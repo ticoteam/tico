@@ -1,0 +1,36 @@
+/* ui/styles/give-to.css — Give to…: the field (a button in place of a native list) and the picker it opens
+   (ui/app/give-to.ts). On a phone the picker is a full-height sheet with 44px rows. Its classes are gv-: gt- is the Goals
+   tree's (goals.css), and a shared name (gt-row, gt-name, gt-title) lays the goal rows out as the picker's. */
+.gv-field{display:inline-flex;min-width:0;max-width:100%}
+.gv-btn{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;min-height:32px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:var(--t-base)/var(--lh-tight) var(--sans);text-align:left;cursor:pointer}
+.gv-btn:hover{background:var(--surface2)}
+.gv-btn.empty{color:var(--muted)}
+.gv-btn .gv-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gv-face{display:inline-flex;flex:none}
+.gv-pop{position:fixed;inset:auto;margin:0;z-index:70;width:320px;max-width:calc(100vw - 16px);max-height:min(70vh,480px);flex-direction:column;padding:8px;border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);color:var(--ink);box-shadow:0 14px 40px rgba(0,0,0,.3)}
+.gv-pop:popover-open{display:flex}
+.gv-head{display:none}
+.gv-q{flex:none;width:100%;height:32px;margin:0 0 6px;padding:0 10px;font-size:var(--t-base);border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+.gv-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.gv-h{padding:8px 8px 4px;color:var(--muted);font-size:var(--t-sm);font-weight:600}
+.gv-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 8px;border-radius:6px;white-space:nowrap;cursor:pointer}
+.gv-row:hover,.gv-row.on{background:var(--surface2)}
+.gv-row .gv-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.gv-role{display:none;flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
+.gv-row.by-role .gv-role{display:block}
+.gv-why{flex:none;margin-left:auto;padding-left:8px;color:var(--muted);font-size:var(--t-sm)}
+.gv-on{flex:none;margin-left:auto}
+.gv-why+.gv-on,.gv-role+.gv-on{margin-left:6px}
+.gv-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.gv-status.gv-none{position:static;width:auto;height:auto;clip-path:none;padding:12px 8px;color:var(--muted)}
+@media (hover:none){.gv-role{display:block}}
+@media (max-width:760px){
+  .gv-pop{inset:0!important;width:100%;max-width:none;height:100%;max-height:none;border:0;border-radius:0;box-shadow:none;padding:max(4px,env(safe-area-inset-top)) 12px max(8px,env(safe-area-inset-bottom))}
+  .gv-head{display:flex;flex:none;align-items:center;gap:4px;min-height:48px}
+  .gv-x{width:44px;height:44px;margin-left:-10px;border:0;background:none;color:var(--ink);font-size:18px;cursor:pointer}
+  .gv-title{font-weight:600}
+  .gv-q{height:44px;font-size:16px}
+  .gv-row{min-height:44px}
+  .gv-role{display:block}
+  .gv-btn{min-height:40px}
+}

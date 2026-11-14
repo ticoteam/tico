@@ -122,6 +122,28 @@ const modelContextWords = (tokens: number | null | undefined): string => {
   if (!(tokens && tokens > 0)) return '';
   return tokens >= 1000000 ? `${+(tokens / 1000000).toFixed(2)}M` : `${Math.round(tokens / 1000)}K`;
 };
+// Where a conversation compacts, in tokens (backend/providers.py COMPACT_SIZES), as a Compact list reads each size.
+const COMPACT_SIZES: [number, string][] = [[100000, '100K'], [150000, '150K'], [200000, '200K'], [250000, '250K'],
+  [300000, '300K'], [400000, '400K'], [500000, '500K'], [600000, '600K'], [700000, '700K'], [800000, '800K'],
+  [900000, '900K'], [1000000, '1M']];
+const compactWords = (tokens: number | null | undefined): string => COMPACT_SIZES.find(([size]) => size === tokens)?.[1]
+  || (tokens ? `${Math.round(tokens / 1000)}K` : '');
+// A Compact select's options: `first` (the fallback's, a run's or a step's "Same as bot", bulk change's "Keep each
+// bot's") with the value '', then only the sizes a model of `window` tokens can hold (unknown: all twelve). A saved
+// size off that list stays, so the select never shows something else than what is saved.
+function compactOptions(current: number | null | undefined, window: number | null | undefined, first = 'Same as bot'): string {
+  const fits = COMPACT_SIZES.filter(([size]) => !(window && window > 0) || size <= window);
+  const list: [number | '', string][] = [['', first], ...fits];
+  if (current && !fits.some(([size]) => size === current)) list.push([current, compactWords(current)]);
+  return list.map(([value, label]) => `<option value="${value}"${(value || null) === (current || null) ? ' selected' : ''}>${esc(label)}</option>`).join('');
+}
+// Whether a harness compacts at a window (its manifest's `compaction`, spec scope 6); one whose manifest has not been
+// read here is taken to, and the server ignores a window its harness does not take.
+const compactsOn = (harness: string | undefined): boolean => {
+  const caps = harness && typeof harnessRow === 'function' ? harnessRow(harness)?.capabilities : undefined;
+  // A harness that compacts on its own default (`own_compaction` in its manifest) takes no Compact size.
+  return !caps || (!!caps.compaction && !caps.own_compaction);
+};
 
 // Shared with the bot page's state pill: lifecycle pause takes precedence over a running turn.
 function botPausedBadge(slug: string, link = false): string {

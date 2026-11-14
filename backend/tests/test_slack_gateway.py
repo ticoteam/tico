@@ -408,7 +408,8 @@ def test_a_channel_message_is_stored_and_reaches_the_readers_once_on_the_hourly_
     assert "Second post" in digests(hub)[-1]["body"] and "Launch copy" not in digests(hub)[-1]["body"]
 
 
-def test_a_shared_dm_with_56_active_bots_is_asked_in_calls_within_the_cap_and_routed(gateway, hub):
+def test_a_shared_dm_with_56_active_bots_is_asked_in_2_calls_and_routed(gateway, hub):
+    """56 bots and the three fixed questions are 59, past the Gateway's 40 a call: 2 calls, every question once."""
     add_bots(hub, 56 - 6)  # the fixture already has six active bots
     with hub.read() as c:
         assert len(gateway.fleet(c)) == 56
@@ -416,12 +417,38 @@ def test_a_shared_dm_with_56_active_bots_is_asked_in_calls_within_the_cap_and_ro
     result = send(gateway, "please draft the vendor terms", channel=DM, kind="message")
     assert result["state"] == "routed", result
     assert [r["bot"] for r in result["decision"]["recipients"]] == ["bot-49", "legal"]
-    assert [len(call) for call in engine.calls] == [40, 19], "56 bots and the three fixed questions, split at the cap"
-    assert sorted(q for call in engine.calls for q in call) == sorted(set(q for call in engine.calls for q in call)), (
-        "no question is asked twice"
-    )
+    assert len(engine.calls) == 2 and all(len(call) <= 40 for call in engine.calls)
+    asked = [q for call in engine.calls for q in call]
+    assert len(asked) == len(set(asked)) == 59, "every question once"
     assert len(result["decision"]["scores"]) == 56
     assert events(hub)[0]["state"] == "routed"
+    with hub.read() as c:
+        audit = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.call'").fetchone()[0])
+    assert audit["questions"] == 59 and audit["calls"] == 2
+
+
+def test_a_fleet_too_big_for_one_call_is_asked_in_the_fewest_calls_and_no_question_twice(gateway, hub, monkeypatch):
+    add_bots(hub, 56 - 6)
+    gateway._judge = engine = CappedJudge({"asks": 0.9, "bot:bot-49": 0.95, "bot:legal": 0.7})
+    with hub.read() as c:
+        fleet = gateway.fleet(c)
+    questions = gateway.questions(fleet)
+    longest = max(J.chars({qid: q}) for qid, q in questions.items())
+    total = sum(J.chars({qid: q}) for qid, q in questions.items())
+    real = J.split
+
+    def split(state, questions):  # the message and about half the questions fit in one call
+        monkeypatch.setattr(J, "MAX_CALL_CHARS", J.chars(state) + total // 2 + longest)
+        return real(state, questions)
+
+    monkeypatch.setattr(J, "split", split)
+    result = send(gateway, "please draft the vendor terms", channel=DM, kind="message")
+    assert result["state"] == "routed" and [r["bot"] for r in result["decision"]["recipients"]] == ["bot-49", "legal"]
+    asked = [q for call in engine.calls for q in call]
+    assert len(engine.calls) == 2 and sorted(asked) == sorted(questions), "each question once, in two calls"
+    with hub.read() as c:
+        audit = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.call'").fetchone()[0])
+    assert audit["calls"] == 2
 
 
 def test_a_persons_message_the_model_reads_as_asking_for_nothing_still_reaches_the_assistant(gateway, hub):

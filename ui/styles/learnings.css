@@ -1,7 +1,7 @@
 /* ui/styles/learnings.css — The Learnings page (ui/app/learnings.ts): a dense rail of nights, then one night. */
-.lrn{display:grid;grid-template-columns:200px minmax(0,1fr);min-height:100%}
+.lrn{display:grid;grid-template-columns:200px minmax(0,1fr);min-height:calc(100% - var(--ctl) - 23px)}   /* the page header (ctl + 9px, 14px under it) sits above */
 .lrn-rail{border-right:1px solid var(--line);padding:14px 8px;display:flex;flex-direction:column;gap:2px;overflow:auto}
-.lrn-rail h3,.lrn-grp>h3{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);margin:2px 8px 8px}
+.lrn-grp>h3{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);margin:2px 8px 8px}
 .lrn-n{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:var(--t-base)}
 .lrn-n:hover{background:var(--hover)}
 .lrn-n.on{background:var(--surface2)}
@@ -14,10 +14,11 @@
 .lrn-grp>h3 .nav-icon{font-size:16px}
 .lrn-subj{border-top:1px solid var(--line)}
 .lrn-subj:last-child{border-bottom:1px solid var(--line)}
-.lrn-subj summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:22px 150px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 4px;border-radius:6px;font-size:var(--t-base)}
+.lrn-subj summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:22px min(var(--lrn-nm,150px),40%) minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 4px;border-radius:6px;font-size:var(--t-base)}
 .lrn-subj summary::-webkit-details-marker{display:none}
 .lrn-subj summary:hover{background:var(--surface2)}
-.lrn-subj .nm{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* block: the global .nm (thread-rail.css, New message) is a flex box, which clips a long name with no "…" */
+.lrn-subj .nm{display:block;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lrn-subj .nm a{color:var(--ink)}
 .lrn-subj .first{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g7)}
 .lrn-subj .more{display:inline-flex;align-items:center;gap:2px;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
@@ -43,11 +44,17 @@
 @media (max-width:760px){
   .lrn{grid-template-columns:1fr}
   .lrn-rail{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px 16px}
-  .lrn-rail h3{display:none}
   .lrn-n{min-width:120px}
   .lrn-night{padding:16px}
-  .lrn-subj summary{grid-template-columns:22px minmax(0,1fr) auto}
-  .lrn-subj .first{grid-column:2/-1;white-space:normal}
   .lrn-body{padding-left:4px}
   .lrn-entry .kv{grid-template-columns:1fr}
+}
+/* A narrow night pane (a small window) reads like the phone: the name has the full row, the line wraps under it. */
+.lrn-night{container-type:inline-size}
+@container (max-width:520px){
+  .lrn-subj summary{grid-template-columns:22px minmax(0,1fr) auto}
+  .lrn-subj .first{grid-column:2/-1;white-space:normal}
+  .lrn-subj .more{grid-row:1;grid-column:3}
+  /* Beside "+2 more" in a 250px pane even the name's full row is short: it wraps rather than being cut. */
+  .lrn-subj .nm{white-space:normal;overflow-wrap:anywhere}
 }

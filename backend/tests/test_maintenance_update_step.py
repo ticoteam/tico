@@ -211,7 +211,16 @@ def test_a_wake_answered_with_nothing_new_is_no_update_request_even_with_a_memor
         c.execute(
             "INSERT INTO bot_memory_updates(bot,sha,subject,author,committed_at,files,runner_id,reported_at) "
             "VALUES(?,?,?,?,?,?,?,?)",
-            (waker, "5e1f0c2", "Rewrite state.md", "waker", H.now(), "state.md", "runner-test", H.now()),
+            (
+                waker,
+                "5e1f0c2",
+                "Remember the release check",
+                "waker",
+                H.now(),
+                "memory/learnings.md",
+                "runner-test",
+                H.now(),
+            ),
         )  # the memory commit that turn made
         c.execute(
             "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('waker-reply',?,?,'say',"

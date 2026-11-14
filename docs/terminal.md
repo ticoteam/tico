@@ -98,6 +98,7 @@ tico pipeline create support --name Support --manager success-manager --stage Tr
 tico pipeline update product --goal "Specs a builder can build from" --manager product-manager
 tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2
 tico stage update product-ideas --no-by-hand --purpose "Ideas worth a spec"
+tico stage update engineering-review-1 --pick-from reviewer-1 --pick-from reviewer-2 --prefer new --no-owns-task
 tico stage move engineering-review-2 --after engineering-review-1
 tico requirement list product-spec
 tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me
@@ -105,7 +106,11 @@ tico requirement update <requirement id> --who-oks people_only
 ```
 
 A holder (`--holder`, `--manager`, `--person`) is a bot's slug, `bot:<id>`, `human:<id>`, `me`, or `assignee` for
-whoever the task is for. Requirement kinds: `page` (a page someone OKs), `ok` (a named person's OK), `owner_done` (the
+whoever the task is for. `--pick-from` (once per bot) makes the stage One of several instead: Tico picks one as each
+task arrives; `--pick turns|random`, `--limit-each N` (`--no-limit-each`), `--prefer anyone|new|family` and
+`--owns-task` (the pick becomes the task's owner) set how, and alone change a stage that picks already. `tico task
+create`, `tico task request` and `tico task file` may leave the owner out when the pipeline's first stage picks: the
+stage picks one (`tico task file` is otherwise yours by default). Requirement kinds: `page` (a page someone OKs), `ok` (a named person's OK), `owner_done` (the
 holder says done), `linked_done` (the tasks it filed are done) and `item` (a source's condition: `--source github
 --condition pr_merged`). A requirement's kind never changes: remove it and add another.
 

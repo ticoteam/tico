@@ -22,8 +22,6 @@ interface OverviewReplayAnswer {
   start?: { bots?: Record<string, { state?: string }> };
 }
 
-// Read by ui/app/refresh.ts on every live change.
-let OVERVIEW_PAGE: OverviewPageState | null = null;
 function overviewModel(): OverviewModel {
   const groups: OverviewGroup[] = [], machines = new Map<string, OverviewGroup>(), humans = new Map<string, OverviewMember>(), placed = new Set<string>();
   const fresh = S.overviewRosterFresh !== false && S.status !== null && S.v2.on;
@@ -83,16 +81,6 @@ function overviewFace(e: Employee): OverviewFace {
   const meta = BOT_AVATARS[e.id], glyph = !meta?.tico && TEMPLATE_ICON.test(e.icon || '') ? e.icon : '';
   return {glyph, initials: avInitials(e.slug || e.id), color: meta?.tico ? '#3fd6a8' : meta?.color || `hsl(${avHue(e.id)} 60% 55%)`,
     svg: meta?.tico ? '/assets/tico/tico-glyph.svg' : !glyph && meta?.icon ? '/assets/bot-symbols/' + meta.icon + '.svg' : ''};
-}
-async function overviewLoadComputers() {
-  const state = OVERVIEW_PAGE;
-  if (!state || state.loadingComputers) return;
-  state.loadingComputers = true;
-  try {
-    const result = await get<OverviewComputersAnswer>('/v2/computers');
-    if (OVERVIEW_PAGE === state && Array.isArray(result.computers)) state.computers = result.computers.map(c => ({id: c.id, label: c.label, revoked_at: c.revoked_at}));
-  } catch {} // Readable bot assignments still provide their buildings when inventory is unavailable.
-  finally { state.loadingComputers = false; }
 }
 function pageOverview() {
   const main = $('#main'); main.classList.add('overview-layout');

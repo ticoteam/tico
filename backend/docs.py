@@ -461,6 +461,13 @@ class DocEdit(M.Contract):
     locked: bool | None = None
     archived: bool | None = None
     note: str = Field(default="", max_length=300)
+    # A bot's write without the version it read (`tico doc write` without --base-version): it may replace only its
+    # own latest version, never one someone else saved (docs/docs.md).
+    own_version_only: bool = False
+    # Write `body` as the text under this heading only (section_text), or add it at the end of the doc or of that
+    # section (`append`). Either one lands on a version newer than `version` when its target is unchanged there.
+    section: str | None = Field(default=None, min_length=1, max_length=300)
+    append: bool = False
 
 
 class DocRestore(M.Contract):
@@ -485,6 +492,97 @@ class LinkEdit(M.Contract):
     description: str | None = Field(default=None, max_length=300)
     url: str | None = Field(default=None, min_length=1, max_length=2000)
     archived: bool | None = None
+
+
+# A bot's write refused so that it never replaces a version it did not read; each is recorded (docs.write_refused).
+REFUSED_WRITES = ("version_conflict", "base_version_required", "path_taken", "section_not_found", "section_ambiguous")
+
+
+def bot_write(who, body, refused):
+    """What a bot's text write records for the Docs measures: whether it sent the version it read, how it wrote and
+    whether it was refused. Empty for a person's write or a change that sends no text."""
+    if not H.is_bot(who.actor) or getattr(body, "body", None) is None:
+        return {}
+    # Only today's tool sends own_version_only, and sends it on every edit (False when it carries the version read). A
+    # write without it (a create, or an older client sending the version current at write time) did not send a base.
+    sent = "own_version_only" in getattr(body, "model_fields_set", ()) and not getattr(body, "own_version_only", True)
+    mode = "append" if getattr(body, "append", False) else "section" if getattr(body, "section", None) else "whole"
+    return {"base_version": sent, "mode": mode, "refused": refused}
+
+
+# A Markdown `#` heading (ATX; underlined headings are not sections) and a fenced code block's opening line.
+HEADING = re.compile(r" {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+FENCE = re.compile(r" {0,3}(`{3,}|~{3,})")
+
+
+def headings(text):
+    """Each heading outside fenced code blocks: (level, text, where its line starts, where its line ends)."""
+    found, fence, at = [], None, 0
+    for line in text.splitlines(keepends=True):
+        bare = line.rstrip("\r\n")
+        opens = FENCE.match(bare)
+        if fence:
+            if (
+                opens
+                and opens.group(1)[0] == fence[0]
+                and len(opens.group(1)) >= len(fence)
+                and not bare[opens.end() :].strip()
+            ):
+                fence = None
+        elif opens:
+            fence = opens.group(1)
+        elif heading := HEADING.match(bare):
+            found.append((len(heading.group(1)), (heading.group(2) or "").strip(), at, at + len(line)))
+        at += len(line)
+    return found
+
+
+def section_span(text, name):
+    """Where the text under heading `name` starts and ends (up to the next heading of the same or a higher level),
+    and whether a heading follows. Refused when no heading or more than one has that text (case and spaces ignored)."""
+    found = headings(text)
+    want = name.strip().casefold()
+    hits = [i for i, h in enumerate(found) if h[1].casefold() == want]
+    if len(hits) != 1:
+        listed = ", ".join(h[1] for h in found) or "none"
+        raise Problem(
+            "section_ambiguous" if hits else "section_not_found",
+            (f'{len(hits)} headings "{name.strip()}"' if hits else f'No heading "{name.strip()}"')
+            + f" in this doc. Headings: {listed}",
+            422,
+            extra={"headings": [h[1] for h in found]},
+        )
+    level, _name, _start, end = found[hits[0]]
+    after = next((h[2] for h in found[hits[0] + 1 :] if h[0] <= level), None)
+    return end, len(text) if after is None else after, after is not None
+
+
+def written_text(text, body):
+    """The doc `text` with the edit's `body` written as a section replace or an append; the rest stays byte for byte."""
+    new = body.body.strip("\r\n")
+    if not body.section:
+        if not text.strip():
+            return new + "\n"
+        ending = len(text) - len(text.rstrip("\n"))
+        return text + "\n" * max(0, 2 - ending) + new + "\n"
+    start, end, followed = section_span(text, body.section)
+    head = text[:start] if text[:start].endswith("\n") else text[:start] + "\n"
+    old = text[start:end]
+    middle = old.strip("\r\n")
+    if middle:
+        lead, trail = old[: len(old) - len(old.lstrip("\r\n"))], old[len(old.rstrip("\r\n")) :] or "\n"
+    else:
+        lead, trail = "\n", "\n\n" if followed else "\n"
+    if body.append and middle:
+        new = middle + "\n\n" + new if new else middle
+    if not new:
+        return head + ("\n" if followed else "") + text[end:]
+    return head + lead + new + trail + text[end:]
+
+
+def section_text(text, name):
+    start, end, _followed = section_span(text, name)
+    return text[start:end]
 
 
 def link_row(c, link_id):
@@ -677,11 +775,18 @@ class Docs:
                 raise Problem("forbidden", "Only an owner or bot administrator can lock or unlock a doc", 403)
             if row["locked"] and not self.admin(who):
                 raise Problem("locked", "This doc is locked: only an owner or bot administrator can change it", 403)
-            if body.version != row["version"]:
+            mine_only = body.own_version_only and row["updated_by_id"] != who.actor
+            partial = body.body is not None and (body.section is not None or body.append)
+            version = body.version
+            if partial and not mine_only and version != row["version"] and self.target_unchanged(c, row, body):
+                version = row["version"]  # its target is the same in the newer version: it lands there (docs/docs.md)
+            if version != row["version"] or mine_only:
                 names = label_names(c, [row["updated_by_id"]])
                 raise Problem(
-                    "version_conflict",
-                    "Someone changed this doc after you opened it. Reload to see their "
+                    "base_version_required" if version == row["version"] else "version_conflict",
+                    "Someone else saved the latest version of this doc. Read it and send the version you read."
+                    if version == row["version"]
+                    else "Someone changed this doc after you opened it. Reload to see their "
                     "version, then apply your change to it.",
                     409,
                     extra={
@@ -693,6 +798,8 @@ class Docs:
                 )
             title = body.title if body.title is not None else row["title"]
             text = body.body if body.body is not None else row["body"]
+            if partial:
+                text = written_text(row["body"], body)
             if who.actor == "bot:librarian" and body.body is not None:
                 text = H.librarian_text(text)
             archived = int(body.archived) if body.archived is not None else row["archived"]
@@ -727,13 +834,27 @@ class Docs:
                     who.actor,
                     "docs.archived" if archived and not row["archived"] else "docs.updated",
                     row["id"],
-                    {"path": path, "version": fresh["version"]},
+                    {"path": path, "version": fresh["version"], **bot_write(who, body, refused=False)},
                 )
                 if archived and not row["archived"]:
                     self.remove_index_source(c, row, who.actor)
             return {"doc": self.doc_view(c, self.get_row(c, row["id"]))}
 
         return work
+
+    def target_unchanged(self, c, row, body):
+        """A section or append write sent on an older version: whether what it writes to is the same now. An append
+        always is, to the doc or to a section (a missing heading is still refused when it applies); a section is when its text is the same in the version read and the latest."""
+        if body.append or body.section is None:
+            return True
+        now = section_text(row["body"], body.section)  # a missing or repeated heading is refused with its own error
+        then = c.execute(
+            "SELECT body FROM doc_versions WHERE doc_id=? AND version=?", (row["id"], body.version)
+        ).fetchone()
+        try:
+            return then is not None and section_text(then["body"], body.section) == now
+        except Problem:
+            return False
 
     def remove_index_source(self, c, source, actor):
         """An archived source leaves the cached index in the same transaction."""
@@ -1077,9 +1198,24 @@ def install_docs(app, store, auth, mutate):
     ):
         return docs.listing(request.state.identity, path_prefix.strip().lstrip("/"), limit, cursor, archived)
 
+    def refusals_recorded(request, body, target, write):
+        """`write`, with a bot's refusal recorded after its transaction rolled back (bot_write)."""
+        try:
+            return write()
+        except Problem as exc:
+            who = request.state.identity
+            detail = bot_write(who, body, refused=True)
+            if detail and exc.code in REFUSED_WRITES:
+                path = getattr(body, "path", None) or ""
+                with store.transaction() as c:
+                    H.event(c, who.actor, "docs.write_refused", target, {"code": exc.code, "path": path, **detail})
+            raise
+
     @app.post("/api/v2/docs")
     def create_doc(request: Request, body: DocCreate):
-        return mutate(request, body, docs.create(request, body))
+        return refusals_recorded(
+            request, body, (body.path or "").strip(), lambda: mutate(request, body, docs.create(request, body))
+        )
 
     @app.get("/api/v2/docs/search")
     def search_docs(
@@ -1183,7 +1319,7 @@ def install_docs(app, store, auth, mutate):
     @app.patch("/api/v2/docs/{doc_id}")
     def edit_doc(request: Request, doc_id: str, body: DocEdit):
         read_only(doc_id)
-        return mutate(request, body, docs.edit(request, doc_id, body))
+        return refusals_recorded(request, body, doc_id, lambda: mutate(request, body, docs.edit(request, doc_id, body)))
 
     @app.get("/api/v2/docs/{doc_id}/versions")
     def doc_versions(request: Request, doc_id: str):

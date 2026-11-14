@@ -4,9 +4,11 @@
 
 /* The list */
 .tt{min-width:0}
-.tt-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:48px;margin:0 0 8px}
-.tt-head h1{margin:0;font-size:var(--t-lg);font-weight:600}
-.tt-head .spacer{flex:1}
+/* Tools' header is the one page header (ui/app/page-head.ts, hook .tt-head). Contacts and Skills still draw their own
+   .tt-head, so its old rules stay for them only (:not(.ph)). */
+.tt-head:not(.ph){display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:48px;margin:0 0 8px}
+.tt-head:not(.ph) h1{margin:0;font-size:var(--t-lg);font-weight:600}
+.tt-head:not(.ph) .spacer{flex:1}
 .tt-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px;min-width:0}
 .tt-bar .theme-seg{flex-wrap:wrap;max-width:100%;min-height:var(--ctl)}
 .tt-q{flex:0 1 240px;min-width:0;margin-left:auto}
@@ -40,7 +42,7 @@
 .tt-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
 .tt-chev{width:16px;color:var(--muted);text-align:right}
 .tt-add{position:relative}
-.tt-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;min-height:var(--ctl-sm, 32px);padding:0 12px;border-radius:8px;background:var(--accent);color:var(--accent-ink, var(--surface));font-weight:600;font-size:var(--t-sm)}
+.tt-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;box-sizing:border-box;min-height:var(--ctl, 32px);padding:0 14px;border-radius:var(--r-ctl);background:var(--accent);color:var(--accent-ink, var(--surface));font-weight:600;font-size:var(--t-base)}
 .tt-add>summary::-webkit-details-marker{display:none}
 .tt-add-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:grid;min-width:200px;max-width:calc(100vw - 32px);padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--raised, var(--surface));box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 14%,transparent)}
 .tt-add-menu button{all:unset;cursor:pointer;padding:8px 10px;border-radius:6px;font-size:var(--t-sm);color:var(--ink)}
@@ -60,6 +62,11 @@
 .tt-tabs a{padding:8px 0;color:var(--muted);text-decoration:none;font-weight:600;font-size:var(--t-sm);border-bottom:2px solid transparent;margin-bottom:-1px}
 .tt-tabs a:hover{color:var(--ink);text-decoration:none}
 .tt-tabs a.cur{color:var(--ink);border-bottom-color:var(--ink)}
+/* A tool's Overview / Activity are .ph-tab (the page header's one tab look); Contacts and Skills keep the underline. */
+.tt-tabs:has(>.ph-tab){gap:2px;padding:0 0 8px}
+.tt-tabs>a.ph-tab{margin:0;padding:4px 10px;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);font-size:var(--t-base);font-weight:400;line-height:20px;white-space:nowrap}
+.tt-tabs>a.ph-tab:hover{background:var(--surface2);color:var(--ink)}
+.tt-tabs>a.ph-tab:is(.cur,[aria-current=page]){background:var(--surface2);color:var(--ink);font-weight:600}
 .tt-cols{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:0 16px;align-items:start}
 .tt-col{min-width:0}
 .tt-cols section.card>header,.ib-detail section.card>header{align-items:center}
@@ -116,8 +123,11 @@ section.card.tt-soon>header .pill{margin-left:auto}
 #mailbox-access{order:1}#inbox-sending{order:2}#inbox-waiting-to-send{order:3}#mailbox-keys{order:4}#mailbox-routines{order:5}#mailbox-recent{order:6}
 
 @media (max-width:760px){
-  .tt-head{min-height:0}
+  .tt-head:not(.ph){min-height:0}
   .tt-q{flex:1 1 100%;margin-left:0}
+  /* Filters at zero are hidden, so "All" can be the bar's only button: a full-size touch target. .ph-seg in the
+     selector outranks the shared filter look (page-head.css), which loads later and zeroes min-height. */
+  .tt-filters.ph-seg>button{min-height:40px}
   .tt-cols{grid-template-columns:minmax(0,1fr)}
   /* Tables become stacked rows: each row a block, its cells wrapping under one another. */
   .tt-list thead,.tt-log thead,.tt-limits thead{display:none}
@@ -128,6 +138,8 @@ section.card.tt-soon>header .pill{margin-left:auto}
   .tt-list .tt-way{grid-column:1;padding-left:42px}
   .tt-list .tt-st{grid-column:2;grid-row:2;text-align:right}
   .tt-list .tt-who{grid-column:1 / -1;padding-left:42px;white-space:normal}
+  /* Nobody can use it yet: the words are for screen readers only, so the cell leaves no empty line. */
+  .tt-list .tt-who:not(:has(.tt-faces)){position:absolute}
   .tt-list .tt-chev{display:none}
   .tt-log tr,.tt-limits tr{display:flex;flex-wrap:wrap;gap:4px 10px;padding:8px 0;border-bottom:1px solid var(--line)}
   .tt-log td,.tt-limits td{display:block;padding:0;border:0;min-width:0}
@@ -156,3 +168,98 @@ section.card.tt-soon>header .pill{margin-left:auto}
 #tool-finance .taf-key select{max-width:100%;min-width:0}
 #tool-finance .taf-table{width:100%;font-size:var(--t-sm)}
 #tool-finance .taf-table td select{max-width:160px}
+/* A website tool's page (ui/app/tools-website.ts): accounts, the browser card and the Add website form. */
+.tw-more{display:inline-flex;align-items:center;justify-content:center;width:28px;min-width:28px;height:28px;padding:0}
+.tw-more .nav-icon{width:20px;height:20px;font-size:20px;color:inherit}
+.tw-accts{display:flex;flex-direction:column}
+.tw-acct{display:grid;grid-template-columns:72px minmax(0,1fr) auto 28px;align-items:center;gap:10px;min-height:44px;padding:6px 0;border-top:1px solid var(--line)}
+.tw-acct:first-child{border-top:0}
+.tw-kind{justify-self:start}
+.tw-acct-name{display:flex;align-items:center;gap:6px;min-width:0}
+.tw-acct-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.tw-acct-user{display:block;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm)}
+.tw-acct-who{display:flex;align-items:center;gap:6px;min-width:0;justify-content:flex-end}
+.tw-2fa{flex:none;width:16px;height:16px;font-size:16px;color:var(--muted)}
+.tw-ses{flex:none;width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.tw-ses[data-state=signed_in]{background:var(--ok)}
+.tw-ses[data-state=needs_you]{background:var(--wait)}
+.tw-ses[data-state=signed_out]{background:var(--fail)}
+.tw-recent{list-style:none;margin:0;padding:0}
+.tw-rec{display:grid;grid-template-columns:60px 22px minmax(0,1fr);align-items:center;gap:8px;padding:6px 0;font-size:var(--t-sm)}
+.tw-rec>.tnum{white-space:nowrap}
+.tw-rec-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tw-rec-text .mono{font-size:var(--t-xs)}
+.tw-host{display:inline-flex;align-items:center;gap:6px}
+.tw-host-dot{width:8px;height:8px;border-radius:50%;background:var(--fail)}
+.tw-host[data-online=true] .tw-host-dot{background:var(--ok)}
+.tw-sites{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;min-width:0}
+.tw-sites .mono{overflow-wrap:anywhere}
+.tw-central{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:var(--t-sm);cursor:pointer}
+.wh-dialog .task-rule-form>label.tw-central{display:flex;margin-top:4px}
+.tw-who-field{display:grid;gap:6px}
+.tw-seg{align-self:flex-start;margin-bottom:4px}
+/* Who can use it (twWhoRow): a 24px face, the name in ink, its muted text, and a quiet × on the right that shows when
+   the row is hovered or has focus; it still takes Tab while hidden. On a touch screen it always shows, 36px. */
+.tw-access{display:flex;flex-direction:column}
+.tw-access:empty{display:none}
+.tw-access-row{display:flex;align-items:center;gap:8px;min-height:36px;font-size:var(--t-base)}
+.tw-who-n{flex:none;max-width:60%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.tw-who-sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
+button.tw-x{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-width:24px;min-height:0;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);opacity:0}
+.tw-x .nav-icon{width:16px;height:16px;font-size:16px;color:inherit}
+button.tw-x:hover{background:var(--surface2)}
+.tw-x:focus-visible{opacity:1;outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.tw-access-row:hover .tw-x,.tw-access-row:focus-within .tw-x{opacity:1}
+.tw-nobody{margin:0}
+/* The picker's list floats in the top layer below the field: the dialog leaves room for seven options, so the list
+   never makes it scroll and never covers Done. */
+.tw-access-dialog .tw-access{min-height:240px;justify-content:flex-start}
+@media (hover:none){
+  button.tw-x{opacity:1;width:36px;height:36px;min-width:36px;margin-right:-6px}
+}
+.tw-code{margin:4px 0 0;font-size:var(--t-xl);font-weight:600;letter-spacing:.08em;text-align:center}
+.tw-code-left{margin:0;text-align:center}
+.tw-log .tt-who-name{display:flex;align-items:center;gap:6px}
+@media (max-width:760px){
+  .tw-acct{grid-template-columns:auto minmax(0,1fr) 36px;grid-template-rows:auto auto;gap:4px 8px}
+  .tw-acct .tw-kind{grid-row:1}
+  .tw-acct .tw-acct-name{grid-row:1}
+  .tw-acct .tw-more{grid-column:3;grid-row:1 / span 2;width:36px;height:36px}
+  .tw-acct .tw-acct-who{grid-column:2;grid-row:2;justify-content:flex-start}
+  .tw-acct .tw-acct-who:not(:has(*)){display:none}
+  .tw-acct-user{max-width:100%}
+}
+.tt-chat{display:inline-flex}
+.tt-chat:empty{display:none}
+/* Keys dropped in that chat (ui/app/tools-key-drop.ts): items show what they are, never a value. */
+.kd-tray{display:flex;flex-direction:column;gap:6px;padding:8px 8px 0;max-height:40vh;max-height:40dvh;overflow-y:auto;overscroll-behavior:contain}
+.kd-tray[hidden]{display:none}
+.kd-head{font-weight:600;font-size:var(--t-sm)}
+.kd-item{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-xs);min-width:0}
+.kd-suspect{border-style:dashed}
+.kd-kind{font-weight:600;min-width:0;overflow-wrap:anywhere}
+.kd-name{width:21ch;max-width:100%;min-width:0;font:inherit;font-family:var(--mono,monospace);padding:2px 4px}
+.kd-preview{color:var(--muted);font-family:var(--mono,monospace)}
+.kd-state{color:var(--muted)}
+.kd-ok{color:var(--ok,inherit)}
+.kd-bad{color:var(--fail,inherit)}
+.kd-x{margin-left:auto}
+.kd-replace{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.kd-denied{margin:0;font-size:var(--t-xs)}
+.kd-proof{margin:4px 2px 0;font-size:var(--t-xs)}
+.kd-proof:empty{display:none}
+.kd-mark{flex:none;white-space:nowrap}
+@media (max-width:760px){
+  .kd-item{flex-direction:column;align-items:stretch}
+  .kd-x{margin-left:0}
+  .kd-name{width:100%}
+}
+/* The Tools owner's proposal card in its chat: rows the server built, Grant, then each key's check. */
+.kg-card{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm)}
+.kg-title{font-weight:600}
+.kg-row,.kg-result{display:flex;flex-wrap:wrap;align-items:center;gap:6px;overflow-wrap:anywhere}
+.kg-acts{display:flex;gap:6px}
+.kg-fix{display:flex;flex-wrap:wrap;gap:6px;flex-basis:100%}
+.kg-err{margin:0;color:var(--fail,inherit)}
+.kg-err[hidden]{display:none}
+.kg-replaces{flex-basis:100%;color:var(--muted);font-size:var(--t-xs)}

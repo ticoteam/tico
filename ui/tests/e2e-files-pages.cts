@@ -20,6 +20,12 @@ interface MakeStatus {
 }
 
 
+// A phone shows a task's pages in its Pages tab, and "+" offers Make page or Link page (task #409).
+async function pagesTab(p: Pick<import('playwright').Page, 'locator'>) {
+    const tab = p.locator('#task-modal[open]').getByRole('tab', {name: /^Pages/});
+    await p.locator('#task-modal[open] [data-task-pages]').waitFor({state: 'attached'});
+    if (await tab.isVisible()) await tab.click();
+}
 async function filesPages({hub, browser, phone}: PassContext) {
     const where = phone ? 'phone' : 'desktop';
     const page = await open(browser, hub, 'dana', {phone, hash: '#/library/files'});
@@ -50,11 +56,14 @@ async function filesPages({hub, browser, phone}: PassContext) {
     assert.match(view, /Engineering weekly/, `${where}: the page shows its title`);
     const audienceReader = await open(browser, hub, 'priya', {phone, hash: new URL(page.url()).hash});
     await audienceReader.locator('#pg-view .pg-title').waitFor();
-    assert.equal(await audienceReader.locator('[data-pg-audience]').count(), 0);
+    assert.equal(await audienceReader.locator('[data-pg-act=access]').count(), 0);
     expectFailure(audienceReader, 404, /^\/api\/v2\/pages\//, 'GET');
-    const access = page.locator('[data-pg-audience]');
+    // Who can see it is the manager's first ⋯ item, with the audience under it.
+    const more = page.locator('#pg-view .pg-menu summary'), access = page.locator('#pg-view [data-pg-act=access]');
+    const audienceText = () => page.evaluate(() => document.querySelector('#pg-view [data-pg-act=access] .pg-mi-sub')?.textContent || '');
+    await more.click();
     await access.waitFor();
-    assert.equal((await access.innerText()).trim(), "Everyone who can see where it's filed");
+    assert.equal(await audienceText(), "Everyone who can see where it's filed");
     await access.click();
     const editor = page.locator('#access-editor');
     await editor.locator('[data-access-everyone]').uncheck();
@@ -62,17 +71,21 @@ async function filesPages({hub, browser, phone}: PassContext) {
     const saved = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
     await editor.locator('button[type=submit]').click();
     assert.equal((await saved).status(), 200);
+    // Without a reload: the status line shows the lock and the item the new audience.
     await page.locator('.pg-status .pg-lock').waitFor();
+    assert.notEqual(await audienceText(), "Everyone who can see where it's filed", `${where}: the item shows the new audience`);
     await drawn(audienceReader, '#pg-view', text => text.includes('not yours to see'), `${where}: audienceReader loses the open page`);
     assert.equal(await audienceReader.locator('.pg-card').count(), 0);
-    await page.locator('[data-pg-audience]').click();
+    await more.click();
+    await access.click();
     await editor.locator('[data-access-everyone]').check();
     const cleared = page.waitForResponse(r => r.request().method() === 'PATCH' && /\/api\/v2\/pages\//.test(r.url()));
     await editor.locator('button[type=submit]').click();
     assert.equal((await cleared).status(), 200);
-    await drawn(page, '[data-pg-audience]', text => text.includes("Everyone who can see where it's filed"), `${where}: cleared audience`);
+    await page.waitForFunction(() => document.querySelector('#pg-view [data-pg-act=access] .pg-mi-sub')?.textContent === "Everyone who can see where it's filed"
+      && !document.querySelector('#pg-view .pg-lock'), null, {timeout: 10000}).catch(() => assert.fail(`${where}: cleared audience`));
     await audienceReader.locator('#pg-view .pg-title').waitFor();
-    assert.equal(await audienceReader.locator('[data-pg-audience], .pg-lock').count(), 0);
+    assert.equal(await audienceReader.locator('[data-pg-act=access], .pg-lock').count(), 0);
     assertClean(audienceReader, `${where}: audienceReader regains the page`);
     const audienceId = new URL((await saved).url()).pathname.split('/').pop();
     const legal = await must<{id: string}>(hub, 'dana', 'POST', 'groups', {name: 'Legal'});
@@ -110,6 +123,8 @@ async function filesPages({hub, browser, phone}: PassContext) {
     assert.equal(permissions.can_link, true, `${where}: the reader can link a page`);
     go(page, '#/task/' + id);
     const section = reader.locator('[data-task-pages]');
+    await pagesTab(reader); await pagesTab(page);
+    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
     await section.getByRole('button', {name: 'Link page', exact: true}).click();
     // A later task update in the same batch must not hide the earlier files invalidation.
     const refreshed = reader.waitForResponse(r => decodeURIComponent(new URL(r.url()).pathname) === '/api/v2/places/task:' + id);
@@ -121,7 +136,7 @@ async function filesPages({hub, browser, phone}: PassContext) {
     const choice = section.getByRole('button', {name: 'Engineering weekly', exact: true});
     const linkedPage = await choice.getAttribute('data-tp-page');
     await choice.click();
-    const card = `.pg-card[data-page="${linkedPage}"]`;
+    const card = `.tp-row[data-page="${linkedPage}"]`;
     await section.locator(card).waitFor({timeout: t(15000)});
     await page.locator('[data-task-pages] ' + card).waitFor({timeout: t(15000)});
     assert.equal(await section.locator('.tp-picker').isVisible(), false, `${where}: linking closes the picker`);
@@ -132,8 +147,8 @@ async function filesPages({hub, browser, phone}: PassContext) {
 
     // The owner unlinks it in another tab; its files event refreshes the already loaded section in both tabs.
     await page.locator('[data-task-pages]').getByRole('button', {name: 'Unlink Engineering weekly', exact: true}).click();
-    await section.locator('.pg-card').waitFor({state: 'detached', timeout: t(15000)});
-    await page.locator('[data-task-pages] .pg-card').waitFor({state: 'detached', timeout: t(15000)});
+    await section.locator('.tp-row').waitFor({state: 'detached', timeout: t(15000)});
+    await page.locator('[data-task-pages] .tp-row').waitFor({state: 'detached', timeout: t(15000)});
     assertClean(page, `${where}: unlink reaches both task readers`);
     assertClean(reader, `${where}: linked pages refresh without reopening the task`);
     await reader.context().close();
@@ -158,10 +173,14 @@ async function makePage({hub, browser, phone}: PassContext) {
       return route.fulfill({response});
     });
     const section = page.locator('[data-task-pages]'), field = section.getByRole('textbox', {name: 'Describe the page'});
+    await pagesTab(page);
+    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
+    await section.getByRole('button', {name: 'Make page', exact: true}).click();
     await field.fill('The alert flow: three scenarios as tabs.');
     await go(page, '#/tasks');
     await section.waitFor({state: 'hidden', timeout: t(10000)});
     await go(page, '#/task/' + id);
+    await pagesTab(page);
     await field.waitFor();
     assert.equal(await field.inputValue(), 'The alert flow: three scenarios as tabs.', 'closing and reopening the task restores the unsent prompt');
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
@@ -189,6 +208,7 @@ async function makePage({hub, browser, phone}: PassContext) {
     await go(page, '#/tasks');
     await section.waitFor({state: 'hidden', timeout: t(10000)});
     await go(page, '#/task/' + id);
+    await pagesTab(page);
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
     await page.waitForFunction(cid => LIVE.es?.readyState === EventSource.OPEN &&
       new URL(LIVE.es.url).searchParams.get('conversation')?.split(',').includes(cid),
@@ -196,7 +216,7 @@ async function makePage({hub, browser, phone}: PassContext) {
     status!.state = 'made';
     const published = await must<{page: {file_id: string}}>(hub, 'engineering-manager', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
       text: '<h1>Alert flow</h1><p>Three scenarios.</p>'});
-    await section.locator('.pg-card[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
+    await section.locator('.tp-row[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
       const state = await page.evaluate(() => ({route: location.hash, stream: LIVE.es?.url,
         open: (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open, section: document.querySelector<HTMLElement>('[data-task-pages]')?.innerText}));
       assert.fail(e.message + '\n' + JSON.stringify({state, errors: page.watch.errors,
@@ -204,6 +224,9 @@ async function makePage({hub, browser, phone}: PassContext) {
     });
     await card.waitFor({state: 'hidden', timeout: t(10000)});
 
+    // Made: the Describe box folds away; a second page starts from "+" › Make page again.
+    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
+    await section.locator('[data-tp-make]').click();
     await field.fill('A second page.');
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
@@ -214,6 +237,7 @@ async function makePage({hub, browser, phone}: PassContext) {
     await card.getByRole('link', {name: 'Open chat'}).click();
     await page.waitForURL(/#\/assistant$/, {timeout: t(10000)});
     await go(page, '#/task/' + id);
+    await pagesTab(page);
     await card.getByRole('link', {name: 'Open chat'}).waitFor({timeout: t(10000)});
 
     cap = true;

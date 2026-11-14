@@ -157,15 +157,19 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
                 return rooms[message["conversation_id"]]
 
             def newest():
-                """The unread backlog newest first, a page at a time: each page's rooms read together, then its messages
-                in open rooms read together INBOX_LIMIT at a time, only as far as they are checked one by one."""
+                """The unread backlog newest first, a page at a time: each page's rooms, their meeting provenance and
+                their tasks read together (privacy.prime_rooms), then its messages in open rooms read together
+                INBOX_LIMIT at a time. Rooms and messages are checked one by one only as far as the answer reads."""
                 for page in H.inbox_pages(c, who.actor, size=INBOX_PAGE):
-                    H.prime_conversations(c, {m["conversation_id"] for m in page} - set(rooms))
-                    candidates = [m for m in page if room_open(m)]
-                    for at in range(0, len(candidates), INBOX_LIMIT):
-                        part = candidates[at : at + INBOX_LIMIT]
-                        privacy.prime_queued(c, H.prime_messages(c, [m["id"] for m in part]).values())
-                        yield from part
+                    privacy.prime_rooms(c, {m["conversation_id"] for m in page} - set(rooms))
+                    part = []
+                    for at, message in enumerate(page, 1):
+                        if room_open(message):
+                            part.append(message)
+                        if len(part) == INBOX_LIMIT or (part and at == len(page)):
+                            privacy.prime_queued(c, H.prime_messages(c, [m["id"] for m in part]).values())
+                            yield from part
+                            part = []
 
             # A bot that never marks messages read can hold thousands: the newest INBOX_LIMIT readable ones are
             # checked and sent, oldest first as before, and `more_messages` says older ones are waiting. Paging stops

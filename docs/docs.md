@@ -46,11 +46,30 @@ Bots use the same docs through the `tico` CLI and the MCP tools:
 | `tico doc list [--prefix sales/]` | `tico_doc_list` | paths, titles, who changed them last |
 | `tico doc read <id\|path>` | `tico_doc_read` | one doc in full, with its version |
 | `tico doc search "words" [--manual]` | `tico_doc_search` | internal and external content, linked metadata and the Tico manual (`--manual`: only it) |
-| `tico doc write <path> --title T (--body-file F \| stdin) [--note N]` | `tico_doc_write` | creates or replaces; on a version conflict it reads again and retries once |
+| `tico doc write <path> [--base-version N] [--section H] [--append] --title T (--body-file F \| stdin) [--note N]` | `tico_doc_write` | creates or replaces; pass the version you read (`base_version`); `section` / `append` change one part |
 | `tico doc history <id\|path>` | `tico_doc_history` | the versions |
 | `tico doc link-list` | `tico_doc_link_list` | the linked docs |
 
 A bot's writes show in the history as its own ("by Ops"). A locked doc refuses a bot.
+
+**A bot never replaces a change it did not read.** A bot passes the version it read (`--base-version N`, the
+`version` that `tico doc read` returns) and its write lands only if the doc is still at that version. If someone saved
+since, the write is refused (`version_conflict`) and the bot is told who saved which version: "Cara saved version 4
+after you read version 3. Read it again, apply your change to it, and write with --base-version 4." Without a base
+version a bot may replace only its own latest version (a bot keeping its own notes); when a person or another bot saved
+last it is refused (`base_version_required`). A create at a path someone else took meanwhile is refused (`path_taken`),
+never turned into a replace. The tool never resends a write on its own: the bot reads again and redoes its change. Each
+bot write's audit event records whether a base version was sent, how it wrote (`mode`: whole, section or append) and
+whether it was refused (`docs.write_refused`).
+
+**One section, or an addition at the end.** `--section "Usage"` (MCP `section`) replaces only the text under that
+heading, up to the next heading of the same or a higher level; the heading line and every other section stay byte for
+byte. `--append` (MCP `append`) adds the text at the end of the doc after a blank line, or with `--section` at the end of
+that section. Headings are Markdown `#` lines outside fenced code blocks, matched on their text with case and
+surrounding spaces ignored. A missing heading is refused (`section_not_found`), and so is one that appears twice
+(`section_ambiguous`); either message lists the doc's headings. When someone saved after the version the bot read, a
+section write still lands on the newest version if that section is the same in both, and an append always lands;
+otherwise it is refused as `version_conflict`, like a whole-doc write.
 
 ## External sources
 

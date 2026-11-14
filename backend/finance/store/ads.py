@@ -393,6 +393,110 @@ def _by_owner(
     return out
 
 
+@dataclass(frozen=True)
+class CampaignMonth:
+    """One campaign's spend in one calendar month (the month of the day the platform reports), on a counting account."""
+
+    platform: str
+    account_external_id: str
+    account_name: str
+    campaign_external_id: str
+    campaign_name: str
+    month: str  # YYYY-MM
+    currency: str
+    amount: int  # cents
+
+
+def counting_accounts(c: sqlite3.Connection) -> list[AdAccount]:
+    """The ad accounts whose spend counts: active, under an enabled import, and once per platform account (the earliest
+    row when two tools both hold it, as live_spend counts it)."""
+    if not ready(c):
+        return []
+    rows = c.execute(
+        "SELECT a.* FROM fin_ad_accounts a JOIN fin_ad_imports i ON i.tool_id=a.tool_id AND i.enabled=1 "
+        "WHERE a.active=1 ORDER BY a.created_at, a.id"
+    ).fetchall()
+    seen: set[tuple[str, str]] = set()
+    out: list[AdAccount] = []
+    for r in rows:
+        key = (str(r["platform"]), str(r["external_id"]))
+        if key not in seen:
+            seen.add(key)
+            out.append(_account(r))
+    return out
+
+
+def campaign_months(c: sqlite3.Connection, start: str, end: str) -> list[CampaignMonth]:
+    """Spend per counting account, campaign, month and currency over the days [start, end]. The campaign's name is its
+    record's (the platform's latest), else the newest day's."""
+    accounts = {a.id: a for a in counting_accounts(c)}
+    if not accounts:
+        return []
+    marks = ",".join("?" * len(accounts))
+    out: list[CampaignMonth] = []
+    for r in c.execute(
+        "SELECT s.ad_account_id, s.campaign_external_id, substr(s.day, 1, 7) AS month, s.currency, "
+        "SUM(s.amount_cents) AS amount, MAX(s.campaign_name) AS spend_name, MAX(k.name) AS campaign_name "
+        "FROM fin_ad_spends s LEFT JOIN fin_ad_campaigns k ON k.ad_account_id=s.ad_account_id "
+        "AND k.external_id=s.campaign_external_id "
+        f"WHERE s.day BETWEEN ? AND ? AND s.ad_account_id IN ({marks}) "
+        "GROUP BY s.ad_account_id, s.campaign_external_id, month, s.currency "
+        "ORDER BY month, s.ad_account_id, s.campaign_external_id",
+        (start, end, *accounts),
+    ):
+        a = accounts[str(r["ad_account_id"])]
+        out.append(
+            CampaignMonth(
+                a.platform,
+                a.external_id,
+                a.name,
+                str(r["campaign_external_id"]),
+                str(r["campaign_name"] or r["spend_name"] or ""),
+                str(r["month"]),
+                str(r["currency"]),
+                int(r["amount"]),
+            )
+        )
+    return out
+
+
+@dataclass(frozen=True)
+class CampaignDay:
+    """One campaign's spend on one day the platform reports, on a counting account."""
+
+    platform: str
+    account_external_id: str
+    campaign_external_id: str
+    day: str  # YYYY-MM-DD
+    currency: str
+    amount: int  # cents
+
+
+def campaign_days(c: sqlite3.Connection, start: str, end: str) -> list[CampaignDay]:
+    """Spend per counting account, campaign, day and currency over the days [start, end]: the daily read behind
+    Growth's weekly CAC (backend/growth_finance.py weeks)."""
+    accounts = {a.id: a for a in counting_accounts(c)}
+    if not accounts:
+        return []
+    marks = ",".join("?" * len(accounts))
+    return [
+        CampaignDay(
+            accounts[str(r[0])].platform,
+            accounts[str(r[0])].external_id,
+            str(r[1]),
+            str(r[2]),
+            str(r[3]),
+            int(r[4]),
+        )
+        for r in c.execute(
+            "SELECT ad_account_id, campaign_external_id, day, currency, SUM(amount_cents) FROM fin_ad_spends "
+            f"WHERE day BETWEEN ? AND ? AND ad_account_id IN ({marks}) "
+            "GROUP BY ad_account_id, campaign_external_id, day, currency ORDER BY day, ad_account_id, campaign_external_id",
+            (start, end, *accounts),
+        )
+    ]
+
+
 def account_label(platform: str, external_id: str) -> str:
     """An ad account as its platform shows it: 123-456-7890 for Google Ads, act_123 for Meta."""
     if platform == "google_ads" and len(external_id) == 10 and external_id.isdigit():

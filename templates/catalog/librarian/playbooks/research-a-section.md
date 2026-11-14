@@ -55,9 +55,10 @@ sentence that states a fact ends with the page it came from as a link: `[example
 Mark a sentence that is your inference as one, in a clause.
 
 - **A doc.** Change only that section's text; every other byte of the doc stays as it was. Write the whole
-  doc back, with a note: `tico doc write <path> --body-file <file> --note "Research: <one line>"`. Read it
-  again just before you write: if its version moved, redo your edit on the new text, so a person's edit made
-  while you researched is never lost. A locked doc cannot be written: say so in the note and put the text you would have added there.
+  doc back on the version you read, with a note: `tico doc write <path> --base-version <the version you read>
+  --body-file <file> --note "Research: <one line>"`. If it is refused because someone saved since, read it again,
+  redo your edit on the new text and write with the new version, so a person's edit made while you researched is
+  never lost. A locked doc cannot be written: say so in the note and put the text you would have added there.
 - **A market page.** Rewrite the page whole with your additions in place: `tico market page <name> --body-file <file>`.
   Facts that belong in the graph also go in the graph, the way `playbooks/market-setup.md` step 4 writes them.
 - **A market entry.** Add what you found as evidence, entities and edges: `tico market report` then
@@ -74,4 +75,4 @@ Finish the task: `tico task done <id> -m "<note>" --version N`. The note, in at 
 2. What you could not find or left out, and why.
 3. Conflicts with what the page already said, each with both sources.
 
-The doc's history shows the exact change, and **Restore** takes it back. Then rewrite `state.md` and commit.
+The doc's history shows the exact change, and **Restore** takes it back. Then note progress on the task and commit.

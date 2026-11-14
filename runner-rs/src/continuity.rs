@@ -13,6 +13,11 @@ pub const RESUME_FAILED: &str = "resume_failed";
 pub const COMPACT_FAILED: &str = "compact_failed";
 pub const INTERRUPTED: &str = "interrupted";
 pub const FALLBACK_SIDE: &str = "fallback_side";
+/// A new session started on a fork of the bot's latest one (the claim's `fork_thread`), which is left as it was.
+pub const FORKED: &str = "forked";
+/// A one-off session the server asked for (`fresh_session`): the conversation's saved one is neither resumed nor
+/// replaced, and its next ordinary turn resumes it.
+pub const FRESH: &str = "fresh";
 /// A resumed session that was compacted first (`config.compact_first`): `kind` stays `resumed`.
 pub const COMPACTED: &str = "compacted";
 
@@ -27,7 +32,7 @@ pub fn retry_pause() -> Duration {
 
 /// Whether the bot keeps nothing from one task to the next (`stateless` in its config, set by the server:
 /// backend/hubdb.py stateless). Its turns resume no session of another task or of the chat, read and keep no memory/
-/// or state.md, and copy no harness memory into its repository.
+/// and copy no harness memory into its repository.
 pub fn stateless(config: &Value) -> bool {
     crate::util::truthy(config.get("stateless"))
 }
@@ -115,7 +120,7 @@ impl Session {
         let read = if stateless {
             "Read the task"
         } else {
-            "Read state.md and memory/"
+            "Read the task and memory/"
         };
         let because = match self.why {
             Some(NOT_FOUND) => "was not on this computer",
@@ -143,6 +148,12 @@ pub const AFTER_INTERRUPT: &str = "Your previous turn in this session was interr
 /// are not in this transcript.
 pub const AFTER_SIDE: &str = "Since your last turn here, a turn ran in a separate side session (a fallback harness), and its replies are in \
     the conversation below. Check what it did (`git log`, `tico task show`) before relying on your own picture of the work.";
+
+/// Told to a side session resumed for another fallback turn: the conversation's own session may have run since, and
+/// its replies are in the conversation below.
+pub const SIDE_RESUMED: &str = "This side session is resumed for another fallback turn. Turns in this task's own session may have run \
+    since your last turn here; their replies are in the conversation below. Check what was done (`git log`, `tico task show`) before \
+    relying on your own picture of the work.";
 
 /// That the turn began a new session or resumed one, and why, for a server that takes it (`run_session`; an older
 /// one refuses the field, and a refused result would never arrive).
@@ -183,6 +194,15 @@ pub fn trim(text: &str) -> String {
         one
     }
 }
+
+/// The conversation key a side session (a task-model fallback's) is saved under in the state: one per conversation and
+/// model, never the conversation's own, so the next fallback turn of the task on that model resumes it.
+pub fn side_session(conversation: &str, model: &str) -> String {
+    format!("{conversation}{SIDE_MARK}{model}")
+}
+
+/// What joins a conversation key to its side sessions' model (side_session); a Clear of the conversation drops them too.
+pub const SIDE_MARK: &str = "#side:";
 
 /// The key under which the state remembers that a side session ran after this primary thread's last turn.
 pub fn side_key(thread: &str) -> String {
@@ -260,7 +280,10 @@ mod tests {
                 && n.contains("where the task stood"),
             "{n}"
         );
-        assert!(n.contains("Read state.md and memory/ before acting"), "{n}");
+        assert!(
+            n.contains("Read the task and memory/ before acting") && !n.contains("state.md"),
+            "{n}"
+        );
         assert!(Session::new(COMPACT_FAILED, None)
             .prompt_note(false, false)
             .unwrap()

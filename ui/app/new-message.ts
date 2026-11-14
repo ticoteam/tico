@@ -238,7 +238,7 @@ function nmWire(pane: HTMLElement, start: string[]): () => void {
     if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); void go({kind: 'new'}, box.value.trim()); }
     else if (ev.key === 'Escape') { ev.preventDefault(); q.focus(); }
   });
-  const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
+  const grow = () => pillGrow(box);
   box.addEventListener('input', grow);
   box.addEventListener('keydown', (ev: KeyboardEvent) => {
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && !touchKeyboard()) { ev.preventDefault(); void go(target(), box.value.trim()); }

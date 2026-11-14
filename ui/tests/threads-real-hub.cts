@@ -221,11 +221,12 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
     await planRow.waitFor({timeout: t(15000)});
     assert.equal(await phone.locator(`#thread-rail a[data-thread="${risks.thread_id}"]`).count(), 0, 'opening a sub-thread adds no row');
 
-    // The same phone: a group chat is on the rail by its name; a 1:1 DM is not, and reads as who it is with in its own
-    // header and on the Unread threads card.
+    // The same phone: a group chat is on the rail by its name; a 1:1 DM is not one of its threads, only an Unread row
+    // while it is unread, and reads as who it is with in its own header and on the Unread threads card.
     const group = await phone.locator(`#thread-rail a.tr-row[data-thread="${(trio.thread || trio).id}"] .tr-title`).innerText({timeout: t(15000)});
     assert.equal(group.trim(), 'Launch trio', 'a group chat is on the rail by its name');
-    assert.equal(await phone.locator(`#thread-rail a[data-thread="${(pair.thread || pair).id}"]`).count(), 0, 'a 1:1 DM is on its teammate, not the rail');
+    assert.equal(await phone.locator(`#thread-rail :is([data-list="pinned"],[data-list="threads"]) a[data-thread="${(pair.thread || pair).id}"]`).count(), 0, 'a 1:1 DM is on its teammate, not among the threads');
+    assert.equal(await phone.locator(`#thread-rail [data-list="unread"] a[data-thread="${(pair.thread || pair).id}"]`).count(), 1, 'an unread 1:1 DM has an Unread row');
     // The card first: opening the DM reads it, and the card lists only unread threads.
     await phone.goto(hub.url + '/#/home');
     const card = phone.locator('.dash-list a', {hasText: 'Priya'}).first();

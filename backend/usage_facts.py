@@ -53,6 +53,7 @@ COLUMNS = (
     "billing",
     "input_tokens",
     "cached_tokens",
+    "cache_write_tokens",
     "output_tokens",
     "cost_nano",
     "low_estimate",
@@ -97,6 +98,10 @@ def record_run(c, run, usage, at):
                 "billing": billing,
                 "input_tokens": int(part.get("input_tokens") or 0),
                 "cached_tokens": int(part.get("cached_tokens") or 0),
+                # None: its runner did not count cache writes apart (they are in input_tokens).
+                "cache_write_tokens": None
+                if part.get("cache_write_tokens") is None
+                else int(part["cache_write_tokens"]),
                 "output_tokens": int(part.get("output_tokens") or 0),
                 "cost_nano": nano(part.get("est_cost_usd")),
                 "low_estimate": None if low is None else int(bool(low)),

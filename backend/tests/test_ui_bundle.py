@@ -34,7 +34,7 @@ def test_the_page_names_one_versioned_script_and_one_stylesheet(api):
         "script-src 'self';" in r.headers["content-security-policy"]
         and "sha256-" not in r.headers["content-security-policy"]
     )
-    assert "<script>" not in r.text  # no inline code
+    assert "<script>" not in r.text  # no inline code (the parts list is a JSON block, which runs nothing)
     again = api.get("/", headers={**AUTH, "If-None-Match": r.headers["etag"]})
     assert again.status_code == 304
     assert (
@@ -42,9 +42,18 @@ def test_the_page_names_one_versioned_script_and_one_stylesheet(api):
     )  # Cloudflare's weak form
     assert api.get("/tico/ui/", headers=AUTH).text == r.text
     # Reuse the page and app fixture to check the build an open tab receives.
-    js = re.search(r'app\.bundle\.js\?v=([0-9a-f]{16})', r.text).group(1)
+    # With page parts (ui/parts.json) the build is all the app's code and the stylesheet, as the parts list names it.
+    import json
+
+    parts = re.search(r'<script type="application/json" id="ui-parts">(.*?)</script>', r.text)
     css = re.search(r'app\.bundle\.css\?v=([0-9a-f]{16})', r.text).group(1)
-    assert api.get("/api/v2/config", headers=AUTH).json()["ui_build"] == f"{js}.{css}"
+    build = (
+        json.loads(parts.group(1))["build"]
+        if parts
+        else re.search(r'app\.bundle\.js\?v=([0-9a-f]{16})', r.text).group(1) + "." + css
+    )
+    assert build.endswith("." + css)
+    assert api.get("/api/v2/config", headers=AUTH).json()["ui_build"] == build
     # The bundle is one strict script, and neither it nor the page is served without a session.
     assert api.get("/tico/ui/app.bundle.js", headers=AUTH).text.startswith("'use strict';\n")
     assert api.get("/tico/ui/app.bundle.js").status_code == 401 and api.get("/").status_code == 401
@@ -62,6 +71,25 @@ def test_a_versioned_font_is_kept_and_an_unversioned_one_revalidates(api):
     assert kept.status_code == 200 and kept.headers["content-type"] == "font/woff2"
     assert kept.headers["cache-control"] == ui_bundle.IMMUTABLE
     assert api.get(url.split("?")[0], headers=AUTH).headers["cache-control"] == "private, no-cache"
+
+
+def test_vendor_scripts_are_sent_compressed_and_fonts_as_they_are(api):
+    # marked.min.js is on every cold open: 35 KB as it is, about 10 KB compressed (P05, the first-open budget).
+    zipped = api.get("/vendor/marked.min.js", headers={**AUTH, "Accept-Encoding": "gzip"})
+    assert zipped.status_code == 200 and zipped.headers["content-encoding"] == "gzip"
+    assert zipped.content == (Path(__file__).resolve().parents[2] / "ui" / "vendor" / "marked.min.js").read_bytes()
+    assert "Accept-Encoding" in zipped.headers["vary"]
+    assert (
+        api.get("/vendor/marked.min.js", headers={**AUTH, "If-None-Match": zipped.headers["etag"]}).status_code == 304
+    )
+    plain = api.get("/vendor/marked.min.js", headers={**AUTH, "Accept-Encoding": "gzip;q=0"})
+    assert plain.status_code == 200 and "content-encoding" not in plain.headers
+    # A font is compressed already: it goes as it is.
+    font = re.search(
+        r'href="(/vendor/fonts/inter-variable\.woff2\?v=[0-9a-f]{12})"',
+        (Path(__file__).resolve().parents[2] / "ui" / "index.html").read_text(),
+    ).group(1)
+    assert "content-encoding" not in api.get(font, headers={**AUTH, "Accept-Encoding": "gzip"}).headers
 
 
 def served_file(ui, name):
@@ -283,6 +311,119 @@ def test_a_typescript_file_runs_only_as_its_current_compiled_output(tmp_path):
         ui_build.check(ui)
 
 
+def test_a_bundled_file_is_its_minified_copy_while_that_is_current(tmp_path):
+    # scripts/build-ui.cjs minifies each bundled file to build/ui/min with a map to its source; the bundle uses that copy
+    # only while the manifest matches the source, and a part with one names its map, which places the file's own map
+    # at the line the file starts on.
+    import hashlib
+    import json
+
+    ui, out = tmp_path / "ui", tmp_path / "build/ui"
+    (ui / "app").mkdir(parents=True)
+    (ui / "styles").mkdir()
+    (out / "min/app").mkdir(parents=True)
+    (ui / "app/a.js").write_text("'use strict';\nconst ALPHA = 1;\n")
+    (ui / "app/b.js").write_text("'use strict';\nconst BETA = ALPHA + 1;\n")
+    (ui / "styles/a.css").write_text("a{color:red}\n")
+    (ui / "index.html").write_text(
+        "<head>\n<!-- bundle:css:start -->\n<link rel=\"stylesheet\" href=\"/tico/ui/styles/a.css\">\n<!-- bundle:css:end -->\n</head>\n"
+        "<!-- bundle:js:start -->\n<script src=\"/tico/ui/app/a.js\"></script>\n<script src=\"/tico/ui/app/b.js\"></script>\n"
+        "<!-- bundle:js:end -->\n"
+    )
+    # b.js minified: column 0 is its line 1, column 13 (`const`) its line 2.
+    (out / "min/app/b.js").write_text('"use strict";const BETA=ALPHA+1;\n')
+    (out / "min/app/b.js.map").write_text(
+        json.dumps({"version": 3, "sources": ["app/b.js"], "names": [], "mappings": "AAAA,aACA"})
+    )
+
+    def sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    (out / "manifest.json").write_text(
+        json.dumps(
+            {
+                "files": {},
+                "min": {
+                    "app/b.js": {
+                        "source": sha(ui / "app/b.js"),
+                        "output": sha(out / "min/app/b.js"),
+                        "map": sha(out / "min/app/b.js.map"),
+                    }
+                },
+            }
+        )
+    )
+    bundles = ui_bundle.UiBundle(ui)
+    bundle = bundles.get()
+    js = bundle.parts[ui_bundle.JS_PATH].decode()
+    assert '// file: app/b.js\n"use strict";const BETA=ALPHA+1;' in js and "const BETA = ALPHA" not in js
+    assert "// file: app/a.js\n'use strict';\nconst ALPHA = 1;" in js  # no minified copy: the file as it is
+    url = re.search(r"//# sourceMappingURL=(app\.bundle\.js\.map)\?v=([0-9a-f]{16})\n\Z", js)
+    assert url, js[-200:]
+    body, _, _ = bundle.source_map(ui_bundle.JS_PATH + ".map", url.group(2))
+    lines = js.split("\n")
+    start = lines.index('"use strict";const BETA=ALPHA+1;')
+    index = json.loads(body)
+    assert [s["offset"] for s in index["sections"]] == [{"line": start, "column": 0}]
+    assert index["sections"][0]["map"]["sources"] == ["app/b.js"]
+    assert bundle.source_map(ui_bundle.JS_PATH + ".map", "0" * 16) is None  # another build's map is not this one
+    # A Sentry frame (1-based line and column) back to the source.
+    assert ui_bundle.where(bundle, f"app.bundle.js:{start + 1}:20") == "app/b.js:2:1"
+    assert ui_bundle.where(bundle, f"https://x.example/tico/ui/app.bundle.js:{start + 1}:1") == "app/b.js:1:1"
+    assert ui_bundle.where(bundle, "app.bundle.js:3:1") is None  # a's line: not minified
+    # The same files built elsewhere, written at another time (another server, a rebuilt image), name the same map.
+    import shutil
+
+    other = tmp_path / "copy"
+    shutil.copytree(ui, other / "ui")
+    shutil.copytree(out, other / "build/ui")
+    for f in (other / "build/ui").rglob("*"):
+        os.utime(f, ns=(f.stat().st_atime_ns, f.stat().st_mtime_ns + 5_000_000_000))
+    assert ui_bundle.build(other / "ui")[0].parts[ui_bundle.JS_PATH] == bundle.parts[ui_bundle.JS_PATH]
+    # b.js edited after the build: the copy is old, so the file is bundled as it is now, without a map.
+    edited = ui / "app/b.js"
+    before = edited.stat()
+    edited.write_text("'use strict';\nconst BETA = ALPHA + 2;\n")
+    os.utime(edited, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+    stale = bundles.get().parts[ui_bundle.JS_PATH].decode()
+    assert "const BETA = ALPHA + 2;" in stale and "sourceMappingURL" not in stale and not bundles.get().sections
+
+
+@served
+def test_the_served_bundle_is_minified_and_maps_to_its_source(api):
+    page = api.get("/", headers=AUTH).text
+    parts = re.findall(r'(?:src|href)="(/tico/ui/app\.bundle(?:\.\d+)?\.(?:js|css))\?v=[0-9a-f]{16}"', page)
+    # and the page parts (ui/parts.json), each under its own address
+    parts += re.findall(r'"url":"(/tico/ui/app\.bundle\.[a-z][a-z0-9-]*\.js)\?v=[0-9a-f]{16}"', page)
+    served, sources = 0, 0
+    for path in parts:
+        body = api.get(path, headers={**AUTH, "Accept-Encoding": "identity"}).text
+        served += len(body)
+        tail = re.search(
+            r"sourceMappingURL=(app\.bundle(?:\.\d+|\.[a-z][a-z0-9-]*)?\.(?:js|css)\.map\?v=[0-9a-f]{16})", body
+        )
+        assert tail, path  # every part holds minified files
+        r = api.get("/tico/ui/" + tail.group(1), headers=AUTH)
+        assert r.status_code == 200 and r.json()["sections"], path
+        assert api.get("/tico/ui/" + tail.group(1)).status_code == 401
+    assert api.get("/tico/ui/app.bundle.js.map?v=" + "0" * 16, headers=AUTH).status_code == 404
+    html = (ui_build.ROOT / "ui/index.html").read_text()
+    for ref in re.findall(r'(?:src|href)="/tico/ui/([^"]+)"', html.split("bundle:css:start")[1]):
+        if "bundle:" in ref:
+            continue
+        sources += (ui_build.ROOT / "ui" / ref).stat().st_size
+    assert served < sources * 0.85, (served, sources)  # minified: today's sources shrink by about a quarter
+    # A frame in a minified file names its source file and line.
+    bundle = ui_bundle.shared(ui_build.ROOT / "ui").get()
+    text = bundle.parts[ui_bundle.part_path("js", 1)].decode().split("\n")
+    line = next(i for i, t in enumerate(text) if not t.startswith("//") and re.search(r"function \w{6,}\(", t))
+    m = re.search(r"function (\w{6,})\(", text[line])
+    source, at, _ = ui_bundle.where(bundle, f"app.bundle.2.js:{line + 1}:{m.start(1) + 1}").rsplit(":", 2)
+    assert re.search(
+        rf"function {m.group(1)}[(<]", (ui_build.ROOT / "ui" / source).read_text().split("\n")[int(at) - 1]
+    )
+
+
 def test_a_typescript_file_is_served_as_its_compiled_javascript(api):
     # With the files served separately (TICO_UI_BUNDLE=off), the page asks for the .ts name it lists.
     name = next(n for n in ui_build.sources(ui_build.ROOT / "ui") if n.startswith("app/"))
@@ -444,3 +585,136 @@ def test_a_stale_service_worker_build_is_a_503_never_the_source(bundle_mode, api
         r = api.get(path, headers=AUTH)
         assert r.status_code == 503 and r.json()["error"]["code"] == "ui_not_built", path
         assert "addEventListener" not in r.text, path
+
+
+def _parted_ui(tmp_path, parts):
+    """A ui/ with a shell file (a.js), two page files (b.js, c.js) and ui/parts.json as given."""
+    import json
+
+    ui = tmp_path / "ui"
+    (ui / "app").mkdir(parents=True)
+    (ui / "styles").mkdir()
+    (ui / "app/a.js").write_text("'use strict';\nconst A = 1;\nfunction aGo() { pageB(); bStop(); }\n")
+    (ui / "app/b.js").write_text(
+        "'use strict';\nconst B = A + 1;\nfunction pageB() { return B; }\nfunction bStop() {}\n"
+    )
+    (ui / "app/c.js").write_text("'use strict';\nfunction cHelp() { return B + 1; }\n")
+    (ui / "styles/a.css").write_text("a{color:red}\n")
+    (ui / "index.html").write_text(
+        "<head>\n<!-- bundle:css:start -->\n<link rel=\"stylesheet\" href=\"/tico/ui/styles/a.css\">\n"
+        "<!-- bundle:css:end -->\n</head>\n<body>\n<!-- bundle:js:start -->\n"
+        "<script src=\"/tico/ui/app/a.js\"></script>\n<script src=\"/tico/ui/app/b.js\"></script>\n"
+        "<script src=\"/tico/ui/app/c.js\"></script>\n<!-- bundle:js:end -->\n</body>\n"
+    )
+    (ui / "parts.json").write_text(json.dumps(parts))
+    return ui
+
+
+def _touch(path, text):
+    before = path.stat()
+    path.write_text(text)
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+
+
+def test_a_page_part_is_left_out_of_the_shell_and_named_by_its_own_content(tmp_path):
+    import json
+
+    ui = _parted_ui(
+        tmp_path,
+        {
+            "pb": {"files": ["app/b.js"], "pages": ["pageB"], "idle": ["bStop"]},
+            "pc": {"files": ["app/c.js"], "deps": ["pb"], "calls": ["cHelp"], "events": ["[data-c-toggle]"]},
+        },
+    )
+    bundles = ui_bundle.UiBundle(ui)
+    first = bundles.get()
+    shell = first.js.decode()
+    assert "// file: app/a.js" in shell and "// file: app/b.js" not in shell and "// file: app/c.js" not in shell
+    # The shell names each page part's entries: a page and a call load the part first, an idle one waits for it.
+    assert 'function pageB(...a) { return uiPartCall("pb", "pageB", a, true); }' in shell
+    assert 'function cHelp(...a) { return uiPartCall("pc", "cHelp", a, false); }' in shell
+    assert "function bStop() {}" in shell
+    assert shell.index("function pageB") < shell.index("// file: app/a.js")  # before any file runs
+    table = json.loads(
+        re.search(r'<script type="application/json" id="ui-parts">(.*?)</script>', first.page.decode()).group(1)
+    )
+    assert set(table["parts"]) == {"pb", "pc"} and table["parts"]["pc"]["load"] == ["pb", "pc"]
+    # A control the shell draws whose click the part handles: the page loads the part on its first click.
+    assert table["parts"]["pc"]["events"] == ["[data-c-toggle]"] and "events" not in table["parts"]["pb"]
+    url = table["parts"]["pb"]["url"]
+    path, v = url.split("?v=")
+    assert path == "/tico/ui/app.bundle.pb.js" and ui_bundle.is_part(path)
+    assert (
+        first.parts[path].decode().startswith("'use strict';\n") and "// file: app/b.js" in first.parts[path].decode()
+    )
+    assert first.part_version[path] == v == ui_bundle._etag(first.parts[path])[1:17]
+    assert table["build"] == first.build and first.build.split(".")[0] != first.version["js"]
+    shell_v = re.search(r"app\.bundle\.js\?v=([0-9a-f]{16})", first.page.decode()).group(1)
+    # A release that changed one page's file changes that part's address only: the shell and the other part keep theirs.
+    _touch(ui / "app/b.js", "'use strict';\nconst B = A + 2;\nfunction pageB() { return B; }\nfunction bStop() {}\n")
+    second = bundles.get()
+    table2 = json.loads(re.search(r'id="ui-parts">(.*?)</script>', second.page.decode()).group(1))
+    assert table2["parts"]["pb"]["url"] != url and table2["parts"]["pc"]["url"] == table["parts"]["pc"]["url"]
+    assert re.search(r"app\.bundle\.js\?v=([0-9a-f]{16})", second.page.decode()).group(1) == shell_v
+    assert second.build != first.build  # an open page still learns there is a new build
+    # A shell change keeps every part's address.
+    _touch(ui / "app/a.js", "'use strict';\nconst A = 5;\nfunction aGo() { pageB(); bStop(); }\n")
+    third = bundles.get()
+    assert (
+        json.loads(re.search(r'id="ui-parts">(.*?)</script>', third.page.decode()).group(1))["parts"] == table2["parts"]
+    )
+    assert re.search(r"app\.bundle\.js\?v=([0-9a-f]{16})", third.page.decode()).group(1) != shell_v
+    # A Sentry frame in a page part is read like one in the shell (here not minified: no source to name).
+    assert ui_bundle.where(third, "https://x.example/tico/ui/app.bundle.pc.js:3:1") is None
+    # A page from before the split asks for the first URL only: the whole app is every part, the page parts last.
+    assert third.js_whole.endswith(third.parts["/tico/ui/app.bundle.pc.js"])
+
+
+@pytest.mark.parametrize(
+    "parts, why",
+    [
+        ({"pb": {"files": ["app/nope.js"]}}, "app/nope.js"),
+        ({"pb": {"files": ["app/b.js"]}, "pc": {"files": ["app/b.js"]}}, "two parts"),
+        ({"pb": {"files": ["app/b.js"], "pages": ["page B"]}}, "page B"),
+        ({"Bad": {"files": ["app/b.js"]}}, "Bad"),
+        ({"pb": {"files": ["app/b.js"], "deps": ["px"]}}, "px"),
+        ({"pb": {"files": ["app/b.js"], "events": [""]}}, "CSS selectors"),
+    ],
+)
+def test_a_wrong_parts_list_is_refused(tmp_path, parts, why):
+    with pytest.raises(ui_bundle.BundleError, match=why):
+        ui_bundle.build(_parted_ui(tmp_path, parts))
+
+
+def test_parts_that_need_each_other_load_together_in_their_listed_order(tmp_path):
+    parts = {
+        "pb": {"files": ["app/b.js"], "deps": ["pc"]},
+        "pc": {"files": ["app/c.js"], "deps": ["pb"]},
+    }
+    found = ui_bundle.read_parts(_parted_ui(tmp_path, parts), ["app/a.js", "app/b.js", "app/c.js"])
+    assert found["pb"]["load"] == found["pc"]["load"] == ["pb", "pc"]
+
+
+def test_a_page_part_over_the_webkit_limit_is_refused(tmp_path, monkeypatch):
+    # The desktop app's WebKit keeps no file over PART_BYTES: a part that large would be downloaded on every open.
+    ui = _parted_ui(tmp_path, {"pb": {"files": ["app/b.js", "app/c.js"]}})
+    monkeypatch.setattr(ui_bundle, "PART_BYTES", 60)
+    with pytest.raises(ui_bundle.BundleError, match="pb"):
+        ui_bundle.build(ui)
+
+
+@served
+def test_a_page_part_is_kept_at_its_address_and_an_old_address_is_refused(api, monkeypatch, tmp_path):
+    ui = _parted_ui(tmp_path, {"pb": {"files": ["app/b.js"], "pages": ["pageB"]}})
+    bundle, _ = ui_bundle.build(ui)
+    monkeypatch.setattr(ui_bundle.UiBundle, "get", lambda self: bundle)
+    path, v = "/tico/ui/app.bundle.pb.js", bundle.part_version["/tico/ui/app.bundle.pb.js"]
+    r = api.get(f"{path}?v={v}", headers={**AUTH, "Accept-Encoding": "identity"})
+    assert r.status_code == 200 and r.content == bundle.parts[path]
+    assert r.headers["cache-control"] == ui_bundle.IMMUTABLE and r.headers["content-type"].startswith("text/javascript")
+    assert api.get(f"{path}?v={v}").status_code == 401
+    # An open tab from before a release names the old address: never another build's code under it (the page
+    # reloads to the current release instead, ui/app/parts.ts).
+    old = api.get(f"{path}?v={'0' * 16}", headers=AUTH)
+    assert old.status_code == 404 and old.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    assert api.get("/tico/ui/app.bundle.px.js", headers=AUTH).status_code == 404

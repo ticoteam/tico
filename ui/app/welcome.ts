@@ -651,9 +651,10 @@ function onbDone(state: OnbState) {
 // ----------------------------------------------------------------- Welcome (a team from the company file)
 // A company whose team came in from the company file at install (hosted signup) has nothing to set up: the owner's first
 // visit is one screen in the same modal, in place of the tour: the team as it is, what the bots run on, Start.
-async function onbWelcome(): Promise<boolean> {
+// `held`: the setup record the caller already read (ui/getting-started.ts reads it before loading this part).
+async function onbWelcome(held?: Partial<OnbRecord> | null): Promise<boolean> {
   if (S.me?.role !== 'owner' || ONB) return false;
-  const record = await get<Partial<OnbRecord> | null>('/v2/setup').catch(() => null);
+  const record = held !== undefined ? held : await get<Partial<OnbRecord> | null>('/v2/setup').catch(() => null);
   if (!record?.completed || !record.company_import || ONB || S.route === WELCOME) return false;
   const state: OnbState = {step: 0, steps: ['welcome'], providers: null, models: [], record: JSON.parse(JSON.stringify(ONB_BLANK)),
     catalog: catalogState([]), busy: false, completing: false, poll: null, org: obBlank(), mode: 'default',

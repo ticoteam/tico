@@ -4,7 +4,7 @@ Triggered by a task asking for a named release, or by a person asking for one. B
 checklist with a go or no-go, the notes, a suggested version, and an ask for the owner's OK. Nothing is tagged until the owner OKs
 that exact version.
 
-Engineering tasks waiting in Release need none of this: a person already signed each off in Fixes 2, and that is the OK.
+Engineering tasks waiting in Release need none of this: a person already signed each off in QA, and that is the OK.
 Cut their release with `tico task release <id> --version N` (with `--tag <version>` where the repository releases from a
 tag), once for the repository; every task waiting on it moves on when the release is published. The daily release hour's
 task is the same: ask once for a task in Release, then close the hour's task. Where the stage has no "Release with" set
@@ -39,7 +39,10 @@ range is listed under "Could not classify" with the question.
 
 ## 5. Ask for the OK
 
-    tico task ask <id> --to <owner> "Publish release 1.4.2 at commit abc1234? <the readiness recommendation in a few words>" --kind ok --version N
+Build the release report (`playbooks/write-the-release-report.md`): the changelog from step 4 first, with each
+change's screenshot, then why we are confident (step 3), the plan and the biggest risks. Ask once, showing it:
+
+    tico task ask <id> --to <owner> "Publish release 1.4.2 at commit abc1234? <the readiness recommendation in a few words>" --kind ok --show page:<file id> --version N
 
 The ask names one version at one commit, as `playbooks/rollout.md` step 0 describes. Put the readiness report and the
 notes' SHA-256 in a comment on the task. A publish goes through only on that OK.
@@ -51,6 +54,6 @@ in one run. Any other version or commit asks again. A failed step stops the roll
 
 ## 7. Finish
 
-Update `knowledge/versioning.md` with the release, its date and commit, and record the release in `state.md`. The task gets one
+Update `knowledge/versioning.md` with the release, its date and commit. The task gets one
 comment: the version and commit, the release link, the notes' path, the readiness outcome, and per install before and after with
 its outcome. Then `tico task done <id> -m "..." --version N`, with the version in the first line.

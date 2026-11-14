@@ -21,7 +21,7 @@ and the date it was read. Where a source disagrees with the team's record, the t
 ## SaaS and renewals
 
 - Notice periods differ by contract. Read the clause; do not rely on memory or on a vendor's dashboard alone. Team practice.
-- A seat is unused only with a dated usage record. Team practice, and the rule in AGENT.md.
+- A seat is unused only with a dated usage record. Team practice, and the rule in AGENTS.md.
 
 ## Anomalies
 

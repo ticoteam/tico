@@ -25,6 +25,7 @@ mod accounts;
 mod afterwatch;
 mod appdriver;
 mod backlog;
+mod browser;
 mod browser_exit;
 mod capture;
 mod checkout_groups;
@@ -62,6 +63,7 @@ mod harness_memory;
 mod harness_tools;
 mod hosts;
 mod idle_load;
+mod instructions;
 mod isolation;
 mod lanes;
 mod lease;
@@ -72,7 +74,6 @@ mod mail_key;
 mod manifest;
 mod mcp;
 mod memory_history;
-mod memory_tidy;
 mod memory_tidy_keep;
 mod model_subscriptions;
 mod op;
@@ -103,6 +104,7 @@ mod source_resume;
 mod state;
 mod subscription_refresh;
 mod tls;
+mod turn_limits;
 mod turn_users;
 mod upload_pace;
 mod util;
@@ -367,6 +369,9 @@ fn main() {
     if argv.get(1).is_some_and(|a| a == reap::FLAG) {
         std::process::exit(reap::main(&argv[2..]));
     }
+    if argv.get(1).is_some_and(|a| a == turn_limits::FLAG) {
+        std::process::exit(turn_limits::main(&argv[2..]));
+    }
     if argv.get(1).is_some_and(|a| a == "--release") {
         // The release this binary was built for (build.rs; "dev" for a source build). `--version` stays the protocol version.
         println!("{}", runner::RUNNER_RELEASE);
@@ -583,7 +588,9 @@ async fn start(command: Command, config: config::Config) -> i32 {
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
     browser_exit::start(client.clone());
+    browser::start(service.config.clone());
     service.run().await;
+    browser::shutdown().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {
         stop.notify_one();

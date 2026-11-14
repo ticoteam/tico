@@ -105,6 +105,10 @@ class Standing:
     about: str | None = None
     since: str | None = None  # when it was asked of whom it waits on, when that is later than the visit began
     fix: str | None = None
+    # On a page a person is asked to OK: the sentences of `line` that say why they are asked again or what a bot read
+    # since (new commits since an OK, a bot's read of them). The decision view shows them on their own when it draws the
+    # page's rounds instead of the line (backend/page_rounds.py notices).
+    notices: tuple[str, ...] = ()
 
     @property
     def met(self) -> bool:
@@ -296,6 +300,12 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
     if answer and answer["answer"] == "no":
         notes = (answer.get("notes") or "").strip()
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"Sent back: {notes}" if notes else "Sent back")
+    if task.get("stage_id") == "product-validate":
+        from . import validate_gate
+
+        held = validate_gate.held(conn, task, requirement)  # a bot's OK reaches the person with a passed page only
+        if held:
+            return held
     return Standing(requirement, WAITING, person, what)
 
 
@@ -355,8 +365,7 @@ UNSURE_BEFORE_SQL = (
 # Jev sent back an earlier page of this requirement on this visit (one since replaced): on a page a person OKs anyway,
 # the owner had its one round, so the next send back is that person's to decide (`_page`).
 NOT_MET_BEFORE_SQL = UNSURE_BEFORE_SQL.replace("v.verdict = 'unsure'", "v.verdict = 'not_met'")
-# What Jev's unsure says to the bot that holds the stage, and then to the pipeline's manager bot (`_unsure_to_bots`).
-FIX_OR_EXPLAIN = "Not yet met: fix it or explain it on the page."
+# What Jev's unsure says to the pipeline's manager bot (`_unsure_to_bots`).
 DECIDE = "Decide if it meets the check: OK it or send it back, and say why."
 
 
@@ -384,13 +393,13 @@ STALE_REVIEW = "New commits since the review"
 
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
-    exact version when the requirement names one or is people only. An answer counts only for the page version it was given on.
+    exact version when the requirement names one or is people only. An answer counts only for the page version it was given on,
+    except a person's OK of an earlier version of the same page at the same commits (`_same_code_ok`), which stays.
     Jev's send back is the owner's turn; on a page a person OKs anyway, the next send back on the same visit is that
-    person's to decide. Jev unsure on a stage a bot holds goes to bots first (two sign-offs rule, Nov 11; `_unsure_to_bots`): back to that bot
-    once, then to the pipeline's manager bot; when Jev could not check, straight to the manager bot. Otherwise a person
-    decides, once per visit:
-    after a person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's
-    list. On a page a person OKs that is not a review (Fixes 2's), commits pushed after the reviews are a bot's to
+    person's to decide. Jev unsure, or unable to check, on a stage a bot holds goes straight to the pipeline's manager bot
+    for one look per version (`_unsure_to_bots`); the page's own bot is not woken to rewrite. On a stage a person OKs,
+    an unsure shows the person nothing from Jev. With no manager bot to look, a person decides once per visit: after a
+    person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's list. On a page a person OKs that is not a review (QA's), commits pushed after the reviews are a bot's to
     review before the person is asked (`_new_commits`). The person's OK is for the commits it was given at: new ones
     since keep it when they change the same lines, or once a bot read and OK'd them (`_after_ok`); and it comes back
     with the task from Merge (`page_for`)."""
@@ -410,15 +419,23 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         answer = _newest_signoff(conn, visit_id, requirement)  # a bot's review of new commits is not the OK
     answer = answer or carried
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
-        answer = None  # given on an earlier page
-    lapsed, lapsed_by, since_ok = "", None, None
+        # Given on an earlier page. A person's OK of an earlier version of this same page, at the commits the PRs are
+        # at now, stays: publishing the page again changed no code (Nov 13, #3584: Chris was asked again for nothing).
+        # Only on the visit where it was given: an OK brought back from Merge is the Merge return's to judge.
+        if signoff and answer is not carried and _same_code_ok(conn, task, requirement, answer, page):
+            name, was = _name(conn, answer["by_id"]), answer["page_version"]
+            return Standing(requirement, MET, line=f"OK'd by {name} on version {was}; no new commits since")
+        answer = None
+    if signoff and carried and answer is carried and (held := _queued_as_is(conn, task, requirement)):
+        return held  # back from Merge at the commits the queue just ran: the OK waits for a fix (task #344)
+    lapsed, lapsed_by, lapsed_ok, since_ok = "", None, None, None
     if signoff and answer and answer["answer"] == "ok" and _moved_since(conn, task, answer):
         # The OK was for the commits the person was shown. New ones that change the same lines keep it; others keep it
         # once a bot read them and OK'd them (`_after_ok`). Otherwise it lapses: the same person is asked again.
         kept, since_ok = _after_ok(conn, task, requirement, answer)
         if kept:
             return kept
-        lapsed_by = str(answer["by_id"])
+        lapsed_by, lapsed_ok = str(answer["by_id"]), answer
         answer, lapsed = None, sentence(f"New commits since {_name(conn, lapsed_by)}'s OK") + " "
         if carried:
             # Back from Merge with no page of its own: the Builder fixes what was sent back and attaches the page again.
@@ -440,8 +457,13 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     if said is None:
         return Standing(requirement, WAITING, JEV, "Jev is checking")
     oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
-    if said == "not_met" and not (
-        oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone()
+    # Jev's verdict on a spec predicts nothing a person decides (task #351: specs it passed were sent back 49% of the
+    # time, those it was unsure of 36%), so on a Spec page it never gates: a missing part goes to the person as its line.
+    gates = jev_gates(requirement)
+    if (
+        said == "not_met"
+        and gates
+        and not (oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone())
     ):
         return Standing(requirement, NOT_MET, owner, f"Jev sent it back: {reasons}" if reasons else "Jev sent it back")
     # This version was asked of someone once Jev had looked: its wait counts from then, not from the stage's start.
@@ -458,13 +480,20 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         person = person or str(back["by_id"])  # the person who sent it back is asked again, by Tico, not by the bot
     if lapsed_by and not requirement.get("person_id") and lapsed_by.startswith("human:"):
         person = person or (lapsed_by if active_person(conn, lapsed_by) else None)
+    if lapsed_ok:
+        lapsed = sentence(_since_ok(conn, task, lapsed_ok, person)) + " "
     after = sentence(f'Version {page["version"]}, after the send back: "{back["said"]}"') + " " if back else ""
+    notices = tuple(part.strip() for part in (lapsed, first) if part.strip())
     after = lapsed + after + first
     if said == "not_met":
         # A page a person OKs anyway that Jev sent back before on this visit: the owner had its round, so the person
         # decides with Jev's reason, as on an unsure (Initech, Nov 11: a page Jev could never pass left only a push-past).
-        line = f"Jev sent it back again: {reasons}" if reasons else "Jev sent it back again"
-        return Standing(requirement, WAITING, person, after + line, since=asked)
+        # A Spec page Jev never gates: the person sees the part that is missing.
+        if not gates:
+            line = f"Jev: {reasons}" if reasons else "Jev: a part is missing"
+        else:
+            line = f"Jev sent it back again: {reasons}" if reasons else "Jev sent it back again"
+        return Standing(requirement, WAITING, person, after + line, since=asked, notices=notices)
     if said in ("unsure", "failed"):
         # A failed verdict's reason is why the calls failed (last_error): it was Jev, not the page.
         failure = " ".join(str((verdict or {}).get("last_error") or "").split())
@@ -474,10 +503,14 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
             else (f"Jev is unsure: {reasons}" if reasons else "Jev is unsure")
         )
         if oks_anyway:
-            # A person OKs this page whatever Jev says: they are asked at once, every version, with Jev's reason. A bot
-            # round trip adds nothing (Acme, Nov 11: after a send back, v2 went to nobody and the Builder improvised asks).
-            return Standing(requirement, WAITING, person, after + line, since=asked)
-        routed = _unsure_to_bots(conn, task, requirement, line, failed=said == "failed")
+            # A person OKs this page whatever Jev says: they are asked at once, every version. A bot round trip adds
+            # nothing (Acme, Nov 11: after a send back, v2 went to nobody and the Builder improvised asks). Jev's can't
+            # tell names nothing to fix and predicts nothing they decide (task #351: people OK'd 41 of 45 QA pages it
+            # was unsure of), so they see nothing from Jev, as when every part is there.
+            return Standing(
+                requirement, WAITING, person, f"{after}{_ok_line(conn, person, page)}", since=asked, notices=notices
+            )
+        routed = _unsure_to_bots(conn, task, requirement, line)
         if routed:
             routed.since = asked if routed.state == WAITING else None
             return routed
@@ -486,12 +519,93 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         return Standing(requirement, WAITING, person, line, since=asked)
     if oks_anyway:
         # A people-only page that names nobody (or whose person left) is any person's: Jev passing it is never enough.
-        from . import hubdb
-
-        H: Any = hubdb
-        name = H.actor_name(conn, person) if person else "someone"
-        return Standing(requirement, WAITING, person, f"{after}OK {name} (version {page['version']})", since=asked)
+        return Standing(
+            requirement, WAITING, person, f"{after}{_ok_line(conn, person, page)}", since=asked, notices=notices
+        )
     return Standing(requirement, MET, line="Jev passed it")
+
+
+def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row, page: Row) -> bool:
+    """Whether `answer`, given on an earlier version of the page now attached, is a person's OK that still holds: the
+    same file (another page is another thing to OK), and the linked PRs' newest commits the ones it was given at."""
+    if answer["answer"] != "ok" or not str(answer["by_id"]).startswith("human:"):
+        return False
+    heads = _heads_of(answer.get("heads"))
+    if not heads or heads != heads_now(conn, task):
+        return False
+    shown = conn.execute(
+        "SELECT file_id, version FROM requirement_pages WHERE visit_id=? AND requirement_id=? AND created_at<=? "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (answer["visit_id"], requirement["id"], answer["created_at"]),
+    ).fetchone()
+    return bool(shown) and shown[0] == page["file_id"] and shown[1] == answer.get("page_version")
+
+
+def short_heads(heads: dict[str, object] | None) -> str:
+    """The commits an OK was given at, as a person reads them: one PR's short head, or each PR's."""
+    found = sorted((heads or {}).items())
+    if len(found) == 1:
+        return str(found[0][1])[:7]
+    return ", ".join(f"{ref} at {str(sha)[:7]}" for ref, sha in found)
+
+
+def _since_ok(conn: "sqlite3.Connection", task: Row, ok: Row, person: str | None) -> str:
+    """Why `person` is asked again after new commits did not keep their OK (`ok`): "2 new commits since your OK at
+    b4b690b: 'card shows a pick wait's line' and 1 more, 1 file." (item_sources.github.since: GitHub's compare of each
+    commit). While Tico has not read what the commits are: "New commits since Ben's OK"."""
+    from .item_sources import github as F
+
+    kept = _heads_of(ok.get("heads")) or {}
+    whose = "your" if person and person == str(ok["by_id"]) else f"{_name(conn, ok['by_id'])}'s"
+    came = F.since(conn, kept, cast("dict[str, object]", heads_now(conn, task)))
+    if not came or not came["commits"]:
+        return f"New commits since {_name(conn, ok['by_id'])}'s OK"  # as before Tico kept what commits are
+    count, titles, files = came["commits"], came["titles"], came["files"]
+    what = f"{count} new commit{'s' if count != 1 else ''} since {whose} OK at {short_heads(kept)}"
+    if titles:
+        more = count - 1
+        what += f": '{titles[0]}'" + (f" and {more} more" if more else "")
+    return f"{what}, {files} file{'s' if files != 1 else ''}"
+
+
+def ok_kept(conn: "sqlite3.Connection", task: Row, requirement: Row, page: Row) -> Row | None:
+    """The person's OK that a page just attached (`page`, a `requirement_pages` row) keeps: given on an earlier version
+    of the same page on this visit, at the commits the PRs are at now (`_same_code_ok`), as `_page` counts it. None when
+    the requirement is not a person's OK, or no OK carries. task_pages.attach says so on the task and to the bot."""
+    settings: Row = requirement.get("settings") or {}
+    if settings.get("at_head") or not (requirement.get("person_id") or people_only(requirement)):
+        return None
+    visit_id = task["visit"]["id"]
+    answer = newest_answers(conn, visit_id).get(requirement["id"])
+    if answer and _reviews_new(requirement, answer):
+        answer = _newest_signoff(conn, visit_id, requirement)
+    if not answer or answer.get("page_version") == page["version"]:
+        return None
+    return answer if _same_code_ok(conn, task, requirement, answer, page) else None
+
+
+def _ok_line(conn: "sqlite3.Connection", person: str | None, page: Row) -> str:
+    """What a page a person OKs says while it waits on them and nothing is missing: who OKs which version."""
+    from . import hubdb
+
+    H: Any = hubdb
+    name = H.actor_name(conn, person) if person else "someone"
+    return f"OK {name} (version {page['version']})"
+
+
+def jev_gates(requirement: Row) -> bool:
+    """Whether Jev's not met sends a page back to its owner: everywhere but a Spec page a person OKs, where Jev only
+    shows the person the part that is missing (`_page`)."""
+    oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
+    return not (oks_anyway and _check_of(requirement) == "spec")
+
+
+def _check_of(requirement: Row) -> str | None:
+    """Which of Jev's shipped checks a page requirement's rubric is (pipeline_judges.check_of), or None."""
+    from . import pipeline_judges as PJ
+
+    settings: Row = requirement.get("settings") or {}
+    return PJ.check_of(settings.get("rubric") or "")
 
 
 def _sent_back(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> Row | None:
@@ -532,11 +646,11 @@ NEW_REVIEWED_SQL = (
     "AND a.undone_at IS NULL AND a.heads IS NOT NULL AND (r.who_oks = 'people_only' OR r.person_id IS NOT NULL)"
 )
 # What the bot that wrote the newest review is asked when commits came after it, before a person OKs a page that is not
-# a review (Fixes 2's Review page). It does so DELTA_ROUNDS times a visit at most: after that the person is asked, told
+# a review (QA's page). It does so DELTA_ROUNDS times a visit at most: after that the person is asked, told
 # that the newest commits had no bot's review. The Builder's fixes after a send back each start a round.
 REVIEW_NEW = "Review the new commits"
 # What the Builder is told when the person's OK, brought back from Merge, lapsed: the page is OK'd again.
-ATTACH_AGAIN = "Attach the Review page again"
+ATTACH_AGAIN = "Attach the QA page again"
 DELTA_ROUNDS = 2
 
 
@@ -679,6 +793,47 @@ def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row 
     return ok
 
 
+# The end of the line when a task came back from the stage that queues its PRs at the commits the queue ran (task #344).
+QUEUED_AS_IS = "The OK from before {stage} comes back once there are new commits"
+
+
+def _queued_as_is(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Standing | None:
+    """The person's OK carried back from Merge (`page_for`) does not count while a linked PR is still at the commit it
+    was last queued at: the queue ran that commit and it did not merge, so the task waits for the Builder's fix instead
+    of going straight back to be queued as it is (Tico Team, Nov 12-13: four bounces, a queue run each). Once every PR
+    has new commits, C22 decides (`_after_ok`). None when no PR is at its queued commit."""
+    from .item_sources import github as F
+
+    still = F.queued_as_is(conn, task["id"])
+    if not still:
+        return None
+    one = len(heads_now(conn, task)) == 1
+    said: list[str] = []
+    for each in still:
+        at = str(each["head"])[:7] if one else f"{each['ref']} at {str(each['head'])[:7]}"
+        why = ", ".join(str(word) for word in (each.get("reason"), each.get("check")) if word)
+        # "failed" only for a failed check: a removal by hand or a conflict says the run did not merge, and why.
+        outcome = "it failed" if each.get("failed") else "it did not merge"
+        # No removal recorded: it was taken out of Merge while still queued, so the queue may never have run it.
+        said.append(
+            f"Merge queue ran {at} and {outcome} ({why}): push a fix"
+            if why
+            else f"Merge queue had {at} and it did not merge: push a fix"
+        )
+    # The visit it came back from: its stage's name, and the note the move back gave, so the one wake on entering
+    # (task_engine._wake_turn, whose "Missing to leave" carries this line) says what the mover said.
+    found = conn.execute(
+        "SELECT s.name, v.how, v.why FROM visits v JOIN stages s ON s.id = v.stage_id WHERE v.task_id=? "
+        "ORDER BY v.entered_at DESC, v.rowid DESC LIMIT 1 OFFSET 1",
+        (task["id"],),
+    ).fetchone()
+    stage = str(found[0]) if found and found[0] else "Merge"
+    note = " ".join(str(found[2] or "").split()) if found and found[1] == "back" else ""
+    if note:
+        said.append(f"Sent back from {stage}: {note}")
+    return Standing(requirement, NOT_MET, task.get("owner_id"), sentences(*said, QUEUED_AS_IS.format(stage=stage)))
+
+
 def _after_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) -> tuple[Standing | None, list[Row]]:
     """New commits since a person's OK (`ok`, a rebase or a conflict fixed, C22): (the standing that keeps the OK or
     holds it for a bot's read, or None when it lapses; the bot reviews of new commits since it). Commits that change
@@ -713,7 +868,7 @@ def _after_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) 
 def _new_commits(
     conn: "sqlite3.Connection", task: Row, requirement: Row, asked: str, reviews: list[Row] | None = None
 ) -> tuple[Standing | None, str]:
-    """Before a person OKs a page that is not a review (Fixes 2's Review page): the commits no bot reviewed since the
+    """Before a person OKs a page that is not a review (QA's page): the commits no bot reviewed since the
     reviews (`_new_heads`) go to the bot that wrote the newest review (`delta_reviewer`), which reads only them against
     what the reviews found and the spec, and OKs them or sends them back as an answer on this page, at the commits it
     read (answers.heads). Its send back is the owner's turn to fix them; the next commits are a new round. After
@@ -761,27 +916,21 @@ def review_commands(task_id: str, requirement_id: str) -> str:
     )
 
 
-def _unsure_to_bots(
-    conn: "sqlite3.Connection", task: Row, requirement: Row, line: str, *, failed: bool = False
-) -> Standing | None:
+def _unsure_to_bots(conn: "sqlite3.Connection", task: Row, requirement: Row, line: str) -> Standing | None:
     """Jev unsure of a page on a stage a bot holds (docs/pipelines-v3.md "Jev is checking"; the two sign-offs rule of
-    Nov 11 put this before a person). The first time this visit, it is that bot's turn with Jev's reason and the check
-    line, to fix the page or explain on it. The next time, the pipeline's manager bot decides: it OKs the page or sends it
-    back, with why, as an answer on the task. None, so a person decides as before, when a person holds the stage, or no
-    manager bot is set, or the manager is the bot that holds it. `failed` (Jev could not check, after its retries) skips
-    the bot's round: the manager decides at once, since the page may be fine and only Jev was down (Nov 11: a Jev outage
-    never makes a third kind of person sign-off). A page a person OKs anyway (people only, or naming someone) never
-    comes here."""
+    Nov 11 put this before a person). The pipeline's manager bot looks once per version: it gets Jev's line naming the
+    part it can't tell, and OKs the page or sends it back, with why, as an answer on the task. The page's own bot is not
+    sent back to rewrite on an unsure (task #351: after unsure, 76 reviews and 25 Validate pages were rewritten and
+    judged again); a part that is no still goes back to it (`_page`). None, so a person decides as before, when a person
+    holds the stage, or no manager bot is set, or the manager is the bot that holds it. `failed` (Jev could not check,
+    after its retries) goes the same way: the page may be fine and only Jev was down. A page a person OKs anyway (people
+    only, or naming someone) never comes here. The line never carries the check's full wording."""
     from . import waiting_on as W
 
     held = W.holder(conn, task)
     if not W.is_bot(held):
         return None
-    settings: Row = requirement.get("settings") or {}
-    check = " ".join(str(settings.get("rubric") or "").split()) or name_of(requirement)
-    said = line if check in line else f"{sentence(line)} The check: {check}"
-    if not failed and not conn.execute(UNSURE_BEFORE_SQL, (task["visit"]["id"], requirement["id"])).fetchone():
-        return Standing(requirement, NOT_MET, task.get("owner_id"), f"{FIX_OR_EXPLAIN} {said}")
+    said = sentence(line)
     pipeline: Row = task.get("pipeline") or {}
     manager: object = pipeline.get("manager_id")
     if W.is_bot(manager) and manager != held:

@@ -96,7 +96,7 @@ class Stage2(unittest.TestCase):
             d = self.root / f"emp-{slug}"
             d.mkdir()
             (d / "employee.yaml").write_text(text)
-            (d / "AGENT.md").write_text(f"# {slug}\n\n## Role\nYou own {slug} work.\n")
+            (d / "AGENTS.md").write_text(f"# {slug}\n\n## Role\nYou own {slug} work.\n")
         data = self.root / "emp-influencer" / "data"
         data.mkdir()
         (data / "creators.csv").write_text(self.creators)

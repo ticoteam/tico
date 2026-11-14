@@ -149,6 +149,8 @@ const writeTimedOut = (ms: number | undefined, signature: string) => Object.assi
  */
 const writeRequestOnce = async (method: string, p: string, body: unknown = {}, operationId?: string, opts: ApiWriteOptions = {}): Promise<UntypedJson> => {
   if (SESSION.out) throw signedOutError(true);
+  // A bot's read-only view (backend/app_view.py, view-only.ts) sends no write: the server would refuse it anyway.
+  if (typeof S !== 'undefined' && S.me?.read_only_view) throw Object.assign(new Error('Read-only view'), {status: 403});
   getForget();
   const payload = JSON.stringify(body), signature = method + ' ' + p + '\n' + payload;
   const key = operationId || pendingWrites.get(signature) || newRequestId();
@@ -319,6 +321,9 @@ async function cloudCompose(path: string, body: Record<string, unknown>, files: 
 }
 const toast = (msg: string, isErr?: boolean, action?: ToastAction | null, opts: ToastOptions = {}): void => {
   if (isErr && SESSION.out && !opts.keepWhenSignedOut) return;   // the signed-out banner says why every request fails (session.js)
+  // A bot's read-only view (backend/app_view.py) clicks nothing: a toast there is only a person-only part of the page
+  // refusing the bot, which a person never sees, and it would sit in the bot's screenshot.
+  if (typeof S !== 'undefined' && S.me?.read_only_view) return;
   // An error with nothing else to press offers Report this: Support opens with the error attached (ui/support.js).
   if (isErr && !action && msg && typeof window.talkToUs === 'function' && window.supportOn?.(true)) action = {label: 'Report this', run: () => window.talkToUs?.({kind: 'toast', title: String(msg)})};
   const t = document.createElement('div'); t.className = 'toast' + (isErr ? ' err' : ''); t.textContent = msg;

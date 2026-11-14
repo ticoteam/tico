@@ -1,5 +1,8 @@
-/* ui/app/org-rules.ts — Rules (docs/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with its Internal
-   (Reach: the org chart and a party's panel), External, Due and Suggested tabs, the rule and due-date side panels, the
+/* ui/app/org-rules.ts — Rules (docs/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with a tab for every
+   kind of rule, each with its count (GET /rule-groups): Company (internal; Reach: the org chart and a party's panel),
+   Outside (external), Pipelines and stages (stage rules by pipeline, then stage; changed from a stage's Rules button,
+   stage-rules.ts), Due, Wakes and Automations on tasks (listed, edited on the Automations page), Built in (read-only)
+   and Suggested (a bot's org rules and stage rules, for a person to accept or skip); the rule and due-date side panels, the
    Add rule and Add document dialogs, and a bot's Rules tab.
    Everything is read from and written to the org rules API (backend/org_rules.py): GET /api/v2/rules (paged; every
    page is read, a team has dozens of rules), /rules/due, /rule-sources and /bots/<slug>/rules. A rule
@@ -7,14 +10,12 @@
    again, and a refusal shows as one line. Saving sends the rule's `version`: a 409 reloads it and says so. Add document
    starts a Rules Owner review (POST /rules/read, backend/counsel.py); its suggestions wait in Suggested, and each one's
    quote shows in its side panel, never on its row.
-   Addresses: #/rules[/external|/due|/suggested][?rule=<id> | ?due=<id> | ?due=new&rule=<id>], and on Internal
+   Addresses: #/rules[/external|/stages|/due|/wakes|/automations|/builtin|/suggested][?rule=<id> | ?due=<id> | ?due=new&rule=<id>], and on Internal
    ?party=<party>[&rule=<id>] (a party as docs/reach.md writes it: *, group:<id>, human:<id>, bot:<id>). The filters stay on
    the page, not in the address. On a phone the lists are stacked rows and a panel is a full-screen sheet.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const RULES_ROUTE = '#/rules';
-const RU_TABS: [RuleTab, string][] = [['internal', 'Internal'], ['external', 'External'], ['due', 'Due'], ['suggested', 'Suggested']];
 const RU_REPEATS: [string, string][] = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['quarterly', 'Quarterly'], ['yearly', 'Yearly']];
 const RU_STATUS: Record<string, [string, string]> = {overdue: ['Overdue', 'fail'], due_soon: ['Due soon', 'ready'], upcoming: ['Upcoming', ''], satisfied: ['Satisfied', 'ok']};
 const RU_KINDS: [string, string][] = [['vendor', 'Vendor'], ['customer', 'Customer'], ['government', 'Government'], ['other', 'Other']];
@@ -24,7 +25,14 @@ const RU_BROKEN: [IfBroken, string][] = [['block', 'Stop'], ['escalate', 'Ask fi
 const RU_BROKEN_HINT: Record<string, string> = {block: 'The output is refused.', escalate: 'Held until the reviewer OKs it.', warn: 'It goes through with a note.'};
 const RU_PAGES = 50;        // pages read for one list at most (a page stops at 100 rows or at its byte budget)
 
-type RuleTab = 'internal' | 'external' | 'due' | 'suggested';
+type RuleTab = 'internal' | 'external' | 'stages' | 'due' | 'wakes' | 'automations' | 'builtin' | 'suggested';
+/** An automation the Rules page lists and the Automations page edits: a What wakes one, or one a task starts. */
+interface RuleAuto { id: string; name: string; enabled: boolean }
+/** GET /rule-groups: each tab's count, and the rows of the read-only tabs. Optional: an older hub answers without them. */
+interface RuleGroups {
+  groups?: {key: RuleTab; label: string; count: number}[];
+  wakes?: RuleAuto[]; automations?: RuleAuto[]; built_in?: StageBuiltIn[];
+}
 type RuleKind = 'internal' | 'external';
 type IfBroken = 'block' | 'escalate' | 'warn';
 type ScopeKind = 'groups' | 'bots' | 'people';
@@ -149,6 +157,10 @@ interface RuState {
   rules: { internal: RuleRow[]; external: RuleRow[] };
   reach: ReachState;
   suggested: RuleRow[];
+  /** Stage rules: those in force (Pipelines and stages), and a bot's waiting in Suggested. */
+  stageRules: StageRule[];
+  stageSuggested: StageRule[];
+  groups: RuleGroups | null;
   due: RuleDue[];
   sources: RuleSource[];
   filter: { q: string; who: string; from: string; due: boolean; status: string; routine: string; moreFrom: boolean };
@@ -211,10 +223,6 @@ function ruControls<T>(form: HTMLFormElement): T { return form.elements as unkno
 const ruPhone = () => matchMedia('(max-width:760px)').matches;
 const ruQuery = () => new URLSearchParams((S.route || '').split('?')[1] || '');
 const ruTabOf = (r: string): RuleTab => { const t = ((r || '').split('?')[0] ?? '').slice(RULES_ROUTE.length + 1); return RU_TABS.some(([k]) => k === t) ? t as RuleTab : 'internal'; };
-const ruHref = (tab: string | null, q: Record<string, string> = {}) => {
-  const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v)).toString();
-  return RULES_ROUTE + (tab && tab !== 'internal' ? '/' + tab : '') + (qs ? '?' + qs : '');
-};
 
 // ----------------------------------------------------------------- names
 const ruGroups = () => (S.orgGroups || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
@@ -262,37 +270,6 @@ const ruScopeIds = (scope: RuleScope | ScopeIds | null | undefined): Required<Sc
   people: (scope?.people || []).map(x => typeof x === 'string' ? x : x.id)});
 const ruSameScope = (a: RuleScope | ScopeIds | null | undefined, b: RuleScope | ScopeIds | null | undefined) => JSON.stringify(ruScopeIds(a)) === JSON.stringify(ruScopeIds(b));
 
-// ----------------------------------------------------------------- mentions
-// A rule names a teammate the way a thread's composer writes a mention: @slug for a bot, @handle for a person (their
-// id, the part of their email before the @, or a first name no one else shares). Each shows as a mention chip.
-function ruMentionOf(word: string) {
-  const w = word.toLowerCase();
-  const bot = (S.emps || []).find(e => e.status !== 'archived' && (String(e.id).toLowerCase() === w || String(e.name || '').toLowerCase() === w));
-  if (bot) return {href: '#/bot/' + encodeURIComponent(bot.id), name: botDisplayName(bot.id)};
-  const people = (S.people || []).filter((p: RuPerson) => !p.archived), first = (p: RuPerson) => String(p.name || '').split(' ')[0]?.toLowerCase();
-  const firsts = people.filter(p => first(p) === w);
-  const p = people.find(p => String(p.id).toLowerCase() === w || (p.email && personHandle(p.email) === w)) || (firsts.length === 1 ? firsts[0] : null);
-  return p ? {href: '#/person/' + encodeURIComponent(p.id), name: p.name || p.id} : null;
-}
-// A rule's text as HTML, its @mentions as chips. `as`: 'link' (an <a>), 'inline' (inside a row that is itself a link:
-// a span that opens the teammate on its own click) or 'plain' (inside a button: the chip's look only).
-function ruTextHTML(text: string, as: 'link' | 'inline' | 'plain' = 'link') {
-  return esc(text).replace(/(^|[^\w@])@(\w[\w.-]*)((?:&#39;s\b|[,;:!?)])*)/g, (all: string, pre: string, word: string, after: string) => {
-    const handle = word.replace(/[.-]+$/, ''), hit = handle && ruMentionOf(handle);
-    if (!hit) return all;
-    const label = '@' + esc(hit.name), tail = word.slice(handle.length) + after;
-    const chip = as === 'link' ? `<a class="ru-at" href="${esc(hit.href)}">${label}</a>`
-      : as === 'inline' ? `<span class="ru-at" data-href="${esc(hit.href)}">${label}</span>` : `<span class="ru-at">${label}</span>`;
-    return pre + (tail ? `<span class="ru-at-w">${chip}${tail}</span>` : chip);
-  });
-}
-// An inline chip opens its teammate, not the row around it.
-document.addEventListener('click', ev => {
-  const at = eventElement(ev)?.closest<HTMLElement>('.ru-at[data-href]');
-  if (!at) return;
-  ev.preventDefault(); ev.stopPropagation();
-  location.hash = at.dataset.href ?? '';
-}, true);
 
 // "Jan 31", or "Jan 31, 2027" outside this year.
 function ruDay(iso: string | null | undefined, year = false) {
@@ -315,8 +292,6 @@ const ruDueCell = (rule: RuleRow) => {
   const [d, ...rest] = ruDueSorted(rule), more = rest.length + (rule.due_more || 0);
   return d ? `<span class="ru-due">${esc(ruDay(d.due_on))}${d.repeats && d.repeats !== 'once' ? ` <span class="muted">· ${esc(ruRepeatWord(d.repeats).toLowerCase())}</span>` : ''}${more ? ` <span class="ru-plus">+${more}</span>` : ''}</span>` : '<span class="ru-none">—</span>';
 };
-// A refusal in one line: a 403 is about permission, the rest say what the server said.
-const ruError = (e: unknown) => errorStatus(e) === 403 ? "You can't change this." : errorMessage(e, 'Something went wrong.');
 
 // ----------------------------------------------------------------- reads
 async function ruAll<T = RuleRow>(path: string): Promise<T[]> {
@@ -345,9 +320,15 @@ async function ruLoad(tab: RuleTab): Promise<boolean> {
       [state.rules.external, state.sources] = await Promise.all([ruAll('/v2/rules?kind=external'), ruAll<RuleSource>('/v2/rule-sources')]);
     } else if (tab === 'due') {
       state.due = await ruAll<RuleDue>('/v2/rules/due?next=3660d');
-    } else {
-      state.suggested = await ruAll('/v2/rules?status=suggested');
+    } else if (tab === 'stages') {
+      state.stageRules = (await get<StageRulesList>('/v2/stage-rules', {fresh: true})).items || [];
+    } else if (tab === 'suggested') {
+      [state.suggested, state.stageSuggested] = await Promise.all([ruAll('/v2/rules?status=suggested'),
+        get<StageRulesList>('/v2/stage-rules?status=suggested', {fresh: true}).then(d => d.items || [])]);
     }
+    // Every tab's count, and the rows of Wakes, Automations on tasks and Built in. Read on its own: a tab still lists
+    // its rules when the counts can't be read, and shows none.
+    state.groups = await get<RuleGroups>('/v2/rule-groups', {fresh: true}).catch((): RuleGroups => ({}));
     state.error = '';
   } catch (e) { state.error = errorMessage(e, ''); }
   if (RU !== state || seq !== state.seq) return false;
@@ -362,12 +343,12 @@ async function pageRules() {
   main.classList.add('ru-layout');
   if (!RU || !document.body.contains(RU.root)) {
     main.innerHTML = `<div class="ru" id="ru-root">
-      <header class="ru-ph"><h1>Rules</h1><nav class="ru-tabs" aria-label="Rules"></nav><span class="spacer"></span><span class="ru-acts"></span></header>
+      ${pageHead({title: 'Rules', hook: 'ru-ph', pad: true, tabsHook: 'ru-tabs', tabsAttrs: 'aria-label="Rules"'})}
       <div class="ru-body"><aside class="ru-filters" aria-label="Filters"></aside><section class="ru-list" aria-live="polite">${skelRows(6)}</section>
         <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
     const root: HTMLElement | null = $('#ru-root');
     if (!root) throw new Error('The Rules page did not draw');
-    RU = {root, tab: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [],
+    RU = {root, tab: null, rules: {internal: [], external: []}, suggested: [], stageRules: [], stageSuggested: [], groups: null, due: [], sources: [],
           reach: {...rrNormal(null), error: '', groups: null, party: null, q: '', edit: null, adding: false, shut: new Set(), chart: ''},
           filter: {q: '', who: '', from: '', due: false, status: '', routine: '', moreFrom: false},
           seq: 0, loaded: new Set(), error: ''};
@@ -390,28 +371,33 @@ async function pageRules() {
 }
 function rulesStop() { RU = null; }
 
+// The header (pageHead, drawn once by pageRules) keeps its title; each tab change fills its tabs, tools and button.
 function ruDrawHead() {
-  const ru = ruOpen();
-  ruFind('.ru-tabs').innerHTML = RU_TABS.map(([k, label]) =>
-    `<a href="${ruHref(k)}" data-ru-tab="${k}"${ru.tab === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('');
+  const ru = ruOpen(), head = ruFind('.ru-ph', ru.root);
+  const count = (k: RuleTab) => ru.groups?.groups?.find(g => g.key === k)?.count;
+  pageHeadSet(head, 'tabs', pageHeadTabs(RU_TABS.map(([k, label]) => ({label, href: ruHref(k), count: count(k), cur: ru.tab === k, attrs: `data-ru-tab="${k}"`}))));
   const human = S.me?.role !== 'bot';
   // Internal's search stays put while the page draws again, so it keeps what is typed and its focus.
-  if (ru.tab === 'internal' && ru.root.querySelector('.ru-acts .rr-q')) return;
-  const acts = {
+  if (ru.tab === 'internal' && head.querySelector('.ph-tools .rr-q')) return;
+  const toolsBy: Partial<Record<RuleTab, string>> = {
     internal: `<div class="rr-find"><input class="rr-q" type="search" placeholder="Search people, bots and teams" aria-label="Search people, bots and teams" autocomplete="off">
       <div class="rr-results" role="listbox" aria-label="Matches" hidden></div></div>`,
-    external: human ? '<button class="ghost small" type="button" data-ru-add>+ Add rule</button><button class="primary small" type="button" data-ru-add-doc>+ Add document</button>' : '',
-    due: human ? '<button class="primary small" type="button" data-ru-add-due>+ Add due date</button>' : '',
-    suggested: '',
-  }[ruTab()];
-  ruFind('.ru-acts').innerHTML = acts;
+    external: human ? '<button class="ghost" type="button" data-ru-add>Add rule</button>' : '',
+  };
+  const primaryBy: Partial<Record<RuleTab, string>> = {
+    external: human ? '<button class="primary ph-go" type="button" data-ru-add-doc>Add document</button>' : '',
+    due: human ? '<button class="primary ph-go" type="button" data-ru-add-due>Add due date</button>' : '',
+  };
+  pageHeadSet(head, 'tools', toolsBy[ruTab()] || '');
+  pageHeadSet(head, 'primary', primaryBy[ruTab()] || '');
 }
 function ruDraw() {
   ruDrawHead();
   const root = ruOpen().root, list = ruFind('.ru-list', root), filters = ruFind('.ru-filters', root);
   root.dataset.tab = ruTab();
   if (ruOpen().error) { filters.innerHTML = ''; list.innerHTML = `<p class="err ru-pad">${esc(ruOpen().error)}</p>`; return; }
-  const draw = {internal: ruDrawInternal, external: ruDrawExternal, due: ruDrawDue, suggested: ruDrawSuggested}[ruTab()];
+  const draw = {internal: ruDrawInternal, external: ruDrawExternal, due: ruDrawDue, suggested: ruDrawSuggested, stages: ruDrawStages,
+    wakes: ruDrawWakes, automations: ruDrawAutomations, builtin: ruDrawBuiltIn}[ruTab()];
   draw(filters, list);
 }
 
@@ -506,7 +492,8 @@ function rrFrom(p: string, eff: ReachEff, f: string) {
   const at = eff.from?.[f];
   return at === p ? '' : at ? 'from ' + rrName(at) : 'default';
 }
-const rrFromTag = (p: string, eff: ReachEff, f: string) => { const w = rrFrom(p, eff, f); return w ? `<span class="rr-from">${esc(w)}</span>` : ''; };
+// The panel's source tag reads as a state on its label line: "Default", "From Sales".
+const rrFromTag = (p: string, eff: ReachEff, f: string) => { const w = rrFrom(p, eff, f); return w ? `<span class="rr-from">${esc(w[0]?.toUpperCase() + w.slice(1))}</span>` : ''; };
 const rrMay = (p: string) => ruOpen().reach.mayEdit.has(p);
 // A hub from before Reach has no /v2/reach: its rules still list.
 const rrError = (e: unknown) => errorStatus(e) === 404 ? 'Reach needs a newer hub.' : errorMessage(e, 'Something went wrong.');
@@ -516,8 +503,10 @@ const rrLinesOf = (p: string | null, R: ReachNormal = ruOpen().reach) => R.lines
   .sort((a, b) => (a.dir === 'to' ? 0 : 1) - (b.dir === 'to' ? 0 : 1));
 const rrTone = (l: ReachLine) => l.per_day === 0 ? 'zero' : l.per_day != null ? 'cap' : l.rule?.text ? 'rule' : 'open';
 const rrCount = (l: ReachLine) => l.per_day != null ? `${l.per_day} a day` : l.rule?.text ? '' : 'Allowed';
-const rrCut = (s: string, n: number) => s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s;
-const rrChip = (l: ReachLine) => [rrCount(l), l.rule?.text ? rrCut(l.rule.text, 30) : ''].filter(Boolean).join(' · ');
+// A line's chip says its count ("3 a day", "Allowed"), or "Rule" for a rule alone; the rule's words are in its title and
+// in the panel's row, never cut on the line.
+const rrChip = (l: ReachLine) => rrCount(l) || 'Rule';
+const rrWords = (l: ReachLine) => [rrCount(l), l.rule?.text || ''].filter(Boolean).join(' · ');
 // Who a rule names, as the Add rule dialog takes it.
 const rrScope = (p: string) => {
   const kind = rrKind(p), id = rrId(p);
@@ -554,7 +543,7 @@ function rrGroupBlock(by: Parameters<typeof rdoNode>[0], g: OrgGroup, ctx: Param
 const rrChartHtml = () => rdoChartHtml(rdoTree(rrLead), {seen: new Set(), group: rrGroupBlock});
 // A card's ref (rdoCard: person:<id> or bot:<id>) as a party.
 const rrOfRef = (ref: string) => ref.startsWith('person:') ? 'human:' + ref.slice(7) : ref;
-// A box in the chart's own (unscaled) pixels.
+// A box in the chart's own pixels.
 function rrBox(el: HTMLElement, cv: HTMLElement): RrBox {
   let x = 0, y = 0;
   for (let e: HTMLElement | null = el; e && e !== cv; e = e.offsetParent as HTMLElement | null) { x += e.offsetLeft; y += e.offsetTop; }
@@ -566,22 +555,21 @@ function rrEdge(b: RrBox, tx: number, ty: number): [number, number] {
   const k = Math.min(dx ? (b.w / 2 + 3) / Math.abs(dx) : Infinity, dy ? (b.h / 2 + 3) / Math.abs(dy) : Infinity, 1);
   return [cx + dx * k, cy + dy * k];
 }
-// The chart fits the pane's width down to a readable size (past that it scrolls); the selected party, the parties it
-// has lines with, and the search's matches are marked, and the lines and chips drawn.
+// The chart is drawn at its own size, never shrunk: past the pane it scrolls and a mouse drags it (dragPan). The
+// selected party, the parties it has lines with, and the search's matches are marked, and the lines and chips drawn.
+// The rest are muted only while a team, person or bot is selected or a search runs (Everyone dims nothing).
 function rrMapPaint() {
   const map = RU?.root.querySelector<HTMLElement>('.rr-map');
   if (!map || !map.offsetParent) return;
   const pane = ruFind('.rr-pane', map), sz = ruFind('.rr-sz', map), cv = ruFind('.rr-cv', map);
-  const s = Math.max(0.6, Math.min(1, (pane.clientWidth - 2) / Math.max(1, cv.offsetWidth)));
-  cv.style.transform = `scale(${s})`;
-  sz.style.width = Math.ceil(cv.offsetWidth * s) + 'px'; sz.style.height = Math.ceil(cv.offsetHeight * s) + 'px';
+  sz.style.width = cv.offsetWidth + 'px'; sz.style.height = cv.offsetHeight + 'px';
   const R = ruOpen().reach, p = R.party, q = R.q;
   const nodes = [...cv.querySelectorAll<HTMLElement>('[data-rr-party]')], at = (party: string | null) => nodes.find(n => n.dataset.rrParty === party);
   const lines = rrLinesOf(p);
   const tone = new Map(lines.map((x): [string, string] => [x.other, rrTone(x.l)]));
   const team = rrKind(p) === 'group' ? cv.querySelector(`[data-rr-team="${CSS.escape(p ?? '')}"]`) : null;
   const hits = q ? new Set(rrFind(q).map(x => x.party)) : null;
-  map.classList.toggle('has-sel', !!p);
+  map.classList.toggle('has-sel', !!p && p !== '*');
   map.classList.toggle('searching', !!q);
   for (const n of nodes) {
     const party = n.dataset.rrParty ?? '';
@@ -596,6 +584,9 @@ function rrMapPaint() {
   const marks = ['zero', 'cap', 'rule', 'open'].map(k => `<marker id="rr-mk-${k}" class="rr-mk ${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>`).join('');
   let paths = '', labels = '';
   const spans: [number, number, number, number][] = [];   // each chip's line (from the selected party's end), for placing it below
+  // A card not wholly in the pane's view: its chip leads with its name, so the line says where it goes.
+  const view = pane.getBoundingClientRect(), vx = view.left + pane.clientLeft, vy = view.top + pane.clientTop;
+  const unseen = (el: HTMLElement) => { const r = el.getBoundingClientRect(); return r.left < vx - 1 || r.top < vy - 1 || r.right > vx + pane.clientWidth + 1 || r.bottom > vy + pane.clientHeight + 1; };
   if (from) {
     const a = rrBox(from, cv), both = new Set(lines.filter(x => lines.some(y => y !== x && y.other === x.other)).map(x => x.other));
     for (const {l, dir, other} of lines) {
@@ -610,26 +601,31 @@ function rrMapPaint() {
       paths += `<line class="rr-ln ${k}" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" marker-end="url(#rr-mk-${k})"/>`;
       const cx = ax + (bx - ax) * 0.55 + ox * 3, cy = ay + (by - ay) * 0.55 + oy * 3;
       spans.push([ax + ox * 3, ay + oy * 3, bx + ox * 3, by + oy * 3]);
-      const words = (dir === 'to' ? rrName(p) + ' to ' + rrName(other) : rrName(other) + ' to ' + rrName(p)) + ': ' + rrChip(l);
-      labels += `<button type="button" class="rr-chip ${k}" data-rr-line="${esc(l.id)}" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px" aria-label="${esc(words)}" title="${esc(words)}"${l.may_edit ? '' : ' aria-disabled="true"'}>${esc(rrChip(l))}</button>`;
+      const words = (dir === 'to' ? rrName(p) + ' to ' + rrName(other) : rrName(other) + ' to ' + rrName(p)) + ': ' + rrWords(l);
+      const name = unseen(to) ? `<span class="rr-cn">${esc(rrName(other))}</span> · ` : '';
+      labels += `<button type="button" class="rr-chip ${k}" data-rr-line="${esc(l.id)}" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px" aria-label="${esc(words)}" title="${esc(words)}">${name}${esc(rrChip(l))}</button>`;
     }
   }
   // A party picked from the search or a link, off screen in a chart wider than the pane (a phone): bring it into view.
   if (R.shown !== p && (R.shown = p) && from) {
-    const b = rrBox(from, cv), l = b.x * s, t = b.y * s, r = (b.x + b.w) * s, btm = (b.y + b.h) * s;
+    const b = rrBox(from, cv), l = sz.offsetLeft + b.x, t = b.y, r = l + b.w, btm = b.y + b.h;
     if (l < pane.scrollLeft || r > pane.scrollLeft + pane.clientWidth || t < pane.scrollTop || btm > pane.scrollTop + pane.clientHeight)
       pane.scrollTo({left: (l + r - pane.clientWidth) / 2, top: (t + btm - pane.clientHeight) / 2});
   }
   svg.innerHTML = `<defs>${marks}</defs>${paths}`;
+  // The chips are drawn again on every paint (a scroll coming to rest among them): a chip that had focus keeps it.
+  const focused = document.activeElement instanceof HTMLElement && chips.contains(document.activeElement) ? document.activeElement.dataset.rrLine : '';
   chips.innerHTML = labels;
-  // A chip goes where it covers no card and no chip already placed: along its line first (the middle outward), then
-  // above, below or beside it; where nothing is clear it keeps the first spot that misses the chips.
+  if (focused) chips.querySelector<HTMLElement>(`[data-rr-line="${CSS.escape(focused)}"]`)?.focus({preventScroll: true});
+  // A chip goes where it covers no card and no chip already placed: along its line first (90px past the selected card,
+  // then the middle outward), then above, below or beside it; where nothing is clear it keeps the first spot that
+  // misses the chips. Near the selected card it stays on screen however far its line runs.
   const cards = nodes.filter(n => n.offsetParent).map(n => rrBox(n, cv)), placed: RrBox[] = [];
   const over = (r: RrBox, x: number, y: number, w: number, h: number, pad: number) => Math.abs(r.x + r.w / 2 - x) < (r.w + w) / 2 + pad && Math.abs(r.y + r.h / 2 - y) < (r.h + h) / 2 + pad;
   chips.querySelectorAll<HTMLElement>(':scope > *').forEach((c, i) => {
     const w = c.offsetWidth, h = c.offsetHeight, [x1, y1, x2, y2] = spans[i] ?? [0, 0, 0, 0];
-    const tries: [number, number][] = [];
-    for (const t of [0.55, 0.45, 0.65, 0.35, 0.75, 0.5]) for (const dy of [0, h + 4, -(h + 4), 2 * (h + 4), -2 * (h + 4)])
+    const tries: [number, number][] = [], near = Math.min(0.55, (90 + w / 2) / (Math.hypot(x2 - x1, y2 - y1) || 1));
+    for (const t of [near, 0.55, 0.45, 0.65, 0.35, 0.75, 0.5]) for (const dy of [0, h + 4, -(h + 4), 2 * (h + 4), -2 * (h + 4)])
       for (const dx of [0, w * 0.6, -w * 0.6]) tries.push([x1 + (x2 - x1) * t + dx, y1 + (y2 - y1) * t + dy]);
     const freeOfChips = ([x, y]: [number, number]) => !placed.some(r => over(r, x, y, w, h, 3));
     const at = tries.find(q => freeOfChips(q) && !cards.some(r => over(r, q[0], q[1], w, h, 2))) || tries.find(freeOfChips) || tries[0];
@@ -640,7 +636,7 @@ function rrMapPaint() {
 }
 // The search's matches under the header box (a computer) and the list of parties (a phone).
 function rrSearchPaint() {
-  const R = ruOpen().reach, root = ruOpen().root, box = root.querySelector<HTMLElement>('.ru-acts .rr-results');
+  const R = ruOpen().reach, root = ruOpen().root, box = root.querySelector<HTMLElement>('.ru-ph .rr-results');
   if (box) {
     const found = R.q ? rrFind(R.q).slice(0, RR_MATCHES) : [];
     box.hidden = !R.q;
@@ -674,7 +670,9 @@ function rrPanelDraw(note = '') {
       <button type="button" class="rr-inh-h" data-rr-inh="${esc(k)}" aria-expanded="${open}"><span class="rr-cx" aria-hidden="true">›</span><span class="rr-inh-t">${esc(label)}</span><span class="ru-n">${rules.length}</span></button>
       ${open ? `<div class="rr-inh-l">${rules.map(r => rule(r, 'rr-rule rr-sub')).join('')}</div>` : ''}</div>`; }).join('');
   // Who bots may book is a bot's calendar rule: a person's own has nothing to limit, so none is shown for one.
-  const book = rrKind(p) === 'human' ? '' : `<div class="rr-book"><span class="rr-book-l">Who bots may book</span>${ruSegHTML('rr-book', RR_BOOKS, eff.book, !may)}${rrFromTag(p, eff, 'book')}</div>`;
+  // Each control under its label line, the source of its value at the line's right; the control on one row.
+  const head = (label: string, f: string) => `<div class="rr-row-h"><span class="rr-row-l">${esc(label)}</span>${rrFromTag(p, eff, f)}</div>`;
+  const book = rrKind(p) === 'human' ? '' : `<div class="rr-row rr-book">${head('Who bots may book', 'book')}${ruSegHTML('rr-book', RR_BOOKS, eff.book, !may)}</div>`;
   const lines = rrLinesOf(p), E = R.edit;
   const row = ({l, dir, other}: ReturnType<typeof rrLinesOf>[number]) => {
     const body = `<span class="rr-lt"><span class="rr-dir">${dir === 'to' ? 'To' : 'From'}</span><span class="rr-who">${esc(rrName(other))}</span>
@@ -688,7 +686,7 @@ function rrPanelDraw(note = '') {
   side.innerHTML = `<div class="rr-panel" data-party="${esc(p)}">
     <div class="rr-h"><a class="ru-x rr-back" href="${ruHref('internal')}" aria-label="Back">‹</a><h2>${esc(rrName(p))}</h2></div>
     ${R.error ? `<p class="err">${esc(R.error)}</p>` : ''}
-    <div class="rr-set">${ruSegHTML('rr-mode', RR_MODES, eff.mode, !may)}${rrFromTag(p, eff, 'mode')}${book}${cap('chats_per_day', 'chats a day')}${cap('tasks_per_day', 'tasks a day')}</div>
+    <div class="rr-set"><div class="rr-row rr-reach">${head('Reach', 'mode')}${ruSegHTML('rr-mode', RR_MODES, eff.mode, !may)}</div>${book}${cap('chats_per_day', 'chats a day')}${cap('tasks_per_day', 'tasks a day')}</div>
     <section class="rr-sec" aria-label="Rules"><header><h3 class="ru-lbl">Rules</h3>${human ? '<button class="ghost small" type="button" data-rr-add-rule>+ Add rule</button>' : ''}</header>
       ${groups}${mine.map(r => rule(r)).join('')}${groups || mine.length ? '' : '<p class="rr-none">None.</p>'}</section>
     <section class="rr-sec" aria-label="Exceptions"><header><h3 class="ru-lbl">Exceptions</h3>${R.mayEdit.size && !R.adding && !E ? '<button class="ghost small" type="button" data-rr-add-line>+ Add exception</button>' : ''}</header>
@@ -743,6 +741,10 @@ function ruDrawInternal(filters: HTMLElement, list: HTMLElement) {
       requestAnimationFrame(() => { queued = false; if (pane.isConnected) rrMapPaint(); });
     }).observe(pane);
     document.fonts?.ready.then(() => { if (pane.isConnected) rrMapPaint(); });
+    // A mouse drags the map about; once it comes to rest the chips are drawn again, naming the cards now out of view.
+    dragPan(pane);
+    let still = 0;
+    pane.addEventListener('scroll', () => { clearTimeout(still); still = window.setTimeout(() => { if (pane.isConnected) rrMapPaint(); }, 120); }, {passive: true});
   }
   rrSearchPaint();
   rrPanelDraw();
@@ -811,6 +813,19 @@ function rrEdit(id: string) {
   rrMapPaint(); rrPanelDraw();
   ruOpen().root.querySelector<HTMLInputElement>('.rr-ed input[name=per_day]')?.focus();
 }
+// A chip on the map: a line the viewer may change opens its editor; any other closes an open editor and shows the
+// line's row in the panel, lit for a moment.
+function rrChipGo(id: string) {
+  const R = ruOpen().reach, x = rrLinesOf(R.party).find(y => y.l.id === id);
+  if (!x) return;
+  if (x.l.may_edit) { rrEdit(id); return; }
+  if (R.edit || R.adding) { Object.assign(R, {adding: false, edit: null}); rrMapPaint(); rrPanelDraw(); }
+  const row = ruOpen().root.querySelector<HTMLElement>(`.rr-panel [data-rr-line="${CSS.escape(id)}"]`);
+  if (!row) return;
+  row.scrollIntoView({block: 'nearest'});
+  row.classList.add('lit');
+  setTimeout(() => row.classList.remove('lit'), 1200);
+}
 /** The selected party of the open panel; every control that uses it lives inside that panel. */
 function rrParty(): string {
   const p = ruOpen().reach.party;
@@ -850,6 +865,8 @@ function rrClick(ev: Event) {
     ruOpen().root.querySelector<HTMLInputElement>('.rr-ed input[name=per_day]')?.focus();
     return true;
   }
+  const chip = t.closest<HTMLElement>('.rr-chip[data-rr-line]');
+  if (chip) { rrChipGo(chip.dataset.rrLine ?? ''); return true; }
   const line = t.closest<HTMLElement>('[data-rr-line]');
   if (line) { rrEdit(line.dataset.rrLine ?? ''); return true; }
   const way = t.closest<HTMLButtonElement>('[data-rr-dir]');
@@ -984,8 +1001,106 @@ function ruDrawSuggested(filters: HTMLElement, list: HTMLElement) {
       ${g.rows.map(r => { const who = ruScopeWords(r.who, ''); return `<div class="ru-prop${ruSel(r.id) ? ' sel' : ''}" data-rule="${esc(r.id)}"${who ? ' data-has-who' : ''}><a class="ru-pt" href="${ruHref('suggested', {rule: r.id})}">${ruTextHTML(r.text, 'inline')}</a>
         <select class="ru-pwho" aria-label="Followed by" data-ru-who${r.can_edit ? '' : ' disabled'}><option value="">${esc(who || 'Pick who')}</option>${ruWhoOptions()}</select>
         <span class="ru-pacts">${r.can_edit ? `<button class="ghost small" type="button" data-ru-skip>Skip</button><button class="primary small" type="button" data-ru-accept${who ? '' : ' disabled'}>Add</button>` : ''}</span></div>`; }).join('')}</section>`)
-    .join('') || '<p class="muted ru-pad">No suggestions.</p>';
-  list.querySelectorAll<HTMLElement>('.ru-sg').forEach(ruAddAllSync);
+    .join('');
+  list.innerHTML += ruStageSuggestedHTML(ruOpen().stageSuggested);
+  if (!list.innerHTML) list.innerHTML = '<p class="muted ru-pad">No suggestions.</p>';
+  // Add all is the org rules' sections' alone; the stage rules' section has none.
+  list.querySelectorAll<HTMLElement>('.ru-sg:not([data-group="stage-rules"])').forEach(ruAddAllSync);
+}
+
+// ----------------------------------------------------------------- Pipelines and stages, Wakes, Automations, Built in
+// Stage rules are read here and changed from a stage's Rules button (stage-rules.ts), where On starts as that stage.
+const ruStageWhere = (r: StageRuleCore) => r.scope === 'company' ? 'Every pipeline'
+  : r.scope === 'pipeline' ? `${r.pipeline_name || r.pipeline_id}: every stage` : `${r.pipeline_name || r.pipeline_id}: ${(r.stage_names || r.stages).join(', ')}`;
+function ruStageRowHTML(r: StageRule, acts = ''): string {
+  return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}"><div class="sr-line"><span class="sr-name">${esc(r.name)}</span>`
+    + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
+    + `<div class="sr-what muted">${esc(ruStageWhere(r))} · ${esc(srSentence(r))}</div>${srIdleHTML(r)}</div>`;
+}
+/** What a suggested change alters in the rule it replaces: "When: A task enters → The owner changes", one per part. */
+function ruStageDiff(old: StageRuleCore, r: StageRuleCore): [string, string, string][] {
+  const a = srParts(old), b = srParts(r);
+  const parts: [string, string, string][] = [['Name', old.name, r.name], ['On', ruStageWhere(old), ruStageWhere(r)],
+    ['When', a.when, b.when], ['If', a.ifs || 'always', b.ifs || 'always'], ['Then', a.act, b.act], ['Says', old.reason || '', r.reason || '']];
+  return parts.filter(([, x, y]) => x !== y);
+}
+// A bot's stage rule, change or retire, for a person to accept or skip. Each says what accepting does: a new rule
+// comes into force, a change rewrites the rule it names (what differs is listed), a retire takes that rule out of force.
+function ruStageSuggestedHTML(rows: StageRule[]): string {
+  if (!rows.length) return '';
+  const human = S.me?.role !== 'bot';
+  return `<section class="ru-sg" data-group="stage-rules"><header><h2>Stage rules</h2></header>${rows.map(r => {
+    const old = r.replaces, kind = !r.suggests ? 'new' : r.retires ? 'retire' : 'change';
+    const accept = kind === 'retire' ? 'Retire' : kind === 'change' ? 'Accept change' : 'Accept';
+    const acts = human && r.can_edit ? `<span class="ru-pacts"><button class="ghost small" type="button" data-sr-decide="skip">Skip</button>`
+      + `<button class="primary small" type="button" data-sr-decide="accept">${accept}</button></span>` : '';
+    const title = kind === 'retire' ? `Retire: ${old?.name ?? r.name}` : kind === 'change' ? `Change to ${old?.name ?? r.name}` : `New: ${r.name}`;
+    let more = '';
+    if (kind === 'retire') more = `<div class="sr-says muted" data-sr-why>${r.retire_why ? `Why: ${esc(r.retire_why)}` : 'No reason given.'}</div>`;
+    else if (kind === 'change' && old) {
+      const diff = ruStageDiff(old, r);
+      more = `<ul class="sr-diff" data-sr-diff>${diff.map(([k, x, y]) => `<li><span class="sr-diff-k">${esc(k)}</span> <s class="muted">${esc(x || '(none)')}</s> → ${esc(y || '(none)')}</li>`).join('')
+        || '<li class="muted">Nothing differs from the rule as it is now.</li>'}</ul>`;
+    } else if (kind !== 'new') more = '<div class="sr-says muted">The rule it changes is gone; skip it.</div>';
+    return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"><div class="sr-line"><span class="sr-name">${esc(title)}</span>`
+      + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
+      + `<div class="sr-what muted">${esc(ruStageWhere(old ?? r))} · ${esc(srSentence(old ?? r))}</div>${more}${kind === 'retire' ? '' : srIdleHTML(r)}</div>`;
+  }).join('')}</section>`;
+}
+// By pipeline, then stage: Company first, then each pipeline's whole-pipeline rules and its stages' rules.
+function ruDrawStages(filters: HTMLElement, list: HTMLElement) {
+  filters.innerHTML = '';
+  const rows = ruOpen().stageRules, groups = new Map<string, StageRule[]>();
+  for (const r of rows) {
+    const key = r.scope === 'company' ? 'Company: every pipeline' : r.scope === 'pipeline' ? `${r.pipeline_name || r.pipeline_id} · Whole pipeline`
+      : `${r.pipeline_name || r.pipeline_id} · ${(r.stage_names || r.stages).join(', ')}`;
+    groups.set(key, [...(groups.get(key) || []), r]);
+  }
+  list.innerHTML = [...groups].map(([name, rs]) => `<section class="ru-sg sr-ru-group"><header><h2>${esc(name)} <span class="ru-n tnum">${rs.length}</span></h2></header>`
+    + rs.map(r => ruStageRowHTML(r, r.can_edit && r.scope === 'stage'
+      ? `<span class="ru-pacts"><button class="ghost small" type="button" data-sr-open-ru="${esc(r.stages[0] ?? '')}" data-sr-pipeline="${esc(r.pipeline_id)}" data-sr-name="${esc(r.stage_names?.[0] ?? '')}">Edit</button></span>` : '')).join('')
+    + '</section>').join('') || '<p class="muted ru-pad">No stage rules. Add one from a stage\'s Rules button on its pipeline.</p>';
+}
+function ruAutosHTML(rows: RuleAuto[], empty: string): string {
+  return rows.length ? `<p class="muted ru-pad">Listed here; edited on the Automations page.</p>${rows.map(a => `<div class="ru-row sr-row-ru"><div class="sr-line">`
+    + `<a class="sr-name" href="${AUTOMATION_HREF(a.id)}">${esc(a.name)}</a><span class="sr-cost">${a.enabled ? 'On' : 'Off'}</span></div></div>`).join('')}`
+    : `<p class="muted ru-pad">${empty}</p>`;
+}
+function ruDrawWakes(filters: HTMLElement, list: HTMLElement) {
+  filters.innerHTML = '';
+  list.innerHTML = ruAutosHTML(ruOpen().groups?.wakes || [], 'No What wakes automations.');
+}
+function ruDrawAutomations(filters: HTMLElement, list: HTMLElement) {
+  filters.innerHTML = '';
+  list.innerHTML = ruAutosHTML(ruOpen().groups?.automations || [], 'No automations start from a task.');
+}
+// What Tico does in code: read-only.
+function ruDrawBuiltIn(filters: HTMLElement, list: HTMLElement) {
+  filters.innerHTML = '';
+  const rows = ruOpen().groups?.built_in || [];
+  list.innerHTML = `<p class="muted ru-pad">In code, read-only.</p>` + rows.map(b => `<div class="ru-row sr-row-ru sr-builtin" data-built-in><div class="sr-line"><span class="sr-name">${esc(b.name)}</span></div>`
+    + `${b.what ? `<div class="sr-what muted">${esc(b.what)}${b.where ? ` · ${esc(b.where)}` : ''}</div>` : ''}</div>`).join('');
+}
+// Accept or Skip on a suggested stage rule; Edit opens the stage's Rules panel.
+async function ruStageClick(ev: MouseEvent): Promise<boolean> {
+  const el = eventElement(ev)?.closest<HTMLElement>('[data-sr-decide],[data-sr-open-ru]');
+  if (!el) return false;
+  if (el.dataset['srOpenRu'] !== undefined) {
+    await stageRulesOpen(el.dataset['srPipeline'] ?? '', el.dataset['srOpenRu'] ?? '', el.dataset['srName'] ?? '');
+    return true;
+  }
+  const id = el.closest<HTMLElement>('[data-stage-rule]')?.dataset['stageRule'] ?? '', action = el.dataset['srDecide'] ?? '';
+  const r = ruOpen().stageSuggested.find(x => x.id === id);
+  if (!r) return true;
+  el.setAttribute('disabled', '');
+  try {
+    await post(`/v2/stage-rules/${encodeURIComponent(id)}/${action}`, {revision: r.revision});
+    toast(action === 'skip' ? 'Skipped' : r.retires ? 'Retired' : 'Accepted');
+    ruOpen().loaded.clear();
+    SR_BOARD.clear();  // the board's Rules counts read again the next time it draws
+    if (await ruLoad('suggested')) ruDraw();
+  } catch (e) { el.removeAttribute('disabled'); toast(ruError(e)); }
+  return true;
 }
 // The rows of a group that can be added now: the viewer may, and a Who is set.
 const ruReady = (group: HTMLElement) => [...group.querySelectorAll<HTMLElement>('.ru-prop')].filter(p => {
@@ -1048,6 +1163,7 @@ function ruWire() {
       else f[key] = f[key] === v ? '' : v;
       ruDraw(); return;
     }
+    if (t.closest('[data-sr-decide],[data-sr-open-ru]')) { void ruStageClick(ev); return; }
     if (t.closest('[data-ru-more]')) { ruOpen().filter.moreFrom = true; ruDraw(); return; }
     if (t.closest('[data-ru-add]')) { ruAddOpen({kind: ruOpen().tab === 'external' ? 'external' : 'internal'}); return; }
     if (t.closest('[data-ru-add-due]')) { location.hash = ruHref('due', {due: 'new'}); return; }
@@ -1359,11 +1475,11 @@ async function ruRulePanel(side: HTMLElement, id: string, note = '') {
     } catch (e) { status.textContent = ruError(e); }
   });
   form.querySelector('[data-ru-retire]')?.addEventListener('click', async () => {
-    if (!confirm('Retire this rule?')) return;
+    if (!(await askConfirm('Retire this rule?'))) return;
     try {
       const out: {due?: RuleDue[]} = await post('/v2/rules/' + encodeURIComponent(r.id) + '/retire', {version: r.version});
       const dues = (out.due || []).filter(d => !d.retired_at);
-      if (dues.length && confirm(dues.length === 1 ? 'Remove its due date too?' : `Remove its ${dues.length} due dates too?`))
+      if (dues.length && (await askConfirm(dues.length === 1 ? 'Remove its due date too?' : `Remove its ${dues.length} due dates too?`)))
         for (const d of dues) await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});
       location.hash = ruBack();
       await ruReload();
@@ -1485,7 +1601,7 @@ async function ruDuePanel(side: HTMLElement, id: string, ruleId: string, note = 
   });
   form.querySelector('[data-ru-satisfy-on]')?.addEventListener('click', () => void satisfy(fields.due_on.value));
   form.querySelector('[data-ru-remove]')?.addEventListener('click', async () => {
-    if (!confirm('Remove this due date?')) return;
+    if (!(await askConfirm('Remove this due date?'))) return;
     try {
       if (!d) throw new Error('This due date is gone.');
       await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});

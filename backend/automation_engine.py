@@ -8,7 +8,9 @@ the forks it took (`trail`) and the next step in that list. Paths never rejoin a
 that cursor is the whole position. A run starts with one thread; a `find` replaces it with one per item.
 
 A thread stops when its list ends, a filter rule ends it (`next` end, or `to` a destination), a fork has no
-path or a step fails. A turn over the spend
+path or a step fails. A listening's run also says which of its items a step delivered (`delivery`): one where a step
+missed some ends `partial`, one where every item was missed `failed`, and an item back from an earlier run goes only
+to the steps that did not deliver it then (`_fresh`). A turn over the spend
 cap is recorded as `spend_cap` and the thread goes on without it; a decision with Decide off is `skipped` likewise. It waits for two things: the answer of an `llm` turn that has steps after it, or of a `bot_turn` a later step reads
 (`{{brief.text}}`, or a `post_update` with no text of its own; `answer` fills it, a bot turn's under its step id) and,
 with `batch` times, the next batch time once the leading filters ran (`advance` picks it up when the time comes).
@@ -25,6 +27,8 @@ none of them and never reuses another destination's result.
 
 services:
   judge(state, questions, label, level) -> {"answers": {...}, "cost_usd": n}, or None while Decide is off
+  judge_many([(state, questions), ...], label) -> [result or exception, ...] in order, or None while Decide is off:
+    several find items' Decide calls at once (backend/decide_groups.py), optional; each result is the item's own
   question_set(ref) -> questions, and state_fields(ref) -> the set's `state` fields
   act(do, args, ctx) -> {"ok": bool, "detail": str, ...}
   start_turn(who, prompt, ctx, wait) -> {"ref": str, "turn": {bot, task, session}}, or None when the spend cap stops it
@@ -39,6 +43,8 @@ import json
 import re
 
 from backend import automation_flow as F
+from backend import listening_text as LT
+from clients import judge as J
 
 READY, WAITING, DONE, FAILED = "ready", "waiting", "done", "failed"
 
@@ -87,10 +93,12 @@ def steps_at(flow, trail):
 def values_of(state, thread):
     """What a condition, a prompt and an action's args read: the payload (also as `trigger`), the thread's outputs,
     and the item a `find` gave it."""
-    payload = state["payload"]
+    payload, view = state["payload"], thread.get("view")
+    if view:  # a step that delivered some of a listening's items in an earlier run gets only the rest (`_fresh`)
+        payload = {**payload, "listening": view["listening"]}
     out = {**payload, "trigger": payload, **thread["outputs"]}
     if thread["item"] is not None:
-        out["item"] = thread["value"]
+        out["item"] = view["item"] if view and "item" in view else thread["value"]
     return out
 
 
@@ -119,6 +127,7 @@ def answer(state, ref, text, cost=0.0, ok=True, flow=None):
             thread.update(state=READY if ok else FAILED, wait=None)
             if not ok:
                 state["status"] = _status(state)
+                conclude(state)
             return True
     return False
 
@@ -151,9 +160,7 @@ def advance(flow, state, services):
         else:
             n += 1
     state["status"] = _status(state)
-    if state["status"] == "failed" and _all_capped(state):
-        state.setdefault("error", CAPPED)
-    return state
+    return conclude(state)
 
 
 def _status(state):
@@ -162,26 +169,153 @@ def _status(state):
         return "running"
     if WAITING in states:
         return "waiting"
-    if FAILED in states or _all_capped(state):
-        return "failed"
     if state["empty"] and not state["threads"]:
         return "empty"
-    if state["steps"] and all(r["status"] == "skipped" for r in state["steps"]):
+    if FAILED not in states and state["steps"] and all(r["status"] == "skipped" for r in state["steps"]):
         return "skipped"
-    return "ok"
+    return outcome(state, "failed" if FAILED in states else "ok")
 
 
-CAPPED = "every turn was stopped by the spend cap"
+# ----------------------------------------------------------------------------- a listening's delivery
+# A listening's send (backend/listening.py `send`) carries its items in the payload's `listening`. An item is delivered
+# when every step that took it handed it over: a turn was started with it, an action ran, a filter's actions ran, or
+# the team's own Paths and filter rules sent it to no further step. A step stopped by the spend cap, held, or failed
+# missed the items it carried, and they go back to waiting (`listening.settle`). Which items a step carried is its
+# record's `ids`: a Paths by tag or by item thread's group or item, else every item sent.
+EFFECTS = ("action", "bot_turn", "llm", "filter")  # the steps that hand items over
+MISSED = {"spend_cap": "spend cap", "held": "held", "failed": "failed"}  # a record's status: why its items missed
 
 
-def _all_capped(state):
-    """A listening's run whose every turn the spend cap stopped: what it sent reached nobody, so it did not go well."""
-    if "listening" not in state["payload"]:
-        return False
-    turns = [r for r in state["steps"] if r["type"] in ("llm", "bot_turn")]
-    return bool(turns) and all(
-        r["status"] == "spend_cap" or (r.get("outputs") or {}).get("skipped") == "spend_cap" for r in turns
-    )
+def _sent(state):
+    sent = state["payload"].get("listening")
+    return sent if isinstance(sent, dict) and isinstance(sent.get("items"), list) else None
+
+
+def _all_ids(sent):
+    return [e.get("id") for e in sent["items"] if isinstance(e, dict)]
+
+
+def _carried(state, thread):
+    """The ids of the listening items a thread carries: a split thread's group or item, else all that was sent."""
+    value = thread["value"]
+    if thread.get("split") and isinstance(value, dict):
+        items = value.get("items")
+        return [e.get("id") for e in items if isinstance(e, dict)] if isinstance(items, list) else [value.get("id")]
+    return _all_ids(_sent(state))
+
+
+def _fresh(state, thread, step):
+    """The items this step carries that it did not deliver in an earlier run (the send's `delivered`: item id -> the
+    steps that delivered it), or None when it delivered none of them before and runs as it is."""
+    sent = _sent(state)
+    before = (sent or {}).get("delivered")
+    if not isinstance(before, dict) or not before or step["type"] not in EFFECTS:
+        return None
+    carried = _carried(state, thread)
+    fresh = [i for i in carried if step["id"] not in (before.get(i) or [])]
+    return None if len(fresh) == len(carried) else fresh
+
+
+def _view(state, thread, ids):
+    """What a step reads instead of the whole send: the send, and a split thread's group or item, cut to `ids`."""
+    view = {"listening": LT.narrow(_sent(state) or {}, ids)}
+    if thread.get("split") and isinstance(thread["value"], dict) and isinstance(thread["value"].get("items"), list):
+        view["item"] = LT.narrow_group(thread["value"], ids)
+    return view
+
+
+class _Delivered:
+    """The services for a filter whose items its actions all delivered in an earlier run: the rules still route the
+    thread, and no action runs again."""
+
+    def __init__(self, services):
+        self._services = services
+
+    def act(self, do, args, ctx):
+        return {"ok": True, "detail": "delivered in an earlier run", "again": True}
+
+    def __getattr__(self, name):
+        return getattr(self._services, name)
+
+
+def _why(record):
+    """Why a record missed the items it carried (MISSED), or None when it did not: a step stopped by the spend cap,
+    held or failed, or a choose step whose turn the cap or a hold stopped (it records ok and runs its default
+    destination, but no turn got the items)."""
+    skipped = (record.get("outputs") or {}).get("skipped")
+    if record["status"] == "ok" and record["type"] == "llm" and skipped in ("spend_cap", "held"):
+        return MISSED[skipped]
+    return MISSED.get(record["status"])
+
+
+def delivery(state):
+    """A listening run's items as its steps left them: `sent` (delivered), `missed` (id -> why: spend cap, held,
+    failed) and `got` (id -> the steps that delivered it in this run). None for a run that is not a listening's."""
+    sent = _sent(state)
+    if sent is None:
+        return None
+    every = _all_ids(sent)
+    got, missed = {i: [] for i in every}, {}
+    for record in state["steps"]:
+        ids = record.get("ids", every)
+        why = _why(record)
+        if why:
+            for i in ids:
+                missed.setdefault(i, why)
+            continue
+        outputs = record.get("outputs") or {}
+        handed = record["type"] != "filter" or any(not a.get("again") for a in outputs.get("actions") or [])
+        # A turn that waits for its answer was started with the items: its task is open, so it has them.
+        turned = record["status"] == "waiting" and record["type"] in ("llm", "bot_turn")
+        if (record["status"] == "ok" or turned) and record["type"] in EFFECTS and handed:
+            for i in ids:
+                if record["id"] not in got.setdefault(i, []):
+                    got[i].append(record["id"])
+    return {
+        "sent": [i for i in every if i not in missed],
+        "missed": {i: missed[i] for i in every if i in missed},
+        "got": {i: got[i] for i in every if got.get(i)},
+    }
+
+
+def outcome(state, status):
+    """A run's ending status (ok or failed), as a listening's reads it: partial when a step missed some items and
+    others were delivered, failed when every item was missed, ok when none was. Any other run keeps `status`."""
+    found = delivery(state) if status in ("ok", "failed", "partial") else None
+    if not found or not (found["sent"] or found["missed"]):
+        return "failed" if status == "partial" else status
+    if not found["missed"]:
+        return "ok"
+    return "partial" if found["sent"] else "failed"
+
+
+def _missed_why(record):
+    """Why a record missed its items, in a few words: the spend cap, a hold, or the step's own error."""
+    if record["status"] != "failed":
+        return _why(record) or "failed"
+    outputs = record.get("outputs") or {}
+    bad = next((a for a in outputs.get("actions") or [] if isinstance(a, dict) and not a.get("ok")), {})
+    return str(outputs.get("error") or outputs.get("detail") or bad.get("detail") or "failed")[:200]
+
+
+def conclude(state):
+    """A listening run that ended (a skipped one too: every step it reached had delivered its items before):
+    `delivery` is kept on the state for `listening.settle` and the run page, each
+    step that missed items says how many (`missed`), and a run that delivered nothing says why (`error`)."""
+    if state["status"] not in ("ok", "failed", "partial", "skipped"):
+        return state
+    found = delivery(state)
+    if found is None:
+        return state
+    state["delivery"] = found
+    every = _all_ids(_sent(state))
+    for record in state["steps"]:
+        if _why(record):
+            record["missed"] = len(record.get("ids", every))
+    first = next((r for r in state["steps"] if _why(r)), None)
+    if state["status"] == "failed" and first is not None and not found["sent"]:
+        state.setdefault("error", "nothing delivered: " + _missed_why(first))
+    return state
 
 
 def _record(state, thread, step, status, outputs=None, cost=0.0):
@@ -194,6 +328,10 @@ def _record(state, thread, step, status, outputs=None, cost=0.0):
     }
     if thread["item"] is not None:
         record["item"] = thread["item"]
+    if thread.get("ids") is not None:
+        record["ids"] = thread["ids"]
+    elif thread.get("split") and _sent(state) is not None:
+        record["ids"] = _carried(state, thread)
     state["steps"].append(record)
     state["cost"] = round(state["cost"] + cost, 6)
     return len(state["steps"]) - 1
@@ -225,11 +363,25 @@ def _step(flow, state, thread, services):
             _record(state, thread, step, "skipped")
             return
         run = RUN[step["type"]]
+        fresh = _fresh(state, thread, step)
+        if fresh is not None:
+            # A listening item back from a run where this step delivered it goes only to the steps that missed it.
+            thread["ids"] = fresh
+            if not fresh and step["type"] != "filter":
+                _record(state, thread, step, "skipped", {"delivered": "before"})
+                thread.pop("ids")
+                return
+            thread["view"] = _view(state, thread, fresh)
+            if not fresh:
+                services = _Delivered(services)
     try:
         run(flow, state, thread, step, services)
     except Exception as exc:  # noqa: BLE001 - a service's failure is the step's, recorded on the run
         _record(state, thread, step, "failed", {"error": (str(exc) or type(exc).__name__)[:300]})
         thread["state"] = FAILED
+    finally:
+        thread.pop("ids", None)
+        thread.pop("view", None)
 
 
 def _chain(services, chain, values, step, key):
@@ -330,11 +482,108 @@ def _act(services, do, args, values, step, key, producer=None):
     return {"do": do, **result}
 
 
-def _decide(flow, state, thread, step, services):
-    questions = step.get("questions") or services.question_set(step["set"])
+# Find items asked about in one Decide call (backend/decide_groups.py, through `services.judge_many`). One until the
+# replay through real Jev shows grouped verdicts match the ones given alone (no more than 2 in 100 changed); then
+# DG.MOST (10).
+GROUP = 1
+
+
+def _asks(flow, state, thread, step, services, after):
+    """(judged, questions, parts, later) for this thread's call at `step`: the object as judged, the questions (merged
+    with the later Decide steps on the same object when they fit in one call, each under its step's id), each step's
+    own questions, and the later steps merged in ({} when none). `after` is the place in the list after `step`."""
     values = values_of(state, thread)
+    questions = step.get("questions") or services.question_set(step["set"])
     judged = F.judge_state(values, services.state_fields(step["set"]) if step.get("set") else None)
-    result = services.judge(judged, questions, f"automation.{step['id']}")
+    later = _same_object(flow, thread, values, judged, services, after)
+    parts = {step["id"]: questions, **later}
+    merged = {f"{sid}:{qid}": q for sid, qs in parts.items() for qid, q in qs.items()}
+    if later and J.fits(judged, merged):  # one call asks every step's questions, each under its step's id
+        return judged, merged, parts, later
+    return judged, questions, parts, {}
+
+
+def _mark(judged, questions):
+    """What a sibling's stashed answer was asked about, short enough to keep on the run: a hash of the call."""
+    import hashlib
+
+    return hashlib.sha256(json.dumps([judged, questions], sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _siblings(flow, state, thread, step):
+    """The other find items' threads ready at this same step, in order, up to GROUP - 1: asked in this thread's call."""
+    out = []
+    for other in state["threads"]:
+        if len(out) >= GROUP - 1:
+            break
+        if other is thread or other["state"] != READY or other["item"] is None or other.get("choice") is not None:
+            continue
+        if other["trail"] != thread["trail"] or other["next"] != thread["next"] - 1:
+            continue
+        if other["batched"] != thread["batched"] or other.get("grouped", {}).get(step["id"]) is not None:
+            continue
+        steps = steps_at(flow, other["trail"])
+        if other["next"] < len(steps) and steps[other["next"]] is step:
+            out.append(other)
+    return out
+
+
+def _judge(flow, state, thread, step, services, judged, questions):
+    """The call's result for this thread (None while Decide is off). A find item's thread asks in one call with the
+    other items ready at the same step (`_siblings`, GROUP at most), each keeping only its own answers: theirs are
+    kept on their threads (`grouped`) for when they reach the step. A failed call fails each item, as its own would."""
+    label = f"automation.{step['id']}"
+    many = getattr(services, "judge_many", None)
+    if GROUP <= 1 or thread["item"] is None or many is None:
+        return services.judge(judged, questions, label)
+    pairs, others = [(judged, questions)], []
+    for other in _siblings(flow, state, thread, step):
+        asked = (other.get("decided") or {}).get(step["id"])
+        own = step.get("questions") or services.question_set(step["set"])
+        if asked is not None and asked["questions"] == own:
+            continue  # an earlier step's call already asked this one
+        try:
+            o_judged, o_questions, _parts, _later = _asks(flow, state, other, step, services, other["next"] + 1)
+        except Exception:  # noqa: BLE001 - that item asks on its own when it runs, and fails there if it must
+            continue
+        pairs.append((o_judged, o_questions))
+        others.append(other)
+    if not others:
+        return services.judge(judged, questions, label)
+    replies = many(pairs, label)
+    if replies is None:  # Decide is off for all of them
+        return None
+    for other, (o_judged, o_questions), reply in zip(others, pairs[1:], replies[1:], strict=True):
+        kept = (
+            {"error": (str(reply) or type(reply).__name__)[:300]}
+            if isinstance(reply, BaseException)
+            else {"result": {"answers": reply.get("answers") or {}, "cost_usd": float(reply.get("cost_usd") or 0)}}
+        )
+        other["grouped"] = {**(other.get("grouped") or {}), step["id"]: {"mark": _mark(o_judged, o_questions), **kept}}
+    if isinstance(replies[0], BaseException):
+        raise replies[0]
+    return replies[0]
+
+
+def _decide(flow, state, thread, step, services):
+    asked = thread.get("decided") or {}
+    questions = step.get("questions") or services.question_set(step["set"])
+    early = asked.pop(step["id"], None)
+    if early is not None and early["questions"] == questions:
+        # An earlier Decide step on the same object asked this step's questions in its call. Its answers stand only
+        # for the questions it asked: a flow edited while the run waited asks again.
+        thread["outputs"][step["out"]] = early["answers"]
+        _record(state, thread, step, "ok", early["answers"])
+        return
+    judged, questions, parts, later = _asks(flow, state, thread, step, services, thread["next"])
+    kept = (thread.get("grouped") or {}).pop(step["id"], None)
+    if kept is not None and kept["mark"] == _mark(judged, questions):
+        # Another find item's call asked this thread's questions too (`_judge`); what it asked is what this step asks.
+        if "error" in kept:
+            raise RuntimeError(kept["error"])
+        result = kept["result"]
+    else:
+        result = _judge(flow, state, thread, step, services, judged, questions)
     if result is None:
         # Decide is off (no decision model, or the month's cap): carry on as callers elsewhere do, with no answers,
         # so a path on them falls to Otherwise.
@@ -342,8 +591,33 @@ def _decide(flow, state, thread, step, services):
         _record(state, thread, step, "skipped", {"off": True})
         return
     answers = result.get("answers") or {}
+    if later:
+        mine = {sid: {qid: answers.get(f"{sid}:{qid}") for qid in qs} for sid, qs in parts.items()}
+        mine = {sid: {qid: a for qid, a in got.items() if a is not None} for sid, got in mine.items()}
+        thread["decided"] = {**asked, **{sid: {"questions": later[sid], "answers": mine[sid]} for sid in later}}
+        answers = mine[step["id"]]
     thread["outputs"][step["out"]] = answers
     _record(state, thread, step, "ok", answers, float(result.get("cost_usd") or 0))
+
+
+def _same_object(flow, thread, values, judged, services, after=None):
+    """{step id: questions} for the Decide steps after this one in its list (from `after`, the thread's cursor by
+    default) that judge the same object the same way, so this step's call asks theirs too and the object is read once.
+    The look stops at a step that could change the object: a find (its items become the object), a fork (its paths
+    are other lists), or a step whose output is named like an object."""
+    out = {}
+    for later in steps_at(flow, thread["trail"])[thread["next"] if after is None else after :]:
+        if later["type"] in ("find", "paths") or later.get("out", later["id"]) in F.OBJECTS:
+            break
+        if later["type"] != "decide" or later.get("enabled", True) is False:
+            continue
+        try:
+            fields = services.state_fields(later["set"]) if later.get("set") else None
+            if F.judge_state(values, fields) == judged:
+                out[later["id"]] = later.get("questions") or services.question_set(later["set"])
+        except Exception:  # noqa: BLE001 - that step asks on its own when it runs, and fails there if it must
+            continue
+    return out
 
 
 def _turn_label(thread):
@@ -363,9 +637,11 @@ def _start(flow, state, thread, step, services, who, prompt, wait, tail=""):
     None when the cap stops it."""
     values = values_of(state, thread)
     cap = (flow.get("spend_cap") or {}).get("per_30m")
-    # A bot_turn step's model, effort and harness are the model its task runs on (backend/task_run_models.py).
+    # A bot_turn step's model, effort, harness and window are what its task runs on (backend/task_run_models.py).
     run_model = (
-        {k: step[k] for k in ("model", "effort", "harness") if step.get(k)} if step.get("type") == "bot_turn" else {}
+        {k: step[k] for k in ("model", "effort", "harness", "compact_at") if step.get(k)}
+        if step.get("type") == "bot_turn"
+        else {}
     )
     return services.start_turn(
         who,

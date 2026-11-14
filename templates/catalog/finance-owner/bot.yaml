@@ -3,8 +3,7 @@ display_name: "Finance Owner"
 labels: [owner:finance-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
-# These must agree with the bot's settings on the server, or be left out of this file entirely.
-reasoning_effort: medium
+# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 60
 
 # Its work comes two ways. Events that want an answer on the day are routines below, one task per event. Everything

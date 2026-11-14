@@ -163,7 +163,12 @@ def test_an_onboarding_bot_leaves_no_note_or_word_on_a_task_kept_from_before(api
     ops, finance, cpo = (as_bot(api, slug) for slug in ("ops", "finance", "cpo"))
     as_member(api, "ben@acme.example")
     kept = post(api, "tasks", {"owner": "ops", "title": "Audit the queue", "body": "x"})
-    question = {"to": "ben", "line": "Which queue first?", "version": kept["version"]}
+    question = {
+        "to": "ben",
+        "line": "Which queue first?",
+        "version": kept["version"],
+        "why": "It decides what ships next.",
+    }
     post(api, f"tasks/{kept['id']}/asks", question, token=ops)
     onboarding(api, "ops", manager="assistant")
     with api.app.state.store.read() as c:

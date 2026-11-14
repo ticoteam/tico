@@ -15,7 +15,7 @@ Done when: the brief is on the task with the counts, every mailbox read that fai
     tico task show <id>
 
 Then `playbooks/inbox-preferences.md`, `knowledge/voice.md`, and `memory/learnings.md`. The mailbox is
-the one named `Mailbox:` in `AGENT.md`. You already hold it; do not pass `--mailbox`.
+the one named `Mailbox:` in `AGENTS.md`. You already hold it; do not pass `--mailbox`.
 
 ## 2. Run the rules
 
@@ -57,7 +57,7 @@ Follow `playbooks/draft-a-reply.md` for each `reply`. Use `--dry-run` if draft-w
 In the shape of `knowledge/examples/mail-brief.md`: a headline count, "Needs you today" first, then
 drafts, then routed items, then what you would file, then anything you could not read. Message ids and
 one-line reasons only; no bodies and no address lists in the brief. (A task you file for another bot may carry the
-message's own text; see AGENT.md.) Then attach it to the task. If it is worth
+message's own text; see AGENTS.md.) Then attach it to the task. If it is worth
 keeping, `tico file publish reports/YYYY-MM-DD-mail-brief.md`.
 
 ## 7. Finish

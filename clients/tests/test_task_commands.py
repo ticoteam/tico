@@ -231,12 +231,55 @@ def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeyp
     for kind in ("blocks", "blocked_by"):
         with pytest.raises(ValueError) as refused:
             hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": kind})
-        assert str(refused.value) == hubtools.BLOCKING_GONE and "tico task file --parent" in str(refused.value)
+        assert str(refused.value) == hubtools.BLOCKING_GONE and "depends_on" in str(refused.value)
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
     cli = Recorder()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
     assert remotecli.main(hubcli.parser().parse_args(["task", "relate", "T1", "T2", "--kind", "blocks"])) == 64
     assert json.loads(capsys.readouterr().out)["detail"] == hubtools.BLOCKING_GONE and cli.writes() == []
+
+
+def test_depends_on_takes_three_words_and_unrelate_takes_it_off(monkeypatch):
+    """`tico task relate 307 depends_on 304` (the spec's words), `--kind depends_on` and the MCP tool all write the same
+    relation; `tico task unrelate` takes it off."""
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    sent = []
+    for words in (
+        ["relate", "T1", "depends_on", "#T2"],
+        ["relate", "T1", "T2", "--kind", "depends_on"],
+        ["unrelate", "T1", "depends_on", "T2"],
+    ):
+        cli = Recorder()
+        monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+        remotecli.run(hubcli.parser().parse_args(["task", *words]))
+        sent.append(cli.writes())
+    write = ("POST", "tasks/T1/relations", {"task": "T2", "kind": "depends_on", "remove": False})
+    assert sent == [[write], [write], [(*write[:2], {**write[2], "remove": True})]]
+    api = Recorder()
+    hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "depends_on"})
+    assert api.writes() == [write]
+    same = Recorder()
+    hubtools.task_relate(same, {"id": "T1", "task": "depends_on", "other": "T2", "kind": "depends-on"})
+    assert same.writes() == [write]
+    with pytest.raises(ValueError, match="Two kinds"):
+        hubtools.task_relate(Recorder(), {"id": "T1", "task": "depends_on", "other": "T2", "kind": "follow_up"})
+
+
+def test_depends_on_until_released_goes_to_the_api_from_the_cli_and_the_mcp_tool(monkeypatch):
+    """`tico task relate <id> depends_on <task> --until released` and the MCP tool's `until` send `until: released`; it
+    goes with depends_on only."""
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    cli = Recorder()
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    remotecli.run(hubcli.parser().parse_args(["task", "relate", "T1", "depends_on", "T2", "--until", "released"]))
+    write = ("POST", "tasks/T1/relations", {"task": "T2", "kind": "depends_on", "remove": False, "until": "released"})
+    assert cli.writes() == [write]
+    api = Recorder()
+    hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "depends_on", "until": "released"})
+    assert api.writes() == [write]
+    assert hubtools.BY_NAME["tico_task_relate"]["inputSchema"]["properties"]["until"]["enum"] == ["released"]
+    with pytest.raises(ValueError, match="goes with depends_on"):
+        hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": "follow_up", "until": "released"})
 
 
 def test_give_takes_the_person_as_to_or_as_a_third_word_and_needs_one(monkeypatch, capsys):
@@ -333,6 +376,69 @@ def test_an_ask_names_who_and_the_line_before_anything_is_sent():
     with pytest.raises(ValueError, match="give to and line"):
         hubtools.task_ask(api, {"id": "T1", "version": 3})
     assert api.calls == []
+
+
+def test_a_bots_question_to_a_person_sends_its_why_each_choice_with_what_happens_and_the_recommendation():
+    """`tico task ask --why ... --choice "Label|what happens" --recommend Label` (asks-not-todos, For the engineer)."""
+    argv = [
+        "task",
+        "ask",
+        "T1",
+        "Which tone?",
+        "--to",
+        "chris",
+        "--why",
+        "It goes out Friday.",
+        "--choice",
+        "Plain|Safe for customers",
+        "--choice",
+        "Playful | Stands out",
+        "--recommend",
+        "Plain",
+        "--version",
+        "3",
+    ]
+    args = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, args)
+    assert api.writes() == [
+        (
+            "POST",
+            "tasks/T1/asks",
+            {
+                "to": "chris",
+                "line": "Which tone?",
+                "version": 3,
+                "why": "It goes out Friday.",
+                "recommend": "Plain",
+                "choices": ["Plain", "Playful"],
+                "details": ["Safe for customers", "Stands out"],
+            },
+        )
+    ]
+    with pytest.raises(ValueError, match="not both"):
+        hubtools.task_ask(Recorder(), {**args, "choices": ["A", "B"]})
+
+
+def test_an_asks_short_title_is_sent_and_an_ask_without_one_sends_none():
+    """`tico task ask ... --title "<at most 60 characters>"`: the decision view's heading (task #390)."""
+    argv = ["task", "ask", "T1", "Which tone should the launch note take?", "--to", "chris", "--version", "3"]
+    args = {k: v for k, v in vars(hubcli.parser().parse_args([*argv, "--title", "Launch note tone"])).items()}
+    args = {k: v for k, v in args.items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, args)
+    [(_, _, body)] = api.writes()
+    assert body["title"] == "Launch note tone"
+    plain = {k: v for k, v in vars(hubcli.parser().parse_args(argv)).items() if k != "fn" and v is not None}
+    api = Recorder()
+    hubtools.task_ask(api, plain)
+    [(_, _, body)] = api.writes()
+    assert "title" not in body, "an ask without a title sends none, as older clients do"
+    bound = {**plain, "kind": "ok", "subject": "hq_reply:t-1", "content": {"text": "hi"}, "title": "Reply"}
+    api = Recorder()
+    with pytest.raises(ValueError, match="title"):
+        hubtools.task_ask(api, bound)
+    assert api.calls == [], "an OK bound to a subject has no title: refused, not dropped"
 
 
 TASK = {
@@ -513,3 +619,32 @@ def test_unlink_finds_the_link_by_its_url_and_says_so_when_there_is_none():
     assert api.writes() == [("DELETE", "tasks/T1/links/L1", {})]
     with pytest.raises(ValueError, match="No link to https://github.com/acme/app/pull/9"):
         hubtools.BY_NAME["tico_task_unlink"]["fn"](Links(), {"id": "T1", "link": "https://github.com/acme/app/pull/9"})
+
+
+def test_task_show_says_it_waits_for_a_free_bot_and_who_each_pick_gave_it_to():
+    """One of several (backend/stage_pick.py): a task nobody is free for waits with state `pick`, its `who` the stage;
+    every pick is a history event of field `pick` whose note is the line."""
+    task = {
+        "id": "T1",
+        "title": "Add negate",
+        "version": 4,
+        "stage": {"name": "Review 2"},
+        "pipeline": {"name": "Engineering"},
+        "turn": {"state": "pick", "who": "engineering-review-2", "line": "Waiting for a free Reviewer"},
+        "to_leave": [],
+    }
+    events = [
+        {"field": "move", "new": "engineering-build", "note": ""},
+        {"field": "pick", "new": "bot:builder-2", "note": "Build given to Builder 2 · took turns"},
+        {"field": "pick", "new": None, "note": "Review 2: Waiting for a free Reviewer"},
+    ]
+    text = hubtools.task_text(task, {}, events)
+    assert "Turn: Waiting for a free Reviewer" in text and "engineering-review-2" not in text
+    assert "Picked: Build given to Builder 2 · took turns" in text.splitlines()
+    assert "Picked: Review 2: Waiting for a free Reviewer" in text.splitlines()
+
+    class Shown(Recorder):
+        def get(self, path, **query):
+            return {"task": task, "events": events, "actors": {}}
+
+    assert "Picked: Build given to Builder 2" in hubtools.BY_NAME["tico_task_show"]["fn"](Shown(), {"id": "T1"})["text"]

@@ -15,6 +15,8 @@ interface GithubAppState {
   authorized?: boolean;
   /** The callback URL the App needs as its Callback URL, or '' when its manifest already names it. */
   callback_url?: string;
+  /** Not connected: the name GitHub will propose for the App ("<team name> Tico"), or '' when the team has no name yet. */
+  app_name?: string;
   /** Bots' own repositories, which Tico makes by itself (backend/bot_repo_maker.py): `problem` is why the rest wait. */
   bot_repositories?: {made: number; taken: number; waiting: number; problem: string};
 }
@@ -128,34 +130,54 @@ window.mountGithubConnect = async function (host) {
     };
     const disconnect = ghEl<HTMLButtonElement>(host, '[data-gh-disconnect]');
     disconnect.onclick = async () => {
-      if (!confirm('Forget the GitHub app?')) return;
+      if (!(await askConfirm('Forget the GitHub app?', disconnect))) return;
       disconnect.disabled = true;
       try { await post('/v2/github/app/disconnect', {}); window.mountGithubConnect(host); }
       catch (error) { ghEl<HTMLElement>(host, '[data-gh-status]').textContent = errorMessage(error, ''); disconnect.disabled = false; }
     };
     return;
   }
-  host.innerHTML = `<form data-gh-form style="display:grid;gap:10px;max-width:460px">
+  // Where GitHub makes the App: the person's own account needs no name (GitHub makes it for whoever is signed in there and
+  // Tico keeps that login); an organization's settings page has the organization's name in its address.
+  const appName = state.app_name
+    ? `GitHub will name the app "${text(state.app_name)}". You can rename it on GitHub's page.`
+    : 'Pick the app\'s name on GitHub\'s page.';
+  host.innerHTML = `<form data-gh-form novalidate style="display:grid;gap:10px;max-width:460px">
       <p class="muted">When GitHub asks where to install, choose <strong>All repositories</strong>. Each bot's token still covers only its own repository. For sensitive code, use a separate account or organization.</p>
-      <label>GitHub account or organization<input name="org" type="text" required maxlength="39" autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9-]*" placeholder="your-name or your-org"></label>
-      <label>App name<input name="name" type="text" maxlength="34" autocomplete="off" placeholder="Acme Tico"></label>
+      <div style="display:grid;gap:4px;justify-items:start"><span id="gh-where-label">Create the app in</span>
+        <div class="theme-seg" role="radiogroup" aria-labelledby="gh-where-label" style="flex-wrap:wrap">
+          <button type="button" role="radio" aria-checked="true" data-gh-where="personal">My GitHub account</button>
+          <button type="button" role="radio" aria-checked="false" data-gh-where="org">An organization</button></div></div>
+      <label data-gh-org-field style="display:none">Organization name<input name="org" type="text" maxlength="39" autocomplete="off" spellcheck="false" placeholder="your-org"></label>
       <label><input type="checkbox" name="administration" checked> Let Tico create bot repositories (recommended; without it a person creates each new bot's repository)</label>
       <button class="primary" type="submit">Connect GitHub</button>
+      <p class="muted" data-gh-name>${appName}</p>
       <p role="status" data-gh-status></p></form>`;
   const form = ghEl<HTMLFormElement>(host, '[data-gh-form]');
   ghEl<HTMLElement>(host, '[data-gh-status]').textContent = GITHUB_RETURNS[(/[?&]github=([a-z]+)/.exec(location.hash) || [])[1] || ''] || '';
+  const orgField = ghEl<HTMLElement>(form, '[data-gh-org-field]'), org = ghEl<HTMLInputElement>(form, '[name=org]');
+  const inOrg = () => ghEl<HTMLElement>(form, '[data-gh-where="org"]').getAttribute('aria-checked') === 'true';
+  form.querySelectorAll<HTMLButtonElement>('[data-gh-where]').forEach(choice => {
+    choice.onclick = () => {
+      for (const b of form.querySelectorAll('[data-gh-where]')) b.setAttribute('aria-checked', String(b === choice));
+      orgField.style.display = inOrg() ? '' : 'none';
+      ghEl<HTMLElement>(host, '[data-gh-status]').textContent = '';
+      if (inOrg()) org.focus();
+    };
+  });
   form.onsubmit = async event => {
     event.preventDefault();
     const status = ghEl<HTMLElement>(host, '[data-gh-status]');
-    const org = ghEl<HTMLInputElement>(form, '[name=org]'), name = ghEl<HTMLInputElement>(form, '[name=name]');
-    const query = new URLSearchParams({org: org.value.trim(), administration: String(ghEl<HTMLInputElement>(form, '[name=administration]').checked)});
-    if (name.value.trim()) query.set('name', name.value.trim());
+    const account = inOrg() ? org.value.trim() : '';
+    if (inOrg() && !account) { status.textContent = 'Enter the organization\'s name'; org.focus(); return; }
+    const query = new URLSearchParams({administration: String(ghEl<HTMLInputElement>(form, '[name=administration]').checked)});
+    if (account) query.set('org', account);
     try {
       let setup: GithubManifestSetup;
       try { setup = await get('/v2/github/app/manifest?' + query); }
       catch (error) {
         // github-app.key is lost with no backup copy: only an explicit confirm drops what it sealed (docs/install.md).
-        if (errorCode(error) !== 'github_key_missing' || !confirm(LOST_KEY_CONFIRM)) throw error;
+        if (errorCode(error) !== 'github_key_missing' || !(await askConfirm(LOST_KEY_CONFIRM))) throw error;
         await post('/v2/github/app/replace-lost-key', {});
         setup = await get('/v2/github/app/manifest?' + query);
       }

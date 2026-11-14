@@ -3500,8 +3500,6 @@ BRIEFING_DONE = {
 }
 
 # Task threads Ana still has to settle stay unread in her sidebar; the seed reads the rest of hers when it finishes.
-# "Let the Finance Owner see the books" is the product's own ask, made when the app starts (backend/bookkeeper.py), so it
-# is not in the seed to be read: it is a decision she still owes, and it stays unread.
 KEEP_UNREAD = (
     "Raise Home Pro from $449 to $479 for December?",
     "Sign the FCC filing for Home Pro 2",

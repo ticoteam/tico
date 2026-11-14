@@ -1,10 +1,9 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 25 minutes. The outcome is five recorded answers, the tools, devices and checklist
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers, the tools, devices and checklist
 files written, a first weekly IT page, and the first routine checked.
 
-Done when: all five answers are in `state.md` under `## Answers`, the knowledge files exist, the first page is attached
+Done when: all five answers are in `knowledge/`, the knowledge files exist, the first page is attached
 and labelled, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
@@ -35,7 +34,7 @@ Numbered, each with its one-line why and a default.
 
 ## 4. Record
 
-Answers to `state.md` under `## Answers`, dated. Write `knowledge/tools.md`, `knowledge/devices.md`,
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/tools.md`, `knowledge/devices.md`,
 and the two checklists: the joiner list (accounts per tool, device, first-login steps, MFA set up) and
 the leaver list (every account disabled on the last day, device returned, shared passwords rotated,
 forwarding set by the manager's choice).
@@ -51,7 +50,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "you will get this page every Monday at 09:30, and I will work requests as they come in between." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

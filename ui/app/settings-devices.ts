@@ -122,12 +122,6 @@ interface DeviceMachine extends SettingsMachine {
   browser_exit?: import('../types/api').BrowserExit | null;
 }
 
-// An external agent (a Hermes profile) has no computer: the cell holds its credential instead.
-// The token is shown once, when it is minted; after that only rotate and revoke remain.
-const agentKind = (a: BotAgent) => `${settingsHarnessName(a.harness) || a.harness} agent`;
-// An imported snapshot's freshness says nothing about its external process.
-const agentPresenceLabel = (a: {synced?: boolean; last_seen_at?: string | null; credential?: unknown}, online: boolean | undefined) => a.synced ? (online ? 'History synced recently' : a.last_seen_at ? 'History not synced lately' : 'History not synced yet')
-  : !a.credential ? 'No credential yet' : online ? 'Reporting in' : 'Not reporting';
 function settingsAgentCell(e: DeviceBot) {
   const a = e.agent; if (!a) return '';
   const name = agentKind(a);
@@ -218,7 +212,7 @@ function settingsAgentPair(slug: string) {
 async function settingsAgentCredential(slug: string) {
   const e: DeviceBot | undefined = S.emps.find(row => row.id === slug); if (!e) return;
   const rotating = !!e.agent?.credential;
-  if (rotating && !confirm(`Rotate the agent credential for ${e.display_name}? The current token stops working at once; install the new one on its computer.`)) return;
+  if (rotating && !(await askConfirm(`Rotate the agent credential for ${e.display_name}? The current token stops working at once; install the new one on its computer.`))) return;
   let issued: AgentCredentialIssued;
   try { issued = await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential`, {}); }
   catch (error) { toast(errorMessage(error, ''), true); return; }
@@ -300,7 +294,7 @@ function settingsTokenShow(issued: PersonalTokenIssued) {
   document.body.appendChild(dialog); dialog.showModal();
 }
 async function settingsTokenRevoke(id: string | undefined, label: string | undefined) {
-  if (!confirm(`Revoke the token ${label}? Anything using it stops at once.`)) return;
+  if (!(await askConfirm(`Revoke the token ${label}? Anything using it stops at once.`))) return;
   try { await post(`/v2/me/tokens/${encodeURIComponent(String(id))}/revoke`, {}); toast(`Token ${label} revoked`); }
   catch (error) { toast(errorMessage(error, ''), true); }
   await renderSettingsTokens();
@@ -310,7 +304,7 @@ function agentConfigYaml(setup: AgentSetup) {
 }
 async function settingsAgentRevoke(slug: string | undefined) {
   const e = S.emps.find(row => row.id === slug); if (!e) return;
-  if (!confirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`)) return;
+  if (!(await askConfirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`))) return;
   try { await post(`/v2/bots/${encodeURIComponent(String(slug))}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
   catch (error) { toast(errorMessage(error, ''), true); }
 }

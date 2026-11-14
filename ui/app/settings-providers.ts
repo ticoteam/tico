@@ -94,8 +94,6 @@ const PROVIDER_PRESETS: SettingsProviderPreset[] = [
   {id: 'gateway', label: 'Tico Gateway only', line: 'Bots run on Tico models with the company\'s gateway key below.'},
   {id: 'own-keys', label: "Your company's plans or API keys", line: 'Bring your own: tick the providers below and sign in, or add API keys in Credentials.'},
 ];
-// The two choices that run main work on Claude and ChatGPT tick them when nothing is ticked yet.
-const PRESET_PROVIDERS: Record<string, string[]> = {'subscriptions-gateway': ['anthropic', 'openai'], subscriptions: ['anthropic', 'openai']};
 function providersPresetHTML(view: SettingsProvidersView, dis: string): string {
   const known = view.presets || PROVIDER_PRESETS.map(row => row.id);
   return `<div class="prov-list" role="radiogroup" aria-label="Models" data-provider-presets>${PROVIDER_PRESETS.filter(row => known.includes(row.id)).map(row =>
@@ -223,8 +221,8 @@ function providersGatewayCardHTML(view: SettingsProvidersView, gateway: Settings
   return `<div class="models-gw models-gw-head">
       ${gateway ? `<p class="models-gw-line" data-gateway-state="${esc(gateway.state || (gateway.connected ? 'connected' : 'none'))}"><span class="dot ${tone === 'ok' ? 'ok' : 'failed'}" aria-hidden="true"></span><span data-gateway-line>${esc(line)}</span>${gatewaySpendBar(gateway)}</p>` : ''}
       <label class="models-gw-toggle"><input type="checkbox" class="people-switch" data-gateway-toggle${providersGatewayOn(view) ? ' checked' : ''}${owner ? '' : ' disabled'}
-        aria-label="Use Tico Gateway as fallback"><span>Use as fallback</span></label>
-      ${helpBubble('Used when a computer has no subscription, or a plan runs out.')}</div>
+        aria-label="Use Tico Gateway until a computer is signed in"><span>Use until a computer is signed in</span></label>
+      ${helpBubble("Used while a computer has no subscription and no login of its own. When a computer's plans run out, its own Fall back to Tico Gateway decides.")}</div>
     ${gatewayOverviewHTML(overview)}
     ${gateway ? `<details class="models-adv" data-gateway-advanced><summary>Advanced</summary>${gatewayHTML(gateway, owner)}</details>` : ''}
     <details class="models-adv" data-gateway-webhooks><summary>Webhooks</summary><div id="wh-gateway"></div></details>`;

@@ -48,6 +48,11 @@ const VERSION_TIMEOUT_S: u64 = 60;
 pub const CHECK_EVERY_S: f64 = 24.0 * 3600.0;
 const RETRY_AFTER_S: f64 = 30.0 * 60.0;
 const INSTALL_TIMEOUT_S: u64 = 900;
+/// A daily update waits until no turn has used its host for this long: the 1-hour prompt cache of every session on it
+/// has expired, so the new version's changed system prompt and tools cost nothing extra.
+const COLD_AFTER_S: f64 = 3600.0;
+/// ...or, when that moment never comes, at most this long; then it goes in at the next moment no turn runs.
+const COLD_WAIT_MAX_S: f64 = 48.0 * 3600.0;
 pub const POLL_S: f64 = 5.0;
 
 const BUILT_IN: &[(&str, &str)] = &[
@@ -156,6 +161,8 @@ pub struct Capabilities {
     /// run as a leased per-turn OS user (crate::turn_users) and still sign in. Without it the turn runs as `bot`.
     pub isolated_user: bool,
     pub compaction: bool,
+    /// The harness compacts on its own default and takes no Compact at (Settings hides it). No built-in harness sets it now.
+    pub own_compaction: bool,
     /// The harness says in its stream when it compacts a session, so a resumed turn can leave out what it holds.
     pub compaction_events: bool,
     pub resume_command: String,
@@ -165,7 +172,6 @@ pub struct Capabilities {
     pub readiness: bool,
     pub repo_permission_lint: bool,
     pub repo_commands: bool,
-    pub packet_only: bool,
     pub sign_in_status: SignInStatus,
 }
 
@@ -197,6 +203,7 @@ impl Default for Capabilities {
             one_turn_per_login: false,
             isolated_user: false,
             compaction: false,
+            own_compaction: false,
             compaction_events: false,
             resume_command: String::new(),
             model_list: String::new(),
@@ -204,7 +211,6 @@ impl Default for Capabilities {
             readiness: true,
             repo_permission_lint: false,
             repo_commands: false,
-            packet_only: false,
             sign_in_status: SignInStatus {
                 check: "none".into(),
                 ..Default::default()
@@ -800,6 +806,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
             "isolated_user" => c.isolated_user = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
+            "own_compaction" => c.own_compaction = flag(k, v)?,
             "compaction_events" => c.compaction_events = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,
             "model_list" => c.model_list = choice(k, v, &["host", "command"])?,
@@ -807,7 +814,6 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "readiness" => c.readiness = flag(k, v)?,
             "repo_permission_lint" => c.repo_permission_lint = flag(k, v)?,
             "repo_commands" => c.repo_commands = flag(k, v)?,
-            "packet_only" => c.packet_only = flag(k, v)?,
             "sign_in_status" => c.sign_in_status = sign_in_status(v, at)?,
             other => return Err(format!("{at}: unknown capability {other}")),
         }
@@ -1188,6 +1194,12 @@ struct Job {
     staged: Option<(PathBuf, String)>,
 }
 
+/// The daily check's own update (not an install, an owner's request or a pin's move): the one that waits for cold
+/// sessions.
+fn daily(job: &Job) -> bool {
+    job.kind == "update" && job.request.is_empty() && job.version.is_empty()
+}
+
 type Slot = Arc<Mutex<Option<Result<Value, String>>>>;
 
 /// One runner's tools directory, its manifests, and the work of keeping them current.
@@ -1209,6 +1221,8 @@ pub struct Harnesses {
     versions: HashMap<(String, i128, i128), String>,
     pub results: Vec<(String, String, String)>,
     state: Map<String, Value>,
+    /// Seconds since a turn last used a host (`quiet_for`); tests set their own.
+    quiet: Box<dyn Fn(&str) -> f64 + Send>,
 }
 
 fn mtime(p: &Path) -> Option<i128> {
@@ -1264,6 +1278,7 @@ impl Harnesses {
             versions: HashMap::new(),
             results: vec![],
             state: Map::new(),
+            quiet: Box::new(quiet_for),
         };
         h.state = h.load();
         h
@@ -1292,6 +1307,10 @@ impl Harnesses {
                     .cloned()
                     .unwrap_or(json!({})),
             );
+        }
+        // Written only once an update has waited for cold sessions, so the file is otherwise as it was.
+        if let Some(w) = value.get("cold_wait").filter(|v| v.is_object()) {
+            out.insert("cold_wait".into(), w.clone());
         }
         out
     }
@@ -1549,7 +1568,27 @@ impl Harnesses {
         self.harvest();
         for id in self.staged.keys().cloned().collect::<Vec<_>>() {
             let m = self.manifests[&id].clone();
+            // A daily update waiting for cold sessions is void once the owner pins the harness: switching it in
+            // later would install the version the pin was set against, then downgrade again.
+            if daily(&self.staged[&id]) && self.policy(&m).0 != "latest" {
+                let job = self.staged.remove(&id).unwrap();
+                if let Some((dir, version)) = &job.staged {
+                    let _ = std::fs::remove_dir_all(dir);
+                    log(&format!(
+                        "Tico runner: dropped the {} {version} update; it is pinned on this computer",
+                        m.name
+                    ));
+                }
+                self.section("cold_wait").remove(&m.id);
+                self.save();
+                continue;
+            }
             if busy().contains(&m.host) {
+                continue;
+            }
+            let waiting = self.staged[&id].clone();
+            let why = self.may_switch(&m, &waiting);
+            if why.is_none() && !self.turned_off(&id) {
                 continue;
             }
             let job = self.staged.remove(&id).unwrap();
@@ -1566,7 +1605,7 @@ impl Harnesses {
                 }
                 continue;
             }
-            self.commit(&m, job);
+            self.commit(&m, job, why.unwrap_or_default());
         }
         for (id, m) in self.manifests.clone() {
             // Turned off: removed at a moment no turn uses it and nothing is being installed for it.
@@ -1604,6 +1643,42 @@ impl Harnesses {
             }
         }
         std::mem::take(&mut self.results)
+    }
+
+    /// Whether a staged version whose host no turn is running may go in now, and why (for the log). Only the daily
+    /// update waits for cold sessions: an install has no session to spoil, and an owner's Update or pin is asked for.
+    /// A new Claude Code changes its system prompt and tools, so a session still inside its 1-hour prompt cache would
+    /// write its whole conversation again at the next turn. The wait starts when the version is first staged and is
+    /// kept in the state file, so a runner restart does not start it again.
+    fn may_switch(&mut self, m: &Manifest, job: &Job) -> Option<String> {
+        if !daily(job) {
+            return Some("no turn running".into());
+        }
+        let quiet = (self.quiet)(&m.host);
+        if quiet >= COLD_AFTER_S {
+            let idle = if quiet < 2.0 * 3600.0 {
+                format!("{} minutes", (quiet / 60.0) as u64)
+            } else {
+                format!("{} hours", (quiet / 3600.0) as u64)
+            };
+            return Some(format!("no turn on this computer has used it for {idle}"));
+        }
+        let now = epoch_s();
+        let since = match self.read("cold_wait", &m.id).as_f64() {
+            Some(t) => t,
+            None => {
+                self.section("cold_wait").insert(m.id.clone(), json!(now));
+                self.save();
+                now
+            }
+        };
+        if now - since >= COLD_WAIT_MAX_S {
+            return Some(format!(
+                "no turn running; sessions stayed warm for {} hours",
+                ((now - since) / 3600.0) as u64
+            ));
+        }
+        None
     }
 
     fn harvest(&mut self) {
@@ -1723,7 +1798,7 @@ impl Harnesses {
         }
         let _ = std::fs::remove_dir_all(&root);
         self.versions.clear();
-        for key in ["checked", "latest", "failed"] {
+        for key in ["checked", "latest", "failed", "cold_wait"] {
             self.section(key).remove(&m.id);
         }
         self.save();
@@ -1735,7 +1810,7 @@ impl Harnesses {
     }
 
     /// Make the staged install the one in use. Called only with no running turn on this host.
-    fn commit(&mut self, m: &Manifest, job: Job) {
+    fn commit(&mut self, m: &Manifest, job: Job, why: String) {
         let root = self.tools.join(&m.id);
         let (dest, version) = job.staged.clone().unwrap();
         let bin = self.bin_dir();
@@ -1778,6 +1853,7 @@ impl Harnesses {
         }
         self.versions.clear();
         self.section("failed").remove(&m.id);
+        self.section("cold_wait").remove(&m.id);
         if job.version.is_empty() {
             self.section("latest").insert(m.id.clone(), json!(version));
         }
@@ -1789,9 +1865,9 @@ impl Harnesses {
         self.save();
         crate::readiness::request_probe();
         log(&if job.kind == "update" {
-            format!("Tico runner: {} {}d to {version}", m.name, job.kind)
+            format!("Tico runner: {} {}d to {version} ({why})", m.name, job.kind)
         } else {
-            format!("Tico runner: installed {} {version}", m.name)
+            format!("Tico runner: installed {} {version} ({why})", m.name)
         });
         if !job.request.is_empty() {
             self.results.push((
@@ -2238,6 +2314,31 @@ fn place_download(exe: &Path, body: &[u8]) -> Result<(), String> {
 
 static SHARED: OnceLock<Arc<Mutex<Harnesses>>> = OnceLock::new();
 static TURNS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+/// When a turn last started or ended on each host, and when this runner started (a session warmed before a restart
+/// counts as warm until an hour after it).
+static LAST_TURN: OnceLock<Mutex<HashMap<String, f64>>> = OnceLock::new();
+static STARTED: OnceLock<f64> = OnceLock::new();
+
+fn turn_seen(hosts: &[String]) {
+    let now = epoch_s();
+    let mut last = LAST_TURN.get_or_init(Default::default).lock().unwrap();
+    for h in hosts {
+        last.insert(h.clone(), now);
+    }
+}
+
+/// Seconds since a turn last used `host` on this computer (a running turn counts as now).
+pub fn quiet_for(host: &str) -> f64 {
+    let started = *STARTED.get_or_init(epoch_s);
+    let last = LAST_TURN
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(host)
+        .copied()
+        .unwrap_or(0.0);
+    epoch_s() - started.max(last)
+}
 
 /// This runner's one installer, made on first use (with the tools bin put on PATH, see `expose_path`). Call it before
 /// the tokio runtime starts threads when possible (main), so PATH is changed while nothing else reads it.
@@ -2250,6 +2351,7 @@ pub fn init(config: &Config) -> Arc<Mutex<Harnesses>> {
 pub fn init_at(config: &Config, state_path: PathBuf) -> Arc<Mutex<Harnesses>> {
     SHARED
         .get_or_init(|| {
+            STARTED.get_or_init(epoch_s);
             let mut h = Harnesses::new(tools_dir(config), state_path, manifests().clone());
             if crate::cloud_machine::detected() {
                 h.own();
@@ -2285,6 +2387,7 @@ pub fn expose_if_owned(config: &Config) {
 /// A turn's hosts (its runtime and its fallback's), so no update is switched in under it. Execute calls this
 /// when a turn starts and `turn_done` when it ends (the parent wires it; until then any running turn counts).
 pub fn turn_runtimes(aid: &str, runtimes: &[String]) {
+    turn_seen(runtimes);
     TURNS
         .get_or_init(Default::default)
         .lock()
@@ -2293,11 +2396,12 @@ pub fn turn_runtimes(aid: &str, runtimes: &[String]) {
 }
 
 pub fn turn_done(aid: &str) {
-    TURNS
+    let hosts = TURNS
         .get_or_init(Default::default)
         .lock()
         .unwrap()
         .remove(aid);
+    turn_seen(&hosts.unwrap_or_else(|| HOSTS.iter().map(|h| h.to_string()).collect()));
 }
 
 /// Host names running turns use; with turns active but none registered, every host (never switch mid-turn).
@@ -2726,6 +2830,12 @@ mod tests {
             self.h.staged.insert("claude-code".into(), job);
         }
 
+        /// What the daily check leaves: a newer version, downloaded and checked, waiting for its switch.
+        fn stage_daily_update(&mut self, version: &str) {
+            self.stage(version);
+            self.h.staged.get_mut("claude-code").unwrap().kind = "update".into();
+        }
+
         fn row(&mut self) -> Value {
             self.h.report(&Map::new())["claude-code"].clone()
         }
@@ -2856,6 +2966,163 @@ mod tests {
             json!({"at": epoch_s() - RETRY_AFTER_S - 1.0, "error": "x"}),
         );
         assert_eq!(m.h.next().unwrap().kind, "install");
+    }
+
+    #[test]
+    fn a_daily_claude_code_update_waits_until_no_session_has_had_a_turn_for_an_hour() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY; // no `step` here starts a real check
+        m.stage("2.1.300");
+        m.h.step(HashSet::new); // an install goes in at once: no session has a cache to lose
+        assert!(m.managed().exists());
+
+        // The daily check downloaded a newer version while a session's cache is still warm: it waits.
+        let quiet = Arc::new(Mutex::new(59.0 * 60.0));
+        let q = quiet.clone();
+        m.h.quiet = Box::new(move |host| {
+            assert_eq!(host, "claude");
+            *q.lock().unwrap()
+        });
+        m.stage_daily_update("2.1.316");
+        m.h.step(HashSet::new);
+        assert!(
+            m.h.staged.contains_key("claude-code"),
+            "warm: still waiting"
+        );
+        assert_eq!(
+            m.h.detect(&m.h.manifests["claude-code"].clone(), &m.managed(), 15),
+            "2.1.300"
+        );
+        let waiting_since = m.h.read("cold_wait", "claude-code").as_f64().unwrap();
+        assert!(epoch_s() - waiting_since < 60.0);
+
+        // A turn running holds it whatever the clock says.
+        *quiet.lock().unwrap() = 61.0 * 60.0;
+        m.h.step(|| HashSet::from(["claude".to_string()]));
+        assert!(m.h.staged.contains_key("claude-code"));
+
+        // An hour with no turn: every cache has expired, so it goes in, and says why.
+        let job = m.h.staged["claude-code"].clone();
+        assert_eq!(
+            m.h.may_switch(&m.h.manifests["claude-code"].clone(), &job)
+                .as_deref(),
+            Some("no turn on this computer has used it for 61 minutes")
+        );
+        m.h.step(HashSet::new);
+        assert!(!m.h.staged.contains_key("claude-code"));
+        assert_eq!(
+            m.h.detect(&m.h.manifests["claude-code"].clone(), &m.managed(), 15),
+            "2.1.316"
+        );
+        assert!(
+            m.h.read("cold_wait", "claude-code").is_null(),
+            "the wait is over"
+        );
+    }
+
+    #[test]
+    fn a_daily_update_that_never_finds_cold_sessions_goes_in_after_48_hours_when_no_turn_runs() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY;
+        m.stage("2.1.300");
+        m.h.step(HashSet::new);
+        m.h.quiet = Box::new(|_| 5.0 * 60.0); // a busy computer: some session always had a turn minutes ago
+        m.stage_daily_update("2.1.316");
+        m.h.step(HashSet::new);
+        assert!(m.h.staged.contains_key("claude-code"));
+
+        // Waiting since just under 48 hours (kept in the state file, so a restart does not start it again).
+        m.h.section("cold_wait").insert(
+            "claude-code".into(),
+            json!(epoch_s() - COLD_WAIT_MAX_S + 60.0),
+        );
+        m.h.step(HashSet::new);
+        assert!(m.h.staged.contains_key("claude-code"));
+
+        m.h.section("cold_wait").insert(
+            "claude-code".into(),
+            json!(epoch_s() - COLD_WAIT_MAX_S - 1.0),
+        );
+        m.h.step(|| HashSet::from(["claude".to_string()]));
+        assert!(
+            m.h.staged.contains_key("claude-code"),
+            "still never mid-turn"
+        );
+        let job = m.h.staged["claude-code"].clone();
+        assert_eq!(
+            m.h.may_switch(&m.h.manifests["claude-code"].clone(), &job)
+                .as_deref(),
+            Some("no turn running; sessions stayed warm for 48 hours")
+        );
+        m.h.step(HashSet::new);
+        assert!(!m.h.staged.contains_key("claude-code"));
+        assert_eq!(
+            m.h.detect(&m.h.manifests["claude-code"].clone(), &m.managed(), 15),
+            "2.1.316"
+        );
+    }
+
+    #[test]
+    fn an_owners_update_does_not_wait_for_cold_sessions() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY;
+        m.stage("2.1.300");
+        m.h.step(HashSet::new);
+        m.h.quiet = Box::new(|_| 0.0);
+        m.stage_daily_update("2.1.316");
+        m.h.staged.get_mut("claude-code").unwrap().request = "r1".into();
+        m.h.step(HashSet::new);
+        assert!(!m.h.staged.contains_key("claude-code"));
+        assert_eq!(
+            m.h.detect(&m.h.manifests["claude-code"].clone(), &m.managed(), 15),
+            "2.1.316"
+        );
+    }
+
+    #[test]
+    fn a_pin_set_while_a_daily_update_waits_drops_that_update() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY;
+        m.stage("2.1.300");
+        m.h.step(HashSet::new);
+        m.h.quiet = Box::new(|_| 5.0 * 60.0); // sessions warm: the update waits
+        m.stage_daily_update("2.1.316");
+        let copy = m.h.tools.join("claude-code").join("2.1.316");
+        m.h.step(HashSet::new);
+        assert!(m.h.staged.contains_key("claude-code"));
+        assert_eq!(m.h.request("pin", "claude-code", "").0, "done");
+
+        m.h.quiet = Box::new(|_| 61.0 * 60.0); // an hour with no turn
+        m.h.step(HashSet::new);
+        assert!(!m.h.staged.contains_key("claude-code"));
+        assert!(!copy.exists(), "the waiting copy is deleted");
+        assert!(m.h.read("cold_wait", "claude-code").is_null());
+        assert_eq!(
+            m.h.detect(&m.h.manifests["claude-code"].clone(), &m.managed(), 15),
+            "2.1.300"
+        );
+    }
+
+    #[test]
+    fn a_turn_marks_its_hosts_warm_when_it_starts_and_ends() {
+        let stamp = || {
+            LAST_TURN
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap()
+                .get("cold-test-host")
+                .copied()
+        };
+        turn_runtimes("cold-test-turn", &["cold-test-host".to_string()]);
+        let started = stamp().unwrap();
+        assert!(quiet_for("cold-test-host") < 5.0);
+        LAST_TURN
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert("cold-test-host".into(), 0.0);
+        turn_done("cold-test-turn");
+        assert!(stamp().unwrap() >= started, "the end stamps it again");
     }
 
     /// A server that, on its one request, runs `meanwhile` before it answers `{}`.

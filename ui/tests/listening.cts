@@ -66,6 +66,9 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.equal(await page.locator('.lst-row.off .lst-nm').innerText(), 'Pricing page watch', tag + ': an off one is dimmed');
       await page.fill('.au-q', 'northwind');
       assert.deepEqual(await page.locator('.lst-row .lst-nm').allInnerTexts(), ['Market listening'], tag + ': the search reads the sources too');
+      await page.fill('.au-q', 'zzz');
+      assert.equal((await page.locator('.au-lst .muted', {hasText: 'No matches'}).innerText()).trim(), 'No matches', tag + ': a search that hides every row says so');
+      assert.equal(await page.locator('.lst-empty, [data-lst-new]').count(), 0, tag + ': with no button');
       await page.fill('.au-q', '');
       await shot(page, 's1-list-desktop');
 
@@ -190,6 +193,17 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.match(await page.locator('.lst-sent pre').innerText(), /^Market listening · Tue Nov 10, 14:00 · 3 of 30\n\n1\. competitor {2}Northwind Team plan is now \$15 a seat/);
       assert.equal(await page.locator('.au-rx .au-sl:not(.muted)').count(), 4, tag + ': then what the steps did');
       await shot(page, 's3-run-desktop');
+      // A send the spend cap partly stopped reads Partly delivered: Sent is what a step got, the rest went back to waiting.
+      const partly = page.locator('.au-rr').nth(1);
+      assert.equal(await partly.locator('.au-dot').getAttribute('aria-label'), 'Partly delivered');
+      assert.equal(await partly.locator('.au-ro').innerText(), 'Partly delivered · 1 of 3 not delivered (spend cap)');
+      await partly.click();
+      await page.waitForFunction(() => document.querySelectorAll('.lst-run').length === 2);
+      assert.deepEqual(await page.locator('.lst-run').nth(1).locator('.lst-cr').allInnerTexts().then(t => t.map(x => x.replace(/\s+/g, ' ').trim())),
+        ['Read 212', 'Duplicates removed 41', 'Dropped by rules 136', 'Could not score 2', 'Kept 33', 'Sent 2', 'Back to waiting 1', 'Waiting 27']);
+      const missedLines = (await page.locator('.au-rx').nth(1).innerText()).split('spend cap · 1 not delivered, back to waiting').length - 1;
+      assert.equal(missedLines, 2, tag + ': each stopped step names what it missed, a capped choose step too');
+      assert.ok(!(await page.locator('.au-rx').nth(1).innerText()).includes('undefined'), tag + ': a step no longer in the flow names no one');
 
       // +: a new one is the viewer's, off, 10 a day, with one step that posts what was sent.
       await page.locator('.au-crumb a').click();
@@ -204,6 +218,37 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.equal(mb.enabled, false);
       assert.deepEqual({...mb.trigger, tz: ''}, {type: 'listening', sources: [], rules: [], limits: [{count: 10, per: 'day'}], at: '08:00', tz: ''});
       assert.deepEqual(mb.steps.map(s => [s.type, s.do]), [['action', 'post_update']]);
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+
+    // None yet: one line on what Listening does and one green New listening: the header's, which never moves (the shared
+    // page header, task 338); the empty state offers the same action as a plain button. A double press makes one listening.
+    {
+      const tag = 'none';
+      let posts = 0;
+      const {page, errors} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/listening',
+        tweak: fx => { fx.automations = fx.automations.filter(a => (a.trigger as {type?: string}).type !== 'listening'); },
+        routes: async p => {
+          await p.route('**/api/v2/automations', async route => {
+            if (route.request().method() === 'POST') { posts++; await new Promise(r => setTimeout(r, 300)); }
+            await route.fallback();
+          });
+        }});
+      const empty = page.locator('.au-lst .empty-state.lst-empty');
+      await empty.waitFor();
+      assert.equal((await empty.locator('p').innerText()).trim(), 'Watches the sites and searches you pick, and posts what matters to Updates.', tag + ': what it does');
+      assert.equal(await empty.locator('.ea-art').count(), 1, tag + ': its little picture');
+      assert.deepEqual(await page.locator('.au-lst :is(button,a).primary:visible').allInnerTexts(), ['New listening'], tag + ': one green action');
+      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': the header\'s New listening stays in place');
+      assert.equal(await empty.locator('[data-lst-new]:not(.primary)').count(), 1, tag + ': the empty state\'s is a plain button');
+      await empty.locator('[data-lst-new]').dblclick();
+      await page.waitForFunction(() => /^#\/listening\/au_\d+$/.test(location.hash));
+      await page.waitForSelector('.lst-blk');
+      assert.equal(posts, 1, tag + ': a double press makes one listening');
+      await page.locator('.au-crumb a').click();
+      await page.waitForSelector('.lst-row');
+      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': New listening is still in the header once one exists');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

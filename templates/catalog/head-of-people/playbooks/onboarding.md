@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not finished. Budget 25 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes.
 
 Inputs: `tico team show`, the open people tasks, `tico calendar list`, `tico template list`, and any handbook pages the Librarian
 already holds.
@@ -49,7 +49,7 @@ those and use the defaults for the rest, saying which you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/team.md`, `knowledge/routing.md`,
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/team.md`, `knowledge/routing.md`,
 `knowledge/headcount-plan.md` (roles and dates, no pay), `knowledge/people-calendar.md` (each date with owner and lead time) and
 `knowledge/policies.md`.
 
@@ -64,7 +64,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`), and tell the human in one line what it does: "I will write this every Monday at 08:30 for
 the readers you named." They can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave
 it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

@@ -114,6 +114,19 @@ def fix(co, engineering, stage):
     return head
 
 
+def qa(co, engineering, head):
+    """Review 2 found nothing: the Builder says done in Fixes 2 at once, then attaches the QA page in QA."""
+    builder = co.handoff(engineering, "Fixes 2", "builder")
+    builder.cli("task", "done", engineering, "-m", "Review 2 found nothing to fix.", "--version", builder.version())
+    builder.end()
+    co.beat()
+    builder = co.handoff(engineering, "QA", "builder")
+    built, _ = builder.page("qa.html", "QA: negate", f"Built at {head}; checks pass; both reviews done.")
+    builder.attach("QA page", built)
+    builder.end()
+    co.beat()
+
+
 @pytest.mark.parametrize("webhooks", [True, False], ids=["webhooks", "github-webhooks-down"])
 def test_a_request_goes_from_typed_to_released_with_two_sign_offs(co, webhooks):
     """The whole happy journey; once with GitHub's webhooks arriving and once with none (their outage), when only the
@@ -162,11 +175,7 @@ def test_a_request_goes_from_typed_to_released_with_two_sign_offs(co, webhooks):
     review(co, engineering, "Review 1", "reviewer-1", head, "One blocking issue: no test for negate(0).")
     head = fix(co, engineering, "Fixes 1")
     review(co, engineering, "Review 2", "reviewer-2", head, "Nothing blocking.")
-    builder = co.handoff(engineering, "Fixes 2", "builder")
-    built, _ = builder.page("built.html", "What was built: negate", f"Built at {head}; checks pass; both reviews done.")
-    builder.attach("Review page", built)
-    builder.end()
-    co.beat()
+    qa(co, engineering, head)
 
     # The second sign-off, then the merge queue.
     assert co.new_in_list(before) == [("ask", engineering)], (
@@ -277,13 +286,13 @@ def test_the_person_sends_the_spec_back_and_the_product_owner_writes_it_again(co
 
 
 def test_a_builder_that_keeps_stopping_goes_to_the_engineering_manager_who_can_settle_it(co):
-    """The Builder ends run after run without doing the work: it is woken again after 2 minutes, 15 minutes and an
-    hour, then the task goes to the pipeline's Manager, who can reassign it, snooze it, move it on, move it back and
+    """The Builder ends run after run without doing the work: it is woken again after 15 minutes, 15 minutes and an
+    hour (a run that finished is not woken 2 minutes on), then the task goes to the pipeline's Manager, who can reassign it, snooze it, move it on, move it back and
     close it."""
     before = co.needs_you()
     product, engineering = to_build(co)
     co.handoff(engineering, "Build", "builder").end("I could not do it.")
-    for minutes in (3, 16, 61):
+    for minutes in (16, 16, 61):
         co.later(minutes)
         co.beat()
         again = co.turn_on("builder", engineering, f"again {minutes} minutes after it stopped")
@@ -352,7 +361,18 @@ def test_a_question_to_the_person_waits_in_their_list_and_the_answer_wakes_the_a
     before = co.needs_you()
     product = request(co)
     owner = co.handoff(product, "Spec", "product-owner")
-    owner.cli("task", "ask", product, "--to", "owner", "Integers only?", "--version", owner.version())
+    owner.cli(
+        "task",
+        "ask",
+        product,
+        "--to",
+        "owner",
+        "Integers only?",
+        "--why",
+        "It decides the input type.",
+        "--version",
+        owner.version(),
+    )
     owner.end()
     co.beat()
     assert co.new_in_list(before) == [("ask", product)], "the question did not reach the person's list once"
@@ -373,11 +393,7 @@ def to_sign_off(co, engineering):
     review(co, engineering, "Review 1", "reviewer-1", head, "One blocking issue: no test for negate(0).")
     head = fix(co, engineering, "Fixes 1")
     review(co, engineering, "Review 2", "reviewer-2", head, "Nothing blocking.")
-    builder = co.handoff(engineering, "Fixes 2", "builder")
-    built, _ = builder.page("built.html", "What was built: negate", f"Built at {head}; checks pass; both reviews done.")
-    builder.attach("Review page", built)
-    builder.end()
-    co.beat()
+    qa(co, engineering, head)
     return head
 
 
@@ -417,7 +433,7 @@ def test_the_merge_queue_drops_the_pr_and_the_release_owner_queues_it_again(co):
 
 def test_after_the_sign_off_a_rebase_is_queued_again_and_a_conflict_fix_is_read_by_reviewer_2_not_the_person(co):
     """Velocity (~100 PRs a day, Nov 12): main moves under a signed-off PR. A rebase changes the same lines, so the
-    Release Owner queues it again. A conflict fix that changes the PR's lines goes back to Fixes 2, where Reviewer 2
+    Release Owner queues it again. A conflict fix that changes the PR's lines goes back to QA, where Reviewer 2
     reads it; its OK keeps the person's, and the PR merges. The person is asked once, at the sign-off."""
     before = co.needs_you()
     _, engineering = to_build(co)
@@ -440,9 +456,9 @@ def test_after_the_sign_off_a_rebase_is_queued_again_and_a_conflict_fix_is_read_
     co.heard(1)
     releaser = co.turn_on("release-owner", engineering, "after the conflict fix took the PR out of the queue")
     code, out, err = releaser.cli("task", "queue", engineering, "--version", releaser.version(), ok=False)
-    assert code != 0 and "Move the task back to Fixes 2" in out + err, f"a bot queued a changed PR: {out}{err}"
+    assert code != 0 and "Move the task back to QA" in out + err, f"a bot queued a changed PR: {out}{err}"
     releaser.cli(
-        "task", "move", engineering, "Fixes 2", "-m", "Fixed the conflict in negate.", "--version", releaser.version()
+        "task", "move", engineering, "QA", "-m", "Fixed the conflict in negate.", "--version", releaser.version()
     )
     releaser.end()
     co.beat()
@@ -473,7 +489,7 @@ def test_after_the_sign_off_a_rebase_is_queued_again_and_a_conflict_fix_is_read_
         f"the merged PR's task is not in Release. {co.line(engineering)}"
     )
     assert co.new_in_list(before) == [], "the person was asked again after the sign-off"
-    co.clean(expected=("Move the task back to Fixes 2",))
+    co.clean(expected=("Move the task back to QA",))
 
 
 def test_the_person_says_no_before_release_and_the_second_round_is_signed_off_once_more(co):
@@ -488,13 +504,13 @@ def test_the_person_says_no_before_release_and_the_second_round_is_signed_off_on
     co.person("POST", answer, {"value": "no", "note": "negate(None) must raise."})
     co.beat()
     assert co.new_in_list(before) == [], "a build sent back is still in the person's list"
-    builder = co.handoff(engineering, "Fixes 2", "builder")
+    builder = co.handoff(engineering, "QA", "builder")
     assert "negate(None) must raise." in builder.wake + builder.show(), "the Builder is not shown why it came back"
     head = co.github.push(REPO, 1, head=co.commit())
     co.github.set_checks(REPO, head, "success")
     co.heard(1)
-    built, _ = builder.page("built.html", "What was built: negate", f"Built at {head}; negate(None) raises.")
-    builder.attach("Review page", built)
+    built, _ = builder.page("qa.html", "QA: negate", f"Built at {head}; negate(None) raises.")
+    builder.attach("QA page", built)
     builder.end()
     co.beat()
     assert co.new_in_list(before) == [], "the person was asked before Reviewer 2 read the new commit"

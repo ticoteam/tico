@@ -1,11 +1,11 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 
 Inputs: the open tasks, the team's documents, the answers the human gives.
 Outcome: five recorded answers; the intake, escalation, obligations and policy registers written from them; a first legal
 summary on the task from the real open requests; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first summary is on the task.
+Done when: `tico bot setup-done` has run, and the first summary is on the task.
 
 ---
 
@@ -48,7 +48,7 @@ answers only some, record those and use the defaults for the rest, and say which
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/intake.md` (sources and request kinds),
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/intake.md` (sources and request kinds),
 `knowledge/escalation.md` (what goes to a lawyer and who that is, with the fallback if they gave no rule), `knowledge/obligations.md`
 (laws, licences and filings named, each with the answer it came from) and `knowledge/policies.md` (each policy, where it lives,
 known gaps). Start `knowledge/requests.md` with the open legal tasks you found.
@@ -65,7 +65,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 and tell the human in one line what it does: "I will write this legal summary every Monday at 08:30. Messages to outsiders stay
 drafts until a person turns mail sending on in Tico." They can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it
 off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

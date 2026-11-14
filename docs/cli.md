@@ -3,7 +3,8 @@
 `tico` is the same command set a bot runs in its turn (`tico task list`, `tico bot go-live`, ... ; `tico --help`), and
 every command is one tool of the MCP server (`tico task create` is `tico_task_create`). Rights live on the server: a
 command can do nothing the API refuses its credential. This page is the plumbing around the commands: which company
-and credential a shell uses, picking fields from an answer, following live events, and what the exit codes mean.
+and credential a shell uses, picking fields from an answer, following live events, the website commands, and what
+the exit codes mean.
 
 ## Which company: profiles
 
@@ -80,6 +81,37 @@ short id or number) is the server's filter; `--pipeline` (id or name) is applied
 `pipeline_id`. `--topics` defaults to `tasks` when `--task` or `--pipeline` is given. Notes about reconnecting go to
 stderr. A bot's turn cannot follow the stream; people and their tokens can.
 
+## Websites: `tico browser` and `tico login`
+
+A bot drives a website tool's browser a verb at a time and signs in without seeing the password
+([integrations/website.md](../integrations/website.md), [Website logins](credential-vault.md#website-logins)). These
+are bot commands: a bot's turn (and BotOps) runs them; a person uses the tool's page.
+
+```
+tico browser open <site> [url]          # opens a page on the tool's sites, signed in as your account
+tico browser read <site>                # the page as text; each control on its own line with a ref (e12)
+tico browser click <site> <ref>
+tico browser type <site> <ref> <text> [--submit]
+tico browser press <site> <key>
+tico browser scroll <site> [--dy N]     # 600 by default; negative scrolls up
+tico browser back <site>
+tico browser screenshot <site> [--out PATH]   # writes the JPEG (default ./screenshots/<site>-<time>.jpg), prints its path
+tico browser download <site> [--out DIR]      # writes the newest download (default ./downloads), prints its path
+tico browser upload <site> <ref> <path>       # a file in your checkout, at most 10 MB
+tico browser close <site>                     # lets go of the account; the sign-in stays
+tico browser needs-you <site> "<line>"        # asks a person on your task to do a step only a person may
+tico login fill <site> username|password|code [--ref eN]
+tico login copy <site> username|password|code # onto this computer's clipboard, cleared after 30 s
+tico login code <site>                        # the current 2FA code and the seconds it has left
+```
+
+`<site>` is a site, a page URL on it, or the tool's name or id. Each command waits up to 40 s and is never retried by
+the CLI (a retry could click twice). It prints one line a bot reads (the page as `<title> — <url>`, the page text, a
+path, a code) and `--json` prints the answer as JSON. Nothing prints a password or a 2FA key. A refusal prints one
+sentence with what to do next, in place of the JSON error: for example "Builder is using this account; try again in a
+minute.", "Mac mini is offline; try again later, or ask a person to see to it.", "That element is gone; read the page
+again (tico browser read app.example.com)." Exit codes are the ones below.
+
 ## Exit codes
 
 | Code | Meaning | Retry? |
@@ -95,8 +127,8 @@ stderr. A bot's turn cannot follow the stream; people and their tokens can.
 | 124 | A waiter's `--timeout` passed before what it waits for happened | Wait again if it should |
 
 Only 1 means "the same call may work if retried". The answer to an error is JSON on stdout,
-`{"error": <code>, "detail": "...", "retryable": false, "operation_id": "..."}`; argparse's usage text goes to
-stderr. Two old exceptions stay: `tico file approved` exits 1 when the file is not approved (`"approved": false` in
+`{"error": <code>, "detail": "...", "retryable": false, "operation_id": "..."}` (`tico browser` and `tico login`
+print one sentence instead, unless `--json`); argparse's usage text goes to stderr. Two old exceptions stay: `tico file approved` exits 1 when the file is not approved (`"approved": false` in
 its answer), and a command that is gone exits 1 with one line on stderr naming what to use instead.
 
 Before 0.6, 4 and 5 were 2, and 64 was 1.

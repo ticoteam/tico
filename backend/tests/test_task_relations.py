@@ -11,7 +11,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
 from backend.tests.helpers.upgrade import FIXTURES, boot
 
 
@@ -167,7 +167,7 @@ def test_sparse_relations_on_a_large_page_do_not_probe_all_task_pairs():
         )
         c.executescript(TR.SCHEMA)
         c.executemany(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks','now')",
+            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'follow_up','now')",
             [(ids[0], ids[600]), (ids[700], ids[1]), (ids[0], ids[999])],
         )
         operations = [0]
@@ -178,6 +178,21 @@ def test_sparse_relations_on_a_large_page_do_not_probe_all_task_pairs():
 
         c.set_progress_handler(budget, 1000)
         result = TR.grouped(c, ids[:400], 'private=0')
-        assert [r['id'] for r in result[ids[0]]['blocks']] == [ids[600]]
-        assert [r['id'] for r in result[ids[1]]['blocks']] == [ids[700]]
+        assert [r['id'] for r in result[ids[0]]['follow_up']] == [ids[600]]
+        assert [r['id'] for r in result[ids[1]]['follow_up']] == [ids[700]]
         assert result[ids[2]] == {}
+
+
+def test_the_api_takes_a_dependency_until_released(api):
+    """`until: released` on a depends_on (task_depends): stored, read back from both ends, and refused on anything else."""
+    work = post(api, "tasks", {"owner": "cpo", "title": "Ship the refund page", "body": "x"})
+    check = post(api, "tasks", {"owner": "cpo", "title": "Check the refund page in production", "body": "x"})
+    path = "tasks/" + check["id"] + "/relations"
+    r = api.post(
+        "/api/v2/" + path, json={"task": work["id"], "kind": "depends_on", "until": "released"}, headers=headers()
+    )
+    assert r.status_code == 200, r.text
+    assert all(line.endswith("until it is released") for line in r.json()["readback"])
+    assert [(x["id"], x["until"]) for x in r.json()["task"]["relations"]["depends_on"]] == [(work["id"], "released")]
+    post(api, path, {"task": work["id"], "kind": "depends_on", "until": "merged"}, expected=422)
+    post(api, path, {"task": work["id"], "kind": "follow_up", "until": "released"}, expected=422)

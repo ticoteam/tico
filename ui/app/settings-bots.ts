@@ -5,6 +5,8 @@
 // A model choice as a bot row stores it (its own model, `fallback`, `task_model`): older rows say runtime and effort.
 interface SettingsBotChoice {
   harness?: string | null | undefined; runtime?: string | undefined; model?: string | null | undefined; reasoning_effort?: string | null | undefined; effort?: string | null | undefined;
+  // A fallback's own window (backend/harnesses.py normalize_fallback); absent is "Same as bot".
+  compact_at?: number | null | undefined;
 }
 // A bot's task settings (backend/task_models.py `stored`): a task model, a task effort and a task context length.
 interface SettingsTaskModel extends SettingsBotChoice { compact_at?: number | null; }
@@ -27,51 +29,24 @@ interface SettingsChoiceKindSpec { name: string; of: (e: SettingsBot) => Setting
 interface SettingsBot extends CloudMachineBot {
   model?: string; runtime?: string; effort?: string; reasoning_effort?: string; resolved_model?: string; resolved_runtime?: string | null;
   fallback?: SettingsBotChoice | null; task_model?: SettingsTaskModel | null; task_model_warning?: string | null;
+  compact_at?: number | null;   // its chosen window; none: its model's default
   revision?: number; role?: string; description?: string; can_manage?: boolean;
   readiness?: { gateway?: string | null; problems?: string[] } | null;
   agent?: (BotAgent & { model?: string; harness?: string }) | null;
 }
 
-const settingsBotName = (id: unknown) => botRow(id)?.display_name || botSlug(id);
-const settingsPerson = (id: string | null | undefined) => SETTINGS_DATA.people.find(person => person.id === id);
-const settingsPersonName = (id: string | null | undefined) => settingsPerson(id)?.name || id || 'Unassigned';
 let SETTINGS_KEEP_MODEL = '';
-const settingsModel = (id: string | null | undefined) => SETTINGS_DATA.models.find(model => model.id === id);
-const settingsHarness = (id: string | null | undefined) => (SETTINGS_DATA.harnesses || []).find(row => row.id === id);
-const settingsModelName = (id: string | null | undefined) => settingsModel(id)?.label || settingsTierName(id) || id || 'Not set';
-const settingsHarnessName = (id: string | null | undefined) => settingsHarness(id)?.label || id || '';
-const settingsEffortName = (effort: string | null | undefined) => ({low:'low', medium:'medium', high:'high', xhigh:'xhigh', max:'max', ultra:'ultra'} as Record<string, string>)[String(effort)] || effort || '';
 const settingsChoiceValue = (harness: string | null | undefined, model: string | null | undefined, effort: string | null | undefined) => [harness || '', model || '', effort || ''].join('::');
 function settingsChoiceFromValue(value: string | null | undefined): SettingsChoice {
   const parts = String(value || '').split('::');
   return {harness: parts[0] || '', model: parts[1] || '', effort: parts[2] || ''};
 }
-// "Claude Opus 5 · high · 1M" (modelChoiceWords and modelContextWords, ui/app/format.ts); the tool that runs it only when it is not the model's own.
-const settingsChoiceLabel = (harness: string | null | undefined, model: string | null | undefined, effort: string | null | undefined) => {
-  if (!model) return 'not set';
-  const row = settingsModel(model), own = row?.harnesses?.[0] || row?.runtime || harness;
-  const words = modelChoiceWords(model, settingsEffortName(effort), harness, own) || settingsModelName(model);
-  const context = modelContextWords(row?.context_tokens);
-  return context ? `${words} · ${context}` : words;
-};
 // ----------------------------------------------------------------- Tico AI Gateway picks
 // A Gateway bot's model is a pick, not a name: Level · Fast · Version (GET /v2/models `gateway`, backend/gateway_tiers.py).
 // The stored model is the id they make: tico-{level}[-fast][-{version}], no version meaning always the latest.
 const settingsIsTico = (id: string | null | undefined) => /^tico-/.test(id || '');
-const settingsGateway = () => SETTINGS_DATA.gateway?.tiers && Object.keys(SETTINGS_DATA.gateway.tiers).length ? SETTINGS_DATA.gateway : null;
-// {tier, level, fast, version ('auto' when none)} for a tier id, or null for any other id.
-function settingsTierParse(id: string | null | undefined): SettingsTierPick | null {
-  const gw = settingsGateway(), m = /^(tico-[a-z0-9-]+?)(?:-(\d+\.\d+))?$/.exec(String(id || ''));
-  if (!m) return null;
-  const tier = gw?.tiers[String(m[1])];
-  return tier ? {tier: String(m[1]), level: tier.level, fast: tier.fast, version: m[2] || 'auto'} : null;
-}
 const settingsTierId = (t: SettingsTierPick) => `${t.tier}${t.version === 'auto' ? '' : '-' + t.version}`;
 const settingsTierKey = (level: string, fast: boolean) => `tico-${level}${fast ? '-fast' : ''}`;
-function settingsTierName(id: string | null | undefined) {
-  const t = settingsTierParse(id);
-  return t ? `${SETTINGS_DATA.gateway?.tiers[t.tier]?.name}${t.version === 'auto' ? ' (auto)' : ' ' + t.version}` : '';
-}
 // "Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M" for a pick, from the catalog's version rows (another id from its model row).
 function settingsTierLine(id: string) {
   const t = settingsTierParse(id), tier = t && SETTINGS_DATA.gateway?.tiers[t.tier];
@@ -87,12 +62,6 @@ const settingsModelPickName = (id: string) => {
   const name = /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
   return context ? `${name} · ${context}` : name;
 };
-// A bot with no model of its own follows the team default; say which one it resolves to.
-function settingsDefaultLabel(e: SettingsBot) {
-  if (e.model || !e.resolved_model) return 'not set';
-  const row = settingsModel(e.resolved_model);
-  return `team default (${settingsChoiceLabel(e.resolved_runtime, e.resolved_model, row?.default_effort || '')})`;
-}
 function settingsAllChoices() {
   // Once the owner has chosen providers, only their models are offered (a bot already on another
   // one keeps its own choice in the editor).
@@ -106,18 +75,6 @@ function settingsAllChoices() {
         const search = [harness, settingsHarnessName(harness), model.id, model.label, model.description || '', effort, label].join(' ').toLowerCase();
         return {harness, model: model.id, effort, label, search, value: settingsChoiceValue(harness, model.id, effort)};
       })));
-}
-// Harness the team has no provider for: shown greyed out to whoever can turn it on, never silently
-// missing, so a shipped vendor arrives with its way in (Muse Code stayed invisible while Meta was off).
-// Only admins see them: anyone else gets no way in, just clutter.
-function settingsOffHarnesses(choices: {harness: string | undefined}[]) {
-  const enabled = SETTINGS_DATA.enabledProviders || [];
-  if (!enabled.length || !settingsIsAdmin()) return [];
-  const have = new Set(choices.map(row => row.harness));
-  return (SETTINGS_DATA.harnesses || []).filter(row =>
-    !row.external && !have.has(row.id) && (SETTINGS_DATA.models || []).some(model =>
-      !model.deprecated && model.provider && !enabled.includes(model.provider) &&
-      (model.harnesses || [model.runtime]).includes(row.id)));
 }
 // What the bot's computer cannot run, as the server judges it (backend/readiness.py `can_run`, sent with
 // /v2/operations as `runnable`): {can_run: false, problem, short, computer, sign_in, move}. Not listed: not refused.
@@ -322,8 +279,7 @@ function renderSettingsBots() {
     if (!target) return;
     const restore = target.closest<HTMLButtonElement>('[data-bot-restore]');
     if (restore) { void settingsRestoreBot(String(restore.dataset.botRestore), restore, restore.dataset.label); return; }
-    const choice = target.closest<HTMLElement>('[data-choice-open]');
-    if (choice) { settingsChoicePopover(choice); return; }
+    if (target.closest('[data-choice-open]')) return;   // the picker opens itself (settings-bots-choice.ts)
     const task = target.closest<HTMLElement>('[data-task-open],[data-task-close]');
     if (task) {
       const slug = String(task.dataset.taskOpen || task.dataset.taskClose), open = SETTINGS_BOTS_VIEW.taskOpen;
@@ -399,7 +355,7 @@ function renderSettingsBots() {
     }
     const machine = target.closest<HTMLSelectElement>('[data-bot-machine]');
     if (machine) void settingsMoveBot(machine);
-    const part = target.closest<HTMLSelectElement>('[data-task-row] [data-task-effort],[data-task-row] [data-task-context]');
+    const part = target.closest<HTMLSelectElement>('[data-task-row] [data-task-effort]');
     if (part) void settingsSaveTaskPart(part);
   };
   settingsWireCombos(el);

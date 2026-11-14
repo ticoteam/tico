@@ -353,5 +353,5 @@
   reply: |
     Dana adds a goal: close the Harbor Co renewal at list price by Nov 30, serving the Retention bet. The turn posts ONE read-back
     with `tico goal read-back` (goal_create, with its title, owner and date, and the bet it serves) and saves nothing: no `hub
-    goal save`, no create, no update. The reply is the read-back in short, and says it is saved only on her plain yes. One
+    goal save`, no create, no update. The reply is the read-back in short, and says it is saved only on her yes. One
     question at most, if it is needed; the read-back is the expected call.

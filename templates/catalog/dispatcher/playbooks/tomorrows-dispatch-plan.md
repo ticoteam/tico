@@ -18,7 +18,7 @@ and yesterday's plan with its close-out notes.
 ## 2. Check and assign
 
 Run `skills/check-a-job-before-you-assign-it/SKILL.md` on each job. Place the jobs that pass on the route, in the order
-and with the buffers set out under "How you plan" in `AGENT.md`. Keep jobs already assigned and confirmed where they are,
+and with the buffers set out under "How you plan" in `AGENTS.md`. Keep jobs already assigned and confirmed where they are,
 unless that breaks a hard limit; a move is a proposal with its reason. Where a planned length is in question, settle it
 with `skills/estimate-a-job-length-from-history/SKILL.md` before you use it.
 

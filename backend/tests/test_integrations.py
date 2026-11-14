@@ -15,7 +15,7 @@ from backend.tests.helpers.bot_tools import configure, report
 
 # Only outside services Tico has built-in support for ship; a company adds its own pages in its
 # config (<registry>/integrations or TICO_INTEGRATIONS_DIR), layered over these.
-SHIPPED = {"github", "slack", "mail", "aside", "close-crm", "postgres", "mysql", "mongodb", "sqlite"}
+SHIPPED = {"github", "slack", "mail", "aside", "website", "close-crm", "postgres", "mysql", "mongodb", "sqlite"}
 
 
 def test_the_release_ships_only_built_in_services_and_every_page_parses():

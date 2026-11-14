@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 15 minutes. The outcome is five recorded answers, one real draft brief on the task,
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 15 minutes. The outcome is five recorded answers, one real draft brief on the task,
 and the first routine checked.
 
 ---
@@ -40,7 +39,7 @@ which defaults you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Put the recipient, schedule, threshold,
+Write each answer, dated, into the `knowledge/` file it belongs to. Put the recipient, schedule, threshold,
 meeting and exclusions in `knowledge/rhythm.md` as present-tense rules.
 
 ## 5. Produce the first brief now
@@ -55,7 +54,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you this every Friday at 15:00." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/rhythm.md` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

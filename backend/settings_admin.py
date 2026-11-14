@@ -68,15 +68,13 @@ def repository_present(c, bot):
     return bool(report.get("repository_present"))
 
 
-# Where a bot's conversation compacts, in tokens (runner-rs/src/hosts/mod.rs DEFAULT_COMPACT_AT): the choices offered,
-# and what a bot that never chose one gets.
-COMPACT_AT = (100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000)
-DEFAULT_COMPACT_AT = 250_000
-
-
-def compact_at(config):
+def compact_at(config, model=None):
+    """Where the bot's conversation compacts, in tokens: its saved size, else the default for `model`, or for the model
+    its config names (backend/providers.py compact_default)."""
     value = (config or {}).get("compact_at")
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else DEFAULT_COMPACT_AT
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return providers.compact_default(model or (config or {}).get("model"))
 
 
 # The fields a manager bot changes on its report (report_managers.SCOPES). Anyone who manages the bot may undo them.
@@ -85,6 +83,9 @@ REPORT_UNDO = ("model", "task_model", "identity", report_managers.LIFECYCLE)
 # emoji is four bytes, not one character). A change past that starts the next page (`next_before`); one bigger than a
 # page on its own is sent without its values (`truncated`), so the page still moves on past it.
 HISTORY_PAGE_BYTES = 256 * 1024
+# The readiness problem a computer reports for a bot it has no checkout of yet (runner-rs/src/readiness.rs); older
+# runners name the instruction file AGENT.md.
+MISSING_REPOSITORY = ("Missing bot repository or AGENTS.md", "Missing bot repository or AGENT.md")
 
 
 def _lifecycle_state(c, bot):
@@ -322,9 +323,9 @@ class SettingsAdmin:
             "model": effective.get("model") or "",
             "runtime": effective.get("runtime") or "",
             "effort": effective.get("reasoning_effort") or row["effort"],
-            "compact_at": compact_at(effective),
+            "compact_at": compact_at(effective, providers.bot_choice(c, self.settings, effective)[1]),
             # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
-            "wake": wake_presets.effective(_json(config["config"], {}) or {}),
+            "wake": wake_presets.waits(_json(config["config"], {}) or {}),
             "profile": profiles.effective(_json(config["config"], {}) or {}),
             "session": effective.get("session"),
             "subtask_session": effective.get("subtask_session"),
@@ -635,6 +636,8 @@ class SettingsAdmin:
             ),
             "model_managed_by": "cloud",
         }
+        if body.compact_at:
+            config["compact_at"] = body.compact_at
         if folder:
             config["folder"] = folder
         profiles.apply(config, profiles.DOER, {})
@@ -809,7 +812,23 @@ class SettingsAdmin:
                 declared["session"] = card["session"]
             BS.write(c, bot_id, declared)
             MessageBots.link(c, who.actor, bot_id, who.actor)  # BotOps built it for them: it is their message bot
+        self._note_making_task(c, bot_id)
         return {**result, **self.definition(c, bot_id), "created": True}
+
+    @staticmethod
+    def _note_making_task(c, bot_id):
+        """BotOps registering a bot while it works an open task (the one it cites, H.DELEGATION) is making the bot on
+        that task: say so in the bot's settings (setup_live.MADE_ON), so the bot counts as being set up and its page
+        names the task and any ask on it until it goes live."""
+        from .setup_live import MADE_ON
+
+        cited = str((H.DELEGATION.get() or {}).get("cited") or "")
+        if not cited or not c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (cited,)).fetchone():
+            return
+        declared = BS.read(c, bot_id) or {}
+        if declared.get("setup_task_id") or declared.get(MADE_ON):
+            return
+        BS.update(c, bot_id, {MADE_ON: cited})
 
     @staticmethod
     def _bot_being_set_up(c, template):
@@ -1227,11 +1246,10 @@ class SettingsAdmin:
         if field == "task_model":
             return task_models.stored(_json(config["config"], {}) or {})
         if field == "compact_at":
-            return compact_at(_json(config["config"], {}))
+            declared = _json(config["config"], {}) or {}
+            return compact_at(declared, providers.bot_choice(c, self.settings, declared)[1])
         if field == start_places.BOT_KEY:
             return start_places.bot_limit(_json(config["config"], {}) or {})
-        if field == "wake_preset":
-            return wake_presets.preset_of(_json(config["config"], {}))
         if field == "profile":
             return profiles.snapshot(_json(config["config"], {}) or {})
         if field == "placement":
@@ -1342,7 +1360,7 @@ class SettingsAdmin:
                 # makes its runner clone the repository. That is fine when GitHub holds the history, and a
                 # refusal that names the cause when it does not.
                 source = self.execution_assignment(c, bot)
-                other = [p for p in detail.get("problems") or [] if p != "Missing bot repository or AGENT.md"]
+                other = [p for p in detail.get("problems") or [] if p not in MISSING_REPOSITORY]
                 if source and detail.get("repository_present") is False and not other:
                     blocked = stranded(c, self.store.settings, bot, source, runner["id"])
                     if blocked:
@@ -2015,9 +2033,11 @@ class SettingsAdmin:
             if isinstance(choice_body, dict):
                 model_id, harness_id = choice_body.get("model"), choice_body.get("harness")
                 effort_id = choice_body.get("effort") or choice_body.get("reasoning_effort")
+                compact = choice_body.get("compact_at")
             else:
                 model_id, harness_id = choice_body.model, choice_body.harness
                 effort_id = getattr(choice_body, "effort", None) or getattr(choice_body, "reasoning_effort", None)
+                compact = getattr(choice_body, "compact_at", None)
             if not HARNESS_BY_ID.get(harness_id):
                 raise Problem("harness", "Choose one of the supported harnesses", 422)
             choice = self.models.get(model_id)
@@ -2032,6 +2052,9 @@ class SettingsAdmin:
                 "reasoning_effort": effort,
                 "runtime": runtime_of(harness),
             }
+            if compact:
+                # Its own window while on the fallback; none is "Same as bot" (providers.with_compact_default).
+                target["compact_at"] = compact
         before = self.snapshot(c, bot, "fallback")
         if before == target:
             raise Problem("unchanged", "That fallback is already selected", 409)
@@ -2170,23 +2193,43 @@ class SettingsAdmin:
         bot = H.actor_id(row["owner_id"])
         what = f"change the model task {task_id} runs on"
         current = task_run_models.of(c, task_id)
-        if "model" in body.model_fields_set and body.model is None:
+        named = body.model_fields_set
+        # Its window: the one named (null is the bot's again), else the one it has.
+        compact = body.compact_at if "compact_at" in named else (current or {}).get("compact_at")
+        if "model" in named and body.model is None:
+            # Back to the bot's model: with a window named, the task keeps only that.
             self._task_run_rights(c, who, bot, what)
-            target = None
+            target = task_run_models.window(body.compact_at) if body.compact_at else None
         else:
-            model = body.model if "model" in body.model_fields_set else (current or {}).get("model")
-            if not model:
+            model = body.model if "model" in named else (current or {}).get("model")
+            if not model and (body.effort or body.harness):
                 raise Problem("model", "Choose a model for this task first", 422)
-            target = self.task_run_choice(c, who, bot, what, model, body.effort, body.harness, current)
+            if model:
+                target = self.task_run_choice(c, who, bot, what, model, body.effort, body.harness, current)
+                target["compact_at"] = compact
+            else:
+                # A window alone: the task's runs keep the bot's model and compact where it says.
+                self._task_run_rights(c, who, bot, what)
+                if not compact and "compact_at" not in named:
+                    raise Problem("model", "Choose a model for this task first", 422)
+                target = task_run_models.window(compact) if compact else None
+        keys = ("harness", "model", "reasoning_effort", "compact_at")
         if (target is None and current is None) or (
-            target and current and all(target[k] == current.get(k) for k in ("harness", "model", "reasoning_effort"))
+            target and current and all(target[k] == current.get(k) for k in keys)
         ):
             raise Problem("unchanged", "That task model is already selected", 409)
         saved = task_run_models.set_choice(c, who.actor, task_id, target)
         declared = shared_bots.follow(c, bot, _json(self._config(c, bot)["config"], {}) or {})
-        readiness = task_models.readiness(c, bot, target) if target else None
-        warning = task_models.warning(c, self.settings, bot, declared, target) if target else ""
+        on_model = target if target and target["model"] else None
+        readiness = task_models.readiness(c, bot, on_model) if on_model else None
+        warning = task_models.warning(c, self.settings, bot, declared, on_model) if on_model else ""
         return {"task": task_id, "run_model": saved, "readiness": readiness, "warning": warning}
+
+    def task_run_window(self, c, who, bot, what, compact_at):
+        """A task's own window with no model of its own, for `who` to set on a task `bot` runs: the same rights as its
+        model (_task_run_rights)."""
+        self._task_run_rights(c, who, bot, what)
+        return task_run_models.window(compact_at)
 
     def _task_run_rights(self, c, who, bot, what):
         """Who may set the model a task of `bot`'s runs on: whoever may change the bot's model (the same gate and check
@@ -2214,12 +2257,23 @@ class SettingsAdmin:
             raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
         before = self.snapshot(c, bot, "compact_at")
         declared = _json(config["config"], {}) or {}
-        declared["compact_at"] = body.compact_at
+        if body.compact_at is None:
+            # Null takes the saved size away: the bot compacts at its model's default and moves with the model.
+            if declared.get("compact_at") is None:
+                return {"bot": bot, "compact_at": None, "compacts_at": before, "revision": config["revision"]}
+            declared.pop("compact_at", None)
+        else:
+            declared["compact_at"] = body.compact_at
         BS.write(c, bot, declared)
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         self.record(c, who.actor, bot, "compact_at", before, body.compact_at)
         H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
-        return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
+        return {
+            "bot": bot,
+            "compact_at": body.compact_at,
+            "compacts_at": compact_at(declared, providers.bot_choice(c, self.settings, declared)[1]),
+            "revision": config["revision"] + 1,
+        }
 
     def set_turns_at_once(self, c, who, bot, body, undo_change_id=None):
         """The most turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
@@ -2240,35 +2294,6 @@ class SettingsAdmin:
             )
         H.event(c, who.actor, "bot.turns_at_once_changed", bot, {"before": before, "after": body.turns_at_once})
         return {"bot": bot, "turns_at_once": body.turns_at_once, "revision": config["revision"] + 1}
-
-    def set_wake_preset(self, c, who, bot, body):
-        """How soon the bot's nonblocking notices and enabled sweeps start a turn (backend/wake_presets.py). Only the
-        one key changes: no routine, hook, subscription, permission or compaction setting moves with it. A branch
-        picks its own, since the queue it holds is its own. Jobs already held are planned again on the new values."""
-        CA.gate(c, who.actor, "cost", f"change how soon {(H.bot(c, bot) or {}).get('slug', bot)} wakes")
-        self._manager(c, who, bot)
-        config = self._config(c, bot)
-        if config["revision"] != body.expected_revision:
-            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
-        before = self.snapshot(c, bot, "wake_preset")
-        declared = _json(config["config"], {}) or {}
-        # Old clients may still send `current`; it now selects Performance.
-        chosen = wake_presets.preset_of({"wake_preset": body.wake_preset})
-        declared["wake_preset"] = chosen
-        if profiles.name_of(declared):
-            # A bot with a profile keeps it: the old setting only changes the profile's window (backend/profiles.py).
-            profiles.apply_preset(declared, chosen)
-        BS.write(c, bot, declared)
-        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
-        wake_presets.replan(c, bot)
-        self.record(c, who.actor, bot, "wake_preset", before, chosen)
-        H.event(c, who.actor, "bot.wake_preset_changed", bot, {"before": before, "after": chosen})
-        return {
-            "bot": bot,
-            "wake_preset": chosen,
-            "wake": wake_presets.effective(declared),
-            "revision": config["revision"] + 1,
-        }
 
 
 def archive_bot(c, actor, bot, successor="", revoke_agent=True):

@@ -138,6 +138,8 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
     assert dm["id"] not in listed_ids and home["id"] not in listed_ids and zeta["id"] not in listed_ids
     assert dm["id"] in rail["catch_up_ids"]  # the DM's unread is Catch up's, not a rail row
     assert rail["dms"] == {"human:ana": 1} and rail["catch_up"] == len(rail["catch_up_ids"])
+    # The first page says the change number it is as of: a stream resuming there misses nothing; later pages leave it out.
+    assert rail["seq"] == cursor(api)
     followed = api.put(f"/api/v2/threads/{zeta['id']}/follow", json={}, headers=headers("ben-test"))
     assert followed.status_code == 200, followed.text
     seen, page = [], listed(api, "rail", "ben-test", limit=1)
@@ -147,6 +149,7 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
             break
         page = listed(api, "rail", "ben-test", limit=1, cursor=page["next_cursor"])
         assert page["pinned"] == [] and page["catch_up"] is None and page["catch_up_ids"] == [] and page["dms"] == {}
+        assert "seq" not in page
     assert seen == [alpha["id"], beta["id"], gamma["id"], zeta["id"]]
     assert api.get("/api/v2/threads/rail", params={"cursor": "nope"}, headers=headers("ben-test")).status_code == 422
 
@@ -603,3 +606,63 @@ def test_catch_up_scans_its_allowance_once_over_all_its_pages_and_muted_roots_ta
             break
         page = listed(api, "catch-up", "ben-test", limit=1, cursor=page["next_cursor"])
     assert seen == rail["catch_up_ids"]
+
+
+def test_the_rail_lists_every_catch_up_chat_it_leaves_out_as_unread_mentions_first(api):
+    # On the rail: a members thread with something new. Off it: a 1:1 DM with a bot, a DM with a person, a task's thread
+    # that mentions Ben, and a thread pinned for nobody that Ben is in but which is read.
+    shared = new_thread(api, title="Budget")
+    say(api, shared["id"], "Numbers are in")
+    new_thread(api, title="Zeta")
+    bot_dm = api.get("/api/v2/threads/dm", params={"with": "bot:ops"}, headers=headers("ben-test")).json()
+    post_as(api, bot_dm["id"], "bot:ops", "The deploy finished")
+    post_as(api, bot_dm["id"], "bot:ops", "And the smoke test passed")
+    person_dm = api.get("/api/v2/threads/dm", params={"with": "human:ben"}, headers=headers("ana-test")).json()
+    say(api, person_dm["id"], "Lunch?")
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "human:ana", "Budget review", "Details.", "human:ana", lint=False)
+    post_as(api, made["conversation_id"], "human:ana", "@ben can you check the total?", to_actor="human:ben")
+    rail = listed(api, "rail", "ben-test")
+    on_rail = set(ids(rail["pinned"] + rail["threads"]))
+    unread = rail["unread"]
+    # AC-1: every chat Catch up counts is on the rail once, as a thread or as an Unread row.
+    assert shared["id"] in on_rail and shared["id"] not in ids(unread)
+    assert sorted(ids(unread) + [i for i in rail["catch_up_ids"] if i in on_rail]) == sorted(rail["catch_up_ids"])
+    assert rail["catch_up"] == len(rail["catch_up_ids"]) == 4
+    # AC-2: the mention first, then newest message first.
+    assert ids(unread) == [made["conversation_id"], person_dm["id"], bot_dm["id"]]
+    task_row, person_row, bot_row = unread
+    assert task_row["mention"] is True and task_row["task_id"] == made["id"] and task_row["audience"] == "task"
+    assert task_row["title"] == "Budget review"
+    # AC-3: a 1:1 chat names its one other, with the number of new messages.
+    assert [m["actor"] for m in bot_row["dm_with"]] == ["bot:ops"] and bot_row["dm_with"][0]["name"]
+    assert bot_row["dm_with_count"] == 1 and bot_row["new_count"] == 2
+    assert bot_row["mention"] is False and bot_row["home_actor"] is None
+    assert person_row["dm_with"][0]["actor"] == "human:ana" and person_row["new_count"] == 1
+    # Reading a chat takes it off; a later page has no Unread.
+    read_up(api, bot_dm["id"], "ben-test")
+    assert bot_dm["id"] not in ids(listed(api, "rail", "ben-test")["unread"])
+    page = listed(api, "rail", "ben-test", limit=1)
+    assert page["next_cursor"] and listed(api, "rail", "ben-test", limit=1, cursor=page["next_cursor"])["unread"] == []
+
+
+def test_a_bots_reply_in_its_home_is_unread_until_read_and_its_unprompted_posts_add_nothing(api):
+    home = api.get("/api/v2/threads/home/bot:ops", headers=headers("ben-test")).json()
+    mine = say(api, home["id"], "Can you check the build?", token="ben-test")
+    post_as(api, home["id"], "bot:ops", "Here is what I did today")
+    assert home["id"] not in listed(api, "rail", "ben-test")["catch_up_ids"]  # an unprompted post is an Update
+    post_as(api, home["id"], "bot:ops", "The build is green", in_reply_to=mine["id"])
+    post_as(api, home["id"], "bot:ops", "And the tests too", in_reply_to=mine["id"])
+    # Ben follows the Home live, so the bot's next unprompted post reaches him; it still adds no count.
+    api.put(f"/api/v2/threads/{home['id']}/follow", json={"notify": "live"}, headers=headers("ben-test"))
+    post_as(api, home["id"], "bot:ops", "Another note for the record")
+    rail = listed(api, "rail", "ben-test")
+    assert rail["catch_up_ids"] == [home["id"]] and rail["catch_up"] == 1
+    [row] = rail["unread"]
+    assert row["id"] == home["id"] and row["home_actor"] == "bot:ops" and row["audience"] == "home"
+    assert row["new_count"] == 2 and row["mention"] is False
+    # Read, it leaves Catch up and the rail, though Ben has not written back.
+    read_up(api, home["id"], "ben-test")
+    rail = listed(api, "rail", "ben-test")
+    assert rail["catch_up_ids"] == [] and rail["unread"] == [] and rail["catch_up"] == 0
+    assert listed(api, "catch-up", "ben-test")["items"] == []

@@ -24,7 +24,8 @@ interface LstSourceRow {
 /** What a send's run carries (run.listening): the text that went out and the counts since the send before. */
 interface LstRun {
   text?: string; count?: number; waiting?: number; sent_at?: string;
-  counts?: { read?: number; duplicates?: number; dropped?: number; kept?: number; sent?: number; waiting?: number; failed?: number };
+  counts?: { read?: number; duplicates?: number; dropped?: number; kept?: number; sent?: number; waiting?: number; failed?: number;
+    sending?: number; back?: number };
 }
 
 const LST_UNITS = ['hour', 'day', 'week', 'month'];
@@ -84,7 +85,11 @@ function lstListHTML(state: AutomationsState): string {
   const q = state.f.q, all = state.list || [];
   const rows = all.filter(a => !q || [a.name, lstLimitsWords(a.trigger?.limits), ...(a.trigger?.sources || []).flatMap(s => [s.site, s.target])]
     .join(' ').toLowerCase().includes(q));
-  if (!rows.length) return `<p class="muted au-pad">${all.length ? 'No matches' : 'No listening yet'}</p>`;
+  if (state.list === null) return '';
+  // The header's New listening is the one green action and never moves (the shared page header); this one is plain.
+  if (!all.length) return `<div class="empty-state lst-empty">${EMPTY_ART.listening}<p>Watches the sites and searches you pick, and posts what matters to Updates.</p>
+    <button type="button" class="ghost" data-lst-new>New listening</button></div>`;
+  if (!rows.length) return `<p class="muted au-pad">No matches</p>`;
   return `<div class="lst-list" role="list">${rows.map(a => {
     const ok = lstOk(a), last = a.last_run?.started_at;
     return `<a class="lst-row${a.enabled === false ? ' off' : ''}" role="listitem" href="${auHref(a.id)}" data-lst="${esc(a.id)}">
@@ -94,11 +99,16 @@ function lstListHTML(state: AutomationsState): string {
   }).join('')}</div>`;
 }
 // +: the viewer's own, off, 10 a day, one step that posts what was sent; then open it.
-async function lstNew(): Promise<void> {
+// A create is running: a second press (the +, or the empty state's New listening) makes no second listening.
+let LST_CREATING = false;
+async function lstNew(pressed?: HTMLButtonElement): Promise<void> {
+  if (LST_CREATING) return;
   const state = AU;
   auDrawn(state);
   const button = auEl<HTMLButtonElement>(state.root, '.au-new');
+  LST_CREATING = true;
   button.disabled = true;
+  if (pressed) pressed.disabled = true;
   try {
     const out = auNormal(await post('/v2/automations', {name: 'New listening', owner: 'person:' + S.me!.id, enabled: false, builtin: false,
       trigger: {type: 'listening', sources: [], rules: [], limits: [{count: 10, per: 'day'}], at: '08:00', tz: auZone()},
@@ -107,7 +117,11 @@ async function lstNew(): Promise<void> {
     state.list = [...(state.list || []), out];
     location.hash = auHref(out.id);
   } catch (e) { toast(errorMessage(e, ''), true); }
-  finally { if (button.isConnected) button.disabled = false; }
+  finally {
+    LST_CREATING = false;
+    if (button.isConnected) button.disabled = false;
+    if (pressed?.isConnected) pressed.disabled = false;
+  }
 }
 
 // ----------------------------------------------------------------------------------------- the flow's block
@@ -148,6 +162,8 @@ function lstClick(t: Element): boolean {
     void copyText(m.dataset.lstCopy || '').then(() => toast('Copied'), () => toast('Could not copy', true));
     return true;
   }
+  const add = t.closest<HTMLButtonElement>('[data-lst-new]');
+  if (add) { void lstNew(add); return true; }
   m = t.closest<HTMLElement>('[data-lst-add]');
   if (m) { lstEdAdd(m.dataset.lstAdd || ''); return true; }
   return false;
@@ -258,7 +274,7 @@ function lstEdOp(op: string, m: HTMLElement, ed: AuEd): void {
 }
 async function lstNewAddress(sourceId: string, button: HTMLElement): Promise<void> {
   const state = AU;
-  if (!state?.cur || !confirm('The old address stops working.')) return;
+  if (!state?.cur || !(await askConfirm('The old address stops working.', button))) return;
   const row = (state.lstSources?.get(state.cur.id) || []).find(r => r.key === sourceId || r.id === sourceId);
   button.setAttribute('disabled', '');
   try {
@@ -303,13 +319,17 @@ function lstRunOf(run: object): LstRun | null {
   const l: unknown = (run as {listening?: unknown}).listening;
   return typeof l === 'object' && l !== null ? l as LstRun : null;
 }
-/** A send's run, opened: the counts since the send before and the text that went out; the steps' lines follow. */
+/** A send's run, opened: the counts since the send before and the text that went out; the steps' lines follow. Sent is
+ *  what a step delivered once the run ended; while it runs its items read Sending, and what no step delivered went back
+ *  to waiting. */
 function lstRunHTML(run: object): string {
   const l = lstRunOf(run);
   if (!l) return '';
   const c = l.counts || {};
+  const sent: [string, number | undefined, string] = c.sending != null ? ['Sending', c.sending, ' lst-b'] : ['Sent', c.sent ?? l.count, ' lst-b'];
   const rows: Array<[string, number | undefined, string]> = [['Read', c.read, ''], ['Duplicates removed', c.duplicates, ''], ['Dropped by rules', c.dropped, ''],
-    ['Kept', c.kept, ''], ['Sent', c.sent ?? l.count, ' lst-b'], ['Waiting', c.waiting ?? l.waiting, ' muted']];
+    ['Kept', c.kept, ''], sent, ['Waiting', c.waiting ?? l.waiting, ' muted']];
+  if (Number(c.back) > 0) rows.splice(5, 0, ['Back to waiting', c.back, '']);
   if (Number(c.failed) > 0) rows.splice(3, 0, ['Could not score', c.failed, '']);
   return `<div class="lst-run"><div class="lst-cnt"><div class="au-lb">Since the last one</div>
       ${rows.map(([label, n, cls]) => `<div class="lst-cr${cls}"><span>${label}</span><span class="au-n">${n == null ? '—' : Number(n).toLocaleString()}</span></div>`).join('')}</div>

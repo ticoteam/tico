@@ -32,7 +32,7 @@ The words Tico uses, and what each replaces.
 
 ## What a bot is made of
 
-- **Instructions**: what a bot is told it does (`AGENT.md` in developer docs).
+- **Instructions**: what a bot is told it does (`AGENTS.md` in developer docs).
 - **Tools**: everything a bot uses: its model and harness, GitHub, Slack, Google, AWS.
 - **Model** and **Harness**: kinds of tool. The model (GPT 6.1 Sol, Claude Opus 5.5) and the harness it runs in (Codex, Claude Code).
 - **AI provider**: the account a model comes from.
@@ -59,7 +59,7 @@ The words Tico uses, and what each replaces.
 - **OK**: a person's yes on an ask. An OK for something that leaves the team or spends is bound to exactly what they
   were
   shown.
-- **Snooze**: the one way to set a task aside, until a date or with no end ("On ice").
+- **Snooze**: the one way to set a task aside, until a date or with no end.
 - **Routine**: a task that repeats on a schedule.
 - **Needs you**: only when it needs the viewer. Otherwise **Needs <Name>**, as in "Needs Sam".
 - **Proposal**: a suggested change to a goal, a KPI or the strategy draft, for its owner to confirm. A `strategy_draft` proposal is how the Strategy Owner puts a draft or a bet change in front of the owner.
@@ -78,7 +78,6 @@ The words Tico uses, and what each replaces.
 - **Home**: a bot's or a person's public thread, where a bot's open asks wait. A bot's Home is its main session's thread; it sees task work only as one-line reports. A person's personal chat with a bot moves into that bot's Home with its messages, unless its owner may not read that Home; the Assistant's and the Strategy Owner's chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay where they are. Everyone who can read the Home can read those messages, except one whose own references name a task, a file under `target`, `answer`, `review` or `body_sources`, or a meeting under `live_meeting` or `live_meetings`, that its reader may not read, or one that replies to, answers, or takes its inputs from a message naming a task, or a meeting under `live_meeting` or `live_meetings`, that its reader may not read, directly or through a chain of such links. The check does not read the words typed into a message or the files attached to it ([Threads and their audiences](permissions.md#threads-and-their-audiences)).
 - **Task session**: the session for one task a bot owns, with its own thread and worktree. Subtasks continue it by default.
 - **Checkpoint**: a task's last turn reply, which a fresh session on the task starts from.
-- **state.md**: a bot's own note of what it is doing and what to pick up next.
 
 ## Knowledge
 

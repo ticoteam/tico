@@ -3,7 +3,7 @@
 Triggered by the routine `weekly-sourcing-slate` (Tuesdays at 09:00 team time, after setup), or by a task that asks for a
 slate. Budget 45 minutes.
 
-Inputs: `state.md`; the open roles (`tico task list --owner recruiter`); each role's
+Inputs: the open roles (`tico task list --owner recruiter`); each role's
 `knowledge/searches/<role>.md`; `knowledge/do-not-contact.md`; `knowledge/contact-log.md`; last week's slate in `reports/`;
 and the replies to last week's outreach, from the recruiting mailbox or pasted on tasks.
 

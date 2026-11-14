@@ -18,7 +18,7 @@ Steps:
    example. Flag comparisons with named colleagues.
 5. Check for content that is not about work: health, family, leave, a protected characteristic, a complaint or a conduct matter.
    Do not read further, summarise or quote it. Name the reference and the kind of content, and send the review to the employee
-   relations owner in `state.md` the same day, untouched.
+   relations owner in `knowledge/review-cycle.md` the same day, untouched.
 6. Write one line per review: reference, items evidenced, partly and with no evidence, wording flags, and any employee relations
    handover. Do not say whether a rating is right or wrong.
 7. Attach the list to the task. Keep review text out of the page and out of `reports/`.

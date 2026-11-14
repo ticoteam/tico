@@ -8,7 +8,7 @@ commit with one edit.
 
 ## Inputs
 
-- The task, the reader from `state.md`, and the job in one sentence ("a new admin invites a teammate").
+- The task, the reader from `knowledge/style.md`, and the job in one sentence ("a new admin invites a teammate").
 - The pull request or the page the draft fixes, with its diff and the current page text.
 - `knowledge/style.md` and `knowledge/glossary.md`.
 

@@ -1,11 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 20 minutes. The outcome is five recorded answers, a first events review on the task,
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers, a first events review on the task,
 and the first routine checked.
 
 Inputs: the setup task, the calendar and team read in step 1, and the five questions in step 3.
-Done when: `state.md` holds five dated answers; `knowledge/calendar.md` and `knowledge/rules.md` are written, and `knowledge/do-not-email.md` is written or the task says no suppression source is connected; the first review is on the task labelled as a draft; the routine is checked and the decision is logged.
+Done when: the five dated answers are recorded; `knowledge/calendar.md` and `knowledge/rules.md` are written, and `knowledge/do-not-email.md` is written or the task says no suppression source is connected; the first review is on the task labelled as a draft; the routine is checked and the decision is logged.
 
 ---
 
@@ -34,7 +33,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/calendar.md` (one line per
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/calendar.md` (one line per
 event) and `knowledge/rules.md` (budget owner and ceiling, follow-up owner and deadline, lead sources). Write
 `knowledge/do-not-email.md`, the suppression source for leads: copy the opt-out and objection list from the tool named in
 answer 5, with its date. If no tool holds one, say so on the task and ask the owner to name the source before any lead is routed.
@@ -51,7 +50,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will review the events calendar every Thursday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

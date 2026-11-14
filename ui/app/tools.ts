@@ -6,6 +6,7 @@
    Addresses:
      #/tools[?show=needs|api|mail|websites]          the list
      #/tools/api/<id>[/activity]                      one API tool (ui/app/tools-api.ts)
+     #/tools/website/<id>[/activity]                  one website tool (ui/app/tools-website.ts)
      #/tools/mailbox/<address or id>[/activity]       one mailbox  ┐
      #/tools/number/<id>                              one Tico address or phone number │ the inbox kinds' pages
      #/tools/address/<id>, #/tools/address/outbox     one mailing address, letters out  │ (ui/app/inboxes*.js)
@@ -20,14 +21,13 @@
 
 // A tool's status: the hub's tone (ok, wait, fail, run, idle) and the text the pill shows.
 interface ToolsStatus { tone?: string; text?: string; }
-// Someone who can use a tool: a bot or a person, with the name and face the list shows.
-interface ToolsWho { kind: string; id: string; name?: string; }
+// Someone who can use a tool: a bot, a person or (a website login shared with one) a group, with the name and face the
+// list shows; a group carries its member count.
+interface ToolsWho { kind: string; id: string; name?: string; members?: number | undefined; }
 // One row of the list, as the hub sends it for this reader.
 interface ToolsRow { id: string; kind: string; name: string; detail?: string; way?: string; href?: string; private?: boolean; needs_you?: boolean; status?: ToolsStatus; who?: ToolsWho[]; who_total?: number; }
 // The list's state: its run (a newer pageTools wins), its rows and counts once read, the error, the search and the filter.
 interface ToolsListState { run: number; rows: ToolsRow[] | null; counts: Record<string, number> | null; error: string; q: string; show: string; }
-const TOOLS_ROUTE = '#/tools';
-const TOOLS_KEYS = '#/tools/keys';
 // The list's filters: key, label, which rows, and the counts field that numbers it.
 const TOOLS_FILTERS: [string, string, (r: ToolsRow) => boolean, string][] = [
   ['', 'All', () => true, 'all'],
@@ -48,15 +48,28 @@ const toolsPill = (status?: ToolsStatus) => {
   const tone = TOOLS_TONE[status?.tone ?? ''];
   return `<span class="pill${tone ? ' ' + tone : ''} tt-status" data-tone="${esc(status?.tone || 'idle')}"><span class="tt-dot" aria-hidden="true"></span>${esc(status?.text || '')}</span>`;
 };
-// One face: a bot's avatar, or a person's photo or initials.
-const toolsFace = (w: ToolsWho, size = 22) => w.kind === 'bot' ? avatar(w.id, size)
+// The list's Status cell shows only what needs someone: a working tool says so to screen readers only, one that is off
+// or unchecked says it in plain muted words, and waiting, failing or running keep the coloured pill. (A tool's own page
+// keeps toolsPill.)
+const toolsListStatus = (status?: ToolsStatus) => {
+  const tone = status?.tone || 'idle', text = esc(status?.text || '');
+  return tone === 'ok' ? `<span class="sr-only">${text}</span>` : tone === 'idle' ? `<span class="muted">${text}</span>` : toolsPill(status);
+};
+// A group's face: a rounded square with the groups icon (ui/styles/avatars.css .av-group).
+const groupAvatar = (size = 22) => `<span class="av av-group" style="width:${size}px;height:${size}px" aria-hidden="true"><span class="nav-icon">groups</span></span>`;
+// A group's member count, in words: "No members", "1 member", "5 members".
+const toolsMembers = (n: number | undefined) => n === undefined ? '' : n === 0 ? 'No members' : n === 1 ? '1 member' : `${n} members`;
+// One face: a group's, a bot's avatar, or a person's photo or initials.
+const toolsFace = (w: ToolsWho, size = 22) => w.kind === 'group' ? groupAvatar(size) : w.kind === 'bot' ? avatar(w.id, size)
   : personAvatar((S.people || []).find(p => p.id === w.id) || {id: w.id, name: w.name}, size);
+// A face's hover name: a group's says its member count ("Design · 5 members").
+const toolsFaceTitle = (w: ToolsWho) => [w.name || w.id, w.kind === 'group' ? toolsMembers(w.members) : ''].filter(Boolean).join(' · ');
 // Who can use it: up to four faces, each named on hover, then "+N more".
 function toolsWhoHTML(row: ToolsRow): string {
   const who = row.who || [], total = Math.max(row.who_total || 0, who.length);
-  if (!total) return '<span class="muted">Nobody yet</span>';
+  if (!total) return '<span class="sr-only">Nobody yet</span>';
   const shown = who.slice(0, TOOLS_WHO_SHOWN), more = total - shown.length;
-  return `<span class="tt-faces">${shown.map(w => `<span class="tt-face" title="${esc(w.name || w.id)}">${toolsFace(w)}</span>`).join('')}</span>${
+  return `<span class="tt-faces">${shown.map(w => `<span class="tt-face" title="${esc(toolsFaceTitle(w))}">${toolsFace(w)}</span>`).join('')}</span>${
     more > 0 ? `<span class="muted tt-more">+${more} more</span>` : ''}`;
 }
 
@@ -66,13 +79,14 @@ async function pageTools() {
   const show = TOOLS_FILTERS.some(([k]) => k === params.get('show')) ? params.get('show') ?? '' : '';
   const run = (TL?.run || 0) + 1;
   TL = {run, rows: TL?.rows || null, counts: TL?.counts || null, error: '', q: TL?.q || '', show};
-  $('#main').innerHTML = `<div class="tt" id="tools-root">
-    <header class="tt-head"><h1>Tools</h1><span class="spacer"></span>
-      <a class="ghost small" href="${TOOLS_KEYS}" data-tl-keys>Keys</a><a class="ghost small" href="#/tools/settings" data-tl-settings>Settings</a>
-      ${toolsAddMenu()}</header>
-    <div class="tt-bar"><div class="theme-seg tt-filters" role="radiogroup" aria-label="Show"></div>
+  // The one page header (ui/app/page-head.ts): Keys and Settings in its ⋯, Add tool (with its menu) last.
+  $('#main').innerHTML = `<div class="tt-wrap" id="tools-root"><div class="tt">
+    ${pageHead({title: 'Tools', hook: 'tt-head', tools: '<span class="tt-chat"></span>',
+      more: `<a href="${TOOLS_KEYS}" data-tl-keys>Keys</a><a href="#/tools/settings" data-tl-settings>Settings</a>`,
+      primary: toolsAddMenu()})}
+    <div class="tt-bar"><div class="theme-seg ph-seg tt-filters" role="radiogroup" aria-label="Show"></div>
       <input type="search" class="tt-q" placeholder="Search" aria-label="Search tools" autocomplete="off" spellcheck="false" value="${esc(TL.q)}"></div>
-    <div class="tt-table" data-tl-table>${TL.rows ? '' : skelRows(5)}</div></div>`;
+    <div class="tt-table" data-tl-table>${TL.rows ? '' : skelRows(5)}</div></div></div>`;
   // The page's root, search box and filter bar are drawn just above.
   const root: HTMLElement = $('#tools-root')!;
   const search = root.querySelector<HTMLInputElement>('.tt-q')!;
@@ -86,6 +100,9 @@ async function pageTools() {
     toolsDraw();
   };
   toolsAddBind(root);
+  // The Tools owner's chat (page-chat.ts), which takes keys without a model seeing them (tools-key-drop.ts).
+  void pageChatMount({page: 'tools', label: 'Tools', button: root.querySelector<HTMLElement>('.tt-chat')!,
+    stays: r => r === TOOLS_ROUTE || r.startsWith(TOOLS_ROUTE + '?'), empty: toolsChatEmpty, keyDrop: toolsInProblem});
   if (TL.rows) toolsDraw();
   try {
     const d = await get('/v2/tool-index', {fresh: true});
@@ -95,14 +112,23 @@ async function pageTools() {
   if (root.isConnected) toolsDraw();
 }
 
+// The tools in Problem, by name: the chat's empty state names them and a dropped key's "For" offers them.
+const toolsInProblem = (): string[] => (TL?.rows || []).filter(r => r.status?.tone === 'fail').map(r => r.name).slice(0, 8);
+function toolsChatEmpty(): string {
+  const names = toolsInProblem();
+  const list = names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0] || '';
+  return (list ? `${list} ${names.length > 1 ? 'need' : 'needs'} keys. ` : '')
+    + 'Paste keys here, in any order, with a word about what each is for. They go to Credentials, encrypted; the bot only sees their names.';
+}
+
 function toolsDraw() {
   const root: HTMLElement | null = $('#tools-root'); if (!root || !TL) return;
   // Nothing here reassigns TL, so the filter and search read the same list throughout.
   const cur = TL;
   const rows = cur.rows || [], counts: Record<string, number> = cur.counts || {};
   const count = (k: string, test: (r: ToolsRow) => boolean) => counts[k] ?? rows.filter(test).length;
-  // Websites shows once there is one.
-  const filters = TOOLS_FILTERS.filter(([k, , test, c]) => k !== 'websites' || count(c, test) > 0 || cur.show === 'websites');
+  // Once the rows are read, a filter with nothing in it is left out (All and the one picked always show).
+  const filters = TOOLS_FILTERS.filter(([k, , test, c]) => !k || k === cur.show || !cur.rows || count(c, test) > 0);
   const bar = root.querySelector<HTMLElement>('.tt-filters');
   if (!bar) return;
   bar.innerHTML = filters.map(([k, label, test, c]) =>
@@ -112,7 +138,9 @@ function toolsDraw() {
   if (!box || !cur.rows) return;
   const test = (TOOLS_FILTERS.find(([k]) => k === cur.show) || TOOLS_FILTERS[0])?.[2] ?? (() => true);
   const words = cur.q.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = rows.filter(r => test(r) && words.every(w => [r.name, r.detail, r.way, r.status?.text, ...(r.who || []).map(x => x.name)]
+  // Search reads the words, not the cells, so a status or "Nobody yet" the list leaves blank still finds its row.
+  const nobody = (r: ToolsRow) => Math.max(r.who_total || 0, (r.who || []).length) ? '' : 'Nobody yet';
+  const shown = rows.filter(r => test(r) && words.every(w => [r.name, r.detail, r.way, r.status?.text, nobody(r), ...(r.who || []).map(x => x.name)]
     .join(' ').toLowerCase().includes(w)));
   const err = cur.error ? `<p class="err" data-tl-error>${esc(cur.error)}</p>` : '';
   if (!shown.length) {
@@ -123,9 +151,9 @@ function toolsDraw() {
     <tbody>${shown.map(r => `<tr data-tl-row="${esc(r.id)}" data-tl-kind="${esc(r.kind)}"${r.needs_you ? ' data-tl-needs' : ''}>
       <td class="tt-tool"><a href="${esc(r.href || '#/tools')}"><span class="tt-tile" aria-hidden="true"><span class="nav-icon">${TOOLS_ICONS[r.kind] || 'link'}</span></span>
         <span class="tt-nm"><strong>${esc(r.name)}${r.private ? TOOLS_PRIVATE : ''}</strong>${r.detail ? `<span class="muted">${esc(r.detail)}</span>` : ''}</span></a></td>
-      <td class="tt-way">${r.way ? `<span class="pill">${esc(r.way)}</span>` : ''}</td>
+      <td class="tt-way">${r.way ? `<span class="muted">${esc(r.way)}</span>` : ''}</td>
       <td class="tt-who">${toolsWhoHTML(r)}</td>
-      <td class="tt-st">${toolsPill(r.status)}</td>
+      <td class="tt-st">${toolsListStatus(r.status)}</td>
       <td class="tt-chev" aria-hidden="true">›</td></tr>`).join('')}</tbody></table>`;
   // The whole row opens the tool; its own links (none today) keep theirs.
   const tbody = box.querySelector<HTMLElement>('tbody')!;   // drawn just above
@@ -139,14 +167,15 @@ function toolsDraw() {
 }
 
 // ----------------------------------------------------------------- Add tool
-// An API (POST /api-tools) for whoever manages keys, then each inbox kind's own Add (ui/app/inboxes*.js).
+// An API (POST /api-tools) and a website (POST /website-tools) for whoever manages keys, then each inbox kind's own
+// Add (ui/app/inboxes*.js).
 function toolsAddMenu(): string {
   const admin = settingsIsAdmin();
   const kinds: InboxKind[] = Object.values(INBOX_KINDS).filter((k: InboxKind) => k.add && (!k.add.admin || admin)).sort((a: InboxKind, b: InboxKind) => a.order - b.order);
-  const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add?.label]),
+  const items = [...(S.me?.credential_access || admin ? [['api', 'API'], ['website', 'Website']] : []), ...kinds.map(k => ['kind:' + k.key, k.add?.label]),
     ['webhook', 'Outgoing webhook']];
   if (!items.length) return '';
-  return `<details class="tt-add" data-tl-add><summary class="primary small">Add tool</summary><div class="tt-add-menu" role="menu">
+  return `<details class="tt-add" data-tl-add><summary class="primary ph-go">Add tool</summary><div class="tt-add-menu" role="menu">
     ${items.map(([k, label]) => `<button type="button" role="menuitem" data-tl-add-item="${esc(k)}">${esc(label)}</button>`).join('')}</div></details>`;
 }
 function toolsAddBind(root: HTMLElement) {
@@ -155,60 +184,12 @@ function toolsAddBind(root: HTMLElement) {
     b.closest('details')?.removeAttribute('open');
     const item = b.dataset.tlAddItem ?? '';
     if (item === 'api') { toolsApiCreate(); return; }
+    if (item === 'website') { toolsWebsiteCreate(); return; }
     if (item === 'webhook') { location.hash = WH_HOOKS_ROUTE; void whHookDialog(null); return; }
     INBOX_KINDS[item.slice(5)]?.add?.open(inboxesCtx(IB.run));
   });
 }
 
-// ----------------------------------------------------------------- routes
-// The redesign's router asks first (ui/app/redesign.ts). Old addresses are replaced, so Back skips them.
-function toolsRoute(r: string): boolean {
-  const [path = '', query = ''] = r.split('?'), q = query ? '?' + query : '';
-  const go = (to: string) => { location.replace(to); return true; };
-  // Library › Tools and its old names: a tool's page, a credential's, or the list.
-  for (const old of ['#/library/tools', INTEGRATIONS]) {
-    if (!rdUnder(path, old)) continue;
-    const rest = path.slice(old.length).replace(/^\/+/, '');
-    if (!rest) return go(new URLSearchParams(query).has('who') ? TOOLS_KEYS + q : TOOLS_ROUTE);
-    return go((rest.startsWith('credentials/') ? TOOLS_KEYS + '/' : TOOLS_ROUTE + '/') + rest + q);
-  }
-  if (rdUnder(path, '#/library/connections')) {
-    const rest = path.slice('#/library/connections'.length).replace(/^\/+/, '');
-    return go(rest ? TOOLS_ROUTE + '/' + rest : TOOLS_ROUTE);
-  }
-  if (rdUnder(path, CREDENTIALS)) return go(TOOLS_KEYS + '?show=credentials');
-  // Settings › Inboxes and the tabs it replaced (Mailboxes, Email & Phone, Mail; Google's sign-in return).
-  if (rdUnder(path, '#/settings/inboxes')) return go(toolsFromInboxes(path.slice('#/settings/inboxes'.length).replace(/^\/+/, '')));
-  const oldTab = path.match(/^#\/settings\/(mailboxes|inbound|company-inbox|email-phone|mail|inbox|google)(?:\/([^/]+))?\/?$/);
-  if (oldTab) {
-    const [, tab = '', rest] = oldTab;
-    return go(tab === 'mailboxes' ? (rest ? '#/tools/mailbox/' + rest : TOOLS_ROUTE + '?show=mail')
-      : tab === 'mail' ? '#/tools/settings/letters-in' : ['inbox', 'google'].includes(tab) || rest === 'set-inbound' ? '#/tools/settings/email'
-      : TOOLS_ROUTE + '?show=mail');
-  }
-  if (!rdUnder(path, TOOLS_ROUTE)) return false;
-  const parts = path.slice(TOOLS_ROUTE.length).split('/').filter(Boolean).map(p => { try { return decodeURIComponent(p); } catch { return p; } });
-  if (!parts.length) { pageTools(); return true; }
-  if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
-  if (parts[0] === 'keys') { pageRdTools(); return true; }
-  if (parts[0] === 'webhooks') { pageToolWebhooks(parts[1] || ''); return true; }
-  const view = inboxesRoute(parts);
-  if (view !== null) { toolsInboxPage(view); return true; }
-  pageToolService(parts.join('/'));
-  return true;
-}
-// An old Settings › Inboxes address (what follows #/settings/inboxes/) at its home under Tools.
-function toolsFromInboxes(rest: string): string {
-  const [head = '', id = ''] = rest.split('/');
-  if (!head) return TOOLS_ROUTE + '?show=mail';
-  if (head === 'settings' || INBOX_SECTIONS.some(([k]) => k === head)) {
-    const section = head === 'settings' ? id : head;
-    return '#/tools/settings' + (INBOX_SECTIONS.some(([k]) => k === section) ? '/' + section : '');
-  }
-  if (head === 'messages') return '#/tools/messages';
-  if (INBOX_KINDS[head] && id) return inboxesLink(head, decodeURIComponent(id));
-  return TOOLS_ROUTE + '?show=mail';
-}
 // One inbox kind's page, mail settings or Messages, drawn by ui/app/inboxes.ts into a host kept while the address stays
 // under the same page, so a redraw keeps what it drew.
 function toolsInboxPage(view: string) {
@@ -217,4 +198,4 @@ function toolsInboxPage(view: string) {
   void inboxesRender();
 }
 // Leaving Tools drops the list, so coming back reads the hub again.
-function toolsStop() { TL = null; INBOXES_VIEW = ''; rdToolsStop(); toolApiStop(); }
+function toolsStop() { TL = null; INBOXES_VIEW = ''; rdToolsStop(); toolApiStop(); toolWebsiteStop(); }

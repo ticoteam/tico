@@ -11,6 +11,8 @@ interface Window {
   };
   supportOn?: (known?: boolean) => boolean;
   talkToUs?: (report: { kind: string; title?: string; [key: string]: unknown }) => void;
+  /** The desktop app's OK/Cancel dialog (app/src/bridge.rs DIALOG_SCRIPT): true only for OK. Called by askConfirm. */
+  ticoConfirm?: (message: string) => Promise<boolean>;
   ticoNative?: any;
   ticoNativeFeatures?: any;
   ticoNativeLog?: any;
@@ -24,6 +26,9 @@ interface Window {
 declare var marked: { parse(src: string, options?: object): string };
 /** Vendored livekit-client.umd.min.js. */
 declare var LivekitClient: LivekitNamespace;
+/** Vendored docx-preview.min.js and jszip.min.js, loaded on first use by ui/app/file-review.ts. */
+declare var docx: {renderAsync(data: Blob, body: HTMLElement, style: HTMLElement | null, options: Record<string, boolean>): Promise<unknown>} | undefined;
+declare var JSZip: {loadAsync(data: Blob): Promise<{file(name: string): {async(type: 'string'): Promise<string>} | null}>} | undefined;
 
 declare var TicoModelLogin: any;
 declare var cloudAgentHire: any;
@@ -70,3 +75,7 @@ declare var ticoIsCloud: any;
 declare var ticoPageHidden: (() => { inCall: boolean }) | undefined;
 declare var ticoSearch: any;
 declare var ticoTheme: any;
+
+// The page parts' stand-ins (backend/ui_bundle.py stubs), declared by the server before the shell's files; none when
+// the UI is served as separate files (ui/app/parts.ts).
+declare const UI_PART_STUBS: Set<unknown> | undefined;

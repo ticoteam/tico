@@ -32,7 +32,7 @@ recruiter and the owners.
 ## 4. Write the attachment
 
 Person-level detail (references, figures, compa-ratios) goes into one file attached with `tico task attach <id> <file>` for the
-owners named in `state.md`. Delete the local file.
+owners named in `knowledge/philosophy.md`. Delete the local file.
 
 ## 5. Write the page and hand over
 

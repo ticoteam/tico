@@ -47,11 +47,6 @@ let BOT_EDIT: BotSidebarDraft | null = null;
 // The draft may change: editing this bot's sidebar and not saving it. A change made while Done's write is on its way
 // would be dropped when the write's answer ends edit mode, so nothing changes until the write succeeds or fails.
 const botDrafting = (slug: string) => BOT_EDIT?.slug === slug && !BOT_EDIT.saving;
-const BOT_SVG = {
-  grip: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><g fill="currentColor"><circle cx="5.5" cy="3.5" r="1.3"/><circle cx="10.5" cy="3.5" r="1.3"/><circle cx="5.5" cy="8" r="1.3"/><circle cx="10.5" cy="8" r="1.3"/><circle cx="5.5" cy="12.5" r="1.3"/><circle cx="10.5" cy="12.5" r="1.3"/></g></svg>',
-  eye: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
-  shut: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><path stroke="currentColor" stroke-width="1.6" d="M4 4l16 16"/></svg>',
-};
 // [, id] types as [never?, string?]; its [1] is id, a string.
 const botWidgetName = (id: string) => (BOT_WIDGETS.find(([w]) => w === id) || [, id])[1] as string;
 // Pages and built-in cards pinned to the sidebar (`page:<file id>`, `card:<id>`): slug -> item -> the pin as
@@ -127,7 +122,9 @@ function botPinFill(slug: string, el: HTMLElement) {
   el.querySelectorAll('.bot-w-name').forEach(n => { n.textContent = name; });
   if (!pin) { body.innerHTML = '<p class="muted dash-none">Loading…</p>'; return; }
   // A page carries its own title; a card gets its name above it, as the rail's other sections do.
-  if (pin.card) body.innerHTML = `<h2 class="rail-h">${esc(name)}</h2>${dashCardBody(pin.card)}`;
+  // A count card's count sits in the header as the rail's other sections show theirs (#355); none at 0.
+  const n = pin.card ? dashHeadCount(pin.card)?.[0] : 0;
+  if (pin.card) body.innerHTML = `<h2 class="rail-h">${esc(name)}${n ? ` <span class="cnt">${dashNum(n)}</span>` : ''}</h2>${dashCardBody(pin.card)}`;
   else { body.innerHTML = ''; body.append(dashPageEl(pin.page, 'small')); }
 }
 async function botPinsLoad(slug: string) {

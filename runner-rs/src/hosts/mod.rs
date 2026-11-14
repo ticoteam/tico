@@ -179,16 +179,18 @@ pub const DEFAULT_COMPACT_AT: i64 = 250_000;
 
 /// A bot's "Compact at" in tokens: its own whole number, else DEFAULT_COMPACT_AT.
 pub fn compact_at(value: &Value) -> i64 {
+    compact_at_set(value).unwrap_or(DEFAULT_COMPACT_AT)
+}
+
+/// The "Compact at" the turn was given, in tokens; None when it carries none (a harness then keeps its own default).
+pub fn compact_at_set(value: &Value) -> Option<i64> {
     let n = match value {
         Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
         Value::String(s) => s.trim().parse::<i64>().ok(),
         Value::Bool(b) => Some(*b as i64),
         _ => None,
     };
-    match n {
-        Some(t) if t > 0 => t,
-        _ => DEFAULT_COMPACT_AT,
-    }
+    n.filter(|t| *t > 0)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -217,8 +219,10 @@ pub struct Settings {
     pub background_wait: Option<std::time::Duration>,
     /// A capacity continuation must fail if its saved session is missing; rebuilding context may repeat work.
     pub require_existing_session: bool,
-    /// Packet-only tidy turns have no checkout tools or Hub MCP server.
-    pub packet_only: bool,
+    /// Where Claude Code keeps its auto memory for this turn: `memory/claude/` in the turn's checkout of the bot's
+    /// repository, so what it remembers is committed with the rest of memory/ and follows the bot to any computer.
+    /// None keeps auto memory off (a stateless bot, a private meeting's copy, a turn outside a checkout).
+    pub memory_dir: Option<String>,
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.
@@ -841,6 +845,30 @@ impl Stopper {
     }
 }
 
+/// A harness process: `program` as `identity` (or the bot user when isolation is on), inside a limited scope of its
+/// own where this runner limits turns (crate::turn_limits), else exactly as `isolation::command_as`.
+pub fn harness_command(
+    identity: Option<(u32, u32)>,
+    program: impl AsRef<std::ffi::OsStr>,
+) -> tokio::process::Command {
+    match crate::turn_limits::prefix() {
+        Some(parent) => crate::isolation::command_after(&parent, identity, program),
+        None => crate::isolation::command_as(identity, program),
+    }
+}
+
+/// `harness_command` for a harness that runs as this runner's own user even when isolation is on.
+pub fn own_user_harness_command(program: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
+    match crate::turn_limits::prefix() {
+        Some(parent) => {
+            let mut cmd = tokio::process::Command::new(&parent[0]);
+            cmd.args(&parent[1..]).arg(program);
+            cmd
+        }
+        None => tokio::process::Command::new(program),
+    }
+}
+
 /// Makes the process `command` starts the leader of a new session and process group, so a stop (`own`) reaches
 /// what it starts (tool commands, MCP servers, a browser) as well as itself. A turn's standard streams are piped, so
 /// losing the controlling terminal costs nothing, and nothing it runs can stop on a read from one.
@@ -1136,6 +1164,20 @@ impl Host {
         }
     }
 
+    /// A new thread started on a fork of session `from`, and whether it is one: only Claude Code forks a session;
+    /// every other host starts a plain new thread.
+    pub async fn start_thread_forked(
+        &self,
+        bot: &str,
+        settings: &Settings,
+        from: &str,
+    ) -> Result<(String, bool), HostError> {
+        match self {
+            Host::Claude(h) => Ok((h.start_thread_forked(settings, from), true)),
+            _ => Ok((self.start_thread(bot, settings).await?, false)),
+        }
+    }
+
     pub async fn resume_thread(
         &self,
         thread_id: &str,
@@ -1290,6 +1332,23 @@ impl Host {
     pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
         if let Host::Claude(h) = self {
             h.compaction_refresh(thread_id, text);
+        }
+    }
+
+    /// Whether the session a resumed thread continues is saved on this computer. Claude says only when a turn runs, so
+    /// it is asked here; every other harness refuses the resume of one it does not have (crate::continuity::missing).
+    pub fn session_saved(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Claude(h) => h.session_saved(thread_id),
+            _ => true,
+        }
+    }
+
+    /// The next turn makes one model turn and no more (a keep-warm turn, crate::prompt::keep_warm). Claude Code only
+    /// (`--max-turns 1`); the other harnesses take no such limit and rely on the turn's words.
+    pub fn one_turn(&self, thread_id: &str) {
+        if let Host::Claude(h) = self {
+            h.one_turn(thread_id);
         }
     }
 

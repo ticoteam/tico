@@ -44,8 +44,6 @@ const LIMIT_SETTLE: Duration = if cfg!(test) {
     Duration::from_secs(20)
 };
 const STEER_MIN_VERSION: (u64, u64, u64) = (2, 1, 296);
-const AUTOCOMPACT_BUFFER: i64 = 33_000;
-const AUTOCOMPACT_RANGE: (i64, i64) = (100_000, 1_000_000);
 /// The tools that start a subagent: `Agent`, called `Task` by older Claude Code.
 const AGENT_TOOLS: &[&str] = &["Agent", "Task"];
 /// The tools whose every call keeps running in the background.
@@ -80,10 +78,6 @@ pub async fn installed_version(cmd: &[String], flag: &str) -> String {
         }
         _ => String::new(),
     }
-}
-
-pub fn autocompact_window(value: &Value) -> i64 {
-    (super::compact_at(value) + AUTOCOMPACT_BUFFER).clamp(AUTOCOMPACT_RANGE.0, AUTOCOMPACT_RANGE.1)
 }
 
 pub fn effort_for(effort: Option<&str>) -> Option<String> {
@@ -162,6 +156,9 @@ pub(crate) struct Thread {
     session_id: Option<String>,
     /// The saved session was not on this computer and the thread restarted as a new one under the same id.
     restored: bool,
+    /// The next turn is a keep-warm turn (crate::prompt::keep_warm): one model turn, `--max-turns 1`. The tools stay
+    /// as they are, so the cached prefix the turn is there to read is the same.
+    one_turn: bool,
 }
 
 /// One process's stdin: what is still to write, whether it takes more, and which messages Claude has not read.
@@ -441,6 +438,8 @@ struct Usage {
     input: i64,
     output: i64,
     cached: i64,
+    /// Prompt tokens written to the cache (`cache_creation_input_tokens`), a part of `input`.
+    cache_write: i64,
     cost: Option<f64>,
     texts: Vec<String>,
     /// Each model request this turn, the bot's and its subagents', in the order Claude made them; true for the bot's own.
@@ -505,7 +504,6 @@ struct Shared {
     cmd: Vec<String>,
     tx: Events,
     steer: std::sync::atomic::AtomicBool,
-    autocompact: std::sync::atomic::AtomicBool,
     inner: Mutex<Inner>,
     capture: Mutex<Option<Arc<crate::capture::Capture>>>,
 }
@@ -518,7 +516,6 @@ pub struct ClaudeHost(Arc<Shared>);
 struct Features {
     version: String,
     steer: bool,
-    autocompact: bool,
 }
 
 fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
@@ -526,14 +523,11 @@ fn features() -> &'static Mutex<HashMap<Vec<String>, Features>> {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Steering needs a Claude Code that replays its input (STEER_MIN_VERSION), and `--autocompact` one whose `--help` lists it.
-async fn read_features(cmd: &[String], version: &str) -> Features {
+/// Steering needs a Claude Code that replays its input (STEER_MIN_VERSION): read from the version alone.
+fn read_features(version: &str) -> Features {
     Features {
         version: version.to_string(),
         steer: version_tuple(version).unwrap_or((0, 0, 0)) >= STEER_MIN_VERSION,
-        autocompact: installed_version(cmd, "--help")
-            .await
-            .contains("--autocompact"),
     }
 }
 
@@ -549,8 +543,10 @@ pub async fn note_version(cmd: &[String], version: &str) {
     {
         return;
     }
-    let read = read_features(cmd, version).await;
-    features().lock().unwrap().insert(cmd.to_vec(), read);
+    features()
+        .lock()
+        .unwrap()
+        .insert(cmd.to_vec(), read_features(version));
 }
 
 impl ClaudeHost {
@@ -561,7 +557,6 @@ impl ClaudeHost {
             cmd,
             tx,
             steer: false.into(),
-            autocompact: false.into(),
             inner: Mutex::new(Inner::default()),
             capture: Mutex::new(None),
         }))
@@ -601,7 +596,7 @@ impl ClaudeHost {
             Some(f) => f,
             None => {
                 // Before the first probe has read this command: read it once here, and keep it under its version.
-                let read = read_features(&key, &installed_version(&key, "--version").await).await;
+                let read = read_features(&installed_version(&key, "--version").await);
                 features().lock().unwrap().insert(key.clone(), read.clone());
                 read
             }
@@ -609,9 +604,6 @@ impl ClaudeHost {
         self.0
             .steer
             .store(known.steer, std::sync::atomic::Ordering::Relaxed);
-        self.0
-            .autocompact
-            .store(known.autocompact, std::sync::atomic::Ordering::Relaxed);
         self.inner().up = true;
         Ok(())
     }
@@ -663,15 +655,26 @@ impl ClaudeHost {
     }
 
     pub fn start_thread(&self, settings: &Settings) -> String {
+        self.new_thread(settings, None)
+    }
+
+    /// A new thread whose first turn reads session `from` and leaves it as it is (`--resume <from> --fork-session`
+    /// under the new id). A `from` not on this computer restarts it as a plain new session (`restored`).
+    pub fn start_thread_forked(&self, settings: &Settings, from: &str) -> String {
+        self.new_thread(settings, Some(from.to_string()))
+    }
+
+    fn new_thread(&self, settings: &Settings, fork_from: Option<String>) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.inner().threads.insert(
             id.clone(),
             Thread {
                 settings: settings.clone(),
                 started: false,
-                fork_from: None,
+                fork_from,
                 session_id: None,
                 restored: false,
+                one_turn: false,
             },
         );
         id
@@ -686,6 +689,7 @@ impl ClaudeHost {
                 fork_from: None,
                 session_id: None,
                 restored: false,
+                one_turn: false,
             },
         );
         thread_id.into()
@@ -732,6 +736,23 @@ impl ClaudeHost {
         };
     }
 
+    /// Whether the session `thread_id` resumes is saved on this computer (its transcript is here). Claude itself finds
+    /// out only when a turn runs; a keep-warm turn must know before, so it never starts a session that is not there.
+    pub fn session_saved(&self, thread_id: &str) -> bool {
+        let inner = self.inner();
+        inner
+            .threads
+            .get(thread_id)
+            .is_some_and(|t| transcript(&t.settings, &session_of(thread_id, t)).is_some())
+    }
+
+    /// The next turn on `thread_id` makes one model turn and no more (a keep-warm turn).
+    pub fn one_turn(&self, thread_id: &str) {
+        if let Some(t) = self.inner().threads.get_mut(thread_id) {
+            t.one_turn = true;
+        }
+    }
+
     pub fn compaction_refresh(&self, thread_id: &str, text: Option<String>) {
         let mut inner = self.inner();
         match text {
@@ -751,25 +772,9 @@ impl ClaudeHost {
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
         // claude.ai connectors). Every turn excludes the operator's own instructions, settings and hooks, even
-        // when HOME is the operator's. Packet-only turns also exclude the repository's settings.
-        argv.extend([
-            "--setting-sources".into(),
-            if t.settings.packet_only {
-                "".into()
-            } else {
-                "project,local".into()
-            },
-        ]);
+        // when HOME is the operator's.
+        argv.extend(["--setting-sources".into(), "project,local".into()]);
         argv.push("--strict-mcp-config".into());
-        if t.settings.packet_only {
-            argv.extend([
-                "--tools".into(),
-                "".into(),
-                "--disable-slash-commands".into(),
-                "--settings".into(),
-                "{\"disableAllHooks\":true}".into(),
-            ]);
-        }
         let project =
             std::fs::read_to_string(std::path::Path::new(&t.settings.cwd).join(".mcp.json"))
                 .ok()
@@ -793,14 +798,15 @@ impl ClaudeHost {
         if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref())) {
             argv.extend(["--effort".into(), e]);
         }
-        if self
-            .0
-            .autocompact
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
+        if t.one_turn {
+            argv.extend(["--max-turns".into(), "1".into()]);
+        }
+        // Where it compacts is the turn's "Compact at", handed over in the environment (turn_env). Its auto memory is
+        // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move.
+        if let Some(dir) = t.settings.memory_dir.as_deref() {
             argv.extend([
-                "--autocompact".into(),
-                autocompact_window(&t.settings.compact_at).to_string(),
+                "--settings".into(),
+                py_dumps(&json!({"autoMemoryDirectory": dir})),
             ]);
         }
         if let Some(from) = &t.fork_from {
@@ -849,12 +855,18 @@ impl ClaudeHost {
                 tokio::process::Command::new(reaper(std::path::Path::new("")).remove(0))
             }
             Some(path) => {
-                let mut c = crate::isolation::command_under(&reaper(path), &argv[0]);
+                // The reaping parent goes inside the turn's scope too, with the shells it keeps.
+                let parent: Vec<_> = crate::turn_limits::prefix()
+                    .into_iter()
+                    .flatten()
+                    .chain(reaper(path))
+                    .collect();
+                let mut c = crate::isolation::command_under(&parent, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }
             None => {
-                let mut c = crate::isolation::command(&argv[0]);
+                let mut c = super::harness_command(None, &argv[0]);
                 c.args(&argv[1..]);
                 c
             }
@@ -922,6 +934,9 @@ impl ClaudeHost {
             let (child, stderr, reaping) = self
                 .launch(thread_id, &t, effort)
                 .map_err(|e| failed(format!("could not start claude: {e}")))?;
+            if let Some(kept) = inner.threads.get_mut(thread_id) {
+                kept.one_turn = false; // that turn only
+            }
             inner.reaping = reaping;
             inner.turn = Some((thread_id.into(), turn.clone()));
             inner.reply.insert(turn.clone(), String::new());
@@ -1416,6 +1431,7 @@ impl ClaudeHost {
         u.input += inp;
         u.output += out;
         u.cached += count(&result["usage"], "cache_read_input_tokens");
+        u.cache_write += count(&result["usage"], "cache_creation_input_tokens");
         if let Some(c) = cost {
             u.cost = Some(u.cost.unwrap_or(0.0) + (c - pipe_cost).max(0.0));
             pipe_cost = c;
@@ -1843,7 +1859,7 @@ impl ClaudeHost {
                 Some(tid),
                 Some(turn),
                 json!({"input": u.input, "output": u.output, "total": u.input + u.output, "cost_usd": u.cost,
-                       "usage": {"input": u.input, "cached": u.cached, "output": u.output,
+                       "usage": {"input": u.input, "cached": u.cached, "cache_write": u.cache_write, "output": u.output,
                                  // The fourth count marks the bot's own requests (1) from its subagents' (0): the
                                  // newest of the bot's own is the session's context size (backend/topic_change.py).
                                  "requests": u.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
@@ -2153,22 +2169,29 @@ pub fn error_text(result: Option<&Value>, rc: i32, stderr: &str) -> String {
     format!("claude exited {rc}")
 }
 
-/// The turn's environment (hosts/claude.py _env): the given one, else this process's. No turn keeps Claude's auto
-/// memory: what a bot remembers lives in its repository's memory/, where its owner sees and edits it (Dev 301), never
-/// in a MEMORY.md under this computer's ~/.claude. No turn loads the claude.ai connectors.
+/// The turn's environment (hosts/claude.py _env): the given one, else this process's. Claude's auto memory is on, as
+/// for a person, when the turn names a folder for it in the bot's repository (`memory_dir`, given in `argv`), so what a
+/// bot remembers is where its owner sees and edits it, never only under this computer's ~/.claude; otherwise it is off.
+/// No turn loads the claude.ai connectors.
 fn turn_env(settings: &Settings) -> crate::env::Env {
     let mut env: crate::env::Env = if settings.env.is_empty() {
         std::env::vars().collect()
     } else {
         settings.env.clone()
     };
-    env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
-    if settings.packet_only {
-        env.insert("CLAUDE_CODE_DISABLE_CLAUDE_MDS".into(), "1".into());
-        env.insert("CLAUDE_CODE_DISABLE_CRON".into(), "1".into());
+    if settings.memory_dir.is_some() {
+        env.remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY");
+    } else {
+        env.insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
     }
     // Belt and braces: `--strict-mcp-config` already skips the claude.ai connectors.
     env.insert("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into());
+    // The turn's "Compact at", as Codex gets it (`model_auto_compact_token_limit`): Claude Code's auto-compact window,
+    // which it reads ahead of every setting and keeps within its own range and the model's window. Any Claude Code
+    // reads it without a version check; one older than the variable ignores it. A turn given none keeps Claude's own.
+    if let Some(tokens) = super::compact_at_set(&settings.compact_at) {
+        env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), tokens.to_string());
+    }
     // The login and the session files live under HOME; a trimmed environment must keep it.
     if env.get("HOME").is_none_or(|h| h.is_empty()) {
         if let Ok(home) = std::env::var("HOME") {
@@ -2186,26 +2209,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn packet_turns_keep_the_login_but_drop_memory_hooks_and_tools() {
+    fn a_thread_started_forked_reads_the_old_session_and_keeps_its_own_id() {
         let host = ClaudeHost::new(
             "synthetic",
             vec!["claude".into()],
             tokio::sync::mpsc::unbounded_channel().0,
         );
-        let settings = Settings {
-            packet_only: true,
-            ..Settings::default()
-        };
-        let thread = host.start_thread(&settings);
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), Some("low"));
-        assert!(argv.windows(2).any(|w| w == ["--tools", ""]));
-        assert!(argv.windows(2).any(|w| w == ["--setting-sources", ""]));
-        assert!(argv.contains(&"{\"disableAllHooks\":true}".into()));
-        assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_CLAUDE_MDS"], "1");
-        assert!(
-            !argv.contains(&"--bare".into()),
-            "subscription login must remain available"
+        let settings = Settings::default();
+        let thread = host.start_thread_forked(&settings, "old-session");
+        assert_ne!(thread, "old-session");
+        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        assert_eq!(
+            &argv[argv.len() - 5..],
+            &[
+                "--resume".to_string(),
+                "old-session".into(),
+                "--fork-session".into(),
+                "--session-id".into(),
+                thread.clone(),
+            ]
         );
+        // A fresh thread is not a fork.
+        let fresh = host.start_thread(&settings);
+        let argv = host.argv(&fresh, &host.inner().threads[&fresh].clone(), None);
+        assert!(!argv.contains(&"--fork-session".to_string()), "{argv:?}");
     }
 
     #[tokio::test]
@@ -2427,13 +2454,107 @@ mod tests {
         assert!(config["mcpServers"].get("hub").is_none());
         let env = turn_env(&settings);
         assert_eq!(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false");
-        // Every bot's turn, and over an inherited setting that would turn it on.
+        // A turn with no memory folder (a stateless bot) keeps auto memory off, over an inherited setting too.
         assert_eq!(env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
+        assert!(!argv.iter().any(|a| a.contains("autoMemoryDirectory")));
         settings
             .env
             .insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "0".into());
         assert_eq!(turn_env(&settings)["CLAUDE_CODE_DISABLE_AUTO_MEMORY"], "1");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn auto_memory_is_on_in_the_repository_and_claude_compacts_at_the_turns_compact_at() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let mut settings = Settings {
+            cwd: "/w/bot-acme".into(),
+            compact_at: json!(120_000),
+            memory_dir: Some("/w/bot-acme/memory/claude".into()),
+            ..Default::default()
+        };
+        // Inherited from a runner that itself runs under Claude Code with auto memory off.
+        settings
+            .env
+            .insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
+        let thread = host.start_thread(&settings);
+        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let at = argv
+            .iter()
+            .position(|a| a == "--settings")
+            .expect("--settings");
+        let given: Value = serde_json::from_str(&argv[at + 1]).unwrap();
+        assert_eq!(
+            given,
+            json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude"})
+        );
+        assert!(!argv.contains(&"--autocompact".to_string()), "{argv:?}");
+        let env = turn_env(&settings);
+        assert!(!env.contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
+        assert_eq!(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "120000");
+    }
+
+    #[test]
+    fn claude_gets_the_compact_at_it_is_given_and_none_when_it_is_given_none() {
+        let mut settings = Settings::default();
+        settings.env.insert("HOME".into(), "/h".into());
+        // The 1M variant gets the same: the setting, never Claude's own ~967k "auto".
+        settings.model = Some("claude-opus-5-5[1m]".into());
+        settings.compact_at = json!(400_000);
+        assert_eq!(
+            turn_env(&settings)["CLAUDE_CODE_AUTO_COMPACT_WINDOW"],
+            "400000"
+        );
+        settings.compact_at = json!("150000");
+        assert_eq!(
+            turn_env(&settings)["CLAUDE_CODE_AUTO_COMPACT_WINDOW"],
+            "150000"
+        );
+        for none in [json!(null), json!(0), json!(""), json!("auto")] {
+            settings.compact_at = none.clone();
+            assert!(
+                !turn_env(&settings).contains_key("CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
+                "{none}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turn_starts_claude_with_its_compact_at() {
+        let dir = std::env::temp_dir().join(format!(
+            "tico-claude-compact-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("claude");
+        crate::util::write_script(
+            &exe,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.325 (Claude Code)'; exit 0;; esac\nprintf '%s' \"$CLAUDE_CODE_AUTO_COMPACT_WINDOW\" > window.txt\nIFS= read -r line\nexit 0\n",
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![exe.display().to_string()], tx);
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            compact_at: json!(300_000),
+            ..Default::default()
+        };
+        settings
+            .env
+            .insert("HOME".into(), dir.display().to_string());
+        settings
+            .env
+            .insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+        let thread = host.start_thread(&settings);
+        let t = host.inner().threads[&thread].clone();
+        let (mut child, _stderr, _status) = host.launch(&thread, &t, None).unwrap();
+        drop(child.stdin.take());
+        child.wait().await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("window.txt")).unwrap(),
+            "300000"
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
@@ -3216,6 +3337,8 @@ mod tests {
             ),
             (&json!(123902), &json!(120000), &json!(83))
         );
+        // Cache writes are counted apart (they cost more than input): the input above includes them.
+        assert_eq!(tokens["usage"]["cache_write"], json!(3000), "{got:?}");
     }
 
     #[tokio::test]
@@ -3409,8 +3532,6 @@ mod tests {
         );
         assert_eq!(effort_for(Some("XHIGH")).as_deref(), Some("xhigh"));
         assert_eq!(effort_for(Some("minimal")), None);
-        assert_eq!(autocompact_window(&json!(null)), 283_000);
-        assert_eq!(autocompact_window(&json!(10)), 100_000);
         assert_eq!(version_tuple("2.1.296 (Claude Code)"), Some((2, 1, 296)));
         assert_eq!(
             usage_tokens(
@@ -3503,7 +3624,7 @@ mod tests {
 mod feature_tests {
     use super::*;
 
-    /// A fake Claude Code that logs each run's arguments and lists `--autocompact` in its help.
+    /// A fake Claude Code that logs each run's arguments.
     fn fake_claude(root: &std::path::Path) -> (Vec<String>, std::path::PathBuf) {
         let exe = root.join("claude");
         let log = root.join("spawns.log");
@@ -3535,11 +3656,11 @@ mod feature_tests {
         note_version(&cmd, &version).await;
         assert_eq!(
             runs(&log),
-            read + 1,
-            "a new version is read once, for --help"
+            read,
+            "a new version's features come from the version alone"
         );
         note_version(&cmd, &version).await;
-        assert_eq!(runs(&log), read + 1, "the same version reads nothing again");
+        assert_eq!(runs(&log), read, "the same version reads nothing again");
         let before_turns = runs(&log);
         for _ in 0..40 {
             let host = ClaudeHost::new("bench", cmd.clone(), tx.clone());
@@ -3550,9 +3671,28 @@ mod feature_tests {
         note_version(&cmd, "2.1.301 (Claude Code)").await;
         assert_eq!(
             runs(&log),
-            before_turns + 1,
-            "a changed version is read once"
+            before_turns,
+            "a changed version runs no process either"
         );
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_keep_warm_turn_runs_one_model_turn_with_the_same_tools() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let thread = host.resume_thread("s-1", &Settings::default());
+        let plain = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        host.one_turn(&thread);
+        let warm = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let at = warm
+            .iter()
+            .position(|a| a == "--max-turns")
+            .expect("--max-turns");
+        assert_eq!(warm[at + 1], "1");
+        // Only the limit is added: the tools and settings that make up the cached prefix are the same.
+        let mut without = warm.clone();
+        without.drain(at..at + 2);
+        assert_eq!(without, plain);
     }
 }

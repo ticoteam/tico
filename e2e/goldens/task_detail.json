@@ -133,7 +133,7 @@
     "messages": [
       {
         "answered_by_id": null,
-        "body": "This task is yours now. Yours.\nDraft the launch plan is in To do (General).\nMissing to leave this stage:\n- Owner says done: Say when the work is done.\nVersion 2. Send it with every command on this task.\nLeave the task in one of five states before you stop:\n1. Done with the stage: what is missing is met, or you moved the task.\n2. Asking a person, on the task.\n3. Waiting on a task you filed.\n4. Snoozed, with a reason, to a date where there is one.\n5. Closed, with a reason.\nAnything else counts as stopped early and you are woken again.",
+        "body": "This task is yours now. Yours.\nDraft the launch plan is in To do (General).\nMissing to leave this stage:\n- Owner says done: Say when the work is done.\nVersion 2. Send it with every command on this task.\nLeave the task in one of six states before you stop:\n1. Done with the stage: what is missing is met, or you moved the task.\n2. Asking a person, on the task.\n3. Waiting on a task you filed.\n4. Snoozed, with a reason, to a date where there is one: only to look again on a date.\n5. Closed, with a reason.\n6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`). You are woken when #N ends. Never snooze for a block.\nWhile your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.\nAnything else counts as stopped early and you are woken again.",
         "conversation_id": "<id1>",
         "created_at": "<time>",
         "delivered_at": null,
@@ -211,6 +211,7 @@
       ],
       "from_person": "human:ana",
       "goal_id": null,
+      "human_id": null,
       "id": "<task>",
       "important_requesters": 0,
       "inputs": [],

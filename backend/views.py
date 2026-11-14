@@ -72,7 +72,7 @@ def since_time(value):
     ) + "Z"
 
 
-ATTEMPT_DETAIL_SQL = "SELECT state,result,finished_at FROM attempts WHERE id=?"
+ATTEMPT_DETAIL_SQL = "SELECT state,started_at,result,finished_at FROM attempts WHERE id=?"
 
 
 def prime_attempt_details(c, ids):
@@ -85,7 +85,9 @@ def prime_attempt_details(c, ids):
         marks = ",".join("?" * len(chunk))
         attempts = {
             row["id"]: row
-            for row in c.execute(f"SELECT id,state,result,finished_at FROM attempts WHERE id IN ({marks})", chunk)
+            for row in c.execute(
+                f"SELECT id,state,started_at,result,finished_at FROM attempts WHERE id IN ({marks})", chunk
+            )
         }
         read_cache.prime(c, ATTEMPT_DETAIL_SQL, {(aid,): attempts.get(aid) for aid in chunk})
         diags = {
@@ -125,6 +127,8 @@ def attempt_details(c, turn):
 
     details = {
         "state": runs.state(attempt["state"]) if attempt else None,
+        # Ended before its computer started it (a silent lapse, a hand-back): Runs reads "Didn't start".
+        "didnt_start": failed and not attempt["started_at"],
         **metadata(c, turn["id"]),
         **attempt_snapshots(c, turn["id"]),
     }
@@ -414,6 +418,28 @@ def _entries(c, github_owner=""):
 def human_only(who):
     if who.role not in ("owner", "human"):
         raise Problem("identity", "This frontend endpoint requires a person", 403)
+
+
+def person_or_view(who):
+    """The page's own start-up reads: a person, or a bot's read-only view of the app (backend/app_view.py), which reads
+    them as that bot."""
+    if not who.view:
+        human_only(who)
+
+
+# What a bot's read-only view is never offered in /api/me, whatever the bot may do elsewhere.
+VIEW_OFF = (
+    "can_create_bots",
+    "can_add_people",
+    "bot_admin",
+    "credential_admin",
+    "can_see_sql",
+    "can_create_tokens",
+    "has_tokens",
+    "credential_access",
+    "mail_access",
+    "mover",
+)
 
 
 def may_chat(c, auth, who, bot):
@@ -2147,7 +2173,43 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             if item["ask"] and item["ask"]["kind"] == "ok":
                 item["line"] = item["ask"]["line"]
                 item["missing"] = [item["ask"]["line"]]
+            elif item["ask"] and item["ask"]["kind"] == "page":
+                item["line"] = page_ask_line(item["ask"]["line"], (item.get("task") or {}).get("title"), item["line"])
     return sorted(items, key=needs_key)
+
+
+# The stage's own words for a page OK that names the person asked ("OK Chris (version 3)", task_requirements._page):
+# the list says who it is for already, so they go; what comes before or after them (Jev's reason, a send back, a merge
+# conflict) stays. Only the last such phrase is the stage's: one inside Jev's reason is kept, and a name may hold
+# brackets ("OK Chris (Owner) (version 3)").
+_PAGE_OK_VERSION = re.compile(r"\(version \d+\)\.?")
+_PAGE_WORD = re.compile(r"\s+page$", re.IGNORECASE)
+
+
+def page_ask_line(name, title, waiting):
+    """A page OK in Needs you, in plain words: what it is, which task, and the decision, "Spec for Share Assistant
+    chat, ready for your OK", then anything the stage said about it. The requirement's name alone ("Spec page") said
+    neither the task nor what was asked (#330)."""
+    name = (name or "").strip() or "Page"
+    what = _PAGE_WORD.sub("", name) or name
+    title = (title or "").strip()
+    head = f"{what} for {title}, ready for your OK" if title else f"{name}, ready for your OK"
+    said = _without_page_ok(waiting or "")
+    return f"{head}. {said}" if said else head
+
+
+def _without_page_ok(waiting):
+    """`waiting` without its last "OK <name> (version N)" phrase, the one the stage wrote."""
+    versions = list(_PAGE_OK_VERSION.finditer(waiting))
+    if not versions:
+        return waiting.strip()
+    end = versions[-1]
+    start = waiting.rfind("OK ", 0, end.start())
+    while start > 0 and not waiting[start - 1].isspace():
+        start = waiting.rfind("OK ", 0, start)
+    if start < 0:
+        return waiting.strip()
+    return " ".join((waiting[:start] + " " + waiting[end.end() :]).split())
 
 
 def needs_key(x):
@@ -2434,7 +2496,9 @@ def fleet_snapshot(c, auth, identity, task_view):
 
 
 def install_views(app, store, auth, mutate, task_view):
-    def visible_turns(c, who, bot=None, limit=200):
+    def visible_turns(c, who, bot=None, limit=200, failed_since=None):
+        """The runs `who` may read, newest first; with `failed_since`, only each job's failed try since then
+        (runs.failed), the list Health's Failed runs opens."""
         auth.domain(who)
         readable = None
         if bot:
@@ -2443,8 +2507,13 @@ def install_views(app, store, auth, mutate, task_view):
             auth.require_read(c, who, bot)
         else:
             readable = {slug for slug, level in auth.bot_accesses(c, who).items() if level["read"]}
-        rows = []
-        for turn in H.turns(c, bot, limit=limit):
+        rows, failed = [], None
+        if failed_since is None:
+            turns = H.turns(c, bot, limit=limit)
+        else:
+            failed = {r["id"] for r in runs.failed(c, failed_since, limit=limit)[1]}
+            turns = [turn for turn in (H.turn(c, aid) for aid in failed) if turn and bot in (None, turn["bot"])]
+        for turn in turns:
             if readable is not None and turn["bot"] not in readable:
                 continue
             message = H.message(c, turn["message_id"])
@@ -2457,8 +2526,9 @@ def install_views(app, store, auth, mutate, task_view):
             except Problem:
                 continue
             rows.append((turn, message))
-        for attempt in failed_attempts(c, who, auth, bot, limit=limit):
-            rows.append((attempt, H.message(c, attempt["message_id"])))
+        for attempt in failed_attempts(c, who, auth, bot, since=failed_since, limit=limit):
+            if failed is None or attempt["id"] in failed:
+                rows.append((attempt, H.message(c, attempt["message_id"])))
         rows.sort(key=lambda item: item[0].get("started_at") or "", reverse=True)
         return rows[:limit]
 
@@ -2479,6 +2549,7 @@ def install_views(app, store, auth, mutate, task_view):
             "state": turn.get("state"),
             "outcome": turn.get("exit"),
             "failure_reason": turn.get("failure_reason") or "",
+            "didnt_start": bool(turn.get("didnt_start")),
             **{
                 k: turn.get(k)
                 for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")
@@ -2694,7 +2765,7 @@ def install_views(app, store, auth, mutate, task_view):
                     "icon": icon_of(config),
                     "helper": helper(config),
                     # What Settings and the branch editor show and pick from (backend/wake_presets.py).
-                    "wake": wake_presets.effective(config),
+                    "wake": wake_presets.waits(config),
                     "profile": profiles.effective(config),
                     "my_access": mine_level,
                     **policy,
@@ -2720,7 +2791,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/me")
     def me(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         with store.read() as c:
             r = roster(c)
             person = P.person(H.actor_id(who.actor), r) or {}
@@ -2770,11 +2841,15 @@ def install_views(app, store, auth, mutate, task_view):
                 "mail_access": can_access(c, who),
                 # may move any task on the board
                 "mover": who.role == "owner" or H.can_move(c, who.actor),
-            }
+            } | (
+                {key: False for key in VIEW_OFF} | {"read_only_view": True, "name": H.actor_name(c, who.actor)}
+                if who.view
+                else {}
+            )
 
     @app.get("/api/employees")
     def employees(request: Request):
-        human_only(request.state.identity)
+        person_or_view(request.state.identity)
         # One snapshot from the start, so read_cache serves the roster, configs and access rows once.
         with store.read_transaction() as c:
             from . import teammate_access
@@ -2787,7 +2862,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/people")
     def people(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         with store.read() as c:
             r, configs = roster(c), entries(c)
             from . import people_photos
@@ -2959,13 +3034,14 @@ def install_views(app, store, auth, mutate, task_view):
                 if r["runner_id"]
             }
             from . import browser_exit
+            from . import browser_commands
 
             # One pass each for every computer's internet sharing and today's bytes through it.
             exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
             runners = list(
                 c.execute(
                     "SELECT id,label,owner_id,last_seen_at,revoked_at,platform,version,capacity,readiness,"
-                    "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
+                    "accepts_member_bots,turns_at_once,screen,performance,capabilities,gateway_fallback,"
                     "restart_since,"
                     "readiness_at FROM runners_with_state ORDER BY created_at"
                 )
@@ -2992,6 +3068,8 @@ def install_views(app, store, auth, mutate, task_view):
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
+                # Its own "Fall back to Tico Gateway": everyone reads it, an admin changes it (models_preset).
+                value["gateway_fallback"] = bool(row["gateway_fallback"])
                 # What the computer may run at once now: its setting, or its capacity (start_places.turn_limit).
                 value["turn_limit"] = turn_limit(row)
                 # Since when it says it is restarting after a person pressed Restart; null when it is not.
@@ -3071,6 +3149,8 @@ def install_views(app, store, auth, mutate, task_view):
                         "signed_out": signed_out.get(row["id"]) or {},
                         "key_cleared": key_cleared.get(row["id"]) or [],
                         "inbox_only": row["id"] in kept_for_inbox,
+                        # The company's browser host (backend/browser_commands.py): where website tools run.
+                        "browser_host": row["id"] == browser_commands.host_id(c),
                         # Its internet shared with bots (backend/browser_exit.py): the owner alone changes it.
                         "browser_exit": browser_exit.listing(
                             exit_policies.get(row["id"]),
@@ -3125,7 +3205,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/status")
     def status(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         # One snapshot from the start, so the roster and access rows are read once (read_cache), not again
         # after the first privacy check opens a transaction.
         with store.read_transaction() as c:
@@ -3188,10 +3268,16 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.get("/api/runs")
-    def runs(request: Request):
+    def runs_list(request: Request, bot: str | None = None, failed: bool = False):
+        """The newest runs a person may read, or one bot's (`bot`, its id or slug). A bot page asks for its own: the
+        newest 200 of the whole company left a quiet bot's failed starts off its Runs card (Nov 12). `failed`: only
+        the day's failed runs, as Health counts them."""
         human_only(request.state.identity)
+        since = H.shift(H.now(), hours=-runs.FAILED_HOURS) if failed else None
         with store.read() as c:
-            rows = [turn for turn, _ in visible_turns(c, request.state.identity)]
+            if bot:
+                bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            rows = [turn for turn, _ in visible_turns(c, request.state.identity, bot, failed_since=since)]
             made = ran_on(c, [turn["id"] for turn in rows])
             return [run_view(turn, c, made[turn["id"]]) for turn in rows]
 
@@ -3386,28 +3472,21 @@ def install_views(app, store, auth, mutate, task_view):
             row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
             config = json.loads(row[0]) if row else {}
             safe = {k: v for k, v in config.items() if k not in ("cwd", "env", "token", "secrets", "secrets_file")}
-            status = H.status(c, bot) or {}
             instruction = c.execute("SELECT content FROM bot_agent_instructions WHERE bot=?", (bot,)).fetchone()
             if not instruction:
                 instruction = c.execute("SELECT content FROM mail_agent_instructions WHERE bot=?", (bot,)).fetchone()
             instructions = instruction["content"] if instruction and instruction["content"].strip() else ""
-            state = "# Cloud status\n\nState: " + str(status.get("state") or H.bot(c, bot)["state"])
-            if status.get("focus"):
-                state += "\n\nFocus: " + status["focus"]
-            if status.get("last_result"):
-                state += "\n\nLast result: " + status["last_result"]
             from .memory_history import documents
 
             memory = documents(c, bot)
             return {
-                "AGENT.md": instructions,
-                "state.md": state + "\n",
+                "AGENTS.md": instructions,
                 "memory/learnings.md": memory.get("memory/learnings.md", ""),
                 "memory/decisions.md": memory.get("memory/decisions.md", ""),
                 "bot.yaml": yaml.safe_dump(safe, sort_keys=False, allow_unicode=True),
                 "employee.yaml": yaml.safe_dump(safe, sort_keys=False, allow_unicode=True),
                 "playbooks": {},
-                "source": "cloud registry and status snapshot",
+                "source": "cloud registry snapshot",
             }
 
     @app.get("/api/employees/{bot}/session")
@@ -3500,7 +3579,7 @@ def install_views(app, store, auth, mutate, task_view):
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
         each bot's count over the whole list. A cursor from an older version starts again from the top (`restart`)."""
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         return await needs_lane.run(request.app, needs_answer, who, count, ids, version, limit, cursor)
 
     def needs_answer(who, count, ids, version, limit, cursor):

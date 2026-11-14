@@ -11,6 +11,7 @@ const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 const {mailboxesFake, open} = require('./support/mailboxes-fake.cts') as import('./support/mailboxes-fake.cts').Api;
 const {googleFake} = require('./support/google-fake.cts') as import('./support/google-fake.cts').Api;
+const {t} = require('./support/load.cts') as import('./support/load.cts').Api;
 
 type ActionBody = {kind: string; payload: {campaign_id: string; teammate?: string | undefined; team?: string | undefined}};
 
@@ -72,7 +73,22 @@ async function start(browser: import('playwright').Browser, width: number) {
   const f = fake();
   const got = await open(browser, mailboxesFake(), googleFake(), {hash: '#/tools/api/t-gads', width, height: width < 500 ? 844 : 900,
     ready: '#tool-finance tr.fc-campaigns', extra: (p, method, body, url) => (f.answer as (p: string, method: string, body: ActionBody, url: URL) => unknown)(p, method, body as ActionBody, url)});
+  // Each owner write reaches the fake a little late, as on a loaded runner: an assert that reads the writes before the
+  // card's POST lands then fails every run, not only on a busy CI box.
+  await got.page.route('**/api/v2/finance/actions', async route => { await new Promise(r => setTimeout(r, t(300))); await route.fallback(); });
   return {...got, f};
+}
+
+// Picks an owner and waits for the save to finish: the write has reached the fake and the card has read its campaigns
+// again (the picker is disabled while it saves and drawn enabled after the reload). Returns the write it posted.
+async function pick(page: import('playwright').Page, f: ReturnType<typeof fake>, id: string, value: string) {
+  const before = f.state.writes.length, sel = `#tool-finance select[data-fc-owner="${id}"]`;
+  await page.locator(sel).selectOption(value);
+  for (const end = Date.now() + t(5000); f.state.writes.length === before && Date.now() < end;) await new Promise(r => setTimeout(r, 25));
+  assert.equal(f.state.writes.length, before + 1, `${id}: one owner write for ${value || 'blank'}`);
+  // Without this wait the next pick can land on the picker the reload is about to replace, and its change is lost.
+  await page.waitForFunction(([sel, value]) => { const el = document.querySelector(sel ?? '') as HTMLSelectElement | null; return !!el && !el.disabled && el.value === value; }, [sel, value]);
+  return f.state.writes.at(-1)!.body;
 }
 
 (async () => {
@@ -95,17 +111,11 @@ async function start(browser: import('playwright').Browser, width: number) {
       assert.equal(await card.locator('select[data-fc-owner="camp-2"]').inputValue(), 'teammate:bot:paid-rental-ads', `${tag}: saved owner picked`);
       await shot(page, `${tag}-before`);
       // Blank posts campaign_owner_set with no owner, and the campaigns read again.
-      await card.locator('select[data-fc-owner="camp-2"]').selectOption('');
-      await page.waitForFunction(() => (document.querySelector('#tool-finance select[data-fc-owner="camp-2"]') as HTMLSelectElement | null)?.value === '');
-      assert.deepEqual(f.state.writes.at(-1)!.body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-2'}}, `${tag}: blank write`);
+      assert.deepEqual(await pick(page, f, 'camp-2', ''), {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-2'}}, `${tag}: blank write`);
       // A team picked posts team; the card shows it after the reload.
-      await card.locator('select[data-fc-owner="camp-1"]').selectOption('team:rental');
-      await page.waitForFunction(() => (document.querySelector('#tool-finance select[data-fc-owner="camp-1"]') as HTMLSelectElement | null)?.value === 'team:rental');
-      assert.deepEqual(f.state.writes.at(-1)!.body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-1', team: 'rental'}}, `${tag}: team write`);
+      assert.deepEqual(await pick(page, f, 'camp-1', 'team:rental'), {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-1', team: 'rental'}}, `${tag}: team write`);
       // A teammate picked posts teammate.
-      await card.locator('select[data-fc-owner="camp-2"]').selectOption('teammate:human:ana');
-      await page.waitForFunction(() => (document.querySelector('#tool-finance select[data-fc-owner="camp-2"]') as HTMLSelectElement | null)?.value === 'teammate:human:ana');
-      assert.deepEqual(f.state.writes.at(-1)!.body, {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-2', teammate: 'human:ana'}}, `${tag}: teammate write`);
+      assert.deepEqual(await pick(page, f, 'camp-2', 'teammate:human:ana'), {kind: 'campaign_owner_set', payload: {campaign_id: 'camp-2', teammate: 'human:ana'}}, `${tag}: teammate write`);
       await shot(page, `${tag}-after`);
       assert.equal(await sideways(page), false, `${tag}: no sideways scroll`);
       assert.deepEqual(seen.errors, [], `${tag}: page errors`);

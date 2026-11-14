@@ -139,7 +139,7 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await page.locator('.rr-map .rr-all').getAttribute('aria-pressed'), 'true');
       assert.match(await panel(page).locator('a.rr-rule').first().innerText(), /Be kind and brief/);
       assert.equal(await panel(page).locator('[data-rr-cap="chats_per_day"]').inputValue(), '999');
-      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="chats_per_day"]) .rr-from').innerText(), 'default');
+      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="chats_per_day"]) .rr-from').innerText(), 'Default');
       // The whole chart, every group open: each team's tab and each teammate is a party.
       for (const p of ['group:eng', 'group:web', 'group:sales', 'group:outbound', 'human:cara', 'bot:builder', 'bot:sdr'])
         assert.equal(await page.locator(`.rr-map [data-rr-party="${p}"]`).count(), 1, p);
@@ -155,7 +155,9 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await page.locator('.rr-lines line.rule').count(), 1);
       assert.equal(await page.locator('.rr-map [data-rr-party="group:sales"]').getAttribute('data-rr-tone'), 'zero');
       const chips = await page.locator('.rr-chip').allInnerTexts();
-      assert.deepEqual(chips.sort(), ['0 a day', '20 a day · Only send finished pull reque…', 'Ask for demo builds through t…'].sort());
+      // Each chip says the line's count, or Rule for a rule alone; its title and label keep the rule's words.
+      assert.deepEqual(chips.map(c => c.replace(/^.* · /, '')).sort(), ['0 a day', '20 a day', 'Rule'].sort());
+      assert.equal(await page.locator('.rr-chip[data-rr-line="l-2"]').getAttribute('title'), 'Builder to Reviewer: 20 a day · Only send finished pull requests.');
       // Its exceptions, To first, then From; a rule alone has no count, and never "None".
       const rows = await panel(page).locator('.rr-line').allInnerTexts();
       assert.equal(rows.length, 3);
@@ -252,11 +254,11 @@ async function until(fn: () => unknown, what: string) {
         ['Can reach anyone', 'Nearby', "Only who's listed"]);
       // Nothing of its own yet: the mode is Everyone's and the counts are the default, each shown as its value and source.
       assert.equal(await panel(page).locator('[data-ru-seg="rr-mode"] [data-v="open"]').getAttribute('aria-pressed'), 'true');
-      assert.equal(await panel(page).locator('.rr-set > .rr-from').innerText(), 'from Everyone');
+      assert.equal(await panel(page).locator('.rr-reach .rr-from').innerText(), 'From Everyone');
       assert.equal(await panel(page).locator('[data-rr-cap="chats_per_day"]').inputValue(), '999');
-      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="chats_per_day"]) .rr-from').innerText(), 'default');
+      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="chats_per_day"]) .rr-from').innerText(), 'Default');
       assert.equal(await panel(page).locator('[data-rr-cap="tasks_per_day"]').inputValue(), '999');
-      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="tasks_per_day"]) .rr-from').innerText(), 'default');
+      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="tasks_per_day"]) .rr-from').innerText(), 'Default');
       await panel(page).locator('[data-ru-seg="rr-mode"] [data-v="nearby"]').click();
       await until(async () => lastWrite(writes, 'PUT')?.body?.mode === 'nearby', 'nearby saved');
       assert.equal(lastWrite(writes, 'PUT').path, '/api/v2/reach/settings/bot%3Abuilder');
@@ -264,7 +266,7 @@ async function until(fn: () => unknown, what: string) {
       await until(async () => lastWrite(writes, 'PUT')?.body?.mode === 'closed', 'closed saved');
       assert.deepEqual(lastWrite(writes, 'PUT'), {method: 'PUT', path: '/api/v2/reach/settings/bot%3Abuilder', body: {mode: 'closed'}});
       await until(async () => (await panel(page).locator('[data-ru-seg="rr-mode"] [data-v="closed"]').getAttribute('aria-pressed')) === 'true', 'closed shown');
-      assert.equal(await panel(page).locator('.rr-set > .rr-from').count(), 0, 'its own mode has no source');
+      assert.equal(await panel(page).locator('.rr-reach .rr-from').count(), 0, 'its own mode has no source');
       const chats = panel(page).locator('[data-rr-cap="chats_per_day"]');
       await chats.fill('30'); await chats.press('Tab');
       await until(async () => lastWrite(writes, 'PUT').body.chats_per_day === 30, 'cap saved');
@@ -279,7 +281,7 @@ async function until(fn: () => unknown, what: string) {
       await until(async () => (await panel(page).locator('.ru-status').innerText()) === 'Saved', 'clear read back');
       // Cleared, the cap is taken from above again: the default, shown as its value.
       assert.equal(await panel(page).locator('[data-rr-cap="chats_per_day"]').inputValue(), '999');
-      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="chats_per_day"]) .rr-from').innerText(), 'default');
+      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="chats_per_day"]) .rr-from').innerText(), 'Default');
       const tasks = panel(page).locator('[data-rr-cap="tasks_per_day"]');
       await tasks.fill('-1'); await tasks.press('Tab');
       await until(async () => /whole number/.test(await panel(page).locator('.ru-status').innerText()), 'bad cap refused');
@@ -288,7 +290,7 @@ async function until(fn: () => unknown, what: string) {
       // Who bots may book: a control of its own beside the mode, Anyone until a company narrows it, shown as the mode is.
       assert.deepEqual(await panel(page).locator('[data-ru-seg="rr-book"] button').allInnerTexts(), ['Anyone', 'Nearby', 'No one']);
       assert.equal(await panel(page).locator('[data-ru-seg="rr-book"] [aria-pressed="true"]').innerText(), 'Anyone');
-      assert.equal(await panel(page).locator('.rr-book .rr-from').innerText(), 'default');
+      assert.equal(await panel(page).locator('.rr-book .rr-from').innerText(), 'Default');
       await panel(page).locator('[data-ru-seg="rr-book"] [data-v="none"]').click();
       await until(async () => lastWrite(writes, 'PUT')?.body?.book === 'none', 'book saved');
       assert.deepEqual(lastWrite(writes, 'PUT'), {method: 'PUT', path: '/api/v2/reach/settings/bot%3Abuilder', body: {book: 'none'}});
@@ -296,23 +298,23 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await panel(page).locator('.rr-book .rr-from').count(), 0, 'its own setting has no source');
 
       // The header search marks matches on the map; Enter selects the first. A team's tab and Everyone are parties too.
-      await page.locator('.ru-acts .rr-q').fill('sales');
-      assert.deepEqual(await page.locator('.ru-acts .rr-results [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:growth-manager']);
+      await page.locator('.ru-ph .rr-q').fill('sales');
+      assert.deepEqual(await page.locator('.ru-ph .rr-results [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:growth-manager']);
       assert.equal(await page.locator('.rr-map .hit').count(), 2);
       await shot(page, 'desktop-search');
-      await page.locator('.ru-acts .rr-q').press('Enter');
+      await page.locator('.ru-ph .rr-q').press('Enter');
       await until(async () => (await panel(page).locator('h2').innerText()) === 'Sales', 'Sales selected');
-      assert.equal(await page.locator('.ru-acts .rr-results').isHidden(), true);
+      assert.equal(await page.locator('.ru-ph .rr-results').isHidden(), true);
       assert.equal(await panel(page).locator('[data-ru-seg="rr-mode"] [data-v="closed"]').getAttribute('aria-pressed'), 'true');
-      assert.equal(await panel(page).locator('.rr-set > .rr-from').count(), 0);
+      assert.equal(await panel(page).locator('.rr-reach .rr-from').count(), 0);
       assert.equal(await panel(page).locator('[data-rr-cap="chats_per_day"]').inputValue(), '40');
       assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="chats_per_day"]) .rr-from').count(), 0);
-      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="tasks_per_day"]) .rr-from').innerText(), 'default');
+      assert.equal(await panel(page).locator('.rr-cap:has([data-rr-cap="tasks_per_day"]) .rr-from').innerText(), 'Default');
       await page.locator('.rr-map .rdo-tab[data-rr-party="group:eng"]').click();
       await until(async () => (await panel(page).locator('h2').innerText()) === 'Engineering', 'Engineering selected');
       assert.equal(await panel(page).locator('.rr-inh-h').allInnerTexts().then(t => t.length), 1, 'a top team follows the company rules only');
       assert.deepEqual(await panel(page).locator('a.rr-rule:not(.rr-sub)').allInnerTexts(), ['Ship behind a flag.']);
-      assert.equal(await panel(page).locator('.rr-set > .rr-from').innerText(), 'from Everyone');
+      assert.equal(await panel(page).locator('.rr-reach .rr-from').innerText(), 'From Everyone');
       await page.locator('.rr-map .rr-all').click();
       await until(async () => (await panel(page).locator('h2').innerText()) === 'Everyone', 'Everyone selected');
       // A person has no Who bots may book: the control is for bots, teams and Everyone.
@@ -340,7 +342,14 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await panel(page).locator('.rr-line.ro').count(), 3);
       await panel(page).locator('.rr-line.ro').first().click();
       assert.equal(await panel(page).locator('.rr-ed').count(), 0);
-      assert.equal(await page.locator('.rr-chip[aria-disabled="true"]').count(), 3);
+      // A read-only chip shows its row in the panel, lit for a moment (no editor opens).
+      assert.equal(await page.locator('.rr-chip[aria-disabled]').count(), 0);
+      await page.locator('.rr-chip[data-rr-line="l-3"]').click();
+      const litAt = Date.now();
+      assert.equal(await panel(page).locator('[data-rr-line="l-3"]').getAttribute('class'), 'rr-line ro lit');
+      assert.equal(await panel(page).locator('.rr-ed').count(), 0);
+      await until(async () => !(await panel(page).locator('[data-rr-line="l-3"]').getAttribute('class'))!.includes('lit'), 'lit removed');
+      assert.ok(Date.now() - litAt < 1500, `lit removed within 1.5s (${Date.now() - litAt}ms)`);
       // Rules still open (their panel decides what the viewer may change).
       await panel(page).locator('a.rr-rule:not(.rr-sub)').click();
       await page.locator('#ru-side').getByText('Run the tests before asking for review.').first().waitFor();
@@ -362,10 +371,10 @@ async function until(fn: () => unknown, what: string) {
       assert.equal(await page.locator('.rr-map').isVisible(), true);
       await panel(page).locator('.rr-back').tap();
       await until(async () => !(await page.locator('.rr-side').isVisible()), 'map alone again');
-      await page.locator('.ru-acts .rr-q').fill('build');
+      await page.locator('.ru-ph .rr-q').fill('build');
       assert.equal(await page.locator('.rr-map').isVisible(), false);
       assert.deepEqual(await page.locator('.rr-pick [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['bot:builder']);
-      assert.equal(await page.locator('.ru-acts .rr-results').isVisible(), false);
+      assert.equal(await page.locator('.ru-ph .rr-results').isVisible(), false);
       await page.locator('.rr-pick [data-rr-party="bot:builder"]').tap();
       await until(async () => await page.locator('.rr-side').isVisible(), 'panel shown');
       assert.equal(await page.locator('.rr-pick').isVisible(), false);

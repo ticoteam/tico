@@ -340,7 +340,7 @@ def bot_copy(api, args):
 
 @tool(
     "tico_bot_update_from_original",
-    "Bring a copy's instructions (AGENT.md, skills, playbooks) up to date with the bot it was copied from, as the "
+    "Bring a copy's instructions (AGENTS.md, skills, playbooks) up to date with the bot it was copied from, as the "
     "person who asked you (they manage the copy): a file-level three-way merge, in one commit on the copy's repository. Answers the "
     "original's diff since the copy, and either `updated`, `current`, or `conflicts` (nothing changed; settle each with the person, "
     "edit the copy, commit, then call again with `resolved`). Runs on this computer.",
@@ -372,7 +372,7 @@ def bot_update_from_original(api, args):
         "paths": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Only these files or folders (AGENT.md, skills/x)",
+            "description": "Only these files or folders (AGENTS.md, skills/x)",
         },
         "title": _s("The pull request's or task's title"),
     },
@@ -519,6 +519,90 @@ def bot_browser_exit(api, args):
 
 
 @tool(
+    "tico_bot_app_view",
+    "Read or set “Can view the app (read only)” for a bot: whether it may open the app signed in as itself, read only, "
+    "to take screenshots for its own proof pages. Only an owner or an admin turns it on or off; every view is in the "
+    "audit log.",
+    {
+        "bot": _s("Bot slug"),
+        "on": {"type": "boolean", "description": "Omit to read; true to turn it on, false to turn it off"},
+    },
+    ("bot",),
+    writes=True,
+)
+def bot_app_view(api, args):
+    who = _as_person(api)
+    if "on" in args:
+        return who.post(f"bots/{args['bot']}/app-view", {"on": bool(args["on"])}, key=_key(args))
+    return who.get(f"bots/{args['bot']}/app-view")
+
+
+@tool(
+    "tico_bot_app_shot",
+    "A screenshot of the app as you see it, read only, signed in as yourself: for the screenshots on a spec or "
+    "Checked in production page. Opens a read-only view (a person turned on “Can view the app” for you; nothing can "
+    "be changed from it), opens `path` (an app address such as /#/tasks or /#/task/<id>) at `width` (390 for a "
+    "phone, 1280 for a desktop) and writes a PNG to `out`. Runs Chrome on this computer.",
+    {
+        "path": _s("The app address to open, such as /#/tasks; / for home"),
+        "out": _s("Where to write the PNG"),
+        "width": {
+            "type": "integer",
+            "minimum": 320,
+            "maximum": 2560,
+            "description": "Window width in px: 390 phone, 1280 desktop",
+        },
+        "height": {"type": "integer", "minimum": 320, "maximum": 4000, "description": "Window height in px"},
+        "wait_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "How long the page reads its data after it loads (default 2500)",
+        },
+        "full": {"type": "boolean", "description": "The whole page, not only the window"},
+    },
+    ("out",),
+    writes=True,
+    local=True,
+)
+def bot_app_shot(api, args):
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    path = str(args.get("path") or "/")
+    if not path.startswith("/"):
+        raise APIError("validation", "path is an app address that starts with /, such as /#/tasks")
+    view = api.post("app-view", {}, key=_key(args))
+    out = str(Path(args["out"]).expanduser().resolve())
+    width = int(args.get("width") or 390)
+    command = [
+        "node",
+        str(Path(__file__).resolve().parent.parent / "app_shot.mjs"),
+        api.url + path,
+        out,
+        str(width),
+        str(int(args.get("height") or 0) or ""),
+        str(int(args.get("wait_ms") if args.get("wait_ms") is not None else 2500)),
+        "full" if args.get("full") else "",
+    ]
+    # The token goes in the environment, never on the command line: it would show in the process list.
+    done = subprocess.run(
+        command,
+        env={**os.environ, "TICO_VIEW_TOKEN": view["token"]},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise APIError("app_shot", (done.stderr or done.stdout or "the screenshot failed").strip()[-500:])
+    shot = json.loads(done.stdout.strip().splitlines()[-1])
+    return {**shot, "view": view["id"], "read_only": True}
+
+
+@tool(
     "tico_bot_budget",
     "Read or set how many runs a bot may start per hour and per day, as the person who asked you. "
     "Tico holds a bot that goes over (a runaway loop, not normal work): its queued work is kept and a person's "
@@ -564,18 +648,6 @@ _PROFILES = ["doer", "reviewer", "lead", "manager", "responder", "monitor", "cus
     {
         "bot": _s("Bot slug"),
         "profile": {"type": "string", "enum": _PROFILES, "description": "The profile to set; leave out to read"},
-        "batch_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 604800,
-            "description": "How long news waits to be batched",
-        },
-        "sweep_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 604800,
-            "description": "Least time between two runs of a sweep",
-        },
         "digest_hour": {
             "type": "integer",
             "minimum": 0,
@@ -608,9 +680,7 @@ def bot_profile(api, args):
     if not args.get("profile"):
         return {**current, "choices": who.get("profiles")["profiles"]}
     body = {
-        k: args[k]
-        for k in ("batch_seconds", "sweep_seconds", "digest_hour", "pulls", "sweeps", "takes", "confirm_drop_rules")
-        if args.get(k) is not None
+        k: args[k] for k in ("digest_hour", "pulls", "sweeps", "takes", "confirm_drop_rules") if args.get(k) is not None
     }
     return who.post(
         path, {**body, "profile": args["profile"], "expected_revision": current["revision"]}, key=_key(args)
@@ -630,15 +700,39 @@ def bot_release(api, args):
     return _as_person(api).post(f"bots/{args['bot']}/release", {}, key=_key(args))
 
 
+# Where a bot's conversation compacts, in tokens: the sizes the server takes (backend/providers.py COMPACT_SIZES).
+COMPACT_SIZES = (
+    100_000,
+    150_000,
+    200_000,
+    250_000,
+    300_000,
+    400_000,
+    500_000,
+    600_000,
+    700_000,
+    800_000,
+    900_000,
+    1_000_000,
+)
+
+
 @tool(
     "tico_bot_model",
-    "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
-    "run in progress to end. A manager bot may change its direct report's model.",
+    "Show the models a bot may run on, or change its model or where its conversation compacts (`compact_at`), as "
+    "the person who asked you. A model change waits for a run in progress to end. A manager bot may change its "
+    "direct report's model.",
     {
         "bot": _s("The bot's slug"),
         "model": _s("A model id or name from the list; leave out to list them"),
         "effort": _s("Reasoning effort that model supports"),
         "harness": _s("A harness from that model's harnesses list"),
+        "compact_at": {
+            "type": ["integer", "string"],
+            "enum": [*COMPACT_SIZES, "default"],
+            "description": "Where the bot's conversation compacts, in tokens; `default` puts it back on its model's "
+            "default (it then moves with the model); leave out to keep it",
+        },
         "on_behalf_of": ON_BEHALF_OF,
     },
     required=("bot",),
@@ -648,7 +742,7 @@ def bot_model(api, args):
     who = _as_person(api, args.get("on_behalf_of"))
     catalog = who.get("models")
     current = who.get(f"bots/{args['bot']}")
-    if not any(args.get(k) for k in ("model", "harness", "effort")):
+    if not any(args.get(k) for k in ("model", "harness", "effort", "compact_at")):
         enabled = set(catalog.get("enabled_providers") or [])
         return {
             "models": [
@@ -656,9 +750,26 @@ def bot_model(api, args):
                 for m in catalog.get("models", [])
                 if not m.get("deprecated") and (not enabled or m.get("provider") in enabled)
             ],
-            **{k: v for k, v in current.items() if k in ("harness", "effort")},
+            **{k: v for k, v in current.items() if k in ("harness", "effort", "compact_at")},
             "current": current.get("model"),
+            "compact_sizes": list(COMPACT_SIZES),
         }
+    out = None
+    if any(args.get(k) for k in ("model", "harness", "effort")):
+        out = _set_bot_model(who, catalog, current, args)
+    if args.get("compact_at"):
+        revision = (out or {}).get("revision") or who.get(f"bots/{args['bot']}")["revision"]
+        size = None if args["compact_at"] == "default" else args["compact_at"]
+        saved = who.post(
+            f"bots/{args['bot']}/compact-at",
+            {"compact_at": size, "expected_revision": revision},
+            key=_key(args, ":compact"),
+        )
+        out = {**(out or {}), **{k: saved.get(k) for k in ("compact_at", "compacts_at", "revision")}}
+    return out
+
+
+def _set_bot_model(who, catalog, current, args):
     model = _model_id(
         catalog, args.get("model") or current.get("model") or (catalog.get("default") or {}).get("model") or ""
     )

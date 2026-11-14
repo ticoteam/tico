@@ -8,6 +8,14 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 
 const ECHO_MS: u64 = 1000;
+/// A one- or two-word repeat is echo only this close to the delay longer echoed runs show.
+/// Speaker echo lands within a few milliseconds of it; a person's own reply rarely does.
+const LAG_TOLERANCE_MS: u64 = 150;
+/// An extra mic word starting with an echoed run (same instant, after the speech it repeats) is
+/// echo; one even slightly earlier may be the person starting to talk.
+const LEAD_MS: u64 = 30;
+/// How far a streamed meeting transcript's word times can slip from the mic's mid-echo.
+const SKEW_MS: u64 = 3000;
 /// Live reference waits never hide speech for more than eight seconds of recording time.
 pub(crate) const REFERENCE_WAIT_MS: u64 = 8000;
 /// After Stop, an unfinished chunk holds live delivery this long past its end (when it was
@@ -64,6 +72,12 @@ fn normal(word: &str) -> String {
         "seventy" => "70",
         "eighty" => "80",
         "ninety" => "90",
+        // One transcript writes the spoken contraction, the other the words.
+        "gonna" => "goingto",
+        "wanna" => "wantto",
+        "gotta" => "gotto",
+        "kinda" => "kindof",
+        "sorta" => "sortof",
         _ => &word,
     }
     .to_owned()
@@ -124,12 +138,16 @@ impl Heard {
                 .flat_map(|c| &c.words),
         )
     }
-    fn clean(&self, words: &[Word]) -> Vec<Word> {
-        let mic: Vec<_> = words
+    /// Microphone tokens in word order: (start, token, word index).
+    fn mic(words: &[Word]) -> Vec<(u64, String, usize)> {
+        words
             .iter()
             .enumerate()
             .flat_map(|(i, w)| tokens(&w.text).into_iter().map(move |t| (w.start_ms, t, i)))
-            .collect();
+            .collect()
+    }
+    /// How one to two microphone tokens match one to two meeting tokens at `m` and `r`.
+    fn matches(&self, mic: &[(u64, String, usize)], m: usize, r: usize) -> Option<(usize, usize)> {
         let form = |parts: &[&str]| {
             if parts.len() == 2
                 && let (Ok(tens), Ok(units)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
@@ -141,70 +159,206 @@ impl Heard {
             }
             parts.concat()
         };
+        for mc in 1..=2 {
+            for rc in 1..=2 {
+                if m + mc > mic.len() || r + rc > self.0.len() {
+                    continue;
+                }
+                let a: Vec<_> = mic[m..m + mc].iter().map(|x| x.1.as_str()).collect();
+                let b: Vec<_> = self.0[r..r + rc].iter().map(|x| x.1.as_str()).collect();
+                if similar(&form(&a), &form(&b)) {
+                    return Some((mc, rc));
+                }
+            }
+        }
+        None
+    }
+    /// The matching run of meeting tokens from `reference` that microphone tokens from `from`
+    /// repeat. One word heard differently, an extra fragment on the mic or a word it missed does
+    /// not end a run when matching goes on right after it, inside the same utterance.
+    fn run(&self, mic: &[(u64, String, usize)], from: usize, reference: usize, window: u64) -> Run {
+        let pause =
+            |i: usize| i > from && mic[i].0.saturating_sub(mic[i - 1].0) >= UTTERANCE_GAP_MS;
+        let mut run = Run {
+            end: from,
+            mic: 0,
+            heard: 0,
+            offsets: vec![],
+            skipped: false,
+        };
+        let (mut m, mut r) = (from, reference);
+        let mut skipped = false;
+        while m < mic.len() && r < self.0.len() {
+            // Once a run is clear, a stream's word times may wander a little further.
+            let limit = if run.mic >= 3 {
+                window.max(2 * ECHO_MS)
+            } else {
+                window
+            };
+            if mic[m].0.abs_diff(self.0[r].0) > limit || pause(m) {
+                break;
+            }
+            if let Some((mc, rc)) = self.matches(mic, m, r) {
+                run.offsets.push(mic[m].0 as i64 - self.0[r].0 as i64);
+                m += mc;
+                r += rc;
+                run.mic += mc;
+                run.heard += rc;
+                run.end = m;
+                skipped = false;
+                continue;
+            }
+            if run.mic == 0 || skipped {
+                break;
+            }
+            let next = |dm: usize, dr: usize| {
+                m + dm < mic.len()
+                    && !pause(m + dm)
+                    && self.matches(mic, m + dm, r + dr) == Some((1, 1))
+            };
+            // An extra mic word is skipped only when it is a fragment ("a", "an", "f-"): a
+            // real word there may be the person talking over the other side.
+            let (dm, dr) = if next(1, 1) {
+                (1, 1)
+            } else if mic[m].1.chars().count() <= 2 && next(1, 0) {
+                (1, 0)
+            } else if next(0, 1) {
+                (0, 1)
+            } else {
+                break;
+            };
+            m += dm;
+            r += dr;
+            skipped = true;
+            run.skipped = true;
+        }
+        run
+    }
+    /// Microphone tokens repeating meeting audio: runs of three or more tokens, plus shorter
+    /// runs only at the echo's own delay (`lag`), which long runs measure. A lone word is never
+    /// echo by content alone: "yes" said back to "yes" stays unless it lands on that delay.
+    fn removed(&self, mic: &[(u64, String, usize)], lag: Option<i64>) -> (Vec<bool>, Vec<i64>) {
         let mut removed = vec![false; mic.len()];
+        let mut offsets = vec![];
+        let mut short = vec![];
         for from in 0..mic.len() {
             if removed[from] {
                 continue;
             }
+            // Echo going on where a streamed reference's word times slipped: only straight after
+            // removed echo in the same utterance, never as a run's own evidence.
+            let continued = from > 0
+                && removed[from - 1]
+                && mic[from].0.saturating_sub(mic[from - 1].0) < UTTERANCE_GAP_MS;
+            let window = if continued { SKEW_MS } else { ECHO_MS };
             let first = self
                 .0
-                .partition_point(|(at, _)| at.saturating_add(ECHO_MS) < mic[from].0);
+                .partition_point(|(at, _)| at.saturating_add(window) < mic[from].0);
             for reference in first..self.0.len() {
-                if self.0[reference].0 > mic[from].0.saturating_add(ECHO_MS) {
+                if self.0[reference].0 > mic[from].0.saturating_add(window) {
                     break;
                 }
-                let (mut m, mut r) = (from, reference);
-                while m < mic.len() && r < self.0.len() {
-                    if mic[m].0.abs_diff(self.0[r].0) > ECHO_MS {
-                        break;
-                    }
-                    if m > from && mic[m].0.saturating_sub(mic[m - 1].0) >= UTTERANCE_GAP_MS {
-                        break;
-                    }
-                    let mut matched = None;
-                    'forms: for mc in 1..=2 {
-                        for rc in 1..=2 {
-                            if m + mc > mic.len() || r + rc > self.0.len() {
-                                continue;
-                            }
-                            let a: Vec<_> = mic[m..m + mc].iter().map(|x| x.1.as_str()).collect();
-                            let b: Vec<_> =
-                                self.0[r..r + rc].iter().map(|x| x.1.as_str()).collect();
-                            if similar(&form(&a), &form(&b)) {
-                                matched = Some((mc, rc));
-                                break 'forms;
-                            }
-                        }
-                    }
-                    let Some((mc, rc)) = matched else {
-                        break;
-                    };
-                    m += mc;
-                    r += rc;
-                }
+                let run = self.run(mic, from, reference, window);
+                let skewed = mic[from].0.abs_diff(self.0[reference].0) > ECHO_MS;
                 // A lone acknowledgement or name is never enough evidence to delete Me.
-                if m - from >= 3 && r - reference >= 3 {
-                    removed[from..m].fill(true);
+                if run.mic >= 3 && run.heard >= 3 {
+                    removed[from..run.end].fill(true);
+                    // A word the mic heard in the same instant an echoed run began, never before
+                    // the meeting audio it repeats (a reply just before it stays).
+                    if from > 0
+                        && mic[from - 1].0 >= self.0[reference].0
+                        && mic[from].0.saturating_sub(mic[from - 1].0) <= LEAD_MS
+                    {
+                        removed[from - 1] = true;
+                    }
+                    if !skewed {
+                        offsets.extend(run.offsets);
+                    }
+                } else if run.mic > 0 && !run.skipped && !skewed {
+                    short.push((from, run));
                 }
             }
         }
+        if let Some(lag) = lag.or_else(|| median(&mut offsets.clone())) {
+            for (from, run) in short {
+                if run
+                    .offsets
+                    .iter()
+                    .all(|at| at.abs_diff(lag) <= LAG_TOLERANCE_MS)
+                    && !removed[from..run.end].iter().any(|r| *r)
+                {
+                    removed[from..run.end].fill(true);
+                }
+            }
+        }
+        (removed, offsets)
+    }
+    /// The echo's delay on this microphone: the median offset of clear echoed runs, if any.
+    fn lag(&self, words: &[Word]) -> Option<i64> {
+        median(&mut self.removed(&Self::mic(words), None).1)
+    }
+    fn clean(&self, words: &[Word], lag: Option<i64>) -> Vec<Word> {
+        let mic = Self::mic(words);
+        let (removed, _) = self.removed(&mic, lag);
         let mut counts = vec![(0usize, 0usize); words.len()];
         for (index, (_, _, word)) in mic.iter().enumerate() {
             counts[*word].0 += 1;
             counts[*word].1 += usize::from(removed[index]);
         }
+        let spoken: Vec<_> = (0..words.len()).filter(|i| counts[*i].0 > 0).collect();
+        let keep: Vec<bool> = (0..words.len())
+            .map(|i| {
+                let (total, matched) = counts[i];
+                if total > 0 {
+                    return matched < total;
+                }
+                // Punctuation a stream sends as its own word goes with the nearest spoken word.
+                let after = spoken.partition_point(|j| *j < i);
+                let near = [after.checked_sub(1), Some(after)]
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|k| spoken.get(k))
+                    .min_by_key(|j| (words[**j].start_ms.abs_diff(words[i].start_ms), i > **j));
+                near.is_none_or(|j| counts[*j].1 < counts[*j].0)
+            })
+            .collect();
         words
             .iter()
-            .zip(counts)
-            .filter(|(_, (total, matched))| *total == 0 || matched < total)
+            .zip(keep)
+            .filter(|(_, keep)| *keep)
             .map(|(word, _)| word.clone())
             .collect()
     }
 }
+struct Run {
+    /// Microphone token index after the last matched token.
+    end: usize,
+    /// Matched microphone and meeting tokens.
+    mic: usize,
+    heard: usize,
+    /// Microphone start minus meeting start, per matched step.
+    offsets: Vec<i64>,
+    skipped: bool,
+}
+fn median(values: &mut [i64]) -> Option<i64> {
+    values.sort_unstable();
+    values.get(values.len() / 2).copied()
+}
+
+/// Every finished microphone word in time order, to measure the echo's delay over the call.
+fn microphone_words(record: &Recording) -> Vec<Word> {
+    let mut chunks: Vec<_> = record.chunks.iter().filter(|c| c.channel == "me").collect();
+    chunks.sort_by_key(|c| c.start_ms);
+    chunks
+        .into_iter()
+        .flat_map(|c| c.words.iter().cloned())
+        .collect()
+}
 
 /// Streamed microphone utterances without speaker bleed, using the same rule as saved chunks.
 pub fn without_echo(me: &[Word], them: &[Word]) -> Vec<Word> {
-    Heard::of(them.iter()).clean(me)
+    let heard = Heard::of(them.iter());
+    heard.clean(me, heard.lag(me))
 }
 
 /// Utterances in time order, shared by the page, exports and live delivery.
@@ -479,7 +633,21 @@ pub fn ready_microphone(record: &Recording, words: &[Word], them: &[Word]) -> Ve
 /// while a finished batch already supplies the words that must keep speaker bleed local.
 pub fn live_microphone(record: &Recording, me: &[Word], streamed_them: &[Word]) -> Vec<Word> {
     let reference = meeting_reference(record, streamed_them.iter());
-    without_echo(&ready_microphone(record, me, &reference), &reference)
+    streamed_microphone(
+        record,
+        &ready_microphone(record, me, &reference),
+        &reference,
+    )
+}
+
+/// Streamed mic words without echo. The stream's own clear runs set the echo's delay; before
+/// it has any, finished chunks' do.
+fn streamed_microphone(record: &Recording, me: &[Word], them: &[Word]) -> Vec<Word> {
+    let heard = Heard::of(them.iter());
+    let lag = heard
+        .lag(me)
+        .or_else(|| heard.lag(&microphone_words(record)));
+    heard.clean(me, lag)
 }
 
 /// A live-delivery snapshot: pending reference ranges stay pending, even when the microphone
@@ -542,6 +710,8 @@ pub fn echo_snapshot(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>)
             }
         }
     }
+    let heard = Heard::of(them.iter());
+    let lag = heard.lag(&microphone_words(record));
     for chunk in &mut out.chunks {
         if chunk.channel != "me" {
             continue;
@@ -555,7 +725,7 @@ pub fn echo_snapshot(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>)
             if chunk.words.is_empty() {
                 continue;
             }
-            chunk.words = without_echo(&chunk.words, &them);
+            chunk.words = heard.clean(&chunk.words, lag);
             chunk.text = chunk
                 .words
                 .iter()
@@ -601,7 +771,7 @@ fn with_streamed(record: &Recording, streamed: &BTreeMap<String, Vec<Word>>) -> 
             .cloned()
             .collect();
         let words = if me {
-            without_echo(&ready_microphone(record, &words, &them), &them)
+            streamed_microphone(record, &ready_microphone(record, &words, &them), &them)
         } else {
             words
         };
@@ -694,7 +864,12 @@ pub fn live_turns(
             } else {
                 partial.words.clone()
             };
-            let clean = without_echo(&words, &reference);
+            let heard = Heard::of(reference.iter());
+            let lag = heard
+                .lag(&words)
+                .or_else(|| heard.lag(streamed.get("me").map_or(&[][..], Vec::as_slice)))
+                .or_else(|| heard.lag(&microphone_words(record)));
+            let clean = heard.clean(&words, lag);
             if clean.is_empty() {
                 continue;
             }
@@ -784,6 +959,7 @@ pub(crate) fn chunk_labels(record: &Recording) -> BTreeMap<String, Vec<Word>> {
 }
 fn words_with(record: &Recording, named: bool) -> BTreeMap<String, Vec<Word>> {
     let heard = Heard::chunks(record);
+    let lag = heard.lag(&microphone_words(record));
     let mut out = BTreeMap::new();
     let labels = speaker_labels(record, &BTreeMap::new());
     for chunk in record.chunks.iter().filter(|c| !c.text.trim().is_empty()) {
@@ -805,7 +981,7 @@ fn words_with(record: &Recording, named: bool) -> BTreeMap<String, Vec<Word>> {
             chunk.words.clone()
         };
         let words = if me {
-            heard.clean(&words)
+            heard.clean(&words, lag)
         } else {
             words
                 .into_iter()
@@ -1578,5 +1754,225 @@ mod tests {
                 "{reason}: share"
             );
         }
+    }
+
+    /// Words from (start, text) pairs, each 150 ms long.
+    fn timed(words: &[(u64, &str)]) -> Vec<Word> {
+        words
+            .iter()
+            .map(|(at, text)| Word {
+                start_ms: *at,
+                end_ms: at + 150,
+                text: (*text).into(),
+                ..Default::default()
+            })
+            .collect()
+    }
+    /// A phrase spoken from `at`, one word every 200 ms.
+    fn spoken(at: u64, phrase: &str) -> Vec<(u64, String)> {
+        phrase
+            .split_whitespace()
+            .enumerate()
+            .map(|(i, text)| (at + i as u64 * 200, text.to_owned()))
+            .collect()
+    }
+    fn texts(words: &[Word]) -> Vec<&str> {
+        words.iter().map(|w| w.text.as_str()).collect()
+    }
+    /// Shaped like a real laptop-speaker call: the mic repeats meeting audio 21 ms late, and the
+    /// recogniser splits it at pauses, mishears a word, adds a zero-length word at a run's start
+    /// and writes "gonna" where the meeting transcript has "going to".
+    #[test]
+    fn speaker_echo_fragments_go_and_genuine_words_stay() {
+        let mut heard: Vec<(u64, String)> = vec![];
+        heard.extend(spoken(
+            1000,
+            "these graphics that he had on like corners and cues and just",
+        ));
+        heard.push((4800, "Um,".into()));
+        heard.extend(spoken(
+            6000,
+            "the thing that I'm still having my heart- a hard time getting",
+        ));
+        heard.push((10_000, "because".into()));
+        heard.extend(spoken(12_000, "this is going to work fine"));
+        heard.push((14_000, "Yes.".into()));
+        let remote = timed(
+            &heard
+                .iter()
+                .map(|(at, t)| (*at, t.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        let mut mic: Vec<(u64, String)> = vec![(700, "Wait".into()), (1021, "All".into())];
+        for (at, text) in &heard {
+            let text = match text.as_str() {
+                "heart-" => "hard-",
+                "Yes." => continue,
+                other => other,
+            };
+            mic.push((at + 21, text.to_owned()));
+            // The person says "okay" over the other side, between two echoed words.
+            if text == "corners" {
+                mic.push((at + 121, "okay".into()));
+            }
+        }
+        let mut mic = timed(
+            &mic.iter()
+                .map(|(at, t)| (*at, t.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        // "going to" heard as "gonna" on the mic.
+        let going = mic.iter().position(|w| w.text == "going").unwrap();
+        mic[going].text = "gonna".into();
+        mic.remove(going + 1);
+        // A zero-length recogniser word at the very start of the echo.
+        mic[1].end_ms = mic[1].start_ms;
+        // A reply to "Yes." half a second later, and a thought of the person's own.
+        mic.extend(timed(&[
+            (14_600, "yes"),
+            (16_000, "I"),
+            (16_200, "disagree"),
+            (16_400, "with"),
+            (16_600, "that"),
+        ]));
+        assert_eq!(
+            texts(&without_echo(&mic, &remote)),
+            ["Wait", "okay", "yes", "I", "disagree", "with", "that"]
+        );
+    }
+
+    /// A streamed meeting transcript sends punctuation as words, and its word times slip by
+    /// over a second mid-sentence. Echo continuing through the slip goes; the same words said
+    /// back after a pause stay.
+    #[test]
+    fn streamed_echo_survives_neither_punctuation_nor_slipping_times() {
+        let mut remote = timed(&[
+            (1000, "give"),
+            (1200, "them,"),
+            (1400, "like,"),
+            (2700, "you"),
+            (2800, "know,"),
+            (3000, "a"),
+            (3100, "Bleacher"),
+            (3400, "Report-like"),
+            (3900, "tool,"),
+        ]);
+        // The rest of the sentence, stamped 1.2 s late by the stream.
+        remote.extend(timed(&[
+            (5400, "where"),
+            (5500, "they"),
+            (5600, "can"),
+            (5700, "do"),
+            (5800, "whatever"),
+        ]));
+        let mut mic = timed(&[
+            (981, "give"),
+            (1181, "them"),
+            (1381, "like"),
+            (2681, ","),
+            (2681, "you"),
+            (2781, "know,"),
+            (2981, "a"),
+            (3081, "bleacher"),
+            (3381, "report"),
+            (3581, "like"),
+            (3881, "tool,"),
+            (4181, "where"),
+            (4281, "they"),
+            (4381, "can"),
+            (4481, "do"),
+            (4581, "whatever"),
+        ]);
+        assert_eq!(texts(&without_echo(&mic, &remote)), Vec::<&str>::new());
+        // Read back after a pause, two seconds behind the stream's times: the person's own.
+        mic.extend(timed(&[
+            (7800, "where"),
+            (8000, "they"),
+            (8200, "can"),
+            (8400, "do"),
+        ]));
+        assert_eq!(
+            texts(&without_echo(&mic, &remote)),
+            ["where", "they", "can", "do"]
+        );
+    }
+
+    /// A lone echoed word opening the next mic chunk goes on the echo delay the whole call
+    /// shows, though that chunk has no clear echo run of its own.
+    #[test]
+    fn lone_echo_at_a_chunk_boundary_uses_the_calls_echo_delay() {
+        let remote: Vec<_> = spoken(1000, "we should ship the release before next monday")
+            .into_iter()
+            .chain([(45_100, "Um,".to_owned())])
+            .collect();
+        let them = chunk(
+            "t",
+            "them",
+            0,
+            &remote
+                .iter()
+                .map(|(at, t)| (*at, t.as_str(), ""))
+                .collect::<Vec<_>>(),
+        );
+        let first = chunk(
+            "m1",
+            "me",
+            0,
+            &remote[..8]
+                .iter()
+                .map(|(at, t)| (at + 21, t.as_str(), ""))
+                .collect::<Vec<_>>(),
+        );
+        let second = chunk(
+            "m2",
+            "me",
+            45_000,
+            &[
+                (45_121, "Um,", ""),
+                (47_000, "Sounds", ""),
+                (47_200, "good", ""),
+            ],
+        );
+        let record = record(vec![them, first, second]);
+        let words = chunk_words(&record);
+        assert!(words["m1"].is_empty());
+        assert_eq!(texts(&words["m2"]), ["Sounds", "good"]);
+        // Without the call's echo runs, a lone shared word is a reply and stays.
+        assert_eq!(
+            texts(&without_echo(
+                &record.chunks[2].words,
+                &record.chunks[0].words
+            )),
+            ["Um,", "Sounds", "good"]
+        );
+    }
+
+    /// The mic's changing tail is cleaned on the delay the stream's settled echo shows.
+    #[test]
+    fn partial_mic_echo_uses_the_streams_echo_delay() {
+        let heard = spoken(1000, "so in other words is it working for you know");
+        let remote = timed(
+            &heard
+                .iter()
+                .map(|(at, t)| (*at, t.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        let settled = timed(
+            &heard[..8]
+                .iter()
+                .map(|(at, t)| (at - 19, t.as_str()))
+                .collect::<Vec<_>>(),
+        );
+        let tail = timed(&[(heard[8].0 - 19, "you"), (heard[9].0 - 19, "know")]);
+        let streamed = BTreeMap::from([("me".to_owned(), settled), ("them".to_owned(), remote)]);
+        let partial = Partial {
+            channel: "me".into(),
+            start_ms: tail[0].start_ms,
+            end_ms: tail[1].end_ms,
+            text: "you know".into(),
+            words: tail,
+        };
+        let turns = live_turns(&record(vec![]), &streamed, &[partial]);
+        assert!(turns.iter().all(|turn| !turn.me), "{turns:?}");
     }
 }

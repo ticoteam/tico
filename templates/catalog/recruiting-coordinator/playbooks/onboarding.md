@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 20 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes.
 
 Inputs: the first message or task, the calendar, the candidates already in interviews, and the Recruiter's role files if they
 exist.
@@ -8,7 +8,7 @@ exist.
 Outcome: five recorded answers, a loop template per open role, the interviewer rules, a first logistics sheet from the real
 calendar, and the first routine checked.
 
-Done when `state.md` says `Setup: finished`, the first sheet is attached to the task, and `tico bot setup-done` has run.
+Done when the first sheet is attached to the task and `tico bot setup-done` has run.
 
 ---
 
@@ -46,7 +46,7 @@ those and use the defaults for the rest, saying which you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/loops/<role>.md` for each open role and
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/loops/<role>.md` for each open role and
 `knowledge/interviewer-rules.md`. Start `knowledge/schedule.md` with the candidates already in interviews, as references only.
 
 ## 5. Produce the first result now
@@ -60,7 +60,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 --enable`) and tell the human in one line what it does: "I will build this sheet every weekday at 08:00 and put each candidate
 message up for review." They can change it or turn it off any time. There is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave
+Record it in `memory/decisions.md`. If they asked for a different schedule or to leave
 it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

@@ -393,6 +393,22 @@ def prime_queued(c, messages):
     H.prime_tasks(c, about)
 
 
+def prime_rooms(c, cids):
+    """Before rooms are checked one at a time (C1, threads.denial, as Auth.conversation asks it): their rows, their
+    roots, their meeting provenance and the tasks they and their roots belong to, read in a fixed number of queries
+    per 500 rooms. Each room is still decided on its own by the same rules; the tasks are read without their tags,
+    which no check reads."""
+    cids = {cid for cid in cids if cid}
+    H.prime_conversations(c, cids)
+    rows = [row for row in (H.conversation(c, cid) for cid in sorted(cids)) if row]
+    roots = {row["root_id"] for row in rows if row.get("root_id")} - cids
+    H.prime_conversations(c, roots)
+    rows += [row for row in (H.conversation(c, rid) for rid in sorted(roots)) if row]
+    if read_cache.cache(c) is not None:
+        meeting_sources(c).prime_conversations(cids)
+    H.prime_tasks(c, {row.get("task_id") for row in rows}, with_tags=False)
+
+
 def prime_messages(c, messages):
     """Before checking each of these stored messages: look up the tasks their refs name, the messages they reply to
     and answer, their rooms and meeting provenance, and the runs behind them together, so a long task's comments are
@@ -1429,6 +1445,7 @@ PRIVATE_MEETING_WRITES = (
     "/api/v2/tasks/dry-run",
     "/api/v2/files/uploads",
     "/api/v2/files/imports",
+    "/api/v2/files/dates",
     "/api/v2/github/token",
 )
 PRIVATE_MEETING_REFUSAL = "This is a private meeting: nothing from it is saved or shared until its owner reviews it."

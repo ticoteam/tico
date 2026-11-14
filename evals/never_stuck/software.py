@@ -25,7 +25,7 @@ from .world import ANA, BUILDER, PM, RELEASE, Refusal, World
 
 PRODUCT, ENGINEERING = "product", "engineering"
 PRODUCT_STAGES = ("Ideas", "Spec", "In development", "Validate")
-ENGINEERING_STAGES = ("On deck", "Build", "Review 1", "Fixes 1", "Review 2", "Fixes 2", "Merge", "Release")
+ENGINEERING_STAGES = ("On deck", "Build", "Review 1", "Fixes 1", "Review 2", "Fixes 2", "QA", "Merge", "Release")
 NOT_BUILT = "is not built yet"
 
 
@@ -115,10 +115,22 @@ def make_page(world: World, author: str, text: str, page: Page | None = None) ->
 
 # ----------------------------------------------------------------------------- the server's Heartbeat steps
 def jev_step(world: World) -> int:
-    """`jev_verdicts` (track B): Jev judges the pages owed a verdict."""
+    """`jev_verdicts` (track B): Jev judges the pages owed a verdict; then `idea_checks`, the duplicate check on ideas
+    filed into Product's Ideas, where the rig's Jev finds every idea new."""
+    from backend import idea_checks as IC
     from backend import page_verdicts as PV
 
-    return int(PV.run(world.store, world.now()))
+    def new(state: dict[str, Any], questions: dict[str, Any], label: str) -> dict[str, Any]:
+        return {
+            "answers": {q: {"choice": "new" if q.startswith("same") else "none", "confidence": 0.99} for q in questions}
+        }
+
+    was, IC.ENGINE = IC.ENGINE, new
+    try:
+        checked = int(IC.run(world.store, world.now()))
+    finally:
+        IC.ENGINE = was
+    return int(PV.run(world.store, world.now())) + checked
 
 
 def reread_step(world: World, github: RigGitHub) -> int:
@@ -273,7 +285,7 @@ class SoftRig(Rig):
         ]
 
     def room_wakes(self, bot: str) -> list[str]:
-        """C10's "Spec has room" wakes for a bot: their keys."""
+        """Any "Spec has room" wake for a bot, by its old `room:` key: there should be none (C10 tells nobody)."""
         return [
             str(r[0])
             for r in self.w.read(

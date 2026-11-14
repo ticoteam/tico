@@ -96,9 +96,21 @@ takes an API key. Candidates:
 A pi turn gets the same MCP servers as a Claude Code or Codex turn (the hub, the bot's bot.yaml servers and the
 repository's `.mcp.json`), in the turn's `mcp.json` under its agent folder (`PI_CODING_AGENT_DIR`: `runtime/pi-agent/<bot>`,
 or the turn's own folder for a Tico model). The file is written atomically per turn. pi takes streamable HTTP only, so an
-SSE server is named as not passed. Each tool is declared directly (`exposure: direct`). Secrets stay `${VAR}`, and each
+SSE server is named as not passed. Every server is `exposure: deferred` and the turn's `--tools` names `tool_search`
+and no `mcp__` entry: pi 1.5 declares an MCP tool only when `--tools` names it, and naming every hub tool would add about
+95k tokens to each request. So no MCP tool is declared before the model searches; `tool_search` loads the matches for the
+next request and they stay declared while the same pi process serves the conversation. When Tico starts pi again on
+that session (after 15 idle minutes, a turn that starts differently, a full pool of kept processes, or a runner restart), pi drops the loaded tools at resume and the
+model must search again: a direct call to one of them answers "not found". The hub server carries a one-line `description`, which
+lists it in pi's system prompt and ranks its tools in a search. Secrets stay `${VAR}`, and each
 stdio server's environment names the Gateway key empty so it never inherits it. Built-in MCP arrived in pi 0.99.0
 (2026-09-29); the runner installs the latest pi, but an older pi would ignore `mcp.json` without an error.
+
+**Compact at** applies to Claude Code and Codex turns. Codex gets it as `model_auto_compact_token_limit`. Claude Code gets
+it as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, its auto-compact window, which it reads ahead of its own settings
+(`hosts/claude.rs` `turn_env`, the 1M models included); Claude compacts a little before that size (the window less its
+summary buffer) and keeps it within its own 100k to 1M range and the model's window. A turn that carries no Compact at
+leaves Claude Code its own default.
 
 **Compact at** applies to a pi turn: the turn's `settings.json` (in the same agent folder) sets pi's
 `compaction.reserveTokens` to the model's context window less the bot's Compact at (`reserve_tokens` in `hosts/pi.rs`,
@@ -354,6 +366,15 @@ installs the new version **between runs**: the copy is downloaded and checked be
 and switched in only at a moment no run in progress uses that harness (a run on another harness does not hold it
 back). A failed install keeps the working version and is retried after 30 minutes.
 
+A daily update also waits until **no turn has used that harness on the computer for 60 minutes**. A new Claude Code
+changes its system prompt and tools, so a session still inside its 1-hour prompt cache would write its whole
+conversation to the cache again at its next turn; after an hour idle that cache has expired anyway. If that moment does
+not come within 48 hours (counted from the first time the update was ready, kept across runner restarts), the update
+goes in at the next moment no run uses the harness, as before. The runner's log line says which: `Claude Code updated
+to 2.1.316 (no turn on this computer has used it for 64 minutes)` or `(no turn running; sessions stayed warm for 48
+hours)`. A first install and the owner's **Update** or pin do not wait, and pinning a harness drops a daily update
+still waiting for it.
+
 A harness can be **pinned** to a version: the runner keeps that version and only reports that a newer one exists.
 The manifest can ship a pin (`[update] policy = "pinned"`, `pin = "1.2.3"`), and the owner can pin or unpin per
 computer.
@@ -505,7 +526,6 @@ another bot's home; all turns use the original login in its own home.
 | `model_list` | `host`: the host adapter lists the models in readiness; `command`: the CLI lists them (`model_list_args`) | No model list |
 | `readiness` | The runner reports install and sign-in for it | `true`; `false` reports nothing, so checks say unknown |
 | `repo_permission_lint` | Readiness warns about permission rules in the bot's repository | No lint |
-| `packet_only` | A tidy check runs from a supplied packet without Hub MCP or checkout tools; Codex also uses its read-only sandbox | The harness cannot run tidy packets |
 | `repo_commands` | The bot's repository skills and commands, and the company skills staged for it, are offered as chat commands | Built-in commands only |
 
 Goals, chat commands and controls stay probed: the runner reports them per installed version in its heartbeat.
@@ -515,7 +535,10 @@ Goals, chat commands and controls stay probed: the runner reports them per insta
 At the start of each Claude Code or Codex turn the runner asks `GET /api/v2/attempts/{aid}/skills` for the skills installed for
 the bot (the latest approved version, or the pinned one). It fetches each bundle once by sha
 (`GET /api/v2/skills/bundles/{sha256}`) into `<state>/skill-bundles/<sha>.json`, checks the sha on every read, and
-writes the files under `<state>/skill-sessions/<attempt>/.claude/skills/<name>/`. That folder is added with
+writes the files under `<state>/skill-sessions/<bot>-<digest>/.claude/skills/<name>/`, where the digest is of the
+skills' names and shas. The path is the same on every turn of the bot while its skills stay the same, so a resumed
+session's prompt does not change; its contents are written fresh each turn beside it and the folder is replaced when
+anything differs (a skill changed, or a session edited a staged file). That folder is added with
 `--add-dir`, so Claude Code loads the skills and its `/` menu lists them; readiness offers the last staged set as chat
 commands. The runner then reports what it staged (`POST /api/v2/attempts/{aid}/skills/receipt`). Only the attempt's
 runner, or the bot's own run of that attempt, may read its installs or post its receipt.
@@ -525,7 +548,7 @@ skill (or all of them) out and the turn runs on; the failure is logged without f
 routes answers 404 and the runner stages nothing. Harnesses other than Claude Code and Codex stage none yet.
 
 Codex gets the same staged folder: before the thread starts or resumes, the runner gives the turn's own app server
-`<state>/skill-sessions/<attempt>/.claude/skills` as its only extra skill root (`skills/extraRoots/set`, Codex 0.136
+`<state>/skill-sessions/<bot>-<digest>/.claude/skills` as its only extra skill root (`skills/extraRoots/set`, Codex 0.136
 and later), and Codex lists those skills to the model next to its own. Nothing is written under `CODEX_HOME` or the
 repository. An app server without the call runs the turn without company skills. Codex counts a use only for an
 explicit selection: a `skill` item in the turn's input, which the app server echoes in the turn's user message, is

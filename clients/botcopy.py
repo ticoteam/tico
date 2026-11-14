@@ -6,7 +6,7 @@ grants credentials; this module makes the repository and the commits.
 
 A copy is a fresh repository with one commit: the original's files at the commit it was at, not its history.
 Nothing is linked afterwards except `copied_from: {bot, sha}` on the server, which "update from the original" and
-"suggest to the original" read. Both work on the instructions only (`AGENT.md`, `skills/`, `playbooks/`), file by file,
+"suggest to the original" read. Both work on the instructions only (`AGENTS.md`, `skills/`, `playbooks/`), file by file,
 with `git merge-file` for the three-way merge.
 
 Secrets never travel: dotenv files, `secrets/`, key files and credentials are left out whatever else is asked.
@@ -26,8 +26,12 @@ from pathlib import Path
 
 from clients.manifest import folder_dir, manifest_path, repo_dir, tools_of
 
-SCOPE = ("AGENT.md", "skills/", "playbooks/")  # what "the original's instructions" means
+# What "the original's instructions" means. AGENT.md is the instruction file of a repository the runner has not moved
+# to AGENTS.md yet: kept in scope so the move reads as one deletion and one addition.
+INSTRUCTION_FILES = ("AGENTS.md", "AGENT.md")
+SCOPE = (*INSTRUCTION_FILES, "skills/", "playbooks/")
 # Left out unless the person asked for the original's memory: what the bot learned and did, not how it works.
+# state.md is the status note an older repository may still hold.
 MEMORY_DIRS = ("memory", "notes", "state", "reports", "artifacts")
 MEMORY_FILES = ("state.md",)
 # Never copied, whatever else is asked: a path is refused when any part of it names one of these.
@@ -57,7 +61,7 @@ def is_secret(rel):
 
 def in_scope(rel):
     rel = str(rel)
-    return rel == SCOPE[0] or any(rel.startswith(prefix) for prefix in SCOPE[1:])
+    return rel in INSTRUCTION_FILES or any(rel.startswith(prefix) for prefix in SCOPE[len(INSTRUCTION_FILES) :])
 
 
 def is_memory(rel):
@@ -249,7 +253,6 @@ def pick(files, with_memory):
 def blank(rel, original):
     """What a copy starts with where the original's memory is not copied."""
     return {
-        "state.md": f"# State\n\nCopied from {original}. Nothing has been done here yet.\n",
         "memory/learnings.md": "# Learnings\nDurable facts about the job and the team. Date each entry.\n",
         "memory/decisions.md": "# Decisions\nWhat was decided, when, and why. Date each entry.\n",
     }.get(rel)
@@ -269,7 +272,7 @@ def build_copy(workspace, original, slug, display_name="", with_memory=False, th
         )
     files, left = pick(tree(path, sha), with_memory)
     if not with_memory:
-        for rel in ("state.md", "memory/learnings.md", "memory/decisions.md"):
+        for rel in ("memory/learnings.md", "memory/decisions.md"):
             files[rel] = blank(rel, original).encode()
     for name in ("bot.yaml", "employee.yaml"):
         if name in files:

@@ -160,9 +160,11 @@ def read(url):
         return {"status": "ok", "text": fetch_page(url)}
     except F.FetchError as exc:
         blocked = exc.code in ("scheme", "userinfo", "url", "port", "private_address")
+        log.warning("Could not read the watched page on %s (%s: %s)", host_of(url), exc.code, exc.message)
         return {"status": "blocked" if blocked else "error", "error": f"{exc.code}: {exc.message}"[:300]}
     except Exception as exc:  # a page can be anything: the watch says so and the rest still run
-        return {"status": "error", "error": type(exc).__name__}
+        log.warning("Could not read the watched page on %s (%s)", host_of(url), F.failure_words(exc))
+        return {"status": "error", "error": F.failure_words(exc)[:300]}
 
 
 # ----------------------------------------------------------------------------- rows

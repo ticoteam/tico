@@ -6,14 +6,18 @@
 .pg-status a{color:var(--link-quiet)}
 .pg-box{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
 .page-frame{display:block;width:100%;border:0;background:#fff}
+/* No address to frame: the full view's placeholder, and elsewhere (a pin, a task's pages) one row like the rail's
+   other rows (ui/bot-files.ts .bf-row): a 24px mark and the title on one line, the whole row the link. */
 .pg-open{display:flex;align-items:center;gap:10px;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);text-decoration:none}
-a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-open .nav-icon{flex:none;color:var(--muted)}
 .pg-open-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .pg-open-title{min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* An Open card reads as a widget placeholder: one-line title, the status line at most two lines. */
-.pg-open .pg-status{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
-.pg-open-btn{flex:none;color:var(--link-quiet);font-size:var(--t-sm)}
+.pg-row>.pg-open{gap:8px;min-height:32px;padding:0 6px;margin:0 -6px;border:0;border-radius:6px;background:none;font-size:13px;line-height:18px}
+.pg-row>.pg-open:hover{background:var(--hover);text-decoration:none}
+.pg-row>.pg-open:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-mark{flex:none;display:inline-grid;place-items:center;width:24px;height:24px}
+.pg-mark .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted);vertical-align:0}
+.pg-row .pg-open-title{flex:1;color:var(--ink)}
 /* A framed card is a widget: a one-line status bar, then the page at its own height up to the size, with nothing
    scrolling inside, a fade at the bottom when the page runs on (pg-cut, from its reported height), one tap target
    over the whole card and an expand icon in its corner. */
@@ -35,11 +39,14 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-view{max-width:1100px;margin:0 auto;padding:12px 20px 48px}
 .pg-head{display:flex;align-items:center;gap:6px;min-height:44px}
 .pg-head .spacer{flex:1}
+/* The title and the status line share the header line; on a narrow screen the status wraps under the title. */
+.pg-headline{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;row-gap:2px}
+.pg-headline .pg-status{min-width:0}
+.pg-headline .pg-status .linkish{color:var(--link-quiet);font-size:inherit}
 .pg-title{margin:0;min-width:0;font-size:var(--t-lg);font-weight:600;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
 .pg-back{flex:none;width:36px;height:36px;margin-left:-8px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 .pg-back .nav-icon{font-size:22px;width:22px;height:22px}
 .pg-archived{flex:none}
-.pg-ver{flex:none;max-width:150px;font-size:var(--t-sm)}
 .pg-menu{position:relative;flex:none}
 .pg-menu>summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:7px;color:var(--muted);cursor:pointer}
 .pg-menu>summary::-webkit-details-marker{display:none}
@@ -48,7 +55,22 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-menu-list>*{display:block;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;text-decoration:none;cursor:pointer}
 .pg-menu-list>*:hover{background:var(--hover);text-decoration:none}
 .pg-menu-list .danger{color:var(--fail)}
+.pg-menu-list>*:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-menu>summary:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-menu-list .pg-mi-name,.pg-menu-list .pg-mi-sub{display:block}
+.pg-menu-list .pg-mi-sub{max-width:260px;color:var(--muted);font-size:var(--t-xs);overflow-wrap:anywhere}
+.pg-menu-list [aria-checked=true] .pg-mi-name{font-weight:600}
+.pg-menu-list .pg-mi-back{display:flex;align-items:center;gap:2px;color:var(--muted)}
+.pg-menu-list .pg-mi-back .nav-icon{font-size:18px;width:18px;height:18px}
 .pg-body{margin-top:6px}
+/* The full view: the page on the view's own surface, with no border, rounded corner or white backdrop around it. */
+.pg-bare .pg-box,.pg-bare .page-frame,.pg-bare .pg-preview .html-view{border:0;border-radius:0;background:transparent}
+/* What's changed?: the page's text as a line diff (tfDiffHTML, ui/styles/task-files.css). */
+.pg-diff-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;font-size:var(--t-sm)}
+.pg-diff-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.pg-diff-head .spacer{flex:1}
+.pg-diff-from{flex:none;width:auto;min-width:64px;font-size:var(--t-sm)}
+.pg-diff .tf-diff-lines{max-height:none}
 .pg-full .page-frame{min-height:240px}
 .pg-preview{min-height:240px}
 .pg-preview .html-view{display:block;width:100%;height:calc(100dvh - 160px);min-height:320px;border:0;background:#fff}
@@ -60,7 +82,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .tp-head,.tp-actions,.tp-search{display:flex;align-items:center;gap:8px}
 .tp-head{justify-content:space-between}
 .tp-head button,.tp-search button,.tp-unlink{font-size:var(--t-sm)}
-.tp-actions{flex-wrap:wrap;justify-content:flex-end}
+.tp-actions{flex-wrap:wrap;justify-content:flex-start;margin:4px 0}
 .tp-picker{border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}
 .tp-search input{min-width:0;flex:1;width:100%}
 .tp-results{max-height:240px;overflow:auto}
@@ -68,8 +90,16 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .tp-result{display:block;width:100%;border:0;background:none;color:var(--ink);text-align:left;padding:9px 6px;font:inherit;font-size:var(--t-sm);border-radius:6px;overflow-wrap:anywhere}
 .tp-result:hover{background:var(--hover)}
 .tp-pages{display:flex;flex-direction:column;gap:12px}
-.tp-page{min-width:0}
-.tp-unlink{display:block;margin:4px 0 0 auto}
+.tp-page{min-width:0;display:flex;align-items:center;gap:4px}
+/* A page on a task is one row, its icon and name; the row opens the page (task #409). */
+.tp-row{flex:1;min-width:0;display:flex;align-items:center;gap:6px;padding:4px 2px;border-radius:6px;color:var(--ink);text-decoration:none}
+.tp-row:hover{background:var(--surface2)}
+.tp-row .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted);flex:none}
+.tp-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-unlink{flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;opacity:0}
+.tp-page:hover .tp-unlink,.tp-unlink:focus-visible{opacity:1}
+@media (hover:none){.tp-unlink{opacity:1;width:40px;height:40px}}
+.tp-actions[hidden]{display:none}
 .tp-make{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0}
 .tp-make[hidden],.tp-making[hidden],.tp-error[hidden]{display:none}
 .tp-make input{min-width:0;flex:1;width:100%}
@@ -142,7 +172,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 
 @media (max-width:760px){
   .pg-view{padding:8px 16px 40px}
-  .pg-ver{max-width:110px}
+  .pg-row>.pg-open{min-height:44px}
   .lf{padding:0 0 40px;--lf-grid:18px minmax(0,1fr)}   /* #main already keeps the 12px gutter */
   .lf-head{gap:8px}
   .lf-search{flex:1 1 auto;margin-left:0}
@@ -163,6 +193,4 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-pinned{margin:10px 0 0;color:var(--muted);font-size:var(--t-sm)}
 .pg-pinned a{color:var(--link-quiet)}
 
-.pg-access { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 16px; }
-.pg-access button { text-align: left; white-space: normal; }
 .pg-lock { font-size: 14px; vertical-align: middle; }

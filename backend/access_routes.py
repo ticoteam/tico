@@ -7,6 +7,10 @@ from .store import Problem
 from fastapi import Request
 from . import account_routes
 from . import org_routes
+from . import key_grants
+from . import page_owners
+from . import page_chat_cards
+from . import secret_drop
 from . import team_rules
 from . import views
 
@@ -50,6 +54,52 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
         with store.read() as c:
             auth.sync_access(c)  # who is a credential administrator follows the rule
         return result
+
+    @app.get("/api/v2/page-owners")
+    def page_owners_read(request: Request):
+        """Each page's owner, the bot its Chat opens (backend/page_owners.py). Anyone on the team reads it."""
+        with store.read() as c:
+            return {"pages": page_owners.read(c)}
+
+    @app.get("/api/v2/secret-rules")
+    def secret_rules_read(request: Request):
+        """The Tools chat's key detector rules (backend/secret_rules.json), which the page runs on a paste before it
+        reaches the text box; the server runs the same ones (backend/secret_drop.py). Anyone on the team reads it."""
+        return secret_drop.rules()
+
+    @app.post("/api/v2/tools-chat/proposals")
+    def key_grant_propose(request: Request, body: M.KeyGrantProposal):
+        """The Tools owner's proposal for keys a person dropped in its chat: the server checks each row (a key saved
+        there, a tool, a level, named bots: never the owner, every bot or every computer) and posts the card
+        (backend/key_grants.py). Only the Tools page's owner bot."""
+        who = request.state.identity
+        rows = [r.model_dump() for r in body.rows]
+        return mutate(request, body, lambda c: key_grants.propose(c, who, body.thread_id, rows, body.note))
+
+    @app.post("/api/v2/tools-chat/proposals/{message_id}/grant")
+    def key_grant_grant(request: Request, message_id: str, body: M.KeyGrantGrant):
+        """Grant on the card: exactly the rows kept, then each tool's check; the card with a result per row. A
+        credential administrator in that chat."""
+        return key_grants.grant(store, request.app.state.vault, request.state.identity, message_id, body.keep)
+
+    @app.post("/api/v2/page-chat/cards")
+    def page_chat_card(request: Request, body: M.PageChatCard):
+        """A page's owner bot proposes a card to a person who just wrote to it from that page: Goals' list of goals,
+        made only on the person's Confirm, as them (backend/page_chat_cards.py). 403 for any other caller."""
+        who = request.state.identity
+        rows = [r.model_dump() for r in body.rows]
+        return mutate(
+            request,
+            body,
+            lambda c: page_chat_cards.propose(c, settings, auth, who, body.page, body.for_person, rows, app.routes),
+        )
+
+    @app.put("/api/v2/page-owners/{page}")
+    def page_owner_set(request: Request, page: str, body: M.PageOwnerSet):
+        """Set or clear a page's owner. The owner or an admin; the page follows at its next load."""
+        who = request.state.identity
+        admin_only(who, "changes a page's owner")
+        return mutate(request, body, lambda c: page_owners.save(c, who.actor, page, body.bot))
 
     @app.put("/api/v2/access/allow")
     def access_allow_save(request: Request, body: M.AccessAllowUpdate):

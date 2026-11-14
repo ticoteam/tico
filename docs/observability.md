@@ -39,10 +39,13 @@ one PostHog project between several apps by filtering on the `app` property (Tic
    the API. Browser config refreshes every 30 seconds;
    reload open tabs to apply configuration changes immediately.
 
-No `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, or `SENTRY_PROJECT` is sent to the browser. This
-plain JavaScript UI needs no source-map upload for its unminified application files; stack
-locations are restricted to known static filenames and line/column numbers. The minified SDK
-bundle has no published source maps, and this change does not implement source-map upload.
+No `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, or `SENTRY_PROJECT` is sent to the browser. Stack
+locations are restricted to known static filenames and line/column numbers. The application's
+bundle parts (`app.bundle.N.js`) are minified, and nothing is uploaded to Sentry: to read a
+frame, check out the release's commit, run `npm run build:ui`, then
+`python -m backend.ui_bundle --where app.bundle.2.js:1:4567`, which prints the source file,
+line and column. A signed-in browser's developer tools read the same maps from the server
+(`app.bundle.N.js.map`). The minified SDK bundle has no published source maps.
 If upload is added later, its authentication token must remain in CI/build secrets, never in
 public config or browser assets. Release/debug mapping needs its own tested privacy policy.
 

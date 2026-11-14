@@ -39,4 +39,4 @@ stays a drafted request.
 ## 5. Record it
 
 Count the rollback once, in the weekly report, at the deploy that made it, with the time to recover measured from the first bad deploy
-to the first good one. Note the request's task in `state.md` under open threads until someone closes it.
+to the first good one.

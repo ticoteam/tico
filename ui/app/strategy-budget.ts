@@ -238,7 +238,7 @@ function pageBudget() {
   if (!main) throw new Error('#main is missing');
   main.classList.add('strategy-layout', 'budget-layout');
   main.innerHTML = strategyHeadHtml('budget') + `<div class="bt-top">
-      <div class="use-seg bt-seg" role="tablist" aria-label="Period">${BUDGET_SPANS.map(([k, label]) =>
+      <div class="use-seg bt-seg ph-seg" role="tablist" aria-label="Period">${BUDGET_SPANS.map(([k, label]) =>
         `<button type="button" role="tab" data-bt-span="${k}" aria-selected="${k === span}">${label}</button>`).join('')}</div>
       <input type="search" class="bt-q" id="bt-q" placeholder="Search" aria-label="Search the budget" autocomplete="off" value="${esc(BUDGET.q)}">
       <button type="button" class="ghost bt-hot" data-bt-hot aria-pressed="${BUDGET.hot}">Near limit<span class="bt-hot-n" id="bt-hot-n"></span></button>

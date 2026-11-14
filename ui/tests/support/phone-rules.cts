@@ -17,6 +17,9 @@
 //   PHONE_REPORT=1 node ...     print every break and exit 0 (for hunting)
 //   PHONE_SHOTS=<folder> ...    also save a screenshot of every screen
 import type {Browser, Page} from 'playwright';
+// The page parts being fetched and those that have run (ui/app/parts.ts).
+declare const UI_PART_SCRIPTS: Map<string, Promise<void>>;
+declare const UI_PART_LOADED: Set<string>;
 const {chromium} = require('playwright') as typeof import('playwright');
 const {spawn} = require('node:child_process') as typeof import('node:child_process');
 const path: typeof import('node:path') = require('node:path');
@@ -248,11 +251,28 @@ function keyboardAudit(): {rule: number; element: string; why: string}[] {
 // ------------------------------------------------------------------------------------------------ the walk
 const settle = async (page: Page) => {
   await page.waitForFunction(() => (document.querySelector('#main')?.children.length ?? 0) > 0, null, {timeout: t(20000)}).catch(() => {});
+  // A page's own code may still be on its way (a page part, ui/app/parts.ts): the page is drawn once it has run.
+  await page.waitForFunction(() => typeof UI_PART_SCRIPTS === 'undefined' || [...UI_PART_SCRIPTS.keys()].every(n => UI_PART_LOADED.has(n)),
+    null, {timeout: t(20000)}).catch(() => {});
   await page.waitForTimeout(t(450));
+  // A modal that opened late (its task read answered after the wait) may still be fading in: mid-fade, at opacity 0,
+  // Chrome's elementFromPoint passes through it, which rule 2 would read as the page drawn over it.
+  await page.waitForFunction(() => [...document.querySelectorAll('dialog[open]')].every(d => d.getAnimations().every(a => a.playState !== 'running')),
+    null, {timeout: t(5000)}).catch(() => {});
 };
 const go = async (page: Page, hash: string) => {
   await page.evaluate(h => { location.hash = h; }, hash);
   await settle(page);
+};
+// Settings > Computers draws its External agents table only when the settings read answers, which can take longer
+// than settle's fixed wait on a loaded computer: wait for the agent row the hub seeded, or the audit misses it.
+const computers = async (page: Page, hub: Hub) => {
+  await go(page, '#/settings/computers');
+  if (!hub.facts.agent) return;
+  const row = `[data-agent-row="${hub.facts.agent}"]`;
+  await page.locator(row).first().waitFor({state: 'attached', timeout: t(20000)}).catch(() => {
+    throw new Error(`Settings > Computers never drew ${row} for the agent the hub seeded`);
+  });
 };
 const openDialogs = (page: Page) => page.evaluate(() => [...document.querySelectorAll('dialog[open]')].map(d => d.id || d.className));
 
@@ -284,7 +304,10 @@ const SCREENS: Screen[] = [
     if (!id) return false;
     await go(page, '#/task/' + encodeURIComponent(id));
   }},
-  {name: 'New task', open: async page => { await go(page, '#/tasks'); return tapFirst(page, ['#task-new', '[data-new-task]', 'button:has-text("New task")', '[aria-label="New task"]']); }},
+  {name: 'New task', open: async page => {
+    await go(page, '#/tasks');
+    if (await tapFirst(page, ['#task-menu'])) return tapFirst(page, ['#task-mi-new']);   // in the Tasks header's ⋯
+    return tapFirst(page, ['[data-new-task]', 'button:has-text("New task")', '[aria-label="New task"]']); }},
   {name: 'Pipeline', open: async page => {
     await go(page, '#/tasks');
     const id = await page.evaluate(async () => {
@@ -303,8 +326,8 @@ const SCREENS: Screen[] = [
   {name: 'One bot', open: page => go(page, '#/bot/builder')},
   {name: 'Tools', open: page => go(page, '#/tools')},
   {name: 'Tools > GitHub', open: page => go(page, '#/tools/github')},
-  {name: 'Settings > Computers', open: page => go(page, '#/settings/computers')},
-  {name: 'Add computer', open: async page => { await go(page, '#/settings/computers'); return tapFirst(page, ['button:has-text("Add computer")', '[data-machine-add]']); }},
+  {name: 'Settings > Computers', open: computers},
+  {name: 'Add computer', open: async (page, hub) => { await computers(page, hub); return tapFirst(page, ['button:has-text("Add computer")', '[data-machine-add]']); }},
   {name: 'Settings > Models', open: page => go(page, '#/settings/models')},
   {name: 'Settings > Billing', open: page => go(page, '#/settings/billing')},
   {name: 'Finance', open: page => go(page, '#/finance')},

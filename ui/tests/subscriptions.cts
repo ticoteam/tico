@@ -8,8 +8,12 @@
 //    ways out; an API key is a key and an optional name; the page never keeps a link, code or value;
 //  - Reconnect is the same sheet from its second step, asking first when runs would restart; Edit (name, owner) and
 //    Remove from the row's menu;
-//  - Computers: one row per computer with a picker per AI tool; a switch that stops runs asks in the page first
-//    (409 confirm_restart), then sends confirm; an older computer says Needs update; Gateway off reads None;
+//  - Models lists subscriptions under each owner (avatar, name, count; the viewer first, "No owner" last), each tool's
+//    plans in pick order with the plan in use, the next one and a held one's end marked;
+//  - Computers: one row per computer with a picker per AI tool: People (a person's plans), Single plans, then the
+//    computer's own login; a person's plans show the plan in use and why under the picker; a switch that stops runs
+//    asks in the page first (409 confirm_restart), then sends confirm; an older computer says Needs update; Gateway off
+//    reads None;
 //  - a computer's pop-up still lists one connection per AI tool, its own login, and the queue line;
 //  - the bot editor has Model and Computer and no subscription line; a phone has no sideways page scroll.
 // SUBS_SHOTS=<dir> saves desktop and phone screenshots, dark and light.
@@ -27,19 +31,20 @@ type Kind = {kind: string; label: string; runtime: string; secret_label: string;
 type Machine = {id: string; label: string; owner_id: string; last_seen_at: string; version: string; platform: string; bots: string[];
   accepts_member_bots: boolean; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>};
   turn_counts: {running: number; starting: number; waiting: number; queued: number; waits: unknown[]}; turn_summary: string;
-  release?: string; cloud_machine?: {state: string};
+  release?: string; cloud_machine?: {state: string}; gateway_fallback?: boolean;
   update?: {state: string; label: string; release: string; commit: string; outdated: boolean; server_release: string; error: string}};
 type Sub = {id: string; name: string; kind: string; runtime: string; label: string; status: string; status_detail: string; computers: string[];
-  usage: {window?: string | null; used_pct?: number | null; cost_usd_month?: number | null; resets_at?: string; reason?: string} | null;
-  added_by: string; owner_id?: string; owner_name?: string};
+  usage: {window?: string | null; used_pct?: number | null; cost_usd_month?: number | null; resets_at?: string; reason?: string; weekly_resets_at?: string; weekly_used_pct?: number} | null;
+  added_by: string; owner_id?: string; owner_name?: string; order?: number | null; in_use_on?: string[]};
+type Assignment = {runner_id: string; runtime: string; subscription_id: string; person?: string; set?: Record<string, unknown> | null};
 // A sign-in as the fake computer reports it; the test reads its id and state.
 type Login = {[key: string]: unknown; id: string; state: string; url: string};
 // The request bodies the fake server reads (what the page sent); other fields stay unknown.
 type Body = {[key: string]: unknown; kind?: string; name?: string; secret?: string; owner_id?: string; confirm?: boolean;
-  subscription?: string; code?: string; runner_id?: string; runtime?: string; preset?: string; enabled?: string[];
+  subscription?: string | null; person?: string; code?: string; runner_id?: string; runtime?: string; preset?: string; enabled?: string[];
   model?: string; expected_revision?: number};
 type Write = {p: string; method: string; body?: Body; confirm?: string | null};
-type Data = {machines: Machine[]; subs: Sub[]; assignments: {runner_id: string; runtime: string; subscription_id: string}[]; capable: string[];
+type Data = {machines: Machine[]; subs: Sub[]; assignments: Assignment[]; capable: string[]; people?: Record<string, string | number>[];
   providers: {[key: string]: unknown; enabled: string[]; default: {runtime: string; model: string}; revision: number; preset: string;
     providers: {id: string; label: string; gateway?: boolean}[]};
   gateway: Record<string, unknown>; models: Record<string, unknown>[]; levels: Record<string, unknown>;
@@ -48,6 +53,7 @@ type Data = {machines: Machine[]; subs: Sub[]; assignments: {runner_id: string; 
 declare var SETTINGS_TAB: string;
 declare function settingsShow(tab: string): void;
 declare function settingsEditBot(slug?: string, inline?: boolean): void;
+declare function subsUsageHTML(sub: {id: string; name: string; kind: string; usage?: {window?: string | null; used_pct?: number | null} | null}): string;
 
 const KINDS: Kind[] = [
   {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.', connect: true, owned: true},
@@ -79,7 +85,7 @@ function fixtures(): Data {
       {id: 's1', name: 'Claude Max (Ana)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
         computers: ['r1', 'r2', 'r3'], usage: {window: '5h', used_pct: 62, cost_usd_month: null}, added_by: 'ana', owner_id: 'human:ana', owner_name: 'Ana'},
       {id: 's2', name: 'ChatGPT Pro (Ana)', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '',
-        computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null, resets_at: new Date(Date.now() + ((4 * 24 + 15) * 60 + 30) * 60000).toISOString()}, added_by: 'ana'},
+        computers: ['r1'], usage: {window: 'week', used_pct: 13, cost_usd_month: null, resets_at: new Date(Date.now() + ((4 * 24 + 15) * 60 + 10) * 60000).toISOString()}, added_by: 'ana'},
       {id: 's3', name: 'OpenAI key (company)', kind: 'openai_key', runtime: 'codex', label: 'OpenAI API key', status: 'working', status_detail: '',
         computers: [], usage: {window: null, used_pct: null, cost_usd_month: 41.2}, added_by: 'ana', owner_id: '', owner_name: ''},
       {id: 's4', name: 'Claude Max (Sam)', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'needs_reconnect', status_detail: 'Token expired',
@@ -208,15 +214,23 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
         return json({removed: sub.id});
       }
     }
-    if (p === '/api/v2/computer-subscriptions' && method === 'GET') return json({assignments: data.assignments, capable: data.capable});
+    if (p === '/api/v2/computer-subscriptions' && method === 'GET') return json({assignments: data.assignments, capable: data.capable, people: data.people || []});
     if (p === '/api/v2/computer-subscriptions' && method === 'PUT') {
       const body = req.postDataJSON() as Body; writes.push({p, method, body});
       // Tico Team box is running a task: a switch there stops it, so the server asks first.
       if (body.runner_id === 'r1' && !body.confirm) return json(problem('confirm_restart', 'Switching restarts running tasks', {running: 2, sessions: 5}), 409);
       data.assignments = data.assignments.filter(a => !(a.runner_id === body.runner_id && a.runtime === body.runtime));
       if (body.subscription) data.assignments.push({runner_id: body.runner_id!, runtime: body.runtime!, subscription_id: body.subscription});
+      if (body.person) data.assignments.push({runner_id: body.runner_id!, runtime: body.runtime!, subscription_id: 'p2', person: body.person,
+        set: {person: body.person, person_name: 'Ana', plans: 3, on: 'p2', on_name: 'Plan 2', why: {kind: 'soonest', plan: null, until: null}}});
       for (const s of data.subs) s.computers = data.assignments.filter(a => a.subscription_id === s.id).map(a => a.runner_id);
       return json({runner_id: body.runner_id, runtime: body.runtime, subscription_id: body.subscription, stopped: body.confirm ? 2 : 0, sessions_reset: body.confirm ? 5 : 0});
+    }
+    const fallback = p.match(/^\/api\/v2\/runners\/([^/]+)\/gateway-fallback$/);
+    if (fallback && method === 'POST') {
+      const body = req.postDataJSON() as Body & {on?: boolean}; writes.push({p, method, body});
+      data.machines.find(m => m.id === fallback[1])!.gateway_fallback = Boolean(body.on);
+      return json({gateway_fallback: Boolean(body.on)});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -231,6 +245,9 @@ async function shot(page: Page, name: string, target: Page | import('playwright'
   await page.waitForTimeout(150);
   await target.screenshot({path: path.join(SHOTS, name + '.png'), ...(target === page ? {fullPage: true} : {})});
 }
+// Each group heading on Settings > Models: [name, count, whether it is the viewer's own].
+const groupHeads = (where: import('playwright').Locator) => where.locator('.subs-group-head').evaluateAll(list => list.map(h =>
+  [h.querySelector('.subs-group-name')!.textContent, h.querySelector('.subs-group-title > .muted')!.textContent, !!h.querySelector('.subs-you')]));
 const modelsReady = async (page: Page) => { await page.locator('#set-subs [data-subs-row]').first().waitFor(); await page.locator('#set-prov').waitFor(); };
 // Waits for the fake server to have seen a write.
 async function until(page: Page, check: () => boolean, what: string) {
@@ -275,30 +292,37 @@ async function modelsTab(browser: Browser) {
   assert.deepEqual(await pane.locator(':scope > section.card > header h2').allInnerTexts(), ['Subscriptions', 'Tico Gateway', 'Defaults', 'Limits']);
   // No intro, no banner, no subtitles on the cards.
   assert.equal(await pane.locator('section.card > header .sub').count(), 0);
-  // Rows: name, kind, a computer count, usage (share used, or the month's cost), Reconnect when the login stopped working.
+  // Rows: name, kind (the tool for a plan), a computer count, usage (share left and the hours to its reset, or the month's
+  // cost), Reconnect when the login stopped working. No computer's state in the Usage column (#335).
+  // Grouped by owner: the viewer's group first, then the others by name, then No owner; no Owner column.
+  assert.deepEqual(await groupHeads(pane), [['Ana', '· 1 plan', true], ['Sam', '· 1 plan', false], ['No owner', '· 4 subscriptions', false]]);
+  assert.equal(await pane.locator('.subs-owner').count(), 0);
   const rows = await pane.locator('[data-subs-row]').evaluateAll(list => list.map(r => [
-    r.querySelector('.subs-name')!.textContent, r.querySelector('.subs-kind')!.textContent, r.querySelector('.subs-owner')!.textContent,
+    r.querySelector('.subs-name')!.textContent, r.querySelector('.subs-kind')!.textContent,
     r.querySelector('.subs-count .tnum')!.textContent,
     [...(r.querySelector('.subs-use')!.querySelectorAll('.subs-usage-w, .tnum, .subs-usage:not(:has(.tnum)), .pill') as unknown as Element[])].map(e => e.textContent).join(' ')]));
   assert.deepEqual(rows, [
-    ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', 'Computer offline: Cloud · Video Owner · Bring it online. 5h 62%'],
-    ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13% resets in 4d 15h'],
-    ['OpenAI key (company)', 'OpenAI API key', '', '0', '$41.20 this month'],
-    ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Sign in again'],
-    ['ChatGPT Team (Cy)', 'ChatGPT plan', '', '1', 'week 0%'],
-    ['Claude Max (Dee)', 'Claude plan', '', '1', 'Computer offline: Cloud · Video Owner · Bring it online.']]);
+    ['Claude Max (Ana)', 'Claude', '3', '5h 38% left'],
+    ['Claude Max (Sam)', 'Claude', '0', 'Sign in again'],
+    ['Claude Max (Dee)', 'Claude', '1', 'No reading yet'],
+    ['ChatGPT Pro (Ana)', 'ChatGPT', '1', 'week 87% left resets in 111h'],
+    ['ChatGPT Team (Cy)', 'ChatGPT', '1', 'week 100% left'],
+    ['OpenAI key (company)', 'OpenAI API key', '0', '$41.20 this month']]);
   assert.equal(await pane.locator('[data-subs-row=s4] [data-subs-reconnect]').innerText(), 'Sign in again');
   assert.match(await pane.locator('[data-subs-row=s4] .subs-use').innerText(), /Sign-in expired/);
-  assert.match(await pane.locator('[data-subs-row=s1] .subs-use').innerText(), /Computer offline: Cloud · Video Owner · Bring it online/);
-  assert.match(await pane.locator('[data-subs-row=s1] .subs-use').innerText(), /5h\s+62%/);
-  assert.match(await pane.locator('[data-subs-row=s6] .subs-use').innerText(), /Computer offline: Cloud · Video Owner · Bring it online/);
-  // The time until the window resets sits after the share; the tooltip adds the share left and the reset time.
-  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^13% used in the week · 87% left · resets \S/);
+  assert.doesNotMatch(await pane.locator('#set-subs').innerText(), /Computer offline|Bring it online|No computer assigned|Connection unavailable|Held until|In use ·/);
+  // The hours until the window resets sit after the share left; the tooltip names the window and the reset time.
+  assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^Week: 87% left · resets \S.* \(in 111h\)$/);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
-  // A reading of 0% still draws its bar; offline guidance replaces an unavailable usage placeholder.
-  assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
+  // The bar is the share left: a fresh plan's is full.
+  assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:100%');
+  // No reading: muted, with the server's reason in the tooltip.
   assert.equal(await pane.locator('[data-subs-row=s6] .subs-bar').count(), 0);
-  assert.equal(await pane.locator('[data-subs-row=s6] .subs-use .subs-usage').innerText(), 'Computer offline: Cloud · Video Owner · Bring it online.');
+  assert.equal(await pane.locator('[data-subs-row=s6] .subs-none').getAttribute('title'), 'Waiting for a computer to report');
+  // An offline computer is an amber dot on the count, naming it; a click opens Settings > Computers.
+  assert.equal(await pane.locator('[data-subs-row=s1] [data-subs-offline]').getAttribute('title'), 'Cloud · Video Owner is offline');
+  assert.equal(await pane.locator('[data-subs-row=s2] [data-subs-offline]').count(), 0);
+  assert.equal(await pane.locator('[data-subs-row=s4] .subs-count').getAttribute('title'), 'Not on a computer. Give it to one in Settings › Computers.');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Owner');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count .nav-icon').count(), 1);
   // The Gateway is one toggle; the key, address and spend wait behind Advanced. No four-way choice, no provider boxes.
@@ -703,9 +727,9 @@ async function computersTable(browser: Browser) {
   assert.doesNotMatch(await table.innerText(), /0 starting/, 'the long queue line is on the computer page');
   // The picker offers the subscriptions for that tool; with none, the computer's own login, else the Gateway.
   const claude = row('r2').locator('[data-subs-pick=claude]');
-  assert.deepEqual(await claude.locator('option').allInnerTexts(), ['Gateway', 'Claude Max (Ana)', 'Claude Max (Sam)', 'Claude Max (Dee)']);
+  assert.deepEqual(await claude.locator('option').allInnerTexts(), ['Claude Max (Ana) · Ana', 'Claude Max (Sam) · Sam', 'Claude Max (Dee)', 'Gateway']);
   assert.equal(await claude.inputValue(), 's1');
-  assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['Signed in here', 'ChatGPT Pro (Ana)', 'OpenAI key (company)', 'ChatGPT Team (Cy)']);
+  assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['ChatGPT Pro (Ana)', 'OpenAI key (company)', 'ChatGPT Team (Cy)', "This computer's own login"]);
   assert.equal(await row('r4').locator('[data-subs-needs-update]').count(), 2, 'an older computer says Needs update');
   assert.equal(await row('r1').locator('.machine-chip').count(), 1, 'Muse Code shows its login as before');
   // Under its own column a tool's chip says its state, not the tool's name again.
@@ -755,12 +779,100 @@ async function computersTable(browser: Browser) {
   console.log('computers table and pickers: ok');
 }
 
+// Ana owns three Claude plans, given to Tico Team box as "Ana's plans": Plan 2 in use, Plan 3 next, Plan 1 held.
+function personPlans(data: Data) {
+  const soon = (days: number) => new Date(Date.now() + days * 864e5).toISOString();
+  const plan = (id: string, name: string, extra: Partial<Sub>): Sub => ({id, name, kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
+    computers: ['r1'], usage: {window: 'week', used_pct: 10, cost_usd_month: null, resets_at: soon(3)}, added_by: 'ana', owner_id: 'human:ana', owner_name: 'Ana', order: null, in_use_on: [], ...extra});
+  data.subs.push(
+    plan('p1', 'Plan 1', {usage: {window: 'week', used_pct: 100, cost_usd_month: null, resets_at: soon(1)}}),
+    plan('p2', 'Plan 2', {usage: {window: 'week', used_pct: 50, cost_usd_month: null, resets_at: soon(2)}, order: 1, in_use_on: ['r1']}),
+    plan('p3', 'Plan 3', {order: 2}));
+  data.people = [{id: 'human:ana', name: 'Ana', claude: 4}, {id: 'human:sam', name: 'Sam', claude: 1}];
+  data.assignments = data.assignments.filter(a => !(a.runner_id === 'r1' && a.runtime === 'claude'));
+  data.assignments.push({runner_id: 'r1', runtime: 'claude', subscription_id: 'p2', person: 'human:ana',
+    set: {person: 'human:ana', person_name: 'Ana', plans: 4, on: 'p2', on_name: 'Plan 2', why: {kind: 'held', plan: 'Plan 1', until: soon(1)}}});
+}
+
+async function personGroups(browser: Browser) {
+  const {page, errors, writes} = await open(browser, {mutate: personPlans});
+  await modelsReady(page);
+  const ana = page.locator('#set-subs [data-subs-group="human:ana"]');
+  assert.deepEqual(await groupHeads(ana), [['Ana', '· 4 plans', true]]);
+  assert.equal(await ana.locator('.subs-group-head .av').count(), 1, "the owner's avatar heads the group");
+  // In pick order: the plan in use (tinted, an In use pill naming its computer), the next one, then the held one, which
+  // reads 0% left like any plan at its limit.
+  const rows = await ana.locator('[data-subs-row]').evaluateAll(list => list.map(r => [
+    r.querySelector('.subs-order')!.textContent, r.querySelector('.subs-name')!.firstChild!.textContent!.trim(), r.querySelector('.subs-mark')?.textContent || '']));
+  assert.deepEqual(rows.slice(0, 2), [['1', 'Plan 2', 'In use'], ['2', 'Plan 3', 'Next']]);
+  assert.deepEqual(rows.slice(2).map(r => r[1]), ['Claude Max (Ana)', 'Plan 1']);
+  assert.equal(rows[3]![2], '');
+  assert.equal(await ana.locator('[data-subs-row=p2] .subs-mark').getAttribute('title'), 'In use on Tico Team box');
+  assert.match(await ana.locator('[data-subs-row=p1] .subs-use').innerText(), /^week\s+0% left\s+resets in 24h$/);
+  assert.equal(await ana.locator('[data-subs-row=p1] .subs-bar').getAttribute('class'), 'subs-bar bad');
+  assert.equal(await ana.locator('[data-subs-row=p2]').getAttribute('class'), 'subs-in-use');
+  await shot(page, 'models-groups');
+  await page.close();
+  // Computers: the cell names the person's plans, the plan in use and why.
+  const computers = await open(browser, {tab: 'devices', mutate: personPlans});
+  const cpage = computers.page;
+  await cpage.locator('#set-machines [data-subs-pick]').first().waitFor();
+  const r1 = cpage.locator('[data-computer-row=r1] [data-subs-pick=claude]');
+  assert.equal(await r1.inputValue(), 'person:human:ana');
+  assert.deepEqual(await r1.locator('optgroup').evaluateAll(list => list.map(g => g.getAttribute('label'))), ['People', 'Single plans']);
+  assert.deepEqual(await r1.locator('optgroup[label=People] option').allInnerTexts(), ["Ana's plans · 4", "Sam's plans · 1"]);
+  assert.match(await cpage.locator('[data-computer-row=r1] [data-subs-set-line]').innerText(), /^On Plan 2 · Plan 1 at its limit until \S/);
+  // Nobody owns a Codex plan here: no person is offered for Codex.
+  assert.equal(await cpage.locator('[data-computer-row=r1] [data-subs-pick=codex] optgroup[label=People]').count(), 0);
+  // Picking a person sends `person`, not a subscription.
+  await cpage.locator('[data-computer-row=r2] [data-subs-pick=claude]').selectOption('person:human:ana');
+  await cpage.locator('[data-computer-row=r2] [data-subs-set-line]').waitFor();
+  assert.deepEqual(computers.writes.at(-1)!.body, {runner_id: 'r2', runtime: 'claude', subscription: null, person: 'human:ana', confirm: false});
+  assert.equal(await cpage.locator('[data-computer-row=r2] [data-subs-set-line]').innerText(), 'On Plan 2 · soonest reset with usage left');
+  await shot(cpage, 'computers-person-plans');
+  assert.deepEqual([...errors, ...computers.errors], []);
+  assert.deepEqual(writes, []);
+  await cpage.close();
+  console.log("a person's plans, grouped and picked: ok");
+}
+
+// Every one of Ana's plans is at its limit on Cloud · shared, which has no Claude login of its own: its bots wait unless
+// the computer's own Fall back to Tico Gateway is on (off until an admin turns it on), and the cell says which.
+async function plansRunOut(browser: Browser) {
+  const {page, errors, writes} = await open(browser, {tab: 'devices', mutate: data => {
+    personPlans(data);
+    data.assignments = data.assignments.filter(a => !(a.runner_id === 'r2' && a.runtime === 'claude'));
+    data.assignments.push({runner_id: 'r2', runtime: 'claude', subscription_id: 'p2', person: 'human:ana',
+      set: {person: 'human:ana', person_name: 'Ana', plans: 3, on: null, on_name: null, why: {kind: 'all_held', plan: null, until: new Date(Date.now() + 864e5).toISOString()}}});
+  }});
+  const line = page.locator('[data-computer-row=r2] [data-subs-set-line]');
+  await line.waitFor();
+  // The company's Gateway switch is on (fixtures), yet the computer's own switch decides.
+  assert.match(await line.innerText(), /^All at their limit · next reset \S.* · waiting$/);
+  await page.locator('[data-computer-row=r2] .machine-name').click();
+  const detail = page.locator('#set-machines dialog.computer-detail[open]');
+  const box = detail.locator('[data-gateway-fallback=r2]');
+  assert.equal(await box.isChecked(), false);
+  await box.check();
+  await page.waitForFunction(() => document.querySelector('[data-computer-row=r2] [data-subs-set-line]')?.textContent?.endsWith('on the Gateway'));
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/runners/r2/gateway-fallback', method: 'POST', body: {on: true}});
+  assert.equal(await detail.locator('[data-gateway-fallback=r2]').isChecked(), true);
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('plans run out: the computer waits unless its own switch is on: ok');
+}
+
 async function gatewayOffAndMember(browser: Browser) {
   const {page, errors} = await open(browser, {tab: 'devices', as: 'member', mutate: data => { data.providers.preset = 'subscriptions'; }});
   await page.locator('#set-machines [data-subs-pick]').first().waitFor();
   const codex = page.locator('[data-computer-row=r2] [data-subs-pick=codex]');
-  assert.equal(await codex.locator('option').first().innerText(), 'None', 'Gateway off: no subscription reads None');
+  assert.equal(await codex.locator('option').last().innerText(), 'None', 'Gateway off: no subscription reads None');
   assert.equal(await codex.isDisabled(), true, 'only owners and admins assign');
+  // A member reads a computer's Fall back to Tico Gateway and cannot change it.
+  await page.locator('[data-computer-row=r2] .machine-name').click();
+  const fallback = page.locator('#set-machines dialog.computer-detail[open] [data-gateway-fallback=r2]');
+  assert.deepEqual([await fallback.isChecked(), await fallback.isDisabled()], [false, true]);
+  await page.keyboard.press('Escape');
   await page.evaluate(() => settingsShow('models'));
   await page.locator('#set-subs [data-subs-row]').first().waitFor();
   assert.equal(await page.locator('#subs-add').isVisible(), false);
@@ -890,6 +1002,125 @@ async function sheetScreens(browser: Browser) {
   console.log('sheet states fit: ok');
 }
 
+// A phone (390 px): each plan's reason and its one action sit under the plan's name, inside the screen, with no sideways
+// scroll to find them (validation of #3370 found the Usage column off-screen to the right). Desktop keeps its columns.
+async function phoneReasons(browser: Browser) {
+  // Two more rows: a plan given to no computer, and one whose state the page cannot name (on a computer that is online).
+  const extra = (id: string, name: string, status: string, computers: string[]): Sub => ({id, name, kind: 'claude_token', runtime: 'claude',
+    label: 'Claude plan', status, status_detail: '', computers, usage: null, added_by: 'ana'});
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844},
+    mutate: d => { d.subs.push(extra('s7', 'Claude Max (Eve)', 'working', []), extra('s8', 'Claude Max (Flo)', 'failing', ['r1'])); }});
+  await modelsReady(page);
+  const width = 390;
+  for (const [id, reason] of [['s1', /^5h\s+38% left$/], ['s2', /^week\s+87% left\s+resets in 111h$/], ['s4', /Sign-in expired\s*Sign in again/],
+    ['s6', /^No reading yet$/], ['s7', /^No reading yet$/], ['s8', /^No reading yet$/]] as [string, RegExp][]) {
+    const row = page.locator(`[data-subs-row=${id}]`);
+    await row.scrollIntoViewIfNeeded();
+    const name = (await row.locator('.subs-name').boundingBox())!, use = (await row.locator('.subs-use').boundingBox())!;
+    assert.ok(name.x >= 0 && name.x + name.width <= width, `${id}: the plan's name is on screen`);
+    assert.ok(use.x >= 0 && use.x + use.width <= width, `${id}: the reason is on screen (x ${Math.round(use.x)}, right ${Math.round(use.x + use.width)})`);
+    assert.ok(use.y >= name.y + name.height - 1, `${id}: the reason sits under the plan's name`);
+    assert.match(await row.locator('.subs-use').innerText(), reason);
+  }
+  // The sign-in action is a button a thumb can reach on the screen, and it opens the sign-in sheet.
+  const again = page.locator('[data-subs-row=s4] [data-subs-reconnect]');
+  const box = (await again.boundingBox())!;
+  assert.ok(box.x >= 0 && box.x + box.width <= width, 'Sign in again is on screen');
+  await again.click();
+  await sheet(page).waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('phone reasons under the name: ok');
+}
+
+// #335: the Usage column shows what is left of each plan and when it resets, nothing about computers. One line, the
+// tighter window (the server's reading is the most-used one), the reset in hours; the colour follows what is left.
+// A person's next and held plans count the computers their set is on.
+async function usageLeft(browser: Browser) {
+  const inHours = (h: number) => new Date(Date.now() + h * 3600e3 + 10 * 60e3).toISOString();
+  const plan = (id: string, name: string, extra: Partial<Sub>): Sub => ({id, name, kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'working', status_detail: '',
+    computers: [], usage: null, added_by: 'ana', owner_id: 'human:ana', owner_name: 'Ana', order: null, in_use_on: [], ...extra});
+  const mutate = (d: Data) => {
+    d.subs = [
+      // AC-1: 38% used in the week, the reset 98 hours away.
+      plan('w', 'Weekly', {computers: ['r1'], order: 1, in_use_on: ['r1', 'r2', 'r3'], usage: {window: 'week', used_pct: 38, cost_usd_month: null, resets_at: inHours(98)}}),
+      // AC-2 with Chris's note: the 5-hour window is the tighter one, so it is the one line.
+      plan('f', 'Five hour', {order: 2, usage: {window: '5h', used_pct: 90, cost_usd_month: null, resets_at: inHours(3), weekly_resets_at: inHours(50), weekly_used_pct: 40}}),
+      // AC-3: at its weekly limit.
+      plan('h', 'Held', {usage: {window: 'week', used_pct: 100, cost_usd_month: null, resets_at: inHours(30)}}),
+      // AC-6: no computer has reported.
+      plan('n', 'No reading', {order: 3, usage: {window: null, used_pct: null, cost_usd_month: null, reason: 'Waiting for a computer to report'}}),
+      {id: 'g', name: 'Chatgpt', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'working', status_detail: '', computers: ['r1'],
+        usage: {window: 'week', used_pct: 85, cost_usd_month: null, resets_at: inHours(60)}, added_by: 'ana'},
+      {id: 'k', name: 'Company key', kind: 'anthropic_key', runtime: 'claude', label: 'Anthropic API key', status: 'working', status_detail: '', computers: [],
+        usage: {window: null, used_pct: null, cost_usd_month: 12.4}, added_by: 'ana', owner_id: '', owner_name: ''},
+    ];
+    // AC-4/AC-5: Ana's plans are on four computers, Cloud · Video Owner offline; an older server lists only the plan in use's.
+    d.machines.push({...d.machines[1]!, id: 'r5', label: 'Builder (cloud)'});
+    d.assignments = ['r1', 'r2', 'r3', 'r5'].map(runner_id => ({runner_id, runtime: 'claude', subscription_id: 'w', person: 'human:ana'}));
+  };
+  for (const viewport of [{width: 1280, height: 860}, {width: 390, height: 844}]) {
+    const {page, errors} = await open(browser, {viewport, mutate});
+    await modelsReady(page);
+    const pane = page.locator('#set-subs');
+    const use = (id: string) => pane.locator(`[data-subs-row=${id}] .subs-use`);
+    // AC-1: a green bar 62% full, "62% left · resets in 98h", nothing else.
+    assert.match(await use('w').innerText(), /^week\s+62% left\s+resets in 98h$/);
+    assert.equal(await use('w').locator('.subs-bar').getAttribute('class'), 'subs-bar');
+    assert.equal(await use('w').locator('.subs-bar b').getAttribute('style'), 'width:62%');
+    assert.match((await use('w').locator('.subs-usage').getAttribute('title'))!, /^Week: 62% left · resets \S.* \(in 98h\)$/);
+    // AC-2: the tighter window alone, its reset in hours; amber when 6-20% is left, red at 5% or less.
+    assert.match(await use('f').innerText(), /^5h\s+10% left\s+resets in 3h$/);
+    assert.equal(await use('f').locator('.subs-bar').getAttribute('class'), 'subs-bar warn');
+    assert.match(await use('g').innerText(), /^week\s+15% left\s+resets in 60h$/);
+    // AC-3: at its limit, 0% left and an empty red bar; "Held until" nowhere.
+    assert.match(await use('h').innerText(), /^week\s+0% left\s+resets in 30h$/);
+    assert.equal(await use('h').locator('.subs-bar').getAttribute('class'), 'subs-bar bad');
+    assert.equal(await use('h').locator('.subs-bar b').getAttribute('style'), 'width:0%');
+    const edge = (id: string) => use(id).locator('.subs-bar').evaluate(e => getComputedStyle(e).boxShadow);
+    assert.notEqual(await edge('h'), await edge('w'), 'the empty bar keeps a red edge');
+    // The colour's edges: green above 20% left, amber from 20% to 6%, red at 5% or less.
+    assert.deepEqual(await page.evaluate(() => [79, 80, 94, 95].map(used => {
+      const span = document.createElement('span');
+      span.innerHTML = subsUsageHTML({id: 'x', name: 'x', kind: 'claude_token', usage: {window: 'week', used_pct: used}});
+      return span.querySelector('.subs-bar')!.className;
+    })), ['subs-bar', 'subs-bar warn', 'subs-bar warn', 'subs-bar bad']);
+    // AC-6: no reading, muted, the server's reason in the tooltip.
+    assert.equal(await use('n').innerText(), 'No reading yet');
+    assert.equal(await use('n').locator('.subs-none').getAttribute('title'), 'Waiting for a computer to report');
+    // AC-4/AC-5: every one of Ana's plans counts the set's four computers, with the amber dot naming the offline one.
+    for (const id of ['w', 'f', 'h', 'n']) {
+      assert.equal(await pane.locator(`[data-subs-row=${id}] .subs-count .tnum`).innerText(), '4', `${id} counts its set's computers`);
+      assert.equal(await pane.locator(`[data-subs-row=${id}] [data-subs-offline]`).getAttribute('title'), 'Cloud · Video Owner is offline');
+    }
+    assert.equal(await pane.locator('[data-subs-row=w] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Owner, Builder (cloud)');
+    assert.equal(await pane.locator('[data-subs-row=w] .subs-mark').innerText(), 'In use');
+    assert.equal(await pane.locator('[data-subs-row=f] .subs-mark').innerText(), 'Next');
+    assert.doesNotMatch(await pane.innerText(), /Computer offline|Bring it online|No computer assigned|Connection unavailable|Held until|In use ·/);
+    // AC-7: the tool, not "plan"; API keys keep their kind.
+    const kinds = await pane.locator('[data-subs-row] .subs-kind').allInnerTexts();
+    assert.deepEqual(kinds, ['Claude', 'Claude', 'Claude', 'Claude', 'Anthropic API key', 'ChatGPT']);
+    assert.match(await pane.locator('[data-subs-row=k] .subs-use').innerText(), /^\$12\.40 this month$/);
+    // AC-9: on a phone each percent and reset is on screen, and nothing scrolls sideways.
+    if (viewport.width === 390) {
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) <= 0, 'no sideways scroll');
+      const dot = (await pane.locator('[data-subs-row=w] [data-subs-offline]').boundingBox())!;
+      assert.ok(dot.width >= 40 && dot.height >= 40 && dot.x + dot.width <= 390, `the offline dot is a thumb-sized target (${dot.width}x${dot.height})`);
+      for (const id of ['w', 'f', 'h', 'g']) {
+        const box = (await use(id).locator('.subs-reset').boundingBox())!;
+        assert.ok(box.x >= 0 && box.x + box.width <= 390, `${id}: the reset is on screen`);
+      }
+    }
+    await shot(page, `models-usage-left-${viewport.width}`, pane);
+    // The dot opens Settings > Computers.
+    await pane.locator('[data-subs-row=w] [data-subs-offline]').click();
+    await page.locator('#set-machines').waitFor();
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('usage left and next reset: ok');
+}
+
 async function screens(browser: Browser) {
   for (const theme of ['dark', 'light']) {
     for (const [kind, viewport] of [['desktop', {width: 1280, height: 860}], ['phone', {width: 390, height: 844}]] as [string, {width: number; height: number}][]) {
@@ -920,6 +1151,6 @@ async function screens(browser: Browser) {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await navigation(browser); await modelsTab(browser); await addSubscription(browser); await connectPlan(browser); await rowMenu(browser);
-    await computersTable(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await screens(browser);
+    await computersTable(browser); await personGroups(browser); await plansRunOut(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await phoneReasons(browser); await usageLeft(browser); await screens(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

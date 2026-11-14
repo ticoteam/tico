@@ -120,46 +120,9 @@
 
 /* The manager's rail beside the stages (ui/app/pipeline-rail.ts): a column at the right of the Tasks page while open. */
 .tasks-page.has-rail { --rail-w: 320px; grid-template-columns: minmax(0, 1fr) var(--rail-w); }
-.pipe-rail { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 13px; }
-.pr-strip { display: none; align-items: flex-start; justify-content: center; width: 100%; padding: 14px 0; border: 0; background: none; cursor: pointer; }
-.pipe-rail.collapsed .pr-strip { display: flex; }
-.pipe-rail.collapsed .pr-panel { display: none; }
-.pr-panel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-.pr-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 8px; }
-.pr-who { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
-.pr-who b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-ran { font-size: 12px; color: var(--muted); }
-.pr-ran.warn { color: var(--wait-ink); }
-.pr-x { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 20px; line-height: 1;
-  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
-.pr-x:hover { background: var(--surface2); color: var(--ink); }
-.pr-tabs { display: flex; gap: 4px; padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
-.pr-tab { font: inherit; font-size: 12px; height: 28px; padding: 0 10px; border-radius: 5px; border: 0; background: none; color: var(--muted); cursor: pointer; }
-.pr-tab.on { background: var(--surface2); color: var(--ink); }
-.pr-body { flex: 0 1 auto; max-height: 46%; overflow-y: auto; padding: 4px 0 8px; border-bottom: 1px solid var(--line); }
-.pr-sec { padding-bottom: 6px; }
-.pr-sec > .pipe-h { padding: 10px 16px 4px; }
-.pr-list { margin: 0; padding: 0; list-style: none; }
-.pr-late { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: baseline; width: 100%; padding: 6px 16px; border: 0;
-  background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
-.pr-late:hover { background: var(--surface2); }
-.pr-late-main { display: flex; flex-direction: column; min-width: 0; }
-.pr-late-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-late-what { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-late-age { color: var(--wait-ink); }
-.pr-line { display: grid; grid-template-columns: 40px 8px minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 4px 16px; font-size: 12px; }
-.pr-when { color: var(--muted); }
-.pr-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--idle); align-self: center; }
-.pr-warn .pr-dot { background: var(--wait); }
-.pr-error .pr-dot { background: var(--fail); }
-.pr-text { overflow-wrap: anywhere; }
-.pr-empty { margin: 0; padding: 10px 16px; color: var(--muted); }
-.pr-chat { flex: 1 1 0; min-height: 160px; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; padding: 0 16px 14px; }
-.pr-chat > .thv { flex: 1 1 auto; min-height: 0; }
-.pr-bar, .pr-scrim { display: none; }
 
-/* A phone: one stage at a time under a row of stage chips; the rail is a bar above the bottom navigation that opens the
-   same panel as a sheet. */
+/* A phone: one stage at a time under a row of stage chips. It has no rail: the board's Ask bar opens the manager's chat
+   as a sheet (ui/app/pipeline-ask.ts). */
 .pchips { display: flex; gap: 8px; overflow-x: auto; padding: 6px 0; scrollbar-width: none; scroll-snap-type: x proximity; }
 .pchips::-webkit-scrollbar { display: none; }
 .pchip { position: relative; display: inline-flex; align-items: center; gap: 6px; flex: none; height: 32px; padding: 0 12px; border-radius: 16px;
@@ -197,29 +160,16 @@
 @media (min-width: 601px) and (max-width: 760px) {
   .tasks-page.has-rail { display: grid; }
   .tasks-page.has-rail .tasks-pane { overflow-y: auto; }
+  /* The page scrolls as a whole here: the rail stays put between the window's top and the bottom bar, so its box is
+     always in view while the board scrolls under the header. */
+  .tasks-page.has-rail > .pm-rail { position: fixed; z-index: 2; top: 0; right: 0; bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom)); width: var(--rail-w); }
+  /* The board's Ask bar stays over the board's column, clear of the rail and its box (it still asks the stage's holder). */
+  .tasks-page.has-rail .pa-host { right: var(--rail-w); }
+  /* While a box has the keyboard the bottom bar hides; the rail runs to the window's edge. */
+  body.mobile-composer-focus .tasks-page.has-rail > .pm-rail { bottom: 0; }
 }
 @media (max-width: 600px) {
   .tasks-page.has-rail { display: block; }
-  .tasks-page.has-rail > .pipe-rail { position: fixed; z-index: 41; left: 0; right: 0; bottom: 0; top: 12vh; border-left: 0; border-top: 1px solid var(--line);
-    border-radius: 14px 14px 0 0; transform: translateY(105%); visibility: hidden; transition: transform .2s ease, visibility .2s; box-shadow: 0 -8px 24px rgba(0, 0, 0, .35); }
-  .tasks-page.has-rail > .pipe-rail.sheet-open { transform: none; visibility: visible; }
-  .pipe-rail.collapsed .pr-panel { display: flex; }
-  .pr-strip { display: none !important; }
-  .pr-body { max-height: 40%; }
-  .pr-tab { height: 44px; padding: 0 12px; }
-  .pr-x { width: 44px; height: 44px; }
-  .pr-late { min-height: 44px; align-items: center; }
-  .pr-bar { position: fixed; z-index: 17; left: 12px; right: 12px; bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);
-    display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px;
-    background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; box-shadow: 0 4px 16px rgba(0, 0, 0, .3); }
-  .pr-bar-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
-  .pr-bar-text b { font-weight: 600; }
-  .pr-bar-text span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pr-bar-late { color: var(--wait-ink); font-size: 12px; white-space: nowrap; }
-  .pr-chev { color: var(--muted); }
-  .pr-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, .4); }
-  body.pipe-sheet-open .pr-scrim { display: block; }
-  body.pipe-sheet-open .pr-bar { display: none; }
   .tasks-pane { padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 84px); }
 }
 
@@ -275,10 +225,18 @@
 .pe-choice{display:inline-flex;align-items:center;gap:2px}
 .pe-choice input{width:120px}
 .pe-add{align-self:flex-start}
+/* An Owner that is "One of several": the bots to pick from (each with its model family), Pick and Prefer as segmented
+   switches, Limit each, the owner switch and who gets the next task. A segmented switch wraps on a narrow screen. */
+.pe-pick{display:flex;flex-direction:column;gap:var(--s3);padding:var(--s2) 0 var(--s2) var(--s3);border-left:2px solid var(--line)}
+.pe-pick-bots{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s3)}
+.pe-family{font-size:var(--t-2xs)}
+.pe-pick-next{margin:0;font-size:var(--t-sm)}
+.pe-seg{align-self:flex-start;flex-wrap:wrap}
 .pe-foot{display:flex;justify-content:space-between;gap:var(--s2)}
 @media (max-width:720px){
   .pe-dialog{width:100vw;max-width:100vw;max-height:92dvh;margin:auto 0 0;border-radius:14px 14px 0 0}
-  .pe-stage-owner>span{display:none}
+  .pe-stage-owner:not(.pe-stage-pool)>span{display:none}
   .pe-stage-body{padding-left:var(--s3)}
   .pe-row>.pe-f-name{flex:1 1 100%}
+  .pe-seg{border-radius:12px}
 }

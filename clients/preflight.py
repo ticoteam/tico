@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preflight: is an employee ready to be flipped from `planned` to `active`?
 
-Read-only. Checks the registry entry, the repo, bot.yaml (older: employee.yaml), AGENT.md, the routines (the
+Read-only. Checks the registry entry, the repo, bot.yaml (older: employee.yaml), AGENTS.md, the routines (the
 seed `tico bot create` turns into the bot's first routines in the hub), the secrets the `tools:`
 block (older: `access:`) declares, and the runtime binary. One line per check, prefixed PASS / WARN / FAIL, then a
 summary. Exit 1 if anything FAILed.
@@ -31,7 +31,7 @@ from runner_support.op import OP_REF, resolve_op_refs
 
 TEMPLATE = REG.HUB_DIR / "templates/employee-repo"
 SECRETS = REG.ROOT / "secrets"
-SCAN_DIRS = ["playbooks", "memory"]  # plus AGENT.md, scanned for stale references
+SCAN_DIRS = ["playbooks", "memory"]  # plus AGENTS.md, scanned for stale references
 STALE = [
     (re.compile(r"/workspace/"), "path `/workspace/` (repos live in the projects folder)"),
     (re.compile(r"Chief of Staff", re.I), "'Chief of Staff' (that role no longer exists)"),
@@ -110,31 +110,34 @@ def check_manifest(r, slug, d):
     return m
 
 
+def instructions_file(d):
+    """The bot's instruction file: AGENTS.md, else AGENT.md in a repository the runner has not moved to AGENTS.md yet."""
+    return next((d / name for name in ("AGENTS.md", "AGENT.md") if (d / name).exists()), d / "AGENTS.md")
+
+
 def check_instructions(r, d):
-    a = d / "AGENT.md"
+    a = instructions_file(d)
     if not a.exists():
-        r.fail("AGENT.md: missing")
+        r.fail("AGENTS.md: missing")
     else:
+        if a.name != "AGENTS.md":
+            r.warn(f"{a.name}: not moved to AGENTS.md yet (the runner moves it on the bot's next turn)")
         text = a.read_text()
-        tmpl = TEMPLATE / "AGENT.md"
+        tmpl = TEMPLATE / "AGENTS.md"
         if tmpl.exists() and text == tmpl.read_text():
-            r.fail("AGENT.md: still the untouched template")
+            r.fail("AGENTS.md: still the untouched template")
         else:
-            r.ok("AGENT.md: written for this employee")
+            r.ok("AGENTS.md: written for this employee")
         owns = re.search(r"^##\s+Owns\s*$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
         if not owns:
-            r.fail("AGENT.md: no `## Owns` section")
+            r.fail("AGENTS.md: no `## Owns` section")
         else:
             bullets = [l.strip()[1:].strip() for l in owns.group(1).splitlines() if l.strip()[:1] in ("-", "*")]
             filled = [b for b in bullets if b]
             if filled:
-                r.ok(f"AGENT.md: `## Owns` has {len(filled)} bullet{'s' if len(filled) != 1 else ''}")
+                r.ok(f"AGENTS.md: `## Owns` has {len(filled)} bullet{'s' if len(filled) != 1 else ''}")
             else:
-                r.fail("AGENT.md: `## Owns` has no non-empty bullet")
-    if (d / "state.md").exists():
-        r.ok("state.md: present")
-    else:
-        r.fail("state.md: missing")
+                r.fail("AGENTS.md: `## Owns` has no non-empty bullet")
 
 
 def check_schedules(r, d, m):
@@ -326,7 +329,7 @@ def check_mail(r, slug, m):
 
 def check_stale(r, d):
     hits = []
-    files = [d / "AGENT.md"] + [f for sub in SCAN_DIRS for f in sorted((d / sub).rglob("*"))]
+    files = [instructions_file(d)] + [f for sub in SCAN_DIRS for f in sorted((d / sub).rglob("*"))]
     for f in files:
         if not f.is_file() or f.suffix not in ("", ".md", ".yaml", ".yml", ".txt"):
             continue

@@ -2,7 +2,7 @@
 
 The claim checks each candidate job and prepares the one it hands out (backend/execution.py). An error in a job's own
 checks or start belongs to that job: its writes are rolled back, its traceback is logged once, and the job is held
-(backend/claim_holds.py) for a wait that doubles with each failed try, up to an hour. An error in a bot's own check (its
+(backend/claim_holds.py) for a wait that doubles with each failed try, up to 50 minutes. An error in a bot's own check (its
 budget or back-off) passes that bot over for the rest of the claim and holds none of its runs; Health names the check
 until one of its runs starts. A claim holds at most CLAIM_HOLDS jobs. A team's default and a storage error fail it.
 """
@@ -496,14 +496,14 @@ def test_a_provider_wide_start_error_holds_each_run_and_they_come_back_after_the
     assert all(not job["held"] for bot in ("ops", "cpo") for job in jobs_of(api, bot))
 
 
-def test_a_held_run_is_retried_after_each_wait_and_a_failure_doubles_the_next_one_up_to_an_hour(api, monkeypatch):
+def test_a_held_run_is_retried_after_each_wait_and_a_failure_doubles_the_next_one_up_to_50_minutes(api, monkeypatch):
     """A held run is retried when its wait ends. Each failed try renews its hold with a wait twice as long as the last,
-    from a minute to an hour, under the one Needs-you item its first hold filed."""
+    from a minute to 50 minutes (inside the hour the bot's session stays cached), under the one Needs-you item its first hold filed."""
     machine, task_id = held_refresh(api, monkeypatch)
     [job] = task_jobs(api, task_id)
     item = job["hold_task_id"]
     assert hold_of(api, job["id"])["hold_streak"] == 1
-    for streak, wait in zip(range(2, 9), (120, 240, 480, 960, 1920, 3600, 3600)):
+    for streak, wait in zip(range(2, 9), (120, 240, 480, 960, 1920, 3000, 3000)):
         wait_ends(api, monkeypatch, job["id"])
         when = H.now()
         assert claim(api, machine) is None
@@ -737,43 +737,34 @@ def batch_hold(api, job_id):
 
 
 def test_a_batch_planned_while_a_claim_hold_still_waits_keeps_its_own_window(api, monkeypatch):
-    """A batch's release is set by its own window, not by a run the claim holds and is still waiting for: the held run
-    has a wait of its own (wake_presets._batch_slot's waiting query)."""
+    """A batch's release is set by its own wait, not by a run the claim holds and is still waiting for in the same
+    room: the held run has a wait of its own (wake_presets._batch_slot's waiting query)."""
     t0 = "2026-10-24T12:00:00.000000Z"
     store = api.app.state.store
     at(monkeypatch, api, t0)
-    post(
-        api,
-        "bots/ops/wake-preset",
-        {"wake_preset": "token_saver", "expected_revision": get(api, "bots/ops")["revision"]},
-    )
-    first = wake_notice(api, batch_task(api, "first"), "Finished: first")
+    task = batch_task(api, "first")
+    first = wake_notice(api, task, "Finished: first")
     wake_tick(api, t0)
-    wake_tick(api, H.shift(t0, minutes=31))
-    at(monkeypatch, api, H.shift(t0, minutes=31))
+    wake_tick(api, H.shift(t0, minutes=6))
+    at(monkeypatch, api, H.shift(t0, minutes=6))
     with store.transaction() as c:
-        claim_holds.hold(c, store.settings, first, "RuntimeError")  # held until t0 + 32 min
-    at(monkeypatch, api, H.shift(t0, minutes=40))
-    second = wake_notice(api, batch_task(api, "second"), "Finished: second")
-    wake_tick(api, H.shift(t0, minutes=41))
-    assert batch_hold(api, second)["hold_until"] == H.shift(t0, minutes=70)
+        claim_holds.hold(c, store.settings, first, "RuntimeError")  # held until t0 + 7 min
+    at(monkeypatch, api, H.shift(t0, minutes=6, seconds=10))
+    second = wake_notice(api, task, "Finished: second")
+    wake_tick(api, H.shift(t0, minutes=6, seconds=20))
+    assert batch_hold(api, second)["hold_until"] == H.shift(t0, minutes=11, seconds=10)
     assert batch_hold(api, second)["held"] == 1
 
 
-def test_a_batch_planned_after_a_claim_hold_was_let_go_is_not_spaced_by_that_holds_wait(api, monkeypatch):
-    """The next batch of a bot waits a window after its last batch went out, never after a run the claim held: a held
-    run let go at its wait's end does not move that window (wake_presets._batch_slot's last query)."""
+def test_a_batch_planned_after_a_claim_hold_was_let_go_waits_only_its_own_notice_wait(api, monkeypatch):
+    """A held run let go at its wait's end does not move the next batch's release: that batch waits the notice wait
+    from its own arrival (wake_presets._batch_slot)."""
     t0 = "2026-10-24T12:00:00.000000Z"
     store = api.app.state.store
     at(monkeypatch, api, t0)
-    post(
-        api,
-        "bots/ops/wake-preset",
-        {"wake_preset": "token_saver", "expected_revision": get(api, "bots/ops")["revision"]},
-    )
     first = wake_notice(api, batch_task(api, "first"), "Finished: first")
     wake_tick(api, t0)
-    wake_tick(api, H.shift(t0, minutes=31))
+    wake_tick(api, H.shift(t0, minutes=6))
     at(monkeypatch, api, H.shift(t0, minutes=40))
     second = wake_notice(api, batch_task(api, "second"), "Finished: second")
     at(monkeypatch, api, H.shift(t0, minutes=44))
@@ -784,7 +775,7 @@ def test_a_batch_planned_after_a_claim_hold_was_let_go_is_not_spaced_by_that_hol
         claim_holds.release_due(c)
     wake_tick(api, H.shift(t0, minutes=46))
     assert batch_hold(api, first)["held"] == 0
-    assert batch_hold(api, second)["hold_until"] == H.shift(t0, minutes=70)
+    assert batch_hold(api, second)["hold_until"] == H.shift(t0, minutes=45)
 
 
 def wake_tick(api, when):

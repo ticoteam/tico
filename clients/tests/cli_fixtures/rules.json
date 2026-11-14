@@ -340,9 +340,14 @@
     "GET",
     "rules?status=suggested",
     null
+   ],
+   [
+    "GET",
+    "stage-rules?status=suggested",
+    null
    ]
   ],
-  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
+  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null,\n  \"stage_rules\": []\n}\n",
   "stderr": "",
   "exit": 0
  },
@@ -1723,6 +1728,290 @@
      },
      "if_broken": "block"
     }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "list",
+   "--kind",
+   "stage",
+   "--pipeline",
+   "engineering",
+   "--stage",
+   "engineering-build"
+  ],
+  "tools": [
+   [
+    "tico_rules_list",
+    {
+     "kind": "stage",
+     "mine": false,
+     "operation_id": null,
+     "pipeline": "engineering",
+     "stage": "engineering-build"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "stage-rules?pipeline=engineering&stage=engineering-build",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "list",
+   "--kind",
+   "stage",
+   "--mine",
+   "--status",
+   "any"
+  ],
+  "tools": [
+   [
+    "tico_rules_list",
+    {
+     "kind": "stage",
+     "mine": true,
+     "operation_id": null,
+     "status": "any"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "stage-rules?status=any&mine=true",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "read",
+   "sr_owner_on_team"
+  ],
+  "tools": [
+   [
+    "tico_rules_get",
+    {
+     "id": "sr_owner_on_team",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "stage-rules/sr_owner_on_team",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "stage",
+   "--name",
+   "Owner on the team",
+   "--pipeline",
+   "engineering",
+   "--stages",
+   "engineering-build",
+   "--event",
+   "owner_changes",
+   "--if",
+   "{\"owner_not_on_team\": \"engineering\"}",
+   "--then",
+   "block",
+   "--reason",
+   "Not on Engineering"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "cond": {
+      "owner_not_on_team": "engineering"
+     },
+     "event": "owner_changes",
+     "kind": "stage",
+     "name": "Owner on the team",
+     "operation_id": null,
+     "pipeline": "engineering",
+     "reason": "Not on Engineering",
+     "stages": [
+      "engineering-build"
+     ],
+     "then": "block"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "stage-rules",
+    {
+     "name": "Owner on the team",
+     "pipeline": "engineering",
+     "stages": [
+      "engineering-build"
+     ],
+     "event": "owner_changes",
+     "cond": {
+      "owner_not_on_team": "engineering"
+     },
+     "then": "block",
+     "reason": "Not on Engineering"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "edit",
+   "sr_owner_on_team",
+   "--version",
+   "2",
+   "--timer",
+   "{\"kind\": \"quiet\", \"hours\": 12}",
+   "--then",
+   "move_back"
+  ],
+  "tools": [
+   [
+    "tico_rules_edit",
+    {
+     "id": "sr_owner_on_team",
+     "operation_id": null,
+     "then": "move_back",
+     "timer": {
+      "hours": 12,
+      "kind": "quiet"
+     },
+     "version": 2
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "stage-rules/sr_owner_on_team",
+    {
+     "revision": 2,
+     "timer": {
+      "kind": "quiet",
+      "hours": 12
+     },
+     "then": "move_back"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "retire",
+   "sr_owner_on_team",
+   "--version",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_rules_retire",
+    {
+     "id": "sr_owner_on_team",
+     "operation_id": null,
+     "version": 3
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "stage-rules/sr_owner_on_team/retire",
+    {
+     "revision": 3
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "accept",
+   "sr_new"
+  ],
+  "tools": [
+   [
+    "tico_rules_accept",
+    {
+     "id": "sr_new",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "stage-rules/sr_new/accept",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "skip",
+   "sr_new"
+  ],
+  "tools": [
+   [
+    "tico_rules_skip",
+    {
+     "id": "sr_new",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "stage-rules/sr_new/skip",
+    {}
    ]
   ],
   "stdout": "{\n  \"ok\": true\n}\n",

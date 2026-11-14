@@ -26,6 +26,7 @@ import logging
 import re
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -81,9 +82,10 @@ class GitHub(Protocol):
         """Whether `commit_sha` is in the history of `release_sha` (GitHub's compare: behind or identical)."""
         ...
 
-    def pr_diff(self, repo: str, number: int, sha: str) -> str | None:
-        """What the PR changes at commit `sha`, as one id (`diff_id`): the diff from where `sha` branched off the PR's
-        base branch to `sha` (GitHub's compare, `<base>...<sha>`). None when GitHub cannot give the whole diff."""
+    def pr_diff(self, repo: str, number: int, sha: str) -> Row:
+        """What the PR changes at commit `sha` (`diff_of`): the diff from where `sha` branched off the PR's base branch
+        to `sha` (GitHub's compare, `<base>...<sha>`) as one id, None when GitHub cannot give the whole diff; the PR's
+        commits up to `sha`; and each file's part of the diff."""
         ...
 
     def ready(self, repo: str, number: int) -> None:
@@ -388,19 +390,18 @@ OK_HEADS_SQL = (
 )
 
 
-def diff_id(files: object) -> str | None:
-    """One id for what a PR changes, from GitHub's compare `files`: per file (by name) its status, old and new name, and
-    its added and removed lines without whitespace, line numbers or context, as `git patch-id` reads a patch. A file
-    GitHub gives no patch for (binary, or too large) counts by its contents at the commit (`sha`). None when GitHub left
-    part of the diff out: DIFF_FILES_MAX files or more, or a file with neither patch nor contents."""
+def _file_parts(files: object) -> dict[str, str] | None:
+    """{file name: one id of its part of the diff} from GitHub's compare `files`: its status, old and new name, and its
+    added and removed lines without whitespace, line numbers or context, as `git patch-id` reads a patch. A file GitHub
+    gives no patch for (binary, or too large) counts by its contents at the commit (`sha`). None when GitHub left part
+    of the diff out: DIFF_FILES_MAX files or more, or a file with neither patch nor contents."""
     if not isinstance(files, list):
         return None
     listed = cast("list[object]", files)
     if len(listed) >= DIFF_FILES_MAX:
         return None
-    parts: list[str] = []
-    rows = [cast("Row", f) for f in listed if isinstance(f, dict)]
-    for found in sorted(rows, key=lambda f: str(f.get("filename") or "")):
+    parts: dict[str, str] = {}
+    for found in [cast("Row", f) for f in listed if isinstance(f, dict)]:
         status = str(found.get("status") or "")
         patch = found.get("patch")
         if isinstance(patch, str):
@@ -411,15 +412,60 @@ def diff_id(files: object) -> str | None:
             body = f"contents {found['sha']}"
         else:
             return None
-        parts.append("\0".join((status, str(found.get("previous_filename") or ""), str(found.get("filename")), body)))
-    return hashlib.sha256("\0\0".join(parts).encode()).hexdigest()
+        parts[str(found.get("filename"))] = "\0".join(
+            (status, str(found.get("previous_filename") or ""), str(found.get("filename")), body)
+        )
+    return parts
 
 
-def save_diff(conn: "sqlite3.Connection", repo: str, sha: str, diff: str | None) -> None:
-    """Keep what commit `sha` of a PR in `repo` changes (`diff_id`; None: GitHub could not give it all)."""
+def diff_id(files: object) -> str | None:
+    """One id for what a PR changes, from GitHub's compare `files`: each file's part (`_file_parts`), by name. None when
+    GitHub left part of the diff out."""
+    parts = _file_parts(files)
+    if parts is None:
+        return None
+    return hashlib.sha256("\0\0".join(parts[name] for name in sorted(parts)).encode()).hexdigest()
+
+
+def diff_of(compare: object) -> Row:
+    """What GitHub's compare of a PR's base branch with one of its commits says it changes: {diff_id (`diff_id`),
+    commits: [[sha, title]] oldest first, the PR's own commits up to that one, files: {file name: id of its part}
+    (None when GitHub left part of the diff out)}. Kept per commit (`save_diff`) so a person asked again after new
+    commits is told how many came and what they changed (`since`)."""
+    body: Row = cast("Row", compare) if isinstance(compare, dict) else {}
+    commits: list[list[str]] = []
+    listed: list[object] = cast("list[object]", body.get("commits") or [])
+    for found in listed:
+        if isinstance(found, dict):
+            entry = cast("Row", found)
+            message = str((cast("Row", entry.get("commit") or {})).get("message") or "")
+            commits.append([str(entry.get("sha") or ""), (message.splitlines() or [""])[0].strip()])
+    parts = _file_parts(body.get("files"))
+    files = None if parts is None else {name: hashlib.sha256(part.encode()).hexdigest() for name, part in parts.items()}
+    return {"diff_id": diff_id(body.get("files")), "commits": commits, "files": files}
+
+
+def save_diff(
+    conn: "sqlite3.Connection",
+    repo: str,
+    sha: str,
+    diff: str | None,
+    *,
+    commits: list[list[str]] | None = None,
+    files: dict[str, str] | None = None,
+) -> None:
+    """Keep what commit `sha` of a PR in `repo` changes (`diff_id`; None: GitHub could not give it all), and when GitHub
+    gave them, the PR's commits up to it and each file's part of the diff (`diff_of`)."""
     conn.execute(
-        "INSERT OR REPLACE INTO github_pr_diffs (repo, sha, diff_id, read_at) VALUES (?,?,?,?)",
-        (repo.lower(), sha, diff, _h().now()),
+        "INSERT OR REPLACE INTO github_pr_diffs (repo, sha, diff_id, commits, files, read_at) VALUES (?,?,?,?,?,?)",
+        (
+            repo.lower(),
+            sha,
+            diff,
+            None if commits is None else json.dumps(commits),
+            None if files is None else json.dumps(files, sort_keys=True),
+            _h().now(),
+        ),
     )
 
 
@@ -444,6 +490,52 @@ def same_changes(conn: "sqlite3.Connection", before: dict[str, object], after: d
             return False
         unknown = unknown or not (read_a and read_b)
     return None if unknown else True
+
+
+def _kept(conn: "sqlite3.Connection", repo: str, sha: str) -> tuple[list[list[str]], dict[str, str]] | None:
+    """(the PR's commits up to `sha`, each file's part of its diff) as kept (`save_diff`), or None when Tico has not
+    read them, or GitHub did not give them all."""
+    found = conn.execute(
+        "SELECT commits, files FROM github_pr_diffs WHERE repo=? AND sha=?", (repo.lower(), sha)
+    ).fetchone()
+    if not found or found[0] is None or found[1] is None:
+        return None
+    return json.loads(found[0]), json.loads(found[1])
+
+
+def since(conn: "sqlite3.Connection", before: dict[str, object], after: dict[str, object]) -> Row | None:
+    """What came in the PRs between the commits `before` and `after` ({pr ref: commit}): {commits: how many new ones,
+    titles: the newest new ones' titles, newest first, up to 3, files: how many files' changes differ}. A commit counts
+    as new when the PR at `before` did not have it, and no commit the PR lost since (a rebase) had its title. None
+    while what one of them changes is not read yet (`_refresh_diffs`), GitHub did not give it all, or the PRs differ."""
+    if set(before) != set(after):
+        return None
+    count, files = 0, 0
+    titles: list[str] = []
+    for ref, sha in after.items():
+        if before[ref] == sha:
+            continue
+        repo = ref.rsplit("#", 1)[0]
+        old, new = _kept(conn, repo, str(before[ref])), _kept(conn, repo, str(sha))
+        if old is None or new is None:
+            return None
+        # A commit the PR still has is not new. One it lost (a rebase rewrote it) cancels one new commit with its
+        # title: the rebase's copy. Counted per title, so a second "Fix tests" pushed after the first is still new.
+        kept_shas = {each[0] for each in new[0]}
+        shas = {each[0] for each in old[0]}
+        rewritten = Counter(each[1] for each in old[0] if each[0] not in kept_shas)
+        added: list[list[str]] = []
+        for each in new[0]:
+            if each[0] in shas:
+                continue
+            if rewritten[each[1]]:
+                rewritten[each[1]] -= 1
+                continue
+            added.append(each)
+        count += len(added)
+        titles.extend(each[1] for each in reversed(added) if each[1])
+        files += sum(1 for name in set(old[1]) | set(new[1]) if old[1].get(name) != new[1].get(name))
+    return {"commits": count, "titles": titles[:3], "files": files}
 
 
 def _diffs_wanted(conn: "sqlite3.Connection") -> list[tuple[str, str, int, str]]:
@@ -492,7 +584,7 @@ def _refresh_diffs(store: Any, github: GitHub) -> int:
 
     with store.read() as conn:
         wanted = _diffs_wanted(conn)[:REREAD_BATCH]
-    read: dict[tuple[str, str], str | None] = {}
+    read: dict[tuple[str, str], Row] = {}
     tasks: list[str] = []
     for task_id, repo, number, sha in wanted:
         if (repo, sha) not in read:
@@ -506,7 +598,7 @@ def _refresh_diffs(store: Any, github: GitHub) -> int:
         return 0
     with store.transaction() as conn:
         for (repo, sha), diff in read.items():
-            save_diff(conn, repo, sha, diff)
+            save_diff(conn, repo, sha, diff.get("diff_id"), commits=diff.get("commits"), files=diff.get("files"))
         moved = sorted(set(tasks))
         _nudge(conn, moved)
         for task_id in moved:
@@ -584,7 +676,7 @@ def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row)
         if task_wakes.add(conn, row, str(owner), visit, body, wake_key=key):
             added += 1
     for task_id in task_ids:
-        # Before a person OKs a page that is not a review (Fixes 2): the new commit is the last reviewer's to read.
+        # Before a person OKs a page that is not a review (QA): the new commit is the last reviewer's to read.
         if task_wakes.review_new(conn, task_id):
             added += 1
     return added
@@ -868,7 +960,9 @@ def vanished(old: Row | None, metadata: Row) -> Row:
 
 
 def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
-    """Each merged PR an open task's In a release waits on: {task, repo (the release repo), sha, at, prereleases}."""
+    """Each merged PR an open task's In a release waits on: {task, repo (the release repo), sha, at, prereleases,
+    held}. Also each merged PR of a Done task that another task depends on until released (task_depends), read with
+    its pipeline's In a release settings and marked `held`, so its release is still read after Done."""
     out: list[Row] = []
     for task_id, settings in conn.execute(
         "SELECT t.id, r.settings FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
@@ -876,23 +970,50 @@ def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
         "AND r.kind='item' AND r.source='github' AND r.condition='in_release' "
         "WHERE t.status='open' AND t.pipeline_id IS NOT NULL"
     ).fetchall():
-        try:
-            setting: Row = json.loads(settings or "{}") or {}
-        except ValueError:
-            setting = {}
-        for link in prs_of(conn, str(task_id)):
-            metadata = link["metadata"]
-            if metadata and metadata["state"] == "merged" and metadata.get("merged_sha"):
-                out.append(
-                    {
-                        "task": str(task_id),
-                        "repo": release_repo(setting, str(link["repo"])),
-                        "sha": str(metadata["merged_sha"]),
-                        "at": metadata.get("merged_at"),
-                        "prereleases": setting.get("prereleases", True) is not False,
-                    }
-                )
+        out += _merged_waits(conn, str(task_id), _settings(settings))
+    from .. import task_depends
+
+    for task_id in task_depends.held_blockers(conn):
+        out += [{**w, "held": True} for w in release_reads(conn, task_id)]
     return out
+
+
+def _settings(settings: object) -> Row:
+    try:
+        return json.loads(str(settings or "{}")) or {}
+    except ValueError:
+        return {}
+
+
+def _merged_waits(conn: "sqlite3.Connection", task_id: str, setting: Row) -> list[Row]:
+    out: list[Row] = []
+    for link in prs_of(conn, task_id):
+        metadata = link["metadata"]
+        if metadata and metadata["state"] == "merged" and metadata.get("merged_sha"):
+            out.append(
+                {
+                    "task": task_id,
+                    "repo": release_repo(setting, str(link["repo"])),
+                    "sha": str(metadata["merged_sha"]),
+                    "at": metadata.get("merged_at"),
+                    "prereleases": setting.get("prereleases", True) is not False,
+                }
+            )
+    return out
+
+
+def release_reads(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
+    """Each merged PR of a task, with the repo whose releases hold it: {task, repo, sha, at, prereleases}. The repo is
+    the one its pipeline's In a release reads (`release_repo`), so a task that has left Release, or never had one, is
+    read as Release read it; with no such requirement, each PR's own repo."""
+    found = conn.execute(
+        "SELECT r.settings FROM tasks t JOIN stages s ON s.pipeline_id = t.pipeline_id "
+        "JOIN requirements r ON r.stage_id = s.id AND r.withdrawn_at IS NULL "
+        "AND r.kind='item' AND r.source='github' AND r.condition='in_release' "
+        "WHERE t.id=? ORDER BY s.position, r.rowid LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return _merged_waits(conn, task_id, _settings(found[0] if found else None))
 
 
 def release_repo(settings: Row, pr_repo: str) -> str:
@@ -941,19 +1062,20 @@ def _refresh_releases(store: Any, github: GitHub, now: str, *, task: str | None 
                 changed += save_release(conn, name, release, version)
             saw_releases(conn, name, version)
     asked = 0
+    listed: dict[tuple[str, bool], list[Row]] = {}  # each repo's releases, read once in this pass
     for wait in waits:
         with store.read() as conn:
             merged = H.parse_ts(wait["at"])
+            key = (wait["repo"].lower(), bool(wait["prereleases"]))
+            if key not in listed:
+                listed[key] = releases(conn, wait["repo"], prereleases=wait["prereleases"])
+            held = holds(conn, wait["sha"])
             unread = [
                 r
-                for r in reversed(releases(conn, wait["repo"], prereleases=wait["prereleases"]))
-                if included(conn, r["id"], wait["sha"]) is None
-                and not (merged and (H.parse_ts(r["published_at"]) or merged) < merged)
+                for r in reversed(listed[key])
+                if str(r["id"]) not in held and not (merged and (H.parse_ts(r["published_at"]) or merged) < merged)
             ]
-            known = any(
-                included(conn, r["id"], wait["sha"])
-                for r in releases(conn, wait["repo"], prereleases=wait["prereleases"])
-            )
+            known = holding(listed[key], held) is not None
         for release in [] if known else unread:  # oldest first; the first that holds it is the one that counts
             if asked >= REREAD_BATCH:
                 return changed
@@ -966,7 +1088,12 @@ def _refresh_releases(store: Any, github: GitHub, now: str, *, task: str | None 
             with store.transaction() as conn:
                 save_included(conn, release["id"], wait["sha"], inside)
                 changed += 1
-                if inside:
+                if inside and wait.get("held"):
+                    # Production may run this release already: what waits on the Done task goes on now.
+                    from .. import task_depends
+
+                    task_depends.released_now(conn, wait["task"])
+                elif inside:
                     _nudge(conn, [wait["task"]])
             if inside:
                 break
@@ -1041,11 +1168,34 @@ def publishes_releases(conn: "sqlite3.Connection", repo: str) -> bool | None:
 
 
 def included(conn: "sqlite3.Connection", release_id: str, commit_sha: str) -> bool | None:
-    """Whether a commit is in a release's history, as read from GitHub; None when not read yet."""
+    """Whether a commit is in one release's history, as read from GitHub; None when not read yet. One question per call:
+    to find which release holds a commit, use `release_of` (or `holds` with `holding`), never this in a loop."""
     found = conn.execute(
         "SELECT included FROM github_release_commits WHERE release_id=? AND commit_sha=?", (release_id, commit_sha)
     ).fetchone()
     return None if found is None else bool(found[0])
+
+
+def holds(conn: "sqlite3.Connection", commit_sha: str) -> dict[str, bool]:
+    """Every saved release read for a commit, in one read: release id -> whether its history holds the commit. A release
+    missing here is not read yet (`included` None)."""
+    return {
+        str(release_id): bool(inside)
+        for release_id, inside in conn.execute(
+            "SELECT release_id, included FROM github_release_commits WHERE commit_sha=?", (commit_sha,)
+        )
+    }
+
+
+def holding(listed: list[Row], held: dict[str, bool]) -> Row | None:
+    """The release that counts for a commit: the oldest of `listed` (newest first, as `releases` gives them) that
+    holds it by `held` (`holds`), or None."""
+    return next((release for release in reversed(listed) if held.get(str(release["id"]))), None)
+
+
+def release_of(conn: "sqlite3.Connection", repo: str, commit_sha: str, *, prereleases: bool) -> Row | None:
+    """The saved release of `repo` that counts as holding a commit (`holding`), in two reads however many releases."""
+    return holding(releases(conn, repo, prereleases=prereleases), holds(conn, commit_sha))
 
 
 def save_included(conn: "sqlite3.Connection", release_id: str, commit_sha: str, value: bool) -> None:
@@ -1086,17 +1236,17 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself. The third removal in one
 #   visit (any PR, counted from the `pr_queue_removed` history rows) goes up the never-stuck ladder instead: the
 #   pipeline's manager bot has it on its 3 tries; a removal after that goes to a person. A second removal for failed
-#   checks at the same head is not queued again: its wake says to send the task back to Fixes 2, and `requeue` refuses it.
+#   checks at the same head is not queued again: its wake says to send the task back to QA, and `requeue` refuses it.
 # - A PR that conflicts with its base branch is never queued: `enqueue` reads GitHub's `mergeable` first and answers
-#   CONFLICTS (the action fails at once; the owner is told to send it back to Fixes 2, where the Builder rebases), or
+#   CONFLICTS (the action fails at once; the owner is told to send it back to QA, where the Builder rebases), or
 #   raises while GitHub still works it out (UNKNOWN: read again after RETRY_S). `requeue` refuses while the PR's link
 #   says it conflicts, and a removal for a conflict wakes the owner with the same send-back (SENT_BACK_FOR_CONFLICT).
 # - The owner (Release Owner, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
 #   `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
-#   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
-#   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
+#   the PR branch and then queues again; or sends the task back to QA with the ordinary move
+#   (`tico task move <task> --to "QA"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
 #   Merge. When it changes the same lines as the commit the task came in with (a rebase, `same_changes`), the owner
-#   queues it again; when it changes others, a bot sends the task back to Fixes 2, where Reviewer 2 reads the new
+#   queues it again; when it changes others, a bot sends the task back to QA, where Reviewer 2 reads the new
 #   commits and the person's OK stands on its OK (`SENT_BACK_FOR_NEW`, task_requirements._after_ok). A person may queue
 #   it as it is. The manager hears of the new commit once (`changed_after_ok`).
 # - A task that goes after another one (backend/merge_order.py) is not queued while that one is open and has not
@@ -1135,24 +1285,24 @@ PR_NAMED = re.compile(r"(?<![\w/#])(?:([\w.-]+/[\w.-]+))?#(\d+)\b")
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
 # Why a bot may not queue again a PR with commits after the person's OK (`requeue`).
 SENT_BACK_FOR_NEW = (
-    "{ref} has new changes since the person's OK. Move the task back to Fixes 2, where Reviewer 2 reads them."
+    "{ref} has new changes since the person's OK. Move the task back to QA, where Reviewer 2 reads them."
 )
 # Why nobody queues a PR GitHub says conflicts with its base branch (`requeue`, a refused queue, a removal): the queue
-# would only take it out again. The Builder rebases it in Fixes 2.
+# would only take it out again. The Builder rebases it in QA.
 SENT_BACK_FOR_CONFLICT = (
     "{ref} conflicts with its base branch, so it is not queued: the merge queue would only take it out again. Move the "
-    'task back to Fixes 2 for the Builder to rebase it: `tico task move {task} "Fixes 2" -m "{ref} conflicts with its '
+    'task back to QA for the Builder to rebase it: `tico task move {task} "QA" -m "{ref} conflicts with its '
     'base branch: rebase it" --version N`.'
 )
 # GitHub's removal reasons for a check that failed in the queue's run, as `removal_words` words them. Taken out this way
-# twice at one head in one visit, that head is not queued again: the task goes back to Fixes 2.
+# twice at one head in one visit, that head is not queued again: the task goes back to QA.
 FAILED_CHECKS = frozenset(removal_words(reason) for reason in ("failed_checks", "checks_failed"))
 COMPARING = "Tico is still reading what {ref}'s new commits change. Try again in a minute."
 # The same send-back for a task that goes after another one (backend/merge_order.py), once that one merged: the Builder
 # rebases onto it.
 SENT_BACK_AFTER = (
     "{ref} conflicts with its base branch now that {earlier}, which it goes after, has merged, so it is not queued. "
-    'Move the task back to Fixes 2 for the Builder to rebase it onto {earlier}: `tico task move {task} "Fixes 2" -m '
+    'Move the task back to QA for the Builder to rebase it onto {earlier}: `tico task move {task} "QA" -m '
     '"{ref} conflicts now that {earlier} merged: rebase it onto {earlier}" --version N`.'
 )
 # Why a bot may not queue a task that goes after another one still open (merge_order.held). A person may.
@@ -1258,7 +1408,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     removed or refused, while the PR's own checks on its newest commit are running ("The checks on <ref> are still
     running") or failing ("Checks failed on <ref>: <names>"), while GitHub says it conflicts with its base branch
     (`SENT_BACK_FOR_CONFLICT`), and when the caller may not; `task_changed` (a bot's stale `seen_version`),
-    `task_ended`. A head taken out for failed checks twice in this visit is refused too (send it back to Fixes 2). Who
+    `task_ended`. A head taken out for failed checks twice in this visit is refused too (send it back to QA). Who
     may: the stage owner, the pipeline's manager, any person. A bot may not queue a PR whose newest commit changes other
     lines than the one the task came into Merge with (`SENT_BACK_FOR_NEW`): the person's OK was for that one. A rebase
     that changes the same lines (`same_changes`) it may; while Tico has not read what the new commit changes yet, it is
@@ -1310,7 +1460,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         if not E.is_human(by) and pinned not in (None, metadata["head_sha"]):
             # The person OK'd the commit the task came into Merge with. A newer one that changes the same lines (a
             # rebase, a conflict fixed without changing the PR's own lines) keeps the OK; one that changes others is
-            # Reviewer 2's to read in Fixes 2 first. A person may queue it as it is.
+            # Reviewer 2's to read in QA first. A person may queue it as it is.
             same = same_changes(conn, {ref: pinned}, {ref: metadata["head_sha"]})
             if same is None:
                 refuse("task_requirement", COMPARING.format(ref=ref))
@@ -1330,13 +1480,13 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
             refuse(
                 "task_requirement",
                 f"GitHub took {ref} out of the merge queue for failed checks ({named[0].get('check')}). Send the task back "
-                "to Fixes 2 instead.",
+                "to QA instead.",
             )
         if len(removals) >= 2:
             refuse(
                 "task_requirement",
                 f"GitHub took {ref} out of the merge queue for failed checks twice at this commit. Send the task back "
-                "to Fixes 2 instead.",
+                "to QA instead.",
             )
     ts = _h().now()
     owed: list[Row] = []
@@ -1429,12 +1579,12 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
         if failed and real:
             lead = (
                 f"GitHub took {ref} out of the merge queue for failed checks. {removed_line(metadata)}.{link} It is not "
-                "queued again as it is: send the task back to Fixes 2 with the failing step and the run link."
+                "queued again as it is: send the task back to QA with the failing step and the run link."
             )
         elif failed and len(failed_checks_removals(conn, task_id, str(visit["id"]), head)) >= 2:
             lead = (
                 f"GitHub took {ref} out of the merge queue for failed checks again at the same commit. It is not queued "
-                f"again as it is: send the task back to Fixes 2 with the failing step and the run link.{link}"
+                f"again as it is: send the task back to QA with the failing step and the run link.{link}"
             )
         elif metadata.get("removed_reason") == CONFLICTS:
             lead = f"GitHub took {ref} out of the merge queue. {MO.conflict_line(conn, row, ref)}"
@@ -1631,6 +1781,45 @@ def failed_checks_removals(conn: "sqlite3.Connection", task_id: str, visit_id: s
         (task_id, visit_id, head),
     ).fetchall()
     return [cast(Row, json.loads(row[0])) for row in found]
+
+
+def queued_as_is(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
+    """The task's open PRs still at the commit they were last queued at (the newest `pr_queued` row for each names it),
+    oldest link first: [{ref, head, reason, check, failed}], `reason` and `check` from the newest removal from the queue
+    at that commit, a failed check's first (None when none was recorded), and `failed` whether that removal was for a
+    failed check. Task #344: the head the merge queue just ran."""
+    out: list[Row] = []
+    for link in prs_of(conn, task_id):
+        metadata = link["metadata"]
+        if not metadata or metadata["state"] != "open" or not metadata.get("head_sha"):
+            continue
+        ref, head = pr_ref(str(link["repo"]), int(link["number"])), str(metadata["head_sha"])
+        queued = conn.execute(
+            "SELECT json_extract(data, '$.head') FROM history_events WHERE subject_type='task' AND subject_id=? "
+            "AND kind='pr_queued' AND json_valid(data) AND json_extract(data, '$.ref')=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (task_id, ref),
+        ).fetchone()
+        if not queued or queued[0] != head:
+            continue
+        removal = conn.execute(
+            "SELECT json_extract(data, '$.reason'), json_extract(data, '$.check'), "
+            "COALESCE(json_extract(data, '$.checks_failed'), 0) FROM history_events "
+            "WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' AND json_valid(data) "
+            "AND json_extract(data, '$.ref')=? AND json_extract(data, '$.head')=? "
+            "ORDER BY COALESCE(json_extract(data, '$.checks_failed'), 0) DESC, created_at DESC, rowid DESC LIMIT 1",
+            (task_id, ref, head),
+        ).fetchone()
+        out.append(
+            {
+                "ref": ref,
+                "head": head,
+                "reason": removal[0] if removal else None,
+                "check": removal[1] if removal else None,
+                "failed": bool(removal and removal[2]),
+            }
+        )
+    return out
 
 
 def _up_the_ladder(conn: "sqlite3.Connection", task_id: str, drops: int, why: str) -> None:
@@ -2001,8 +2190,9 @@ def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[
 
 
 def _first(requirement: Row, found: list[Standing]) -> Standing:
-    """The first unmet standing of many PRs', else the first met one."""
-    return next((s for s in found if not s.met), found[0])
+    """The standing of many PRs' the task shows, in link order: the first that is someone's turn (a PR dropped from the
+    queue while another still waits in it), else the first that waits, else the first met one."""
+    return next((s for s in found if s.state == NOT_MET), None) or next((s for s in found if not s.met), found[0])
 
 
 def _reading(requirement: Row) -> Standing:
@@ -2158,9 +2348,11 @@ def _release_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: 
         return Standing(requirement, WAITING, SOURCE, "Reading releases")
     if not publishes:
         return Standing(requirement, MET, line="This repo doesn't publish releases")  # C31
-    for release in reversed(releases(conn, repo, prereleases=settings.get("prereleases", True) is not False)):
-        if included(conn, release["id"], str(metadata["merged_sha"])):
-            return Standing(requirement, MET, line=f"In {release['tag']}")
+    release = release_of(
+        conn, repo, str(metadata["merged_sha"]), prereleases=settings.get("prereleases", True) is not False
+    )
+    if release:
+        return Standing(requirement, MET, line=f"In {release['tag']}")
     return GR.standing(conn, task, requirement, repo, metadata)  # who cuts it, and what became of the ask
 
 

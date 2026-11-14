@@ -26,7 +26,9 @@ def live(api):
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(api.app, log_level="error"))
+    # As backend/server.py stops: a request still open after 2 s (a computer's browser-command long poll, whose
+    # disconnect the HTTP middlewares do not pass on) is cancelled rather than waited out.
+    server = uvicorn.Server(uvicorn.Config(api.app, log_level="error", timeout_graceful_shutdown=2))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
     thread.start()
     try:

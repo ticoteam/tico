@@ -172,7 +172,6 @@ function stratEl<T extends Element>(selector: string, root: ParentNode = documen
 let STRAT: StratState | null = null;          // the open page
 let STRAT_LOAD = 0;
 let STRAT_MKT: StratMkt = {};
-const isStrategyRoute = (r: string) => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS: Record<string, string> = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
 const STRAT_MAX_ACTIVE = 7;
 // The seven sections every strategy has, in this order (backend/strategy.py FIXED). The placeholder is the question;
@@ -341,13 +340,17 @@ function strategyMetaHtml(data: StratData, view: StratView) {
   return `<p class="strat-meta">${head}${head && status ? ' · ' : ''}${status ? `<span class="strat-status" data-strat-status>${esc(status)}</span>` : ''}</p>`;
 }
 
+// The header's quiet tools (page-head.ts): Lenses, then Versions once there is a published strategy.
+function strategyToolsHtml(data: StratData) {
+  return `<a class="strat-sub" href="${LENSES_ROUTE}">Lenses</a>${data.current ? '<button class="ghost" type="button" data-strat-versions>Versions</button>' : ''}`;
+}
+// The header's filled button: Publish, for the owner.
 function strategyActionsHtml(data: StratData, view: StratView) {
-  const versions = data.current ? '<button class="ghost" type="button" data-strat-versions>Versions</button>' : '';
-  if (!view.owner) return versions;
+  if (!view.owner) return '';
   const refusal = strategyPublishRefusal(data, view), fresh = strategyDiffers(data);
   const why = refusal || (fresh ? '' : 'Nothing new to publish');
   // Why Publish is off sits in a (?) beside it, not a line of its own.
-  return `${versions}<button class="primary" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>${refusal ? helpBubble(refusal, 'data-strat-why-not') : ''}`;
+  return `<button class="primary ph-go" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>${refusal ? helpBubble(refusal, 'data-strat-why-not') : ''}`;
 }
 
 function strategyPublishHtml() {
@@ -665,6 +668,8 @@ function strategyRender() {
   if (!body || !STRAT) return;
   const data = STRAT.data, view = strategyView(data);
   patchHTML($('#strat-actions'), strategyActionsHtml(data, view));
+  const tools = $('.rd-strat-head > .ph-tools');
+  if (tools) patchHTML(tools, strategyToolsHtml(data));
   if (!view.owner && !data.current) { body.innerHTML = '<p class="strat-none">No strategy yet.</p>'; strategyBind(); return; }
   if (!$('#strat-doc')) body.innerHTML = STRAT_FRAME;
   const v = view.version || {};
@@ -730,10 +735,9 @@ const stratAutosize = (el: HTMLTextAreaElement) => { el.style.height = 'auto'; e
 function strategyBindActions() {
   const state = STRAT;
   if (!state) return;
-  const actions = $('#strat-actions');
-  const versions = actions.querySelector('[data-strat-versions]');
+  const versions = $('.rd-strat-head [data-strat-versions]');
   if (versions) versions.onclick = () => void strategyVersionsOpen();
-  const publish = actions.querySelector('[data-strat-publish]');
+  const publish = $('#strat-actions [data-strat-publish]');
   if (publish) publish.onclick = () => { state.publishing = true; strategyRender(); $('[data-strat-publish-form] input')?.focus(); };
 }
 
@@ -816,9 +820,9 @@ function strategyBind() {
       if (!ok && STRAT === state && sform.isConnected) { [state.editSection, state.addSection] = was; sform.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; }); }
     };
     const remove = sform.querySelector<HTMLElement>('[data-section-remove]');
-    if (remove) remove.onclick = () => {
+    if (remove) remove.onclick = async () => {
       const title = stratExtra(view.version)[key]?.title || key;
-      if (confirm(`Remove ${title}? Earlier versions keep it.`)) void send({extra: {[key]: ''}});
+      if (await askConfirm(`Remove ${title}? Earlier versions keep it.`, remove)) void send({extra: {[key]: ''}});
     };
     sform.onsubmit = async ev => {
       ev.preventDefault();

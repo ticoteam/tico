@@ -132,7 +132,12 @@ def register(app, auth, mutate, settings, store, visual_view):
             choice = Providers.load(c, settings)
             cat = gateway_page.catalog(c, settings)
         return {
-            "models": [row for row in MODEL_CATALOG if not row.get("held")],
+            # Each with where a bot on it compacts when none is saved (the Compact list marks it "(default)").
+            "models": [
+                {**row, "compact_default": Providers.compact_default(row["id"])}
+                for row in MODEL_CATALOG
+                if not row.get("held")
+            ],
             "harnesses": list(HARNESS_CATALOG),
             "gateway": gateway_tiers.view(cat),
             "enabled_providers": choice["enabled"],

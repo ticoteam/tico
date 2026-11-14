@@ -16,14 +16,14 @@ from clients.tico import APIError
 
 # ----------------------------------------------------------------------------- goals
 GOAL_YES = _s(
-    "The owner's plain yes to a goal read-back: turn or its message id. On not_agreed read back again, never retry the save."
+    "The owner's agreement to a goal read-back: turn or its message id. On not_agreed read back again, never retry the save."
 )
 
 
 @tool(
     "tico_goal_read_back",
     "Tico writes and stores the read-back in the owner's Strategy Owner chat. "
-    "Saves nothing without a plain yes. "
+    "Saves nothing until the owner agrees. Read back the whole plan at once. "
     "Returns message_id, text and exact method/path/body steps; save agreed steps with tico_goal_save. "
     "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
     {
@@ -31,8 +31,9 @@ GOAL_YES = _s(
             "type": "array",
             "items": {"type": "object"},
             "minItems": 1,
-            "maxItems": 20,
-            "description": "1 to 20 changes, each its kind and that change's fields (on a command line, as JSON)",
+            "maxItems": 500,
+            "description": "the whole plan, 1 to 500 changes, each its kind and that change's fields (on a command line, "
+            "as JSON)",
         }
     },
     required=("changes",),
@@ -44,15 +45,15 @@ def goal_read_back(api, args):
         try:
             changes = json.loads(changes)
         except ValueError:
-            raise ValueError("changes must be a JSON array of 1 to 20 change objects") from None
-    if not isinstance(changes, list) or not 1 <= len(changes) <= 20 or any(not isinstance(c, dict) for c in changes):
-        raise ValueError("changes must be a JSON array of 1 to 20 change objects")
+            raise ValueError("changes must be a JSON array of 1 to 500 change objects") from None
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 500 or any(not isinstance(c, dict) for c in changes):
+        raise ValueError("changes must be a JSON array of 1 to 500 change objects")
     return api.post("goals/read-back", {"changes": changes}, key=_key(args))
 
 
 @tool(
     "tico_goal_save",
-    "Save one exact method/path/body step returned by tico_goal_read_back after the owner's plain yes. "
+    "Save one exact method/path/body step returned by tico_goal_read_back after the owner agrees. "
     "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry. "
     "Also records the owner's \"no\" to a suggestion you made in chat: path /api/v2/goal-proposals/turned-down, with the "
     "suggestion's kind, goal_id, kpi_id, payload and reason as the body; the owner's words become its reason.",
@@ -80,7 +81,7 @@ def goal_save(api, args):
     ):
         raise ValueError("path must be a goal read-back save step")
     if not args.get("on_behalf_of"):
-        raise ValueError("cite the owner's plain yes with on_behalf_of")
+        raise ValueError("cite the owner's yes with on_behalf_of")
     try:
         body = json.loads(args["body"])
     except ValueError:
@@ -576,7 +577,7 @@ def kpi_link(api, args):
 
 @tool(
     "tico_kpi_target",
-    "Set or remove the target on a goal's measure. Cite the owner's plain yes to its read-back.",
+    "Set or remove the target on a goal's measure. Cite the owner's yes to its read-back.",
     {"goal_id": _s("Goal id"), "kpi_id": _s("KPI id"), **TARGET_PROPS, "on_behalf_of": GOAL_YES},
     required=("goal_id", "kpi_id"),
     writes=True,
@@ -743,15 +744,15 @@ GOAL = (
     Group("goal", "goals: list, read-back, create and edit"),
     Command(
         "goal read-back",
-        "Saves nothing without a plain yes: posts 1 to 20 changes as Tico's read-back in the owner's Strategy Owner "
-        "chat, with the exact method, path and body of each step to `goal save` after that yes. On not_agreed read back "
-        "again; never retry the save.",
+        "Saves nothing until the owner agrees: posts the whole plan (1 to 500 changes) as Tico's read-back in the "
+        "owner's chat, with the exact method, path and body of each step to `goal save` after their yes. On not_agreed "
+        "read back again; never retry the save.",
         args=(Arg("changes", action="store"),),
         example="""tico goal read-back '[{"kind": "goal_create", "owner": "me", "title": "Ship 0.6"}]'""",
     ),
     Command(
         "goal save",
-        "save one exact read-back step after the owner's plain yes, citing it with --on-behalf-of",
+        "save one exact read-back step after the owner agrees, citing their reply with --on-behalf-of",
         args=(Arg("on_behalf_of", "--on-behalf-of"),),
         example="tico goal save POST goals '{\"title\": \"Ship 0.6\"}' --on-behalf-of turn",
     ),

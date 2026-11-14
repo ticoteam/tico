@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is five recorded answers, the CRO playbook page published, your KPI under the North Star, your first ideas
 filed, and both routines checked.
 
@@ -35,7 +35,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/funnel.md` (the steps, their pages and
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/funnel.md` (the steps, their pages and
 their count sources) and `knowledge/pages.md` (each page, who puts a change live, what must never be tested there, and
 the date you last checked it as a visitor). Keep the segment list and the never-test list fixed from here on: a change
 to either is a proposal, not an edit.
@@ -91,4 +91,4 @@ off and no person turned it off, run `tico automation update <id> --enable` with
 one line what each does: "Each morning I check every step of what we kept; each Tuesday I file up to three CRO ideas."
 They can change or turn off either at any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
+Record it in `memory/decisions.md`.

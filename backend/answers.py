@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 from . import hubdb_core, pr_conflicts
 from . import task_engine as E
 from . import task_requirements as R
-from . import task_wakes
+from . import task_wakes, validate_gate
 from . import waiting_on as W
 
 if TYPE_CHECKING:
@@ -36,6 +36,9 @@ is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
 DONE, OK, NO, AGAIN, GIVE, PUSHED_PAST = "done", "ok", "no", "again", "give", "pushed_past"
+# The two answers Tico adds to every bot's question to a person (Tasks spec "Bots ask people a question with choices",
+# AC-4 and AC-5), beside the bot's own choices and never counted in them. Each closes the ask like any answer.
+DONT_KNOW, GIVE_BACK = "I don't know, explain", "Give it back"
 # The kinds a person (or a named bot) answers by hand. A page is answered once Jev has looked (task_requirements._page).
 BY_HAND = ("owner_done", "ok", "answer", "page")
 # Kinds that are an ask: they can name a person, and take a thumb (C29).
@@ -197,6 +200,9 @@ def _may_answer(
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
+    if kind == "ok" and validate_gate.held(conn, row, requirement):
+        # A bot's OK in Validate is the person's only once Jev passed its page: not from the task page before then.
+        _refuse(conn, by, "task_requirement", f"{validate_gate.HELD}.", task_id)
     if kind == "ok" and requirement.get("visit_id") and not is_human(by):
         _refuse(conn, by, "task_requirement", "An OK is a person's to give", task_id)
     if kind == "ok" and value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
@@ -380,6 +386,12 @@ def _tell_bot(
         lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}": {value}'
         if is_bot(asker) and target != asker:
             lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}", asked by {_name(conn, asker)}: {value}'
+        if is_bot(asker) and value == GIVE_BACK:
+            # Give it back (AC-5): not an answer to act on. The bot decides, or asks the one it reports to.
+            lead = (
+                f"{_name(conn, by)} gave it back: decide it yourself, or ask your manager. "
+                f'The question was "{R.name_of(requirement)}".'
+            )
         _wake(conn, row, target, lead, key, requirement.get("shows"))
 
 
@@ -447,6 +459,11 @@ def answer(
         from . import task_asks
 
         task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
+    if validate_gate.sends_back(conn, row, requirement, value):
+        # Not validated: back to In development with the note, which files new Engineering work.
+        out = validate_gate.not_validated(conn, task_id, by, notes)
+        out["answer_id"] = answer_id
+        return out
     if requirement["kind"] == "owner_done":
         _done_ends_own_snooze(conn, task_id, by)
     else:

@@ -38,9 +38,9 @@ LIBRARIAN = "librarian"
 STRATEGY_OWNER = G.STRATEGY_OWNER  # keeps the KPIs and sets goals' automatic colours (docs/goals-and-kpis.md)
 ASSISTANT_TEMPLATE_SLUG = "assistant"
 CARD_FILE = "card.yaml"
-INSTRUCTIONS_FILE = "AGENT.md"
+INSTRUCTIONS_FILE = "AGENTS.md"
 # Filled wherever a person reads a card: a template names itself after the assistant, and
-# its AGENT.md is written against the company that is about to adopt it. The wizard no longer
+# its AGENTS.md is written against the company that is about to adopt it. The wizard no longer
 # asks for assistant_name; an empty one falls back to TICO_ASSISTANT_NAME (display_names).
 PLACEHOLDERS = ("company_name", "app_name", "assistant_name", "bot_name")
 NEEDS_SETUP = statuses.NEEDS_SETUP
@@ -116,7 +116,7 @@ def fill(text, names, bot_name=""):
 
 def render(card, names, bot_name=""):
     """One card as a person reads it. A card is written for whichever company adopts it, so
-    every word it shows carries the placeholders, not only its AGENT.md."""
+    every word it shows carries the placeholders, not only its AGENTS.md."""
     name = fill(bot_name or card["name"], names)
     instructions = fill(card["instructions"], names, name)
     return {
@@ -426,6 +426,8 @@ def config_view(c, settings, who=None):
         value["readiness_turn_user"] = True
         # And whether it is a cloud machine's trust group (`trust`, runner-rs/src/fallback.rs server_takes_trust).
         value["readiness_trust"] = True
+        # And Chrome for website tools (`browser`, runner-rs/src/fallback.rs server_takes_browser).
+        value["readiness_browser"] = True
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
         # Pages and SVG from Tico file hosting: the desktop app follows a frame to this origin, only on its signed
@@ -504,7 +506,7 @@ def setup_body(slug, choice, answers):
                 else []
             ),
             "",
-            "Instructions the owner reviewed, for AGENT.md:",
+            "Instructions the owner reviewed, for AGENTS.md:",
             "",
             "```markdown",
             choice["instructions"].strip(),
@@ -1159,7 +1161,7 @@ class Onboarding:
             try:
                 self.execution.assign(c, who, row["bot"], SimpleNamespace(runner_id=runner_id, expected_generation=0))
             except Problem as refusal:
-                if refusal.code not in ("inbox_isolation", "shared_runner"):
+                if refusal.code not in ("inbox_isolation", "shared_runner", "browser_host"):
                     raise
                 continue  # an inbox or a shared checkout cannot take a second bot here
             placed.append(row["bot"])
@@ -1382,7 +1384,13 @@ class Onboarding:
                     self.execution.assign(c, who, slug, SimpleNamespace(runner_id=runner_id, expected_generation=0))
                     break
                 except Problem as problem:
-                    if problem.code not in ("inbox_isolation", "shared_runner", "forbidden", "computer_closed"):
+                    if problem.code not in (
+                        "inbox_isolation",
+                        "shared_runner",
+                        "forbidden",
+                        "computer_closed",
+                        "browser_host",
+                    ):
                         raise
                     refusal = refusal or problem
             else:

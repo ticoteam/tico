@@ -8,7 +8,6 @@ interface SkillsDeviceCode { label?: string | null; user_code?: string | null; }
 // The `!`: the markup this file just drew always has the element; a missing one throws on first use, as the old lookup did.
 function skillsEl<T extends Element>(root: ParentNode, selector: string): T { return root.querySelector<T>(selector)!; }
 
-const SKILLS_CONNECT = '#/skills/connect';
 let SKILLS_CONNECT_LOAD = 0;
 
 async function pageSkillsConnect() {

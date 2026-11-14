@@ -50,7 +50,7 @@ or inbox sending policy. The modes are **On their own**, **Ask first** and **Nev
   window before it goes. Under Ask first Tico asks a person on the task to OK that exact message. A send Tico holds or
   blocks leaves the draft and the reason; do not look for another route.
 - Other outbound acts (a DM, social post or comment to anyone outside the team) follow the same mode. With On their
-  own, the standing send instructions in your AGENT.md and playbooks apply, within the requested work and your Tools.
+  own, the standing send instructions in your AGENTS.md and playbooks apply, within the requested work and your Tools.
   Otherwise produce the send-ready draft, attach it to the task, and stop; under Ask first, ask a person for an OK on
   that exact draft (`approvals.md`) and send only what they OK'd. This holds even where an older instruction says to
   send as the owner.
@@ -79,8 +79,11 @@ customer-facing stays a draft until your sending policy in Tico lets you send.
 Deliver files with `tico task attach <id> <file> --note "..."`. The same task and name adds a version.
 For a comment, use `tico task comment <id> "..." --attach <file>`.
 When your task needs a person (a decision, access, a fix only they can make), ask them once, on your task:
-`tico task ask <id> --to <person> "<one sentence>" [--choices Yes,No] [--show file:<ID@N>] --version N`
-(MCP: `tico_task_ask`). `--kind ok` asks them to OK the thing you show, or send it back with notes. The task stays in
+`tico task ask <id> --to <person> "<one sentence>" --why "<why it matters to them>" --choice "<Label>|<what happens>"
+--choice "<Label>|<what happens>" --recommend <Label> [--show page:<ID>] --version N` (MCP: `tico_task_ask`). A question
+to a person says why it matters and gives 2 to 4 choices, each with what happens, and the one you recommend (or no
+choices, for a typed answer); what it shows is a page, file or task by its id, or a link, never a path in your
+repository. Otherwise it is refused before anyone sees it. `--kind ok` asks them to OK the thing you show, or send it back with notes. The task stays in
 its stage until they answer, the ask is one line in their Needs you with buttons, and their answer wakes you once on
 the task. Act on that answer, and don't ask again. Ask once per version: never re-ask about an answered version;
 attach a new version when the work changes, and ask about that. Answers record who replied; you decide the next step.
@@ -130,16 +133,16 @@ the change in its own repository. This permission does not extend to another bot
 shared policy, a product repository, public content, credentials, or unrequested actions.
 After merging, the bot verifies the result and leaves its runner checkout on an up-to-date `main`.
 
-Every bot hardens itself. At the end of every run, before marking the task done, answer one
-question: did anything go wrong or take a detour this run (a wrong assumption, a refused or
-failed command, a tool used the hard way, a rule you had to guess)? If yes, add the smallest
-scaffold that prevents that exact mistake next time, in your own repo, in the same run:
-- a line in the playbook or AGENT.md when the fix is knowing something;
+Every bot hardens itself. Once per task, when it leaves your stage (done, moved on or closed), not
+on every run, answer one question: did anything go wrong or take a detour on this task (a wrong
+assumption, a refused or failed command, a tool used the hard way, a rule you had to guess)? If
+yes, add the smallest scaffold that prevents that exact mistake next time, in your own repo:
+- a line in the playbook or AGENTS.md when the fix is knowing something;
 - a check or a helper in `software/` when the fix is doing something;
 - a proposed rule on the task when the fix belongs to Tico (mail rules, Slack channels, policy).
 Scope it to the mistake you actually made. Do not add a rule for a mistake you imagine. Do not
 add a process where a sentence will do. Note the change in `memory/learnings.md` with the date
-and the run it came from, so the next reviewer can see why it exists and remove it if it ever
+and the task it came from, so the next reviewer can see why it exists and remove it if it ever
 becomes the problem. Simplicity wins: if two scaffolds would work, keep the smaller one.
 
 ## Announce meaningful shipped changes

@@ -369,6 +369,14 @@ def test_with_many_prs_the_first_unmet_in_link_order_gives_the_line(c):
     assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#2: e2e")
 
 
+def test_a_failed_pr_is_the_line_before_an_earlier_pr_whose_checks_still_run(c):
+    engineering(c)
+    task_id = new(c, 1, 2)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": [{"name": "u", "state": "pending"}]}, 1)
+    F.save_pr(c, REPO, 2, {"state": "open", "head_sha": "b", "checks": [{"name": "e2e", "state": "failure"}]}, 1)
+    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#2: e2e")
+
+
 def test_in_release_waits_for_a_release_that_holds_the_merge(c):
     engineering(c)
     task_id = new(c, 1)
@@ -523,7 +531,7 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
         woken = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
         assert len(woken) == 1 and woken[0].startswith(f"{task_id}:")
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (woken[0],)).fetchone()[0]
-        assert "e2e" in body and "https://ci/9" in body and "Fixes 2" in body
+        assert "e2e" in body and "https://ci/9" in body and "QA" in body
         assert f"tico task queue {task_id}" not in body  # a check that really failed is not queued again as it is
         assert X.events(c, task_id).count("pr_queue_removed") == 1
         assert effects(c, task_id) == [("act", "done")]
@@ -532,6 +540,36 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
     with company.transaction() as c:
         assert stage(c, task_id) == "Merge" and effects(c, task_id) == [("act", "done")]
         assert any(":changed_after_ok:" in key for key, _ in X.wakes(c, task_id, EM))
+
+
+def test_a_drop_of_one_pr_is_the_line_while_another_pr_of_the_task_is_still_queued(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1, 2)
+    MQ.run(company, gh)
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
+    gh.push(REPO, 2)  # a new commit on the second-linked PR: GitHub takes it out; PR 1 stays queued
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        assert gh.prs[(REPO, 1)]["queue_state"] == "queued"
+        assert line(c, task_id, "pr_merged") == (
+            R.NOT_MET,
+            RM,
+            "Dropped from the merge queue: A new commit was pushed",
+        )
+        assert W.turns(c, E.task(c, task_id)) == {RM}
+
+
+def test_links_made_in_the_same_millisecond_keep_the_order_they_were_made_in(c):
+    engineering(c)
+    task_id = new(c, 9, 3)
+    same = "SELECT MIN(created_at) FROM task_links WHERE task_id=?"
+    c.execute(f"UPDATE task_links SET created_at=({same}) WHERE task_id=?", (task_id, task_id))
+    # Ids are random: make the first link's sort after the second's, as a tie broken by id may do
+    c.execute("UPDATE task_links SET id=CASE WHEN url LIKE '%/9' THEN 'z' ELSE 'a' END WHERE task_id=?", (task_id,))
+    assert [pr["number"] for pr in F.prs_of(c, task_id)] == [9, 3]
 
 
 def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_person(company):
@@ -575,7 +613,7 @@ def queue_removal_bodies(c, task_id):
     return [c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0] for key in keys]
 
 
-def test_a_failed_checks_removal_that_names_its_leg_goes_to_fixes_not_the_queue(company):
+def test_a_failed_checks_removal_that_names_its_leg_goes_to_qa_not_the_queue(company):
     gh = FakeGitHub()
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
@@ -584,15 +622,15 @@ def test_a_failed_checks_removal_that_names_its_leg_goes_to_fixes_not_the_queue(
     F.refresh(company, gh, later(10))
     with company.transaction() as c:
         (first,) = queue_removal_bodies(c, task_id)
-        assert REAL_LEG in first and "Fixes 2" in first and f"tico task queue {task_id}" not in first
+        assert REAL_LEG in first and "QA" in first and f"tico task queue {task_id}" not in first
         version = E.task(c, task_id)["version"]
         detail = refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
-        assert REAL_LEG in detail and "Fixes 2" in detail
+        assert REAL_LEG in detail and "QA" in detail
         assert stage(c, task_id) == "Merge"
     head = gh.push(REPO, 1)  # a fix pushed: a bot may not queue that commit, a person may
     F.refresh(company, gh, later(30))
     with company.transaction() as c:
-        assert "Fixes 2" in refused(
+        assert "QA" in refused(
             lambda: MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"]), "task_requirement"
         )
         owed = MQ.requeue(c, task_id, X.ANA, seen_version=E.task(c, task_id)["version"])
@@ -600,7 +638,7 @@ def test_a_failed_checks_removal_that_names_its_leg_goes_to_fixes_not_the_queue(
 
 
 @pytest.mark.parametrize("check", [MQ.CANCELLED_FROM_OUTSIDE, None])
-def test_an_outside_cancel_is_queued_once_at_a_head_and_a_second_removal_goes_to_fixes(company, check):
+def test_an_outside_cancel_is_queued_once_at_a_head_and_a_second_removal_goes_to_qa(company, check):
     gh = FakeGitHub()
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
@@ -618,9 +656,9 @@ def test_an_outside_cancel_is_queued_once_at_a_head_and_a_second_removal_goes_to
         later_bodies = queue_removal_bodies(c, task_id)
         assert len(later_bodies) == 2
         (second,) = [body for body in later_bodies if body != first]
-        assert "Fixes 2" in second and "Queue it again" not in second
+        assert "QA" in second and "Queue it again" not in second
         version = E.task(c, task_id)["version"]
-        assert "Fixes 2" in refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
+        assert "QA" in refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
         assert stage(c, task_id) == "Merge"
 
 
@@ -905,7 +943,8 @@ def owner_wakes(c, task_id, who):
 @pytest.mark.parametrize("where", ["Build", "Merge"])
 def test_a_pr_closed_by_hand_is_the_stage_owner_s_turn_and_wakes_them_once(company, where):
     """Spec "The ladder": a GitHub wait that turns Not met is the owner's turn; the never-stuck check wakes them once
-    with what is missing (after its first gap, as for a failed check), and not again before its next try."""
+    with what is missing (15 minutes after the run that opened the PR finished, never 2), and not again before its next
+    try."""
     gh = FakeGitHub()
     with company.transaction() as c:
         if where == "Merge":
@@ -927,7 +966,7 @@ def test_a_pr_closed_by_hand_is_the_stage_owner_s_turn_and_wakes_them_once(compa
     F.refresh(company, gh, later())
     with company.transaction() as c:
         assert line(c, task_id, kind) == (R.NOT_MET, owner, f"{REF} was closed without merging")
-        for seconds in (10, 20, 30, 150, 160, 600):  # the check's passes, every 10 s, then up to 10 minutes on
+        for seconds in (10, 20, 30, 150, 160, 600, 910, 1200):  # the check's passes, every 10 s, then up to 20 min on
             NS.check(c, H.shift(now, seconds=seconds))
         added = [w for w in owner_wakes(c, task_id, owner) if w not in before]
         assert len(added) == 1, added
@@ -992,7 +1031,7 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
         refused(lambda: go(by=RM, v=version - 1), "task_changed")
         refused(lambda: go(by=B), "task_requirement")  # not the owner, the manager or a person
         # The new commit changes other lines than the one the person OK'd: the Release Owner sends the task back to
-        # Fixes 2, where Reviewer 2 reads them; it may not queue it as it is (an OK on an old commit never merges a
+        # QA, where Reviewer 2 reads them; it may not queue it as it is (an OK on an old commit never merges a
         # new one).
         assert refused(lambda: go(by=RM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
         assert refused(lambda: go(by=EM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
@@ -1029,6 +1068,56 @@ def test_a_rebase_after_the_ok_is_queued_again_by_the_release_owner(company):
         assert [(e["state"], e["pinned"]) for e in owed] == [("owed", head)]
     F.refresh(company, gh, later(20))
     assert [call[0] for call in gh.calls].count("pr_diff") == 2, "each commit is read once"
+
+
+COMPARE_FILES = [
+    {"filename": "b.py", "status": "modified", "patch": "@@ -1 +1 @@\n-x = 1\n+x = 2"},
+    {"filename": "a.png", "status": "added", "sha": "abc"},
+    {"filename": "gone.py", "status": "removed"},
+]
+
+
+def test_what_a_commit_changes_keeps_its_id_and_now_its_commits_and_files():
+    """#435: the compare now also gives the PR's commits and each file's part, for the person asked again after new
+    commits. The id of what it changes stays the one kept before, or every OK'd PR would read as changed."""
+    assert F.diff_id(COMPARE_FILES) == "2a8086eabe7e1a84f7aface30699acab47f8a9e3fcf9d0f7e411f4a291517824"
+    body = {
+        "files": COMPARE_FILES,
+        "commits": [
+            {"sha": "a" * 40, "commit": {"message": "Absolute value"}},
+            {"sha": "b" * 40, "commit": {"message": "Handle the 0 case\n\nIt was dropped."}},
+        ],
+    }
+    got = F.diff_of(body)
+    assert got["diff_id"] == F.diff_id(COMPARE_FILES)
+    assert got["commits"] == [["a" * 40, "Absolute value"], ["b" * 40, "Handle the 0 case"]]
+    assert sorted(got["files"]) == ["a.png", "b.py", "gone.py"]
+    assert F.diff_of({"files": [{"filename": "x.bin", "status": "modified"}]})["files"] is None
+
+
+def test_new_commits_since_count_new_titles_and_changed_files(c):
+    """`since`: commits the OK'd one did not have (a rebase's copies keep their titles, so are not new), the newest
+    titles first, and the files whose part of the diff differs. None until both commits were read with their commits."""
+    ref = f"{REPO}#1"
+    first = [["a" * 40, "Absolute value"]]
+    F.save_diff(c, REPO, "old", "d1", commits=first, files={"abs.py": "h1", "keep.py": "k"})
+    assert F.since(c, {ref: "old"}, {ref: "new"}) is None, "the new commit is not read yet"
+    F.save_diff(c, REPO, "new", "d2")
+    assert F.since(c, {ref: "old"}, {ref: "new"}) is None, "read before Tico kept commits"
+    rebased = [["c" * 40, "Absolute value"], ["d" * 40, "Handle 0"], ["e" * 40, "Say why"]]
+    F.save_diff(c, REPO, "new", "d2", commits=rebased, files={"abs.py": "h2", "keep.py": "k", "new.py": "n"})
+    assert F.since(c, {ref: "old"}, {ref: "new"}) == {"commits": 2, "titles": ["Say why", "Handle 0"], "files": 2}
+    # A new commit with an old commit's title is new when the old commit is still there: only a rewritten commit's
+    # title cancels one copy.
+    F.save_diff(c, REPO, "old2", "d3", commits=[["f" * 40, "Fix tests"]], files={"abs.py": "h1"})
+    again = [["f" * 40, "Fix tests"], ["0" * 40, "Fix tests"]]
+    F.save_diff(c, REPO, "new2", "d4", commits=again, files={"abs.py": "h3"})
+    assert F.since(c, {ref: "old2"}, {ref: "new2"}) == {"commits": 1, "titles": ["Fix tests"], "files": 1}
+    # A rebase plus one new commit with the same title: the rewritten commit cancels only its own copy.
+    F.save_diff(
+        c, REPO, "new3", "d5", commits=[["1" * 40, "Fix tests"], ["2" * 40, "Fix tests"]], files={"abs.py": "h3"}
+    )
+    assert F.since(c, {ref: "old2"}, {ref: "new3"}) == {"commits": 1, "titles": ["Fix tests"], "files": 1}
 
 
 def test_queue_again_only_on_a_stage_that_queues_and_an_open_task(c):
@@ -1294,7 +1383,7 @@ def test_the_heartbeat_steps_are_quiet_without_a_github_app():
 # Every way into a stage that queues PRs passes the stages before it (docs/pipelines-v3.md "GitHub", "Merge"): a bot
 # can't push past the person's OK, link a new PR there, move back into it, or reopen or restore a task into it.
 def preset_engineering(c):
-    """The Engineering preset with the Fixes 2 OK people-only (chris/rc3-signoffs makes the preset so)."""
+    """The Engineering preset with the QA OK people-only (chris/rc3-signoffs makes the preset so)."""
     from backend import pipeline_settings as PS
     from backend.tests.helpers.product_engineering_presets import _answers, _team
 
@@ -1304,7 +1393,7 @@ def preset_engineering(c):
     pid = c.execute("SELECT id FROM pipelines WHERE name='Engineering'").fetchone()[0]
     c.execute(
         "UPDATE requirements SET who_oks='people_only' WHERE kind='page' AND stage_id IN "
-        "(SELECT id FROM stages WHERE pipeline_id=? AND name='Fixes 2')",
+        "(SELECT id FROM stages WHERE pipeline_id=? AND name='QA')",
         (pid,),
     )
     return pid

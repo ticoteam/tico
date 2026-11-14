@@ -263,6 +263,7 @@ class TaskRow(TypedDict):
     pipeline_id: str | None
     stage_id: str | None
     assignee_id: str | None
+    human_id: str | None
 
 
 class PresenceRow(TypedDict):
@@ -333,6 +334,7 @@ class AttemptRow(TypedDict):
     session_why: str | None
     input_tokens: int | None
     cached_tokens: int | None
+    cache_write_tokens: int | None
     output_tokens: int | None
     prompt_tokens: int | None
     usage_model: str | None
@@ -378,6 +380,7 @@ class RunnerRow(TypedDict):
     performance: str
     turns_at_once: int | None
     device_id: str | None
+    gateway_fallback: int
 
 
 class RunnerStateRow(TypedDict):
@@ -525,6 +528,7 @@ class UsageFactRow(TypedDict):
     billing: str | None
     input_tokens: int
     cached_tokens: int
+    cache_write_tokens: int | None
     output_tokens: int
     cost_nano: int | None
     low_estimate: int | None
@@ -934,6 +938,9 @@ class ToolRow(TypedDict):
     created_at: str
     updated_at: str
     audience: str | None
+    kind: str
+    sites: str | None
+    central_only: int
 
 
 class ToolCheckRow(TypedDict):
@@ -1483,6 +1490,7 @@ class PipelineRow(TypedDict):
     created_at: str
     updated_at: str
     retired_at: str | None
+    keep_warm_hours: int
 
 
 class StageRow(TypedDict):
@@ -1504,6 +1512,7 @@ class StageRow(TypedDict):
     created_at: str
     updated_at: str
     retired_at: str | None
+    pick: str | None
 
 
 class VisitRow(TypedDict):
@@ -1530,6 +1539,9 @@ class VisitRow(TypedDict):
     last_change_attempt: int | None
     last_change_message: int | None
     last_change_start: int | None
+    holder_id: str | None
+    pick_state: str | None
+    pick_why: str | None
 
 
 class RequirementRow(TypedDict):
@@ -1585,6 +1597,20 @@ class SnoozeRow(TypedDict):
     created_at: str
     ended_at: str | None
     ended_by_id: str | None
+    filed: int  # 1: written as a bot filed its own idea into Product's Ideas; only a person ends it (idea_checks)
+
+
+class IdeaCheckRow(TypedDict):
+    """Jev's duplicate check on an idea filed into Product's Ideas (backend/idea_checks.py), owed until checked_at."""
+
+    task_id: str
+    visit_id: str | None
+    owed_at: str
+    checked_at: str | None
+    outcome: str | None
+    same_id: str | None
+    confidence: float | None
+    call_id: str | None
 
 
 class OkGrantRow(TypedDict):
@@ -1706,11 +1732,15 @@ class GithubReleaseCommitRow(TypedDict):
 
 
 class GithubPrDiffRow(TypedDict):
-    """What a PR commit changes, as one id (item_sources.github.diff_id); None when GitHub could not give it all."""
+    """What a PR commit changes, as one id (item_sources.github.diff_id); None when GitHub could not give it all. With
+    it, as JSON, the PR's commits up to it ([[sha, title]]) and each file's part of the diff ({name: id}); None when
+    read before Tico kept them or GitHub did not give them all."""
 
     repo: str
     sha: str
     diff_id: str | None
+    commits: str | None
+    files: str | None
     read_at: str
 
 
@@ -1808,6 +1838,30 @@ class ListeningItemRow(TypedDict):
     scored_at: str | None
     run_id: str | None
     sent_at: str | None
+    delivered: str | None  # JSON list of the step ids that delivered it, for an item not all steps took
     cost: float
     created_at: str
     updated_at: str
+
+
+# Customer facts Growth computes cohorts from (backend/growth_customers.py): dates are YYYY-MM-DD in the team's zone.
+class GrowthCustomerRow(TypedDict):
+    source: str
+    customer_key: str
+    became: str
+    signed_up: str | None
+    channel: str | None
+    segment: str | None
+    plan: str | None
+    churned: str | None
+    revenue_month: float | None
+    loaded_at: str
+
+
+class GrowthCustomerLoadRow(TypedDict):
+    id: str
+    source: str
+    customers: int
+    removed: int
+    loaded_by: str | None
+    loaded_at: str

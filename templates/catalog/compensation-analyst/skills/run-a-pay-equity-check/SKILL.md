@@ -7,7 +7,7 @@ description: Compare pay between groups of people with like-for-like controls, r
 When to use: when the owner asks for a pay equity check on a group, or on a review cycle, and has attached the data for it.
 
 Steps:
-1. Confirm the purpose and the owner who acts on the result, from `state.md`. Use only the attached data. Do not add data
+1. Confirm the purpose and the owner who acts on the result, from `knowledge/philosophy.md`. Use only the attached data. Do not add data
    from elsewhere without the owner's yes.
 2. Check the group sizes before any comparison. Any group under five is combined with the nearest group, or left out with a
    note. Do not stack filters (team, tenure, location) that shrink a reported group below five.

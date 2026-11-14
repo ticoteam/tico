@@ -47,6 +47,8 @@ struct Behaviour {
     fail: HashSet<usize>,
     /// Events uploads stored whose answer is lost (the connection closes).
     drop_answer: HashSet<usize>,
+    /// When set, the first events upload is not answered (nor stored) until this is notified.
+    hold_first: Option<Arc<Notify>>,
 }
 
 /// The hub runs on its own runtime and threads, as a server does: the runner's work never delays its answers.
@@ -124,6 +126,9 @@ async fn serve(k: Arc<Mutex<Kept>>, b: Arc<Behaviour>, ready: std::sync::mpsc::S
                             *lock += 1;
                             let events = body["events"].as_array().cloned().unwrap_or_default();
                             tokio::time::sleep(b.write + b.per_event * events.len() as u32).await;
+                            if let (0, Some(hold)) = (n, &b.hold_first) {
+                                hold.notified().await;
+                            }
                             if b.fail.contains(&n) {
                                 kept.lock().unwrap().uploads.push((
                                     aid.to_string(),
@@ -578,10 +583,14 @@ async fn idle_turns_do_not_widen_the_window_and_a_turn_counts_out_a_second_after
 }
 
 /// How long a control event recorded during an upload takes to reach the hub when the store's write connection
-/// stalls for 1 s (other turns' appends and fsyncs) just as that upload's answer arrives.
+/// stalls for 1 s (other turns' appends and fsyncs) just as that upload's answer arrives. The hub holds that answer
+/// until the stall really has the connection, so the ack write always lands inside the stall, however the threads
+/// are scheduled.
 async fn control_behind_a_stalled_ack(bounds: Bounds) -> Duration {
+    let stalled = Arc::new(Notify::new());
     let hub = hub(Behaviour {
         write: Duration::from_millis(200),
+        hold_first: Some(stalled.clone()),
         ..Default::default()
     })
     .await;
@@ -613,21 +622,27 @@ async fn control_behind_a_stalled_ack(bounds: Bounds) -> Duration {
         let (runner, aid) = (runner.clone(), aid.clone());
         async move { runner.flush(&aid).await }
     });
+    // Lets the second flush queue behind the first before the stall can begin.
     tokio::time::sleep(Duration::from_millis(50)).await;
     let state = runner.state.clone();
     let stall = std::thread::spawn(move || {
         state.with(|_| {
+            let began = Instant::now();
+            // Stores a permit if the hub is not waiting yet.
+            stalled.notify_one();
             std::thread::sleep(Duration::from_secs(1));
-            Ok(())
+            Ok(began)
         })
     });
     first.await.unwrap().unwrap();
     second.await.unwrap().unwrap();
-    stall.join().unwrap().unwrap();
+    let stall_began = stall.join().unwrap().unwrap();
     let kept = hub.kept.lock().unwrap();
     assert!(kept.refused.is_empty(), "{:?}", kept.refused);
     assert_eq!(kept.stored[&aid], local(&runner, &aid));
-    let late = arrival(&kept, &aid, seq).saturating_duration_since(written);
+    // The hub holds its first answer until the stall begins, so a late stall thread would count against the new
+    // order too: measure from whichever came last.
+    let late = arrival(&kept, &aid, seq).saturating_duration_since(written.max(stall_began));
     std::fs::remove_dir_all(dir).ok();
     late
 }

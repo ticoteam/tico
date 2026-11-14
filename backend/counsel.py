@@ -466,7 +466,7 @@ def read(c, auth, who, files, blobs, body, found):
         else "Departments holding this From's access: none granted (leave Who empty)"
     )
     lines = [
-        "Read this document and suggest the rules that bind us. Follow the Documents section of your AGENT.md.",
+        "Read this document and suggest the rules that bind us. Follow the Documents section of your AGENTS.md.",
         f"From: {source['name']} ({source['kind']})",
         f"Document: {file_id} version {number}",
         hint,
@@ -997,7 +997,7 @@ def ask(c, auth, who, question):
     lines = [
         "Answer this question from the rules in force. Cite each rule by its id and From; if no rule covers it, say "
         "so and suggest a lawyer. End with the one line that it is not legal advice. Follow the Questions section of "
-        "your AGENT.md.",
+        "your AGENTS.md.",
         "",
         "The question (a person's words):",
         fence(question),

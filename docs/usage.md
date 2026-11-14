@@ -12,6 +12,12 @@ from the old `turns` table by migration 0072) and prices them
 from `providers.PRICES`, in USD per million tokens, dated by `providers.PRICES_AS_OF`. A cache write counts as input; batch, priority and
 regional premiums are not modelled. A model with no price keeps its tokens and shows a dash for the cost.
 
+Cache writes are counted apart: the cache writes a run's harness reports (Claude's `cache_creation_input_tokens`, Cursor's
+`cacheWriteTokens`, pi's `cacheWrite`) go to `cache_write_tokens` (on `attempts` and `usage_facts`) and are left out of
+`input_tokens`, which is then the uncached input only. They are still priced as input. A runtime that reports no cache
+writes (Codex, Gemini, Antigravity, Muse Code) records 0. A run recorded
+before they were counted apart, or by a runner too old to send them, has NULL there and its `input_tokens` include them.
+
 Some models charge more for a request with a long prompt (`providers.LONG_PROMPT`, dated by `LONG_PROMPT_AS_OF`; today Claude Haiku
 5.5 over 100,000 tokens, counting cache reads and writes). For those, the Claude runner sends each model request's tokens as `requests`
 and the server prices each request at its own rate. A Decide judge call is one request too, so its prompt pays the long tier for Claude Haiku 5.5 (approved 2026-11-06) and gpt-6.1-terra. Tokens no request accounts for (an older runner, another runtime, a run of more
@@ -22,6 +28,29 @@ tokens (Grok today) shows runs and no tokens. When every API run lacks reported 
 A run on a ChatGPT or Claude sign-in (Codex "Signed in with ChatGPT", Claude with `claude.ai` or a long-lived OAuth token, a Cursor
 account) is `billing: subscription`. It costs nothing extra, so its figure is shown as "API-equivalent" and kept out of the estimate of what
 was spent.
+
+## A bot's detail
+
+Click a bot on the Usage page to see what explains its spend, under the page's range and filters, from one request
+(`GET /api/v2/usage?bot=<slug>`):
+
+- **A summary**: its API-equivalent cost, runs, tokens and cache rate.
+- **Tokens**: one bar split into four parts, with a legend giving each part's count and share of all tokens.
+  - **Cache reads**: input the provider read from its prompt cache (`cached_tokens`). On most models these cost about a
+    tenth of new input.
+  - **Cache writes**: input written to the cache for later turns (`cache_write_tokens`; 0 on runtimes that report none).
+  - **New input**: input sent fresh, neither read from nor written to the cache (`input_tokens`).
+  - **Output**: what the model wrote back (`output_tokens`).
+- **Cache rate** = cache reads ÷ (new input + cache reads + cache writes): the share of input tokens read from cache, as a
+  whole percent. A dash when no input tokens were reported. A runtime that counts cache reads differently (or not at all)
+  reads lower.
+- **Tasks**: the bot's top 10 tasks by cost, each with its runs, tokens, cache rate, cost and share of the bot's cost, then
+  how many more and what they cost. Runs with no task always keep their own row. Runs are grouped by task title, so a routine's runs add up on one row; a private
+  task reads "A private task", one you can't open "A task you can't open", and runs with no task "Chats and other runs".
+- **Models**: every model the bot used, with the same columns; a model with no list price shows a dash for cost.
+- **Cost per day**, only when the range has two days or more; hover a column for its cost, runs and cache rate.
+- **Automations**, and **Export CSV**: the bot's days with their token counts, costs and `cache_rate` (0 to 1, empty
+  when no input tokens were reported).
 
 ## Who sees it
 
@@ -87,7 +116,7 @@ Usage > Limits; the hub decides who may change which, and a row it says is not y
 ## API
 
 `GET /api/v2/usage?from=&to=&department=&bots=&group=bot|day|routine|task|harness|model|effort|subscription` (UTC dates, default the last 7 days, at most 366) returns `rows` and
-`totals` with `runs`, `input_tokens`, `cached_tokens`, `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
+`totals` with `runs`, `input_tokens`, `cached_tokens`, `cache_write_tokens` (NULL runs sum as 0), `output_tokens`, `est_cost_usd` (null when every API-billed run used an unpriced
 model or reported no usage), `subscription_equiv_usd`, `unpriced_runs`, `low_estimate_runs`, and on each row its `share` of the total. `?bot=<slug>` returns that bot's `daily` series and top
 `routines`. The legacy `department` query parameter filters by group; `bots` (slugs, comma separated) narrows to those bots; `group` selects how rows are aggregated (`task`: the top 25 tasks by spend, a private one named only as one, one the reader cannot open only as that, runs with no task together). A group lead also sees the bots in the groups they lead, as `/usage/limits` lists them. See `GET /api/v2/openapi.json`.
 
@@ -117,3 +146,5 @@ remain the runner's reported choice; this does not discover an underlying model 
 A new runner talking to an older server falls back to the older final-portion usage report. Update the
 server and runners to get complete primary/fallback attribution. No provider credentials are stored
 with usage. This page is an estimate of Tico runs, not a provider invoice or a subscription quota meter.
+
+Why bots spend what they do, what was done to cut it, and the weekly review: [Token efficiency](token-efficiency.md).

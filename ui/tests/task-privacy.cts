@@ -1,8 +1,8 @@
 import type * as Tasks from './tasks-page.cts';
 import type {Page} from 'playwright';
 // Task privacy in the task window, on the v3 fixture (ui/tests/tasks-page.cts); every request is intercepted.
-// - Private: the requester may make a private task public; Who can see lists requester, owner and readers, × takes a
-//   reader off, + adds one; a company task says Public.
+// - Visible to (one row, task #409): the requester may make a private task the team's; a private task lists requester,
+//   owner and readers, × takes a reader off, + adds one; a company task says Team.
 // - Followers: each name with its level when not live; Follow / Following for you, × for others.
 // - A task filed under a private parent is private (the create form sends it); a parent the reader cannot open is
 //   named only "a private task", never its title or id, and is not a link.
@@ -15,6 +15,10 @@ const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
 const {html} = require('./support/page.cts');
 const {open, task} = require('./tasks-page.cts') as Tasks.Api;
+const openDetails = async (page: import('playwright').Page, id: string) => {
+  const sum = page.locator(`#task-modal[open][data-task="${id}"] details.task-details:not([open]) > summary`);
+  if (await sum.count()) await sum.click();
+};
 declare function openTaskCreate(owner: string, opts?: {parent: {id: string; title: string; private: boolean}}): void;
 declare function loadSettings(): Promise<void>;
 declare function settingsEditBot(name: string): void;
@@ -76,13 +80,14 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     const {page, errors, posts} = await open(browser, {hash: '#/task/t-11', tasks, needs: [], bots: BOTS, beforeGoto: routes});
     const win = page.locator('#task-modal[open]');
 
-    // Private: Ana asked for it, so she may make it public.
-    const privacy = win.locator('[data-task-private]');
-    assert(await privacy.isChecked());
-    assert(await privacy.isEnabled(), 'the requester may make it public');
+    // Visible to: Private. Ana asked for it, so she may make it the team's.
+    await win.locator('details.task-details').waitFor();
+    await openDetails(page, 't-11');
+    const seen = win.locator('[data-prop-row="visible"]');
+    await seen.locator('[data-prop="visible"]').waitFor();
+    assert.equal(await seen.getAttribute('data-visible'), 'private');
 
-    // Who can see: requester, owner and one reader; only the reader comes off; + adds one (not the owner).
-    const seen = win.locator('[data-prop-row="readers"]');
+    // Private · names: requester, owner and one reader; only the reader comes off; + adds one (not the owner).
     await seen.locator('[data-prop-clear-reader="human:sam"]').waitFor();
     assert.equal(await seen.locator('.prop-chip').count(), 3, 'requester, owner and one reader');
     assert.equal(await seen.locator('.prop-x').count(), 1, 'only a reader comes off');
@@ -115,43 +120,54 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await fol.locator('[data-prop-unfollow="human:sam"]').waitFor({state: 'detached'});
     assert.deepEqual(posted.at(-1)!.body, {actor: 'human:sam', following: false});
 
-    // Making it public sends private: false with the version.
-    await privacy.uncheck();
-    await page.waitForFunction(() => document.querySelector('#task-modal [data-prop-row="readers"]')?.textContent?.includes('Public'));
+    // Making it the team's sends private: false with the version.
+    await seen.locator('[data-prop="visible"]').click();
+    await page.locator('#task-modal .prop-pop [data-prop-pick="team"]').click();
+    await page.locator('#task-modal [data-prop-row="visible"][data-visible="team"]').waitFor();
     const edit = posts.find(x => x.p === '/api/v2/tasks/t-11')!;
     assert.equal(edit.body['private'], false);
 
-    // A company task: Public, nothing to add.
+    // A company task: Team, no people to add.
     await page.evaluate(() => { location.hash = '#/task/t-12'; });
-    await page.locator('#task-modal[open][data-task="t-12"] [data-prop-row="readers"]', {hasText: 'Public'}).waitFor();
-    assert.equal(await win.locator('[data-prop-row="readers"] [data-prop="readers"]').count(), 0);
+    await page.locator('#task-modal[open][data-task="t-12"] details.task-details').waitFor();
+    await openDetails(page, 't-12');
+    await page.locator('#task-modal[open][data-task="t-12"] [data-prop-row="visible"]', {hasText: 'Team'}).waitFor();
+    assert.equal(await win.locator('[data-prop-row="visible"] [data-prop="readers"]').count(), 0);
     // No parent: nothing to add one with (backend/task_relations.py relate refuses a parent).
-    assert.equal(await win.locator('[data-prop-row="parent"] [data-prop="parent"]').count(), 0, 'no Add parent');
-    assert.match(await win.locator('[data-prop-row="parent"]').innerText(), /None/);
+    assert.equal(await win.locator('[data-prop-row="parent"]').count(), 0, 'no parent: no Part of row, nothing to add');
 
     // Filed by Postal mail on Ana's rights: Asked by names Postal mail; Who can see still lists Ana, not Postal mail.
     await page.evaluate(() => { location.hash = '#/task/t-15'; });
     const filed = page.locator('#task-modal[open][data-task="t-15"]');
+    await filed.locator('details.task-details').waitFor();
+    await openDetails(page, 't-15');
     await filed.locator('[data-prop-row="asker"]').waitFor();
     assert.match(await filed.locator('[data-prop-row="asker"]').innerText(), /Postal mail/);
-    const filedSeen = await filed.locator('[data-prop-row="readers"]').innerText();
+    const filedSeen = await filed.locator('[data-prop-row="visible"]').innerText();
     assert.doesNotMatch(filedSeen, /Postal mail/, 'the filer is not someone who can see it');
     assert.match(filedSeen, /You/, 'the requester still can');
 
     // A parent the reader can open: a link to it, nothing to change or take off.
     await page.evaluate(() => { location.hash = '#/task/t-14'; });
+    await page.locator('#task-modal[open][data-task="t-14"] details.task-details').waitFor();
+    await openDetails(page, 't-14');
     const up = page.locator('#task-modal[open][data-task="t-14"] [data-prop-row="parent"]');
     await up.waitFor();
     assert.equal(await up.locator('[data-open-task="t-12"]').count(), 1, 'links to the parent');
     assert.equal(await up.locator('[data-prop-clear="parent"], [data-prop="parent"]').count(), 0, 'no change or remove');
     // The Related menu: only what relate writes.
+    // An empty Related section is under ⋯ › Activity and links (task #409).
+    await page.locator('#task-modal[open][data-task="t-14"] [data-task-more]').click();
+    await page.locator('#task-modal .prop-pop').getByRole('menuitem', {name: 'Activity and links'}).click();
     await page.locator('#task-modal[open][data-task="t-14"] [data-related-add]').click();
     const kinds = await page.locator('#task-modal .prop-pop [data-prop-pick]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset['propPick']));
-    assert.deepEqual(kinds, ['related', 'duplicate_of', 'follow_up']);
+    assert.deepEqual(kinds, ['related', 'duplicate_of', 'follow_up', 'depends_on']);
     await page.keyboard.press('Escape');
 
     // A parent the reader cannot open: "a private task", no link, nothing of it in the window.
     await page.evaluate(() => { location.hash = '#/task/t-13'; });
+    await page.locator('#task-modal[open][data-task="t-13"] details.task-details').waitFor();
+    await openDetails(page, 't-13');
     const parent = page.locator('#task-modal[open][data-task="t-13"] [data-prop-row="parent"]');
     await parent.waitFor();
     assert.match(await parent.innerText(), /a private task/);
@@ -185,6 +201,6 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
     assert.deepEqual(posted.find(x => x.p === '/api/v2/bots/pm/definition')!.body['update_subscriptions'], ['templates', 'tico']);
     assert.deepEqual(errors, []);
-    console.log('task privacy: Private, Who can see, Followers, Public, a hidden parent named only "a private task", private under a private parent, bot defaults: ok');
+    console.log('task privacy: Visible to (Private · names, Team), Followers, a hidden parent named only "a private task", private under a private parent, bot defaults: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

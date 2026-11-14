@@ -981,12 +981,12 @@ pub async fn preflight(
                 &computer,
             ));
         }
-        let repository_present = repo_problem.is_none() && path.join("AGENT.md").is_file();
+        let repository_present = repo_problem.is_none() && crate::instructions::present(&path);
         if !repository_present && !app && repo_problem.is_none() {
             problems.push(
                 crate::product_files::problem(&bot)
                     .or_else(|| crate::fetchrepo::problem(&bot))
-                    .unwrap_or_else(|| "Missing bot repository or AGENT.md".into()),
+                    .unwrap_or_else(|| "Missing bot repository or AGENTS.md".into()),
             );
         } else if repository_present {
             // Its harness's permission rules matter only where its turns run on that harness: signed in here, signed
@@ -1001,11 +1001,11 @@ pub async fn preflight(
             if caps.repo_permission_lint && harness_runs {
                 warnings.extend(crate::readiness_extra::deny_warnings(&path));
             }
-            if let Ok(text) = std::fs::read(path.join("AGENT.md")) {
+            if let Some(Ok(text)) = crate::instructions::path(&path).map(std::fs::read) {
                 let lines =
                     text.split(|b| *b == b'\n').count() - usize::from(text.ends_with(b"\n"));
                 if lines > 150 {
-                    warnings.push(format!("AGENT.md is {lines} lines; keep current rules under 150 and move dated history to memory/decisions.md"));
+                    warnings.push(format!("AGENTS.md is {lines} lines; keep current rules under 150 and move dated history to memory/decisions.md"));
                 }
             }
         }
@@ -1336,7 +1336,9 @@ pub fn mail_agent_instructions(config: &Config, assignments: &[Value]) -> Map<St
             continue;
         }
         let bot = text_of(&entry["bot"]);
-        let path = local_path(config, &bot).join("AGENT.md");
+        let checkout = local_path(config, &bot);
+        let path = crate::instructions::path(&checkout)
+            .unwrap_or_else(|| checkout.join(crate::instructions::FILE));
         match std::fs::symlink_metadata(&path)
             .ok()
             .filter(|m| m.is_file())
@@ -1353,7 +1355,7 @@ pub fn mail_agent_instructions(config: &Config, assignments: &[Value]) -> Map<St
                 );
             }
             Some(_) => crate::util::log(&format!(
-                "Tico runner: {bot}: AGENT.md is too large to show in Mail"
+                "Tico runner: {bot}: AGENTS.md is too large to show in Mail"
             )),
         }
     }
@@ -1372,7 +1374,9 @@ pub fn changed_agent_instructions(
             continue;
         }
         let bot = text_of(&entry["bot"]);
-        let path = local_path(config, &bot).join("AGENT.md");
+        let checkout = local_path(config, &bot);
+        let path = crate::instructions::path(&checkout)
+            .unwrap_or_else(|| checkout.join(crate::instructions::FILE));
         let meta = std::fs::symlink_metadata(&path)
             .ok()
             .filter(|m| m.is_file());

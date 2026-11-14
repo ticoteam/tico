@@ -59,8 +59,11 @@ async function notifyThreadNeedsOnce(items: NeedsEntry[]) {
   const id = S.me?.id;
   if (!id) return;                  // the identity has not loaded: there is no person to keep a memory for yet
   if (S.notifyBrowser === undefined) {
-    // The person's own row in the people list carries the setting (there is no one-person read).
-    try { S.notifyBrowser = ((await v2Get('/humans'))?.people || []).find((p: {id?: string; notify_browser?: boolean}) => p.id === id)?.notify_browser === true; }
+    // The person's own row in the people list carries the setting (there is no one-person read): the list the page
+    // read as it opened (boot.ts setPeople) when it has the row, else read for it.
+    const own = (people: {id?: string; notify_browser?: boolean}[] | null | undefined) => (people || []).find(p => p.id === id);
+    const held = own(S.people);
+    try { S.notifyBrowser = (held && 'notify_browser' in held ? held : own((await v2Get('/humans'))?.people))?.notify_browser === true; }
     catch { S.notifyBrowser = false; }
     pushKeep(S.notifyBrowser);         // this browser takes Web Push too (person-page.ts)
   }

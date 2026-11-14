@@ -179,6 +179,7 @@ AUDIENCE = {
         name: REQUESTER
         for name in (
             "tico_credential_grant",
+            "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
             "tico_credential_revoke",
             "tico_credential_import",
             "tico_credential_delete",
@@ -262,6 +263,9 @@ AUDIENCE = {
     # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
     "tico_assistant_learn": HUMANS_AND_ASSISTANT,
     "tico_assistant_learned": HUMANS_AND_ASSISTANT,
+    # A chat a person shared with a bot they chose (backend/assistant_share.py): only that bot, in its own run.
+    "tico_assistant_shared": BOTS,
+    "tico_assistant_shared_read": BOTS,
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.
     "tico_brief": HUMANS_AND_ASSISTANT,
     "tico_bot_recent": HUMANS_AND_ASSISTANT,
@@ -291,13 +295,21 @@ AUDIENCE = {
     "tico_page_publish": BOTS + ("assistant",),  # the route authenticates the initiating Make page request
     # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
     "tico_file_delete": ("owner", "botops"),
+    "tico_page_card": BOTS,  # only the page's owner bot, for a person who just wrote to it there (the route checks)
     "tico_page_archive": PEOPLE + BOTS,
     "tico_page_access": PEOPLE + BOTS,
+    # A bot's read-only view of the app (backend/app_view.py): an owner or admin turns it on, as themselves; the bot
+    # takes its own screenshots with it.
+    "tico_bot_app_view": PEOPLE,
+    "tico_bot_app_shot": BOTS,
     # Reads that go over POST, which the Assistant may not make on its own.
     **{
         name: NOT_ASSISTANT
         for name in ("tico_sql", "tico_classify", "tico_decision_ask", "tico_decision_outcome", "tico_market_ask")
     },
+    # Website tools (clients/commands/browser.py, logins.py): a bot's own turn drives the browser as its account; a
+    # person opens the browser on the tool's page instead, and the Assistant never signs in anywhere.
+    **{t["name"]: BOTS for t in TOOLS if t["name"].startswith(("tico_browser_", "tico_login_"))},
 }
 
 
@@ -330,7 +342,10 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_contacts_types",
         "tico_contacts_describe",
         "tico_contacts_history",
+        # Finance ad spend setup, run from the CLI; hidden to keep the listing under its size cap.
+        "tico_growth_source_campaigns",
         "tico_credential_grant",
+        "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
         "tico_credential_revoke",
         "tico_credential_delete",
         "tico_credential_set",
@@ -427,6 +442,58 @@ ASSISTANT_TOOLS = frozenset(
 )
 
 
+# The developer tool list (backend/mcp.py tool_profile): what a code bot (the Builder, both Reviewers, and the QA, Release
+# and Code Hygiene Owners) is told to run in its template, playbooks and skills (templates/catalog/<template>), and in
+# the wake and stage text the server sends it. The full list is about 92k tokens of schemas, which a harness without
+# tool search carries on every call; this one is a tenth of that. Only the listing shrinks: a call to any other tool the
+# caller's kind allows still runs, and the `tico` CLI still reaches every route. backend/tests/test_developer_tools.py
+# checks that every tool those files name is here.
+DEVELOPER = "developer"
+DEVELOPER_TOOLS = frozenset(
+    {
+        # Tasks: read, work, ask, hand on.
+        "tico_task_show",
+        "tico_task_list",
+        "tico_task_comment",
+        "tico_task_update",
+        "tico_task_done",
+        "tico_task_move",
+        "tico_task_ask",
+        "tico_task_answer",
+        "tico_task_attach",
+        "tico_task_create",
+        "tico_task_close",
+        "tico_task_link",
+        "tico_task_relate",
+        "tico_task_label",
+        "tico_task_snooze",
+        "tico_task_queue",
+        "tico_task_release",
+        "tico_task_worktree_add",
+        "tico_task_worktree_attach",
+        "tico_conversation_show",
+        # Status and setup.
+        "tico_bot_status_set",
+        "tico_bot_setup_done",
+        "tico_team_show",
+        # Pages, files and docs: specs, review and QA pages, and the screenshots on them.
+        "tico_page_publish",
+        "tico_file_publish",
+        "tico_file_read",
+        "tico_doc_read",
+        "tico_doc_search",
+        "tico_bot_app_view",
+        "tico_bot_app_shot",
+        # Onboarding switches its routines on; the Release Owner tags releases.
+        "tico_automation_list",
+        "tico_automation_update",
+        "tico_tag_create",
+        "tico_tag_show",
+        "tico_tag_update",
+    }
+)
+
+
 def offered_to(tool_):
     """The kinds a tool is offered to. The Assistant's turn is offered the tools it is told to run (ASSISTANT_TOOLS) and
     what its audience already names, minus ASSISTANT_HIDDEN; the gate and the route decide what it may do."""
@@ -449,12 +516,16 @@ def offered_to(tool_):
 UNLISTED = frozenset({"tico_finance_card_fill"})
 
 
-def listing(local=False, kind=None):
+def listing(local=False, kind=None, profile=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
-    when the kind is not known), never an UNLISTED one. Sorted by name, so the order never depends on where a tool is
-    defined (and `tico_<noun>_<verb>` names keep a noun's tools together)."""
+    when the kind is not known), never an UNLISTED one, and with the `developer` profile only DEVELOPER_TOOLS. Sorted by
+    name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>` names keep a noun's tools
+    together)."""
     return [
         {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
         for t in sorted(TOOLS, key=lambda t: t["name"])
-        if t["name"] not in UNLISTED and (local or not t.get("local")) and (kind is None or kind in offered_to(t))
+        if t["name"] not in UNLISTED
+        and (local or not t.get("local"))
+        and (kind is None or kind in offered_to(t))
+        and (profile != DEVELOPER or t["name"] in DEVELOPER_TOOLS)
     ]

@@ -22,6 +22,8 @@ does and what it returns. For any other command, run `tico <group> --help` first
 
 - `tico doc write _librarian/<name>.md --title "<title>" --body-file <file.md> --note "<what changed>"`: creates or replaces
   one of your docs. Write only under `_librarian/` and `FAQ.md`.
+  To change a doc someone else saved last, read it first and add `--base-version <the version you read>`;
+  a refusal names who saved since: read it again and redo your change on their version.
 - `tico api GET "docs?limit=500&cursor=<next_cursor>"`: the next page of the doc list, when `tico doc list` has a cursor.
 
 ## Market

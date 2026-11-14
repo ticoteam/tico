@@ -9,10 +9,11 @@ list the database enforces. Two kinds of enforcement, both refusing a value outs
 - `check`: a CHECK constraint, installed by rebuilding a small table (`_rebuild_with_check`).
 
 Changing a list is a code change here. `enforce` compares what is installed with what this module says and replaces
-it when they differ, so the next start applies a new list without a separate migration. A list that drops a value
-still in use is refused by `upgrade`, which is backend/migrations/0002_status_values.py: it counts the stored values
-outside the list and stops, naming them, before it rewrites anything. A later list change that drops a value needs a new
-migration that maps or refuses the stored rows the same way.
+it when they differ, so the next start applies a new list without a separate migration. A stored value outside a list
+never stops the server: `upgrade` (backend/migrations/0002_status_values.py) and every later `enforce` keep the rows,
+log them, still install a trigger column's triggers (they check new writes only), and leave a CHECK column as it was
+until its rows are fixed. So a list change that drops a value still in use needs a migration that maps or refuses the
+stored rows first. docs/status-and-state.md has the table, generated from COLUMNS (scripts/build_status_docs.py).
 
 Retired spellings are rewritten by `upgrade` (one spelling per meaning). Each retired value is accepted by the
 precheck and mapped to its replacement, never kept as a second spelling.
@@ -41,7 +42,7 @@ BOT_STATUS_STATES = (
 TASK_STATUSES = ("open", "done", "closed")
 JOB_STATES = ("queued", "leased", "running", "input", "completed", "failed", "uncertain", "canceled")
 ATTEMPT_STATES = ("leased", "running", "input", "completed", "failed", "interrupted", "expired")
-RUN_STATUSES = ("queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held")
+RUN_STATUSES = ("queued", "running", "waiting", "ok", "partial", "failed", "empty", "skipped", "held")
 WEBHOOK_SEND_STATES = ("ready", "sending", "delivered", "failed", "canceled", "withheld")
 PAYMENT_STATUSES = (
     "queued",
@@ -65,10 +66,6 @@ GOOGLE_CONNECT_STATUSES = (
     "disconnected",
     "failed",
 )
-
-
-class StatusValuesError(RuntimeError):
-    """A stored value the list does not allow: the upgrade stops before it changes anything."""
 
 
 class Column:
@@ -174,11 +171,7 @@ def upgrade(conn):
     writes only), and a CHECK column is left without its CHECK until its rows are fixed (enforce adds it then).
     Runs inside the migration's transaction, with foreign keys already off."""
     problems = unknown_values(conn)
-    if problems:
-        log.warning(
-            "status values outside their lists, kept as they are; map or fix these rows:\n%s",
-            "\n".join(_describe(problems)),
-        )
+    _log(problems)
     for spec in present(conn):
         # CHECK columns are mapped while their table is copied (_rebuild_with_check), not by an UPDATE the old CHECK
         # would refuse.
@@ -186,6 +179,14 @@ def upgrade(conn):
             for old, new in spec.retired:
                 conn.execute(f"UPDATE {spec.table} SET {spec.column}=? WHERE {spec.column}=?", (new, old))
     _enforce(conn, problems)
+
+
+def _log(problems):
+    if problems:
+        log.warning(
+            "status values outside their lists, kept as they are; map or fix these rows:\n%s",
+            "\n".join(_describe(problems)),
+        )
 
 
 def _describe(problems):
@@ -204,8 +205,10 @@ def enforce(conn):
 def _enforce(conn, problems=None):
     checks = [spec for spec in present(conn) if spec.enforce != "trigger"]
     if problems is None:
-        # Only CHECK columns are scanned here (small tables): a rebuild would refuse rows outside the list.
+        # Only CHECK columns are scanned here (small tables): a rebuild would refuse rows outside the list. A column
+        # left without its new CHECK is logged on every start, or nothing would say its list is not enforced.
         problems = unknown_values(conn, checks)
+        _log(problems)
     blocked = {(t, c) for t, c, _v, _n in problems}
     for spec in present(conn):
         if spec.enforce == "trigger":

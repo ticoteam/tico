@@ -1,6 +1,7 @@
 """Dream: the auto dream (backend/dream_auto.py), once a day, for up to "Most bots per run" bots (default 3). The verdict is
-dream_auto's: the changed lines, the lookback, the gaps and the busy checks. The 02:00 timer is gone; this step is its
-only trigger. No customer tokens are counted here: a started dream is a task, and its turns are the bot's own.
+dream_auto's: the need (turns and people's corrections since the last dream), the lookback, the gaps and the waiting and
+busy checks. Each dream is queued with its wake held on the release policy, so it starts while its bot is warm. No
+customer tokens are counted here: a queued dream is a task, and its turns are the bot's own.
 """
 
 from .. import dream, dream_auto

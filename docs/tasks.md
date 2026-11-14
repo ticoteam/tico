@@ -35,7 +35,7 @@ A bot cannot close a task a person asked for. It asks that person instead.
 ## Whose turn it is
 
 What a task waits on is worked out, never stored. The first match is the line under the title; the task lists all of
-them ([the nine states](pipelines-v3.md#whose-turn-it-is-the-nine-states-of-an-open-task)):
+them ([the ten states](pipelines-v3.md#whose-turn-it-is-the-ten-states-of-an-open-task)):
 
 1. Snoozed
 2. A person's turn: an ask names them, or the task is theirs
@@ -65,6 +65,9 @@ tico task ask <id> --to <person> --kind ok "Approve the launch post" --show page
 tico task ask <id> --withdraw -m "why"
 ```
 
+An ask may carry a short title of at most 60 characters (`--title "Launch note tone"`). The decision view shows it as
+the heading, with the full question once under it; an ask without one is headed by its question.
+
 A bot has one ask of its own open on a task at a time: asking again replaces it. An ask never expires. A person
 answers it from Needs you. A bot named on one answers with `tico task answer <id> <requirement> ok|no|again|<answer>`,
 or gives it to someone else with `tico task give <id> <requirement> --to <person>`.
@@ -78,7 +81,7 @@ Work a person has to go and do is a sub-task for them, not an ask. An @ in the c
 
 ## Snooze
 
-Snooze is the only hold. It sets a task aside until a date, or with no end ("On ice"). While snoozed, nothing wakes
+Snooze is the only hold. It sets a task aside until a date, or with no end. While snoozed, nothing wakes
 or chases it, it is not Late, it holds no slot in a stage with a limit, and it leaves Needs you.
 
 ```sh
@@ -90,6 +93,27 @@ A bare date is the start of that day, Pacific. A bot gives a reason and should g
 date tells the manager bot once; after three snoozes by a bot in one stage, the next goes to the manager bot. When a
 snooze ends, the owner is woken once. Finishing or closing a task ends its snooze. `tico task list --snoozed only|all`
 lists snoozed tasks.
+
+On a pipeline's board a snoozed task is grayed at the bottom of its stage, with the day it wakes (or "Snoozed"); its
+moon is its one button, Unsnooze.
+
+### Product's Ideas
+
+Product's Ideas is an ordinary stage. An idea that is not snoozed moves on to Spec by itself when Spec has room, oldest
+first, once Jev has checked it against open and recent Product tasks (the `idea-check@1` questions, one call per pass
+for up to 20 ideas, `backend/idea_checks.py`). When Jev is sure (0.85 or over) an idea is the same as task #N, the idea
+is closed as a duplicate of #N, linked to it, and its person is added to #N's requesters with an "Also asked by"
+comment. A person's idea that matches a bot's idea still in Ideas closes the bot's instead. Under 0.85, a failed call,
+or no answer within 2 minutes: the idea goes on as it is.
+
+A bot's own idea is filed snoozed with no end date, and only a person unsnoozes it. A bot filing a person's ask files
+it for them, from the message they asked in; the task is then the person's, and its history names the bot:
+
+```sh
+tico task create --pipeline product --owner bot:pm --title "Export to CSV" --for human:ana --from-message <message id>
+```
+
+It is refused unless that person sent the message and the bot can read its conversation.
 
 ## Done, closed and reopen
 
@@ -108,12 +132,17 @@ tico task move <id> reopen -m "The export is wrong again" --version N
 
 Done and Closed tasks are behind the archive button on the Tasks page. Nothing closes by itself.
 
+A duplicate is closed by merging it into the task that stays ([Merge and make a subtask](#merge-and-make-a-subtask)):
+its details move there first, and it is closed with "Archiving this one as a duplicate of #N; its details were added
+there." Reopening it brings it back; what moved stays on the other task.
+
 ## When a bot stops early
 
-A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, or closed.
-Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and 1
-hour; then its manager bot, three tries more; then one person, once, in Needs you, with Try again, Reassign, Move back,
-Close and Snooze. Any change to the task starts the count again. See
+A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, closed, or
+blocked on another task (depends_on; never a snooze). While its own pull request's checks run, the turn is GitHub's.
+Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and 50
+minutes (inside the hour its session stays cached); then its manager bot, three tries more; then one person, once, in
+Needs you, with Try again, Reassign, Move back, Close and Snooze. Any change to the task starts the count again. See
 [The never-stuck check](pipelines-v3.md#the-never-stuck-check).
 
 A person hands a task back to its owner with **Try again** (`POST /api/v2/tasks/{id}/try-again`).
@@ -130,7 +159,8 @@ a task.
 ## Sub-tasks
 
 A task waits on the tasks it files. File one with `tico task file --parent <id> "title"` (yours unless `--owner`), or
-`tico task create --parent <id> ...`. The parent is set when the task is filed and never changes. Sub-tasks nest at
+`tico task create --parent <id> ...`. The parent is set when the task is filed; a person can also put a task under
+another afterwards, from the Tasks board (see [Merge and make a subtask](#merge-and-make-a-subtask)). Sub-tasks nest at
 most 5 deep. When the last one ends, the parent's owner is woken once with how each ended. Closing a parent closes its
 open sub-tasks. A deleted sub-task counts as Closed for whatever waits on it.
 
@@ -154,6 +184,36 @@ tico task child <parent-id> --check-model codex:gpt-6.1-sol --title "Check the m
 Models), from a provider other than the parent's authors when one can run it. The sub-task is the filing bot's own.
 Only the runtime, model, harness and effort change: the bot's repository, tools and credentials stay its own. The API
 takes `check_model` and `check_role` on task create.
+
+## Merge and make a subtask
+
+On the Tasks board, on a desktop, drag a task onto another task's card: that card is outlined, not its column, and
+letting go asks what to do. Letting go over a column's empty space still moves the stage. Only a person who can change
+both tasks can do this; bots cannot.
+
+- **Make it a subtask.** The task goes under the other. Both keep their owners, stages and pipelines, and the other
+  waits on it like any sub-task. History on both says who did it.
+- **Merge the tasks.** The task you dropped on stays. In one change (if any part is refused, nothing changes):
+
+| Part of the dropped task | After the merge |
+|---|---|
+| Description, files and pages | Added to the kept task under "From #N", with its title. Files and pages are linked, not copied |
+| Open sub-tasks | Move under the kept task, before the close, so they stay open |
+| Comments | Stay on the dropped task. The kept task's note says how many |
+| Open asks and OKs | End with it. The kept task's note lists each question, so its owner can ask again |
+| Followers and requesters | Added to the kept task. Teammates who asked for the merged task also follow the kept one, so they hear when it is done |
+| Labels and related links | Added to the kept task. Its own stage, due date and pipeline stay; the other's due date is in the note |
+| The task itself | Closed with "Archiving this one as a duplicate of #N; its details were added there.", related as `duplicate_of` |
+
+A note on the kept task lists what came in. When its owner is a bot, the bot is woken once to fold in what is relevant;
+a person is not woken. When the two owners differ, Merge asks who keeps the task; by default its own owner does, and
+choosing the other is a reassign with the usual checks. The dialog shows what will move before you confirm, and
+disables a choice that would make a loop, nest past 5 levels, join a private task with a company one, or (for Merge)
+lose an open pull request or cross pipelines, saying why.
+
+`GET /api/v2/tasks/{id}/merge?into=<other id>` returns both tasks, why each choice cannot be done (null when it can)
+and what a merge would move. `POST /api/v2/tasks/{id}/merge` takes `{"into": "<other id>", "owner": "<optional>"}`;
+`POST /api/v2/tasks/{id}/parent` takes `{"parent": "<other id>"}`. Both are for people only.
 
 ## Related tasks
 
@@ -198,6 +258,11 @@ tico task comment <id> "Use the August numbers." --steer
 tico task comment <id> "For later." --defer 4h
 ```
 
+A comment that names a bot's open question on the task (`ask`: its requirement id, in `POST
+/api/v2/tasks/{id}/comments`) is a reply to it: it is written to the bot that asked and wakes it, even when that bot is
+not the one the task's comments go to first, and the question stays open. The person the question waits on may wake
+the bot this way. The decision view's "Write to <bot>" box sends it.
+
 A comment is talk. It is not progress: a bot that only comments has still stopped early.
 
 ## Choosing the model a task runs on
@@ -206,6 +271,12 @@ A bot's task runs on the bot's task model. A task can name its own model, effort
 the task window, `tico task create --model <id> --effort <effort> --harness <harness>`, `tico task model <id> <model>`,
 or `tico task model <id> --clear`. `POST /api/v2/tasks/{id}/model` does the same (`{"model": null}` clears it). Whoever
 may change the bot's model may change a task's model; a bot never does. A task that changes owner loses its own model.
+
+A task can also keep its own **Compact** window, where its conversation compacts: one of the twelve sizes from 100K to
+1M, offered only up to what its model holds, or **Same as bot**. It goes with the model as `compact_at` (in
+`POST /api/v2/tasks` and `POST /api/v2/tasks/{id}/model`), or alone, which keeps the bot's model and resumes the task's
+session; `{"compact_at": null}` puts it back to the bot's. A bot's fallback keeps one the same way; on Same as bot it
+takes the bot's window, lowered to fit the fallback model.
 
 ## Changing many tasks at once
 
@@ -222,6 +293,16 @@ Besides its owner, a task can list people or bots under a **role**, a short name
 `"roles": {"reviewer": ["human:charlie"]}` (each role named replaces its people, `[]` clears one).
 `tico task list --member me [--role reviewer]` lists the tasks you are on. In SQL they are the `task_roles` table.
 
+## The task's Human
+
+A task may name one **Human**: the person accountable for it, whoever owns it, such as the developer on a ticket a bot
+owns. It is optional. The owner still has the work and is the one woken; the Human is the person the task falls to
+first. An OK, a page or a question that names nobody goes to them and is in their Needs you, as is the task once the
+ladder brings it to a person, and the owner bot's wake tells it to ask them. Naming one who cannot read a private task
+is refused (it adds no reader). A Human who left, cannot sign in or can no longer read the task is passed over for the
+rest of the ladder. Task create and update take `"human": "human:charlie"` (`""` takes them off); the task carries
+`human_id`. `tico task create|update --human <person>`. It stays when the task moves to another pipeline.
+
 ## Files
 
 Attach a file to the task so anyone who can read the task can open it. Uploading the same name on the same task adds a
@@ -236,6 +317,26 @@ tico task comment <id> "The export" --file <file-id>@1
 `POST /api/v2/tasks/{id}/files` takes `name`, `text` or `content_base64`, and `note`. `GET /api/v2/tasks/{id}/files`
 lists them with their versions. The task's **Files** strip shows each file at its newest version; a comment's pictures
 and pages show under it ([Visuals](visuals.md#in-a-chat-or-task-conversation)).
+
+### Attach a page to a page requirement
+
+```sh
+tico task attach <id> page:<file id>[@<version>] --req "Spec page" --version N \
+  --changed "Sources on every evidence row" --changed "Cut the repeated second section" \
+  --answered "Sources on the evidence table: done, each row links its query" \
+  --answered "Phone picture: not done, it needs a person's phone"
+```
+
+`POST /api/v2/tasks/{id}/pages` takes `requirement`, `page`, `version`, and, all optional, `note` (500 characters),
+`changed` (up to 5 one-line bullets of 120 characters: what changed in this version) and `answered` (up to 12 entries
+`"<point>: done|not done, <why>"`, one per point of the person's last send back; the bot splits their note into points).
+An entry not in that form is refused with the form. A note or line that repeats 12 or more words in a row from the
+person's last send back is refused: "Don't quote their note back; say what you did with each point (--answered)". The
+MCP tool `tico_task_attach` takes the same fields. The decision view shows them on the next OK of the page.
+
+`GET /api/v2/tasks/{id}/asks/{requirement id}/rounds` lists every version attached to that page requirement, oldest
+first: when and by whom, the note, `changed` and `answered` given with it, Jev's verdict and reason (no p-value), and
+each OK or send back given while it counted.
 
 ## Followers
 
@@ -271,6 +372,11 @@ names everyone in it, read at each check.
 - API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with
   `{"readers": [...]}`. A task lists at most 50 readers.
 - A reader reads that task only: not the task above it or its other sub-tasks.
+- A private task stuck because the next stage's owner or someone it asks can't see it says so on its person's Needs
+  you card, naming everyone shut out ("Stuck in Build: Reviewer 1 can't see this task"), with **Let Reviewer 1 see
+  it**: one press adds exactly them as readers and moves the task on (`POST /api/v2/tasks/{id}/move` with
+  `{"to": "next", "let_see": ["<actor>", ...]}`, the list the task's `turn.share` gives; refused, adding nobody, when
+  it now waits on someone else). A bot is never told how to share it: its refusal names the person to ask.
 
 ### A private task with no person on it
 
@@ -335,7 +441,7 @@ tico task done <id> -m "what was done" --version N
 tico task move <id> next|<stage>|done|closed|reopen -m "why" --version N
 tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
-tico task ask <id> --to <person> "line" [--kind ok] [--choices a,b] [--show page:12] --version N
+tico task ask <id> --to <person> "line" [--title "short"] [--kind ok] [--choices a,b] [--show page:12] --version N
 tico task ask <id> --withdraw
 tico task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
 tico task give <id> <requirement> --to <person> --version N

@@ -11,13 +11,19 @@ are on it:
 
 - Everything is met and there is room: the task moves.
 - A bot's turn: nothing while the bot has a live run or a wake queued for the task. Otherwise the ladder: the bot is
-  woken again 2 minutes after it stopped, then 15 minutes, then 1 hour. After 3 tries with no change the pipeline's
+  woken again 15 minutes after a run that finished (2 minutes after one that was cut off, or a wake that never ran),
+  then 15 minutes, then 50 minutes. After 3 tries with no change the pipeline's
   manager bot gets the task on the same 3 tries, then a person. If the task changed, the count goes back to zero.
 - Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them. A
-  person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`).
+  person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`). Nobody
+  is told that a stage has room.
 - Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
   lands in one person's list, once.
 - A snooze whose date came ends, and the owner is woken once.
+- Stage rules whose When is a timer (N h in the stage, N h quiet, N h waiting on a person) are judged after the
+  tasks (backend/stage_rule_timers.py): they tell the manager, in one wake an hour, tell the owner or move the task back.
+- A snooze the owner bot set on its own task ends when everything is met and there is room, and the task moves
+  (`_ready_snoozes`).
 
 A pass is one write transaction, opened by the caller. Each task is done on its own inside it: a task the check cannot
 work out is left as it was and named in `failures`, and the pass goes on to the next one. Doing a pass twice is
@@ -30,10 +36,11 @@ from collections.abc import Callable, Iterable
 from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from . import batch_work, hubdb_core, merge_order, task_wakes
+from . import batch_work, hubdb_core, merge_order, stage_rule_timers, task_depends, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
+from .prompt_cache import CACHE_WARM_S
 
 if TYPE_CHECKING:
     import sqlite3
@@ -48,9 +55,10 @@ _batch: Any = batch_work
 storage_error: Callable[[BaseException], bool] = _batch.storage_error
 SYSTEM: str = E.SYSTEM
 
-# Seconds a bot is left alone after it stopped, before try 1, try 2 and try 3. After try 3 the task goes up a level
-# once the first gap has passed.
-GAPS = (E.FIRST_TRY_S, 900, 3600)
+# Seconds a bot is left alone after it stopped, before try 1, try 2 and try 3. The first gap is only for a run that was
+# cut off (a crash, a limit) or a wake that never ran: after a run that finished, the first look waits the second gap
+# (`_ladder`). After try 3 the task goes up a level once the first gap has passed. The third comes back while the bot's session is still cached (backend/prompt_cache.py).
+GAPS = (E.FIRST_TRY_S, 900, CACHE_WARM_S)
 TRIES = len(GAPS)
 # Bot runs one visit may start between two changes: the owner's start and 3 tries, then the manager bot's 3 tries.
 # Every run on the task counts, whoever it was for and whatever woke it (R1). The ladder holds to them, and the claim
@@ -69,6 +77,8 @@ _OPEN = (
     "JOIN stages s ON s.id = t.stage_id "
     "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=0 "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+    # A task blocked by one it depends on is nobody's turn, never Late, and goes on when that ends (task_depends).
+    f"AND NOT {task_depends.BLOCKED % 't'} "
     "ORDER BY v.entered_at, v.id"
 )
 
@@ -110,19 +120,6 @@ def _manager(conn: "sqlite3.Connection", row: Row, seen: dict[str, str | None]) 
     return manager if _usable(conn, manager, seen) and _reads(conn, manager, row) else None
 
 
-def to_manager(conn: "sqlite3.Connection", task_id: str, why: str) -> bool:
-    """Hand an open task to its pipeline's manager bot now, its first try woken at once with `why` (as the ladder's
-    `_to_manager`), rather than on the next pass. False when no manager bot can take it, or a person has the task already: the ladder
-    goes on as it is."""
-    row = E.task(conn, task_id)
-    manager = _manager(conn, row, {}) if row else None
-    if not row or not manager or manager == row.get("owner_id") or _part(row, "visit").get("level") == "person":
-        return False  # a task a person has already stays theirs: it never drops back to a bot
-    done = {"woken": 0, "to_manager": 0, "to_person": 0}
-    _to_manager(conn, row, manager, why, _h().now(), done)
-    return True
-
-
 # ----------------------------------------------------------------------------- the pass
 def check(
     conn: "sqlite3.Connection", now: str | None = None, failures: list[tuple[str, Exception]] | None = None
@@ -135,6 +132,7 @@ def check(
     done = {"snoozes_ended": 0, "moved": 0, "woken": 0, "to_manager": 0, "to_person": 0, "late": 0}
     seen: dict[str, str | None] = {}
     live = task_wakes.live_bots(conn, at)  # a pass starts no run: read once
+    _ready_snoozes(conn, done, failures)
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "
@@ -185,9 +183,7 @@ def check(
         quiet = quiet + 1 if conn.total_changes == changes else 0
     _keeping_reads(conn, "SAVEPOINT never_stuck_room")
     try:
-        done["moved"] += _requests(conn)  # before C10: a person's request takes the room first
-        done["woken"] += _room(conn)
-        _handoffs(conn, at, done, seen)
+        done["moved"] += _requests(conn)
     except Exception as error:
         if failures is None or not conn.in_transaction or storage_error(error):
             raise
@@ -196,31 +192,57 @@ def check(
     finally:
         if conn.in_transaction:
             conn.execute("RELEASE never_stuck_room")
+    _keeping_reads(conn, "SAVEPOINT never_stuck_stage_rules")
+    try:
+        # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
+        timers: Any = stage_rule_timers
+        timers.sweep(conn, at)
+    except Exception as error:
+        if failures is None or not conn.in_transaction or storage_error(error):
+            raise
+        conn.execute("ROLLBACK TO never_stuck_stage_rules")
+        failures.append(("stage_rules", error))
+    finally:
+        if conn.in_transaction:
+            conn.execute("RELEASE never_stuck_stage_rules")
     return done
 
 
-# ----------------------------------------------------------------------------- C10: room after a by-hand stage
-# Each by-hand stage holding a task that is not snoozed, with the work stage after it, when that stage has a limit.
-_ROOM = (
-    "SELECT s.id, n.id, s.owner, s.requests_move_on FROM stages s JOIN stages n ON n.pipeline_id = s.pipeline_id "
-    "AND n.kind='work' AND n.retired_at IS NULL AND n.task_limit > 0 "
-    "AND n.position = (SELECT MIN(x.position) FROM stages x "
-    "WHERE x.pipeline_id = s.pipeline_id AND x.kind='work' AND x.retired_at IS NULL AND x.position > s.position) "
-    "WHERE s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL AND EXISTS (SELECT 1 FROM tasks t "
-    "WHERE t.pipeline_id IS NOT NULL AND t.stage_id = s.id AND t.status='open' "
-    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL))"
-)
-_FIRST_WAITING = (
-    "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
-    "WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
-    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
-    "ORDER BY v.entered_at, v.id LIMIT 1"
-)
-_FREED = (
-    "SELECT id, left_at FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
+# ----------------------------------------------------------------------------- a bot's snooze on a ready task
+# Open tasks on the engine, in a stage that is not by hand, set aside by a snooze their owner bot set itself.
+_OWN_SNOOZES = (
+    "SELECT t.id FROM tasks t JOIN snoozes z ON z.task_id = t.id AND z.ended_at IS NULL AND z.by_id = t.owner_id "
+    "JOIN stages s ON s.id = t.stage_id "
+    "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=0 "
+    "AND t.owner_id LIKE 'bot:%' ORDER BY z.created_at, z.id"
 )
 
 
+def _ready_snoozes(
+    conn: "sqlite3.Connection", done: dict[str, int], failures: "list[tuple[str, Exception]] | None"
+) -> None:
+    """A snooze the owner bot set on its own task does not hold it once everything the stage asks is met and the next
+    stage has room: the bot was waiting for that (its PR's checks), so the snooze ends and the task moves on
+    (`task_engine.move_on_past_own_snooze`). This catches what no event ended: checks that finished before the snooze
+    was written, a result that was lost. A person's snooze, another bot's, or a task still missing something stays.
+    *Nov 12: Tico Team's Build tasks sat for hours, snoozed "until checks pass", with their checks passed.*"""
+    for (task_id,) in conn.execute(_OWN_SNOOZES).fetchall():
+        _keeping_reads(conn, "SAVEPOINT never_stuck_snoozed")
+        try:
+            if E.move_on_past_own_snooze(conn, str(task_id), "Everything this stage asks is met"):
+                done["snoozes_ended"] += 1
+                done["moved"] += 1
+        except Exception as error:
+            if failures is None or not conn.in_transaction or storage_error(error):
+                raise
+            conn.execute("ROLLBACK TO never_stuck_snoozed")
+            failures.append((str(task_id), error))
+        finally:
+            if conn.in_transaction:
+                conn.execute("RELEASE never_stuck_snoozed")
+
+
+# ----------------------------------------------------------------------------- room after a by-hand stage
 # A person's request still on its first visit to a by-hand stage that moves requests on (task_engine.not_held_by_hand),
 # oldest first.
 _REQUESTS = (
@@ -230,6 +252,7 @@ _REQUESTS = (
     "AND s.requests_move_on=1 "
     "AND v.entered_how='new' AND t.requester_id LIKE 'human:%' "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+    f"AND NOT {task_depends.BLOCKED % 't'} "
     "ORDER BY v.entered_at, v.id"
 )
 
@@ -237,9 +260,10 @@ _REQUESTS = (
 def _requests(conn: "sqlite3.Connection") -> int:
     """A task a person files into a by-hand stage whose "a person's request moves on" setting is on (Product's Ideas)
     is not held there: the person already picked it. Once the stage's own requirements are met (Ideas has none) it moves
-    into the next stage as soon as that has room, oldest first, before the by-hand stage's owner is woken about room
-    (C10). Ideas a bot filed stay until someone moves them, and so does every task in a by-hand stage with the setting
-    off (Growth's Ideas, Monitoring's Watching). Returns how many moved."""
+    into the next stage as soon as that has room, oldest first. Nobody is told about room (C10): the move is the whole
+    of it, and the owner's turn in the next stage wakes them as any move does. Ideas a bot filed stay until a person
+    picks them, and so does every task in a by-hand stage with the setting off (Growth's Ideas, Monitoring's Watching).
+    Returns how many moved."""
     moved = 0
     for (task_id,) in conn.execute(_REQUESTS).fetchall():
         row = E.task(conn, str(task_id))
@@ -251,97 +275,6 @@ def _requests(conn: "sqlite3.Connection") -> int:
         E.move(conn, row["id"], nxt["id"], SYSTEM, seen_version=row.get("version"))
         moved += 1
     return moved
-
-
-# A task in a by-hand stage that moves requests on, owned by a bot that is not its requester, not snoozed: maybe a
-# hand-off (task_engine.handed_over), oldest first.
-_HANDOFFS = (
-    "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
-    "JOIN stages s ON s.id = t.stage_id "
-    "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL "
-    "AND s.requests_move_on=1 AND t.owner_id LIKE 'bot:%' AND t.owner_id IS NOT t.requester_id "
-    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
-    "ORDER BY v.entered_at, v.id"
-)
-
-
-def _handoffs(conn: "sqlite3.Connection", at: str, done: dict[str, int], seen: dict[str, str | None]) -> None:
-    """Work someone else handed to its owner bot in Product's Ideas (task_engine.handed_over) is the owner's turn,
-    though the stage has no ladder: the owner gets the one wake its turn starts with (the same key as the one written
-    when it entered, so it is written once), and once the turn is due (task_engine.handover_due) the task is Late and
-    the pipeline's manager bot is woken once to look. Nothing else chases it: the owner still chooses."""
-    for (task_id,) in conn.execute(_HANDOFFS).fetchall():
-        row = E.task(conn, str(task_id))
-        if not row or not E.handed_over(conn, row):
-            continue
-        if E.wake_turn(conn, row):
-            done["woken"] += 1
-        visit = row["visit"]
-        if visit.get("late_told_at") or at < E.handover_due(conn, row):
-            continue
-        conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
-        _event(conn, row["id"], "late", None, None, {"expected_minutes": E.HANDED_OVER_S // 60})
-        done["late"] += 1
-        manager = _manager(conn, row, seen)
-        if not manager or manager == row.get("owner_id"):
-            continue
-        fresh = E.task(conn, row["id"]) or row
-        stage = row["stage"]["name"]
-        lead = (
-            f"Late: handed to {_name(conn, row.get('owner_id'))} in {stage} {_span(E.HANDED_OVER_S)} ago, and not "
-            "moved on or snoozed. Look once: move it on, reassign it, snooze it or close it."
-        )
-        key = f"{row['id']}:{visit['id']}:late"
-        if task_wakes.add(
-            conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead, to=manager), wake_key=key
-        ):
-            done["woken"] += 1
-
-
-def room_key(stage_id: str, freed_by: str | None) -> str:
-    """C10's wake key: one wake per slot freed in the stage (`freed_by`, the visit whose leaving freed it, or the task
-    whose turn became a person's and when: `freed`), and one for the room a stage has before any task ever left it."""
-    return f"room:{stage_id}:{freed_by or 'start'}"
-
-
-def freed(conn: "sqlite3.Connection", stage_id: str) -> str | None:
-    """What freed the stage's newest slot: the visit that left it last, or a task in it whose turn became a person's
-    since (`waiting_on.slots`), as "<task id>@<when>". None before any slot was ever freed."""
-    left = conn.execute(_FREED, (stage_id,)).fetchone()
-    newest: tuple[str, str] | None = (str(left[1]), str(left[0])) if left else None
-    for task_id, since in W.slots(conn, stage_id).on_person:
-        if newest is None or since > newest[0]:
-            newest = (since, f"{task_id}@{since}")
-    return newest[1] if newest else None
-
-
-def _room(conn: "sqlite3.Connection") -> int:
-    """C10: when the stage after a by-hand stage (Product's Ideas, then Spec) has room, the by-hand stage's owner bot
-    (else that task's owner, when it is a bot) gets one wake, about the task that has waited longest there. Once per
-    freed slot (`room_key`); never chased: the by-hand stage has no ladder. A stage owned by "the task's assignee" wakes
-    that task's owner only when it moves a person's request on (Product's Ideas with one Product Owner per area); with
-    the switch off (Growth's and Success's Ideas, Watching) its tasks rest and nobody is told. Returns how many wakes
-    were written."""
-    woken = 0
-    for by_hand, after, stage_owner, requests_move_on in conn.execute(_ROOM).fetchall():
-        nxt = E.stage(conn, str(after))
-        if not nxt or not E.has_room(conn, nxt):
-            continue
-        wake_key = room_key(str(after), freed(conn, str(after)))
-        first = conn.execute(_FIRST_WAITING, (by_hand,)).fetchone()
-        row = E.task(conn, str(first[0])) if first else None
-        if not row or not row.get("visit"):
-            continue
-        if stage_owner == "assignee" and not requests_move_on:
-            continue  # each task there is its own assignee's, and resting: nobody is told (Growth's Ideas, Watching)
-        # Product's Ideas owned by the assignee: the oldest waiting task's own owner is told.
-        owner: str | None = row.get("owner_id") if stage_owner == "assignee" else stage_owner or row.get("owner_id")
-        if not is_bot(owner) or not _reads(conn, owner, row):
-            continue
-        text = f"{nxt['name']} has room."
-        if task_wakes.add(conn, row, owner, row["visit"], text, wake_key=wake_key):
-            woken += 1
-    return woken
 
 
 def _keeping_reads(conn: "sqlite3.Connection", statement: str) -> None:
@@ -458,6 +391,14 @@ def _one(
     row = ahead[0] if ahead else E.task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return  # a move earlier in this pass took it
+    if not row.get("owner_id") and row["visit"].get("pick_state"):
+        # It waits for a stage's pick (One of several): the first bot with room gets the oldest such task, and it is
+        # woken then. While everyone is full, nobody is chased.
+        if E.pick_again(conn, task_id):
+            done["woken"] += 1
+            return
+        if row["visit"].get("pick_state") == "full":
+            return
     standings = ahead[1] if ahead else R.standings(conn, row)
     waits = ahead[2] if ahead else W.of(conn, row, seen, standings)
     if W.all_met(waits) and E.advance(conn, task_id):
@@ -521,12 +462,17 @@ def _ladder(
         return
     read: str | None = inbox["read_at"] if inbox else None  # it took its wake then, and nothing ran on the engine
     spent = target in spent_by  # its wake for this try was lost twice: the try is spent
+    last = task_wakes.last_run(conn, row, target)
     gap = GAPS[tries] if tries < TRIES else GAPS[0]
+    if tries == 0 and (last or {}).get("state") == "completed":
+        # Its last run finished and said where it stands: no wake 2 minutes on (it stopped on purpose, and a wake that
+        # soon finds nothing new). The first look waits the second gap. A run cut off (a crash, a limit) or a wake that
+        # never ran keeps the 2 minutes.
+        gap = GAPS[1]
     due: str | None = visit.get("next_try_at")
     if not due:
         conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=gap), visit["id"]))
         return
-    last = task_wakes.last_run(conn, row, target)
     stopped: str | None = (last or {}).get("finished_at") or read
     if stopped and not _snoozed_since(conn, visit, stopped):
         due = max(due, str(H.shift(stopped, seconds=gap)))  # the gap runs from when the bot stopped, or read its wake
@@ -699,19 +645,43 @@ def _person(conn: "sqlite3.Connection", row: Row) -> str | None:
 
 # ----------------------------------------------------------------------------- late
 def _spent(conn: "sqlite3.Connection", visit: Row, at: str) -> float:
-    """Seconds the task has been in this visit, not counting the time it was snoozed."""
+    """Seconds the task has been in this visit, not counting the time it was snoozed or blocked by a task it depends
+    on (task_depends), each moment once."""
     H = _h()
     now, entered = H.parse_ts(at), H.parse_ts(visit["entered_at"])
     if not now or not entered:
         return 0.0
-    spent = (now - entered).total_seconds()
-    for created, ended in conn.execute(
-        "SELECT created_at, ended_at FROM snoozes WHERE task_id=? AND visit_id=?", (visit["task_id"], visit["id"])
-    ).fetchall():
-        start, end = H.parse_ts(created), H.parse_ts(ended or at)
-        if start and end:
-            spent -= max((end - start).total_seconds(), 0.0)
-    return spent
+    aside: list[tuple[str, str | None]] = [
+        (str(created), ended)
+        for created, ended in conn.execute(
+            "SELECT created_at, ended_at FROM snoozes WHERE task_id=? AND visit_id=?", (visit["task_id"], visit["id"])
+        ).fetchall()
+    ]
+    aside += task_depends.spans(conn, str(visit["task_id"]), str(visit["entered_at"]))
+    return (now - entered).total_seconds() - _covered(aside, str(visit["entered_at"]), at)
+
+
+def _covered(spans: "list[tuple[str, str | None]]", start: str, end: str) -> float:
+    """Seconds of [start, end] inside at least one of `spans` ((from, to); a None `to` runs to `end`)."""
+    H = _h()
+    lo, hi = H.parse_ts(start), H.parse_ts(end)
+    if not lo or not hi:
+        return 0.0
+    cut: list[tuple[Any, Any]] = []
+    for begun, ended in spans:
+        a, b = H.parse_ts(begun), H.parse_ts(ended or end)
+        if a and b:
+            a, b = max(a, lo), min(b, hi)
+            if b > a:
+                cut.append((a, b))
+    total, reach = 0.0, None
+    for a, b in sorted(cut):
+        if reach is not None and a < reach:
+            a = reach
+        if b > a:
+            total += (b - a).total_seconds()
+            reach = b if reach is None else max(reach, b)
+    return total
 
 
 def _span(seconds: float) -> str:

@@ -1,0 +1,50 @@
+/* A stage's rules (ui/app/stage-rules.ts): the Rules button on a stage header and the panel it opens. The panel reuses
+   the Rules page's dialog (.ru-modal, .ru-form) from org-rules.css. */
+.sr-btn{flex:none;display:inline-flex;align-items:center;gap:4px;height:24px;margin-left:auto;padding:0 8px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans);cursor:pointer}
+.sr-btn:hover{color:var(--ink);background:var(--surface2)}
+.sr-btn:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.sr-btn .tnum:empty{display:none}
+.sr-btn + .pv-play{margin-left:0}
+.pv-group-head .sr-btn{margin-left:4px}
+/* One width on a phone: the count arrives late and differs in digits between stages, and the tabs must not move
+   (fits "Rules 999"). */
+.pv-phone-head .sr-btn{box-sizing:border-box;width:96px;height:44px;margin:0 0 4px;padding:0;justify-content:center;white-space:nowrap}
+
+.sr-modal{width:min(600px,calc(100vw - 32px))}
+/* The panel has no padding of its own, so the shared dialog head sits flush rather than pulled out over it. */
+.ru-modal.sr-modal .ru-side-h{margin:0}
+.sr-pad{margin:0;padding:10px 16px 0}
+.sr-pad:empty{display:none}
+.sr-groups{display:flex;flex-direction:column;gap:14px;padding:12px 16px 4px}
+.sr-group h3{display:flex;align-items:baseline;gap:6px;margin:0 0 6px;color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
+.sr-incode{text-transform:none;letter-spacing:0;font-weight:400}
+.sr-list{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
+.sr-rule{padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-ctl)}
+.sr-builtin{background:var(--surface2)}
+.sr-line{display:flex;align-items:center;gap:8px;min-width:0}
+.sr-name{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sr-cost{flex:none;padding:1px 8px;border-radius:999px;background:var(--surface2);color:var(--muted);font-size:var(--t-label)}
+.sr-cost-jev{background:var(--wait-bg);color:var(--wait-ink)}
+.sr-acts{flex:none;display:flex;gap:2px}
+.sr-what,.sr-says{margin-top:3px;font-size:var(--t-sm)}
+.sr-idle{margin-top:3px;font-size:var(--t-sm);color:var(--wait-ink)}
+.sr-none{margin:0;font-size:var(--t-sm)}
+.sr-foot{padding:12px 16px 16px}
+.sr-who{padding-bottom:16px;font-size:var(--t-sm)}
+.sr-row{display:flex;align-items:center;gap:6px}
+.sr-row input[name=hours]{width:80px !important}
+.sr-row select[name=owner_check]{flex:none;width:auto}
+.sr-row input[name=owner_team]{flex:1;min-width:0}
+.sr-costline{margin:0;font-size:var(--t-sm)}
+.sr-timer[hidden]{display:none}
+@media (max-width:640px){
+  .sr-modal{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0}
+  .sr-act{min-height:40px}
+  /* A rule's name gets its own line; its cost and buttons wrap under it. */
+  .sr-rule .sr-line{flex-wrap:wrap}
+  .sr-rule .sr-name{flex-basis:100%;white-space:normal}
+  .sr-rule .sr-acts{margin-left:auto}
+}
+/* A suggested change on Rules › Suggested: what differs, old struck through. */
+.sr-diff{margin:4px 0 0;padding:0 0 0 16px;font-size:var(--t-sm)}
+.sr-diff-k{font-weight:600}

@@ -1,7 +1,9 @@
 /* ui/app/growth-channels.ts — The Growth page's Settings (ui/app/growth-page.ts): the numbers the maths uses (PUT
    /api/v2/growth/settings), the channels (/api/v2/growth/channels: add, edit, retire) and each channel's months, where
-   a month is corrected or added by hand (GET|PUT /api/v2/growth/cohorts), and the link to Sources. The owner or an admin
-   changes them; the cards read again after a save.
+   a month is corrected or added by hand (GET|PUT /api/v2/growth/cohorts), and the link to Sources. Each number in a
+   month says where it came from: a synced source's (locked, since the source owns it) or who typed it, and a source
+   that disagrees with a typed actual offers Keep and Use. The owner or an admin changes them; the cards read again after
+   a save.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -32,8 +34,19 @@ interface GrowthCohort {
   margin_pct: number | null;
   quality: 'actual' | 'estimate' | null;
   sources?: GrowthCohortSources | null;
+  origins?: Record<string, GrowthOrigin> | null;
 }
-interface GrowthSource { id: string; system: string; truth_for: string; retired_at?: string | null; }
+// One number's origin (backend/growth_sync.py origins_view): synced by a source or typed by someone, and a value a source
+// brought that was held back because someone typed an actual.
+// A figure computed from customer facts (backend/growth.py beside) says `computed`, how many customers and the customers
+// sources they came from, and `differs` when a typed actual is beside it (`chosen` once the channel's owner chose).
+interface GrowthOrigin {
+  origin: 'synced' | 'typed' | 'computed'; quality: string; source_id: string | null; source: string | null; at: string | null; by: string | null;
+  conflict: { value: number | null; source_id: string | null; source: string | null; at: string | null } | null;
+  computed_from?: number; sources?: Array<{ source_id: string | null; source: string; at: string | null }>;
+  differs?: { typed: number | null; chosen: string | null; computed?: number | null } | null;
+}
+interface GrowthSource { id: string; system: string; truth_for: string; retired_at?: string | null; kind?: string | null; fills?: string[]; }
 interface GrowthKpi { id: string; name: string; }
 /** The form's fields by name, as the dialogs read them (grDialog hands the form element); K is the names the dialog reads. */
 type GrowthFormFields<K extends string> = HTMLFormControlsCollection & Record<K, { value: string }>;
@@ -71,6 +84,9 @@ async function gcSettings(state: GrowthState) {
       ${grField('Margin %', `<input name="margin_pct" inputmode="decimal" value="${esc(st.margin_pct ?? '')}">`)}</div></div></fieldset>
     <section class="gr-sec gs-sec" aria-label="Channels"><h3 class="gr-k">Channels</h3>${list.map(c => row(c, true)).join('')}${row(GC_UNKNOWN, false)}
       <button class="ghost small gs-add" type="button" data-ch-add>+ Channel</button></section>
+    <section class="gr-sec gs-sec" aria-label="Customers"><h3 class="gr-k">Customers</h3>
+      <p class="muted gr-note">Load one row per customer and Growth computes retention, LTV and CAC from them.</p>
+      <button class="ghost small" type="button" data-grx-upload-settings>Upload customers</button></section>
     <a class="gs-src" href="${GR_SOURCES}" data-gr-sources>Where numbers come from</a>`, 'Save', async form => {
     const v = (n: SettingsField) => (form.elements as GrowthFormFields<SettingsField>)[n].value;
     const body: GrowthSettings = {revenue_month: grNum(v('revenue_month')), margin_pct: grNum(v('margin_pct'))};
@@ -80,6 +96,8 @@ async function gcSettings(state: GrowthState) {
   });
   const sources = dlg.querySelector<HTMLElement>('[data-gr-sources]');
   if (sources) sources.onclick = () => dlg.close();
+  const upload = dlg.querySelector<HTMLElement>('[data-grx-upload-settings]');
+  if (upload) upload.onclick = () => grxUpload();
   const add = dlg.querySelector<HTMLElement>('[data-ch-add]');
   if (add) add.onclick = () => void gcChannelDialog(state);
   dlg.querySelectorAll<HTMLButtonElement>('[data-gs-edit]').forEach(b => { b.onclick = () => void gcChannelDialog(state, list.find(c => c.slug === b.dataset.gsEdit)); });
@@ -88,27 +106,60 @@ async function gcSettings(state: GrowthState) {
 
 // A channel's months, newest first, each with its retention and an Edit; + Month adds one.
 async function gcMonths(state: GrowthState, ch: ChannelRef) {
-  let cohorts: GrowthCohort[];
-  try { cohorts = await get<{cohorts?: GrowthCohort[]}>('/v2/growth/cohorts?channel=' + encodeURIComponent(ch.slug), {fresh: true}).then(r => r.cohorts || []); }
-  catch (e) { toast(errorMessage(e, 'Did not load'), true); return; }
+  let cohorts: GrowthCohort[], live: Map<string, string[]>;
+  try {
+    const [rows, sources] = await Promise.all([get<{cohorts?: GrowthCohort[]}>('/v2/growth/cohorts?channel=' + encodeURIComponent(ch.slug), {fresh: true}).then(r => r.cohorts || []),
+      get<{sources?: GrowthSource[]}>('/v2/growth/sources', {fresh: true}).then(r => r.sources || []).catch((): GrowthSource[] => [])]);
+    cohorts = rows;
+    live = new Map(sources.filter(x => x.kind && !x.retired_at).map(x => [x.id, x.fills || []]));
+  } catch (e) { toast(errorMessage(e, 'Did not load'), true); return; }
   if (GR !== state) return;
   cohorts.sort((a, b) => String(b.month).localeCompare(String(a.month)));
   const cell = (c: GrowthCohort, f: GrowthKeptField, dd: string) => `<span class="gc-h" title="${dd} days"${c[f] == null ? '' : ` style="--k:${Math.max(0, Math.min(100, Number(c[f])))}"`}>${c[f] == null ? '' : esc(grPct(c[f]))}</span>`;
   const dlg = grDialog(`${ch.name} · Months`, `<div class="gr-sec gc-months">${cohorts.map((c, n) =>
     `<div class="gr-row gc-coh"><span class="gr-row-t">${esc(grMonth(c.month))}</span>${c.new_customers == null ? '' : `<span class="gr-num">${esc(grX(c.new_customers, 0))} new</span>`}
-      <span class="gc-kept">${GC_KEPT.map(([f, dd]) => cell(c, f, dd)).join('')}</span>${gcQuality(c.quality)}<button class="ghost small" type="button" data-gc-edit="${n}">Edit</button></div>`).join('')
+      <span class="gc-kept">${GC_KEPT.map(([f, dd]) => cell(c, f, dd)).join('')}</span>${gcQuality(c.quality)}${gcSyncedMark(c)}<button class="ghost small" type="button" data-gc-edit="${n}">Edit</button></div>`).join('')
     || '<p class="muted gr-note">No months yet</p>'}</div>
     <button class="ghost small gc-add" type="button" data-gc-month-add>+ Month</button>`, '', null);
-  dlg.querySelectorAll<HTMLButtonElement>('[data-gc-edit]').forEach(b => { b.onclick = () => { const cohort = cohorts[Number(b.dataset.gcEdit)]; if (cohort) gcCohortDialog(state, ch, cohort); }; });
+  dlg.querySelectorAll<HTMLButtonElement>('[data-gc-edit]').forEach(b => { b.onclick = () => { const cohort = cohorts[Number(b.dataset.gcEdit)]; if (cohort) gcCohortDialog(state, ch, cohort, false, live); }; });
   const monthAdd = dlg.querySelector<HTMLElement>('[data-gc-month-add]');
-  if (monthAdd) monthAdd.onclick = () => gcCohortDialog(state, ch, {month: state.month || new Date().toISOString().slice(0, 7)}, true);
+  if (monthAdd) monthAdd.onclick = () => gcCohortDialog(state, ch, {month: state.month || new Date().toISOString().slice(0, 7)}, true, live);
+}
+// A month's row says which sources filled some of it, and when a source disagrees with a typed number.
+function gcSyncedMark(c: GrowthCohort) {
+  const all = Object.values(c.origins || {});
+  const names = [...new Set(all.filter(o => o.origin === 'synced' && o.source).map(o => String(o.source)))];
+  const held = all.filter(o => o.conflict).length;
+  return `${names.length ? `<span class="muted gc-synced" title="Synced from ${esc(names.join(', '))}">${esc(names.join(', '))}</span>` : ''}${held ? `<span class="pill waiting" data-gc-differs>Source differs</span>` : ''}`;
+}
+// One of a month's numbers by its field name.
+const gcValue = (c: Partial<GrowthCohort>, field: string): number | null => { const v = (c as Record<string, unknown>)[field]; return typeof v === 'number' ? v : null; };
+// Under a number in a month: where it came from, and Keep / Use when a source disagrees with what was typed.
+function gcOriginHint(ch: ChannelRef, month: string, field: string, c: Partial<GrowthCohort>, o: GrowthOrigin | undefined) {
+  if (!o) return '';
+  const from = (o.sources || []).map(s => s.source).join(', ');
+  const line = o.origin === 'synced' ? `From ${o.source || 'a source'}${o.at ? ` · ${ago(o.at)}` : ''} · actual`
+    : o.origin === 'computed' ? `Computed from ${o.computed_from ?? 0} customers${from ? ` · ${from}` : ''}`
+    : `Typed${o.by ? ` by ${grWho(o.by)}` : ''}${o.at ? `, ${grDay(o.at)}` : ''} · ${o.quality === 'estimate' ? 'estimate' : 'actual'}${o.differs?.chosen === 'typed' ? ' · kept over the computed number' : ''}`;
+  const typed = gcValue(c, field), d = o.differs;
+  // The server checks who may choose; the dialog offers Keep and Use to whoever opened it, as it does for a source's value.
+  const conflict: GrConflict | null = o.conflict ? {channel: ch.slug, channel_name: ch.name, month, field, typed: typed ?? null, value: o.conflict.value, source: o.conflict.source, may: true}
+    : d && !d.chosen ? {channel: ch.slug, channel_name: ch.name, month, field, typed: d.typed, value: typed ?? null, source: `${o.computed_from ?? 0} customers`, may: true, against: 'computed'} : null;
+  return `<span class="gc-origin muted" data-gc-origin="${esc(field)}">${esc(line)}</span>${conflict ? `<span class="gr-conflict">${grConflictLine(conflict, false)}</span>` : ''}`;
 }
 
 // One month's numbers for a channel; `fresh` picks the month in the form.
-function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCohort>, fresh = false) {
-  const n = (name: string, label: string, v: number | null | undefined) => grField(label, `<input name="${name}" inputmode="decimal" value="${esc(v ?? '')}">`);
+// A number a live synced source filled and still fills is locked: that source owns it (typing it is refused, naming the
+// source; growth_sync.live_owner). A remap that drops the number hands it back to typing. Only
+// the numbers changed are sent, so a month with synced numbers still saves its typed ones.
+const GC_NUMBERS = ['spend', 'bot_cost', 'new_customers', 'kept_d30', 'kept_d90', 'kept_d180', 'revenue_month', 'margin_pct'] as const;
+function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCohort>, fresh = false, live: Map<string, string[]> = new Map()) {
+  const origins = c.origins || {}, month = c.month ?? '';
+  const locked = (name: string) => { const o = origins[name]; return !!o && o.origin === 'synced' && !!o.source_id && !!live.get(o.source_id)?.includes(name); };
+  const n = (name: string, label: string, v: number | null | undefined) => grField(label, `<input name="${name}" inputmode="decimal" value="${esc(v ?? '')}"${locked(name)
+    ? ` disabled title="${esc(`${origins[name]?.source || 'A source'} syncs this number: change it there, or retire that source to type it`)}"` : ''}>${fresh ? '' : gcOriginHint(ch, month, name, c, origins[name])}`);
   const srcs: GrowthCohortSources = c.sources || {};
-  grDialog([ch.name, fresh ? 'New month' : grMonth(c.month)].join(' · '),
+  const dlg = grDialog([ch.name, fresh ? 'New month' : grMonth(c.month)].join(' · '),
     `${fresh ? grField('Month', `<input name="month" type="month" required value="${esc(c.month)}">`) : ''}
     <div class="gr-pair">${n('spend', 'Spend', c.spend)}${n('bot_cost', 'Bot cost', c.bot_cost)}</div>
     <div class="gr-pair">${n('new_customers', 'New', c.new_customers)}${grField('Data', `<select name="quality">${grOpts([['actual', 'Actual'], ['estimate', 'Estimate']], c.quality || 'estimate', null)}</select>`)}</div>
@@ -119,14 +170,19 @@ function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCoh
       const v = (name: CohortField) => (form.elements as GrowthFormFields<CohortField>)[name].value;
       // The server merges these keys into what it keeps; an empty one removes that key.
       const sources = {...srcs, spend: v('src_spend').trim(), new_customers: v('src_new').trim()};
-      const month = fresh ? v('month') : c.month ?? '';
-      if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('A month');
-      await put('/v2/growth/cohorts', {channel: ch.slug, month, spend: grNum(v('spend')), bot_cost: grNum(v('bot_cost')), new_customers: grNum(v('new_customers')),
-        kept_d30: grNum(v('kept_d30')), kept_d90: grNum(v('kept_d90')), kept_d180: grNum(v('kept_d180')), revenue_month: grNum(v('revenue_month')),
-        margin_pct: grNum(v('margin_pct')), quality: v('quality'), sources});
+      const at = fresh ? v('month') : month;
+      if (!/^\d{4}-\d{2}$/.test(at)) throw new Error('A month');
+      const numbers: Record<string, number | null> = {};
+      for (const f of GC_NUMBERS) {
+        const value = grNum(v(f)), was = gcValue(c, f);
+        if (!locked(f) && (fresh || value !== was)) numbers[f] = value;
+      }
+      await put('/v2/growth/cohorts', {channel: ch.slug, month: at, ...numbers, quality: v('quality'), sources});
       toast('Saved');
       grReload(state);
     });
+  dlg.dataset.closeOnResolve = '1';   // its fields would show the number from before the choice
+  grResolveWire(dlg);
 }
 
 // Add or edit a channel; editing also retires it.

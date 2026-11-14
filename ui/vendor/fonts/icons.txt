@@ -53,6 +53,7 @@ developer_board
 diversity_3
 docs
 download
+draft
 dynamic_feed
 edit
 edit_note
@@ -72,6 +73,7 @@ forum
 forward_to_inbox
 gavel
 grading
+graphic_eq
 groups
 handshake
 headset_mic
@@ -79,6 +81,7 @@ health_and_safety
 help
 history
 history_edu
+image
 inbox
 integration_instructions
 inventory_2
@@ -102,6 +105,7 @@ mic_off
 monitor_heart
 monitoring
 more_horiz
+movie
 new_releases
 newspaper
 open_in_full
@@ -150,6 +154,7 @@ strategy
 supervisor_account
 support_agent
 swap_horiz
+table_chart
 tag
 target
 task_alt

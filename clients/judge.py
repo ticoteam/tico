@@ -105,13 +105,19 @@ QUESTIONS_DIR = Path(__file__).resolve().parents[1] / "questions"
 _REGISTRY_DIR_FD = os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
 
 # What one call may carry. TypeSafe takes up to 255 options and 10 levels, and Jev 1.13 reads
-# 32k tokens of state plus the longest question (64k for the whole call); the state limit here
-# is that budget at roughly four characters a token, so an oversized call is refused before it
-# is sent. The rest are ours.
-MAX_QUESTIONS = 40
+# 32k tokens of state plus the longest question (64k for the whole call); the limits here are
+# that budget at roughly four characters a token, less about 6% for text that takes more tokens
+# per character (code, JSON, non-Latin scripts), so an oversized call is split or refused before
+# it is sent. The Tico AI Gateway also refuses a call with more than MAX_QUESTIONS questions (seen in
+# production on 2026-11-13: 40 answered, 41 and more came back as an error). Jev charges for what it
+# reads, so every question about one state goes in as few calls as those two limits allow (`split`,
+# `pack`, `fits`): one, unless there are more than MAX_QUESTIONS or they do not fit beside the state.
+# The rest are ours.
 MAX_OPTIONS = 255
 MIN_LEVELS, MAX_LEVELS = 2, 10
 MAX_STATE_CHARS = 120_000
+MAX_CALL_CHARS = 240_000  # the state and every question, as sent
+MAX_QUESTIONS = 40  # the Gateway's limit on questions in one call
 MAX_INSTRUCTIONS = 8_000
 MAX_LABEL = 80
 TIMEOUT = 20
@@ -360,8 +366,6 @@ def validate(state, questions, label=None):
     """Refuse before the network does: the shape every transport checks the same way."""
     if not isinstance(questions, dict) or not questions:
         raise JudgeError("invalid", "questions must be a non-empty map of id -> question")
-    if len(questions) > MAX_QUESTIONS:
-        raise JudgeError("invalid", f"at most {MAX_QUESTIONS} questions in one call")
     for qid, q in questions.items():
         if not isinstance(qid, str) or not qid.strip():
             raise JudgeError("invalid", "every question id is a non-empty string")
@@ -406,8 +410,70 @@ def validate(state, questions, label=None):
         raise JudgeError("invalid", "state must be JSON")
     if size > MAX_STATE_CHARS:
         raise JudgeError("invalid", f"state is {size} characters; the limit is {MAX_STATE_CHARS}")
+    if len(questions) > MAX_QUESTIONS:
+        raise JudgeError("invalid", f"at most {MAX_QUESTIONS} questions in one call")
+    whole = size + chars(clean(questions))
+    if whole > MAX_CALL_CHARS:
+        raise JudgeError("invalid", f"the call is {whole} characters; the limit is {MAX_CALL_CHARS}")
     if label is not None and (not isinstance(label, str) or len(label) > MAX_LABEL):
         raise JudgeError("invalid", f"label is a string of at most {MAX_LABEL} characters")
+
+
+def chars(value):
+    """How many characters `value` is as a call sends it (JSON)."""
+    return len(json.dumps(value, default=str))
+
+
+def split(state, questions):
+    """`questions` as few calls as fit beside `state` (MAX_CALL_CHARS) at MAX_QUESTIONS a call, every question in
+    exactly one, each part in the questions' own order: one call whenever they all fit. Past that they are packed largest
+    first, each into the first call with room and fewer than MAX_QUESTIONS (first-fit decreasing: the fewest calls for
+    questions of about one size, such as one per bot or per rule, and within a call or so of it for any mix). A question
+    too big to fit beside the state on its own gets a call of its own, which `validate` then refuses."""
+    if not isinstance(questions, dict) or not questions:
+        return [questions]
+    room = MAX_CALL_CHARS - chars(state)
+    # A map's JSON is exactly the sum of its one-entry maps' (each entry's braces become its ", " or the outer braces).
+    sizes = {qid: chars({qid: q}) for qid, q in clean(questions).items()}
+    if sum(sizes.values()) <= room and len(questions) <= MAX_QUESTIONS:
+        return [questions]
+    calls = []  # [room left, {qid: question}]
+    for qid in sorted(questions, key=lambda q: -sizes[q]):
+        call = next((c for c in calls if c[0] >= sizes[qid] and len(c[1]) < MAX_QUESTIONS), None)
+        if call is None:
+            call = [room, {}]
+            calls.append(call)
+        call[0] -= sizes[qid]
+        call[1][qid] = questions[qid]
+    return [{qid: q for qid, q in questions.items() if qid in part} for _, part in calls]
+
+
+def fits(state, questions):
+    """Whether one call can carry `state` and `questions`: `validate`'s limits on size and on how many questions."""
+    if len(questions) > MAX_QUESTIONS:
+        return False
+    size = chars(state)
+    return size <= MAX_STATE_CHARS and size + chars(clean(questions)) <= MAX_CALL_CHARS
+
+
+def pack(items, build):
+    """[(items, questions, state)]: `items` in as few calls as fit (`fits`: size and MAX_QUESTIONS), in order, when each
+    item puts its own part in the state as well as its questions (a rule's text, a recipient's profile). `build(items)`
+    is (questions, state) for a call about those items. One call, unless they do not fit in one; None when a single item does not fit on its own."""
+    whole = build(items)
+    if fits(whole[1], whole[0]):
+        return [(items, *whole)]
+    groups, group = [], []
+    for item in items:
+        if group:
+            questions, state = build(group + [item])
+            if not fits(state, questions):
+                groups.append(group)
+                group = []
+        group.append(item)
+    groups.append(group)
+    built = [(group, *build(group)) for group in groups]
+    return built if all(fits(state, questions) for _, questions, state in built) else None
 
 
 def clean(questions):
@@ -448,30 +514,56 @@ def check_evidence(value):
     return {"summary": value["summary"][:EVIDENCE_SUMMARY], "findings": findings}
 
 
+_PARTIAL = contextvars.ContextVar("tico_judge_partial", default=False)
+
+
+@contextlib.contextmanager
+def partial_answers():
+    """Within it, `check_answers` keeps the answers that are there and in shape and leaves the rest out, instead of
+    refusing the whole map. A call about several items (backend/decide_groups.py) checks each item's answers itself,
+    so one item's missing answer is that item's, not the call's: the others keep theirs and it alone is asked again."""
+    token = _PARTIAL.set(True)
+    try:
+        yield
+    finally:
+        _PARTIAL.reset(token)
+
+
 def check_answers(answers, questions):
     """Every question answered, in its type's shape; anything else is `JudgeError("shape")`. Returns the answers rebuilt
     from what each type answers (`_project`): only the questions asked, only their fields, so nothing else a provider
-    sent (an extra answer, an extra field, text) reaches the caller."""
+    sent (an extra answer, an extra field, text) reaches the caller. Within `partial_answers` a missing or malformed
+    answer is left out rather than refused."""
     if not isinstance(answers, dict):
         raise JudgeError("shape", "answers is not a map")
+    kept = {}
     for qid, q in questions.items():
-        a = answers.get(qid)
-        if not isinstance(a, dict):
-            raise JudgeError("shape", f"{qid}: no answer")
-        kind = q["type"]
-        if kind == "choice":
-            if not isinstance(a.get("choice"), str) or a["choice"] not in q["criteria"]:
-                raise JudgeError("shape", f"{qid}: choice is not one of the options")
-            if not _bounded(a.get("confidence"), 0, 1):
-                raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
-        if kind == "score":
-            if not _bounded(a.get("score"), 0, len(q["criteria"]) - 1):
-                raise JudgeError("shape", f"{qid}: score is outside its levels")
-            if not _bounded(a.get("confidence"), 0, 1):
-                raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
-        if kind == "noul" and not _bounded(a.get("noul"), 0, 1):
-            raise JudgeError("shape", f"{qid}: noul is not in [0,1]")
-    return {qid: _project(answers[qid], q) for qid, q in questions.items()}
+        try:
+            _check_answer(answers.get(qid), q, qid)
+        except JudgeError:
+            if _PARTIAL.get():
+                continue
+            raise
+        kept[qid] = q
+    return {qid: _project(answers[qid], q) for qid, q in kept.items()}
+
+
+def _check_answer(a, q, qid):
+    if not isinstance(a, dict):
+        raise JudgeError("shape", f"{qid}: no answer")
+    kind = q["type"]
+    if kind == "choice":
+        if not isinstance(a.get("choice"), str) or a["choice"] not in q["criteria"]:
+            raise JudgeError("shape", f"{qid}: choice is not one of the options")
+        if not _bounded(a.get("confidence"), 0, 1):
+            raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
+    if kind == "score":
+        if not _bounded(a.get("score"), 0, len(q["criteria"]) - 1):
+            raise JudgeError("shape", f"{qid}: score is outside its levels")
+        if not _bounded(a.get("confidence"), 0, 1):
+            raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
+    if kind == "noul" and not _bounded(a.get("noul"), 0, 1):
+        raise JudgeError("shape", f"{qid}: noul is not in [0,1]")
 
 
 def _project(answer, question):

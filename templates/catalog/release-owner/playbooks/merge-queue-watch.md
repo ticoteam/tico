@@ -8,7 +8,7 @@ product repositories changes.
 
 ## 1. Read what is open
 
-Read `state.md` under `## Open stalls` and `knowledge/merge-gates.md`, and the thresholds in `knowledge/thresholds.md`
+Read `knowledge/merge-gates.md`, including its `## Open stalls`, and the thresholds in `knowledge/thresholds.md`
 (the stall rule and the slow-gate rule).
 
 ## 2. Read the default branch
@@ -26,9 +26,9 @@ Keep the runs of the gating checks named in `knowledge/merge-gates.md`. Ignore r
 
 ## 4. Update the open stalls
 
-In `state.md` under `## Open stalls`, one line per open stall: the check, the repository, the first red run's id and time, and the
+In `knowledge/merge-gates.md` under `## Open stalls`, one line per open stall: the check, the repository, the first red run's id and time, and the
 date it was last seen red. When a stalled check has been green since, move its line to `## Recent stalls` with the end time, so the
-weekly report can count it. Change nothing else in `state.md`.
+weekly report can count it. Change nothing else in that file's stall sections.
 
 ## 5. Hand a stall over once
 

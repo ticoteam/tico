@@ -20,31 +20,53 @@ Read your own ranked problem list, the latest feedback update, the UX Researcher
 area where the team has them, and `tico meeting search "<feature>"` for what customers and the team said. Quote sparingly,
 with source and date. Separate what was observed from what was inferred, and mark each inference.
 
+**A bug:** reproduce it first (a screenshot, the call and its output, or the query and its rows), then find the root
+cause in the code, with `path:line`, before you write anything. If part of the cause is not known, say which part and
+how it will be found. Never guess one.
+
 ## 3. Set the appetite
 
 Follow `skills/shape-a-spec-to-an-appetite/SKILL.md`. Write the appetite (team-weeks, a small or big batch) before you
 draft the solution. If the problem needs more than a big batch, say so and stop there: it is two problems, or a bet for a
 later cycle.
 
-## 4. Write the core page
+## 4. Write the page
 
-In the order of `knowledge/spec-format.md`, in `specs/<slug>.md`:
-- **Problem**: who, trying to do what, what it costs them today. Two or three sentences, from the brief.
-- **Who has it**: accounts in the window, out of the segment's accounts in the cohort, with the window.
-- **Evidence**: three to five lines, each with its source and count.
-- **Appetite**: the time the problem is worth, and who set it.
-- **Goal** and **How we will know**: the goal in Tico it moves, with the measure, baseline, target, read date and guard
-  from `skills/write-how-we-will-know/SKILL.md`.
-- **Scope** and **Non-goals**: bullets. Every non-goal is something someone might reasonably assume. A change to CI
-  workflow files (`.github/workflows/`) is a person's, since bots cannot push them: the spec names it as a person's step,
-  and the Engineering task leaves it out.
-- **Acceptance criteria**: follow `skills/write-acceptance-criteria/SKILL.md`, each tagged before release or after launch.
-- **Open questions**: each with the human who owes the answer and a date.
-- **Risks**: what could make this the wrong bet, and the cheapest check.
+A spec is clear when someone who has never seen the task reads the top of the page and knows exactly what will be
+built. The pictures do most of the work. Start from the skill's template, in `specs/<slug>.html`:
+`templates/bug-spec.html` for a bug, `templates/screen-spec.html` for a feature or change on a screen,
+`templates/change-spec.html` for a change with no screen (an API, a command, a job).
 
-The spec says what the team builds and how it is judged; it does not pick the design. Where the team has not decided,
-write "open question" and name who decides. No customer's name, email address or other personal detail: name an account
-by its id.
+**The top, in this order, and nothing else above the details:**
+- **A bug:** the report (what was reported, by whom, when, with a link; quoted, cut to two lines if long), the root
+  cause, the goal (what is true once it is fixed, one or two sentences), then the solution: before and after
+  screenshots with red numbered arrows on what changes, one line per arrow. A fix with no screen shows the real call
+  or job output before and after instead.
+- **A feature:** the goal (who it is for, and what they can do after that they cannot now), then the solution: before
+  and after screenshots with arrows, one pair per screen in the order a person meets them.
+
+The after picture is the app running with the smallest change that shows it, on a local branch that is never pushed
+(the skill's "Real screenshots"); never a drawing.
+
+**The details, below the line**, only what helps the builder or QA:
+- **Done when**: the acceptance criteria, numbered, from `skills/write-acceptance-criteria/SKILL.md`, each tagged
+  before release or after launch. They become the QA plan, so each one is checkable by a bot: a test, a call, a
+  screenshot.
+- **Scope**: in and out. Every out is something someone might reasonably assume. A change to CI workflow files
+  (`.github/workflows/`) is a person's, since bots cannot push them: name it as a person's step, and the Engineering
+  task leaves it out.
+- **Why now and how we will know**: the evidence (each line with its source and count), who has it, the appetite, and
+  the measure, baseline, target, read date and guard from `skills/write-how-we-will-know/SKILL.md`. A bug that only
+  needs fixing says who it hurts and how often, in one line.
+- **Plan**: the steps in order, with the files they touch, where you know them.
+- **Release needs**: the apps or services that ship it, data changes, settings, flags, a store release. "None" where
+  none.
+- **Open questions**: each with the person who owes the answer and a date. Where the team has not decided, write
+  "open question" and name who decides. Empty once agreed.
+
+Any section `knowledge/spec-format.md` adds goes in the details. Every sentence names something specific (a number, a
+screen, a file, a person); cut sentences that would fit any spec, and any section that only restates the top. No
+customer's name, email address or other personal detail: name an account by its id.
 
 When the page describes its sign-off, identify the configured approver by their name. If you are writing the page for
 that approver, address them as "you". Do not call the person "Product Manager" or another role unless the sentence is
@@ -52,16 +74,19 @@ about that role in general.
 
 ## 5. Check it with the builders' eyes
 
-Read it as the engineer: can each criterion be tested? Is anything ambiguous ("quickly", "simple")? Is there a dependency
+Read the top alone, as someone who has never seen the task: do they know exactly what will be built, from the words
+and the pictures? Then read it as the engineer: can each criterion be tested? Is anything ambiguous ("quickly", "simple")? Is there a dependency
 on another team or another repository? Is every rabbit hole fixed, cut or time-boxed? Fix those before handing over.
 
 ## 6. Build the page and attach it
 
-Follow `skills/build-the-spec-page/SKILL.md` for the visual page, or publish the written spec as it is:
+Follow `skills/build-the-page/SKILL.md`: screenshots at phone (390 px) and desktop (1280 px) width, arrows, then
+build and check it with the skill's `page.py` (`--kind bug-spec`, `screen-spec` or `change-spec`), then publish it:
 
-    tico file publish specs/<slug>.md --task <id>
+    tico page publish specs/<slug>.html --spec --task <id>
 
-Either prints the file id. Attach it to the requirement `tico task show` names:
+It prints the file id. Render the published page with `page.py render` and look at it at both widths before you
+attach it: a broken page is never sent. Attach it to the requirement `tico task show` names:
 
     tico task attach <id> page:<file id> --req "<requirement>" --version N
 

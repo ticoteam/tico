@@ -52,6 +52,7 @@
 .tr-arch{opacity:0}
 .tr-arch .nav-icon,.thv-arch .nav-icon{font-size:18px;color:inherit}
 .tr-item:hover .tr-arch,.tr-arch:focus-visible{opacity:1}
+.thv-arch.ghost,.thv-del.ghost{width:auto;padding:0 8px;border:0;box-shadow:none;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans)}
 .tr-arch:hover,.thv-arch:hover,.thv-del:hover{background:var(--surface2);color:var(--ink)}
 .tr-browse-tabs{display:flex;gap:6px;margin-bottom:8px}
 .tr-browse-tabs .on{font-weight:600}
@@ -60,6 +61,12 @@
 .tr-row.cur{background:var(--hover);color:var(--ink);font-weight:500}
 .tr-row.cur.unread{font-weight:600}
 .tr-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:18px;color:var(--muted);font-size:15px;font-weight:400}
+.tr-rail .tr-mark{width:20px}
+/* Unread: Mark read takes the count's place on hover or focus (Archive's place on a Threads row), so counts line up. */
+.tr-unread{position:relative}
+.tr-unread .tr-arch{position:absolute;right:2px;top:50%;transform:translateY(-50%);width:24px;height:24px;background:var(--surface2)}
+.tr-unread .tr-arch:hover{background:var(--hover)}
+@media (hover:none){.tr-unread .tr-arch{display:none}}
 .tr-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tr-more{align-self:flex-start;margin:2px 0 0;padding:4px 10px;border:0;background:none;color:var(--muted);font-size:var(--t-sm);cursor:pointer}
 .tr-more:hover{color:var(--ink)}
@@ -212,7 +219,8 @@
   .tr-pane{padding:max(var(--s2),env(safe-area-inset-top)) 12px 0}
   .tr-pane .thv-head{margin:0 -12px var(--s1);padding:2px 12px 6px;min-height:48px}
   .thv-back-rail{display:inline-grid;place-items:center;width:44px;height:44px;margin-left:-10px;font-size:26px}
-  .thv-pin,.thv-arch{width:44px;height:44px}
+  .thv-pin{width:44px;height:44px}
+  .thv-arch{min-width:44px;height:44px}
   .thv-people{min-height:44px}
   /* One line: the title gives way (ellipsis) to back, pin, call, faces and ⋯. */
   .tr-pane .thv-titleline{flex-wrap:nowrap;gap:2px}
@@ -249,3 +257,6 @@
   .nm-title input{font-size:16px}
   .nm-chip button{width:28px;height:28px}
 }
+
+/* #282: in a bot's top line, Archive moves to More (Chris, 13 Nov). */
+#bot-top-acts .thv-arch{display:none}   /* a bot's private chat is archived from More */

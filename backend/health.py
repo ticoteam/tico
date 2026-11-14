@@ -21,12 +21,14 @@ from . import (
     hook_relay,
     hosted_updates,
     inbox_isolation,
+    login_holds,
     model_login,
     models_preset,
     providers,
     releases,
     replication,
     runner_versions,
+    runs,
     setup_stuck,
     sleep_idle,
     usage_limits,
@@ -76,6 +78,7 @@ NEEDS_YOU_MINUTES = 30  # this quiet, its owner is asked to bring it back
 # getting through. The floor is for the default one-minute sync; a longer interval holds more files between uploads.
 BACKUP_UNSENT_FILES = 1000
 RECENT_HOURS = 24
+FAILED_RUNS = "#/settings/history?view=runs&failed=1"
 GITHUB_HEALTH = "github:token"
 PROXIES = {
     "cloudflare": "Cloudflare Access",
@@ -383,13 +386,14 @@ def _mail_key_exposed(c):
 
 
 PUBLISH_WARNING = "GitHub history not published: "  # runner-rs/src/readiness_extra.rs
-DENIED_WARNING = "Claude Code denies what AGENT.md asks for: "  # runner-rs/src/readiness_extra.rs
+DENIED_WARNING = "Claude Code denies what AGENTS.md asks for: "  # runner-rs/src/readiness_extra.rs
+OLD_DENIED_WARNING = "Claude Code denies what AGENT.md asks for: "  # a computer on a runner from before AGENTS.md
 DENIES_WARNING = "Claude Code settings deny: "  # runner-rs/src/readiness_extra.rs
 # GitHub writes a bot's access may allow: the command, and the `can` verbs (backend/bot_tools.py) that allow it.
 # Only a push: write access to a repository is given for pushing, and says nothing about whether the bot's work opens,
 # edits or comments on pull requests or issues. A Release Owner given write to push fixes in Merge denies `gh pr create`
 # on purpose, because Tico queues and merges the pull request itself. Whether a bot needs a `gh` command is what its
-# AGENT.md asks for, which the computer compares with the same denies (Health "Claude Code permissions").
+# AGENTS.md asks for, which the computer compares with the same denies (Health "Claude Code permissions").
 GITHUB_WRITES = (("git push", ("write",)),)
 WRITE_VERBS = {"write", "pull_requests", "issues"}
 
@@ -1580,7 +1584,8 @@ _TOKEN_CACHE = {}  # (database, threshold) -> (monotonic time, answer)
 
 def _token_heavy(c, threshold):
     """(bot, tokens) for bots whose uncached input tokens passed `threshold` in the last day. A run records
-    `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count.
+    `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count;
+    cache writes (`cache_write_tokens`, apart from input since they were counted apart) do.
     It reads the measured segments (usage_facts, indexed on `started_at`); the sum still visits every segment of the day,
     so one answer serves every tab's Health poll for five minutes."""
     if not threshold or threshold <= 0:
@@ -1595,8 +1600,8 @@ def _token_heavy(c, threshold):
     answer = [
         (r["bot"], r["n"])
         for r in c.execute(
-            "SELECT bot_id AS bot, sum(input_tokens) AS n FROM usage_facts WHERE source='estimate' AND started_at>=? "
-            "GROUP BY bot_id HAVING sum(input_tokens)>? ORDER BY sum(input_tokens) DESC",
+            "SELECT bot_id AS bot, sum(input_tokens + coalesce(cache_write_tokens, 0)) AS n FROM usage_facts "
+            "WHERE source='estimate' AND started_at>=? GROUP BY bot_id HAVING n>? ORDER BY n DESC",
             (since, threshold),
         )
     ]
@@ -2288,16 +2293,59 @@ def _server_settings(c, settings):
 
 
 def _failed(c):
-    since = H.shift(H.now(), hours=-RECENT_HOURS)
-    rows = c.execute(
-        "SELECT bot_id,state,finished_at FROM attempts WHERE state IN ('failed','expired') AND finished_at>? "
-        "ORDER BY finished_at DESC LIMIT 5",
-        (since,),
-    ).fetchall()
-    total = c.execute(
-        "SELECT count(*) FROM attempts WHERE state IN ('failed','expired') AND finished_at>?", (since,)
-    ).fetchone()[0]
-    return total, [{"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"]} for r in rows]
+    """How many jobs failed in the last day and the newest five of them (runs.failed): a retry that went back in the
+    queue is not one. Each says why, read for all five at once (_failed_why)."""
+    total, rows = runs.failed(c, H.shift(H.now(), hours=-runs.FAILED_HOURS), limit=5)
+    ids = [r["id"] for r in rows]
+    found = (
+        {
+            r["id"]: r
+            for r in c.execute(
+                "SELECT a.id,a.state,a.started_at,a.result,a.final_text,r.label AS computer,d.end_reason,"
+                # The tries on the computer the line names, so "after N tries" is true of that computer.
+                "(SELECT count(*) FROM attempts t WHERE t.job_id=a.job_id AND t.runner_id=a.runner_id "
+                "AND t.started_at IS NULL) AS unstarted "
+                "FROM attempts a LEFT JOIN runners r ON r.id=a.runner_id "
+                "LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
+                f"WHERE a.id IN ({','.join('?' * len(ids))})",
+                ids,
+            )
+        }
+        if ids
+        else {}
+    )
+    return total, [
+        {"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"], "why": _failed_why(found.get(r["id"]))}
+        for r in rows
+    ]
+
+
+def _failed_why(row):
+    """Why one failed job failed, in one line: a job its computer never started "couldn't start on <computer> after N
+    tries" (execution.settle_unstarted failed it), else the error its run stored, as Runs words it
+    (views.attempt_details: the limit it hit, else run_diagnostics' end_reason). A job the claim refused because its bot
+    may not read its task never reached a computer, so it says that (execution.REFUSED_RUN), not that a computer failed.
+    Unlike Runs, no `result.error`/`reason`/`message`: Completion forbids fields it does not know, so a runner never
+    sends them."""
+    from .execution import REFUSED_RUN
+
+    if not row:
+        return "Attempt failed before completion"
+    if not row["started_at"] and row["final_text"] == REFUSED_RUN:
+        return REFUSED_RUN
+    if not row["started_at"]:
+        where = row["computer"] or "its computer"
+        return f"couldn't start on {where} after {_plural(max(row['unstarted'], 1), 'try', 'tries')}"
+    try:
+        result = json.loads(row["result"] or "{}")
+    except (ValueError, TypeError):
+        result = {}
+    reason = str(
+        login_holds.failure_line(result)
+        or row["end_reason"]
+        or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion")
+    )
+    return (reason.strip().splitlines() or ["Attempt failed before completion"])[0][:300]
 
 
 def _fallbacks(c, loads=None):
@@ -2728,7 +2776,7 @@ def never_stuck_reading(c):
     tied when it was found), so someone who reads only some tasks is shown only those. A private task no person who
     reads it can move is held, not a break: it counts under `no_one`, a number only. It reads every open task, so it
     runs hourly (record_never_stuck), not on each page load."""
-    from . import never_stuck, waiting_on
+    from . import never_stuck, task_depends, waiting_on
 
     found = never_stuck.rules_hold(c)
     breaks = [line for line in found if not getattr(line, "held", False)]
@@ -2737,7 +2785,8 @@ def never_stuck_reading(c):
     for task_id, level in c.execute(
         "SELECT t.id, CASE WHEN v.level='owner' AND v.tries>0 THEN 'retry' ELSE v.level END "
         "FROM visits v JOIN tasks t ON t.id=v.task_id WHERE v.left_at IS NULL AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL)"
+        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id=t.id AND s.ended_at IS NULL) "
+        f"AND NOT {task_depends.BLOCKED % 't'}"
     ):
         if level in ("retry", "manager", "person"):
             tasks[level].append(task_id)
@@ -3189,7 +3238,7 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open bots", "#/settings", "bots")],
             )
         )
-    denied = _reported(c, DENIED_WARNING) if full else []
+    denied = (_reported(c, DENIED_WARNING) + _reported(c, OLD_DENIED_WARNING)) if full else []
     if denied:
         checks.append(
             _check(
@@ -3453,6 +3502,24 @@ def view(c, who, settings, auth, github, config):
             )
 
     if full:
+        from .start_places import over_limits
+
+        # A bot running more turns than its "Turns at once": the claim and the start place both refuse at the limit, so
+        # this is a lowered limit its running turns still exceed, or a start that got past the check.
+        over = over_limits(c)
+        names = _bot_names(c, [bot for bot, _, _ in over])
+        for bot, count, limit in over:
+            checks.append(
+                _check(
+                    "turn_limit:" + bot,
+                    "Turn limit",
+                    "warn",
+                    f"{names[bot]} has {count} turns at once, over its limit of {limit}. Most often the limit was "
+                    "lowered while these turns ran: no new turn of it starts, and this clears as they end. If it stays "
+                    "after they have ended, the limit is not holding.",
+                    [_fix(*BOT_SETTINGS)],
+                )
+            )
         overloads = recent_overloads(c, [computer["id"] for computer in computers])
         from .cloud_machines import disk_words
 
@@ -3893,6 +3960,12 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open Computers", "#/settings", "devices")],
             )
         )
+    from . import browser_commands
+
+    if full and (browser := browser_commands.health_problem(c)):
+        checks.append(
+            _check("browser_host", "Browser host", "warn", browser, [_fix("Open Computers", "#/settings", "devices")])
+        )
     beside = _member_bots_beside_shared_keys(c) if full else []
     if beside:
         checks.append(
@@ -3972,7 +4045,8 @@ def view(c, who, settings, auth, github, config):
             "Failed runs",
             "warn" if failed else "ok",
             f"{_plural(failed, 'run')} failed in the last day." if failed else "No failed runs in the last day.",
-            [_fix("Open Runs", "#/settings", "runs")] if failed and full else [],
+            # Runs showing only these failures (backend/views.py runs), so none is lost among the day's other runs.
+            [_fix("Open failed runs", FAILED_RUNS)] if failed and full else [],
         )
     )
     return {
@@ -3986,7 +4060,12 @@ def view(c, who, settings, auth, github, config):
         "stuck": blocked,
         "on_fallback": on_fallback,
         "limited": limited,
-        "failures": failures if full or kind == "bot" else [],
+        # Why each one failed is for administrators, who may read every bot's runs; a bot hears which and when.
+        "failures": failures
+        if full
+        else [{k: v for k, v in f.items() if k != "why"} for f in failures]
+        if kind == "bot"
+        else [],
         "stalled_runs": stalled_runs,
         # To the minute, so an unchanged answer keeps its ETag (backend/json_response.py) between polls.
         "checked": H.now()[:17] + "00.000000Z",

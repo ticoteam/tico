@@ -1,6 +1,6 @@
 /* ui/styles/decide.css — the ask screen (ui/app/decide.ts, docs/pipelines-v3.md S3): "2 of 7" and 👍 👎 ‹ › ✕ on top,
-   the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, the
-   buttons at the bottom while the thing scrolls.
+   the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, one
+   scroll (the thing, then the sentence and Notes) with the buttons in a bar pinned to the bottom.
    The cascade runs in the order index.html links these files; keep rules in order. */
 .dc-dialog{width:min(1040px,calc(100vw - 32px));max-width:none;height:min(760px,calc(100dvh - 48px));max-height:none;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:hidden}
 .dc-dialog::backdrop{background:rgba(0,0,0,.5)}
@@ -13,7 +13,7 @@
 .dc-icon:hover:not(:disabled),.dc-icon[aria-pressed="true"]{background:var(--surface2)}
 .dc-icon:disabled{color:var(--muted);opacity:.4;cursor:default}
 .dc-icon[hidden]{display:none}
-.dc-main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 340px}
+.dc-main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 420px}
 .dc-thing{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:20px 24px;display:flex;flex-direction:column}
 .dc-thing>.dc-doc{flex:1 0 0}
 .dc-side{min-height:0;overflow-y:auto;padding:20px;border-left:1px solid var(--line);display:flex;flex-direction:column}
@@ -30,39 +30,163 @@
 /* a page fills the pane and scrolls inside itself; several pages each take the pane's height */
 .dc-page{display:block;flex:1 0 100%;width:100%;min-height:320px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .dc-said{margin:0;overflow-wrap:anywhere}
+.dc-gives{margin:0;font-size:13px;overflow-wrap:anywhere}
 .dc-proof{width:100%;height:min(70vh,900px);border:1px solid var(--line);border-radius:6px;background:var(--surface2)}
 .dc-media{max-width:100%;height:auto}
 .dc-addr{margin:0}
 .dc-notes{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .dc-side textarea,.dc-side select{width:100%;box-sizing:border-box;font:inherit}
 .dc-side textarea{resize:vertical;min-height:64px}
+/* the note starts at 7 lines (4 on a phone, rows in decide.ts) and grows with its text before it scrolls (decideGrow) */
+.dc-side textarea[data-dc-grow]{resize:none;overflow-y:auto}
+.dc-open-task{align-self:flex-start;margin:-4px 0 0;padding:0;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--t-sm);text-decoration:underline;cursor:pointer}
+/* screenshots and files with the note: each with its state and ✕, then 📎 Attach */
+.dc-files{display:flex;flex-direction:column;gap:6px;border-radius:8px}
+.dc-side.over{outline:2px dashed var(--line);outline-offset:-6px}
+.dc-files ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.dc-file{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 4px 4px 10px;border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm)}
+.dc-file-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-file[data-state="failed"] .dc-file-state{color:var(--fail,var(--ink))}
+.dc-file-x{flex:none;display:grid;place-items:center;width:32px;height:32px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.dc-file-x:hover{background:var(--surface2);color:var(--ink)}
+.dc-attach{align-self:flex-start;padding:4px 0;color:var(--muted);font-size:var(--t-sm);cursor:pointer}
+.dc-attach:hover{color:var(--ink)}
+.dc-attach.disabled{opacity:.5;cursor:default}
+.dc-status{margin:0;font-size:var(--t-sm)}
+.dc-file-note{margin:4px 0 0;font-size:var(--t-sm)}
 .dc-acts,.dc-choices,.dc-more,.dc-chips{display:flex;flex-wrap:wrap;gap:8px}
 .dc-acts button,.dc-choices button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
+/* what an item is about (decide-about.ts): who asked, the task's text, its links, files and pages; Go to; the reply */
+.dc-who{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.dc-who b{color:var(--ink);font-weight:600}
+.dc-md{font-size:var(--t-base);line-height:var(--lh-body,1.5)}
+.dc-refs{display:flex;flex-wrap:wrap;gap:6px}
+.dc-ref-chip{display:inline-flex;align-items:center;max-width:100%;min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:999px;color:var(--ink);font-size:var(--t-sm);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-ref-chip:hover{background:var(--surface2)}
+.dc-q.dc-q-short{font-size:var(--t-lg)}
+.dc-full{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.dc-links{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
+.dc-links .dc-open-task{margin:0}
+.dc-go{min-height:36px;padding:0 12px;border-radius:10px;font-weight:600}
+.dc-reply{display:flex;flex-direction:column;gap:6px}
+.dc-reply-row{display:flex;align-items:center;gap:10px}
+.dc-reply-row button{min-height:36px;padding:0 14px;border-radius:10px;font-weight:600}
+.dc-sent{color:var(--muted);font-size:var(--t-sm)}
+.dc-held{display:flex;flex-direction:column;gap:6px}
+.dc-held-line{margin:0;font-size:var(--t-sm);font-weight:600}
+/* Skip: a quiet link after the buttons, never a row of its own */
+.dc-acts .dc-skip{min-width:44px;min-height:40px;padding:0 6px;border:0;background:none;color:var(--muted);font-weight:500;text-decoration:underline}
+@media (min-width:761px){
+  /* one line at 1040 px: Done · Snooze · Give to… at 36 px, then Skip */
+  .dc-acts-row{flex-wrap:nowrap;align-items:center}
+  .dc-acts-row button{min-height:36px;padding:0 14px;border-radius:10px;white-space:nowrap}
+}
 .dc-more{padding-top:4px}
+/* a bot's question (decideBotAskHTML): why it matters, a card per choice with its line, the recommended one outlined;
+   Send under the box at its right edge; then a hairline and one row: I don't know, Give it back, and Skip at the end */
+.dc-why{margin:0;overflow-wrap:anywhere}
+.dc-choice-list{display:flex;flex-direction:column;gap:8px}
+.dc-choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.dc-choice:hover:not(:disabled){border-color:var(--muted)}
+.dc-choice.dc-rec{border:2px solid var(--ink);padding:9px 13px}
+.dc-choice:disabled{opacity:.6;cursor:default}
+.dc-choice-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.dc-choice-name{font-weight:600;overflow-wrap:anywhere}
+.dc-rec-tag{padding:2px 8px;border-radius:999px;background:var(--line);font-size:var(--t-sm);font-weight:600}
+.dc-choice-line{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
+.dc-send{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.dc-send button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
+.dc-acts.dc-fixed{flex-wrap:nowrap;align-items:center;padding-top:12px;border-top:1px solid var(--line)}
+.dc-acts.dc-fixed button{white-space:nowrap}
+.dc-acts.dc-fixed [data-dc="skip"]{margin-left:auto}
 .dc-chip{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;cursor:pointer}
 .dc-chip[aria-pressed="true"]{border-color:var(--wait-ink,var(--ink));background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink))}
 .dc-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:14px;max-width:calc(100% - 32px);padding:10px 14px;border-radius:12px;background:var(--ink);color:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.25)}
 .dc-bar[hidden]{display:none}
 .dc-bar button{padding:0;border:0;background:none;color:inherit;font:600 var(--t-base) var(--sans);text-decoration:underline;cursor:pointer}
 .dc-bar button[hidden]{display:none}
+/* a page that comes back (decideRoundsHTML): Version N · date with Jev's chip, the review history, then its parts */
+.dc-ver{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.dc-jev{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
+button.dc-jev{cursor:pointer}
+.dc-jev[data-v="met"]{border-color:color-mix(in srgb,var(--ok) 40%,var(--line));background:var(--ok-bg);color:var(--ok)}
+.dc-jev[data-v="unsure"],.dc-jev[data-v="failed"]{border-color:color-mix(in srgb,var(--wait) 40%,var(--line));background:var(--wait-bg);color:var(--wait-ink,var(--ink))}
+.dc-jev[data-v="not_met"]{border-color:color-mix(in srgb,var(--fail) 40%,var(--line));background:var(--fail-bg);color:var(--fail)}
+.dc-jev-wait{border-style:dashed;color:var(--muted);font-weight:400}
+.dc-notice{margin:0;padding:6px 10px;border-left:3px solid var(--wait,var(--line));border-radius:4px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-size:var(--t-sm);overflow-wrap:anywhere}
+.dc-jev-why{margin:-4px 0 0;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
+.dc-hist{margin:0 -4px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
+.dc-hist ol{display:flex;gap:6px;margin:0;padding:2px 4px 6px;list-style:none}
+.dc-hist li{flex:0 0 calc((100% - 24px) / 5);min-width:72px}
+.dc-step{display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;height:100%;padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.dc-step:hover{background:var(--surface2)}
+.dc-step.now{border-color:var(--ink)}
+.dc-step .dc-jev{min-height:20px;min-width:20px;justify-content:center;padding:0 6px;font-size:var(--t-xs,var(--t-sm))}
+.dc-step-date,.dc-step-ans{color:var(--muted);white-space:nowrap}
+.dc-step-ans[data-a="Sent back"]{color:var(--fail)}
+.dc-step-ans[data-a="OK'd"]{color:var(--ok)}
+.dc-part{display:flex;flex-direction:column;gap:4px}
+.dc-part h4{margin:0;font-size:var(--t-sm);font-weight:600}
+.dc-when{color:var(--muted);font-weight:400}
+.dc-part ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.dc-changed-list li{position:relative;padding-left:14px;overflow-wrap:anywhere}
+.dc-changed-list li::before{content:"•";position:absolute;left:2px;color:var(--muted)}
+.dc-points li{display:flex;gap:8px;align-items:baseline;overflow-wrap:anywhere}
+.dc-mark{flex:none;width:16px;font-weight:700;color:var(--ok)}
+.dc-points li[data-done="false"] .dc-mark{color:var(--fail)}
+.dc-clamp{margin:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere;white-space:pre-line}
+.dc-clamp.open{display:block;-webkit-line-clamp:unset;line-clamp:none}
+.dc-more-btn{align-self:flex-start;padding:0;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--t-sm);text-decoration:underline;cursor:pointer}
+.dc-more-btn[hidden]{display:none}
+/* Changes since vK, over the page */
+.dc-since{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:0 0 10px;font-size:var(--t-sm)}
+.dc-switch{display:inline-flex;align-items:center;gap:8px;min-height:32px;font-weight:600;cursor:pointer}
+.dc-switch input{width:18px;height:18px;margin:0;accent-color:var(--wait,var(--ink))}
+.dc-since-none{color:var(--muted)}
+.dc-diff .tf-diff-lines{max-height:none}
 .decide.dc-empty .dc-main{grid-template-columns:1fr}
 .decide.dc-empty .dc-thing{display:none}
 .decide.dc-empty .dc-side{border:0}
 .dc-done{display:grid;place-content:center;justify-items:center;gap:14px;min-height:240px;text-align:center}
 .dc-done h2{margin:0;font-size:var(--t-xl)}
 @media (max-width:760px){
-  /* the whole screen; the sentence and the buttons stay at the bottom while the thing scrolls */
+  /* the whole screen, one scroll: the thing asked about, then the sentence, Notes and Attach; the answer row is a bar
+     pinned to the bottom of the screen (task #454) */
   /* The visible rectangle (viewport.ts): with the keyboard up, Approve and Send back stay above it. */
   .dc-dialog{inset:var(--chat-viewport-top,0) 0 auto;width:100%;height:var(--chat-viewport-height,100dvh);margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
   .dc-icon{width:44px;height:44px}
+  /* ‹ › on a phone too, › kept 8 px clear of ✕ */
+  .dc-nav [data-dc="next"]{margin-right:6px}         /* 6 px + .dc-nav's 2 px gap = 8 px */
+  /* For 400 ms after an answer or Skip the next item's buttons take no taps, so a second tap on the same spot does not
+     answer an item not yet read (decideCalm) */
+  .decide.dc-calm .dc-side button{pointer-events:none}
+  .dc-count{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dc-chip{min-height:44px;padding:0 14px}
   .dc-more select,.dc-side select{min-height:44px}
-  .dc-side>div>.dc-acts:last-child{position:sticky;bottom:0;z-index:1;margin:0 -16px;padding:8px 16px 0;background:var(--bg)}
-  .dc-wide{display:none}
-  .dc-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}
-  .dc-thing{padding:16px}
-  .dc-side{max-height:55dvh;border-left:0;border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  /* The answer row: out of the scroll, pinned to the bottom of the screen (.decide), solid, over the safe area. The
+     scroll keeps its height clear at the end (--dc-bar-h, measured by decideBarRoom), and the Undo bar sits above it. */
+  .dc-side>div:not(.dc-done)>.dc-acts:last-child{position:absolute;left:0;right:0;bottom:0;z-index:1;margin:0;padding:8px 16px calc(8px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--bg)}
+  .dc-bar{bottom:calc(var(--dc-bar-h,0px) + 8px)}
+  .dc-main{display:block;overflow-y:auto;overscroll-behavior:contain;padding-bottom:var(--dc-bar-h,0px);scroll-padding-bottom:calc(var(--dc-bar-h,0px) + 8px)}
+  .dc-thing{overflow:visible;padding:16px}
+  .dc-thing>.dc-doc{flex:none}
+  /* an ask with nothing to show opens on its question */
+  .dc-thing:empty,.dc-thing:has(>.dc-bare:only-child){display:none}
+  .dc-side{overflow:visible;border-left:0;border-top:1px solid var(--line);padding:12px 16px}
+  .dc-thing:empty+.dc-side,.dc-thing:has(>.dc-bare:only-child)+.dc-side{border-top:0}
+  /* Notes starts one line tall (rows in decide.ts) and grows with its text */
+  .dc-side textarea[data-dc-grow]{min-height:44px}
   .dc-q{font-size:var(--t-lg)}
+  .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-reply-row button,.dc-acts .dc-skip{min-height:44px}
+  /* one row at 390 px: I don't know, explain · Give it back · Skip */
+  .dc-acts.dc-fixed{gap:6px}
+  .dc-acts.dc-fixed button{padding:0 12px}
+  .dc-jev,.dc-more-btn{min-height:44px}
+  .dc-step .dc-jev{min-height:20px}
+  .dc-switch{min-height:44px}
+  .dc-open-task{margin:-12px 0 -8px;display:inline-flex;align-items:center}
+  .dc-file-x{width:44px}
+  .dc-attach{display:inline-flex;align-items:center}
 }
 
 

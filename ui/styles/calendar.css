@@ -1,75 +1,101 @@
 /* Calendar: the sidebar row (ui/app/calendar-row.ts) and the page (ui/app/calendar.ts).
    Colour says who: each calendar in view has a hue (--h), drawn at the theme's saturation and lightness below.
-   Shape says what: a filled block is an event, an outlined one a bot run (dashed until it starts), a pill in the top
-   row something due, a hatched block Busy. Jade stays for the link under the pointer and the shared free time. */
+   Shape says what, and nothing is drawn as an outline: an event is a solid block with a strong left edge, a bot run a
+   lighter solid tint of its bot's colour (striped until it starts), a pill in the top row something due, a hatched
+   block Busy. Jade stays for the link under the pointer and the shared free time. */
 :root{--cv-s:26%;--cv-l:23%;--cv-fl:84%;--cv-bl:60%}
 :root[data-theme="light"]{--cv-s:42%;--cv-l:89%;--cv-fl:26%;--cv-bl:46%}
 @media (prefers-color-scheme:light){:root[data-theme="system"]{--cv-s:42%;--cv-l:89%;--cv-fl:26%;--cv-bl:46%}}
 
 /* ----------------------------------------------------------------- the row */
-/* Two lines in one row: "Calendar" with the next event at the right, and under them the day bar, lined up with the label. */
-.cal-row{position:relative;flex-wrap:wrap}
-.cal-row>.nav-link{flex:1;min-width:0}
-.cal-bar{position:relative;flex:0 0 calc(100% - 46px);height:12px;margin:-5px 10px 4px 36px;display:none}
-/* its line is kept from the first paint where this browser last saw calendars (ui/theme.ts marks html.nav-cal) */
-.cal-row.cal-on .cal-bar,html.nav-cal .cal-bar{display:block}
-/* the track: working hours */
-.cal-bar::before{content:"";position:absolute;left:0;right:0;top:50%;height:6px;margin-top:-3px;border-radius:3px;background:var(--line)}
-.cal-blk{position:absolute;top:50%;height:6px;margin-top:-3px;min-width:3px;padding:0;border:0;border-radius:2px;background:var(--accent-quiet);cursor:pointer;transition:height var(--dur,.12s),margin var(--dur,.12s)}
-.cal-blk.past{opacity:.36}
-.cal-blk:hover,.cal-blk.sel{height:10px;margin-top:-5px;background:var(--accent)}
-.cal-blk:focus-visible{outline:var(--focus-ring);outline-offset:1px}
-.cal-now{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;border-radius:1px;background:var(--ink);pointer-events:none}
-.cal-bub{position:absolute;top:calc(100% + 6px);z-index:30;display:flex;flex-direction:column;gap:1px;max-width:220px;padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 6px 18px rgba(0,0,0,.22);font-size:var(--t-sm);white-space:nowrap}
-.cal-bub::before{content:"";position:absolute;top:-5px;left:calc(var(--tip,50%) - 5px);width:8px;height:8px;border-left:1px solid var(--line);border-top:1px solid var(--line);background:var(--surface);transform:rotate(45deg)}
-.cal-bub a{color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis}
-.cal-bub a:hover{color:var(--accent);text-decoration:underline}
-.cal-bub span{color:var(--muted)}
-.cal-next{position:absolute;right:10px;top:0;height:32px;max-width:calc(100% - 128px);min-width:0;display:none;align-items:center;pointer-events:none}
+/* One line: "Calendar", then at the right the next event as plain text, in the link's ink, between ‹ and ›. The name gives
+   way first ("…"); the time and the arrows always show. */
+.cal-row>.nav-link{flex:none;padding-right:4px}
+.cal-next{flex:1;min-width:0;display:none;align-items:center;justify-content:flex-end}
 .cal-row.cal-on .cal-next{display:flex}
-.cal-nx{display:flex;gap:4px;min-width:0;max-width:100%;font-size:11.5px;color:var(--muted);white-space:nowrap;pointer-events:auto}
+.cal-nx{display:flex;gap:3px;min-width:0;padding:0 2px;font-size:var(--t-sm);color:var(--ink);white-space:nowrap}
 .cal-nx .cal-nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .cal-nx .cal-tm{flex:none;font-variant-numeric:tabular-nums}
 a.cal-nx:hover{color:var(--accent);text-decoration:underline}
+.cal-nx.cal-none{display:block;padding:0;overflow:hidden;text-overflow:ellipsis}
+.cal-step{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:24px;padding:0;border:0;border-radius:4px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:1;cursor:pointer}
+.cal-step:hover{background:var(--surface2)}
+.cal-step:focus-visible{outline:var(--focus-ring);outline-offset:-1px}
+/* A step slides the new event in from the side it came from. */
+.cal-nx.cal-in-r{animation:cal-in-r var(--dur,.16s) ease-out}
+.cal-nx.cal-in-l{animation:cal-in-l var(--dur,.16s) ease-out}
+@keyframes cal-in-r{from{opacity:0;transform:translateX(10px)}}
+@keyframes cal-in-l{from{opacity:0;transform:translateX(-10px)}}
+@media (prefers-reduced-motion:reduce){.cal-nx.cal-in-r,.cal-nx.cal-in-l{animation:none}}
+/* A phone's side menu is wide: arrows big enough for a thumb. */
+@media (max-width:760px){.cal-step{width:28px;height:32px}}
 .cal-recorder-link{display:none}
 
 /* ----------------------------------------------------------------- the page */
 #main.cal-layout{max-width:none}
 .cal{display:flex;flex-direction:column;min-height:0}
-.cal-h1{display:flex;align-items:center;flex-wrap:wrap;gap:10px;min-height:48px}
-.cal-h1 h1{margin:0;font-size:var(--t-lg);font-weight:600}
-.cal-sr{position:relative;flex:1;max-width:420px;min-width:180px;display:flex;align-items:center;gap:6px;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.cal-sr:focus-within{border-color:var(--g5)}
-.cal-sr>.nav-icon{font-size:18px;color:var(--muted)}
-.cal-sr input{flex:1;min-width:0;border:0;background:none;outline:0;color:var(--ink);font:inherit;font-size:var(--t-base);padding:0}
+/* One line: Today, the arrows, the range, the chips and Add, then search (an icon until opened), the views and ⋯. */
+.cal-h{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:8px;min-height:44px;margin:0 0 10px}
+.cal-h>*{flex:none}
+.cal-br{display:none}
+.cal-nav{display:inline-flex}
+.cal-range{font-size:var(--t-md);font-weight:600;white-space:nowrap}
+.cal-chips{display:flex;flex:0 1 auto;min-width:0;gap:6px;overflow:hidden}
+.cal-chip{flex:none;display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 4px 0 10px;border-radius:999px;background:hsl(var(--h) var(--cv-s) var(--cv-l));color:hsl(var(--h) 30% var(--cv-fl));font-size:var(--t-sm);font-weight:600;white-space:nowrap}
+.cal-chip button{width:20px;height:20px;padding:0;border:0;border-radius:50%;background:none;color:inherit;font-size:15px;line-height:1;cursor:pointer;opacity:.7}
+.cal-chip button:hover{opacity:1;background:rgba(127,127,127,.2)}
+.cal-chip:not(:has(button)){padding-right:10px}
+.cal-add{position:relative}
+.cal-add-b{display:inline-flex;align-items:center;gap:2px;padding-left:6px}
+.cal-add-b .nav-icon{font-size:18px;margin:0}
+.cal-sr{position:relative;margin-left:auto;display:flex;align-items:center;gap:6px;height:32px;border:1px solid transparent;border-radius:8px}
+.cal-sr input{display:none;flex:1;min-width:0;border:0;background:none;outline:0;color:var(--ink);font:inherit;font-size:var(--t-base);padding:0}
 .cal-sr input::-webkit-search-cancel-button{display:none}
-.cal-views{margin-left:auto}
+.cal-sr.open{flex:0 1 260px;min-width:160px;padding:0 10px 0 2px;border-color:var(--line);background:var(--surface)}
+.cal-sr.open input{display:block}
+.cal-sr.open:focus-within{border-color:var(--g5)}
+.cal-sr.open .cal-sr-ic{pointer-events:none}
 .cal-ib{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0}
 .cal-ib .nav-icon{font-size:20px;margin:0}
 .cal-more{position:relative}
-.cal-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:200px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 24px rgba(0,0,0,.25)}
-.cal-menu[hidden]{display:none}
+.cal-menu,.cal-addm{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:200px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.cal-menu[hidden],.cal-addm[hidden]{display:none}
 .cal-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
 .cal-menu button:hover{background:var(--surface2)}
 .cal-menu button::before{content:"";flex:none;width:14px;height:14px;border:1.5px solid var(--g5);border-radius:4px;box-sizing:border-box}
 .cal-menu button[aria-checked="true"]::before{border-color:var(--ink);background:var(--ink);box-shadow:inset 0 0 0 2px var(--surface)}
 
-.cal-h2{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 10px}
-.cal-nav{display:inline-flex}
-.cal-range{font-size:var(--t-md);font-weight:600;min-width:120px}
-.cal-chips{display:flex;flex-wrap:wrap;gap:6px}
-.cal-chip{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 4px 0 10px;border-radius:999px;background:hsl(var(--h) var(--cv-s) var(--cv-l));color:hsl(var(--h) 30% var(--cv-fl));font-size:var(--t-sm);font-weight:600}
-.cal-chip button{width:20px;height:20px;padding:0;border:0;border-radius:50%;background:none;color:inherit;font-size:15px;line-height:1;cursor:pointer;opacity:.7}
-.cal-chip button:hover{opacity:1;background:rgba(127,127,127,.2)}
-.cal-chip:not(:has(button)){padding-right:10px}
-.cal-lays{display:inline-flex;gap:2px;margin-left:auto}
+/* Add: find anyone, two quick choices, people and bots with a tick, and what to show */
+.cal-addm{left:0;right:auto;width:280px;padding:6px;font-size:var(--t-sm)}
+.cal-addm-sr{display:flex;align-items:center;gap:6px;height:32px;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+.cal-addm-sr:focus-within{border-color:var(--g5)}
+.cal-addm-sr .nav-icon{font-size:18px;margin:0;color:var(--muted)}
+.cal-addm-sr input{flex:1;min-width:0;border:0;background:none;outline:0;color:var(--ink);font:inherit;padding:0}
+.cal-addm-quick{display:flex;flex-direction:column;margin:6px 0 2px;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.cal-addm-quick button,.cal-addm-row{display:flex;align-items:center;gap:8px;width:100%;min-height:30px;padding:3px 8px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer;box-sizing:border-box}
+.cal-addm-quick button:hover,.cal-addm-row:hover{background:var(--surface2)}
+.cal-addm-quick button:disabled{color:var(--muted);cursor:default;background:none}
+.cal-addm-quick .nav-icon{font-size:18px;margin:0;color:var(--muted)}
+.cal-addm .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cal-addm .n,.cal-addm .m{flex:none;color:var(--muted);font-variant-numeric:tabular-nums}
+.cal-addm-list{display:flex;flex-direction:column;max-height:min(300px,45vh);overflow-y:auto;padding:4px 0;border-bottom:1px solid var(--line)}
+.cal-addm-row input{margin:0;accent-color:var(--ink)}
+.cal-cd.off{background:var(--g5)}
+.cal-addm-none{margin:6px 8px;color:var(--muted)}
+.cal-addm-note{margin:2px 8px 4px;color:var(--muted)}
+.cal-addm-row:has(input:disabled){color:var(--muted);cursor:default}
+.cal-chip[hidden]{display:none}
+.cal-chip-more{padding:0 10px;border:0;background:var(--surface2);color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
+.cal-addm-h{padding:6px 8px 2px;color:var(--muted);font-weight:600}
+.cal-lays{display:flex;flex-wrap:wrap;gap:2px}
 .cal-lays button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);cursor:pointer}
 .cal-lays button:hover{background:var(--surface2)}
 .cal-lays button[aria-pressed="false"]{color:var(--muted);text-decoration:line-through}
+/* the key draws the same solid shapes as the grid */
 .cal-gl{display:inline-block;width:14px;height:10px;border-radius:3px;box-sizing:border-box}
-.cal-gl.event{background:var(--muted)}
-.cal-gl.run{border:1.5px solid var(--muted)}
-.cal-gl.due{height:8px;border-radius:999px;border:1.5px solid var(--muted);background:var(--surface2)}
+.cal-gl.event{background:var(--muted);box-shadow:inset 3px 0 0 var(--ink)}
+.cal-gl.run{background:color-mix(in srgb,var(--muted) 45%,var(--surface))}
+.cal-gl.due{height:8px;border-radius:999px;background:color-mix(in srgb,var(--muted) 45%,var(--surface))}
 .cal-lays button[aria-pressed="false"] .cal-gl{opacity:.4}
 .cal-strip{display:none}
 
@@ -78,6 +104,7 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-dd[hidden]{display:none}
 .cal-dd button{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 8px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
 .cal-dd button.on,.cal-dd button:hover{background:var(--surface2)}
+.cal-dd button[aria-disabled="true"]{color:var(--muted);cursor:default}
 .cal-dd .nav-icon{font-size:18px;color:var(--muted);margin:0}
 .cal-dd .t{flex:none;min-width:84px;color:var(--muted);font-variant-numeric:tabular-nums}
 .cal-dd .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -94,13 +121,14 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-ev small{font-size:11px;opacity:.8;font-variant-numeric:tabular-nums}
 .cal-ev:hover{filter:brightness(1.08);z-index:2}
 .cal-ev.sel{box-shadow:0 0 0 2px var(--ink);z-index:3}
-.cal-ev.run{background:var(--bg);border:1.5px solid hsl(var(--h) 45% var(--cv-bl));color:var(--ink)}
-.cal-ev.run.planned{border-style:dashed}
-.cal-ev.run.grp{background:color-mix(in srgb,hsl(var(--h) var(--cv-s) var(--cv-l)) 45%,var(--bg))}
+/* a run: a lighter solid tint of its bot's colour, no outline; a planned one the same tint, striped */
+.cal-ev.run{border-left-color:color-mix(in srgb,hsl(var(--h) 45% var(--cv-bl)) 50%,var(--surface));background-color:color-mix(in srgb,hsl(var(--h) var(--cv-s) var(--cv-l)) 50%,var(--surface));color:var(--ink)}
+.cal-ev.run.grp{background-color:color-mix(in srgb,hsl(var(--h) var(--cv-s) var(--cv-l)) 70%,var(--surface))}
+.cal-ev.run.planned,.cal-kd.run.planned{background-image:repeating-linear-gradient(135deg,transparent 0 6px,color-mix(in srgb,var(--surface) 55%,transparent) 6px 10px)}
 .cal-ev.busy,.cal-pill.busy{color:var(--muted);border-left-color:var(--g5);background:repeating-linear-gradient(135deg,var(--surface2) 0 5px,var(--bg) 5px 10px)}
 .cal-dots{position:absolute;right:4px;top:4px;display:flex;gap:2px}
 .cal-dots i,.cal-cd{display:inline-block;width:7px;height:7px;border-radius:50%;background:hsl(var(--h) 45% var(--cv-bl))}
-.cal-pill{display:flex;align-items:center;gap:4px;width:100%;min-width:0;height:22px;padding:0 8px;border:1.5px solid hsl(var(--h) 45% var(--cv-bl));border-radius:999px;background:var(--bg);color:var(--ink);font-size:12px;text-align:left;box-sizing:border-box}
+.cal-pill{display:flex;align-items:center;gap:4px;width:100%;min-width:0;height:22px;padding:0 8px;border:0;border-radius:999px;background:color-mix(in srgb,hsl(var(--h) var(--cv-s) var(--cv-l)) 50%,var(--surface));color:var(--ink);font-size:12px;text-align:left;box-sizing:border-box}
 .cal-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cal-pill .nav-icon{font-size:14px;margin:0;color:hsl(var(--h) 45% var(--cv-bl))}
 .cal-pill.event,.cal-pill.away{background:hsl(var(--h) var(--cv-s) var(--cv-l));color:hsl(var(--h) 30% var(--cv-fl));border-radius:4px}
@@ -138,10 +166,10 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-mev{display:flex;align-items:center;gap:5px;min-width:0;padding:1px 4px;border:0;border-radius:4px;background:none;color:var(--ink);font-size:12px;text-align:left}
 .cal-mev:hover{background:var(--surface2)}
 .cal-mev i{flex:none;width:7px;height:7px;border-radius:50%;background:hsl(var(--h) 45% var(--cv-bl))}
-.cal-mev.run i{background:none;border:1.5px solid hsl(var(--h) 45% var(--cv-bl));box-sizing:border-box}
+.cal-mev.run i{background:color-mix(in srgb,hsl(var(--h) 45% var(--cv-bl)) 45%,var(--surface))}
 .cal-mev .t{flex:none;color:var(--muted);font-variant-numeric:tabular-nums}
 .cal-mev span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cal-mruns{align-self:flex-start;padding:1px 7px;border:1.5px solid hsl(var(--h) 45% var(--cv-bl));border-radius:4px;background:none;color:var(--ink);font:inherit;font-size:11px;cursor:pointer}
+.cal-mruns{align-self:flex-start;padding:1px 7px;border:0;border-radius:4px;background:color-mix(in srgb,hsl(var(--h) var(--cv-s) var(--cv-l)) 50%,var(--surface));color:var(--ink);font:inherit;font-size:11px;cursor:pointer}
 .cal-mmore{align-self:flex-start;padding:0 4px;border:0;background:none;color:var(--muted);font:inherit;font-size:11px;cursor:pointer}
 .cal-mmore:hover{color:var(--ink)}
 
@@ -155,9 +183,8 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-lr .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cal-lr .m{flex:none;max-width:30%;color:var(--muted);font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cal-kd{flex:none;width:12px;height:12px;border-radius:3px;background:hsl(var(--h) 45% var(--cv-bl));box-sizing:border-box}
-.cal-kd.run{background:none;border:2px solid hsl(var(--h) 45% var(--cv-bl))}
-.cal-kd.run.planned{border-style:dashed}
-.cal-kd.due{height:8px;border-radius:999px;background:none;border:1.5px solid hsl(var(--h) 45% var(--cv-bl))}
+.cal-kd.run{background-color:color-mix(in srgb,hsl(var(--h) 45% var(--cv-bl)) 45%,var(--surface))}
+.cal-kd.due{height:8px;border-radius:999px;background:color-mix(in srgb,hsl(var(--h) 45% var(--cv-bl)) 45%,var(--surface))}
 .cal-kd.busy{background:repeating-linear-gradient(135deg,var(--g5) 0 2px,transparent 2px 4px)}
 .cal-err{margin:0 0 8px}
 
@@ -177,13 +204,15 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-card-runs .t{flex:none;width:44px;color:var(--muted);font-variant-numeric:tabular-nums}
 
 /* Phone: search, chips, a week strip and the list first */
+/* Phone: two header lines (the date and arrows, then the views and chips), search, chips, a week strip and the list */
 @media (max-width:760px){
-  .cal-h1{gap:8px}
-  .cal-sr{order:3;flex-basis:100%;max-width:none}
-  .cal-views{margin-left:auto}
-  .cal-h2{gap:6px}
-  .cal-range{min-width:0;flex:1}
-  .cal-lays{margin-left:0;flex-basis:100%}
+  .cal-h{flex-wrap:wrap;gap:6px}
+  .cal-today{order:1}.cal-nav{order:2}.cal-range{order:3;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .cal-sr{order:4}.cal-more{order:5}.cal-br{display:block;order:6;flex-basis:100%;height:0}
+  .cal-views{order:7}.cal-chips{order:8;flex:1 1 0;overflow-x:auto;scrollbar-width:none}.cal-add{order:9}
+  .cal-views [data-cal-view="week"],.cal-views [data-cal-view="month"]{display:none}
+  .cal-sr.open{position:absolute;left:0;right:0;top:0;z-index:41;flex:none;min-width:0;margin:0}
+  .cal-addm{position:fixed;left:8px;right:8px;top:auto;width:auto}
   .cal-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:0 0 8px}
   .cal-strip button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;border:0;border-radius:8px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
   .cal-strip button b{color:var(--ink);font-size:var(--t-md)}

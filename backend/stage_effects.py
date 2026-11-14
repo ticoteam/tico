@@ -116,11 +116,30 @@ def notes_on_the_way_in(conn: "sqlite3.Connection", task: Row) -> list[str]:
     return []
 
 
+def _sent_back(conn: "sqlite3.Connection", task: Row) -> str:
+    """Why the task just came back into this stage, as the one who moved it back said it ("Not validated: the row is
+    still clipped", validate_gate), naming the stage it came from; "" when it did not come back."""
+    from . import task_engine
+
+    found = conn.execute(
+        "SELECT stage_id, how, why FROM visits WHERE task_id=? AND left_at IS NOT NULL "
+        "ORDER BY left_at DESC, entered_at DESC LIMIT 1",
+        (task["id"],),
+    ).fetchone()
+    if not found or found[1] != "back" or not str(found[2] or "").strip():
+        return ""
+    name = (task_engine.stage(conn, str(found[0])) or {}).get("name") or "a later stage"
+    return f"Sent back from {name}: {' '.join(str(found[2]).split())}"
+
+
 def _handoff_body(conn: "sqlite3.Connection", task: Row) -> str:
-    """The filed task's body: the filing task's, the `Spec:` line, and what each person said with their OK of the
+    """The filed task's body: the filing task's, why it came back when it did (`_sent_back`), the `Spec:` line, and what each person said with their OK of the
     spec, marked as theirs, so whoever builds it does not ask again what was already answered there."""
     H = _h()
     parts = [str(task.get("body") or "").rstrip()]
+    back = _sent_back(conn, task)
+    if back:
+        parts.append(back)
     page = _spec_page(conn, task)
     if page:
         parts.append(f"Spec: page:{page['file_id']}@{page['version']}")

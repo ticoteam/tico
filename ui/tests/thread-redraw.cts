@@ -5,7 +5,8 @@
 // (new, edit, delete, routing, status, rename, pin) end on exactly the markup a view drawn after every event shows. A
 // draft with its selection and focus, the place someone reads, the stay-at-bottom, a visual card and a closed view are
 // kept. Prints the burst bench (Measures 1 and 2 of the I20 spec): list builds and milliseconds, drawing per event (as
-// before) against once per frame. Fixtures only.
+// before) against once per frame. The milliseconds are printed, never asserted: a wall-clock ratio on a shared CI runner
+// fails at random, so each promise is held by counting list builds and draws instead. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
@@ -25,10 +26,13 @@ declare var threadViewsLive: (topic: string, event: unknown) => void;
 declare var threadMount: (host: HTMLElement, opts: Json) => View;
 declare var thvMarkRead: (view: View) => void;
 declare const window: Window & typeof globalThis & {
-  __rows: Map<number, number>; __tails: number; __drawMs: number; __errors: string[];
+  __rows: Map<number, number>; __tails: number; __draws: number; __drawMs: number; __errors: string[];
 };
 
 const T = 't-big', N = 250;
+// The random bursts are the slow part (each one draws a 250-message view after every event). This script runs seeds 1-4;
+// thread-redraw-bursts-1..4.cts run 5-9, 10-14, 15-19 and 20-24 through TICO_REDRAW_SEEDS, so each script stays well under the limit.
+const SEEDS = (process.env.TICO_REDRAW_SEEDS ?? '1-4').split('-').map(Number) as [number, number];
 const now = Date.now(), at = (sec: number) => new Date(now - sec * 1000).toISOString();
 const me = {member: true, following: true, notify: 'live', last_read_seq: N - 5, unread: 5, activity: false, can_post: true, can_manage: true, pinned: false};
 const thread = {id: T, title: 'Launch review', audience: 'team', audience_group_id: 'ops', last_seq: N, last_message_at: at(1), me, members: []};
@@ -76,28 +80,30 @@ async function open(browser: import('playwright').Browser) {
   await page.goto(`https://tico-ui.test/#/thread/${T}`);
   await page.locator(`.th-msg[data-mid="m${N}"]`).waitFor();
   await page.locator('figure.vcard').waitFor();
-  // Count message-list builds per view, status-row redraws, and the time spent drawing.
+  // Count message-list builds per view, status-row redraws, draws, and the time spent drawing (printed only).
   await page.evaluate(() => {
-    window.__rows = new Map(); window.__tails = 0; window.__drawMs = 0;
+    window.__rows = new Map(); window.__tails = 0; window.__draws = 0; window.__drawMs = 0;
     const rows = thvRowsHTML, tail = patchHTMLTail, draw = thvDraw;
     thvRowsHTML = view => { window.__rows.set(view.key, (window.__rows.get(view.key) || 0) + 1); return rows(view); };
     patchHTMLTail = (...a) => { window.__tails++; return tail(...a); };
-    thvDraw = (...a) => { const t = performance.now(); try { draw(...a); } finally { window.__drawMs += performance.now() - t; } };
+    thvDraw = (...a) => { window.__draws++; const t = performance.now(); try { draw(...a); } finally { window.__drawMs += performance.now() - t; } };
   });
   // Until the page has stopped drawing on its own (the card's picture loading, the first read marks).
   for (let last = -1, n = 0; n !== last;) { last = n; await page.waitForTimeout(400); n = await page.evaluate(() => [...window.__rows.values()].reduce((a, b) => a + b, 0)); }
   return {page, errors};
 }
 const main = (page: Page) => page.evaluate(() => [...THV_VIEWS].find(v => v.id === 't-big' && v.host.isConnected)!.key);
-const reset = (page: Page) => page.evaluate(() => { window.__rows.clear(); window.__tails = 0; window.__drawMs = 0; });
-const counts = (page: Page, key: number) => page.evaluate(k => ({rows: window.__rows.get(k) || 0, tails: window.__tails}), key);
+const reset = (page: Page) => page.evaluate(() => { window.__rows.clear(); window.__tails = 0; window.__draws = 0; window.__drawMs = 0; });
+const counts = (page: Page, key: number) => page.evaluate(k => ({rows: window.__rows.get(k) || 0, tails: window.__tails, draws: window.__draws}), key);
 const frame = (page: Page) => page.evaluate(() => new Promise(r => requestAnimationFrame(() => r(null))));
 // Events go in within one task, as a burst off the live stream does.
-// Returns the time the events took and the list builds made while they came in.
+// Returns the time the events took and the list builds and draws made while they came in. Draws are counted from the
+// burst's start, so a draw an earlier step left waiting does not count against it.
 const burstIn = (page: Page, events: Live[]) => page.evaluate(evs => {
   const sum = () => [...window.__rows.values()].reduce((a, b) => a + b, 0), was = sum(), t = performance.now();
+  window.__draws = 0;
   for (const [k, d] of evs) threadViewsLive(k, d);
-  return {ms: performance.now() - t, rows: sum() - was};
+  return {ms: performance.now() - t, rows: sum() - was, draws: window.__draws};
 }, events);
 const burst = async (page: Page, events: Live[]) => (await burstIn(page, events)).ms;
 const edit = (n: number, rev: number, body: string): Live => ['messages', {id: 'm' + n, thread_id: T, root_id: T,
@@ -143,24 +149,25 @@ let browser: import('playwright').Browser | null = null;
     return {ms: performance.now() - t, rows: window.__rows.get(k) || 0};
   }, [A, Array.from({length: 20}, (_, i) => edit(N - 3, i + 1, `Before ${i + 1}`))] as [number, Live[]]);
   await reset(page);
-  // One draw of a changed list, the median of three so one slow draw does not set the bar.
+  // One draw of a changed list, the median of three, printed in the bench for comparison.
   const one = await page.evaluate(([k, evs]) => {
     const view = [...THV_VIEWS].find(v => v.key === k)!, ms = evs.map(ev => { const t = performance.now(); threadViewsLive(ev[0], ev[1]); thvDraw(view); return performance.now() - t; });
     return ms.sort((a, b) => a - b)[1]!;
   }, [A, [100, 101, 102].map(r => edit(N - 3, r, `One draw ${r}`))] as [number, Live[]]);
   await reset(page);
   const edits = Array.from({length: 20}, (_, i) => edit(N - 3, 200 + i, `Edit number ${i + 1}`));
-  const {ms: liveMs, rows: during} = await burstIn(page, edits);
+  const {ms: liveMs, rows: during, draws: drawsDuring} = await burstIn(page, edits);
   assert.equal(during, 0, 'nothing is drawn while the events come in');
+  assert.equal(drawsDuring, 0, 'no draw runs while the events come in');
   await frame(page);
   const drawMs1 = await page.evaluate(() => window.__drawMs);
   const after1 = {...await counts(page, A), ms: liveMs + drawMs1};
   assert.equal(after1.rows, 1, 'the list is built once for the frame');
   assert.match(await page.locator(`.th-msg[data-mid="m${N - 3}"] .th-body`).innerText(), /Edit number 20/);
   assert.equal(before1.rows, 20);
-  assert.ok(after1.ms < before1.ms / 2, `a frame's draw costs less than drawing each edit: ${after1.ms} vs ${before1.ms}`);
-  // The spec's AC-1 target, within 2× of one draw, with room for a busy CI machine.
-  assert.ok(after1.ms <= 2 * one + 25, `the burst costs at most about two draws: ${after1.ms} vs one draw ${one}`);
+  // The spec's AC-1 target (the burst costs at most about two draws) held by count, not by the clock: the 20 edits make
+  // one draw and one list build, where drawing each edit made 20 of each.
+  assert.equal(after1.draws, 1, 'the 20 edits are drawn once, by the frame');
 
   // ---- Measure 2 (AC-2): 20 status changes build no list and redraw the status rows once.
   await reset(page);
@@ -175,6 +182,7 @@ let browser: import('playwright').Browser | null = null;
   const statusMs = await burst(page, Array.from({length: 20}, (_, i) => status(i + 1)));
   await frame(page);
   const after2 = {...await counts(page, A), ms: statusMs + await page.evaluate(() => window.__drawMs)};
+  assert.equal(after2.draws, 1, 'the 20 status changes are drawn once, by the frame');
   assert.deepEqual({rows: after2.rows, tails: after2.tails}, {rows: 0, tails: 1}, 'only the status rows are drawn, once');
   assert.match(await page.locator('.th-status .th-status-detail').innerText(), /step 20/);
   assert.equal(await page.locator('.thv-list > :last-child').getAttribute('data-th-status'), 'bot:ops', 'the status rows stay at the end of the timeline');
@@ -298,7 +306,7 @@ let browser: import('playwright').Browser | null = null;
   }, k);
   assert.deepEqual(await snap(B), await snap(A), 'the two views start the same');
   const ids = Array.from({length: N}, (_, i) => 'm' + (i + 1));
-  for (let seed = 1; seed <= 24; seed++) {
+  for (let seed = SEEDS[0]; seed <= SEEDS[1]; seed++) {
     const events = randomBurst(seed, 1 + (seed * 7) % 12, ids, seq);
     // B: drawn after each event, as before this change. A: drawn by the frame.
     await page.evaluate(([b, evs]) => { const vb = [...THV_VIEWS].find(v => v.key === b)!; for (const [kind, d] of evs) { threadViewsLive(kind, d); thvDraw(vb); } }, [B, events] as [number, Live[]]);

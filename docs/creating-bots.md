@@ -3,7 +3,7 @@
 How to set up a bot that works, and how to write the instructions it reads every run.
 
 Two readers: the owner standing up the first bots in a new environment, and the human (or bot)
-writing a bot's `AGENT.md`. Installation of the server, the runner and the model CLIs is in the
+writing a bot's `AGENTS.md`. Installation of the server, the runner and the model CLIs is in the
 [Install](install.md); this page starts where you can open **Settings > Bots > Add from template**. See also
 [How it works](how-it-works.md), [Using Tico](using-tico.md), [Routines](routines.md) and
 [Shared credentials](credential-vault.md).
@@ -78,7 +78,7 @@ If a control fails, the row keeps the current state, shows the reason and offers
 
 Open the bot’s **Instructions** tab and use the inline **Request instruction changes** form.
 Describe the change and choose **Send changes to BotOps**. BotOps receives your request in its DM and updates
-`AGENT.md` on the bot's computer. Description is separate: it summarizes the bot on the roster.
+`AGENTS.md` on the bot's computer. Description is separate: it summarizes the bot on the roster.
 The app displays the Instructions from the latest repository snapshot; refresh after BotOps finishes.
 New repositories default to `bot-<slug>`.
 
@@ -158,7 +158,7 @@ Ask BotOps to copy a bot ("make me a copy of the support bot"), or run `tico bot
 on the computer that holds its repository. Anyone who may read the bot can ask. The Librarian cannot be copied. The copy is an ordinary, independent bot: it belongs
 to the person who asked, reports to them, counts toward their limit of bots like any bot they add, and starts `planned`. It has the
 original's model where the person may use it (else the team's default), and a new repository `bot-<slug>` made from the original's
-files at its current commit: `AGENT.md`, `skills/`, `playbooks/`, `knowledge/` and the `tools:` list, as one fresh commit (`Copied
+files at its current commit: `AGENTS.md`, `skills/`, `playbooks/`, `knowledge/` and the `tools:` list, as one fresh commit (`Copied
 from <original> at <commit>`), without the history. The original's memory, notes, state and reports are left out unless you say
 `--with-memory`. A credential, `.env`, key file or `secrets/` is never copied, and neither are routines.
 
@@ -168,7 +168,7 @@ For anyone else, missing grants come back as "needs credential X" for BotOps to 
 after the copy the two bots change on their own, and the server keeps only `copied_from: {bot, sha}`, for two requests you make
 explicitly:
 
-- **Update my copy from the original** (`tico bot update-from-original <copy>`): the original's `AGENT.md`, `skills/` and `playbooks/`
+- **Update my copy from the original** (`tico bot update-from-original <copy>`): the original's `AGENTS.md`, `skills/` and `playbooks/`
   since the copy was made are merged file by file with git into one commit on the copy; if a file changed on both sides nothing is
   changed and BotOps settles each conflict with you.
 - **Suggest this to the original** (`tico bot suggest-to-original <copy> [--paths ...]`): the copy's changed instructions become a pull
@@ -226,12 +226,12 @@ A bot is **one durable git repository plus one row in the server**. Three parts:
 
 | The server owns (change it in **Settings → Bots**) | The repository owns (change it in git) |
 |---|---|
-| Runtime, model, reasoning effort, `max_run_minutes` | `AGENT.md`, the Instructions |
+| Runtime, model, reasoning effort, `max_run_minutes` | `AGENTS.md`, the Instructions |
 | Which computer runs the bot | `playbooks/`, the repeatable methods |
 | Record status: `planned`, `active`, `paused`, `quarantined` | `knowledge/`, what is true in the domain |
 | Display name, reporting line, owner and primary human | `memory/`, dated learnings and decisions |
-| The repository link recorded on the bot | `state.md`, where the bot is right now |
-| Tasks, asks, runs, routines, sending policy and their history | `bot.yaml`: `tools:` |
+| The repository link recorded on the bot | `bot.yaml`: `tools:` |
+| Tasks (where the bot is right now), asks, runs, routines, sending policy and their history | |
 
 A one-off request is a **task**, not an edit. Only change the repository when the change should
 hold next month too.
@@ -239,7 +239,7 @@ hold next month too.
 ## 2. Repository anatomy
 
 A template produces this layout already; `templates/employee-repo/` is the generic version
-of it. A bot made from a template keeps following it: after an update it takes the template's newer `AGENT.md`,
+of it. A bot made from a template keeps following it: after an update it takes the template's newer `AGENTS.md`,
 `playbooks/`, `skills/`, `.claude/settings.json` and `knowledge/` pages, except a file it or a person changed since,
 which is kept and named in the refresh's event ([Bots follow their template](updates.md#bots-follow-their-template)). Copy it to `<workspace>/bot-<slug>` and fill it in. Tico picks the slug from the bot's
 name (lowercase, hyphenated, with -2, -3 when it is taken); nobody is asked for one. Slugs are stable: the slug appears in the repository name, in `bot.yaml` and in the bot's
@@ -247,9 +247,8 @@ own paths, so renaming later is real work.
 
 | Path | What it is for |
 |---|---|
-| `AGENT.md` | The Instructions. Read at the start of every run. **Required.** `AGENTS.md` and `CLAUDE.md` are one-line pointers at it, so any model CLI finds it |
+| `AGENTS.md` | The Instructions. Claude Code and Codex load it at the start of every run. **Required.** A repository still on the old name `AGENT.md` is moved to `AGENTS.md` by the runner on the bot's next turn |
 | `bot.yaml` | Identity and switches: `name`, optional runtime overrides, `gateway:`, `tools:`, `reads:`. An older `employee.yaml` (with `access:` and `schedules:`) is still read for one release; the template refresh renames it |
-| `state.md` | Current focus, open threads, next step. Rewritten at the end of each run |
 | `memory/learnings.md` | How to do the job: the flag it forgot, the tool that refused, dated |
 | `memory/decisions.md` | What was decided, when, why. Dated. This is where history goes |
 | `knowledge/` | The domain: one topic per file, dated sources. Other bots may read it |
@@ -263,10 +262,10 @@ own paths, so renaming later is real work.
 The runner checks these before it will run the bot, and the preflight script
 (`clients/preflight.py`) checks the same things plus more before you flip a bot to `active`:
 
-- **`AGENT.md` must exist.** A missing `AGENT.md` reads to the runner as a missing repository.
-- **`AGENT.md` must not be the untouched template**, and it must contain an `## Owns` section with
+- **`AGENTS.md` must exist.** A missing `AGENTS.md` reads to the runner as a missing repository.
+- **`AGENTS.md` must not be the untouched template**, and it must contain an `## Owns` section with
   at least one non-empty bullet. Preflight fails otherwise.
-- **`state.md` must exist**, and **`bot.yaml` must parse with `name:` equal to the slug**
+- **`bot.yaml` must parse with `name:` equal to the slug**
   (`name: sales` in `bot-inbound-sales-owner`).
 - **`runtime:` and `model:` in the file must match the server, or be left out.** A mismatch reads
   as "Configuration differs from server" and the bot does not run. The simplest repository omits
@@ -297,9 +296,9 @@ Large or regenerable files go in `<workspace>/bot-<slug>.data/`, a sibling direc
 committed: raw API pulls, downloaded pages, seen-item stores, intermediate JSON. If losing it costs
 nothing but a re-run, it belongs there, and the repository stays small enough to read as a diff.
 
-## 3. Writing an `AGENT.md` that works
+## 3. Writing an `AGENTS.md` that works
 
-`AGENT.md` is read in full at the start of every run, so every line is paid for on every run.
+`AGENTS.md` is read in full at the start of every run, so every line is paid for on every run.
 Aim for one to two pages. Past 150 lines it is a warning sign, and past 250 lines the bot is doing
 archaeology before it starts work.
 
@@ -318,36 +317,36 @@ Then, in this order:
 
 ### The task loop
 
-Every run is the same shape, and `AGENT.md` should say so plainly:
+Every run is the same shape, and `AGENTS.md` should say so plainly:
 
-1. **Read `state.md`** to find out where the last run stopped.
-2. **Read the task and its thread** through the run's `tico` CLI. The task is the instruction;
-   the thread is the context.
-3. **Check `memory/learnings.md` and the playbook the task names** before touching anything.
-4. **Do the work**, updating `knowledge/` as it learns rather than at the end.
-5. **Report in the task thread.** The result goes in the task's completion note, first line
-   first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENT.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
-6. **When it needs a person, ask on the task** (`tico task ask`), having read the record first, since most
+1. **Read the task and its thread** through the run's `tico` CLI. The task is the instruction;
+   the thread is the context, and the task's notes say where the last run stopped.
+2. **Check `memory/learnings.md` and the playbook the task names** when the session is new or was compacted. A
+   resumed turn already has them in context: reading them again on every run costs a full context of tokens each time.
+3. **Do the work**, updating `knowledge/` as it learns rather than at the end.
+4. **Report in the task thread.** The result goes in the task's completion note, first line
+   first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENTS.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
+5. **When it needs a person, ask on the task** (`tico task ask`), having read the record first, since most
    questions a bot wants to ask are already answered there. One sentence, readable on its own: it is the only thing
    the person has to read. A bot has one open ask per task; asking again replaces it. Internal routing, task closure,
    branches and draft pull requests are the bot's work, not questions for a person. An OK (`--kind ok`) can clarify
    an uncertain action; granted Tools and the outbound send switch govern access.
-7. **Commit, then mark the stage's work done with a result note** (`tico task done <id> -m "..."`). A bot never
+6. **Commit, then mark the stage's work done with a result note** (`tico task done <id> -m "..."`). A bot never
    closes a task a person asked for: it asks that person.
 
 ### Where a line belongs
 
 | The line is... | It goes in |
 |---|---|
-| A rule that is always true for this bot | `AGENT.md` |
+| A rule that is always true for this bot | `AGENTS.md` |
 | Steps for one repeated job | `playbooks/<job>.md` |
 | A fact about the domain, with a source | `knowledge/<topic>.md` |
 | A mistake this bot made and how to avoid it | `memory/learnings.md` |
 | Why something changed, on what date | `memory/decisions.md` |
-| Today's status | `state.md` |
+| Today's status | the bot's Tico tasks (a task note or comment) |
 
-The single most common failure is dated exceptions piling up at the top of `AGENT.md` until the
-role is buried under three months of overrides. `AGENT.md` holds **current rules, present tense,
+The single most common failure is dated exceptions piling up at the top of `AGENTS.md` until the
+role is buried under three months of overrides. `AGENTS.md` holds **current rules, present tense,
 no dates**. When a rule changes, rewrite the rule and put the dated note in `memory/decisions.md`.
 
 ### Recording learnings
@@ -397,15 +396,18 @@ See the shared approvals policy. In addition:
 - Never invent a number. A figure you did not read in a dated source stays out.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation.
-2. Read `memory/learnings.md` and the playbook the task names.
-3. Skim `knowledge/README.md` so you update the right file, not a new one.
+1. Read the task and its conversation.
+2. In a new session or after a compaction, read `memory/learnings.md`, the playbook the task names and
+   `knowledge/README.md`. A resumed turn already has them.
 
 ## Ending a run
-1. Add the smallest scaffold against anything that went wrong this run.
-2. Update `knowledge/`; that is the work, not an afterthought.
-3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, commit.
-4. Mark the task done with the result in the first line. The requester closes it.
+1. Update `knowledge/`; that is the work, not an afterthought.
+2. Leave a short progress note on the task and commit.
+3. Mark the task done with the result in the first line. The requester closes it.
+
+When the task leaves your stage (done, moved on or closed), once per task and not every run:
+- Add the smallest scaffold against anything that went wrong on the task.
+- Record durable decisions in `memory/decisions.md`, then commit this repository.
 
 ## Working style              <- three to six habits, one or two sentences each
 - Quote the source. A claim you cannot quote goes in `open-questions.md`.
@@ -655,8 +657,11 @@ Levers set in **Settings → Bots**, not in the repository:
 - A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
   login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
-- **Compact at**: how full the bot's conversation gets before it is compacted: 100k, 150k, 250k tokens (the default),
-  400k, 600k or 1M. Claude Code and Codex follow it. pi follows it only on a Tico AI Gateway model, and there 250k or more
+- **Compact at**: how full the bot's conversation gets before it is compacted: 100k, 150k, 200k, 250k, 300k, 400k,
+  500k, 600k, 700k, 800k, 900k or 1M tokens. With none chosen it follows the model: 300k on Opus and Sonnet, 150k on
+  Haiku and 250k on any other, never more than the model's own window. Agents set it with `tico bot model <bot> --compact-at
+  <tokens>`, and `--compact-at default` (`{"compact_at": null}` on `POST /api/v2/bots/{bot}/compact-at`) takes a saved
+  size away, so the bot follows its model's default again and moves with the model. Claude Code and Codex follow it. pi follows it only on a Tico AI Gateway model, and there 250k or more
   compacts at about 184k, the Gateway's 200,000-token window less the 16,384 pi keeps. pi's other models keep pi's own
   compaction ([pi](harnesses.md#why-pi-is-the-catch-all)). Changing it keeps the session. A bot's tasks can use another
   length (**Task model**, **Task context length**).
@@ -713,7 +718,7 @@ or the bot will not run, which is why the plainest repository names neither.
 ## 8. A bot's first week
 
 1. **Create it `planned`.** **Settings → Bots → Add bot**, then copy `templates/employee-repo/` to
-   `<workspace>/bot-<slug>` on the computer that will run it, fill in `AGENT.md` and `bot.yaml`,
+   `<workspace>/bot-<slug>` on the computer that will run it, fill in `AGENTS.md` and `bot.yaml`,
    commit, push, and record the repository link on the bot. Leave its sending at Never in Tico and
    add no routines yet.
 2. **Run preflight** and fix everything it fails on. Then set the bot to `active` so it can take tasks.
@@ -723,20 +728,20 @@ or the bot will not run, which is why the plainest repository names neither.
 4. **Read the first three runs end to end**, the run and not just the completion note. You are
    looking for where it guessed, what it read that it did not need, and what it invented.
 5. **Fix the instructions, not the task.** Every correction you find yourself typing into a task
-   thread twice belongs in `AGENT.md` or a playbook. This is the whole of the first week.
+   thread twice belongs in `AGENTS.md` or a playbook. This is the whole of the first week.
 6. **Keep it active** when three runs in a row need no correction; adjust its Instructions when needed.
 7. **Add one routine**, pointing at a playbook written from those three runs, and watch the first
    two occurrences.
 8. **Review `memory/` weekly** for the first month, pruning: scaffolds that fixed a one-time
    problem, rules for mistakes that never repeated, decisions superseded twice. Then reread
-   `AGENT.md` and delete what is no longer true.
+   `AGENTS.md` and delete what is no longer true.
 
 ### Common mistakes
 
 Drawn from real bot reviews, stated generically.
 
-- **`AGENT.md` becomes a decision log.** Dated override sections stack above `## Role` until the
-  role is unfindable. Rules in `AGENT.md`, dates in `memory/decisions.md`.
+- **`AGENTS.md` becomes a decision log.** Dated override sections stack above `## Role` until the
+  role is unfindable. Rules in `AGENTS.md`, dates in `memory/decisions.md`.
 - **The routine's task is left open.** The next occurrence is absorbed and the routine silently
   stops. Always finish the task.
 - **"Nothing found" when a source was blocked.** Unknown coverage is not evidence of absence.
@@ -778,8 +783,8 @@ repository can be cloned into another environment's workspace as a starting poin
 
 Two consequences when you run more than one environment:
 
-- **Promote instructions, not state.** `AGENT.md`, `playbooks/` and `software/` travel well.
-  `state.md`, `memory/` and most of `knowledge/` do not: they are that bot's history in that
+- **Promote instructions, not state.** `AGENTS.md`, `playbooks/` and `software/` travel well.
+  `memory/` and most of `knowledge/` do not: they are that bot's history in that
   environment.
 - **Credentials stay with their environment.** Store and grant them separately in each environment;
   a Credential grant in one environment means nothing in another. Legacy files are migration sources only.
@@ -809,7 +814,7 @@ other slugs, and the UI shows slugs beside matching names.
 ### Move a local bot to another Computer
 
 A local repository lives on its current Computer. Before moving it, copy the complete `bot-<slug>`
-repository, including its Git history and `AGENT.md`, into the destination runner's workspace.
+repository, including its Git history and `AGENTS.md`, into the destination runner's workspace.
 Use the runner's configured workspace on that Computer. Keep the directory name that the bot's
 repository field specifies. Credentials are granted separately and do not belong in the repository.
 Alternatively, push the bot's history to its configured GitHub repository so the destination can clone it.

@@ -10,7 +10,6 @@ from . import (
     models as M,
     providers as Providers,
     runner_versions,
-    task_privacy as privacy,
     views,
 )
 from .auth import Identity, validate_identity
@@ -63,11 +62,10 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 return execution.heartbeat(c, request.state.identity, body, live_tasks=selected if unchanged else None)
 
             result = mutate(request, body, work)
-        # The roster, providers and repositories behind the assignments are read from a snapshot after the commit,
-        # not under the write lock: a heartbeat keeps no receipt (store.is_poll), so nothing replays them.
-        with store.read_transaction() as c:
-            result["assignments"] = execution.assigned(c, request.state.identity)
-            privacy.require_payload(c, request.state.identity, {"assignments": result["assignments"]})
+        # No bot list: every runner the server accepts (0.4.0 on) reads its bots from GET runners/assignments when a
+        # `runner` change of kind "assignments" tells it to, and never read this one (at 53 bots it was ~0.5 MB a beat).
+        # Kept as an empty list for the 0.5.0 and 0.6.0 contracts, which require the field (contracts/runner/releases).
+        result["assignments"] = []
         return result
 
     @app.get("/api/v2/runners/desired")
@@ -78,6 +76,8 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
         # `usage_request_main`: ... and a fourth count marking the bot's own requests (an older one refuses it).
+        # `usage_cache_writes`: a run's usage may carry `cache_write_tokens` apart from `input_tokens` (an older one refuses
+        # the field; the runner then counts cache writes in input, as before).
         # `run_pushes`: a run's result may list the pushes its task worktrees made (an older one refuses the field).
         # `run_rotation`: a run's result may say it started a fresh session and why (an older one refuses the field).
         # `run_session`: a run's result may say whether it resumed its session or started a new one, and why (an older
@@ -96,6 +96,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "limit_resets_at": True,
                 "usage_requests": True,
                 "usage_request_main": True,
+                "usage_cache_writes": True,
                 "run_pushes": True,
                 "run_rotation": True,
                 "run_session": True,

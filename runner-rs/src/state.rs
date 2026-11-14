@@ -532,9 +532,12 @@ impl State {
                     |r| r.get(0),
                 )
                 .optional()?;
+            // The conversation's own threads and its side sessions (crate::continuity::side_session).
+            let side = format!("{session}{}", crate::continuity::SIDE_MARK);
+            let clear = "DELETE FROM sessions WHERE bot=?1 AND (conversation=?2 OR substr(conversation, 1, length(?3))=?3)";
             let moved = match seen {
-                Some(e) => e != epoch && tx.execute("DELETE FROM sessions WHERE bot=? AND conversation=?", params![bot, session]).map(|_| true)?,
-                None => epoch != 0 && tx.execute("DELETE FROM sessions WHERE bot=? AND conversation=?", params![bot, session])? > 0,
+                Some(e) => e != epoch && tx.execute(clear, params![bot, session, side]).map(|_| true)?,
+                None => epoch != 0 && tx.execute(clear, params![bot, session, side])? > 0,
             };
             if seen != Some(epoch) {
                 tx.execute("INSERT OR REPLACE INTO session_epochs VALUES(?,?,?,?)", params![bot, conversation_id, session, epoch])?;
@@ -622,9 +625,17 @@ mod tests {
             state.session("ops", "bot", "claude").unwrap().as_deref(),
             Some("t-new")
         );
-        // A conversation's own thread moves with that conversation's epoch, apart from the bot's.
+        // A conversation's own thread moves with that conversation's epoch, apart from the bot's, and its side
+        // sessions with it; another conversation whose key only starts the same way keeps its own.
         state
             .save_session("ops", "conversation:c-ana", "claude", "c-old")
+            .unwrap();
+        let side = crate::continuity::side_session("conversation:c-ana", "opus");
+        state
+            .save_session("ops", &side, "claude", "c-side")
+            .unwrap();
+        state
+            .save_session("ops", "conversation:c-ana2", "claude", "c-other")
             .unwrap();
         assert!(!state
             .epoch_moved("ops", "c-ana", "conversation:c-ana", 0)
@@ -637,6 +648,14 @@ mod tests {
                 .session("ops", "conversation:c-ana", "claude")
                 .unwrap(),
             None
+        );
+        assert_eq!(state.session("ops", &side, "claude").unwrap(), None);
+        assert_eq!(
+            state
+                .session("ops", "conversation:c-ana2", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("c-other")
         );
         assert_eq!(
             state.session("ops", "bot", "claude").unwrap().as_deref(),

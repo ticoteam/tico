@@ -217,19 +217,20 @@ def manifest_page(action, manifest):
     "Start connecting a GitHub App (the Owner), from an agent: answers the App manifest, GitHub's create address and a "
     "single-use `state`, and `page_html`, the page to open in a browser signed in to GitHub as an owner of the account "
     "or organization; it posts the manifest and the person clicks Create GitHub App. Then tico_github_finish with the "
-    "state. Refused when GitHub is already connected. Example: tico github connect acme --html github.html",
+    "state. With no `org`, GitHub makes the App in the personal account signed in there. Refused when GitHub is already "
+    "connected. Example: tico github connect --html github.html (a personal account), tico github connect acme-co",
     {
-        "org": _s("The GitHub account or organization the App is made under"),
+        "org": _s("The GitHub organization the App is made under; leave out for your own GitHub account"),
         "name": _s("The App's name; default '<company> Tico'"),
         "administration": {
             "type": "boolean",
             "description": "Let BotOps create bot repositories (Administration: write). Default true",
         },
     },
-    required=("org",),
 )
 def github_connect(api, args):
-    query = {"org": args["org"], "name": args.get("name") or None}
+    org = (args.get("org") or "").strip()
+    query = {"org": org or None, "name": args.get("name") or None}
     if args.get("administration") is False:
         query["administration"] = "false"
     made = api.get("github/app/manifest", **query)
@@ -239,7 +240,9 @@ def github_connect(api, args):
         "manifest": made["manifest"],
         "page_html": manifest_page(made["action"], made["manifest"]),
         "next": [
-            f"Open the page in a browser signed in to GitHub as an owner of {args['org']}, and click Create GitHub App",
+            f"Open the page in a browser signed in to GitHub as an owner of {org}, and click Create GitHub App"
+            if org
+            else "Open the page in a browser signed in to GitHub as the account the App is for, and click Create GitHub App",
             f"tico github finish {made['state']}: answers install_url once GitHub has sent the App back",
             "Open install_url, choose All repositories (recommended), click Install",
             "tico github installed: records the install; then tico github status",
@@ -720,10 +723,15 @@ def add_commands(sub):
         github,
         "connect",
         "start connecting an App: the manifest page to open in a browser and the state to finish with (the Owner)",
-        "tico github connect acme --html github.html",
+        "tico github connect --html github.html",
         "github connect",
     )
-    s.add_argument("org", help="the GitHub account or organization the App is made under")
+    s.add_argument(
+        "org",
+        nargs="?",
+        default=None,
+        help="the GitHub organization the App is made under; leave out for your own account",
+    )
     s.add_argument("--name", help="the App's name; default '<company> Tico'")
     s.add_argument(
         "--no-administration",

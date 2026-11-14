@@ -21,7 +21,7 @@ from starlette.requests import ClientDisconnect
 
 
 from . import built_on
-from . import agents, app_delivery, mcp_oauth, oidc, views
+from . import agents, app_delivery, app_view, mcp_oauth, oidc, views
 from . import outcome_stats
 from . import pipeline_judges
 from . import recorder_installs
@@ -143,6 +143,23 @@ STABLE_PATH = re.compile(
 
 # Gateway image calls in flight per process (each holds a thread up to 130 s); more answer 429 with Retry-After.
 GATEWAY_IMAGE_SLOTS = 4
+
+
+def filed_for(c, who, person, message_id):
+    """`--for human:X --from-message M` (Ideas: say it once, #227): a bot files a person's own ask, and the task is the
+    person's. Only when X sent M and the bot reads M; anything else is refused, and nothing is filed."""
+    if who.role != "bot":
+        raise Problem("for", "Only a bot files a task for a person; a person files their own", 422)
+    if not H.is_human(person) or not H.human(c, person):
+        raise Problem("for", f"{person} is not a person on this team", 422)
+    message = H.message(c, message_id)
+    from . import threads
+
+    if not message or not threads.readable(c, who, message):  # its conversation, and the message in it
+        raise Problem("from_message", "No message you can read has that id", 403)
+    if message.get("sender_id") != person:
+        raise Problem("from_message", f"That message was not sent by {person}", 403)
+    return person
 
 
 def create_app(settings=None):
@@ -327,21 +344,38 @@ def create_app(settings=None):
                 stopping=stop.is_set,
             ).start()
             scheduler.drains = workers
-            try:
-                await run_passes(scheduler, recorded, release_check)
-            finally:
-                # No new claims; a call already started finishes within its own timeout.
-                await asyncio.to_thread(workers.stop, 75)
+            # The steps that call GitHub, and the release check and update feeds, on a worker of their own beside
+            # this loop (backend/heartbeat.py `Outside`): a slow GitHub never holds up a due time or a recovery.
+            from . import heartbeat
 
-        async def run_passes(scheduler, recorded, release_check):
+            outside = heartbeat.Outside(
+                scheduler,
+                app=app,
+                telemetry=telemetry,
+                also=lambda: recorded("release_check", release_check),
+                stopping=stop.is_set,
+            ).start()
+            scheduler.outside = outside
+            try:
+                await run_passes(scheduler)
+            finally:
+                # No new claims or passes; a call already started finishes within its own timeout.
+                outside.stop.set()
+                await asyncio.to_thread(workers.stop, 75)
+                await asyncio.to_thread(outside.halt, 15)
+
+        async def run_passes(scheduler):
             from . import heartbeat
 
             rest = heartbeat.Rest()
             while not stop.is_set():
-                # The Heartbeat (backend/heartbeat.py): GitHub sync, personal alerts, the tick's due-time and recovery
-                # steps, repository waits and call sweeps, in that order, each on its own (one failing never stops
-                # the next; each goes to telemetry as before).
+                # The Heartbeat (backend/heartbeat.py): personal alerts, the tick's due-time and recovery steps and the
+                # call sweeps, in that order, each on its own (one failing never stops the next; each goes to
+                # telemetry as before). The outside polls' worker is asked for its pass at the beat's time first, so
+                # it runs beside the beat and never more than one pass at a time.
                 ctx = heartbeat.Context(scheduler, app=app, telemetry=telemetry)
+                if scheduler.outside is not None:
+                    scheduler.outside.wake(ctx.at)
                 try:
                     await asyncio.to_thread(heartbeat.beat, ctx)
                 except Exception as exc:
@@ -351,7 +385,9 @@ def create_app(settings=None):
                 if rest.due(ctx):
                     try:
                         await asyncio.to_thread(scheduler.tick, ctx.at, ctx)
-                        await asyncio.to_thread(recorded, "release_check", release_check)
+                        if scheduler.outside is not None:
+                            # The release check, here only while the worker's thread is dead.
+                            await asyncio.to_thread(scheduler.outside.rest_fallback)
                     except Exception as exc:
                         telemetry.capture("scheduler", exc)
                         import logging
@@ -817,6 +853,9 @@ def create_app(settings=None):
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
                 return await call_next(request)
+            # A file source's signed address (backend/growth.py): its HMAC signature is the right to post.
+            if request.url.path.startswith("/api/v2/growth/in/") and request.method == "POST":
+                return await call_next(request)
             # A listening's push address carries its own token (backend/listening.py).
             if request.url.path.startswith(LISTENING_PUSH_PATH) and request.method == "POST":
                 return await call_next(request)
@@ -890,6 +929,10 @@ def create_app(settings=None):
 
                     raw = request.scope.get("raw_path") or b""
                     support_access.gate(who, raw.decode("latin-1") if raw else request.url.path, request.method)
+                if who.view:
+                    # A bot's read-only view (backend/app_view.py), on the path as sent as well.
+                    raw = request.scope.get("raw_path") or b""
+                    app_view.gate(raw.decode("latin-1") if raw else request.url.path, request.method)
                 if who.via == "assistant" and not who.confirmed and not who.task_actor and not who.attempt_id:
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
@@ -953,6 +996,7 @@ def create_app(settings=None):
                     "/api/v2/uploads/tasks",
                     "/api/v2/uploads/assistant/messages",
                     "/api/v2/meetings/import",
+                    "/api/v2/growth/customers",  # customer facts as CSV: 100,000 customers is about 7 MB
                 ) or re.fullmatch(
                     r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+|v2/uploads/threads/[^/]+/messages)",
                     request.url.path,
@@ -1010,6 +1054,10 @@ def create_app(settings=None):
                     if captured
                     else 20_000_000
                     if docs_import or upload and request.state.identity.role in ("human", "owner")
+                    else 14_200_000  # a website tool's upload, 10 MB in base64 (backend/browser_commands.py)
+                    if request.url.path == "/api/v2/browser/commands"
+                    else 20_100_000  # a website tool's download, from the computer
+                    if re.fullmatch(r"/api/v2/runner-browser-commands/[^/]+/file", request.url.path)
                     else 2_000_000
                 )
                 if int(size) > limit:
@@ -2459,16 +2507,19 @@ def create_app(settings=None):
 
         return place
 
-    def rule_check(who, operation, output, audience, obj="", context=None, place=None, *, track_route=False):
+    def rule_check(
+        who, operation, output, audience, obj="", context=None, place=None, *, track_route=False, late=False
+    ):
         """The check for one write by a person or a bot, or None (nothing to judge). An audience the caller may not name
         is `org_rule_check.refused`: never unchecked, the write fails with that error (`apply`). `place`: the write's
         place, or a function of (c, author, recipients) that reads it. `track_route` keeps the audience even when
-        nothing matches, so a send cannot move to an unchecked recipient."""
+        nothing matches, so a send cannot move to an unchecked recipient. `late`: when every rule it meets only warns,
+        the check runs right after the write instead of before it (org_rule_check `check_as`)."""
         author = org_rule_check.author_of(who, settings.assistant_bot)
         if not track_route and (not output or not author):
             return None
         with store.read() as c:
-            in_force = org_rule_check.in_force(c)
+            in_force = org_rule_check.in_force(c, org_rule_check.asking(place))
             if not track_route and not in_force:
                 return None  # no rule in force: the audience (a roster read, @mentions) is never resolved
             try:
@@ -2477,7 +2528,7 @@ def create_app(settings=None):
                 return org_rule_check.refused(exc)
         verdict = (
             org_rule_check.preflight(
-                store, app.state.judge, who, operation, output, recipients, context, obj, place=place
+                store, app.state.judge, who, operation, output, recipients, context, obj, place=place, late=late
             )
             if in_force and output and author
             else None
@@ -3259,9 +3310,9 @@ def create_app(settings=None):
         except check_models.CheckModelError as exc:
             raise Problem(exc.code, str(exc), 409 if exc.code == "runner_not_ready" else 422)
 
-    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None):
+    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
-        for a bot wakes it."""
+        for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
         source = who
         actual_bot = source.task_actor or (source.actor if source.role == "bot" else "")
         if body.from_private:
@@ -3282,6 +3333,16 @@ def create_app(settings=None):
         others = [(auth.resolve_task(c, who, r.task), r.kind) for r in body.relations]
         from .shared_bots import route
 
+        # No owner: a first stage that picks from several picks one as the task arrives (backend/stage_pick.py). The
+        # filer stands in as its requester and reach, as for a task a stage files, and it enters with no assignee.
+        unassigned = not body.owner
+        if unassigned:
+            from . import stage_pick
+
+            refused = stage_pick.no_owner_refusal(c, body.pipeline)
+            if refused:
+                raise Problem("owner", refused, 422)
+            body = body.model_copy(update={"owner": who.actor})
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
         from . import meeting_audience
@@ -3370,14 +3431,21 @@ def create_app(settings=None):
             check, unchecked = check_models.review_default(c, settings, owner, parent_id)
         # The task's own model, checked before anything is written (the same rights as the bot's model, a bot never).
         run_model = None
-        if body.model is not None or body.effort or body.harness:
+        if body.model is not None or body.effort or body.harness or body.compact_at:
             if not H.is_bot(owner):
                 raise Problem("owner", "Only a task a bot runs has a model to choose", 422)
-            if body.model is None:
+            if body.model is None and (body.effort or body.harness):
                 raise Problem("model", "Choose a model to pick an effort or harness for it", 422)
-            run_model = settings_admin.task_run_choice(
-                c, who, H.actor_id(owner), "set the model a new task runs on", body.model, body.effort, body.harness
-            )
+            if body.model is None:
+                # A window alone: its runs keep the bot's model (backend/task_run_models.py).
+                run_model = settings_admin.task_run_window(
+                    c, who, H.actor_id(owner), "set where a new task's runs compact", body.compact_at
+                )
+            else:
+                run_model = settings_admin.task_run_choice(
+                    c, who, H.actor_id(owner), "set the model a new task runs on", body.model, body.effort, body.harness
+                )
+                run_model["compact_at"] = body.compact_at
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
@@ -3426,7 +3494,7 @@ def create_app(settings=None):
         if body.goal_id and not G.goal(c, body.goal_id):
             raise Problem("not_found", "Unknown goal", 404)
         requester_actor = None
-        if who.role == "bot" and owner == who.actor and not parent_id and who.attempt_id and private:
+        if who.role == "bot" and owner == who.actor and not unassigned and not parent_id and who.attempt_id and private:
             origin = c.execute(
                 "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
                 "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot_id=?",
@@ -3449,6 +3517,9 @@ def create_app(settings=None):
                 raise Problem(
                     "privacy", "The verified requester cannot receive this private execution's other context", 403
                 )
+        if body.for_actor:
+            # A bot files a person's own ask: the person asked for it, so it is theirs (Ideas: say it once, #227).
+            requester_actor = filed_for(c, who, body.for_actor, body.from_message)
         if private and actual_bot and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         if reach_to:
@@ -3462,6 +3533,7 @@ def create_app(settings=None):
             body.due,
             parent_id,
             requester_actor=requester_actor,
+            requester_said=bool(body.for_actor),
             visibility=body.visibility,
             public_title=body.public_title,
             public_summary=body.public_summary,
@@ -3484,8 +3556,21 @@ def create_app(settings=None):
             # everyone who will.
             readers=body.readers or (),
             readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
+            unassigned=unassigned,
+            wake_refs=wake_refs,
+            human_id=body.human,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if body.for_actor:
+            H._task_event(
+                c,
+                row["id"],
+                who.actor,
+                "filed_for",
+                None,
+                body.for_actor,
+                f"Filed for {H.actor_name(c, body.for_actor)}, from their message",
+            )
         if run_model:
             task_run_models.set_choice(c, who.actor, row["id"], run_model, note="Set when the task was filed")
         # A send, counted against the sender's cap for this owner, at the moment the task was made.
@@ -3776,6 +3861,7 @@ def create_app(settings=None):
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         fields = body.model_dump(exclude={"version", "on_behalf_of"})
+        fields["human_id"] = fields.pop("human")  # the column's name: `human` is the API's, as `owner` is
         if "size" in body.model_fields_set and body.size is None:
             fields["clear_size"] = True
         after = H.task_update(
@@ -5371,6 +5457,9 @@ def create_app(settings=None):
     from .growth_numbers import install as install_growth_numbers
 
     install_growth_numbers(app, store, auth)  # the Growth page's numbers (read-only)
+    from .growth_finance import install as install_growth_finance
+
+    install_growth_finance(app, store, auth)  # Finance ad spend source: the campaign mapping step
     from .strategy_setup import install as install_strategy_setup
 
     install_strategy_setup(app, store, auth, mutate)
@@ -5396,6 +5485,9 @@ def create_app(settings=None):
 
     install_meeting_items(app, store, mutate, task_create, auth)
     pipeline_judges.install(app, store, mutate, auth)
+    from . import stage_rules
+
+    stage_rules.install(store)
     from . import presence
 
     presence.install(app, store, mutate, auth)
@@ -5424,9 +5516,15 @@ def create_app(settings=None):
     from . import api_tools
 
     api_tools.install(app, store, auth, settings)  # Tools: API tools, their keys and levels, and the tool index
+    from . import website_tools
+
+    website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts
     from . import tool_proxy
 
     tool_proxy.install(app, store)
+    from . import browser_commands
+
+    browser_commands.install(app, store, auth, mutate)  # website tools' browser: bots' verbs, computers, live view
     from .finance import actions as finance_vault
 
     finance_vault.use_vault(app.state.vault)  # never one an earlier app left behind (the scheduler may be off)
@@ -5494,6 +5592,9 @@ def create_app(settings=None):
     thread_tasks.install(app, store, auth, create_task, settings.public_url or "")  # Make task from a message
     counsel.install(app, store, auth, mutate)  # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
+    from . import stage_rules_api
+
+    stage_rules_api.install(app, store, auth, mutate)  # stage rules: the Rules button, the Rules page's groups
     why_here.install(app, store, auth)  # GET /api/v2/origins/{ref}: why an item is on the list
     assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
     reach.install(app, store, auth, mutate)  # Rules › Internal: who reaches whom (docs/reach.md)
@@ -5556,6 +5657,11 @@ def create_app(settings=None):
     from .learned import install as install_learned
 
     install_learned(app, store, auth, mutate)
+    from . import assistant_share
+
+    assistant_share.install(
+        app, store, auth, mutate
+    )  # bots a person lets view their Assistant chat (docs/assistant.md)
     from .mcp import install_mcp
 
     install_mcp(app, settings)
@@ -5723,6 +5829,8 @@ def create_app(settings=None):
     from .performance import install as install_performance
 
     install_performance(app, store, auth, mutate, execution)
+    # A bot's read-only view of the app, for its own screenshots (backend/app_view.py).
+    app_view.install(app, store, auth)
     # A bot's browser through another computer's internet (backend/browser_exit.py); the same relay as the screen.
     from .browser_exit import install as install_browser_exit
 

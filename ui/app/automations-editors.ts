@@ -28,7 +28,7 @@ interface AuStep {
   rules?: AuRule[];
   set?: string; questions?: Record<string, AuQuestion>;
   as?: string; prompt?: string; choose?: { mode?: string; to?: string[]; default?: string };
-  bot?: string; model?: string; harness?: string; effort?: string;
+  bot?: string; model?: string; harness?: string; effort?: string; compact_at?: number;
   source?: string; query?: string; since?: string; limit?: number;
   do?: string; args?: AuArgs;
   paths?: AuPath[]; otherwise?: { steps?: AuStep[] };
@@ -77,7 +77,9 @@ interface AuStepEd {
 /** The trigger's editor: the copy edited, the saved one (to go back to its kind), and whether the event is Custom. */
 interface AuTriggerEd { kind: 'trigger'; trigger: AuFlowTrigger; saved?: AuFlowTrigger; evCustom?: boolean | undefined;
   /** A listening's name, edited beside its parts and saved with them. */
-  name?: string }
+  name?: string;
+  /** A schedule's run settings, edited beside its cron and saved with it (auReleaseOf fills the defaults). */
+  release?: AuRelease }
 interface AuSpendEd { kind: 'spend'; value?: unknown }
 interface AuRunEd { kind: 'run'; text: string }
 interface AuVersionsEd { kind: 'versions'; rows?: AuVersion[] | null; props?: AuProp[]; error?: string }
@@ -131,7 +133,7 @@ function auEdOpen(ed: AuEd) {
 function auEdOpenStep(id: string, path?: string | null) {
   auHave(AU);
   if (!AU.cur) return;
-  if (id === 'trigger') { auEdOpen({kind: 'trigger', trigger: auClone(auCurTrigger()), ...(lstIs() ? {name: AU.cur.name || ''} : {})}); return; }
+  if (id === 'trigger') { auEdOpen({kind: 'trigger', trigger: auClone(auCurTrigger()), release: auReleaseOf(AU.cur.release), ...(lstIs() ? {name: AU.cur.name || ''} : {})}); return; }
   const hit = auFind(AU.cur.steps, id);
   if (hit) auEdOpen({kind: 'step', id, step: auClone(hit.step), path: path ?? null});
 }
@@ -237,6 +239,19 @@ function auEventField(t: AuFlowTrigger, ed?: AuTriggerEd) {
   const pick = auSel('evpick', list, custom ? AU_EV_CUSTOM : t.name, `aria-label="Event"${t.name && !custom ? ` title="${esc(t.name)}"` : ''}`);
   return auFld('Event', pick + (custom ? auIn('trigger.name', t.name, 'custom.name', 'aria-label="Custom event"') : ''));
 }
+// A scheduled routine's run settings (backend/automation_flow.py `_check_release`): absent is warm off, wait 0, run, fresh.
+const AU_RELEASE_MAX_HOURS = 336;
+const auReleaseOf = (r: Partial<AuRelease> | null | undefined): AuRelease => ({warm: r?.warm === true, wait_hours: Number(r?.wait_hours ?? 0),
+  deadline: r?.deadline === 'skip' ? 'skip' : 'run', session: r?.session === 'continue' ? 'continue' : 'fresh'});
+function auReleaseFields(r: AuRelease) {
+  const ro = auRO();
+  return `<div class="au-f au-rel">
+      <label class="au-ir au-rel-sw"><span class="au-lb">Wait for a warm session</span>${peopleSwitch('data-b="release.warm" data-redraw', r.warm, ro, 'Wait for a warm session')}</label>
+      <label class="au-ir au-days"><span class="muted">Up to</span><input type="number" data-b="release.wait_hours" data-num min="0" max="${AU_RELEASE_MAX_HOURS}" step="1" value="${esc(r.wait_hours)}"${ro || !r.warm ? ' disabled' : ''}><span class="muted">hours</span></label>
+    </div>
+    <div class="au-two">${auFld('At the deadline', auSel('release.deadline', [['run', 'Run cold'], ['skip', 'Skip']], r.deadline))}
+      ${auFld('Session', auSel('release.session', [['fresh', 'Fresh'], ['continue', 'Continue latest']], r.session))}</div>`;
+}
 function auTriggerFields(t: AuFlowTrigger, ed?: AuTriggerEd) {
   if (t.type === 'listening') return lstFields(t, ed);   // no When and no filters: its rules are its filters
   const fields: Record<string, () => string> = {message: () => auFld('Inbox', auIn('trigger.inbox', t.inbox)),
@@ -251,7 +266,7 @@ function auTriggerFields(t: AuFlowTrigger, ed?: AuTriggerEd) {
   const src = fields[t.type ?? ''];
   // When: a schedule, an event or a due date (a kind made elsewhere, such as a message, shows as itself).
   const when = auFld('When', auSel('ttype', auWithCur(AU_WHEN, t.type, AU_TRIGGER_WORDS[t.type ?? ''] || t.type), t.type));
-  return when + (src ? src() : '')
+  return when + (src ? src() : '') + (t.type === 'schedule' && ed?.release ? auReleaseFields(ed.release) : '')
     + auBox('Filters', auCondRows('trigger.filters', t.filters) + auPlus('trigger.filters', 'cond', 'Filter'));
 }
 function auFilterFields(s: AuStep) {
@@ -308,7 +323,8 @@ function auBotFields(s: AuStep) {
     + auFld('Prompt', auTa('step.prompt', s.prompt)) + auBotRunsFields(s);
 }
 // Runs on: the model the turn's task runs on, stamped on the task its run opens (backend/task_run_models.py). Blank is the
-// bot's task model; the harness and effort follow the model picked, and a blank one is left out of the step.
+// bot's task model; the harness and effort follow the model picked, and a blank one is left out of the step. Compact is
+// where that task's runs compact: "Same as bot" (left out of the step) or a size the model holds.
 function auBotRunsFields(s: AuStep) {
   const rows: TaskRunRow[] = TASK_RUN_ROWS || [], model = s.model || '', row = rows.find(m => m.id === model);
   const models = auWithCur([['', "The bot's task model"], ...rows.map(m => [m.id, m.label || m.id])], model, model);
@@ -316,7 +332,8 @@ function auBotRunsFields(s: AuStep) {
   const harnesses = rowHarnesses.length > 1 ? rowHarnesses.map(h => [h, harnessWords(h) || h]) : [];
   return auFld('Runs on', auSel('step.model', models, model, 'data-blank data-redraw'))
     + (harnesses.length ? auFld('Harness', auSel('step.harness', harnesses, s.harness || rowHarnesses[0], 'data-blank')) : '')
-    + (row?.efforts?.length ? auFld('Effort', auSel('step.effort', [['', 'Default'], ...row.efforts.map(e => [e, e])], s.effort || '', 'data-blank')) : '');
+    + (row?.efforts?.length ? auFld('Effort', auSel('step.effort', [['', 'Default'], ...row.efforts.map(e => [e, e])], s.effort || '', 'data-blank')) : '')
+    + (compactsOn(s.harness || rowHarnesses[0]) ? auFld('Compact', `<select data-b="step.compact_at" data-num${auDis()}>${compactOptions(s.compact_at, row?.context_tokens)}</select>`) : '');
 }
 // The models the Runs on field lists (the task picker's catalog, read once); the editor draws again when they arrive.
 async function auModelsLoad(ed: AuEd) {
@@ -405,7 +422,13 @@ function auEdWire(box: HTMLElement) {
     const stopAt = /^step\.rules\.(\d+)\.stop$/.exec(b), sr = stopAt && ed.step?.rules?.[Number(stopAt[1])];   // C: the same index
     if (sr && 'next' in sr) sr.next = v ? 'end' : sr.next === 'end' ? 'step' : sr.next;
     // Another model has its own harnesses and efforts: the ones kept for the last model do not carry over.
-    if (b === 'step.model') { auPathSet(ed, 'step.harness', undefined); auPathSet(ed, 'step.effort', undefined); }
+    if (b === 'step.model') {
+      auPathSet(ed, 'step.harness', undefined); auPathSet(ed, 'step.effort', undefined);
+      // Its window stays, lowered to the largest size the new model holds (spec scope 8).
+      const window = (TASK_RUN_ROWS || []).find(m => m.id === v)?.context_tokens || 0;
+      const compact = auPathGet<number>(ed, 'step.compact_at');
+      if (compact && window && compact > window) auPathSet(ed, 'step.compact_at', COMPACT_SIZES.filter(([size]) => size <= window).pop()?.[0]);
+    }
     if (t.hasAttribute('data-redraw') && e.type === 'change') { if (b === 'step.do') { auEdIs(ed, 'step'); ed.step.args = {}; } auDrawSide(); }
   };
   box.addEventListener('input', onField);
@@ -449,7 +472,7 @@ async function auEdSave(button?: HTMLButtonElement) {
   if (ed.kind === 'run') { await auRunNow(ed, button); return; }
   if (ed.kind === 'board') { await auBoardEdSave(ed, button); return; }
   if (button) button.disabled = true;
-  let body: { trigger: AuFlowTrigger } | { steps?: unknown; destinations?: unknown };
+  let body: { trigger: AuFlowTrigger; release?: AuRelease | null } | { steps?: unknown; destinations?: unknown };
   if (ed.kind === 'trigger' && ed.trigger.type === 'listening') {
     const made = lstBody(ed);
     if (typeof made === 'string') { lstRefused(made); if (button) button.disabled = false; return; }
@@ -465,6 +488,15 @@ async function auEdSave(button?: HTMLButtonElement) {
       if (bad) { toast(bad, true); if (button) button.disabled = false; return; }
       body.trigger = {...t, open_days: days, tz: String(t.tz || '').trim() || auZone()};
     }
+    // Only a schedule's runs wait (the hub refuses release on any other trigger): a schedule sends its four settings,
+    // and another kind takes a saved one away.
+    if (ed.trigger.type === 'schedule') {
+      const r = auReleaseOf(ed.release), hours = r.wait_hours;
+      if (!(Number.isFinite(hours) && hours >= 0 && hours <= AU_RELEASE_MAX_HOURS)) {
+        toast(`Wait from 0 to ${AU_RELEASE_MAX_HOURS} hours`, true); if (button) button.disabled = false; return;
+      }
+      body.release = r;
+    } else if (a?.release) body.release = null;
   }
   else {
     const step = auClone(auNeed(ed.step, 'the step'));
@@ -869,7 +901,7 @@ async function auBoardDelete(ed: AuBoardEd, button: HTMLButtonElement) {
   else if (ed.part === 'q') b.questions.splice(ed.i, 1);
   else if (ed.part === 'dest') {
     const d = b.dests[ed.i];
-    if (!d || b.dests.length < 2 || !confirm(`Delete ${d.name || d.id}?`)) return;
+    if (!d || b.dests.length < 2 || !(await askConfirm(`Delete ${d.name || d.id}?`))) return;
     b.dests.splice(ed.i, 1);
     for (const r of [...b.rules, ...b.questions]) if (r.to === d.id) Object.assign(r, {to: '', next: 'end'});
     b.llm.to = b.llm.to.filter(x => x !== d.id);

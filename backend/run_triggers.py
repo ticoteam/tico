@@ -8,7 +8,8 @@ Every run (its `attempts` row) records three things, all in plain code, none ask
   message is the wake and its author says which. A keeper wake nothing stamped is `other`.
 - tokens: `input_tokens` (the uncached input), `cached_tokens` (the cached part of the input, where the harness
   reports it) and `output_tokens`, as the run's usage records them.
-- `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. Exact for every write that
+- `did_nothing`: 1 when the run made no write Tico counts (`writes` is 0), else 0. NULL, with `outcome` NULL, for a
+  keep-warm turn that wrote nothing (KEEP_WARM): it was never meant to do anything. Exact for every write that
   reaches Tico with the run's token, and for a git push from a worktree of the run's own task, which its runner
   reports with the result (`pushes`, see `pushed`). A push from anywhere else is not seen.
 - `outcome`: `acted` when the run wrote something: a hub write made with its own run token (`writes`), or a
@@ -56,6 +57,7 @@ TRIGGERS = (
     "background_done",
     "release_published",
     "task_turn",
+    "keep_warm",
     "other",
 )
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
@@ -75,7 +77,11 @@ TRIGGER_PURPOSES = {
     "background_done": "resume after background work",
     "release_published": "follow up a release",
     "task_turn": "work a task",
+    "keep_warm": "keep warm",
 }
+# A keep-warm turn (backend/keep_warm.py): a one-line turn that only reads a task session's cache so it stays warm. It
+# is no work: never counted as acting, as doing nothing, or as a run on its task (never_stuck, may_start).
+KEEP_WARM = TRIGGER_PURPOSES["keep_warm"]
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
 REVIEWERS = ("pr-reviewer-sol", "reviewer-2")
 BOT_PURPOSES = {(bot, kind): "review PR" for bot in REVIEWERS for kind in ("status_or_relation", "pr_checks")}
@@ -186,7 +192,12 @@ OUTCOME_SQL = (
     + ",".join(f"'{s}'" for s in OPEN_TASK)
     + ") THEN 'no_change' ELSE 'nothing_to_do' END"
 )
-SETTLE_SQL = f"outcome={OUTCOME_SQL}, did_nothing=(coalesce(writes,0)=0)"
+# A keep-warm turn that wrote nothing has neither (KEEP_WARM): it is no work, and not a run that did nothing.
+_KEPT_WARM = f"coalesce(purpose,'')='{KEEP_WARM}' AND coalesce(writes,0)=0"
+SETTLE_SQL = (
+    f"outcome=CASE WHEN {_KEPT_WARM} THEN NULL ELSE {OUTCOME_SQL} END, "
+    f"did_nothing=CASE WHEN {_KEPT_WARM} THEN NULL ELSE (coalesce(writes,0)=0) END"
+)
 
 
 def pushed(conn, turn_id, computer, pushes):
@@ -262,7 +273,17 @@ def session(conn, turn_id, session):
         "UPDATE attempts SET session_kind=?, session_why=? WHERE id=? AND settled_at IS NULL",
         (session.kind, why, turn_id),
     ).rowcount
-    if done and session.kind == "new" and why != "none_saved":
+    # A fork the release policy asked for (backend/wake_presets.py, session `fork`) is a new session on purpose.
+    if done:
+        # A job the release policy let go records what the runner did, not what was asked (backend/wake_presets.py).
+        from .wake_presets import reported_session
+
+        conn.execute(
+            "UPDATE attempts SET wake=json_set(wake,'$.release.session',?) WHERE id=? "
+            "AND json_type(wake,'$.release')='object'",
+            (reported_session(session.kind, why), turn_id),
+        )
+    if done and session.kind == "new" and why not in ("none_saved", "forked", "fresh"):
         row = conn.execute("SELECT task_id FROM attempts WHERE id=?", (turn_id,)).fetchone()
         new_session(conn, row[0] if row else None, why)
     return done
@@ -300,8 +321,8 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     by = str(actor)[4:] if str(actor).startswith("bot:") else ""
     turn = conn.execute(
         "SELECT id FROM attempts WHERE task_id=? AND bot_id<>? AND (job_id IS NULL OR trigger IS NOT NULL) "
-        "AND (? IS NULL OR created_at<=?) ORDER BY bot_id=? DESC, created_at DESC LIMIT 1",
-        (row["id"], by, reached, reached, owner[4:]),
+        "AND coalesce(purpose,'')<>? AND (? IS NULL OR created_at<=?) ORDER BY bot_id=? DESC, created_at DESC LIMIT 1",
+        (row["id"], by, KEEP_WARM, reached, reached, owner[4:]),
     ).fetchone()
     if (
         not turn

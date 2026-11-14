@@ -22,6 +22,7 @@ interface UpdateStatus {
 // unbundled). The bar offers the reload and never reloads by itself, since the person may be typing.
 let LOADED_VERSION = '';
 const PAGE_BUILD = (() => {
+  if (UI_PARTS.build) return UI_PARTS.build;   // the shell and its page parts (ui/app/parts.ts)
   const v = (sel: string) => (document.querySelector(sel)?.getAttribute(sel.startsWith('script') ? 'src' : 'href') || '').split('?v=')[1] || '';
   const js = v('script[src*="app.bundle.js"]'), css = v('link[href*="app.bundle.css"]');
   return js && css ? js + '.' + css : '';

@@ -21,7 +21,7 @@ interface ProfileOwn {
 const CHOICES = ['doer', 'reviewer', 'lead', 'responder', 'monitor', 'custom'].map(name => ({name, label: name[0]!.toUpperCase() + name.slice(1),
   description: `The ${name} profile.`, pulls: 'all', sweeps: true, takes: 'all', digest_hour: name === 'lead' ? 9 : null, rules: []}));
 const effective = (name: string, own: ProfileOwn = {}) => ({name, label: name[0]!.toUpperCase() + name.slice(1), description: `The ${name} profile.`, chosen: true,
-  batch_seconds: 900, batch_scope: 'conversation', sweep_seconds: 900, digest_hour: name === 'lead' ? own.digest_hour ?? 9 : null,
+  digest_hour: name === 'lead' ? own.digest_hour ?? 9 : null,
   pulls: own.pulls || 'all', sweeps: own.sweeps ?? true, takes: own.takes || 'all', options: own, summary: `Runs as ${name}.`});
 
 async function open(browser: import('playwright').Browser, role: string, viewport: {width: number; height: number} = {width: 1280, height: 900}) {

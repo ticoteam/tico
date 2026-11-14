@@ -1,55 +1,73 @@
-"""Per-bot wake presets: how soon a bot's nonblocking notices and its enabled sweeps start a turn.
+"""One release policy for every bot run that can wait, on the job hold (Product #248, spec v4, items 8-11).
 
-A bot's `config.wake_preset` is `token_saver` or `performance`. Existing bots without a preset,
-including the former `current` setting, use Performance. New bots start as Doers.
+A queued job that can wait carries four values (`jobs.release`, JSON, see `policy`):
 
-Under a preset, two kinds of job wait at enqueue time (the `wake_preset_hold` trigger on jobs, so every
-event source is held the same way): a nonblocking notice the server marks with `refs.wake_batch`
-(BATCH_KINDS: a finished request, review comments, a failing check nobody armed a wait for) and a sweep
-(a routine's scheduled run). Only Tico writes those refs, so nobody can make an immediate wake wait by sending text
-that looks like one. A task's turn (`task_turn`, backend/task_wakes.py) is never held. Other news (a comment, a task
-moving or a relation, any notice no rule names) starts no job at all: the rules engine writes it as a note (backend/rules.py,
-`default_note`), so nothing here holds it. A held batch never holds anything else back: a person's message starts
-its turn at once.
-The scheduler plans each held job's release (`tick`) and lets it go when it is due.
+- `due`: the earliest time it may start (null: when it was queued).
+- `wait`: how long after Due it may wait, in seconds (0: it starts at Due).
+- `warm` (Prefers warm): released the first time after Due that the bot has been idle WARM_AFTER (no turn running, its
+  last model request that long ago), and before WARM_BEFORE, while the 1-hour cache is still warm. Several jobs of one
+  bot released by the same window run one after another, oldest Due first (`release_after` chains them).
+- `deadline` (at Due + wait): `run` starts it cold, as before; `skip` drops it and records it as skipped.
+- `session`: `fork` asks the runner to fork the bot's latest session (execution.py hands `fork_thread`), `fresh` (or
+  null) starts a new one.
 
-Under a preset a job whose message repeats another of the bot's in the same conversation (same sender, kind, text,
-refs and reply) is dropped as a duplicate, so a duplicated event wakes the bot once: while the first is queued or
-being worked, and for DUPLICATE_SECONDS after its turn ended. A notice a batch carried (its newest, or its digest) is
-live while its carrier is, so a redelivery after the batch is let go still matches. A message from a person or a bot
-repeats only when nothing else was said in between, so the same words sent again after an answer are a new request.
-A preset grants nothing: it is one key in the bot's configuration and the hold reads nothing else.
+What is held is decided at enqueue time by the `wake_preset_hold` trigger on jobs, so every source is held the same
+way, and only from Tico's own notices (sender H.KEEPER): nobody can make a wake wait by sending text that looks like
+one. Two kinds wait:
 
-A bot with a profile (backend/profiles.py) runs on the profile's numbers instead of its preset's: a window, a scope, a
-sweep gap and, for a Lead, the hour of its daily digest. The preset kept on the bot's configuration and its jobs is then
-only the label older readers and the hold trigger use (Token saver when the window is 30 minutes or more).
+- a nonblocking notice the server marks with `refs.wake_batch` (BATCH_KINDS: a finished request, review comments, a
+  failing check nobody armed a wait for): one built-in wait of NOTICE_SECONDS, Prefers warm off, Run cold. Notices for
+  one conversation that arrive inside the wait are let go together (one turn, or one digest). A Lead's notices wait for
+  its daily digest hour instead (backend/profiles.py), one digest for the bot.
+- a job whose notice carries `refs.release` (a policy): a scheduled routine's run (`automations.release_of`) and, in
+  wave 2b, a dream. Its class is `routine` unless `refs.release_kind` names another (RELEASE_KINDS). The repeat guard
+  applies to routines: no second run while one of the same routine is queued or running, and none sooner than
+  REPEAT_SECONDS after the last one started.
 
-The values below are starting points to evaluate, not measured optima. TICO_WAKE_PRESETS overrides them
-per install without a code change, e.g. `{"token_saver": {"batch_seconds": 900}}`.
+Never held: a task's turn in a pipeline (`task_turn`, backend/task_wakes.py) and a person's message start at once, and
+a held job never holds anything else back. Other news (a comment, a task moving, any notice no rule names) starts no job
+at all (backend/rules.py `default_note`).
+
+One release check, `tick`, runs in the scheduler's write transaction every tick: it plans each newly held job's Due
+(`hold_until`) and lets go of what is due. A release is an UPDATE of `held`, which tells the bot's computer there is
+work. The wake presets (Token saver, Performance) and the profiles' wake numbers that this replaces are gone: past runs
+keep the preset they recorded (`jobs.wake_preset`, `measures`), and nothing new writes it.
+
+A job whose message repeats another of the bot's in the same conversation (same sender, kind, text, refs and reply) is
+dropped as a duplicate, so a duplicated event wakes the bot once: while the first is queued or being worked, and for
+DUPLICATE_SECONDS after its turn ended. A notice a batch carried (its newest, or its digest) is live while its carrier
+is, so a redelivery after the batch is let go still matches. A message from a person or a bot repeats only when nothing
+else was said in between, so the same words sent again after an answer are a new request.
 """
 
 import json
-import os
+import logging
 
 from . import hubdb as H
 from . import bot_settings as BS
 
-# A run's tokens: its input (uncached and cached) and output, as its usage records them.
-RUN_TOKENS = "coalesce(a.input_tokens,0)+coalesce(a.cached_tokens,0)+coalesce(a.output_tokens,0)"
+# A run's tokens: its input (uncached, cached and written to the cache) and output, as its usage records them.
+RUN_TOKENS = "coalesce(a.input_tokens,0)+coalesce(a.cached_tokens,0)+coalesce(a.cache_write_tokens,0)+coalesce(a.output_tokens,0)"
 
+# The labels past runs recorded (`jobs.wake_preset`, `attempts.wake.preset`): history only, never written now.
 CURRENT = "current"
 TOKEN_SAVER = "token_saver"
 PERFORMANCE = "performance"
-NEW_BOT_PRESET = PERFORMANCE  # a new bot is a Doer (backend/profiles.py), 15 min on the old label
-# batch_seconds: how long a nonblocking notice waits. batch_scope "bot" spaces the bot's batches at least
-# batch_seconds apart (at most one batched wake per window); "conversation" only coalesces notices for one
-# task inside the window. sweep_seconds: the least time between two runs of the same enabled sweep.
-PRESETS = {
-    TOKEN_SAVER: {"label": "Token saver", "batch_seconds": 30 * 60, "batch_scope": "bot", "sweep_seconds": 2 * 3600},
-    PERFORMANCE: {"label": "Performance", "batch_seconds": 60, "batch_scope": "conversation", "sweep_seconds": 15 * 60},
-}
-CHOICES = (CURRENT, TOKEN_SAVER, PERFORMANCE)  # Legacy runs remain identifiable in historical measures.
+CHOICES = (CURRENT, TOKEN_SAVER, PERFORMANCE)
 LABELS = {CURRENT: "Immediate (legacy)", TOKEN_SAVER: "Token saver", PERFORMANCE: "Performance"}
+
+# The built-in waits (spec v4): a nonblocking notice waits 5 minutes; a routine's next run starts at least 15 minutes
+# after its last one started.
+NOTICE_SECONDS = 5 * 60
+REPEAT_SECONDS = 15 * 60
+# The warm window: idle at least this long and less than that, inside the 1-hour prompt cache.
+WARM_AFTER = 45 * 60
+WARM_BEFORE = 55 * 60
+MAX_WAIT = 14 * 86400  # the longest wait a policy keeps (a weekly routine's is 7 days)
+RUN, SKIP = "run", "skip"
+FRESH, FORK = "fresh", "fork"
+ROUTINE = "routine"
+RELEASE_KINDS = (ROUTINE, "dream")
 # An immediate wake not picked up within this long counts as a missed action in `measures`.
 MISSED_AFTER_SECONDS = 5 * 60
 # How long after a turn ends an identical event still counts as the same one (a retried webhook, a double send).
@@ -61,8 +79,8 @@ NOTICE = "notice"
 DIGEST_ROOMS = 40  # rooms a digest names; it counts the rest
 DIGEST_IDS = 200  # job ids its event keeps
 HELD_CLASSES = (*BATCH_KINDS, NOTICE)
-# Sweeps: refs.wake on a keeper notice, or refs.sweep (a routine's scheduled run, by schedule id).
-SWEEP_WAKES = ("occurrence",)
+# The classes the policy releases: its kinds, and `sweep`, a routine run an earlier build held.
+POLICY_CLASSES = (*RELEASE_KINDS, "sweep")
 IMMEDIATE = (
     "A person's message or request",
     "An assignment",
@@ -72,11 +90,12 @@ IMMEDIATE = (
     "An actionable blocker",
 )
 _BATCH_SQL = "json_extract(m.refs,'$.wake_batch') IN (" + ",".join(f"'{k}'" for k in BATCH_KINDS) + ")"
-_SWEEP_SQL = (
-    "(json_extract(m.refs,'$.wake') IN (" + ",".join(f"'{k}'" for k in SWEEP_WAKES) + ") "
-    "OR json_extract(m.refs,'$.sweep') IS NOT NULL)"
+_POLICY_SQL = "json_type(m.refs,'$.release')='object'"
+_KIND_SQL = (
+    "CASE WHEN json_extract(m.refs,'$.release_kind') IN ("
+    + ",".join(f"'{k}'" for k in RELEASE_KINDS)
+    + f") THEN json_extract(m.refs,'$.release_kind') ELSE '{ROUTINE}' END"
 )
-_PRESET_SQL = "(SELECT wake_preset FROM jobs WHERE id=NEW.id) IN ('" + TOKEN_SAVER + "','" + PERFORMANCE + "')"
 # The same event as an earlier job's message: same room, sender, kind, text, refs and reply. Only the message's own
 # fields: a job's hold flag changes when its batch is let go.
 _SAME_EVENT = (
@@ -99,22 +118,25 @@ _DUPLICATE = " OR ".join(
    OR a.finished_at>=strftime('%Y-%m-%dT%H:%M:%fZ',m.created_at,'-{DUPLICATE_SECONDS} seconds')))"""
     for earlier in _EARLIER
 )
+# The hold reads only the job's own notice: nothing per bot (no preset, no profile number) decides what waits.
 HOLD_TRIGGER = f"""CREATE TRIGGER wake_preset_hold AFTER INSERT ON jobs WHEN NEW.state='queued' BEGIN
- UPDATE jobs SET wake_preset=CASE WHEN (SELECT wake_preset FROM bot_settings
-   WHERE bot_id=NEW.bot_id)='{TOKEN_SAVER}' THEN '{TOKEN_SAVER}' ELSE '{PERFORMANCE}' END WHERE id=NEW.id;
- UPDATE jobs SET held=1,wake_class=(SELECT CASE WHEN {_BATCH_SQL} THEN json_extract(m.refs,'$.wake_batch')
-   ELSE 'sweep' END FROM messages m WHERE m.id=NEW.message_id)
-   WHERE id=NEW.id AND {_PRESET_SQL} AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
+ UPDATE jobs SET held=1,
+   wake_class=(SELECT CASE WHEN {_BATCH_SQL} THEN json_extract(m.refs,'$.wake_batch') ELSE {_KIND_SQL} END
+     FROM messages m WHERE m.id=NEW.message_id),
+   release=(SELECT CASE WHEN {_BATCH_SQL} THEN NULL ELSE json_extract(m.refs,'$.release') END
+     FROM messages m WHERE m.id=NEW.message_id)
+   WHERE id=NEW.id AND EXISTS(SELECT 1 FROM messages m WHERE m.id=NEW.message_id
    AND m.sender_id='{H.KEEPER}' AND coalesce(json_extract(m.refs,'$.wake_immediate'),0)<>1
-   AND ({_BATCH_SQL} OR {_SWEEP_SQL}));
- UPDATE jobs SET state='canceled',held=0,wake_class='duplicate' WHERE id=NEW.id AND {_PRESET_SQL}
-   AND ({_DUPLICATE});
+   AND ({_BATCH_SQL} OR {_POLICY_SQL}));
+ UPDATE jobs SET state='canceled',held=0,wake_class='duplicate' WHERE id=NEW.id AND ({_DUPLICATE});
 END"""
+# The profile options and settings the presets wrote, which the migration in `ensure` removes.
+_RETIRED_OPTIONS = ("batch_seconds", "batch_scope", "sweep_seconds")
 
 
 def ensure(c):
-    """The hold's columns and trigger. Unversioned like the other job columns: an older release never reads them,
-    and the trigger is rebuilt whenever its text changes."""
+    """The hold's columns and trigger, and the move off the wake presets. Unversioned like the other job columns: an
+    older release never reads them, and the trigger is rebuilt whenever its text changes."""
     H.add_column(c, "jobs", "wake_preset", "TEXT")
     H.add_column(c, "jobs", "wake_class", "TEXT")
     H.add_column(c, "jobs", "held", "INTEGER NOT NULL DEFAULT 0")
@@ -126,6 +148,8 @@ def ensure(c):
     H.add_column(c, "jobs", "hold_streak", "INTEGER NOT NULL DEFAULT 0")
     # The job whose turn carried this one's notice (a batch's newest, or its digest), for `measures`.
     H.add_column(c, "jobs", "wake_carrier", "TEXT")
+    # The release policy's own columns (`release`, `release_after`, `released`) come from migration
+    # 20261113061438_job_release_policy, and from store.SCHEMA on a new file.
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot_id,hold_until) WHERE held=1")
     # The few held jobs still queued, in claim order: what tick reads every pass under the write lock (HELD_*_SQL).
     c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created_at, id) WHERE held=1 AND state='queued'")
@@ -136,91 +160,97 @@ def ensure(c):
     if not stored or stored[0] != HOLD_TRIGGER:
         c.execute("DROP TRIGGER IF EXISTS wake_preset_hold")
         c.execute(HOLD_TRIGGER)
+    retire_presets(c)
 
-    c.execute(
-        "UPDATE bot_config SET revision=revision+1 WHERE bot IN (SELECT bot_id FROM bot_settings "
-        "WHERE wake_preset IS NULL OR wake_preset=?)",
-        (CURRENT,),
+
+def retire_presets(c):
+    """The migration off the wake presets (spec v4): every bot's `wake_preset` and its profile's wake numbers (notice
+    window, batch scope, sweep gap) go, and each held job is planned again on the policy. Touches only bots that still
+    carry one, so it runs once per bot however often the server starts. Returns how many bots it changed."""
+    paths = ", ".join(f"'$.profile_options.{k}'" for k in _RETIRED_OPTIONS)
+    carrying = "wake_preset IS NOT NULL OR json_type(extra,'$.wake_preset') IS NOT NULL OR " + " OR ".join(
+        f"json_type(extra,'$.profile_options.{k}') IS NOT NULL" for k in _RETIRED_OPTIONS
     )
+    bots = [r[0] for r in c.execute(f"SELECT bot_id FROM bot_settings WHERE {carrying}").fetchall()]
+    if not bots:
+        return 0
+    marks = ",".join("?" * len(bots))
     c.execute(
-        "UPDATE bot_settings SET wake_preset=?,updated_at=? WHERE wake_preset IS NULL OR wake_preset=?",
-        (PERFORMANCE, H.now(), CURRENT),
+        f"UPDATE bot_settings SET wake_preset=NULL,extra=json_remove(coalesce(extra,'{{}}'),'$.wake_preset',{paths}),"
+        f"updated_at=? WHERE bot_id IN ({marks})",
+        (H.now(), *bots),
     )
+    c.execute(f"UPDATE bot_config SET revision=revision+1 WHERE bot IN ({marks})", bots)
+    for bot in bots:
+        replan(c, bot)
+    return len(bots)
 
 
-def values():
-    """PRESETS with this install's TICO_WAKE_PRESETS overrides: whole seconds from 0 to a week, and a known scope."""
-    out = {name: dict(spec) for name, spec in PRESETS.items()}
-    try:
-        given = json.loads(os.environ.get("TICO_WAKE_PRESETS") or "{}")
-    except ValueError:
-        given = {}
-    for name, spec in given.items() if isinstance(given, dict) else ():
-        if name not in out or not isinstance(spec, dict):
-            continue
-        for key in ("batch_seconds", "sweep_seconds"):
-            if isinstance(spec.get(key), int) and not isinstance(spec.get(key), bool) and 0 <= spec[key] <= 7 * 86400:
-                out[name][key] = spec[key]
-        if spec.get("batch_scope") in ("bot", "conversation"):
-            out[name]["batch_scope"] = spec["batch_scope"]
-    return out
+def policy(due=None, wait=0, warm=False, deadline=RUN, session=None):
+    """A release policy for `refs.release`: Due (an ISO time, or None for when the job is queued), how long it may wait
+    after Due in seconds, Prefers warm, what happens at the deadline (`run` or `skip`) and the session (`fresh`, `fork`
+    or None). Refuses values it would not keep (ValueError)."""
+    if due is not None and not H.parse_ts(due):
+        raise ValueError("due is an ISO time or None")
+    if isinstance(wait, bool) or not isinstance(wait, int) or not 0 <= wait <= MAX_WAIT:
+        raise ValueError(f"wait is whole seconds from 0 to {MAX_WAIT}")
+    if deadline not in (RUN, SKIP):
+        raise ValueError("deadline is run or skip")
+    if session not in (None, FRESH, FORK):
+        raise ValueError("session is fresh, fork or None")
+    return {"due": due, "wait": wait, "warm": bool(warm), "deadline": deadline, "session": session}
 
 
-def preset_of(config):
-    """Normalize older configurations to Performance; Token saver is always an explicit choice."""
-    name = (config or {}).get("wake_preset")
-    return name if name in PRESETS else PERFORMANCE
+def policy_of(raw):
+    """A job's stored policy, read leniently: an unreadable value is a job that starts at Due."""
+    given = H._json(raw, {}) if isinstance(raw, str) else raw
+    given = given if isinstance(given, dict) else {}
+    wait = given.get("wait")
+    return {
+        "due": given.get("due") if isinstance(given.get("due"), str) else None,
+        "wait": wait if isinstance(wait, int) and not isinstance(wait, bool) and 0 <= wait <= MAX_WAIT else 0,
+        "warm": given.get("warm") is True,
+        "deadline": SKIP if given.get("deadline") == SKIP else RUN,
+        "session": given.get("session") if given.get("session") in (FRESH, FORK) else None,
+    }
 
 
-def effective(config):
-    """What the bot's settings and the API show: the preset and the values it runs on. A profile's own numbers
-    stand over the preset's, which then only names the closest of the two."""
+def waits(config):
+    """What the bot's settings and the API show about waiting: the built-in waits, a Lead's digest hour, and what wakes
+    it at once. Nothing here is a per-bot choice."""
     from . import profiles
 
-    name = preset_of(config)
-    spec = dict(values().get(name))
-    own = profiles.numbers(config)
-    if own:
-        spec.update(own)
-    batch = _duration(spec["batch_seconds"])
+    hour = profiles.digest_hour(config)
     summary = (
-        f"{spec['label']}: finished requests and a person's review comments wait up to {batch}"
-        + (" (at most one such wake per " + batch + ")" if spec["batch_scope"] == "bot" else "")
-        + f"; an enabled routine runs at most every {_duration(spec['sweep_seconds'])}. "
-        "People, assignments, questions, awaited results and blockers wake it at once."
+        f"Finished requests, review comments and check results wait {_duration(NOTICE_SECONDS)}, one wake per "
+        f"conversation; a routine runs at least {_duration(REPEAT_SECONDS)} after its last run started, and waits for a "
+        "warm session as its own settings say. People, assignments, questions, awaited results and blockers wake it "
+        "at once."
     )
-    if own and own.get("digest_hour") is not None:
+    if hour is not None:
         summary = (
-            f"The rest of the news arrives once a day, at {own['digest_hour']:02d}:00 team time. "
+            f"The rest of the news arrives once a day, at {hour:02d}:00 team time. "
             "People, escalations and asks wake it at once."
         )
     return {
-        "preset": name,
-        "label": spec["label"],
-        "chosen": True,
-        "batch_seconds": spec["batch_seconds"],
-        "batch_scope": spec["batch_scope"],
-        "sweep_seconds": spec["sweep_seconds"],
-        "digest_hour": spec.get("digest_hour"),
+        "notice_seconds": NOTICE_SECONDS,
+        "repeat_seconds": REPEAT_SECONDS,
+        "warm_window": [WARM_AFTER, WARM_BEFORE],
+        "digest_hour": hour,
         "profile": profiles.name_of(config),
         "immediate": list(IMMEDIATE),
         "summary": summary,
     }
 
 
-def numbers_for(c, bot, label, cache=None):
-    """The window, scope, sweep gap and digest hour a held job of this bot is planned on: its profile's when it has
-    one, else the preset its job carries (None when that is unknown)."""
+def _digest_hour(c, bot, cache):
+    """The hour of the bot's daily digest (a Lead's), or None: its notices then wait NOTICE_SECONDS."""
     from . import profiles
 
-    if cache is not None and bot in cache:
-        own = cache[bot]
-    else:
+    if bot not in cache:
         row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-        own = profiles.numbers(H._json(row[0], {}) if row else {})
-        if cache is not None:
-            cache[bot] = own
-    return {**values()[label], **own} if own and label in PRESETS else (own or values().get(label))
+        cache[bot] = profiles.digest_hour(H._json(row[0], {}) if row else {})
+    return cache[bot]
 
 
 def _duration(seconds):
@@ -232,7 +262,8 @@ def _duration(seconds):
 
 
 def sweep_key(refs):
-    return str(refs.get("sweep") or refs.get("task") or "")
+    """Which routine a run is, for the repeat guard: its automation, else (an earlier build's) sweep or task."""
+    return str(refs.get("automation") or refs.get("sweep") or refs.get("task") or "")
 
 
 def release_quota_resets(c, at=None):
@@ -248,13 +279,14 @@ def release_quota_resets(c, at=None):
 # messages and seeks each job, because the stale sqlite_stat1 row for messages (16k rows when analysed, 72k
 # now) makes that look cheapest. 40-44 ms a tick on TIDY v0.5.1, 480 ticks an hour.
 HELD_NEW_SQL = (
-    "SELECT j.id,j.bot_id,j.wake_preset,j.wake_class,j.created_at,m.conversation_id,m.refs "
+    "SELECT j.id,j.bot_id,j.wake_class,j.created_at,j.release,m.conversation_id,m.refs "
     "FROM jobs j INDEXED BY jobs_held_queued JOIN messages m ON m.id=j.message_id "
     "WHERE j.held=1 AND j.hold_until IS NULL AND j.hold_reason IS NULL AND j.state='queued' "
     "ORDER BY j.created_at,j.id"
 )
 HELD_DUE_SQL = (
-    "SELECT j.id,j.bot_id,j.wake_preset,j.wake_class,j.message_id,m.conversation_id,m.refs "
+    "SELECT j.id,j.bot_id,j.wake_class,j.message_id,j.created_at,j.hold_until,j.release,j.release_after,j.released,"
+    "m.conversation_id,m.refs "
     "FROM jobs j INDEXED BY jobs_held_queued JOIN messages m ON m.id=j.message_id "
     "WHERE j.held=1 AND j.state='queued' AND j.hold_until IS NOT NULL AND j.hold_until<=? "
     "AND j.hold_reason IS NULL ORDER BY j.created_at,j.id"
@@ -262,66 +294,244 @@ HELD_DUE_SQL = (
 
 
 def tick(c, at=None):
-    """Plan each newly held job's release, then let go of the ones that are due. Runs in the scheduler's write
-    transaction every tick; a release is an UPDATE of `held`, which tells the bot's computer there is work."""
+    """The one release check. Plan each newly held job's Due, then let go of what is due: a notice batch at its Due, a
+    policy job at Due when it does not prefer warm, in the bot's warm window when it does, and at its deadline cold or
+    skipped; then keep active task sessions warm (backend/keep_warm.py, once a minute). Runs in the scheduler's write
+    transaction every tick."""
     at = at or H.now()
-    cache = {}
+    hours = {}
     for job in c.execute(HELD_NEW_SQL).fetchall():
-        values_of = numbers_for(c, job["bot_id"], job["wake_preset"], cache)
-        if not values_of:
-            c.execute("UPDATE jobs SET held=0 WHERE id=?", (job["id"],))
-            continue
-        if job["wake_class"] == "sweep":
-            due = _sweep_slot(c, job, values_of["sweep_seconds"])
+        if job["wake_class"] in POLICY_CLASSES:
+            given = policy_of(job["release"])
+            due = _repeat_slot(c, job, given["due"] or job["created_at"])
             if due is None:
                 c.execute("UPDATE jobs SET state='canceled',held=0 WHERE id=?", (job["id"],))
                 H.event(c, H.KEEPER, "job.wake_merged", job["id"], {"bot": job["bot_id"]})
+                # Its routine task goes with it: nothing else wakes it, and an open one would be worked as a second run.
+                _close_task(c, job, "Merged: this routine's previous run is still waiting or running.")
                 continue
+            c.execute(
+                "UPDATE jobs SET hold_until=?,release=? WHERE id=?",
+                (due, json.dumps({**given, "due": due}), job["id"]),
+            )
         else:
-            due = _batch_slot(c, job, values_of)
-        c.execute("UPDATE jobs SET hold_until=? WHERE id=?", (due, job["id"]))
-    groups = {}
+            c.execute(
+                "UPDATE jobs SET hold_until=? WHERE id=?",
+                (_batch_slot(c, job, _digest_hour(c, job["bot_id"], hours)), job["id"]),
+            )
+    groups, waiting = {}, {}
     # A run a claim holds (backend/claim_holds.py) has a wait of its own, and only its claim releases it.
     for job in c.execute(HELD_DUE_SQL, (at,)).fetchall():
-        if job["wake_class"] in ("sweep", "quota-reset"):
+        if job["wake_class"] == "quota-reset":
             # A quota retry is the same job, not news to batch, fold into another request or turn into a digest.
             c.execute("UPDATE jobs SET held=0 WHERE id=?", (job["id"],))
-            continue
-        scope = (numbers_for(c, job["bot_id"], job["wake_preset"], cache) or {}).get("batch_scope")
-        groups.setdefault((job["bot_id"], job["conversation_id"] if scope == "conversation" else ""), []).append(job)
+        elif job["wake_class"] in POLICY_CLASSES:
+            waiting.setdefault(job["bot_id"], []).append(job)
+        else:
+            per_bot = _digest_hour(c, job["bot_id"], hours) is not None
+            groups.setdefault((job["bot_id"], "" if per_bot else job["conversation_id"]), []).append(job)
     for (bot, _), jobs in groups.items():
         _release(c, bot, jobs)
+    for bot, jobs in waiting.items():
+        _release_policy(c, bot, jobs, at)
+    # Task sessions in an active stage that reach the warm window get their one-line turn (backend/keep_warm.py). Its
+    # own savepoint: a keep-warm that fails is logged and never undoes the releases above.
+    from . import keep_warm
+
+    c.execute("SAVEPOINT keep_warm")
+    try:
+        keep_warm.sweep(c, at)
+    except Exception:  # noqa: BLE001 - keep-warm is a saving, never a reason to hold the release check
+        c.execute("ROLLBACK TO keep_warm")
+        logging.getLogger("tico.keep_warm").warning("keep warm sweep failed", exc_info=True)
+    c.execute("RELEASE keep_warm")
 
 
-def _sweep_slot(c, job, gap):
-    """When this run of a sweep may start: now, or `gap` after the same sweep's last run started (its first claim,
-    which a busy computer can put well after its planned release). None when the same sweep is still queued, held or
-    let go, since this run adds nothing that one will not do."""
-    key, since = sweep_key(H._json(job["refs"], {}) or {}), H.shift(job["created_at"], seconds=-gap)
+def _repeat_slot(c, job, due):
+    """The routine repeat guard: when this run may start, at Due or REPEAT_SECONDS after the same routine's last run
+    started (its first claim). None when a run of the same routine is still queued or running: this one adds nothing
+    that one will not do. Other kinds (a dream) start at Due."""
+    if job["wake_class"] not in (ROUTINE, "sweep"):
+        return due
+    key = sweep_key(H._json(job["refs"], {}) or {})
+    if not key:
+        return due
+    since = H.shift(due, seconds=-REPEAT_SECONDS)
     last = None
     for row in c.execute(
-        "SELECT j.state,j.hold_until,m.refs,"
-        "(SELECT min(a.created_at) FROM attempts a WHERE a.job_id=j.id) AS started_at "
+        "SELECT j.state,m.refs,(SELECT min(a.created_at) FROM attempts a WHERE a.job_id=j.id) AS started_at "
         "FROM jobs j JOIN messages m ON m.id=j.message_id "
-        "WHERE j.bot_id=? AND j.wake_class='sweep' AND j.id<>? AND j.state<>'canceled' "
-        "AND (j.state IN ('queued','leased','running','input') OR j.hold_until>? "
+        "WHERE j.bot_id=? AND j.wake_class IN ('routine','sweep') AND j.id<>? AND j.state<>'canceled' "
+        "AND (j.state IN ('queued','leased','running','input') "
         "OR EXISTS(SELECT 1 FROM attempts a WHERE a.job_id=j.id AND a.created_at>?))",
-        (job["bot_id"], job["id"], since, since),
+        (job["bot_id"], job["id"], since),
     ):
         if sweep_key(H._json(row["refs"], {}) or {}) != key:
             continue
-        if row["state"] == "queued":
+        if row["state"] in ("queued", "leased", "running", "input"):
             return None
-        last = max(last or "", row["started_at"] or row["hold_until"])
-    return max(job["created_at"], H.shift(last, seconds=gap)) if last else job["created_at"]
+        if row["started_at"]:
+            last = max(last or "", row["started_at"])
+    return max(due, H.shift(last, seconds=REPEAT_SECONDS)) if last else due
 
 
-def _batch_slot(c, job, values_of):
-    """When a nonblocking notice may wake the bot: with the batch already waiting (the bot's, or this conversation's
-    under a per-conversation scope), else a window after it arrived, and under a per-bot scope never sooner than a
-    window after the bot's last batch went out."""
-    gap, per_bot = values_of["batch_seconds"], values_of["batch_scope"] == "bot"
-    hour = values_of.get("digest_hour")
+def idle_seconds(c, bot, at):
+    """How long the bot has been idle at `at`: None while a turn of it is running, or when it never ran (no warm cache
+    to wait for). Its last model request is read as its last turn's end."""
+    if c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone():
+        return None
+    # Only a turn that reached the model warmed the cache: one that failed before any request did not.
+    last = c.execute(
+        "SELECT max(finished_at) FROM attempts WHERE bot_id=? AND coalesce(input_tokens,0)+coalesce(cached_tokens,0)"
+        "+coalesce(cache_write_tokens,0)+coalesce(output_tokens,0)>0",
+        (bot,),
+    ).fetchone()[0]
+    return _seconds(last, at) if last else None
+
+
+def _release_policy(c, bot, jobs, at):
+    """Let go of the bot's due policy jobs: a job chained after another once that one is over; a job that does not
+    prefer warm now; jobs that do, together, when the bot is in its warm window (one after another, oldest Due first);
+    and at the deadline, cold or skipped."""
+    order = sorted(jobs, key=lambda j: (j["hold_until"], j["created_at"], j["id"]))
+    free = []
+    for job in order:
+        if not job["release_after"]:
+            free.append(job)
+            continue
+        before = c.execute("SELECT state FROM jobs WHERE id=?", (job["release_after"],)).fetchone()
+        if not before or before[0] not in ("queued", "leased", "running", "input"):
+            _let_go(c, job, at, warm=True)
+        elif at >= H.shift(job["hold_until"], seconds=policy_of(job["release"])["wait"]):
+            # The one before it never ended: its own deadline still holds, as if no window had come.
+            if policy_of(job["release"])["deadline"] == SKIP:
+                _skip(c, job, at)
+            else:
+                _let_go(c, job, at, warm=False)
+    if not free:
+        return
+    idle = idle_seconds(c, bot, at)
+    window = idle is not None and WARM_AFTER <= idle < WARM_BEFORE
+    chain = []
+    for job in free:
+        given = policy_of(job["release"])
+        if not given["warm"]:
+            _let_go(c, job, at, warm=window)
+        elif window:
+            chain.append(job)
+        elif at >= H.shift(job["hold_until"], seconds=given["wait"]):
+            if given["deadline"] == SKIP:
+                _skip(c, job, at)
+            else:
+                _let_go(c, job, at, warm=False)
+    previous = None
+    for job in chain:
+        if previous is None:
+            _let_go(c, job, at, warm=True)
+        else:
+            # Next once the one before is over; the window's cache stays warm while they run.
+            c.execute("UPDATE jobs SET release_after=? WHERE id=?", (previous, job["id"]))
+        previous = job["id"]
+
+
+def _waited(job, at):
+    return int(_seconds(job["hold_until"], at) or 0)
+
+
+def _let_go(c, job, at, warm):
+    """Release a policy job, recording how: warm or cold, and how long it waited after Due."""
+    c.execute(
+        "UPDATE jobs SET held=0,released=? WHERE id=?",
+        (json.dumps({"warm": bool(warm), "waited": _waited(job, at), "at": at}), job["id"]),
+    )
+
+
+def _skip(c, job, at):
+    """At the deadline with Skip: the job does not run and is recorded as skipped with its wait. A routine's task is
+    closed with it, so the routine's next run is not absorbed into it."""
+    waited = _waited(job, at)
+    c.execute(
+        "UPDATE jobs SET state='canceled',held=0,released=? WHERE id=?",
+        (json.dumps({"skipped": True, "warm": False, "waited": waited, "at": at}), job["id"]),
+    )
+    refs = H._json(job["refs"], {}) or {}
+    H.event(
+        c,
+        H.KEEPER,
+        "job.release_skipped",
+        job["id"],
+        {"bot": job["bot_id"], "class": job["wake_class"], "waited": waited, "task": refs.get("task")},
+    )
+    _close_task(
+        c,
+        job,
+        "Skipped: the bot found no warm session before this run's deadline, and the routine skips at the deadline.",
+    )
+
+
+def _close_task(c, job, why):
+    """Close the open task a dropped run was filed as (a routine run's own task), so nothing works it later. Only a task
+    the run made itself, i.e. one whose first job is this one: a run that names an existing task (a person's, a
+    pipeline's) never closes it."""
+    refs = H._json(job["refs"], {}) or {}
+    task = H.task(c, H._task_ref(refs.get("task")) or "") if refs.get("task") else None
+    if not task or task.get("status") != "open":
+        return
+    first = c.execute(
+        "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.conversation_id=? "
+        "AND j.bot_id=? ORDER BY j.rowid LIMIT 1",
+        (task["conversation_id"], job["bot_id"]),
+    ).fetchone()
+    if first and first[0] == job["id"]:
+        H.attempt(c, H.task_close, H.KEEPER, task["id"], why)
+
+
+def replan(c, bot):
+    """Plan the bot's held jobs again from when they were queued (the migration off the presets)."""
+    c.execute(
+        "UPDATE jobs SET hold_until=NULL,release_after=NULL WHERE bot_id=? AND held=1 AND state='queued' "
+        "AND coalesce(wake_class,'')<>'quota-reset' AND hold_reason IS NULL",
+        (bot,),
+    )
+
+
+def fork_thread(c, job_id, bot, runner_id):
+    """The session a released job with session `fork` continues from: the thread of the bot's latest finished turn on
+    this computer (a fork reads it from there) on a task that is not private, or None. A private task's session and a
+    chat's are never forked into a routine's run, whose task others may read; the runner keeps those apart too."""
+    row = c.execute("SELECT release FROM jobs WHERE id=?", (job_id,)).fetchone()
+    if not row or policy_of(row[0])["session"] != FORK:
+        return None
+    found = c.execute(
+        "SELECT a.thread_id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.bot_id=? AND a.runner_id=? "
+        "AND a.thread_id IS NOT NULL AND a.finished_at IS NOT NULL AND coalesce(a.job_id,'')<>? "
+        "AND coalesce(t.private,0)=0 ORDER BY a.finished_at DESC LIMIT 1",
+        (bot, runner_id, job_id),
+    ).fetchone()
+    return found[0] if found else None
+
+
+def fresh_session(c, job_id):
+    """Whether a job the release policy let go must start a session of its own (session `fresh`, the default) rather
+    than resume its conversation's: the runner then starts a new one and leaves the conversation's session as it was."""
+    row = c.execute("SELECT wake_class,release,released FROM jobs WHERE id=?", (job_id,)).fetchone()
+    return bool(
+        row and row["wake_class"] in POLICY_CLASSES and row["released"] and policy_of(row["release"])["session"] != FORK
+    )
+
+
+def reported_session(kind, why):
+    """What the run record's fork/fresh says once the runner reports how the session began: `fork`, `fresh` or
+    `resumed` (a job that asked for one and resumed its conversation's instead, e.g. on an older runner)."""
+    if kind == "new":
+        return FORK if why == "forked" else FRESH
+    return "resumed"
+
+
+def _batch_slot(c, job, hour):
+    """When a nonblocking notice may wake the bot: with the batch already waiting for its conversation (for a Lead, the
+    bot's digest), else NOTICE_SECONDS after it arrived, or at a Lead's next digest hour."""
+    per_bot = hour is not None
     kinds = ",".join(f"'{k}'" for k in HELD_CLASSES)
     waiting = c.execute(
         "SELECT min(j.hold_until) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
@@ -331,18 +541,9 @@ def _batch_slot(c, job, values_of):
     ).fetchone()[0]
     if waiting:
         return waiting
-    if hour is not None:
-        return digest_time(job["created_at"], hour)
-    due = H.shift(job["created_at"], seconds=gap)
     if per_bot:
-        last = c.execute(
-            f"SELECT max(hold_until) FROM jobs WHERE bot_id=? AND wake_class IN ({kinds},'digest') "
-            "AND held=0 AND hold_until>? AND hold_reason IS NULL",
-            (job["bot_id"], H.shift(job["created_at"], seconds=-gap)),
-        ).fetchone()[0]
-        if last:
-            due = max(due, H.shift(last, seconds=gap))
-    return due
+        return digest_time(job["created_at"], hour)
+    return H.shift(job["created_at"], seconds=NOTICE_SECONDS)
 
 
 def digest_time(created, hour):
@@ -403,17 +604,13 @@ def _release(c, bot, jobs):
     from . import profiles
 
     row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-    mine = profiles.name_of(H._json(row[0], {}) if row else {})
-    held_by = (
-        f"your {profiles.SPEC[mine]['label']} profile"
-        if mine
-        else f"your {LABELS.get(jobs[0]['wake_preset'], '')} wake preset"
-    )
+    digest = profiles.digest_hour(H._json(row[0], {}) if row else {}) is not None
+    held_by = "for your daily digest" if digest else f"for the {_duration(NOTICE_SECONDS)} notice wait"
     sent = H.say(
         c,
         H.KEEPER,
         "bot:" + bot,
-        f"{len(jobs)} updates held by {held_by}:\n"
+        f"{len(jobs)} updates held {held_by}:\n"
         + "\n".join(lines)
         + "\nOpen each task that needs you; the rest is news.",
         kind="notice",
@@ -423,8 +620,8 @@ def _release(c, bot, jobs):
         c.execute("SELECT hold_until FROM jobs WHERE id=?", (j["id"],)).fetchone()[0] or H.now() for j in jobs
     )
     c.execute(
-        "UPDATE jobs SET wake_class='digest',wake_preset=?,hold_until=? WHERE message_id=?",
-        (jobs[0]["wake_preset"], held_until, (sent or {}).get("id")),
+        "UPDATE jobs SET wake_class='digest',hold_until=? WHERE message_id=?",
+        (held_until, (sent or {}).get("id")),
     )
     digest = c.execute("SELECT id FROM jobs WHERE message_id=?", ((sent or {}).get("id"),)).fetchone()
     for job in jobs:
@@ -453,17 +650,6 @@ def _on_one_page(c, jobs):
         (oldest["conversation_id"], oldest["rowid"]),
     ).fetchone()[0]
     return after <= HISTORY_PAGE // 2
-
-
-def replan(c, bot):
-    """A preset change: the bot's held jobs are planned again on the new values."""
-    config = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-    name = preset_of(H._json(config[0], {}) if config else {})
-    c.execute(
-        "UPDATE jobs SET hold_until=NULL,wake_preset=? WHERE bot_id=? AND held=1 AND state='queued' "
-        "AND coalesce(wake_class,'')<>'quota-reset' AND hold_reason IS NULL",
-        (name, bot),
-    )
 
 
 def classify(message):
@@ -508,22 +694,19 @@ def classify(message):
     return "notice", "A Tico notice"
 
 
-def record(c, job, message, bot=None):
-    """The wake a turn starts from, kept on its attempt: what woke it, the preset in force, the bot's profile then
-    (backend/profiles.py; its settings and the run show the profile, the preset stays for older clients) and how long
-    it waited."""
+def record(c, job, message, bot=None, forked=False):
+    """The wake a turn starts from, kept on its attempt: what woke it, the bot's profile then (backend/profiles.py),
+    until when it was held, and for a job the policy released (spec item 11, the run record): warm or cold, fork or
+    fresh, and how long it waited after Due. The run's cache read and cache write tokens are its own columns
+    (attempts.cached_tokens, attempts.cache_write_tokens). No preset is recorded: past runs keep theirs."""
     cls, words = classify(message)
-    if job["wake_class"] in (*HELD_CLASSES, "digest", "sweep"):
-        cls = "sweep" if job["wake_class"] == "sweep" else "batched"
-        words = "A scheduled sweep" if cls == "sweep" and words == "A Tico notice" else words
-    name = job["wake_preset"] or CURRENT
-    out = {
-        "class": cls,
-        "reason": words,
-        "preset": name,
-        "preset_label": LABELS.get(name, LABELS[CURRENT]),
-        "event_at": message.get("created_at"),
-    }
+    held_class = job["wake_class"]
+    if held_class in (*HELD_CLASSES, "digest"):
+        cls = "batched"
+    elif held_class in POLICY_CLASSES:
+        cls = "sweep" if held_class in (ROUTINE, "sweep") else held_class
+        words = {"dream": "A dream"}.get(held_class, "A scheduled routine run")
+    out = {"class": cls, "reason": words, "event_at": message.get("created_at")}
     if bot:
         from . import profiles
 
@@ -531,6 +714,17 @@ def record(c, job, message, bot=None):
         out["profile_label"] = profiles.SPEC[out["profile"]]["label"]
     if job["hold_until"]:
         out["held_until"] = job["hold_until"]
+    released = H._json(job["released"], None) if job["released"] else None
+    if held_class in POLICY_CLASSES and isinstance(released, dict):
+        given = policy_of(job["release"])
+        out["release"] = {
+            "warm": released.get("warm") is True,
+            "session": FORK if forked else FRESH,
+            "waited_seconds": released.get("waited") or 0,
+            "due": given["due"],
+            "wait_seconds": given["wait"],
+            "deadline": given["deadline"],
+        }
     return out
 
 

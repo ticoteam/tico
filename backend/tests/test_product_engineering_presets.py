@@ -1,6 +1,6 @@
 """The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2): who
 fills each role (backend/pipeline_seats.py), when they are made and retired (pipeline_settings.ensure_presets), the
-handoff In development files (backend/stage_effects.py), C10's one wake when Spec has room (never_stuck), and
+handoff In development files (backend/stage_effects.py), C10 (nobody is told when Spec has room, never_stuck), and
 company_import.new_company passing over untouched presets.
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, and a few bots.
@@ -115,6 +115,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         "engineering-fixes-1": "bot:builder",
         "engineering-review-2": "bot:rev-b",
         "engineering-fixes-2": "bot:builder",
+        "engineering-qa": "bot:builder",
         "engineering-merge": "bot:rm",
         "engineering-release": "bot:rm",
     }
@@ -130,12 +131,13 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         "engineering-review-1": ["page"],
         "engineering-fixes-1": ["owner_done", "checks_pass"],
         "engineering-review-2": ["page"],
-        "engineering-fixes-2": ["checks_pass", "page"],
+        "engineering-fixes-2": ["owner_done", "checks_pass"],
+        "engineering-qa": ["checks_pass", "page"],
         "engineering-merge": ["pr_merged"],
         "engineering-release": ["in_release"],
     }
     stages = {s["id"]: s for s in product["stages"] + engineering["stages"]}
-    assert stages["product-ideas"]["by_hand"] and not stages["engineering-on-deck"]["by_hand"]
+    assert not stages["product-ideas"]["by_hand"] and not stages["engineering-on-deck"]["by_hand"]
     limits = {sid: s["task_limit"] for sid, s in stages.items() if s["task_limit"]}
     assert limits == {"product-spec": 20, "engineering-build": 3}
     assert [stages[s]["expected_minutes"] for s in ("product-spec", "product-in-development", "product-validate")] == [
@@ -145,7 +147,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     ]
     assert [
         stages[s]["expected_minutes"]
-        for s in ("engineering-build", "engineering-review-1", "engineering-fixes-2", "engineering-merge")
+        for s in ("engineering-build", "engineering-review-1", "engineering-qa", "engineering-merge")
     ] == [1440, 120, 240, 120]
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
     assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
@@ -154,13 +156,13 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     assert "acceptance criteria someone can check" in spec["settings"]["rubric"]
     validate = stages["product-validate"]["requirements"][0]
     assert (validate["person_id"], validate["settings"]["with_release"]) == (None, True)  # Jev only; G15
-    fixes_2 = stages["engineering-fixes-2"]["requirements"][1]
-    assert (fixes_2["person_id"], fixes_2["who_oks"]) == (ANA, "people_only")
-    assert "the checks at the newest commit" in fixes_2["settings"]["rubric"]
-    assert "what Reviewer 1 and Reviewer 2 each found" in fixes_2["settings"]["rubric"]
+    qa = stages["engineering-qa"]["requirements"][1]
+    assert (qa["line"], qa["person_id"], qa["who_oks"]) == ("QA page", ANA, "people_only")
+    assert "the checks at the newest commit" in qa["settings"]["rubric"]
+    assert "what Reviewer 1 and Reviewer 2 each found" in qa["settings"]["rubric"]
     # The two person sign-offs are the only people-only OKs, and the only requirements naming a person.
     people_only = sorted(sid for sid, s in stages.items() for r in s["requirements"] if r["who_oks"] == "people_only")
-    assert people_only == ["engineering-fixes-2", "product-spec"]
+    assert people_only == ["engineering-qa", "product-spec"]
     named = sorted(sid for sid, s in stages.items() for r in s["requirements"] if r["person_id"])
     assert named == people_only
     assert all(
@@ -420,14 +422,17 @@ def test_a_handoff_into_a_pipeline_with_no_manager_keeps_the_filer_as_assignee(c
     assert (eng["requester_id"], eng["assignee_id"], eng["owner_id"]) == ("bot:pm", "bot:pm", "bot:pm")
 
 
-def _owned_by_a_bot_that_lost_write_access(c):
-    """An Engineering task the Product Owner owns in On deck, given while it could push; it may only read now."""
-    _writes(c, "pm")
-    eng = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", "bot:pm", pipeline="engineering")
-    assert eng["owner_id"] == "bot:pm"
-    # Read-only now, as the Product Owner in the stress run was: a read grant is not enough to build.
-    c.execute("UPDATE bot_repo_access SET access='read' WHERE bot='pm'")
-    return eng
+def _in_groups(c, placed):
+    """Each bot in its group, as the org chart places it: {group id: (name, [slugs])}."""
+    from backend import groups as G
+
+    roster = G._roster(c)
+    for gid, (name, _) in placed.items():
+        G.ensure(roster, gid, name)
+    G._save(c, roster)
+    for gid, (_, slugs) in placed.items():
+        for slug in slugs:
+            G.move_bot(c, slug, gid)
 
 
 def _move_notes(c, task_id):
@@ -439,96 +444,110 @@ def _move_notes(c, task_id):
     return [row[0] or "" for row in rows]
 
 
-def _assignee_owned_engineering(c):
-    """Engineering's work stages belong to the task's assignee, the product's repository is In use, and only the
-    Builder may push to it."""
+def _rule_lines(c, task_id):
+    """What the task's history says each stage rule did, oldest first."""
+    rows = c.execute(
+        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='stage_rule' "
+        "ORDER BY rowid",
+        (task_id,),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def _engineering_with_teams(c):
+    """Engineering's work stages belong to the task's assignee; the Engineering Manager and the Builder are on the
+    Engineering team, the Product Owner on Product. The default stage rules are on (ensure_presets seeds them)."""
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
-    X.github_installed(c)
-    _writes(c, "builder")
+    X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
     c.execute("UPDATE stages SET owner='assignee' WHERE pipeline_id='engineering'")
+    _in_groups(c, {"engineering": ("Engineering", [EPM, "builder"]), "product": ("Product", [PPM, "pm"])})
 
 
-def test_a_bot_that_cannot_push_to_the_repository_never_owns_an_assignee_owned_engineering_stage(c):
-    """A task given to the Product Owner, read-only on the product's repository, in Engineering (as a handoff before
-    the fix, or by hand): it never owns On deck or Build there. The stage has nobody, as with no assignee, the
-    Engineering manager is woken to pick a builder, and the task's history says why."""
-    _assignee_owned_engineering(c)
+def _owned_by_the_product_owner(c, title="Saved carts"):
+    """An Engineering task the Product Owner owns in On deck, filed before Owner on the team was on."""
+    c.execute("UPDATE stage_rules SET retired_at='x' WHERE id='sr_owner_on_team'")
+    eng = H.task_create(c, ANA, title, "Let a shopper keep a cart.", "bot:pm", pipeline="engineering")
+    c.execute("UPDATE stage_rules SET retired_at=NULL WHERE id='sr_owner_on_team'")
+    assert eng["owner_id"] == "bot:pm"
+    return eng
+
+
+def test_owner_on_the_team_a_task_filed_to_the_product_owner_enters_engineering_with_no_owner(c):
+    """K03: a hand-off left the Product Owner owning Engineering work. With Owner on the team it enters with no owner,
+    the history names the rule, and the Engineering Manager is woken to pick a builder (C25)."""
+    _engineering_with_teams(c)
     eng = H.task_create(c, "bot:pm", "Saved carts", "Let a shopper keep a cart.", "bot:pm", pipeline="engineering")
     assert (eng["stage_id"], eng["assignee_id"], eng["owner_id"]) == ("engineering-on-deck", None, None)
+    assert _rule_lines(c, eng["id"]) == ["Rule Owner on the team: pm is not on the Engineering team"]
+    assert _move_notes(c, eng["id"]) == ["Rule Owner on the team: pm is not on the Engineering team"]
+    assert "stage_rule.refused" in [r[0] for r in c.execute("SELECT action FROM events WHERE target=?", (eng["id"],))]
     built = E.advance(c, eng["id"])
     assert (built["stage_id"], built["assignee_id"], built["owner_id"]) == ("engineering-build", None, None)
     assert E._turn_of(c, built) == (f"bot:{EPM}", "This task has no owner. Pick one and reassign it.")
     assert [bot for bot, _ in _queued_wakes(c, eng["id"])] == [EPM]
-    assert _move_notes(c, eng["id"]) == ["pm cannot work On deck: it has no write access to acme/app", ""]
 
 
-def test_a_task_that_comes_back_to_a_stage_whose_assignee_lost_write_access_goes_to_the_manager(c):
-    """A task already in Build with the Product Owner as assignee (filed before the fix): a move into Fixes, a work
-    stage of the assignee, leaves it with nobody rather than the bot that cannot push."""
-    _assignee_owned_engineering(c)
-    eng = _owned_by_a_bot_that_lost_write_access(c)
+def test_owner_on_the_team_a_task_that_comes_back_to_fixes_owned_outside_engineering_goes_to_the_manager(c):
+    _engineering_with_teams(c)
+    eng = _owned_by_the_product_owner(c)
     fixes = next(s for s in E.stages(c, "engineering") if s["name"] == "Fixes 1")
     moved = E.move(c, eng["id"], fixes["id"], ANA, "Review found the cart is lost on sign-out")
     assert (moved["assignee_id"], moved["owner_id"]) == (None, None)
     assert _move_notes(c, eng["id"])[-1] == (
-        "Review found the cart is lost on sign-out. pm cannot work Fixes 1: it has no write access to acme/app"
+        "Review found the cart is lost on sign-out. Rule Owner on the team: pm is not on the Engineering team"
     )
 
 
-def test_a_kickback_keeps_the_builder_that_can_push(c):
-    """Fixes returning to the same builder is unchanged: the Builder may push, so it keeps the task."""
-    _assignee_owned_engineering(c)
+def test_owner_on_the_team_keeps_the_builder_on_a_kickback(c):
+    """Fixes returning to the same builder is unchanged: the Builder is on Engineering, so it keeps the task."""
+    _engineering_with_teams(c)
     eng = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", "bot:builder", pipeline="engineering")
     assert eng["owner_id"] == "bot:builder"
     fixes = next(s for s in E.stages(c, "engineering") if s["name"] == "Fixes 1")
     moved = E.move(c, eng["id"], fixes["id"], ANA, "Review found the cart is lost on sign-out")
     assert (moved["assignee_id"], moved["owner_id"]) == ("bot:builder", "bot:builder")
+    assert _rule_lines(c, eng["id"]) == []
 
 
-def test_a_bot_that_cannot_push_does_not_snooze_its_engineering_task_out_of_sight(c):
-    """The Product Owner left owning Build snoozed the task for two days, and nothing showed it. Its snooze is not
-    taken: the manager bot gets the task, to give it to someone who can build. The Builder's own snooze is taken."""
-    _assignee_owned_engineering(c)
-    eng = _owned_by_a_bot_that_lost_write_access(c)
-    row = E.task(c, eng["id"])
-    out = E.snooze(c, eng["id"], "bot:pm", "Needs the Builder", "2026-11-14T08:00:00.000000Z", row["version"])
-    assert out.get("snooze") is None
-    assert out["note"] == (
-        "pm cannot work On deck: it has no write access to acme/app. The manager has it now, to give it to someone "
-        "who can."
-    )
-    assert out["visit"]["level"] == "manager"
-    assert "snooze_refused" in X.events(c, eng["id"])
-    # A long snooze dodges the snooze count and Late: the Engineering manager is woken now, told why, not on a later
-    # pass, and Health's Tasks reading counts the task with a manager until someone who can build has it.
-    wakes = _queued_wakes(c, eng["id"])
-    assert [bot for bot, _ in wakes] == [EPM], wakes
-    assert wakes[0][1].startswith(
-        "pm cannot work On deck: it has no write access to acme/app, and it tried to snooze the task "
-        "(Needs the Builder). Reassign it to a builder."
-    ), wakes[0][1]
-    from backend import health
+def test_owner_on_the_team_refuses_a_bot_and_lets_a_person_set_anyway(c):
+    """A bot giving Engineering work to someone outside Engineering is refused with the rule's id; a person is offered
+    Set anyway, and the history says they overturned the rule."""
+    from backend.hubdb import Refused
 
-    assert health.never_stuck_reading(c)["tasks"]["manager"] == [eng["id"]]
-    E.reassign(c, eng["id"], "bot:builder", ANA, "Builder takes it", out["version"])
-    row = E.task(c, eng["id"])
-    assert E.snooze(c, eng["id"], "bot:builder", "Waiting for #12 to merge", None, row["version"]).get("snooze")
+    _engineering_with_teams(c)
+    eng = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", "bot:builder", pipeline="engineering")
+    with pytest.raises(Refused) as bot_refused:
+        E.reassign(c, eng["id"], "bot:pm", f"bot:{EPM}", "PM takes it", eng["version"])
+    assert "(rule sr_owner_on_team)" in str(bot_refused.value)
+    with pytest.raises(Refused) as person_refused:
+        E.reassign(c, eng["id"], "bot:pm", ANA, "PM takes it", eng["version"])
+    assert "Set anyway" in str(person_refused.value)
+    given = E.reassign(c, eng["id"], "bot:pm", ANA, "PM takes it", eng["version"], set_anyway=True)
+    assert given["owner_id"] == "bot:pm"
+    note = c.execute(
+        "SELECT note FROM history_events WHERE subject_id=? AND kind='reassign' ORDER BY rowid DESC", (eng["id"],)
+    ).fetchone()[0]
+    assert note == "PM takes it. Overturned rule Owner on the team"
 
 
-def test_a_refused_snooze_leaves_a_task_a_person_has_with_that_person(c):
-    """Once the ladder has handed the task to a person, the owner that cannot build trying to snooze it does not hand
-    it back to the manager bot, and the note says a person has it."""
-    _assignee_owned_engineering(c)
-    eng = _owned_by_a_bot_that_lost_write_access(c)
-    c.execute("UPDATE visits SET level='person', person_id=? WHERE task_id=? AND left_at IS NULL", (ANA, eng["id"]))
-    row = E.task(c, eng["id"])
-    out = E.snooze(c, eng["id"], "bot:pm", "Needs the Builder", "2026-11-14T08:00:00.000000Z", row["version"])
-    assert out.get("snooze") is None
-    assert out["visit"]["level"] == "person"
-    assert out["note"].endswith("A person has it now, to give it to someone who can.")
-    assert _queued_wakes(c, eng["id"]) == []
+def test_owner_on_the_team_once_at_release_clears_the_owners_it_refuses_and_wakes_the_manager_once(c):
+    """The release sweep: open Engineering tasks owned outside Engineering lose their owner, and the Engineering
+    Manager gets one wake listing them all."""
+    from backend import stage_rules as SR
+
+    _engineering_with_teams(c)
+    first, second = _owned_by_the_product_owner(c), _owned_by_the_product_owner(c, "Gift cards")
+    kept = H.task_create(c, ANA, "Wish lists", "Let a shopper save items.", "bot:builder", pipeline="engineering")
+    assert sorted(SR.sweep_owners(c)) == sorted([first["id"], second["id"]])
+    assert [E.task(c, t["id"])["owner_id"] for t in (first, second, kept)] == [None, None, "bot:builder"]
+    wakes = c.execute(
+        "SELECT j.bot_id, m.body FROM messages m JOIN jobs j ON j.message_id = m.id WHERE m.wake_key LIKE ?",
+        ("%:stage-rules-sweep:%",),
+    ).fetchall()
+    assert [bot for bot, _ in wakes] == [EPM]
+    assert wakes[0][1].startswith("Stage rules: 2 tasks have no owner now.")
 
 
 def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
@@ -549,25 +568,22 @@ def test_a_handoff_nobody_can_file_files_nothing_and_the_move_goes_through(c):
     assert (standing.state, standing.on, standing.line) == (R.NOT_MET, "bot:pm", "No task filed yet")
 
 
-def test_a_private_product_task_whose_handoff_builder_cannot_read_tells_the_product_manager_why(c):
-    """The engine never adds a reader: the private Engineering task is not filed, the stage waits on the Product
-    Manager, and their one wake for it says why."""
+def test_a_private_product_tasks_handoff_is_filed_and_read_by_the_builder_while_it_holds_on_deck(c):
+    """The engine never adds a reader: the Engineering task is filed private, with the Product task's readers, and the
+    Builder (the bot the pipeline names for On deck) reads it while it holds that stage (spec: a private task's stage
+    bot can read it while it holds the stage). It used to stop here, with nothing filed."""
     row = _product_task(c)
     c.execute("UPDATE tasks SET private=1 WHERE id=?", (row["id"],))
     readers = c.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()[0]
     moved = E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
-    assert moved["stage_id"] == "product-in-development" and _filed(c, row["id"]) == []
-    standing = R.standings(c, moved)[0]
-    assert (standing.state, standing.on) == (R.NOT_MET, "bot:pm")
+    ((filed, kind),) = _filed(c, row["id"])
+    eng = E.task(c, filed)
+    assert (kind, moved["stage_id"], eng["stage"]["name"]) == ("handoff", "product-in-development", "On deck")
+    assert H.task_private(c, eng) and H.task_private_readable(c, eng["owner_id"], H.task(c, filed))
     assert c.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()[0] == readers
-    wakes = c.execute(
-        "SELECT m.body FROM messages m JOIN jobs j ON j.message_id = m.id WHERE m.wake_key LIKE ? AND j.state='queued'",
-        (f"{row['id']}:{moved['visit']['id']}:%",),
-    ).fetchall()
-    assert len(wakes) == 1, wakes
-    assert wakes[0][0].startswith(
-        "No Engineering task was filed: builder owns On deck and cannot read this private task.\n"
-    ), wakes[0][0]
+    assert eng["owner_id"] not in H.task_readers(H.task(c, filed))
+    lines = c.execute("SELECT note FROM history_events WHERE subject_id=? AND kind='stage_read'", (filed,)).fetchall()
+    assert [n for (n,) in lines] == [f"{H.actor_name(c, eng['owner_id'])} can read this while it holds On deck"]
 
 
 def test_not_validated_files_a_new_task_each_time_even_with_the_same_title(c):
@@ -607,74 +623,33 @@ def test_not_validated_files_a_new_task_each_time_even_with_the_same_title(c):
 
 
 # ----------------------------------------------------------------------------- C10
-def test_the_product_manager_is_woken_once_when_spec_has_room(c):
+def _room_messages(c):
+    return c.execute(
+        "SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%' OR body LIKE '%has room.%'"
+    ).fetchone()[0]
+
+
+def test_the_product_manager_is_not_told_when_spec_has_room(c):
+    """C10 (spec "Spec has room: move it, don't send a notice"): its own briefs rest in Ideas, and nobody is told when
+    Spec has room, whether it had room from the start or a slot frees."""
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
     ideas = [X.new_task(c, "bot:pm", f"Idea {n}", "product") for n in range(4)]  # its own briefs: held by hand
     X.settled(c)
     N.check(c)
-    first = N.room_key("product-spec", None)
-    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:%'").fetchall()
-    assert [tuple(r) for r in rows] == [(first, "bot:pm")]
     N.check(c)
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 1
+    assert _room_messages(c) == 0
     for idea in ideas[:2]:
         E.move(c, idea["id"], "product-spec", ANA)
-    N.check(c)  # Spec is full: nothing
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 1
+    N.check(c)
     E.move(c, ideas[0]["id"], "product-ideas", ANA, "Not ready")
-    left = c.execute("SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (ideas[0]["id"],)).fetchone()[
-        0
-    ]
     N.check(c)
     N.check(c)
-    keys = [r[0] for r in c.execute("SELECT wake_key FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")]
-    assert keys == [first, N.room_key("product-spec", left)]
-    assert N.rules_hold(c) == []
-
-
-def _left_spec(c, task_id):
-    return c.execute("SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (task_id,)).fetchone()[0]
-
-
-def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_freed_slot(c):
-    """C10 when a customer points Product's Ideas at "the task's assignee" (one Product Owner per area): a request moved
-    back into Ideas is held by hand, so its own owner is woken once when Spec has room, once per freed slot. Growth's
-    Ideas, whose requests do not move on, still wakes nobody (test_growth_pipelines.py)."""
-    _team(c)
-    _answers(c, software="yes")
-    PS.ensure_presets(c)
-    area = X.bot(c, "app-owner")
-    c.execute("UPDATE stages SET owner='assignee' WHERE id='product-ideas'")
-    c.execute("UPDATE stages SET task_limit=1 WHERE id='product-spec'")
-    bug = X.new_task(c, ANA, "Saved carts lose items", "product", assignee=area)
-    X.settled(c)
-    N.check(c)  # a person's request: it moves on into Spec by itself
-    assert E.task(c, bug["id"])["stage_id"] == "product-spec"
-    E.move(c, bug["id"], "product-ideas", ANA, "Route it to its area's owner first")
-    first = N.room_key("product-spec", _left_spec(c, bug["id"]))
-    row = E.task(c, bug["id"])
-    assert (row["stage_id"], row["owner_id"], row["visit"]["entered_how"]) == ("product-ideas", area, "back")
-    (held,) = W.of(c, row)
-    assert held.state == W.BY_HAND
-    X.settled(c)
-    N.check(c)
-    N.check(c)
-    rows = c.execute("SELECT wake_key, recipient_id, body FROM messages WHERE wake_key LIKE 'room:%'").fetchall()
-    assert [(r[0], r[1]) for r in rows] == [(first, area)]
-    assert rows[0][2].startswith("Spec has room.")
-    assert E.task(c, bug["id"])["stage_id"] == "product-ideas"  # still held: the wake only tells
-    # A slot frees: one more wake, to the owner of the task that has waited longest.
-    other = X.new_task(c, ANA, "Export to CSV", "product", assignee=area)
-    X.settled(c)
-    N.check(c)
-    assert E.task(c, other["id"])["stage_id"] == "product-spec"
-    E.move(c, other["id"], E.CLOSED, ANA, "Done elsewhere")
-    N.check(c)
-    N.check(c)
-    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")
-    assert [tuple(r) for r in rows] == [(first, area), (N.room_key("product-spec", _left_spec(c, other["id"])), area)]
+    assert _room_messages(c) == 0
+    assert [E.task(c, idea["id"])["stage_id"] for idea in ideas] == ["product-ideas", "product-spec"] + [
+        "product-ideas"
+    ] * 2
     assert N.rules_hold(c) == []
 
 
@@ -685,10 +660,10 @@ def _ideas_moves(c):
     }
 
 
-def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_waits_by_hand(c):
-    """G5: a person who files into Product already picked it. With Spec's limit at 2, two filed at once both go in; the third
-    waits for room, named as room, and goes in first when a slot frees. A bot's idea, and a request moved back into
-    Ideas, are held by hand."""
+def test_ideas_move_into_spec_by_themselves_and_a_bots_own_idea_waits_snoozed(c):
+    """Ideas: say it once (#227): with Spec's limit at 2, two ideas filed at once both go in once Jev checked them; the
+    third waits for room, named as room, and goes in first when a slot frees. A bot's own idea is filed snoozed and
+    stays. Nobody is sent a "Spec has room" notice."""
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
@@ -696,6 +671,7 @@ def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_wait
     asked = [X.new_task(c, ANA, f"Request {n}", "product") for n in range(3)]
     brief = X.new_task(c, "bot:pm", "Brief", "product")
     X.settled(c)
+    X.ideas_checked(c)
     assert N.check(c)["moved"] == 2
     assert _ideas_moves(c) == {
         "Request 0": "product-spec",
@@ -705,17 +681,14 @@ def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_wait
     }
     (wait,) = W.of(c, E.task(c, asked[2]["id"]))
     assert (wait.state, wait.line) == (W.ROOM, "No room in Spec")
-    (held,) = W.of(c, E.task(c, brief["id"]))
-    assert held.state == W.BY_HAND
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
+    assert W.of(c, E.task(c, brief["id"]))[0].state == W.SNOOZED
     moved = E.task(c, asked[0]["id"])
     assert moved["owner_id"] == "bot:pm" and X.wakes(c, moved["id"], "bot:pm")  # its owner is told at once
-    E.move(c, asked[0]["id"], "product-ideas", ANA, "Not this month")
+    E.move(c, asked[0]["id"], E.CLOSED, ANA, "Not this month")
     N.check(c)
     assert _ideas_moves(c) == {
-        "Request 0": "product-ideas",  # moved back: held by hand like any idea
         "Request 1": "product-spec",
-        "Request 2": "product-spec",  # the slot went to the waiting request, not to a room wake
+        "Request 2": "product-spec",  # the freed slot went to the waiting request
         "Brief": "product-ideas",
     }
     assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
@@ -747,11 +720,35 @@ def _sign_off(c, stage_id):
     return _jev_passed(c, row["id"], "f-page", 1), rid
 
 
-@pytest.mark.parametrize("stage_id", ["product-spec", "engineering-fixes-2"])
+def test_when_review_2_found_nothing_the_builder_says_done_and_qa_asks_it_for_the_page_not_a_person(c):
+    """Fixes 2 holds no page a person OKs: with nothing to fix the Builder says done at once, and the task moves to QA,
+    where the QA page is the Builder's to attach. Nobody is asked a question on the way (Acme, Nov 12: the Builder asked
+    a person to move it on past a page it took for a review)."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="engineering", lint=False)
+    row = E.move(c, row["id"], "engineering-fixes-2", ANA, "Review 2 found nothing")
+    # The checks need GitHub: met here by taking them off, so Fixes 2 waits on the Builder's done alone.
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE kind='item' AND stage_id LIKE 'engineering-%'", (H.now(),))
+    row = E.task(c, row["id"])
+    (done,) = R.standings(c, row)
+    assert (done.requirement["kind"], done.state, done.on) == ("owner_done", R.NOT_MET, "bot:builder")
+    assert all(w.state == W.BOT and w.who == "bot:builder" for w in W.of(c, row))
+    A.answer(c, row["id"], done.requirement["id"], "bot:builder", "done", "Nothing to fix", seen_version=row["version"])
+    qa = E.task(c, row["id"])
+    assert (qa["stage_id"], qa["owner_id"]) == ("engineering-qa", "bot:builder")
+    (page,) = R.standings(c, qa)
+    assert (R.name_of(page.requirement), page.state, page.on) == ("QA page", R.NOT_MET, "bot:builder")
+    assert all(w.state == W.BOT and w.who == "bot:builder" for w in W.of(c, qa))
+    assert not c.execute("SELECT 1 FROM requirements WHERE visit_id IS NOT NULL").fetchone()  # no ask was added
+
+
+@pytest.mark.parametrize("stage_id", ["product-spec", "engineering-qa"])
 def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_person(c, time_machine, stage_id):
     time_machine.move_to(datetime(2026, 11, 10, 9, tzinfo=timezone.utc), tick=False)
     row, rid = _sign_off(c, stage_id)
-    # Fixes 2's checks need GitHub: met here by taking them off, so the person's OK is all the task waits on.
+    # QA's checks need GitHub: met here by taking them off, so the person's OK is all the task waits on.
     c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id=? AND kind='item'", (H.now(), stage_id))
     row = E.task(c, row["id"])
     page = next(s for s in R.standings(c, row) if s.requirement["id"] == rid)
@@ -783,8 +780,7 @@ def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_perso
     A.answer(c, row["id"], rid, ANA, "ok")
     after = E.task(c, row["id"])
     assert (
-        after["stage_id"]
-        == {"product-spec": "product-in-development", "engineering-fixes-2": "engineering-merge"}[stage_id]
+        after["stage_id"] == {"product-spec": "product-in-development", "engineering-qa": "engineering-merge"}[stage_id]
     )
 
 
@@ -832,14 +828,14 @@ def test_an_ok_with_no_notes_adds_nothing_to_the_engineering_task(c):
 def test_what_the_person_says_with_the_pre_release_ok_reaches_whoever_acts_after_it(c):
     """The other direction: the OK of what was built moves the task on to Merge and Release, and every wake there
     carries the person's notes; moved back, it no longer does."""
-    row, rid = _sign_off(c, "engineering-fixes-2")
+    row, rid = _sign_off(c, "engineering-qa")
     X.github_installed(c)  # Merge and Release need GitHub: with no App the Release Owner would wait on Connect GitHub
-    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id='engineering-fixes-2' AND kind='item'", (H.now(),))
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id='engineering-qa' AND kind='item'", (H.now(),))
     said = "Say in the release notes that negate(-0.0) is 0.0"
     A.answer(c, row["id"], rid, ANA, "ok", said)
     merge = E.task(c, row["id"])
     assert merge["stage_id"] == "engineering-merge"
-    line = f"{H.actor_name(c, ANA)}'s notes with their OK of {R.name_of(R.get(c, rid))} in Fixes 2: {said}"
+    line = f"{H.actor_name(c, ANA)}'s notes with their OK of {R.name_of(R.get(c, rid))} in QA: {said}"
     assert line in TW.body(c, merge, to=merge["owner_id"]).splitlines()
     told = c.execute(
         "SELECT recipient_id, body FROM messages WHERE wake_key LIKE ? AND body LIKE ?",
@@ -851,7 +847,7 @@ def test_what_the_person_says_with_the_pre_release_ok_reaches_whoever_acts_after
     release = E.advance(c, row["id"])
     assert release["stage_id"] == "engineering-release"
     assert line in TW.body(c, release, to=release["owner_id"]).splitlines()
-    back = E.move(c, row["id"], "engineering-fixes-2", ANA, "The release notes are wrong")
+    back = E.move(c, row["id"], "engineering-qa", ANA, "The release notes are wrong")
     again = E.move(c, back["id"], E.NEXT, ANA, "Fixed, no new OK needed", seen_version=back["version"])
     assert again["stage_id"] == "engineering-merge"
     assert line not in TW.body(c, again, to=again["owner_id"])
@@ -916,7 +912,7 @@ LOOSENING = {
 }
 SIGN_OFFS = [
     ("product", "product-spec", "product-ideas", "product-in-development", PPM),
-    ("engineering", "engineering-fixes-2", "engineering-review-2", "engineering-merge", EPM),
+    ("engineering", "engineering-qa", "engineering-fixes-2", "engineering-merge", EPM),
 ]
 
 
@@ -979,14 +975,14 @@ def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_the
     PS.ensure_presets(c)
     c.execute(
         "UPDATE requirements SET who_oks='people_with_exceptions' "
-        "WHERE stage_id IN ('product-spec', 'engineering-fixes-2') AND kind='page'"
+        "WHERE stage_id IN ('product-spec', 'engineering-qa') AND kind='page'"
     )
     PS.ensure_presets(c)
     found = c.execute(
-        "SELECT stage_id, who_oks FROM requirements WHERE stage_id IN ('product-spec', 'engineering-fixes-2') "
+        "SELECT stage_id, who_oks FROM requirements WHERE stage_id IN ('product-spec', 'engineering-qa') "
         "AND kind='page' ORDER BY stage_id"
     )
-    assert [tuple(r) for r in found] == [("engineering-fixes-2", "people_only"), ("product-spec", "people_only")]
+    assert [tuple(r) for r in found] == [("engineering-qa", "people_only"), ("product-spec", "people_only")]
 
 
 @pytest.mark.parametrize(
@@ -994,14 +990,14 @@ def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_the
     [
         (
             "engineering",
-            ("on-deck", "build", "review-1", "fixes-1", "review-2"),
+            ("on-deck", "build", "review-1", "fixes-1", "review-2", "fixes-2"),
             ("merge", "release", "done"),
         ),
         ("product", ("ideas",), ("in-development", "validate", "done")),
     ],
 )
 def test_no_bot_jumps_a_task_over_a_sign_off_from_any_earlier_stage(c, pipeline, before, past):
-    """A forward move counts every stage it jumps as not met, so a bot's jump over Fixes 2 or Spec meets the
+    """A forward move counts every stage it jumps as not met, so a bot's jump over QA or Spec meets the
     people-only OK and is refused: no merge is queued, and no Engineering task is filed without the spec OK."""
     _team(c)
     _answers(c, software="yes")
@@ -1025,3 +1021,101 @@ def test_no_bot_jumps_a_task_over_a_sign_off_from_any_earlier_stage(c, pipeline,
             assert c.execute("SELECT COUNT(*) FROM effects").fetchone()[0] == effects
             assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == tasks
     assert not c.execute("SELECT 1 FROM answers WHERE answer='pushed_past'").fetchone()
+
+
+def _on_deck_picks(c, bots, last=None):
+    """On deck's owner is One of several (backend/stage_pick.py) from `bots`, the pick becoming the task's owner."""
+    pick = {"bots": bots, "how": "turns", "prefer": "anyone", "owns_task": True}
+    c.execute("UPDATE stages SET owner='pick', pick=? WHERE id='engineering-on-deck'", (json.dumps(pick),))
+    if last:
+        c.execute("INSERT OR REPLACE INTO stage_pick_turns VALUES ('engineering-on-deck', ?, ?)", (last, H.now()))
+
+
+def _picks(c, task_id):
+    rows = c.execute(
+        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='pick'", (task_id,)
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def test_owner_on_the_team_holds_a_picked_bot_as_it_holds_a_named_one(c):
+    """One of several never gives a task to a bot a stage's Block rule refuses: Owner on the team skips the Product
+    Owner on the list, and when it refuses every bot, the manager is woken and told which rule."""
+    _engineering_with_teams(c)
+    _on_deck_picks(c, ["bot:builder", "bot:pm"], last="bot:builder")  # turns alone would give it to pm
+    picked = H.task_create(
+        c, "bot:pm", "Saved carts", "Keep a cart.", "bot:pm", pipeline="engineering", unassigned=True
+    )
+    assert (picked["owner_id"], picked["assignee_id"]) == ("bot:builder", "bot:builder")
+    assert _picks(c, picked["id"]) == ["On deck given to builder · took turns"]
+    _on_deck_picks(c, ["bot:pm"])
+    nobody = H.task_create(c, "bot:pm", "Gift cards", "Sell cards.", "bot:pm", pipeline="engineering", unassigned=True)
+    row = E.task(c, nobody["id"])
+    assert (row["owner_id"], row["visit"]["pick_state"]) == (None, "nobody")
+    assert row["visit"]["pick_why"] == "rule Owner on the team refuses every bot it picks from"
+    assert _picks(c, nobody["id"]) == ["On deck: nobody picked, rule Owner on the team refuses every bot it picks from"]
+
+
+def test_owner_on_the_team_at_release_clears_a_picked_owner_and_its_assignee(c):
+    """The release sweep in a stage whose pick becomes the task's owner clears the assignee with the owner, as in a stage
+    the assignee owns: a refused bot does not stay the task's owner for life."""
+    from backend import stage_rules as SR
+
+    _engineering_with_teams(c)
+    _on_deck_picks(c, ["bot:pm"])
+    c.execute("UPDATE stage_rules SET retired_at='x' WHERE id='sr_owner_on_team'")
+    eng = H.task_create(c, ANA, "Wish lists", "Save items.", ANA, pipeline="engineering", unassigned=True)
+    c.execute("UPDATE stage_rules SET retired_at=NULL WHERE id='sr_owner_on_team'")
+    assert eng["assignee_id"] == "bot:pm"
+    assert SR.sweep_owners(c) == [eng["id"]]
+    row = E.task(c, eng["id"])
+    assert (row["owner_id"], row["assignee_id"]) == (None, None)
+
+
+def _engineering_at_release(c):
+    """A Product task in Spec, with Engineering set as the release migration sets it: On deck and Build pick from two
+    Builders (the pick becomes the task's owner), the two Reviews from two Reviewers."""
+    import importlib
+
+    _role_bot(c, "builder-2", "builder")
+    row = _product_task(c)
+    _seat(c, "Builder 2", "builder", "builder-2")
+    X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
+    importlib.import_module("backend.migrations.20261113033639_engineering_picks_at_release").up(c)
+    return row
+
+
+BUILDERS, REVIEWERS = ("bot:builder", "bot:builder-2"), ("bot:rev-a", "bot:rev-b")
+
+
+def test_a_handoff_into_picking_stages_gets_a_builder_and_review_1_a_reviewer(c):
+    """#387: a hand-off from Product arrives in On deck with a Builder, keeps it in Build, and Review 1 picks a
+    Reviewer as the task enters it; nobody is left without an owner for a person's Stuck card."""
+    row = _engineering_at_release(c)
+    E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
+    eng = E.task(c, _filed(c, row["id"])[0][0])
+    assert eng["stage_id"] == "engineering-on-deck"
+    assert eng["owner_id"] in BUILDERS and eng["assignee_id"] == eng["owner_id"]
+    built = E.advance(c, eng["id"])
+    assert (built["stage_id"], built["owner_id"]) == ("engineering-build", eng["owner_id"])
+    reviewed = E.move(c, eng["id"], "engineering-review-1", ANA, "The PR is green")
+    assert reviewed["owner_id"] in REVIEWERS and reviewed["assignee_id"] == eng["owner_id"]
+    assert _picks(c, eng["id"])[-1].startswith("Review 1 given to rev-")
+
+
+def test_a_product_owner_filing_straight_into_build_gets_a_builder(c):
+    """#387: the Product Owner files a task with no owner into Engineering's Build: the stage picks a Builder."""
+    _engineering_at_release(c)
+    eng = H.task_create(
+        c,
+        "bot:pm",
+        "Saved carts",
+        "Keep a cart.",
+        "bot:pm",
+        pipeline="engineering",
+        stage="engineering-build",
+        unassigned=True,
+        lint=False,
+    )
+    assert eng["stage_id"] == "engineering-build"
+    assert eng["owner_id"] in BUILDERS and eng["assignee_id"] == eng["owner_id"]

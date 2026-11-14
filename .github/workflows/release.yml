@@ -586,6 +586,24 @@ jobs:
         run: |
           find dist/recorder -type f ! -name recorder-latest.json -print0 | xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber
           gh release upload "$GITHUB_REF_NAME" dist/recorder/recorder-latest.json --clobber
+      # The Recorder follows release candidates too: installed Recorders read the latest release's manifest, so a
+      # candidate's manifest also goes there when it is newer than what that manifest offers. The files stay on the
+      # candidate's own release, where the manifest points.
+      - name: Offer the recorder to installed Recorders
+        if: contains(github.ref_name, '-')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" -q .tag_name)
+          [ -n "$latest" ] && [ "$latest" != "$GITHUB_REF_NAME" ] || exit 0
+          offered=$(gh release download "$latest" --pattern recorder-latest.json --output - 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null || true)
+          if python3 scripts/ci/semver_newer.py "${GITHUB_REF_NAME#v}" "$offered"; then
+            gh release upload "$latest" dist/recorder/recorder-latest.json --clobber
+            echo "Installed Recorders are offered ${GITHUB_REF_NAME#v} (was ${offered:-none}) through $latest."
+          else
+            echo "$latest already offers $offered; left as is."
+          fi
 
   # A prerelease (any '-' in the tag, as the release job marks it) builds no company app: a company's installed apps
   # update from its own bucket's latest.json, which a prerelease must never move (scripts/company_apps.py refuses too).

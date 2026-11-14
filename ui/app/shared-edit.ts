@@ -22,6 +22,9 @@ interface SharedPlaceHandle {
 interface SharedPlaceState { shared?: SharedPlaceHandle | null | undefined }
 interface SharedPlaceOptions {
   id: string; place: string; topic: string; filter: string;
+  /** A change number from before the item was read (LIVE.after): the stream resumes from it, so it replays whatever
+   *  changed since that read and its first `ready` need not read the item again. */
+  after?: number | null | undefined;
   changed: (data?: unknown) => void; gone: () => void; present: (words: string) => void;
 }
 interface SharedPresence { actors?: {actor: string; name: string}[] }
@@ -90,27 +93,32 @@ function sharedPlaceStop(state: SharedPlaceState): void {
   shared.leave?.();
 }
 function sharedPlaceStart(state: SharedPlaceState, options: SharedPlaceOptions): void {
-  const {id, place, topic, filter, changed, gone, present} = options;
+  const {id, place, topic, filter, changed, gone, present, after} = options;
   if (state.shared?.place === place) return;
   sharedPlaceStop(state);
+  // A bot's read-only view (backend/app_view.py) says nowhere that it is here and follows no live changes: the page
+  // stays as it was read, for a screenshot. Its refused heartbeat must not read as losing the place.
+  if (S.me?.read_only_view) return;
   const shared: SharedPlaceHandle = state.shared = {id, place, session: newRequestId()};
   const current = () => state.shared === shared;
   const lost = (error: unknown) => {
     const status = typeof error === 'object' && error !== null && 'status' in error ? error.status : undefined;
     if (current() && typeof status === 'number' && [403, 404].includes(status)) gone();
   };
-  const presence = async () => {
-    try {
-      const reply = await get<SharedPresence>('/v2/presence?place=' + encodeURIComponent(place), {fresh: true});
-      if (!current()) return;
-      const others = (reply.actors || []).filter(a => a.actor !== 'human:' + S.me?.id);
-      present(others.length ? `${others.map(a => a.name).join(', ')} ${others.length === 1 ? 'is' : 'are'} here` : '');
-    } catch (error) { lost(error); }
+  const shown = (reply: SharedPresence) => {
+    if (!current()) return;
+    const others = (reply.actors || []).filter(a => a.actor !== 'human:' + S.me?.id);
+    present(others.length ? `${others.map(a => a.name).join(', ')} ${others.length === 1 ? 'is' : 'are'} here` : '');
   };
+  const presence = async () => {
+    try { shown(await get<SharedPresence>('/v2/presence?place=' + encodeURIComponent(place), {fresh: true})); }
+    catch (error) { lost(error); }
+  };
+  // The heartbeat's answer is the place's list as GET /v2/presence gives it (backend/presence.py): it is not read again.
   const heartbeat = async (leave: boolean) => {
     try {
-      await post('/v2/presence', {place, session_id: shared.session, gone: leave}, undefined, {keepalive: leave});
-      if (!leave && current()) await presence();
+      const reply = await post('/v2/presence', {place, session_id: shared.session, gone: leave}, undefined, {keepalive: leave}) as SharedPresence;
+      if (!leave) shown(reply || {});
     } catch (error) { if (!leave) lost(error); }
   };
   shared.leave = () => { void heartbeat(true); };
@@ -123,6 +131,7 @@ function sharedPlaceStart(state: SharedPlaceState, options: SharedPlaceOptions):
   if (!document.hidden) void heartbeat(false);
   if (typeof EventSource !== 'undefined') {
     const query = new URLSearchParams({topics: topic + ',presence', [filter]: id, place});
+    if (after != null) query.set('after', String(after));
     const source = shared.source = new EventSource(API + '/v2/events?' + query);
     source.addEventListener(topic, (event: MessageEvent) => {
       if (!current()) return;
@@ -131,7 +140,10 @@ function sharedPlaceStart(state: SharedPlaceState, options: SharedPlaceOptions):
       getForget(); changed(data);
     });
     source.addEventListener('presence', () => { if (current()) void presence(); });
-    source.addEventListener('ready', refresh);
+    // A connect reads the item and who is here again, for what changed while no stream carried it; the first one of a
+    // stream that resumes from before the item was read replays those changes instead, so it reads nothing.
+    let resumed = after != null;
+    source.addEventListener('ready', () => { if (resumed) resumed = false; else refresh(); });
     source.addEventListener('reset', refresh);
     source.addEventListener('expired', () => { if (current()) gone(); });
   }

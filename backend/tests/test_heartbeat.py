@@ -43,6 +43,7 @@ ORDER = [
     "item_metadata",
     "source_actions",
     "jev_verdicts",
+    "idea_checks",
 ]
 
 
@@ -452,3 +453,188 @@ def test_the_heartbeat_jobs_schedule_follows_the_interval(api):
     with api.app.state.store.read() as c:
         following = SR.next_at(SR.BY_KEY["heartbeat"], {"started_at": HB.S.stamp(now)}, now - timedelta(minutes=1), c=c)
     assert following == now + timedelta(seconds=30)
+
+
+# ----------------------------------------------------------------------------- the outside polls' own worker (P07)
+OUTSIDE = ["github_sync", "ci_sweep", "repository_waits", "item_metadata", "source_actions"]
+
+
+def outside_of(api, scheduler, **kw):
+    worker = HB.Outside(scheduler, app=api.app, **kw)
+    scheduler.outside = worker
+    return worker
+
+
+def test_the_github_steps_run_on_their_own_worker_and_the_beat_runs_the_rest(api, fake):
+    ran, _ = fake
+    assert [s.key for s in HB.STEPS if s.outside] == OUTSIDE
+    scheduler = scheduler_of(api)
+    worker = outside_of(api, scheduler)
+    beat(api, scheduler, AT)
+    assert ran == [k for k in ORDER if k not in OUTSIDE], "the beat leaves them to the worker"
+    ran.clear()
+    worker.wake(AT)
+    result = worker.pass_once()
+    assert ran == OUTSIDE and result["ran"] == OUTSIDE, "in the beat's order, each due on a first pass"
+    (state,) = rows(api, "SELECT beats_count FROM heartbeat_states WHERE id=1")
+    assert state["beats_count"] == 1, "the worker's pass is not a beat"
+
+
+def test_a_slow_github_never_holds_up_a_due_run_and_one_pass_runs_at_a_time(api, fake, monkeypatch):
+    """AC-1, AC-2, AC-4: GitHub answers after 10 s (here: hangs until released). For five minutes of 10-second beats
+    each due run starts within the beat, the every-minute steps run 5 times, and the worker runs its one stuck pass,
+    never a second beside it; released, it runs one more pass, not one per missed beat."""
+    import threading
+    import time
+
+    ran, answers = fake
+    release, started = threading.Event(), threading.Event()
+    real = HB.BY_KEY["github_sync"].run
+
+    def slow_github(ctx):
+        started.set()
+        release.wait(10)  # GitHub answers after 10 s
+        return real(ctx)
+
+    steps = [dataclasses.replace(s, run=slow_github) if s.key == "github_sync" else s for s in HB.STEPS]
+    monkeypatch.setattr(HB, "STEPS", steps)
+    monkeypatch.setattr(HB, "BY_KEY", {s.key: s for s in steps})
+    answers["deferred"] = ("1 deferred run started", False)
+    scheduler = scheduler_of(api)
+    worker = outside_of(api, scheduler).start()
+    try:
+        beats, slowest = 0, 0.0
+        for i in range(30):  # five minutes at a 10 s interval
+            at = AT + timedelta(seconds=10 * i)
+            worker.wake(at)
+            if i == 0:
+                assert started.wait(5), "the worker took the first pass"
+            begun = time.monotonic()
+            result, _ = beat(api, scheduler, at)
+            slowest = max(slowest, time.monotonic() - begun)
+            assert "deferred" in result["did"], at
+            beats += 1
+        assert beats >= 28 and slowest < 2, f"slowest beat {slowest:.1f} s"
+        assert ran.count("deferred") == 30 and ran.count("stall_marks") == 5, "AC-2"
+        assert worker.passes == 0 and worker.running, "one pass, still waiting on GitHub; no second beside it"
+        assert ran.count("github_sync") == 0 and "ci_sweep" not in ran
+        release.set()
+        deadline = time.monotonic() + 10
+        while worker.passes < 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.3)  # a third pass, if one were coming, would start here
+        assert worker.passes == 2, "the stuck pass, then one more for every wake it missed"
+        assert ran.count("github_sync") == 2
+    finally:
+        worker.halt(5)
+    assert not worker.thread.is_alive()
+
+
+def test_with_github_quick_each_poll_keeps_todays_cadence_and_none_runs_faster(api, fake):
+    """AC-3: five minutes at a 10 s interval: GitHub sync 30 times, the re-read 5, the CI sweep once, as in the beat;
+    at a 5 s interval none runs more often."""
+    ran, _ = fake
+    for seconds in (10, 5):
+        ran.clear()
+        scheduler = scheduler_of(api)
+        worker = outside_of(api, scheduler)
+        for i in range(300 // seconds):
+            at = AT + timedelta(seconds=seconds * i)
+            worker.wake(at)
+            worker.pass_once()
+            beat(api, scheduler, at)
+        assert 27 <= ran.count("github_sync") <= 30, seconds
+        assert ran.count("repository_waits") == ran.count("github_sync")
+        assert ran.count("source_actions") == 300 // seconds, "the merge queue calls go every beat, as in the beat"
+        assert ran.count("item_metadata") in (4, 5) and ran.count("ci_sweep") == 1, seconds
+        assert ran.count("deferred") == 300 // seconds, "the beat keeps its own interval"
+
+
+def test_a_failing_github_step_shows_on_its_row_and_reaches_the_schedulers_health(api, fake):
+    """AC-5: as when it ran in the beat: its row on the Heartbeat screen, a beat-log row, telemetry, and the next
+    scheduler pass's health row."""
+    ran, answers = fake
+    answers["item_metadata"] = RuntimeError("GitHub said no")
+    telemetry = Telemetry()
+    scheduler = scheduler_of(api)
+    worker = outside_of(api, scheduler, telemetry=telemetry)
+    worker.wake(AT)
+    result = worker.pass_once()
+    assert result["failed"] == ["item_metadata"] and ran == OUTSIDE, "the steps after it still ran"
+    assert telemetry.seen == [("scheduler", "RuntimeError")]
+    screen = get(api, "heartbeat")
+    row = next(s for s in screen["steps"] if s["key"] == "item_metadata")
+    assert row["failing"] and row["last_error"] and row["failed_24h"] == 1 and row["runs_24h"] == 1
+    assert [s["key"] for s in screen["beats"][0]["steps"]] == ["item_metadata"]
+    assert screen["beats_24h"] == 0, "not a beat"
+    assert worker.take_failures() == [{"item_metadata": "RuntimeError"}]
+    answers["item_metadata"] = RuntimeError("again")
+    worker.wake(AT + timedelta(minutes=1))
+    worker.pass_once()
+    scheduler.tick(AT + timedelta(minutes=1))
+    (health,) = rows(api, "SELECT detail FROM service_health WHERE service='scheduler'")
+    assert {"item_metadata": "RuntimeError"} in json.loads(health["detail"])["failures"]
+
+
+def test_the_release_check_rides_on_the_worker_at_most_every_10_seconds(monkeypatch):
+    class _Scheduler:
+        outside = None
+        step_marks: dict = {}
+        store = execution = github_app = None
+
+    now, calls = [0.0], []
+    telemetry = Telemetry()
+
+    def also():
+        calls.append(now[0])
+        if len(calls) == 2:
+            raise RuntimeError("releases unreachable")
+
+    worker = HB.Outside(_Scheduler(), telemetry=telemetry, also=also, clock=lambda: now[0])
+    monkeypatch.setattr(HB, "outside_pass", lambda ctx: {"ran": [], "did": [], "failed": []})
+    for t in (0.0, 5.0, 10.0, 15.0, 20.0):
+        now[0] = t
+        worker.pass_once()
+    assert calls == [0.0, 10.0, 20.0]
+    assert telemetry.seen == [("scheduler", "RuntimeError")], "a failure is captured; the next pass tries again"
+
+
+def test_a_worker_whose_thread_died_hands_the_github_steps_back_to_the_beat(api, fake):
+    ran, _ = fake
+    scheduler = scheduler_of(api)
+    worker = outside_of(api, scheduler).start()
+    beat(api, scheduler, AT)
+    assert not set(OUTSIDE) & set(ran), "a live worker takes them"
+    worker.halt(5)
+    assert not worker.alive() and worker.is_set()
+    ran.clear()
+    beat(api, scheduler, AT + timedelta(minutes=5))
+    assert not set(OUTSIDE) & set(ran), "a stopping worker keeps them: no GitHub call inline during a shutdown"
+    worker.stop.clear()  # a thread that ended without being stopped, as a crash outside a pass would end it
+    beat(api, scheduler, AT + timedelta(minutes=10))
+    assert [k for k in ran if k in OUTSIDE] == OUTSIDE, "the beat runs them again, in its order"
+
+
+def test_a_dead_worker_hands_the_release_check_back_to_the_loops_rest_pass():
+    import threading
+
+    class _Scheduler:
+        outside = None
+        step_marks: dict = {}
+        store = execution = github_app = None
+
+    now, calls = [0.0], []
+    worker = HB.Outside(_Scheduler(), also=lambda: calls.append(now[0]), clock=lambda: now[0])
+    worker.rest_fallback()
+    assert calls == [], "an unstarted worker (a test driving pass_once) keeps it"
+    worker.thread = threading.Thread(target=lambda: None)
+    worker.thread.start()
+    worker.thread.join()
+    for t in (0.0, 5.0, 10.0):
+        now[0] = t
+        worker.rest_fallback()
+    assert calls == [0.0, 10.0], "dead: the rest pass runs it, still at most every 10 s"
+    worker.stop.set()
+    now[0] = 30.0
+    worker.rest_fallback()
+    assert calls == [0.0, 10.0], "not while stopping"

@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
 // Offline browser check of Skip on the ask screen (task #181), against a fake of the new routes, on a 390 px phone and
 // on a desktop:
-// - every item, a typed choice with no answer row of its own included, shows a Skip button with at least a 40 px tap area, on every width; the phone has no ‹ ›;
+// - every item, a typed choice with no answer row of its own included, shows a Skip button with at least a 40 px tap area, on every width; the phone has ‹ › too (task #454);
 // - Skip goes to the next item and sends nothing: the skipped item is not answered or changed;
 // - at the last item, Skip wraps to the first one skipped, which is still waiting;
 // - on a desktop ‹ › and the arrow keys still step through.
@@ -77,7 +77,7 @@ const Q = ['Which plan do new signups get?', 'Which region first?', 'Ship on Mon
         assert.ok(box.y >= 0 && box.y + box.height <= viewport.height, `${label}: Skip is in view`);
       };
       await at(1, 3);
-      if (label === 'phone') assert.equal(await dialog.locator('[data-dc="next"]').isVisible(), false, 'no › on a phone');
+      assert.ok(await dialog.locator('[data-dc="next"]').isVisible(), `${label}: › shows`);
 
       // Skip: the next item, nothing sent.
       await skipBox();

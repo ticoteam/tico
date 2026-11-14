@@ -72,12 +72,14 @@ def _page(c, store):
 
 
 def _request(c, title):
-    """A person's request in Ideas: it moves into Spec by itself when Spec has room."""
-    return X.new_task(c, ANA, title, "product", assignee=WRITER)
+    """A person's request in Ideas, Jev's duplicate check done: it moves into Spec by itself when Spec has room."""
+    row = X.new_task(c, ANA, title, "product", assignee=WRITER)
+    X.ideas_checked(c)
+    return row
 
 
 def _idea(c, title):
-    """An idea a bot filed: it stays in Ideas until someone moves it."""
+    """An idea a bot filed for itself: it is filed snoozed, and waits in Ideas until a person unsnoozes it."""
     return X.new_task(c, WRITER, title, "product", assignee=WRITER)
 
 
@@ -170,28 +172,24 @@ def test_when_jev_passes_and_the_stage_asks_a_person_the_slot_frees_for_the_olde
     assert (_stage(c, older), _stage(c, newer)) == ("Spec", "Ideas")
 
 
-def _room_wakes(c):
-    return [
-        tuple(found)
-        for found in c.execute(
-            "SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:product-spec:%' ORDER BY rowid"
-        )
-    ]
-
-
-def test_with_no_request_waiting_the_ideas_owner_gets_one_spec_has_room_wake(c, store):
+def test_when_a_spec_task_turns_to_a_person_no_bot_is_told_about_room(c, store):
     """Given Spec is full of bot work and Ideas holds only an idea a bot filed, when a Spec task's turn becomes a
-    person's, the Ideas owner gets one "Spec has room" wake, and no second one on the next pass."""
-    first, _second = _in_spec(c, "Importer spec"), _in_spec(c, "Exporter spec")
-    _idea(c, "Bug Triage handoffs")
+    person's, then no bot is told about room, on that pass or the next, and the idea stays in Ideas."""
+    first, second = _in_spec(c, "Importer spec"), _in_spec(c, "Exporter spec")
+    idea = _idea(c, "Bug Triage handoffs")
     _pass(c)
-    assert _room_wakes(c) == []  # full of bot work: nobody is told
     _to_person(c, store, first)
+    X.settled(c)
+    before = c.execute("SELECT MAX(rowid) FROM messages").fetchone()[0]
     _pass(c)
-    since = W.slots(c, "product-spec").on_person[0][1]
-    assert _room_wakes(c) == [(f"room:product-spec:{first['id']}@{since}", WRITER)]
     _pass(c)
-    assert len(_room_wakes(c)) == 1
+    new = c.execute(
+        "SELECT wake_key, body FROM messages WHERE recipient_id LIKE 'bot:%' AND rowid > ?", (before,)
+    ).fetchall()
+    # Only the Spec tasks' own turns (a lost wake retried): nothing about room, nothing about the idea.
+    assert all(str(key).split(":")[0] in (first["id"], second["id"]) for key, _ in new), new
+    assert not any("has room" in str(body) for _, body in new), new
+    assert _stage(c, idea) == "Ideas"
 
 
 def test_a_spec_a_person_sends_back_keeps_its_place_and_the_stage_sits_over_its_limit(c, store):

@@ -84,22 +84,22 @@ function rdNavWho(me: SelfPerson | null | undefined): void {
   RD_NAV_WHO = who;
 }
 for (const name of RD_NAV_NAMES) rdNavPaint(name, document.documentElement.classList.contains(RD_NAV_ROWS[name]));
-// Library open or folded: what this browser chose, opened while a Library page is showing (a fold there holds until
-// the next visit). A browser that will not store it keeps Library open.
+// Library open or folded: folded unless opened here, opened while a Library page is showing (a fold there holds until
+// the next visit). A browser that will not store it keeps the choice for this visit (RD_LIB.mem).
 const RD_LIB_KEY = 'tico.nav.library';
-const RD_LIB = {inside: false, was: false};
+const RD_LIB = {inside: false, was: false, mem: false};
 // Contacts sits on the Team header, so its page (and its old Directory address) leaves Library as it is.
 const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] ?? ''; return !rdUnder(p, DIR_ROUTE) && !rdUnder(p, DIR_OLD_ROUTE) && [DOCS, MEETINGS, TOOLS_ROUTE, '#/library'].some(base => rdUnder(p, base)); };
-function rdLibRemember(open: boolean): void { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
-function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) !== 'closed'; } catch { return true; } }
+function rdLibRemember(open: boolean): void { RD_LIB.mem = open; try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) === 'open'; } catch { return RD_LIB.mem; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
-// Company folds the same way: open unless folded here, opened while Strategy, Finance, Growth, Automations, Listening or
-// Rules is showing (its own page, #/home, shows its row whatever the fold).
+// Company folds the same way: folded unless opened here, opened while Strategy, Finance, Growth, Automations, Listening
+// or Rules is showing (its own page, #/home, shows its row whatever the fold).
 const RD_CO_KEY = 'tico.nav.company';
-const RD_CO = {inside: false, was: false};
+const RD_CO = {inside: false, was: false, mem: false};
 const rdInCompany = (r: string): boolean => ['#/strategy', GR_ROUTE, FIN_ROUTE, RD_AUTOMATIONS, RD_LISTENING, RULES_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
-function rdCoRemember(open: boolean): void { try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
-function rdCoSaved() { try { return localStorage.getItem(RD_CO_KEY) !== 'closed'; } catch { return true; } }
+function rdCoRemember(open: boolean): void { RD_CO.mem = open; try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+function rdCoSaved() { try { return localStorage.getItem(RD_CO_KEY) === 'open'; } catch { return RD_CO.mem; } }
 const rdCoOpen = () => RD_CO.inside || rdCoSaved();
 function rdLibSync() {
   rdCoSync();
@@ -202,10 +202,10 @@ function redesignStrategyHead(tab: string): string {
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
   const sub = tab === 'strategy' || tab === 'lenses'
     ? `<a class="strat-sub" href="${tab === 'lenses' ? '#/strategy' : LENSES_ROUTE}">${tab === 'lenses' ? 'Strategy' : 'Lenses'}</a>` : '';
-  return `<div class="strat-head rd-strat-head"><h1>Strategy</h1>
-      <nav class="tabs slim strat-tabs" aria-label="Strategy">${tabs.map(([id, href, label]) =>
-        `<a href="${href}" data-strat-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>
-      <span class="spacer"></span>${sub}<div class="strat-actions" id="strat-actions"></div></div>`;
+  // The one page header (page-head.ts); #strat-actions is its button holder, which each tab fills.
+  return pageHead({title: 'Strategy', hook: 'strat-head rd-strat-head', tabsHook: 'strat-tabs', tabsAttrs: 'aria-label="Strategy"',
+    tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`})),
+    tools: sub, actId: 'strat-actions'});
 }
 
 // Org (ui/app/redesign-org.ts) and the Market page (ui/app/redesign-market.ts) are their own files.

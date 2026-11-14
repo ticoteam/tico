@@ -155,6 +155,8 @@ export interface OpenAutomationsOptions {
   system?: boolean;
   maintenance?: boolean;
   heartbeat?: boolean;
+  // A script's own routes, set before the page loads: they answer first, and route.fallback() hands a path back here.
+  routes?: ((page: Page) => Promise<void>) | null;
 }
 
 export interface AutomationsPage {
@@ -381,13 +383,18 @@ function listenRuns(now = Date.now()): Run[] {
         {id: 'lb1', type: 'bot_turn', status: 'ok', outputs: {}, cost: 0.06},
         {id: 'lt1', type: 'action', status: 'ok', outputs: {result: '1 task'}, cost: 0},
         {id: 'lu1', type: 'action', status: 'ok', outputs: {result: 'posted'}, cost: 0}]};
-  });
+  }).map((run, i) => i !== 1 ? run : {...run, status: 'partial', summary: 'Partly delivered · 1 of 3 not delivered (spend cap)',
+    // The second send: the spend cap stopped the bot turn, so its one item went back to waiting.
+    listening: {...run.listening!, counts: {...run.listening!.counts, sent: 2, back: 1}},
+    steps: [...run.steps!.map(s => s.id === 'lb1' ? {...s, status: 'spend_cap', missed: 1, cost: 0} : s),
+      // A choose step the cap stopped: ok, its default destination ran, but its turn never got the item.
+      {id: 'lc1', type: 'llm', status: 'ok', outputs: {skipped: 'spend_cap', to: 'later'}, missed: 1, cost: 0}]});
 }
 
 // One page on the fake hub. viewer: the person signed in (any but the fixture's owner sees nothing editable).
 // tweak(fx) changes the fixture copy before the page reads it. proposal: a bot's pending version on the inbox one.
 async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/automations', viewer = 'dana', tweak = null, draft = false,
-                                         proposal = false, system = false, maintenance = false, heartbeat = false}: OpenAutomationsOptions = {}): Promise<AutomationsPage> {
+                                         proposal = false, system = false, maintenance = false, heartbeat = false, routes = null}: OpenAutomationsOptions = {}): Promise<AutomationsPage> {
   const fx = clone(fixture<AutomationsFixture>(FIXTURE));
   const proposalFx = fx.proposal as Proposal;
   if (system) fx.automations.push(clone(SYSTEM));
@@ -656,6 +663,10 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
         if (b.steps || b.trigger || b.destinations) {
           const bad = b.steps ? flowProblem(b.steps) : '';
           if (bad) return refuse(422, 'invalid_flow', bad);
+          // A schedule's run settings ride on the flow; any other trigger refuses them (automation_flow.py _check_release).
+          const release = 'release' in b ? b.release : a.release, kind = ((b.trigger || a.trigger) as Json).type;
+          if (release != null && kind !== 'schedule') return refuse(422, 'invalid_flow', 'release is for a scheduled routine only');
+          if ('release' in b) { if (b.release === null) delete a.release; else a.release = sortKeys(b.release) as Json; }
           // A listening's new push source gets its address, sent with this answer only.
           const had = new Set((((a.trigger as Json).sources || []) as Json[]).map(s => s.id));
           const pushed = (((b.trigger as Json | undefined)?.sources || []) as Json[]).filter(s => s.kind === 'push' && !had.has(s.id));
@@ -745,6 +756,7 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
     }
     return json(unrouted(p));
   });
+  await routes?.(page);
   await page.goto('http://tico-ui.test/' + hash);
   // Hold an automation's GET, Maintenance's PATCH or the Heartbeat's PUT until release() (fail: then answer 500).
   const hold = (id: string, fail = false) => {

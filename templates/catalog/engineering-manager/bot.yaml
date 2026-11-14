@@ -2,7 +2,6 @@ name: engineering-manager
 display_name: "Engineering Manager"
 labels: [owner:engineering-manager]
 reads: []
-reasoning_effort: medium
 max_run_minutes: 60
 routines:
   - id: weekly-engineering-summary

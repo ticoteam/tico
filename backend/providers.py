@@ -456,6 +456,64 @@ class _ById(dict):
 
 MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 
+# Where a bot's conversation compacts, in tokens: the sizes a person or agent may choose (backend/models.py CompactAt),
+# and the default for a bot, task or run with none saved. The default follows the model's family (Opus and Sonnet 300k,
+# Haiku 150k, any other 250k) and never passes the model's own window. Every call re-reads the whole context, so a 1M
+# window is room to finish a turn, not a size to grow to: a person or agent raises Compact at where a bot needs more.
+# The runner's DEFAULT_COMPACT_AT (runner-rs/src/hosts/mod.rs) is only the last resort for a turn that arrives without
+# one.
+COMPACT_SIZES = (
+    100_000,
+    150_000,
+    200_000,
+    250_000,
+    300_000,
+    400_000,
+    500_000,
+    600_000,
+    700_000,
+    800_000,
+    900_000,
+    1_000_000,
+)
+DEFAULT_COMPACT_AT = 250_000
+COMPACT_DEFAULTS = (("opus", 300_000), ("sonnet", 300_000), ("haiku", 150_000))
+
+
+def fit_compact_at(size, window):
+    """`size`, lowered to the largest size that fits a model of `window` tokens (unknown: no limit)."""
+    if not window or size <= window:
+        return size
+    return max((s for s in COMPACT_SIZES if s <= window), default=COMPACT_SIZES[0])
+
+
+def compact_default(model):
+    """Where a bot on `model` compacts when nothing is saved for it."""
+    row = MODEL_BY_ID.get(model or "") or {}
+    family = next((size for name, size in COMPACT_DEFAULTS if name in str(model or "")), DEFAULT_COMPACT_AT)
+    return fit_compact_at(family, row.get("context_tokens"))
+
+
+def with_compact_default(config):
+    """A turn's `config` with its model's default compaction size when it carries none of its own, a saved size
+    lowered to fit the model it runs on (a bot moved to a smaller model by an agent or the API keeps its size until
+    then), and its fallback's: the fallback's own size, else the turn's ("Same as bot"), lowered to fit the fallback
+    model's window."""
+    saved = config.get("compact_at")
+    if isinstance(saved, int) and not isinstance(saved, bool) and saved > 0:
+        fitted = fit_compact_at(saved, (MODEL_BY_ID.get(config.get("model") or "") or {}).get("context_tokens"))
+        out = config if fitted == saved else {**config, "compact_at": fitted}
+    else:
+        out = {**config, "compact_at": compact_default(config.get("model"))}
+    fallback = out.get("fallback")
+    if isinstance(fallback, dict) and fallback.get("model"):
+        window = (MODEL_BY_ID.get(str(fallback["model"])) or {}).get("context_tokens")
+        own = fallback.get("compact_at")
+        size = own if isinstance(own, int) and not isinstance(own, bool) and own > 0 else out["compact_at"]
+        out = {**out, "fallback": {**fallback, "compact_at": fit_compact_at(size, window)}}
+    return out
+
+
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,
 # output). The one exception is gpt-6.1-terra, Tico's approved rate (its row says so). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context

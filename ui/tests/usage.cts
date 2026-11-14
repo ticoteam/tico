@@ -1,6 +1,6 @@
 // Offline browser regression: the Usage page (account menu > Usage). The range switch asks for the right days, the rows
 // are sorted by spend whatever order they arrive in, a subscription's figure stays apart from spend, a bot opens to its
-// daily chart and routines and a CSV, every limit is changed in one Limits table, and an empty range says so. A bot over its limit is marked in the org tree and its
+// cache rate, token split, top tasks, models, a daily chart on ranges of several days, its routines and a CSV, every limit is changed in one Limits table, and an empty range says so. A bot over its limit is marked in the org tree and its
 // page leads with a banner whose link opens Usage.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -11,25 +11,35 @@ const {t} = (() => { try { return require('./support/load.cts') as import('./sup
 const {unrouted} = require('./support/routes.cts');
 
 declare function useLimits(): void;
+declare function pageUsage(): void;
 const day = (n: number) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
-const figures = (runs: number, i: number, c: number, o: number, est: number | null, sub = 0) => ({runs, input_tokens: i, cached_tokens: c, output_tokens: o, est_cost_usd: est, subscription_equiv_usd: sub, unpriced_runs: 0});
+const figures = (runs: number, i: number, c: number, o: number, est: number | null, sub = 0, w = 0) => ({runs, input_tokens: i, cached_tokens: c, cache_write_tokens: w, output_tokens: o, est_cost_usd: est, subscription_equiv_usd: sub, unpriced_runs: 0});
 const limit = (daily: number | null, monthly: number | null, percent = 0, blocked: string | null = null) => ({daily_usd: daily, monthly_usd: monthly, own_daily_usd: daily, own_monthly_usd: monthly, percent, blocked, may_edit: true, source: {}});
 // Arriving in the wrong order on purpose.
 const ROWS = [
   {bot: 'sales', name: 'Sales', department: 'Revenue', ...figures(3, 1000, 2000, 500, 0.4), low_estimate_runs: 2, share: 0.05, limit: limit(null, null)},
   {bot: 'support', name: 'Support', department: 'Revenue', ...figures(12, 900000, 2100000, 60000, 6.1, 1.5), share: 0.8, limit: limit(5, 50, 122, 'daily')},
-  {bot: 'inbox', name: 'Inbox', department: null, ...figures(5, 400, 0, 50, null), share: 0, limit: limit(null, 20, 85)},
+  {bot: 'inbox', name: 'Inbox', department: null, ...figures(5, 400, 0, 50, null, 0, 100), share: 0, limit: limit(null, 20, 85)},
   {bot: 'assistant', name: 'COO', department: 'Ops', ...figures(4, 5000, 5000, 900, 0, 2.2), share: 0.15, limit: limit(null, null)},
 ];
+// The opened bot's top tasks (the server sorts them) and its models, one with no list price.
+const TASKS = [
+  {value: 'Usage detail', name: "Usage detail explains a bot's spend", ...figures(3, 200000, 14000000, 300000, 2.0, 0, 100000), share: 0.26},
+  {value: 'A private task', name: 'A private task', ...figures(2, 100000, 4000000, 100000, 1.5), share: 0.2},
+  {value: null, name: 'Chats and other runs', ...figures(4, 0, 0, 0, 0, 1.2), share: 0.16},
+  ...Array.from({length: 7}, (_, n) => ({value: `Job ${n}`, name: `Job ${n}`, ...figures(1, 1000, 3000, 100, 0.3), share: 0.04})),
+];
+const MODELS = [{value: 'claude-opus-5-5', name: 'claude-opus-5-5', ...figures(10, 2.0e6, 43.9e6, 1.0e6, 6.1, 1.5, 1.2e6), share: 1},
+                {value: 'mystery-model', name: 'mystery-model', ...figures(2, 100000, 0, 1000, null), share: 0}];
 // The team's limits: a default, a team cap with the old hour window, a capped group, one bot with limits of its own.
 const LIMITS = {default: {daily_usd: 20, monthly_usd: null, count_subscription: false}, may_edit_default: true,
   bots: {support: {...limit(5, 50, 122, 'daily'), spent: {day: 6.1, month: 7.6}}, sales: {...limit(null, null), daily_usd: 20, spent: {day: 0.4}},
          inbox: limit(null, null), coo: limit(null, null)},
   pools: {company: {hourly_usd: 10, per_30m_usd: 4, spent: {hour: 4, '30m': 3.5}, percent: 87},
           groups: {ops: {name: 'Ops', parent: null, daily_usd: 30, spent: {day: 3}}, revenue: {name: 'Revenue', parent: null}}}};
-const total = (rows: {runs: number; est_cost_usd: number | null; subscription_equiv_usd: number; low_estimate_runs?: number}[]) => rows.reduce<{runs: number; est_cost_usd: number; subscription_equiv_usd: number; input_tokens: number; cached_tokens: number; output_tokens: number; unpriced_runs: number; low_estimate_runs: number}>((t, r) => ({runs: t.runs + r.runs, est_cost_usd: t.est_cost_usd + (r.est_cost_usd || 0), subscription_equiv_usd: t.subscription_equiv_usd + r.subscription_equiv_usd,
-                                              input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: t.low_estimate_runs + (r.low_estimate_runs || 0)}),
-                                     {runs: 0, est_cost_usd: 0, subscription_equiv_usd: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: 0});
+const total = (rows: {runs: number; est_cost_usd: number | null; subscription_equiv_usd: number; low_estimate_runs?: number}[]) => rows.reduce<{runs: number; est_cost_usd: number; subscription_equiv_usd: number; input_tokens: number; cached_tokens: number; cache_write_tokens: number; output_tokens: number; unpriced_runs: number; low_estimate_runs: number}>((t, r) => ({runs: t.runs + r.runs, est_cost_usd: t.est_cost_usd + (r.est_cost_usd || 0), subscription_equiv_usd: t.subscription_equiv_usd + r.subscription_equiv_usd,
+                                              input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: t.low_estimate_runs + (r.low_estimate_runs || 0)}),
+                                     {runs: 0, est_cost_usd: 0, subscription_equiv_usd: 0, input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: 0});
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
@@ -65,12 +75,19 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
         if (q.bot) {
           const days = [], from = new Date(q.from + 'T00:00:00Z'), to = new Date(q.to + 'T00:00:00Z');
           for (let d = from, n = 0; d <= to; d = new Date(+d + 864e5), n++)
-            days.push({day: d.toISOString().slice(0, 10), ...figures(n % 2 ? 2 : 0, 100, 0, 10, n % 3 ? 1 + n : 0, n % 2 ? 0.5 : 0)});
-          return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', bot: q.bot, name: 'Support', department: 'Revenue', totals: figures(12, 0, 0, 0, 6.1, 1.5), daily: days,
-                       routines: [{routine: 's1', title: 'Morning triage', ...figures(7, 0, 0, 0, 4.2)}, {routine: null, title: 'Other runs', ...figures(5, 0, 0, 0, 1.9, 1.5)}]});
+            days.push({day: d.toISOString().slice(0, 10), ...(n === 3 ? figures(2, 100, 0, 10, null, 0, 5) : figures(n % 2 ? 2 : 0, 100, 0, 10, n % 3 ? 1 + n : 0, n % 2 ? 0.5 : 0, 5))});   // day 3: unpriced runs only
+          if (q.bot === 'inbox')   // runs that reported no tokens
+            return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', bot: q.bot, name: 'Inbox', totals: figures(3, 0, 0, 0, null), daily: days, routines: [],
+                         tasks: [{value: null, name: 'Chats and other runs', ...figures(3, 0, 0, 0, null), share: 0}], tasks_more: {count: 0, ...figures(0, 0, 0, 0, 0)},
+                         models: [{value: null, name: 'Not recorded / not applicable', ...figures(3, 0, 0, 0, null), share: 0}]});
+          return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', bot: q.bot, name: 'Support', department: 'Revenue',
+                       totals: figures(12, 2.1e6, 43.9e6, 1.0e6, 6.1, 1.5, 1.2e6), daily: days,
+                       routines: [{routine: 's1', title: 'Morning triage', ...figures(7, 0, 0, 0, 4.2)}, {routine: null, title: 'Other runs', ...figures(5, 0, 0, 0, 1.9, 1.5)}],
+                       tasks: TASKS, tasks_more: {count: 4, ...figures(4, 1000, 9000, 100, 0.8)}, models: MODELS});
         }
         const rows = empty ? [] : ROWS.filter(r => !q.department || r.department === q.department);
-        return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', group: 'bot', department: q.department || null, totals: total(rows), rows, departments: ['Ops', 'Revenue']});
+        return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', group: 'bot', department: q.department || null, totals: total(rows), rows, departments: ['Ops', 'Revenue'],
+                     dimensions: {harness: ['claude', 'codex'], model: ['claude-opus-5-5', 'claude-sonnet-5'], effort: [], subscription: []}});
       }
       if (p === '/api/employees') return json([{name: 'support', display_name: 'Support', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
@@ -140,6 +157,9 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['Support', 'COO', 'Sales', 'Inbox']);
     assert.match(await page.locator('.use-total').innerText(), /^\$10\.20 API-equivalent · 24 runs/);
     assert.equal(await page.locator('.use-note').count(), 1, 'API-equivalent is said once');
+    assert.deepEqual(await page.locator('#use-total').evaluate(el => [getComputedStyle(el).fontSize, getComputedStyle(el).fontWeight]), ['16px', '600'], 'the total is 16px/600');
+    assert.equal(await page.locator('.use-note').innerText(), 'API-equivalent · 24 runs', 'the rest of the line is small and muted');
+    assert.equal(await page.locator('.use-note').evaluate(el => getComputedStyle(el).fontSize), '12px');
     assert.equal(await page.locator('#use-total').getAttribute('title'), '$6.50 billed on API keys or Tico Gateway; the rest ran on subscriptions');
     const support = page.locator('.use-row[data-bot=support]');
     assert.match(await support.locator('.use-runs').innerText(), /12 runs/);
@@ -149,10 +169,75 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     assert.equal(await page.locator('.use-row[data-bot=assistant] .use-est').getAttribute('title'), 'All on subscriptions');
     // Runs on a model that charges more for long prompts, without each request's tokens, may read low.
     assert.match(await page.locator('.use-row[data-bot=sales] .use-cost').innerText(), /\$0\.40\s*estimate, may be low/);
-    assert.match(await page.locator('.use-total').innerText(), /Estimate, may be low: 2 runs on a model that charges more for long prompts/);
+    assert.match(await page.locator('.use-total').innerText(), /24 runs · may be low/);
+    assert.match(await page.locator('.use-total .use-low').getAttribute('title') || '', /^2 runs on a model that charges more for long prompts/);
     assert.equal((await page.locator('.use-row[data-bot=inbox] .use-cost').innerText()).trim(), '—', 'a model with no price has no cost');
-    assert.match(await page.locator('.use-row[data-bot=inbox] .use-tok').innerText(), /450 tokens/);
+    assert.match(await page.locator('.use-row[data-bot=inbox] .use-tok').innerText(), /550 tokens/, 'cache writes count as tokens');
     assert.equal(await page.locator('.use-row[data-bot=support] .use-share i').evaluate(e => e.style.width), '100%');
+
+    // The answer first: the first bot row starts within 200px of the title, and how the total is counted waits behind
+    // the help button beside it.
+    const titleTop = (await page.locator('.use-head h1').boundingBox())!.y, rowTop = (await page.locator('.use-row').first().boundingBox())!.y;
+    assert.ok(rowTop - titleTop < 200, `the list starts ${rowTop - titleTop}px below the title`);
+    const why = page.locator('#use-why-text'), help = page.getByRole('button', {name: 'How this is counted'});
+    assert.equal(await why.isHidden(), true, 'the caveats wait');
+    await help.click();
+    assert.match(await why.innerText(), /^API list price, including runs on subscriptions\..*2 runs on a model that charges more/s);
+    assert.equal(await help.getAttribute('aria-expanded'), 'true');
+    await help.click();
+    assert.equal(await why.isHidden(), true, 'a second click hides them');
+
+    // "Set limit" waits for the row's hover or focus; a limit or a chip always shows.
+    const setLimit = page.locator('.use-row[data-bot=sales] button.use-limit');
+    const opacity = (l: import('playwright').Locator) => l.evaluate(e => getComputedStyle(e).opacity);
+    await page.mouse.move(1, 1);
+    assert.equal(await opacity(setLimit), '0', 'Set limit is not shown at rest');
+    assert.equal(await opacity(page.locator('.use-row[data-bot=support] button.use-limit')), '1', 'a limit shows');
+    await page.locator('.use-row[data-bot=sales] .use-line').hover();
+    assert.equal(await opacity(setLimit), '1', 'on hover');
+    await page.mouse.move(1, 1);
+    await setLimit.focus();
+    assert.equal(await opacity(setLimit), '1', 'on focus');
+    await setLimit.blur();
+
+    // Filter: one button in the bar. Its panel puts the cursor in its first select and shows only selects with a choice
+    // (Group, Harness; not Model with one value); a filter set counts on the button; Group by and Sort by do not.
+    // Escape closes it and gives the button the focus; Reset clears the filters and keeps the sort.
+    const filter = page.locator('button.use-filter'), panel = page.locator('#use-filter-panel');
+    assert.equal(await filter.locator('.use-filter-t').innerText(), 'Filter');
+    assert.equal(await panel.isHidden(), true);
+    await filter.click();
+    assert.equal(await filter.getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'use-dept', 'the first select has the focus');
+    assert.deepEqual(await panel.locator('.use-frow:not([hidden]) > span').allInnerTexts(), ['Group', 'Harness', 'Model', 'Group by', 'Sort by']);
+    await panel.locator('[data-use-filter=harness]').selectOption('codex');
+    await page.waitForFunction(() => document.querySelector('.use-filter')?.textContent?.includes('Filter · 1'));
+    assert.equal(asked.at(-1)!.harness, 'codex');
+    await panel.locator('#use-dept').selectOption('Revenue');
+    await panel.locator('#use-sort').selectOption('runs');
+    await page.waitForFunction(() => document.querySelector('.use-filter')?.textContent?.includes('Filter · 2'));
+    assert.equal(await filter.getAttribute('aria-label'), 'Filter, 2 on', 'Group by and Sort by do not count');
+    await page.keyboard.press('Escape');
+    assert.equal(await panel.isHidden(), true);
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('use-filter')), true, 'focus back on Filter');
+    await filter.click();
+    await panel.getByRole('button', {name: 'Reset'}).click();
+    await page.waitForFunction(() => document.querySelectorAll('.use-row').length === 4);
+    assert.equal(await filter.locator('.use-filter-t').innerText(), 'Filter', 'Reset clears the filters');
+    assert.equal(await filter.getAttribute('aria-label'), null);
+    assert.equal(await panel.locator('#use-sort').inputValue(), 'runs', 'Reset keeps Sort by');
+    assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['Support', 'Inbox', 'COO', 'Sales'], 'the list stays sorted by runs after Reset');
+    await panel.locator('#use-sort').selectOption('cost');
+    await page.locator('.use-head h1').click();
+    assert.equal(await panel.isHidden(), true, 'a click outside closes it');
+    // At 400px the panel stays in the window.
+    await page.setViewportSize({width: 400, height: 844});
+    await filter.click();
+    const pb = (await panel.boundingBox())!;
+    assert.ok(pb.x >= 0 && pb.x + pb.width <= 400, `the panel fits: ${JSON.stringify(pb)}`);
+    await filter.click();
+    assert.equal(await panel.isHidden(), true, 'the button closes it');
+    await page.setViewportSize({width: 1440, height: 900});
 
     // The limit cell: the caps, a warning chip near one and a Paused chip at one; a click opens it in Limits.
     assert.equal((await page.locator('.use-row[data-bot=support] .use-limit').innerText()).replace(/\s+/g, ' ').trim(), 'Paused $5/day · $50/mo');
@@ -221,27 +306,129 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
 
     // The department filter.
     await page.locator('.use-seg button', {hasText: '7 days'}).click();
+    await page.locator('button.use-filter').click();
     await page.locator('#use-dept').selectOption('Ops');
     await page.waitForFunction(() => document.querySelectorAll('.use-row').length === 1);
     assert.equal(asked.at(-1)!.department, 'Ops');
     assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['COO']);
     await page.locator('#use-dept').selectOption('');
     await page.waitForFunction(() => document.querySelectorAll('.use-row').length === 4);
+    await page.keyboard.press('Escape');
 
-    // A bot opens to a daily chart, its top routines and a CSV; clicking again closes it.
+    // A bot opens to what explains its spend: a summary with its cache rate, where the tokens go, its top tasks and its
+    // models, a labelled daily chart, its routines and a CSV; clicking again closes it.
+    await page.locator('button.use-filter').click();
+    await page.locator('#use-filter-panel [data-use-filter=model]').selectOption('claude-opus-5-5');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy]) .use-row'));
     await support.locator('.use-line').click();
-    await support.locator('.use-col').first().waitFor();
-    assert.equal(await support.locator('.use-col').count(), 7);
+    const detail = support.locator('.use-detail');
+    await detail.locator('.use-sum').waitFor();
+    assert.equal(asked.at(-1)!.bot, 'support');
+    assert.equal(asked.at(-1)!.model, 'claude-opus-5-5', 'the detail counts only the runs the page filters to');
+    const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
+    assert.equal(flat(await detail.locator('.use-sum').innerText()), '$7.60 API-equivalent · 12 runs · 48.2M tokens · 93% from cache');
+    assert.equal(await detail.locator('.use-sum .use-est').getAttribute('title'), '$6.10 billed on API keys or Tico Gateway; the rest ran on subscriptions');
+    assert.equal(await detail.locator('.use-sum .use-cache').getAttribute('title'),
+                 'Share of input tokens read from cache. On most models a cache read costs about a tenth of new input.');
+    // Tokens: one bar in four labelled parts, in a fixed order, each with its count and share.
+    assert.equal(await detail.locator('.use-sec h3').first().innerText(), 'Tokens');
+    assert.deepEqual((await detail.locator('.use-legend li').allInnerTexts()).map(flat),
+                     ['Cache reads 43.9M · 91%', 'Cache writes 1.2M · 2%', 'New input 2.1M · 4%', 'Output 1M · 2%']);
+    assert.deepEqual(await detail.locator('.use-mix i').evaluateAll(els => els.map(e => e.dataset.part)), ['read', 'write', 'new', 'output']);
+    // Tasks: ten by cost as the server sends them, then the rest on one line.
+    const tasks = detail.locator('.use-tasks tbody tr');
+    assert.equal(await tasks.count(), 11);
+    assert.deepEqual((await tasks.nth(0).locator('td').allInnerTexts()).map(flat).slice(0, 5), ["Usage detail explains a bot's spend", '3', '14.6M', '98%', '$2.00']);
+    assert.equal(flat(await tasks.nth(1).locator('td').first().innerText()), 'A private task');
+    assert.equal(flat(await tasks.nth(2).locator('td').first().innerText()), 'Chats and other runs');
+    assert.equal(flat(await tasks.nth(10).innerText()), '4 more tasks · $0.80');
+    assert.equal(await tasks.nth(0).locator('.use-share i').evaluate(e => e.style.width), '26%');
+    // Models: every one, an unpriced one with a dash for cost.
+    const models = detail.locator('.use-models tbody tr');
+    assert.equal(await models.count(), 2);
+    assert.equal(flat(await models.nth(1).locator('td').nth(4).innerText()), '—');
+    assert.deepEqual(await detail.locator('.use-sec h3').allInnerTexts(), ['Tokens', 'Tasks', 'Models', 'Cost per day', 'Automations']);
+    // Cost per day, on a range of several days: a column a day, the top value on an axis line, the first and last dates.
+    assert.equal(await detail.locator('.use-col').count(), 7);
+    assert.equal(await detail.locator('.use-top').innerText(), '$6.50');
+    const shortDay = (d: string) => page.evaluate(d => new Date(d + 'T00:00:00Z').toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'}), d);
+    assert.deepEqual(await detail.locator('.use-axis span').allInnerTexts(), [await shortDay(day(6)), await shortDay(day(0))]);
+    assert.equal(await detail.locator('.use-col').nth(1).getAttribute('title'), `${await shortDay(day(5))} · $2.50 · 2 runs · 0% from cache`);
+    assert.equal(await detail.locator('.use-col').nth(3).getAttribute('title'), `${await shortDay(day(3))} · — · 2 runs · 0% from cache`, 'a day of unpriced runs has no cost, not $0.00');
+    assert.doesNotMatch(await detail.innerText(), /a day at most/);
     assert.match(await support.locator('.use-routines tbody tr').first().innerText(), /Morning triage\s+7\s+\$4\.20/);
     assert.match(await support.locator('.use-routines tbody tr').nth(1).innerText(), /Other runs.*\$3\.40/s);
-    assert.equal(asked.at(-1)!.bot, 'support');
     const [download] = await Promise.all([page.waitForEvent('download'), support.locator('[data-use-csv]').click()]);
     assert.match(download.suggestedFilename(), /^usage-support-\d{4}-\d\d-\d\d-\d{4}-\d\d-\d\d\.csv$/);
     const csv = fs.readFileSync(await download.path(), 'utf8').trim().split('\n');
-    assert.equal(csv[0], 'day,runs,input_tokens,cached_tokens,output_tokens,est_cost_usd,subscription_equiv_usd');
+    assert.equal(csv[0], 'day,runs,input_tokens,cached_tokens,cache_write_tokens,output_tokens,est_cost_usd,subscription_equiv_usd,cache_rate');
+    assert.match(csv[1]!, /^\d{4}-\d\d-\d\d,\d+,100,0,5,10,.*,0$/, 'each day carries its cache writes and its cache rate');
     assert.equal(csv.length, 8);
+
+    // At phone width every section fits, and a task row keeps its name and cost.
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'no sideways scroll');
+    const row = tasks.nth(0), box = await row.boundingBox();
+    for (const cell of ['td:first-child', '.use-c-cost']) {
+      const b = await row.locator(cell).boundingBox();
+      assert.ok(b && b.width > 0 && b.x >= 0 && b.x + b.width <= 390, cell + ' on screen');
+    }
+    assert.ok(box && box.x + box.width <= 390);
+    assert.equal(await row.locator('.use-c-runs').isHidden(), true);
+    assert.equal(await row.locator('.use-c-tok').isHidden(), true);
+    const bar = await detail.locator('.use-mix').boundingBox(), legend = await detail.locator('.use-legend').boundingBox();
+    assert.ok(bar && legend && legend.y >= bar.y + bar.height, 'the legend sits under the bar');
+    await page.setViewportSize({width: 1440, height: 900});
+
+    // One day: no daily chart at all.
+    await page.locator('.use-seg button', {hasText: 'Today'}).click();
+    await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy]) .use-row'));
+    await support.locator('.use-line').click();
+    await detail.locator('.use-sum').waitFor();
+    assert.equal(await detail.locator('.use-chart, .use-col').count(), 0);
+    assert.doesNotMatch(await detail.innerText(), /a day at most|Cost per day/);
     await support.locator('.use-line').click();
     assert.equal(await support.locator('.use-detail').isHidden(), true);
+
+    // A bot whose runs reported no tokens: no cache rate and no empty bar.
+    const inbox = page.locator('.use-row[data-bot=inbox]');
+    await inbox.locator('.use-line').click();
+    await inbox.locator('.use-detail .use-sum').waitFor();
+    assert.match(flat(await inbox.locator('.use-sum').innerText()), / · 0 tokens · cache rate —$/);
+    assert.equal(flat(await inbox.locator('.use-sec').first().innerText()), 'Tokens No token counts reported for 3 runs');
+    assert.equal(await inbox.locator('.use-mix').count(), 0);
+    await inbox.locator('.use-line').click();
+    await page.locator('button.use-filter').click();
+    await page.locator('#use-filter-panel [data-use-filter=model]').selectOption('');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy]) .use-row'));
+
+    // One day has no daily chart: a single bar would only fill the width. The automations and the CSV stay.
+    await page.locator('.use-seg button', {hasText: 'Today'}).click();
+    await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy])'));
+    await support.locator('.use-line').click();
+    await support.locator('.use-routines').waitFor();
+    assert.equal(await support.locator('.use-chart, .use-axis').count(), 0, 'no chart for a single day');
+    assert.match(await support.locator('.use-routines tbody tr').first().innerText(), /Morning triage/);
+    assert.equal(await support.locator('[data-use-csv]').count(), 1);
+    await support.locator('.use-line').click();
+    await page.locator('.use-seg button', {hasText: '7 days'}).click();
+    await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy])'));
+
+    // Drawing Usage again replaces the Filter panel's click-outside listener; listeners do not pile up per visit.
+    const listening = await page.evaluate(() => {
+      let n = 0;
+      const add = document.addEventListener.bind(document), remove = document.removeEventListener.bind(document);
+      const counts = (type: string, o?: boolean | AddEventListenerOptions) => type === 'click' && (o === true || (typeof o === 'object' && !!o.capture));
+      document.addEventListener = ((type: string, f: EventListenerOrEventListenerObject, o?: boolean | AddEventListenerOptions) => { if (counts(type, o)) n++; add(type, f, o); }) as typeof document.addEventListener;
+      document.removeEventListener = ((type: string, f: EventListenerOrEventListenerObject, o?: boolean | EventListenerOptions) => { if (counts(type, o)) n--; remove(type, f, o); }) as typeof document.removeEventListener;
+      pageUsage(); pageUsage(); pageUsage();
+      document.addEventListener = add; document.removeEventListener = remove;
+      return n;
+    });
+    assert.equal(listening, 0, 'three redraws leave one click-outside listener, not four');
+    await page.locator('.use-row').first().waitFor();
 
     // Nothing in the range.
     empty = true;

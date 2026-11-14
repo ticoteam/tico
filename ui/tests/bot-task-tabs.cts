@@ -31,7 +31,7 @@ interface Task {
   labels: string[]; version: number; created_at: string; updated_at: string;
   pipeline_id: string; stage_id: string; turn: Turn | null; late: null; snoozed: boolean; done_at?: string;
 }
-interface PageFixture { file_id: string; title: string; bot: string; updated_at: string; archived: boolean }
+interface PageFixture { file_id: string; title: string; bot: string; updated_at: string; archived: boolean; restricted?: boolean }
 interface Server {
   layouts: Record<string, Layout>;
   puts: {bot: string; body: Layout}[];
@@ -73,7 +73,16 @@ const CONDITIONS: Record<'needs' | 'active' | 'blocked', Cond[]> = {
 const normalized = (tab: Tab): Tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin as keyof typeof CONDITIONS]} : tab;
 const WIDGETS: Widget[] = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
 const PAGES: Record<string, PageFixture> = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated_at: ago(90), archived: false},
-  'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated_at: ago(30), archived: false}};
+  'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated_at: ago(30), archived: false},
+  'page:f3': {file_id: 'f3', title: 'Board pack for the November review with every number the finance team asked for', bot: 'lead', updated_at: ago(10), archived: false, restricted: true}};
+// Built-in cards pinned to the sidebar: what GET /api/v2/places/bot:<slug> answers for a `card:<id>` widget (backend/cards.py).
+const CARDS: Record<string, unknown> = {
+  'card:c1': {id: 'c1', template: 'my_tasks', title: '', heading: 'My tasks', name: 'My tasks', team_name: '', hidden: false, settings: {},
+    data: {count: 8, tasks: [{id: 't1', title: 'Ship the release', due_at: null}]}},
+  'card:c2': {id: 'c2', template: 'updates', title: '', heading: 'Updates', name: 'Updates', team_name: '', hidden: false, settings: {},
+    data: {unread: 0, updates: []}},
+  'card:c3': {id: 'c3', template: 'spend', title: '', heading: 'Spend', name: 'Spend', team_name: '', hidden: false, settings: {},
+    data: {spent: 1240, budget: 2000, month: 'Nov'}}};
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
 const matches = (bot: string, tab: Tab, t: Task): boolean => (t.owner_id === 'bot:' + bot || t.requester_id === 'bot:' + bot) && tab.conditions!.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
@@ -150,7 +159,8 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
     // The sidebar's pages (backend/cards.py): what GET /api/v2/places/bot:<slug> answers for the saved widgets.
     const pinned = decodeURIComponent(p).match(/^\/api\/v2\/places\/bot:([^/]+)$/);
     if (pinned) return json({place: 'bot:' + pinned[1], kind: 'bot', saved: true, can_edit: pinned[1] === 'lead',
-      pins: ((server.layouts[pinned[1]!] || ({} as Partial<Layout>)).widgets || []).filter(w => PAGES[w.id]).map((w, i) => ({id: 'p' + i, item: w.id, position: i, size: 'medium', page: PAGES[w.id]}))});
+      pins: ((server.layouts[pinned[1]!] || ({} as Partial<Layout>)).widgets || []).filter(w => PAGES[w.id] || CARDS[w.id])
+        .map((w, i) => ({id: 'p' + i, item: w.id, position: i, size: 'medium', ...(PAGES[w.id] ? {page: PAGES[w.id]} : {card: CARDS[w.id]})}))});
     if (p === '/api/v2/cards/choices') return json({templates: [], teams: [], kpis: [], pages: Object.values(PAGES)});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -175,13 +185,13 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       const shows = () => rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w') as unknown as HTMLElement[])].filter(w => w.offsetParent).map(w => w.dataset.widget));
       const goto = async (hash: string) => {
         await page.goto('https://tico-ui.test/' + hash);
-        if (phone) await page.locator('.bot-switch button', {hasText: 'Tasks'}).click().catch(() => {});
+        if (phone) await page.locator('.bot-switch button[aria-label="Tasks"]').click().catch(() => {});
       };
 
       // Loading until the layout arrives: no widget is drawn and then moved.
       await goto('#/bot/lead');
       await page.waitForFunction(() => document.querySelector('#pane-tasks')?.hasAttribute('data-loading'));
-      if (phone) await page.locator('.bot-switch button', {hasText: 'Tasks'}).click();
+      if (phone) await page.locator('.bot-switch button[aria-label="Tasks"]').click();
       await rail.locator('.bot-rail-loading').waitFor();
       assert.deepEqual(await shows(), [], at + ': nothing drawn while the layout loads');
       release();
@@ -480,6 +490,76 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
     assert.deepEqual(await shown(), ['page:f2']);
     assert.deepEqual(paged.errors, []);
     await paged.context.close();
+    // Pinned pages with no framed preview (a media install: no src) are rows like the rail's others: a mark and the
+    // title, the whole row the link, no Open button, status line, version or box; two pins in a row stack as one list.
+    for (const viewport of [{width: 1280, height: 900}, {width: 390, height: 844}]) {
+      const phone = viewport.width < 760, at = 'pinned rows ' + viewport.width;
+      const rows: Server = {layouts: {lead: {tabs: DEFAULT, widgets: [{id: 'page:f1', hidden: false, height: null}, {id: 'page:f3', hidden: false, height: null},
+        ...WIDGETS.map(w => ({...w, hidden: true}))]}}, puts: [], page: 200};
+      const pinned = await open(browser, viewport, 'light', rows);
+      await pinned.page.goto('https://tico-ui.test/#/bot/lead' + (phone ? '/tasks' : ''));
+      const rr = pinned.page.locator('#pane-tasks');
+      await rr.locator('.bot-w[data-widget="page:f3"] a.pg-open').waitFor();
+      const row = (id: string) => rr.locator(`.bot-w[data-widget="${id}"] a.pg-open`);
+      assert.equal(await rr.locator('.pg-open-btn, .pg-status, .pg-ver').count(), 0, at + ': no Open button, updated line or version');
+      assert.deepEqual(await rr.locator('.pg-open-title').allInnerTexts(), ['Weekly numbers', PAGES['page:f3']!.title], at + ': the titles');
+      const style = await row('page:f1').evaluate(el => { const c = getComputedStyle(el); return {border: c.borderTopWidth, bg: c.backgroundColor}; });
+      assert.deepEqual(style, {border: '0px', bg: 'rgba(0, 0, 0, 0)'}, at + ': no box');
+      for (const id of ['page:f1', 'page:f3']) {
+        const h = (await row(id).boundingBox())!.height;
+        assert.ok(phone ? h >= 44 : Math.round(h) === 32, `${at}: ${id} is ${h}px tall`);
+      }
+      // A restricted page shows a lock in place of the page icon; the tooltip is the full title.
+      assert.equal(await row('page:f1').locator('.pg-mark .nav-icon').innerText(), 'article');
+      assert.equal(await row('page:f3').locator('.pg-mark .nav-icon').innerText(), 'lock', at + ': a lock for a restricted page');
+      assert.equal(await row('page:f3').getAttribute('title'), PAGES['page:f3']!.title, at + ': the full title as the tooltip');
+      // A long title stays on one line, cut with an ellipsis, inside the rail.
+      const cut = await row('page:f3').locator('.pg-open-title').evaluate(el => ({ellipsis: getComputedStyle(el).textOverflow, wraps: el.getBoundingClientRect().height > 24, over: el.scrollWidth > el.clientWidth}));
+      assert.deepEqual(cut, {ellipsis: 'ellipsis', wraps: false, over: true}, at + ': one line, ending in an ellipsis');
+      const railBox = (await rr.boundingBox())!, rowBox = (await row('page:f3').boundingBox())!;
+      assert.ok(rowBox.x >= railBox.x - 1 && rowBox.x + rowBox.width <= railBox.x + railBox.width + 1, at + ': nothing overflows the rail');
+      // Two pins in a row: no hairline and no gap between them.
+      const joint = await rr.evaluate(el => {
+        const [a, b] = ['f1', 'f3'].map(id => el.querySelector(`.bot-w[data-widget="page:${id}"] > .rail-sec`) as HTMLElement);
+        const ra = a!.querySelector('a.pg-open')!.getBoundingClientRect(), rb = b!.querySelector('a.pg-open')!.getBoundingClientRect();
+        return {line: getComputedStyle(b!).borderTopWidth, gap: Math.round(rb.top - ra.bottom)};
+      });
+      assert.deepEqual(joint, {line: '0px', gap: 0}, at + ': two pins stack as consecutive rows');
+      // Hover shades the row; a focused row shows the focus ring, and Enter opens the page.
+      if (!phone) {
+        await row('page:f1').hover();
+        await pinned.page.waitForFunction(() => getComputedStyle(document.querySelector('#pane-tasks .bot-w[data-widget="page:f1"] a.pg-open')!).backgroundColor !== 'rgba(0, 0, 0, 0)');
+        if (process.env.TICO_UI_SHOTS) await rr.screenshot({path: require('node:path').join(process.env.TICO_UI_SHOTS, 'bot-sidebar-page-rows.png')});
+        await pinned.page.mouse.move(0, 0);
+        await row('page:f1').focus();
+        await pinned.page.keyboard.press('Tab');
+        assert.equal(await row('page:f3').evaluate(el => document.activeElement === el && el.matches(':focus-visible') ? getComputedStyle(el).outlineStyle : 'not focused'), 'solid', at + ': the focus ring');
+        assert.deepEqual(pinned.errors, [], at + ': page errors');
+        await pinned.page.keyboard.press('Enter');
+        await pinned.page.waitForFunction(() => location.hash === '#/page/f3');
+      } else {
+        assert.deepEqual(pinned.errors, [], at + ': page errors');
+        // Anywhere on the row opens the page, its far end too.
+        const box = (await row('page:f1').boundingBox())!;
+        await pinned.page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+        await pinned.page.waitForFunction(() => location.hash === '#/page/f1');
+      }
+      await pinned.context.close();
+    }
+    // A card in the sidebar (#355): its count in the rail header's own count style, none at 0; its figures 16px at most.
+    const carded = await open(browser, {width: 1280, height: 900}, 'light', {puts: [], page: 200, layouts: {lead: {tabs: DEFAULT,
+      widgets: ['card:c1', 'card:c2', 'card:c3'].map(id => ({id, hidden: false, height: null}))}}});
+    await carded.page.goto('https://tico-ui.test/#/bot/lead');
+    const crail = carded.page.locator('#pane-tasks');
+    await crail.locator('.bot-w[data-widget="card:c3"] .dash-big').waitFor();
+    const head = (id: string) => crail.locator(`.bot-w[data-widget="${id}"] .bot-pin > h2.rail-h`);
+    assert.equal(await head('card:c1').textContent(), 'My tasks 8', 'shown as MY TASKS 8, in the rail header\'s small caps');
+    assert.equal(await head('card:c1').locator('.cnt').innerText(), '8');
+    assert.equal(await crail.locator('.bot-w[data-widget="card:c1"] .dash-big').count(), 0, 'no figure under the header');
+    assert.equal(await head('card:c2').locator('.cnt').count(), 0, 'no count at 0');
+    assert.equal(await crail.locator('.bot-w[data-widget="card:c3"] .dash-big strong').evaluate(el => getComputedStyle(el).fontSize), '16px');
+    assert.deepEqual(carded.errors, []);
+    await carded.context.close();
     console.log('bot-task-tabs: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

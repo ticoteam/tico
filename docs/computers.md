@@ -14,8 +14,8 @@ reports an app-salted hash of the OS device identity; the raw identity stays on 
 **Settings → Models** holds the company's model settings:
 
 - **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
-- **Tico Gateway**: one switch, **Use as fallback** (used when a computer has no subscription, or a plan runs out). The
-  [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
+- **Tico Gateway**: one switch, **Use until a computer is signed in** (used while a computer has no subscription and no
+  login of its own). The [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
 - **Defaults**: **Default model**, **Decisions**, **Meeting model**, **Fall back when a plan runs out** and **Check model**.
 - **Limits**: the [company turn levels](#change-the-company-turn-levels).
 
@@ -26,7 +26,12 @@ Old links to AI providers, Subscriptions or the Models card on Computers open Mo
 
 A subscription is a login or key the company saves once and gives to computers. A bot doesn't pick one: it runs on its
 computer, and a run uses, in order, that computer's subscription for the run's AI tool, the login signed in on the
-computer, then Tico Gateway when it is on. Otherwise the run waits.
+computer, then Tico Gateway where that computer falls back to it. Otherwise the run waits.
+
+Each computer's window has **Fall back to Tico Gateway**, under Connections, off for every computer until an owner or
+admin turns it on. When every plan given to a computer for a tool is at its limit (or needs reconnecting) and it has no
+login of its own, its bots wait for the first plan to reset unless that switch is on; with it on they run on Tico
+Gateway meanwhile. The line under the computer's plan picker says which: "on the Gateway" or "waiting".
 
 1. Open **Settings → Models** and click **Add subscription**.
 2. Tap **Claude plan** or **ChatGPT plan**. The sign-in starts at once on one of the company's computers. With none
@@ -35,6 +40,15 @@ computer, then Tico Gateway when it is on. Otherwise the run waits.
    code: paste it in the sheet (a pasted code is sent by itself). For ChatGPT, copy the code the sheet shows and enter it
    on ChatGPT's page. The sheet closes once Tico has saved the result, and the list shows the new row.
 4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
+
+Instead of one plan, the picker can name a person under **People** ("Ana's plans · 3"): the computer then uses every
+plan that person owns for that tool, one at a time. A turn starts on the plan with usage left whose weekly reset comes
+soonest, and stays on it until it reaches its limit or needs reconnecting. The next turn then moves to the next plan in a
+fresh session (never in the middle of one). A plan with no usage reading yet comes after those with one. When every plan
+is at its limit, turns run as for a single plan at its limit: the computer's own login, then the Gateway, else they wait.
+A plan the person adds later joins on its own, and one given to someone else leaves. API keys have no owner and are
+never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its
+limit until Fri 09:00"); `tico subscription list` shows the same for agents.
 
 The plan is named after itself (*Claude*, then *Claude 2*) and its owner is the person who signed in; change either
 under the row's **⋯ → Edit**. An API key is its own small form: the key and, if you like, a name. **Paste instead**,
@@ -46,7 +60,9 @@ session of that tool there starts fresh. When tasks are running, Tico asks first
 subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
 picker until it updates.
 
-Each row shows a plan's owner (blank for an API key), how many computers use it and its usage: the share of the 5-hour or weekly window used and the time until that window resets (such as `4d 15h`), or an API key's cost this month. Hover the usage to see the share left and the reset time. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the old one. The page asks first and says how many. **Edit** in the same menu changes the name or, for a plan, the owner.
+Settings → Models lists subscriptions under each owner's avatar and name, yours first, with API keys under **No
+owner**. Inside a group each tool's plans are in the order a person's plans are used: the plan in use names its computer,
+the next one is marked, and a plan at its limit says until when. Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used and the time until that window resets (such as `4d 15h`), or an API key's cost this month. Hover the usage to see the share left and the reset time. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the old one. The page asks first and says how many. **Edit** in the same menu changes the name or, for a plan, the owner.
 
 Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
 cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway
@@ -299,18 +315,23 @@ while a turn runs on a subscription, another bot's turn on the same computer cou
 #### Bots' models follow the plans
 
 When a Claude or ChatGPT plan is added, connected or reconnected, or one is removed or **Needs reconnect**, each bot made
-from a template moves to its role's model for the plans that work now (`backend/plan_models.py` `SETS`). A start does the
-same, so a company that had a plan before this keeps up. With no plan, nothing moves. An API key is not a plan.
+from a template moves to its role's model for the plans that work now (`backend/plan_models.py` `SETS`), and its tasks to
+its role's task model (`TASK_SETS`). A start does the same, so a company that had a plan before this keeps up. With no
+plan, nothing moves. An API key is not a plan.
 
-| Role | Claude only | ChatGPT only | Both |
-| --- | --- | --- | --- |
-| Builder, Reviewer 1, managers, the Assistant, every other role | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
-| Reviewer 2 | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
-| Librarian, Rules, Updates, Automations and Finance Owners | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Terra, medium |
+| Role | | Claude only | ChatGPT only | Both |
+| --- | --- | --- | --- | --- |
+| Builder, Reviewer 1, every Owner, Product Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
+| | tasks | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
+| The Assistant (it chats; no task model) | bot | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
+| Reviewer 2 (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
+| Librarian, Rules, Updates, Automations and Finance Owners (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Terra, medium |
 
 A model the catalog does not offer yet is replaced by the set's first offered model on the same tool. A bot whose model a
-person changed (Settings, the model picker, a manager bot or the Assistant) keeps it; undoing that change gives it back to
-the plans. Each move is a `bot.model_changed` event with `why: plans`. Decision models (pipeline judges, Decide) stay on
+person changed (Settings, the model picker, a manager bot or the Assistant) keeps it, and gets no task model from the
+plans; undoing that change gives it back to the plans. A task model a person set stays the same way. A task model keeps
+its task context length when the plans move it. Each move is a `bot.model_changed` or `bot.task_model_changed` event
+with `why: plans`. Decision models (pipeline judges, Decide) stay on
 the Gateway. On Tico Cloud, setup's **Done** waits for a plan or key.
 
 ### Bots sharing one ChatGPT sign-in run side by side
@@ -437,6 +458,54 @@ can use another's proxy.
 API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}/browser-exit/usage`,
 `GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](api.md#the-contract)). Hub: `tico computer browser-exit` and
 `tico bot browser-exit`.
+
+## Browser host
+
+The browser host is the one computer that runs the company's website tools ([Website
+logins](credential-vault.md#website-logins)): a Chrome profile per account, kept signed in, which bots drive by verbs
+and people watch or take control of from the tool's page. An admin picks it with the **Browser host** switch in that
+computer's pop-up; one per company.
+
+- It needs Chrome: Google Chrome on a Mac; on Linux `google-chrome`, else `chromium`, on its PATH. The runner image
+  (Docker, amd64 and arm64) ships Debian's Chromium, since Google publishes no Linux arm64 Chrome; elsewhere Tico does
+  not install it. On Linux without a display it runs headless. In the runner container Chromium starts without its own
+  sandbox, which needs a user namespace that Docker's default seccomp profile refuses; it runs there as the runner's
+  user with no capabilities, and bot code, which runs as another user, cannot read its profiles.
+- It runs no bots of its own: placing a bot there is refused while it is the browser host.
+- It is online when it asked for website commands within the last 40 seconds; a running computer asks continuously.
+  Health shows "Browser host offline" or "Chrome missing on <computer>" when it is not ready.
+- Each account's browser starts on its first command, closes after 15 minutes idle (the sign-in is kept) and at most 8
+  are open at once.
+
+Where a website runs is chosen when it is opened:
+
+1. On the browser host, when one is set, online and has Chrome.
+2. Otherwise on the bot's own computer, if it has Chrome, unless the site is **central only**.
+3. Otherwise it is refused, naming the browser host when it is the one that is offline.
+
+Every later command stays on that computer. If it goes offline or is no longer allowed, the command is refused and the
+bot opens the website again, which chooses afresh. A person's view follows the session to its computer and keeps its
+page; a browser that restarted or left the site goes back to the site. With no session it opens on the browser host.
+
+## Let a bot view the app (read only)
+
+A bot can open the app signed in as itself and take screenshots, so a Product Owner shows what it checked in
+production on its own page instead of asking a person to look. It is off for every bot until an owner or admin turns
+on **Can view the app (read only)** for that bot: `tico bot app-view <bot> on` (`off` turns it off and ends any view
+it has open).
+
+The bot then runs `tico bot app-shot /#/task/<id> --width 390 --out shot.png` (390 for a phone, 1280 for a desktop)
+on its computer, which needs Chrome. Each shot opens a view for at most 15 minutes, bound to the run that opened it.
+The view sees only what that bot already reads, never another person's view, and every write is refused with
+"Read-only view": a button, a form, marking something read. Reads that make or show a token, key or credential are
+refused too. Each view, and each time the setting changes, is a line in the audit log.
+
+The page a view shows offers nothing that writes, so a screenshot never suggests the bot could act: New task, Follow,
+the page + and answer buttons are not shown, the message box is a grey "Read-only view" line, and other controls that
+change something show greyed out. Tasks lists the bot's own open tasks by stage (Needs you is a person's list), and
+Company › Mine is one card of them.
+
+API: `GET/POST /api/v2/bots/{bot}/app-view`, `POST /api/v2/app-view` ([OpenAPI](api.md#the-contract)).
 
 ## Add a connection
 

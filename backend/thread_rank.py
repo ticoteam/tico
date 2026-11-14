@@ -16,7 +16,8 @@ import threading
 import time
 
 from clients import judge as J
-from .judge import CHAIN_SECONDS, audit_detail, daily_cap, primary_engine, server_engine, used_today
+from . import decide_groups as DG
+from .judge import CHAIN_SECONDS, daily_cap, primary_engine, server_engine, used_today
 from .store import H
 
 LOG = logging.getLogger("tico.thread_rank")
@@ -27,7 +28,10 @@ LEVELS = 10
 DEFAULT = 5  # a thread no pass has ranked yet
 NOISE = 1  # this level and below never list in Important
 RUN_SECONDS = 300
-CALLS_PER_PASS = 20
+CALLS_PER_PASS = 20  # threads a pass ranks at most
+# Threads asked about in one call (backend/decide_groups.py). One until the replay through real Jev shows grouped
+# verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
 CALLS_PER_HOUR = 40
 DAILY_SHARE = 0.8  # ranking stops once the server's Decide calls today reach this share of the daily cap
 RERANK_SECONDS = 3600  # a thread is ranked again at most this often
@@ -201,48 +205,70 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
     if engine is None:
         return {**summary, "why": "unavailable"}
     questions = {"importance": qset["questions"]["importance"]}
-    for row in found:
+
+    def gate():
+        """Why the pass stops before its next call, or None."""
         with store.read() as c:
             if calls_this_hour(c, at, label) >= CALLS_PER_HOUR:
-                summary["why"] = "hourly_cap"
-                break
+                return "hourly_cap"
             if used_today(c, H.KEEPER, at) >= DAILY_SHARE * daily_cap(settings, "bot"):
-                summary["why"] = "daily_cap"
-                break
-            state = state_of(c, row["id"])
+                return "daily_cap"
         if clock() - started > PASS_SECONDS - CHAIN_SECONDS:
-            summary["why"] = "time"
-            break
+            return "time"
+        return None
+
+    def ask(rows):
+        """Several threads to a call (backend/decide_groups.py), each ranked from its own answer only."""
+        pairs = [(state, questions) for _, state in rows]
+        for run in DG.packs(pairs, GROUP):
+            why = gate()
+            if why:
+                summary["why"] = why
+                return False
+            calls = []
+            replies = DG.ask_run(engine, [pairs[n] for n in run], label, calls, run)
+            with store.transaction() as c:
+                for call in calls:
+                    detail = DG.audit_row(call, label, types=["score"])
+                    detail["thread" if len(call.items) == 1 else "threads"] = (
+                        rows[call.items[0]][0]["id"] if len(call.items) == 1 else [rows[n][0]["id"] for n in call.items]
+                    )
+                    if call.result is not None:
+                        summary["cost_usd"] = round(summary["cost_usd"] + float(call.result.get("cost_usd") or 0), 6)
+                        route = route_of(call.result)
+                        summary["routes"][route] = summary["routes"].get(route, 0) + 1
+                    H.event(c, H.KEEPER, "judge.call", label, detail)
+                for n, reply in zip(run, replies, strict=True):
+                    row = rows[n][0]
+                    level = None
+                    if not isinstance(reply, BaseException):
+                        try:
+                            level = level_of(J.score(reply.get("answers") or {}, "importance")[0])
+                        except Exception as exc:  # noqa: BLE001 - a fake, a provider bug: the thread keeps its rank
+                            LOG.warning("Thread ranking answer unreadable: %s", type(exc).__name__)
+                    elif not isinstance(reply, J.JudgeError):
+                        LOG.warning("Thread ranking call failed: %s", type(reply).__name__)
+                    if level is None:
+                        summary["errors"] += 1
+                        tried(c, row["id"], at)
+                    else:
+                        save(c, row["id"], level, row["activity"], at)
+                        summary["ranked"] += 1
+        return True
+
+    waiting = []
+    for row in found:
+        with store.read() as c:
+            state = state_of(c, row["id"])
         if state is None:
             continue
-        result, error, level = None, None, None
-        try:
-            result = engine(state, questions, label)
-            answers = J.check_answers(result.get("answers"), questions)
-            level = level_of(J.score(answers, "importance")[0])
-        except J.JudgeError as exc:
-            error = J.error_code(exc)
-        except Exception as exc:  # noqa: BLE001 - a fake, a provider bug: the thread keeps its rank until the next pass
-            LOG.warning("Thread ranking call failed: %s", type(exc).__name__)
-            error = "error"
-        detail = {"label": label, "questions": 1, "types": ["score"], "thread": row["id"]}
-        if isinstance(result, dict):
-            detail.update(audit_detail(result))
-            summary["cost_usd"] = round(summary["cost_usd"] + float(result.get("cost_usd") or 0), 6)
-            route = route_of(result)
-            summary["routes"][route] = summary["routes"].get(route, 0) + 1
-        if error:
-            detail["error"] = error
-            summary["errors"] += 1
-        else:
-            detail["level"] = level
-        with store.transaction() as c:
-            H.event(c, H.KEEPER, "judge.call", label, detail)
-            if error:
-                tried(c, row["id"], at)
-            else:
-                save(c, row["id"], level, row["activity"], at)
-                summary["ranked"] += 1
+        waiting.append((row, state))
+        if len(waiting) == GROUP:
+            if not ask(waiting):
+                return summary
+            waiting = []
+    if waiting:
+        ask(waiting)
     return summary
 
 

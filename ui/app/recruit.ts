@@ -28,25 +28,20 @@ interface RecruitCard {
 // An option row: the value and its label.
 type RecruitPlace = [string, string | undefined];
 type RecruitFormOf<C> = HTMLFormElement & { readonly elements: HTMLFormControlsCollection & C };
-interface RecruitChoice { name?: string; reports_to?: string; runner_id?: string; model?: string }
+interface RecruitChoice { name?: string; reports_to?: string; runner_id?: string; model?: string; harness?: string; effort?: string; compact_at?: number | null }
 type RecruitDraftResult = 'ok' | 'stale' | 'error';
 interface RecruitPostFields {
   title: HTMLInputElement; team: HTMLSelectElement; reports_to: HTMLSelectElement; description: HTMLTextAreaElement;
   runner_id: HTMLSelectElement; model: HTMLSelectElement;
 }
-interface RecruitHireFields { name: HTMLInputElement; reports_to: HTMLSelectElement; runner_id: HTMLSelectElement; model: HTMLSelectElement }
+interface RecruitHireFields { name: HTMLInputElement; reports_to: HTMLSelectElement; runner_id: HTMLSelectElement }
 interface RecruitModelRow { id: string; label?: string; name?: string }
-let RECRUIT_HANDOFF: RecruitSeed | null = null;
-// Page-local state: which load is current, the arrival in progress, each seat's applicants once listed (the sidebar
-// shows their count), and the Computer and Model chosen while posting, which the Hire box starts from.
-const RECRUIT: RecruitState = {load: 0, arrive: '', run: null, found: {}, counts: {}, prefs: {}};
 const RECRUIT_DEPT: Record<string, string> = {marketing: '#a63d65', sales: '#1769a6', finance: '#2f6b3c', product: '#5946b2', support: '#9a4f19',
   legal: '#4b5563', engineering: '#3f566b', operations: '#0f6e56', hr: '#7a3e9d', leadership: '#3f566b'};
 const RECRUIT_MATCH: Record<string, string> = {strong: 'Strong', good: 'Good'};
 const RECRUIT_HOLD = 1600;                         // how long a dot that landed stays in 'done' before it rests
 const RECRUIT_ARM = 4000;                          // how long Close job? waits for the second click
 const RECRUIT_NEED: Record<string, string> = {connected: 'Connected', on_hire: 'Installs on hire', not_set: 'Not set'};
-const recruitAddress = (id: string, template = '') => '#/seat/' + encodeURIComponent(id) + (template ? '/' + encodeURIComponent(template) : '');
 
 function settingsRecruitHandoff() {
   if (!RECRUIT_HANDOFF || !S.me?.id || !settingsCanCreateBots()) return;
@@ -327,7 +322,6 @@ function recruitCount(id: string, n: number) {
   if (badge) countSet(badge, String(n));
   else renderTree();
 }
-const recruitSeatCount = (id: string): number | undefined => RECRUIT.counts[id];
 function recruitAvatar(c: RecruitCandidate, size = 34) {
   const color = RECRUIT_DEPT[String(c.department_id)] || `hsl(${avHue(c.template)} 38% 33%)`;
   const icon = TEMPLATE_ICON.test(c.icon || '') ? c.icon : '';
@@ -483,7 +477,7 @@ function recruitApplicant(main: HTMLElement, found: RecruitFound, c: RecruitCand
       ${manager?.until ? `<p class="muted" data-reports-now>Reports to ${esc(manager.name || 'the person or bot above')} until ${esc(manager.until)} is hired.</p>` : ''}
       <label class="rp-field"><span>Computer</span><select name="runner_id"><option value="">Default</option></select></label>
       <details class="rc-settings"><summary>More settings</summary>
-        <label class="rp-field"><span>Model</span><select name="model"><option value="">Suggested: ${esc(c.model_name || '')}</option>${recruitOptions(models.filter(m => m.id !== c.model).map((m): RecruitPlace => [m.id, m.name]), model)}</select></label></details>
+        <div class="rp-field" data-hire-model><span>Model</span></div></details>
       <p class="err" role="alert" data-hire-error hidden></p>
       <button class="primary rc-hire-go" type="submit">Hire</button></form></aside>` : ''}
     </div>
@@ -494,6 +488,7 @@ function recruitApplicant(main: HTMLElement, found: RecruitFound, c: RecruitCand
   // The line says where the bot reports only while the seat's own line is what is picked: a new manager replaces it.
   const reportsNow = form.querySelector<HTMLElement>('[data-reports-now]');
   if (reportsNow) form.elements.reports_to.addEventListener('change', () => { reportsNow.hidden = form.elements.reports_to.value !== seat.reports_to; });
+  void recruitHireModel(form, c, model);
   void recruitComputers().then(rows => {
     if (!form.isConnected) return;
     form.elements.runner_id.insertAdjacentHTML('beforeend', recruitOptions(rows, prefs.runner_id || ''));
@@ -502,9 +497,33 @@ function recruitApplicant(main: HTMLElement, found: RecruitFound, c: RecruitCand
     event.preventDefault();
     const f = form.elements;
     void recruitHire(found, c, page.querySelector('.rc-who-big'), {name: f.name.value.trim(), reports_to: f.reports_to.value,
-      runner_id: f.runner_id.value, model: f.model.value}, form.querySelector<HTMLElement>('[data-hire-error]'));
+      runner_id: f.runner_id.value, ...recruitHirePick(form)}, form.querySelector<HTMLElement>('[data-hire-error]'));
   };
   page.querySelector<HTMLElement>('[data-recruit-hirebar]')!.onclick = () => form.requestSubmit();
+}
+
+// The Hire box's Model is the shared picker (settings-bots-choice.ts); its catalog is read once when the page has none.
+async function recruitHireModel(form: HTMLFormElement, c: RecruitCandidate, model: string | undefined) {
+  const host = form.querySelector<HTMLElement>('[data-hire-model]');
+  if (!host) return;
+  try {
+    if (!SETTINGS_DATA.models.length) {
+      const catalog = await get('/v2/models');
+      if (!SETTINGS_DATA.models.length) Object.assign(SETTINGS_DATA, {models: catalog.models || [], harnesses: catalog.harnesses || [],
+        enabledProviders: catalog.enabled_providers || [], defaultModel: catalog.default?.model || '', gateway: null});
+    }
+  } catch { return; }
+  if (!form.isConnected) return;
+  const start = settingsAllChoices().find(row => row.model === model)?.value || '';
+  host.insertAdjacentHTML('beforeend', settingsChoiceBox({kind: 'hire', name: 'Model', current: start, mode: 'bot', none: `Suggested: ${c.model_name || 'the team default'}`}));
+  settingsWireCombos(host, 'hold');
+}
+// What the Hire box's picker holds: the model, its harness and effort, and the window when one was chosen.
+function recruitHirePick(form: HTMLFormElement): RecruitChoice {
+  const box = form.querySelector<SettingsChoiceBox>('[data-bot-choice]'), value = box?.picker?.value() || '';
+  if (!value) return {model: ''};
+  const pick = settingsChoiceFromValue(value);
+  return {model: pick.model, harness: settingsRealHarness(pick.harness), effort: pick.effort, compact_at: box?.picker?.compact() || null};
 }
 
 // Hire: the bot is created in Onboarding in the seat's place; a HIRED stamp lands on its avatar, then its page opens.
@@ -528,7 +547,8 @@ async function recruitHire(found: RecruitFound, c: RecruitCandidate, card: Eleme
     const runner = choice.runner_id ?? prefs.runner_id ?? '';
     const model = choice.model ?? ((found.models || []).some(m => m.id === prefs.model) ? prefs.model : '');
     const hired: import('../types/api').SeatHired & {bot: string} = await post(`/v2/seats/${encodeURIComponent(seat.id)}/hire`,
-      {template: c.template, model: model || '', name: choice.name || seat.title, ...(runner ? {runner_id: runner} : {})});
+      {template: c.template, model: model || '', ...(model && choice.harness ? {harness: choice.harness} : {}), ...(model && choice.effort ? {effort: choice.effort} : {}),
+        ...(model && choice.compact_at ? {compact_at: choice.compact_at} : {}), name: choice.name || seat.title, ...(runner ? {runner_id: runner} : {})});
     await recruitStamp(card);
     delete RECRUIT.found[seat.id]; delete RECRUIT.counts[seat.id]; delete RECRUIT.prefs[seat.id];
     RECRUIT.hiring = false;

@@ -21,7 +21,12 @@ function meetSourcesTrouble(state: MeetSourcesState) {
   return (state.sourceRows || []).some(r => r.status === 'error' || r.status === 'delayed')
     || !!(g && (g.needs_signin || (g.connected && (g.last_error || state.gmsg))));
 }
-// The dot on the tab bar's Sources link.
+// Focus goes back to Sources, or to the header's ⋯ that holds it once its menu has closed.
+function meetSourcesFocusBack(): void {
+  const button: HTMLElement | null = $('#meet-sources .meet-src-btn');
+  (button?.checkVisibility() ? button : $('.notes-head > .ph-more'))?.focus();
+}
+// The dot on Sources, in the header's ⋯ menu.
 function meetSourcesDot(state: MeetSourcesState) {
   const button: HTMLElement | null = $('#meet-sources .meet-src-btn');
   if (!button) return;
@@ -29,6 +34,8 @@ function meetSourcesDot(state: MeetSourcesState) {
   button.querySelector('.dot')?.remove();
   if (trouble) button.insertAdjacentHTML('afterbegin', '<i class="dot" aria-hidden="true"></i>');
   button.setAttribute('aria-label', trouble ? 'Sources, needs a look' : 'Sources');
+  // Sources sits in the header's ⋯ (task #338), so the ⋯ carries the same dot while the menu is closed.
+  button.closest('.ph')?.querySelector(':scope > .ph-more')?.classList.toggle('meet-src-trouble', !!trouble && !button.closest('[hidden]'));
 }
 
 function meetSourceItems(state: MeetSourcesState) {
@@ -86,7 +93,7 @@ function meetSourcesOpen(state: MeetSourcesState, focus?: string) {
     const made = document.createElement('dialog');
     made.className = 'tmodal msrc-dialog'; made.id = 'meet-src-dialog'; made.setAttribute('aria-label', 'Sources');
     made.onclick = e => { if (e.target === made) made.close(); };
-    made.addEventListener('close', () => { made.remove(); $('#meet-sources .meet-src-btn')?.focus(); });
+    made.addEventListener('close', () => { made.remove(); meetSourcesFocusBack(); });
     document.body.append(made);
     dialog = made;
   }
@@ -114,7 +121,7 @@ function meetSourcesPaint(state: MeetSourcesState, focus?: string) {
       if (act === 'close-panel') dialog.close();
       else if (act === 'g-connect') granolaConnect(state);
       else if (act === 'g-sync') granolaSync(state, true);   // the button: may retry inside a backoff
-      else if (act === 'g-remove') { if (confirm('Remove Granola?')) granolaDisconnect(state); }
+      else if (act === 'g-remove') { if (await askConfirm('Remove Granola?', el)) granolaDisconnect(state); }
       else if (act === 'imp-connect') {
         if (!source) throw new Error(`Unknown source ${id}`);
         window.openMeetingImporter?.(id, source.name, () => meetSources(state));
@@ -123,7 +130,7 @@ function meetSourcesPaint(state: MeetSourcesState, focus?: string) {
         const label = el.closest('.msrc-row')?.querySelector('b');
         if (!label) throw new Error('Source row has no name');
         const name = label.textContent;
-        if (!confirm(`Remove ${name}?`)) return;
+        if (!(await askConfirm(`Remove ${name}?`, el))) return;
         el.disabled = true;
         try { await post('/v2/meeting-importers/' + encodeURIComponent(id), {enabled: false, runner_id: ''}); }
         catch (error) { el.disabled = false; toast(errorMessage(error, 'Could not remove the source'), true); return; }

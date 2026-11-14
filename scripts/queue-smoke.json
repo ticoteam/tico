@@ -206,6 +206,11 @@
       "script": "visual-media",
       "seconds": 4.858,
       "reason": "Video and audio cards on a bare page: no autoplay, range requests for seeks, one clip paused at a time"
+    },
+    {
+      "script": "parts-first-visit",
+      "seconds": 63.0,
+      "reason": "Every page opens on its first visit through its page part's stand-ins; a missed one breaks only that page, cold"
     }
   ]
 }

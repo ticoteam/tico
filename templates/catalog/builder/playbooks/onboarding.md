@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 20 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes.
 The outcome is three recorded answers, `knowledge/standards.md`, and the test commands found for each repository.
 
 ---
@@ -24,11 +24,11 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 1. Which repositories should I build in, and which branch do changes merge into (for example main)? Why: sets where I work. I never clone or push to a repository I was not given.
 2. How do you run the tests, and what must pass before a change can merge? Why: I run the same checks the team runs, and I say so when I could not run one.
-3. Which paths need a named person to look before a change ships? (Default: sign-in, permissions, billing and customer data.) Why: I say so on the page a person OKs in Fixes 2.
+3. Which paths need a named person to look before a change ships? (Default: sign-in, permissions, billing and customer data.) Why: I say so on the QA page a person approves before it ships.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/standards.md`: the repositories and their base
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/standards.md`: the repositories and their base
 branches, the test commands, and the risky paths with the person who must look at each. Start
 `knowledge/patterns.md` empty.
 

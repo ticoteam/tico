@@ -4,7 +4,7 @@ Only when `tico goal strategy-bot` says `level` 3 ("Acts on its own"), which onl
 refuses every decision: at level 2 a red goal gets a recovery proposal (`playbooks/recoveries.md`), at Passive a
 check-in question at most. Read the level at the start of every run; the owner may have lowered it since.
 
-Inputs: `tico goal strategy-bot` (the level and `asked_today`), `tico goal list --all`, `tico health check`, the Heads' reports and `state.md`.
+Inputs: `tico goal strategy-bot` (the level and `asked_today`), `tico goal list --all`, `tico health check`, the Heads' reports and `memory/decisions.md`.
 
 A **decision** is one reason and 1 to 10 changes to bot tasks, made together and logged with an Undo for the owner:
 `tico goal strategy-bot-decide "<reason>" '<changes json>' --goal-id <goal>`. The changes are:
@@ -17,7 +17,7 @@ The reason is one sentence the owner reads in the Strategy Owner log: what you c
 `--goal-id` when a goal is behind it. The answer is your receipt: what was `done`, and what was `left` and why. A part
 the server would not let you do alone (a person's task, a bot that is paused or offline, a private task, a bot you
 may not give work to) is not dropped: it is one proposal in the owner's Needs you, filed by the server. Don't file it
-again yourself and don't try it another way. Note each decision's id, goal and reason in `state.md`: you can't read
+again yourself and don't try it another way. Note each decision's id, goal and reason in `memory/decisions.md`: you can't read
 the log (it is the owner's), and the Monday note and your next run need them.
 
 ## A red or stalled goal
@@ -31,7 +31,7 @@ In the run that finds it (the KPI pass's status pass, a task or message about th
 2. Decide what gets the goal moving, using bot tasks only: create at least one task for the bot that owns that work,
    or move its most useful open task to the top of its queue. Reassign or close only where a bot's task is plainly in
    the wrong queue or no longer serves a current goal. A person's task is theirs: leave it out.
-3. Look before you act: if `state.md` has a decision for this goal since it last turned red, don't repeat it; one
+3. Look before you act: if `memory/decisions.md` has a decision for this goal since it last turned red, don't repeat it; one
    decision per goal per time it goes red or stalls. The owner's Undo stands: a change they undid in an earlier
    decision (the same new task for the same bot, or the same reorder, reassign or close of a task) is never made
    alone again. The server makes it a proposal and your answer's `left` says "the owner undid this same change".
@@ -91,4 +91,4 @@ the server never makes it and files it as a proposal in the owner's Needs you. N
 (`playbooks/check-ins.md`). For the rest, the server refuses your try and files it as the proposal. Never try one
 another way. A proposal counts toward the owner's 5 a day.
 
-**Done when:** each red or stalled goal in this run has one decision with its comment, or a reason it was left alone; each clash is settled and both Heads are told; and `state.md` has each decision's id.
+**Done when:** each red or stalled goal in this run has one decision with its comment, or a reason it was left alone; each clash is settled and both Heads are told; and `memory/decisions.md` has each decision's id.

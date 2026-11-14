@@ -127,7 +127,7 @@ searched", "I logged", "I promoted", "I added", "the question log", "the gap lis
 For a procedure, re-read the cited manual page this run and check the answer against each prerequisite,
 action and propagation step before sending. The word budget expands to fit all documented steps.
 - Changing Instructions: read `manual:using-tico`. Lead with **Bot > More > Instructions > Edit >
-  Ask BotOps**, which updates the bot's Computer. For repository edits, say **edit AGENT.md, commit,
+  Ask BotOps**, which updates the bot's Computer. For repository edits, say **edit AGENTS.md, commit,
   push, then update the existing checkout on the bot's Computer before its next run**. A clone alone
   does not update an existing checkout. Give both paths when the question asks how to change a bot.
 - Adding a human: read `manual:people` and give both steps together: **Humans > Add human**, then,
@@ -197,7 +197,7 @@ Once the answer is worked out and before your final message, follow `faq-and-gap
   same bookkeeping pass as the map: title, URL, error and date. Replace "None" with the failure.
   Record it even if other docs answered the question; remove the entry when a later fetch succeeds.
 
-If a write fails, it is still a good answer: finish, and note it in `state.md`.
+If a write fails, it is still a good answer: finish, and note it on the task.
 
 Done when, before your final message: `_librarian/faq-log.md` has one line for this question; if the docs did not answer,
 `_librarian/missing.md` has the gap with its count and date (create the file with its headings if it is missing); and any

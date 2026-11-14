@@ -35,7 +35,7 @@ type FallbackModel = Partial<SettingsModel & {default_effort?: string; harnesses
 type BotRun = (revision: number) => Promise<number>;
 type ChoiceKind = 'model' | 'fallback' | 'task';
 // A Model, Fallback or Task model picker's box: the picker's own methods, and its saved value on the box.
-type ChoicePicker = {valid(): boolean; value(): string; changed(): boolean};
+type ChoicePicker = SettingsChoicePicker;
 type ChoiceBox = HTMLElement & {picker?: ChoicePicker};
 // The update feeds the server's config carries (backend/update_feeds.py): the release notes and the template feed.
 type UpdateFeeds = {unreleased?: boolean; templates?: {feed?: string | null; status?: string; no_template?: string}};
@@ -60,26 +60,12 @@ function settingsBotEditorRows(e: BotEditRow) {
     ${budgetRowHTML(e)}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
-    ${settingsCompactRow(e)}
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
     ${settingsTaskParts(e)}
     <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>
     ${settingsBrowserExitRow(e)}
     ${cloudMachineRowHTML(e)}`}`;
-}
-// Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
-// `compaction` takes it, and it saves on its own without a fresh session, like the computer.
-const SETTINGS_COMPACT_AT: [number, string][] = [[100000, '100k'], [150000, '150k'], [250000, '250k'], [400000, '400k'], [600000, '600k'], [1000000, '1M']];
-const SETTINGS_COMPACT_DEFAULT = 250000;
-function settingsCompactRow(e: BotEditRow) {
-  const harness = e.harness || e.runtime || e.resolved_runtime;
-  if (harness && !(settingsHarness(harness)?.capabilities || harnessCaps(harness)).compaction) return '';
-  const current = Number(e.compact_at) || SETTINGS_COMPACT_DEFAULT;
-  const options = SETTINGS_COMPACT_AT.some(([value]) => value === current) ? SETTINGS_COMPACT_AT : [...SETTINGS_COMPACT_AT, [current, `${Math.round(current / 1000)}k`]];
-  return `<div class="sb-row sb-compact"><span>Compact at</span><select class="settings-inline-select" data-bot-compact="${esc(e.id)}" data-current="${current}" aria-label="Compact at for ${esc(e.display_name)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>
-      ${options.map(([value, label]) => `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('')}
-    </select><span></span></div>`;
 }
 // Which computer's internet the bot's browser goes out through (backend/browser_exit.py): only computers whose owner
 // shares with this bot, and the one it has now even if that stopped (it then fails closed, so it stays visible).
@@ -101,10 +87,6 @@ function settingsBrowserExitRun(select: HTMLSelectElement): BotRun {
   return async rev => { await post(`/v2/bots/${encodeURIComponent(slug)}/browser-exit`, {runner_id}); return rev; };
 }
 // The editor's held changes: each returns the save Save bot runs, given the bot's revision, answering the next one.
-function settingsCompactRun(select: HTMLSelectElement): BotRun {
-  const slug = String(select.dataset.botCompact), compact_at = Number(select.value);
-  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at, expected_revision: rev}))?.revision ?? rev + 1;
-}
 // The most turns a bot runs at once across all its computers. The server takes 1 to 256, and empty is no limit.
 function settingsTurnsAtOnceRow(e: BotEditRow) {
   if (e.agent) return '';
@@ -135,8 +117,6 @@ function settingsManagesReportsRun(box: HTMLInputElement): BotRun {
   return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/manages-reports`,
     {manages_reports, expected_revision: rev}))?.revision ?? rev + 1;
 }
-// The old wake presets, for history rows written before profiles (backend/profiles.py replaced them).
-const SETTINGS_WAKE_PRESETS = [['token_saver', 'Token saver'], ['performance', 'Performance']];
 // A synced bot whose platform has a desktop app a Mac's runner drives (backend/app_delivery.py APPS) can be delivered
 // through that app on one of its person's computers instead of waiting for the daily sync. Only that person chooses a
 // computer, one of their own where the app is ready (the rest are listed, disabled, with why); they or an admin turn it
@@ -245,7 +225,7 @@ function settingsEditBot(slug = '', inline = false) {
         ${editing ? settingsUpdateSubscriptions(e) : ''}
         ${editing ? `<h3 class="bot-editor-sec bot-editor-wide">Access, model and computer</h3><p class="bot-editor-hint bot-editor-wide">Save bot saves your changes.</p><div class="bot-editor-wide sb-rows" data-bot-people></div>` : ''}
         ${editing ? '' : `<h3 class="bot-editor-sec bot-editor-wide">Model and computer</h3><div class="bot-editor-wide" data-add-choice>
-          ${settingsChoiceFields(currentModel)}
+          ${settingsChoiceBox({kind: 'new', name: 'Model', current: currentModel, mode: 'bot'})}
           <input type="hidden" name="model_effort" value="${esc(currentModel)}">
         </div>
         <label>Computer owner<select name="operator" ${S.me?.role === 'owner' ? '' : 'disabled'}>${SETTINGS_DATA.people.map(person => `<option value="${esc(person.id)}" ${person.id === operator ? 'selected' : ''}>${esc(person.name || person.id)}</option>`).join('')}</select></label>
@@ -283,7 +263,7 @@ function settingsEditBot(slug = '', inline = false) {
     const paint = () => {
       const bot = S.emps.find(row => row.id === slug) || e;
       if (!bot) return;
-      rows.innerHTML = settingsBotEditorRows(bot); rows.querySelectorAll('[data-choice-apply]').forEach((button: Element) => button.remove()); settingsWireCombos(rows); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); void cloudMachineMount(rows, slug); paintPending();
+      rows.innerHTML = settingsBotEditorRows(bot); settingsWireCombos(rows, 'hold'); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); void cloudMachineMount(rows, slug); paintPending();
     };
     const refresh = () => { if (!active() || !form.isConnected) { cleanup(); return; } if (pendingNames().length) return; if (touched) rev = (S.emps.find((row): row is BotEditRow => row.id === slug) || e)?.revision ?? 0; paint(); };
     paint();
@@ -351,8 +331,6 @@ function settingsEditBot(slug = '', inline = false) {
       const cloudGrow = eventElement(event)?.closest<HTMLInputElement>('[data-bot-cloud-grow]');
       if (cloudGrow) stage('cloud-grow', 'grow storage', cloudGrow.checked !== (cloudGrow.dataset.current === 'true')
         && cloudMachineRun(slug, {grow_storage: cloudGrow.checked}, cloudGrow));
-      const compact = eventElement(event)?.closest<HTMLSelectElement>('[data-bot-compact]');
-      if (compact) stage('compact', 'compact at', changed(compact) && settingsCompactRun(compact));
       const exit = eventElement(event)?.closest<HTMLSelectElement>('[data-bot-browser-exit]');
       if (exit) stage('browser-exit', 'browse through', changed(exit) && settingsBrowserExitRun(exit));
       const profile = eventElement(event)?.closest<HTMLElement>('[data-bot-profile], [data-profile-key]');
@@ -375,7 +353,7 @@ function settingsEditBot(slug = '', inline = false) {
     // A task model picked here changes the Task effort choices: the efforts of the model that would run tasks.
     rows.addEventListener('tico:choice', (event: Event) => {
       const box = eventElement(event)?.closest<HTMLElement & {picker?: {valid(): boolean; value(): string; changed(): boolean}}>('[data-bot-choice][data-kind=task]'), select: HTMLSelectElement | null | undefined = rows.querySelector('[data-task-effort]');
-      if (!box?.picker?.valid() || !select) return;
+      if (!box?.picker?.valid() || !select) { paintPending(); return; }
       // Only settingsBotEditorRows(e) draws a Task model picker, so e (and bot) is a bot here.
       const bot = S.emps.find(row => row.id === slug) || e, value = box.picker.value();
       const choice = value ? settingsChoiceFromValue(value) : null, efforts = settingsModelEfforts(settingsTaskRunsOn(bot!, choice?.model || ''));
@@ -441,11 +419,11 @@ function settingsEditBot(slug = '', inline = false) {
         computer.disabled = external; if (external) computer.value = '';
         if (computerNote) computerNote.textContent = external ? 'Run by an external agent: no computer. After saving, create its credential in the Computer column.' : '';
       };
-      const picker = settingsWireChoiceFields(combo.querySelector('[data-choice-fields]'), (value?: string, valid?: boolean) => {
-        hidden.value = valid ? String(value) : '';
-        syncComputer();
-      });
-      if (!picker.valid()) hidden.value = '';
+      // Apply holds the pick here; Add bot sends it, with the window when one was chosen.
+      settingsWireCombos(combo, 'hold');
+      combo.addEventListener('tico:choice', () => { hidden.value = (combo.querySelector('[data-bot-choice]') as ChoiceBox | null)?.picker?.value() || ''; syncComputer(); });
+      const start = settingsChoiceFromValue(hidden.value);
+      if (!settingsAllChoices().some(row => row.value === hidden.value) && !settingsTierParse(start.model)) hidden.value = '';
       syncComputer();
     }
   }
@@ -458,31 +436,30 @@ function settingsEditBot(slug = '', inline = false) {
       if (editing) {
         const model = settingsEditorPendingChoice(rows, 'model'), fallback = settingsEditorPendingChoice(rows, 'fallback');
         const task = settingsEditorPendingChoice(rows, 'task'), taskParts = settingsEditorTaskParts(rows);
-        const unfinished = [model, fallback, task].find(pick => pick && !pick.ready);
-        if (unfinished) throw new Error(`Nothing saved: finish choosing the ${unfinished === model ? 'model' : unfinished === fallback ? 'fallback' : 'task model'}, or reset it.`);
-        // A model change or a move starts a fresh session, so Save asks first; saying no saves nothing.
-        const bot = S.emps.find(row => row.id === slug) || e, target = model && settingsChoiceFromValue(model.value);
+        // A model change or a move starts a fresh session, so Save asks first; saying no saves nothing. A window
+        // alone keeps the session.
+        const bot = S.emps.find(row => row.id === slug) || e, target = model?.moved ? settingsChoiceFromValue(model.value) : null;
         if (!bot) throw new Error('Nothing saved: this bot is no longer on the team.');
-        if (model && target && !await settingsConfirmTransition(bot, 'model', settingsChoiceLabel(target.harness, target.model, target.effort)))
+        if (target && !await settingsConfirmTransition(bot, 'model', settingsChoiceLabel(target.harness, target.model, target.effort)))
           throw new Error('Nothing saved: the model change was not confirmed. Reset the model, or press Save bot again.');
         const move = machinePick;
         if (move && !await settingsConfirmTransition(bot, 'machine', move.label))
           throw new Error('Nothing saved: the move was not confirmed. Pick the current computer again, or press Save bot again.');
         if (fallback) {
-          rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(fallback.value), expected_revision: rev})).revision;
+          rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/fallback`, {fallback: settingsFallbackBody(fallback.value, fallback.compact), expected_revision: rev})).revision;
           saved = true;
           // Saved now: if the definition fails below, pressing Save again does not send it twice.
-          settingsChoiceMarkSaved(fallback.box, fallback.value);
+          settingsChoiceMarkSaved(fallback.box, fallback.value, fallback.compact);
         }
         if (task || taskParts.length) {
-          // The task model, Task effort and Task context length in one save, each part not changed kept as it is.
+          // The task model, its window and Task effort in one save, each part not changed kept as it is.
           // The bot's own model, and so its sessions, stay as they are.
-          const change = Object.fromEntries(taskParts.map(([select]) => 'taskEffort' in select.dataset
-            ? ['effort', select.value] : ['compact_at', Number(select.value) || null]));
-          if (task) change.choice = task.value ? settingsChoiceFromValue(task.value) : null;
+          const change: SettingsTaskChange = Object.fromEntries(taskParts.map(([select]) => ['effort', select.value]));
+          if (task?.moved) change.choice = task.value ? settingsChoiceFromValue(task.value) : null;
+          if (task?.resized) change.compact_at = task.compact;
           rev = await settingsSaveTaskModel(bot, change, rev, true);
           saved = true;
-          if (task) settingsChoiceMarkSaved(task.box, task.value);
+          if (task) settingsChoiceMarkSaved(task.box, task.value, task.compact);
           taskParts.forEach(([select]) => { select.dataset.current = select.value; });
         }
         rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
@@ -497,6 +474,13 @@ function settingsEditBot(slug = '', inline = false) {
         saved = true;
         // The held rows, in the order they were changed; each one done leaves the list, so Save again never repeats it.
         for (const [key, item] of pending) { rev = await item.run(rev); pending.delete(key); }
+        // The bot's window: it saves on its own and keeps the session, so before a model change.
+        // Default (null) clears a saved window, back to the model's own.
+        if (model?.resized) {
+          rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/compact-at`, {compact_at: model.compact, expected_revision: rev}))?.revision ?? rev + 1;
+          if (!target) settingsChoiceMarkSaved(model.box, model.value, model.compact);
+          else model.box.dataset.compactCurrent = model.compact ? String(model.compact) : '';
+        }
         // Last, since a transition holds the revision it started from; its own dialog shows the progress. A model
         // change applies at once, then the move starts from the bot as it is now (one change at a time per bot).
         let transition: {id: string} | null = null;
@@ -504,26 +488,27 @@ function settingsEditBot(slug = '', inline = false) {
           transition = await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'model',
             model: target.model, effort: target.effort, harness: target.harness,
             expected_generation: bot.machine?.generation || 0, expected_revision: rev});
-          settingsChoiceMarkSaved(model.box, model.value);
+          settingsChoiceMarkSaved(model.box, model.value, model.compact);
         }
         if (move) {
-          if (model) await loadSettings();
+          if (target) await loadSettings();
           const now = S.emps.find(row => row.id === slug) || bot;
           transition = await post(`/v2/bots/${encodeURIComponent(slug)}/transitions`, {kind: 'machine', runner_id: move.id,
-            expected_generation: now.machine?.generation || 0, expected_revision: model ? now.revision : rev});
+            expected_generation: now.machine?.generation || 0, expected_revision: target ? now.revision : rev});
           machinePick = null;
         }
         if (transition) settingsWatchTransition(transition.id);
       } else {
         const choice = settingsChoiceFromValue(form.elements.model_effort.value);
         if (!choice.harness || !choice.model || !choice.effort) throw new Error('Choose a harness, model and effort.');
+        const compact_at = (dialog.querySelector('[data-add-choice] [data-bot-choice]') as ChoiceBox | null)?.picker?.compact() || null;
         const slugChosen = form.elements.slug.dataset.edited && form.elements.slug.value;
         added = await post('/v2/bots', {...(slugChosen ? {slug: slugChosen} : {}), display_name: form.elements.display_name.value,
           description: form.elements.description.value, reports_to: form.elements.reports_to.value || null,
           status: form.elements.status.value, ...(slugChosen || form.elements.repo.dataset.edited ? {repo: form.elements.repo.value} : {}),
           private_tasks_default: form.elements.private_tasks_default.checked,
           thread_mode: form.elements.thread_mode.value, shared: form.elements.shared.checked, model: choice.model, effort: choice.effort,
-          harness: choice.harness, operator: form.elements.operator.value || S.me?.id,
+          harness: choice.harness, ...(compact_at ? {compact_at} : {}), operator: form.elements.operator.value || S.me?.id,
           runner_id: form.elements.runner_id.value || null});
       }
       if (!inline) dialog.close();
@@ -547,22 +532,22 @@ function settingsEditBot(slug = '', inline = false) {
     dialog.showModal();
   }
 }
-// A Model or Fallback picked in the editor but not Applied (TK-BLOG3EDS): Save applies it, or says why it can't,
-// rather than closing over it. Null when the picker shows what the bot has; `ready` when Apply would take it.
+// A Model, Fallback or Task model applied in the editor's picker and not saved yet (TK-BLOG3EDS): Save saves it.
+// Null when the picker holds what the bot has; `moved` when its model differs, `resized` when its window does.
 function settingsEditorPendingChoice(rows: ParentNode | null | undefined, kind: ChoiceKind) {
   const box = rows?.querySelector<ChoiceBox>(`[data-bot-choice][data-kind="${kind}"]`);
   if (!box?.picker?.changed()) return null;
-  const value = box.picker.value();
-  return {box, value, ready: box.picker.valid() && value !== (box.dataset.current || '')};
+  const value = box.picker.value(), compact = box.picker.compact();
+  return {box, value, compact, moved: value !== (box.dataset.current || ''), resized: compact !== (Number(box.dataset.compactCurrent) || null)};
 }
-// A picker's saved value, kept on its box and on the fields it draws (the fields always exist under a picker).
-function settingsChoiceMarkSaved(box: ChoiceBox, value: string) {
-  const fields = box.querySelector<HTMLElement>('[data-choice-fields]');
-  if (fields) box.dataset.current = fields.dataset.current = value;
+// A picker's saved pick, kept on its box: it now holds what the bot has.
+function settingsChoiceMarkSaved(box: ChoiceBox, value: string, compact: number | null = Number(box.dataset.compactCurrent) || null) {
+  box.dataset.current = value;
+  box.dataset.compactCurrent = compact ? String(compact) : '';
 }
-// Task effort and Task context length changed in the editor and not saved yet: [[select, name], ...].
+// Task effort changed in the editor and not saved yet: [[select, name]].
 function settingsEditorTaskParts(rows: ParentNode | null | undefined): [HTMLInputElement | HTMLSelectElement, string][] {
-  const parts: [string, string][] = [['[data-task-effort]', 'task effort'], ['[data-task-context]', 'task context length']];
+  const parts: [string, string][] = [['[data-task-effort]', 'task effort']];
   return parts
     .map(([selector, name]): [HTMLInputElement | HTMLSelectElement | null | undefined, string] => [rows?.querySelector<HTMLInputElement | HTMLSelectElement>(selector), name])
     .filter((pair): pair is [HTMLInputElement | HTMLSelectElement, string] => !!pair[0] && pair[0].value !== (pair[0].dataset.current || ''));

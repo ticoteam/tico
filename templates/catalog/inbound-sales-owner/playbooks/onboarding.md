@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 25 minutes. The outcome is five recorded answers, a first sweep on the task from the
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers, a first sweep on the task from the
 leads already waiting, and both routines checked.
 
 ---
@@ -45,7 +44,7 @@ some, record those and use the defaults for the rest, saying which you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write the team's criteria, speed target and reply rules into
+Write each answer, dated, into the `knowledge/` file it belongs to. Write the team's criteria, speed target and reply rules into
 `knowledge/inbound-method.md`, keeping the standing rules above them. Write who takes booked calls into
 `knowledge/team.md`. Write `knowledge/voice.md` and `knowledge/do-not-contact.md` as present-tense statements.
 
@@ -64,7 +63,7 @@ Tell the human in one line each: "I will sweep inbound leads on weekdays at 09:0
 prepare replies for your review." and "I will publish the inbound read-out every Monday at 08:00." They can change or
 turn off either one any time; there is nothing to approve.
 
-Record both in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
+Record both in `memory/decisions.md`. If they asked for a different schedule
 or to leave one off, adjust `knowledge/inbound-method.md` and the routine to match (`tico automation update <id>`, with
 `--disable` to turn it off).
 

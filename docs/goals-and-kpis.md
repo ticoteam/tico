@@ -201,6 +201,10 @@ The vision is still what a goal's [Why](#a-goals-why) ties to.
 
 Only the owner writes the vision and publishes a version, on their own click. An admin cannot. No bot writes the draft
 or publishes, the Strategy Owner included: it proposes, at every level ([Strategy](strategy.md#who-may-do-what)).
+One exception: while the team has no vision, the Strategy Owner asks the owner "What is this team for?" as a question
+in their Needs you (above Passive), on a task it holds. When they reply with a vision, it saves their words as the
+vision (`tico strategy vision`, which refuses any text they did not write there, and any write once there is a vision)
+and the question closes; when they reply with a question, it answers and the question stays open.
 `GET /api/v2/company` answers the strategy's vision, and `POST /api/v2/company` with a vision writes it into the
 strategy draft (the owner only), so there is one source. `/company/history` still answers for older clients.
 

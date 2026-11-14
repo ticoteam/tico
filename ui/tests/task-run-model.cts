@@ -1,7 +1,8 @@
 // A bot's task says the model its runs use (Runs on, backend/task_run_models.py). Whoever the server says may set it
 // (`can_set_run_model` in GET /v2/tasks/{id}) picks the task's own model, harness and effort and applies it, or clears
 // it back to the bot's task model; anyone else reads what it runs on. Retired and Gateway tier models are not offered.
-// The form fits a phone's width.
+// Its Compact list starts on "Same as bot" and offers only the sizes the picked model holds; a window alone keeps the
+// bot's model (task #237); Claude Code, which compacts on its own default, has none. The form fits a phone's width.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -24,13 +25,18 @@ const MODELS = [
   {id: 'old-model', label: 'Old Model', harnesses: ['claude'], efforts: [], deprecated: true},
   {id: 'tico-fast', label: 'Gateway fast', harnesses: ['claude'], efforts: []}];
 
+// Claude Code compacts on its own default (own_compaction), so a Claude model offers no Compact; Codex and Cursor do.
+const HARNESSES = [
+  {id: 'claude', capabilities: {compaction: true, own_compaction: true}},
+  {id: 'codex', capabilities: {compaction: true}}, {id: 'cursor', capabilities: {compaction: true}}];
+
 // `canSet` is the server's answer for this reader (`can_set_run_model`), whatever their role in the roster says.
 async function run(viewport: {width: number; height: number}, shot: string, me: unknown, canSet: boolean) {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
     const errors: string[] = [], posted: unknown[] = [];
-    let runModel: {model: string; harness: string; runtime: string; reasoning_effort: string} | null = null;
+    let runModel: {model: string; harness: string; runtime: string; reasoning_effort: string; compact_at: number | null} | null = null;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -45,12 +51,13 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/models') return json({models: MODELS});
+      if (p === '/api/v2/models') return json({models: MODELS, harnesses: HARNESSES});
       if (p === '/api/v2/tasks') return json({tasks: [task]});
       if (p === '/api/v2/tasks/t-audit/model' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}');
         posted.push(body);
-        runModel = body.model ? {model: body.model, harness: body.harness, runtime: body.harness, reasoning_effort: body.effort || ''} : null;
+        runModel = body.model ? {model: body.model, harness: body.harness, runtime: body.harness, reasoning_effort: body.effort || '', compact_at: body.compact_at ?? null}
+          : body.compact_at ? {model: '', harness: '', runtime: '', reasoning_effort: '', compact_at: body.compact_at} : null;
         return json({task: 't-audit', run_model: runModel, readiness: null, warning: ''});
       }
       if (p === '/api/v2/tasks/t-audit')
@@ -63,6 +70,7 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
     await page.evaluate(t => taskModalShow(t), task);
     const modal = page.locator('#task-modal'), sec = modal.locator('[data-task-run-model]');
+    if (viewport.width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();   // a phone: Runs on is in Info (task #409)
     await sec.locator('.task-run-now', {hasText: "The bot's task model"}).waitFor();
 
     if (!canSet) {
@@ -83,6 +91,11 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
       'the window is in the option label');
     assert.equal(await sec.locator('[data-run-model-apply]').isDisabled(), true, 'nothing to apply yet');
 
+    // A Claude Code model has no Compact: Claude Code compacts as it does for a person.
+    await model.selectOption('claude-sonnet-5-5');
+    await sec.locator('[data-run-effort]').waitFor();
+    assert.equal(await sec.locator('[data-run-compact]').count(), 0, 'no Compact for Claude Code');
+
     // A model with two harnesses offers both, starting on its first harness and its default effort.
     await model.selectOption('gpt-test');
     await sec.locator('[data-run-harness]').waitFor();
@@ -90,19 +103,31 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     assert.equal(await sec.locator('[data-run-effort]').inputValue(), 'low');
     await sec.locator('[data-run-harness]').selectOption('cursor');
     await sec.locator('[data-run-effort]').selectOption('high');
+    // Compact: "Same as bot" first, then the twelve sizes this 1.05M model holds.
+    const compact = sec.locator('[data-run-compact]');
+    assert.equal(await compact.inputValue(), '', 'Same as bot until a size is picked');
+    assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Same as bot', '100K', '150K', '200K', '250K', '300K',
+      '400K', '500K', '600K', '700K', '800K', '900K', '1M']);
+    await compact.selectOption('400000');
     const box = (await sec.boundingBox())!;
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `Runs on fits the ${viewport.width} px width`);
     if (shot) await page.screenshot({path: shot});
     await sec.locator('[data-run-model-apply]').click();
     await sec.locator('.task-run-now', {hasText: 'GPT Test'}).waitFor();
-    assert.deepEqual(posted.at(-1), {model: 'gpt-test', harness: 'cursor', effort: 'high'});
-    assert.match(await sec.locator('.task-run-now').innerText(), /GPT Test · .+ · high/);
+    assert.deepEqual(posted.at(-1), {model: 'gpt-test', harness: 'cursor', effort: 'high', compact_at: 400000});
+    assert.match(await sec.locator('.task-run-now').innerText(), /GPT Test · .+ · high · .+ · compacts at 400K/);
 
-    // Back to the bot's task model clears the task's own choice.
+    // Back to the bot's task model keeps the task's own window ("Same as bot 400K")...
     await sec.locator('[data-run-model]').selectOption('');
+    assert.equal(await sec.locator('[data-run-compact]').inputValue(), '400000', 'the window stays when the model goes');
     await sec.locator('[data-run-model-apply]').click();
-    await sec.locator('.task-run-now', {hasText: "The bot's task model"}).waitFor();
-    assert.deepEqual(posted.at(-1), {model: null});
+    await sec.locator('.task-run-now', {hasText: "The bot's task model · compacts at 400K"}).waitFor();
+    assert.deepEqual(posted.at(-1), {model: null, compact_at: 400000});
+    // ...and Same as bot clears the task's own choice.
+    await sec.locator('[data-run-compact]').selectOption('');
+    await sec.locator('[data-run-model-apply]').click();
+    await sec.locator('.task-run-now', {hasText: /^The bot's task model$/}).waitFor();
+    assert.deepEqual(posted.at(-1), {model: null, compact_at: null});
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 }

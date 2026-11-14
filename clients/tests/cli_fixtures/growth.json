@@ -273,7 +273,7 @@
     null
    ]
   ],
-  "stdout": "id  truth for  system      reach    may\ns1  ad spend   Google Ads  mcp:ads\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
+  "stdout": "id  truth for      system         reach    may  fills          health\ns1  ad spend       Google Ads     mcp:ads       typed by hand  -\ns4  new customers  Signups sheet  person        new_customers  failing: column \"channel\" not found\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
   "stderr": "",
   "exit": 0
  },
@@ -300,7 +300,7 @@
     null
    ]
   ],
-  "stdout": "id  truth for  system      reach    may\ns1  ad spend   Google Ads  mcp:ads\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
+  "stdout": "id  truth for      system         reach    may  fills          health\ns1  ad spend       Google Ads     mcp:ads       typed by hand  -\ns4  new customers  Signups sheet  person        new_customers  failing: column \"channel\" not found\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
   "stderr": "",
   "exit": 0
  },
@@ -414,6 +414,183 @@
  {
   "argv": [
    "growth",
+   "source",
+   "add",
+   "--truth-for",
+   "new customers",
+   "--system",
+   "Signups sheet",
+   "--sync",
+   "file",
+   "--map",
+   "new_customers=signups",
+   "--map",
+   "channel=source"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_add",
+    {
+     "map": [
+      "new_customers=signups",
+      "channel=source"
+     ],
+     "operation_id": null,
+     "sync_kind": "file",
+     "system": "Signups sheet",
+     "truth_for": "new customers"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources",
+    {
+     "truth_for": "new customers",
+     "system": "Signups sheet",
+     "sync_kind": "file",
+     "sync_map": {
+      "fields": {
+       "new_customers": "signups"
+      },
+      "channel": "source"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "add",
+   "--truth-for",
+   "customers",
+   "--system",
+   "Billing export",
+   "--sync",
+   "file",
+   "--map",
+   "customers"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_add",
+    {
+     "map": [
+      "customers"
+     ],
+     "operation_id": null,
+     "sync_kind": "file",
+     "system": "Billing export",
+     "truth_for": "customers"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources",
+    {
+     "truth_for": "customers",
+     "system": "Billing export",
+     "sync_kind": "file",
+     "sync_map": {
+      "shape": "customers"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "sync",
+   "s1"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_sync",
+    {
+     "id": "s1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "growth/sources/s1/sync",
+    {}
+   ]
+  ],
+  "stdout": "Synced: 4 numbers written, 1 held beside a typed number.\n  not written: row 4 podcast 2026-10: no such channel\n",
+  "stderr": "tico: 1",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "resolve",
+   "--channel",
+   "search-ads",
+   "--month",
+   "2026-10",
+   "--field",
+   "new_customers",
+   "--keep",
+   "typed"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_resolve",
+    {
+     "channel": "search-ads",
+     "field": "new_customers",
+     "keep": "typed",
+     "month": "2026-10",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "growth/cohorts/conflicts",
+    {
+     "channel": "search-ads",
+     "month": "2026-10",
+     "field": "new_customers",
+     "keep": "typed"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
    "cohort",
    "list"
   ],
@@ -421,6 +598,7 @@
    [
     "tico_growth_cohort_list",
     {
+     "customers": false,
      "operation_id": null
     }
    ]
@@ -619,7 +797,7 @@
     null
    ]
   ],
-  "stdout": "kpis:\n  - id: k1\n    name: Bookings\n    role: north_star\n",
+  "stdout": "Nothing yet.\nNext (step 2 of 4): Add your first channel: where customers come from (search ads, SEO, partners).\n  Only the owner or an admin can: Ana.\n",
   "stderr": "",
   "exit": 0
  },
@@ -736,6 +914,204 @@
      "sources": {
       "new": "1",
       "spend": "1"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "setup"
+  ],
+  "tools": [
+   [
+    "tico_growth_setup",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/setup",
+    null
+   ]
+  ],
+  "stdout": "Set up: 1 of 4 steps done.\n  done  1. Settings  2026-11-13\n  next  2. First channel\n        3. Its source\n        4. First month\nFirst opened: 2026-11-13\nNext (step 2 of 4): Add your first channel: where customers come from (search ads, SEO, partners).\n  Only the owner or an admin can: Ana.\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "setup",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_setup",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/setup",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"done\": false,\n  \"steps\": [\n    {\n      \"step\": \"settings\",\n      \"done\": true,\n      \"at\": \"2026-11-13T09:00:00Z\"\n    },\n    {\n      \"step\": \"channel\",\n      \"done\": false,\n      \"at\": null\n    },\n    {\n      \"step\": \"source\",\n      \"done\": false,\n      \"at\": null\n    },\n    {\n      \"step\": \"month\",\n      \"done\": false,\n      \"at\": null\n    }\n  ],\n  \"next\": {\n    \"step\": \"channel\",\n    \"number\": 2,\n    \"says\": \"Add your first channel: where customers come from (search ads, SEO, partners).\",\n    \"command\": \"tico growth channel add <slug> --name \\\"<name>\\\"\",\n    \"tool\": \"tico_growth_channel_add\",\n    \"you_may\": false,\n    \"who_may\": [\n      {\n        \"ref\": \"human:ana\",\n        \"name\": \"Ana\"\n      }\n    ],\n    \"bots_may\": false\n  },\n  \"channel\": null,\n  \"you_may\": {\n    \"settings\": false,\n    \"channels\": false,\n    \"sources\": false,\n    \"months\": true\n  },\n  \"first_opened_at\": \"2026-11-13T08:55:00Z\",\n  \"numbers_seen_at\": null\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--by",
+   "plan",
+   "--month",
+   "2026-09"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "by": "plan",
+     "customers": false,
+     "month": "2026-09",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/computed?by=plan&month=2026-09",
+    null
+   ]
+  ],
+  "stdout": "period   plan  new  day 30         day 90              day 180             LTV      CAC        payback    source\n2026-09  pro   71   78.9% (56/71)  not yet 2026-12-29  not yet 2027-03-29  640      not split  not split  computed\n2026-09  solo  19   12 of 19       not yet 2026-12-29  not yet 2027-03-29  too few  not split  not split  computed\nUnder 30 customers a cohort shows counts only: too few for a rate.\nCAC and payback are per channel: spend is not split by plan.\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--by",
+   "segment",
+   "--grain",
+   "week",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "by": "segment",
+     "customers": false,
+     "grain": "week",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/computed?by=segment&grain=week",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"by\": \"plan\",\n  \"grain\": \"month\",\n  \"min_cohort\": 30,\n  \"cac_note\": \"spend is not split by plan\",\n  \"keys_visible\": false,\n  \"cohorts\": [\n    {\n      \"period\": \"2026-09\",\n      \"value\": \"pro\",\n      \"too_few\": false,\n      \"new_customers\": {\n        \"value\": 71,\n        \"status\": \"ok\"\n      },\n      \"kept_d30\": {\n        \"value\": 78.9,\n        \"status\": \"ok\",\n        \"count\": 56,\n        \"denominator\": 71\n      },\n      \"kept_d90\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2026-12-29\"\n      },\n      \"kept_d180\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2027-03-29\"\n      },\n      \"ltv\": {\n        \"value\": 640,\n        \"status\": \"ok\"\n      },\n      \"cac\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      },\n      \"payback_months\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      }\n    },\n    {\n      \"period\": \"2026-09\",\n      \"value\": \"solo\",\n      \"too_few\": true,\n      \"new_customers\": {\n        \"value\": 19,\n        \"status\": \"ok\"\n      },\n      \"kept_d30\": {\n        \"value\": null,\n        \"status\": \"too_few\",\n        \"count\": 12,\n        \"denominator\": 19\n      },\n      \"kept_d90\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2026-12-29\"\n      },\n      \"kept_d180\": {\n        \"value\": null,\n        \"status\": \"not_yet\",\n        \"fills_on\": \"2027-03-29\"\n      },\n      \"ltv\": {\n        \"value\": null,\n        \"status\": \"too_few\"\n      },\n      \"cac\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      },\n      \"payback_months\": {\n        \"value\": null,\n        \"status\": \"not_split\"\n      }\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "campaigns",
+   "--months",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_campaigns",
+    {
+     "months": 3,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/finance-campaigns?months=3",
+    null
+   ]
+  ],
+  "stdout": "From Finance: Meta Ads act_111. Unmapped spend counts on Unknown.\nkey                 campaign      month    spend\nmeta_ads:111:brand  Brand search  2026-10  4210.5\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "update",
+   "s1",
+   "--sync",
+   "finance_ad_spend",
+   "--campaign",
+   "meta_ads:111:brand=search-ads",
+   "--campaign",
+   "meta_ads:111:promo=unknown"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_update",
+    {
+     "campaign": [
+      "meta_ads:111:brand=search-ads",
+      "meta_ads:111:promo=unknown"
+     ],
+     "id": "s1",
+     "operation_id": null,
+     "sync_kind": "finance_ad_spend"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/sources/s1",
+    {
+     "sync_kind": "finance_ad_spend",
+     "sync_map": {
+      "campaigns": {
+       "meta_ads:111:brand": "search-ads",
+       "meta_ads:111:promo": "unknown"
+      }
      }
     }
    ]

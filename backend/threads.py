@@ -58,6 +58,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import people as P
 from . import read_cache
+from . import secret_drop
 from .store import H, Problem
 
 AUDIENCES = ("company", "team", "members", "task", "home", "personal", "participants", "meeting")
@@ -491,13 +492,14 @@ def actor_viewer(c, actor):
 def _task_readable(c, v, task_id):
     if not task_id:
         return True
+    # Who reads a task never depends on its tags, so none are read here (task_privacy.prime_rooms primes the rows).
     if v.auth is not None:
         try:
-            v.auth.task(c, v.who, task_id)
+            v.auth.task(c, v.who, task_id, tags=False)
             return True
         except Problem:
             return False
-    row = H.task(c, task_id)
+    row = H.task_untagged(c, task_id)
     return bool(row) and H.task_private_readable(c, v.actor, row)
 
 
@@ -2538,6 +2540,7 @@ def post(
     start=None,
     in_reply_to=None,
     reach=False,
+    unmarked=None,
 ):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it.
@@ -2547,7 +2550,10 @@ def post(
     nothing, and its Send anyway replays this same post.
 
     `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
-    (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
+    (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not.
+
+    `unmarked`: digests of suspect keys the person un-marked in the Tools chat (backend/secret_drop.py), the only
+    suspects its backstop lets through, and only from the web."""
     H.check_message_refs(refs)
     thread = thread_row(c, thread_id) if thread_id else start
     on_task = H.message_task_id({"refs": refs}, thread)
@@ -2571,6 +2577,7 @@ def post(
                 start=start,
                 in_reply_to=in_reply_to,
                 reach=reach,
+                unmarked=unmarked,
             ),
         )
 
@@ -2609,6 +2616,7 @@ def _post(
     start,
     in_reply_to,
     reach,
+    unmarked=None,
 ):
     actor, v = _actor_of(principal)
     if origin and origin.get("origin_id") and start is not None:
@@ -2662,6 +2670,8 @@ def _post(
     text = str(body or "")
     if not text.strip() and not attachments:
         raise Problem("empty", "Write the message", 422)
+    # A key in a person's message to the Tools owner is refused before it is stored, delivered or mirrored.
+    secret_drop.refuse(c, thread, actor, text, via, unmarked)
     given_refs, refs = refs, dict(refs or {})
     if via:
         refs["via"] = via
@@ -4301,6 +4311,7 @@ def edit_message(c, principal, message_id, body):
     thread = thread_row(c, message["conversation_id"])
     if v is not None and not can_post(c, v, thread):
         raise Problem("forbidden", "You can read this thread but not post in it", 403)
+    secret_drop.refuse(c, thread, actor, text)  # an edit is checked as a new message is
     # A private run's edit may only put its words in its own private task's thread (the same check as its post): a
     # company message it wrote earlier cannot carry them. The edit keeps the run's provenance: the message is restricted
     # (its per-message check applies) and the event names the run.
@@ -4355,6 +4366,14 @@ def apply_revision(c, origin, *, body=None, deleted=False):
     if row is None:
         return None
     row = dict(row)
+    if not deleted:  # a replicated edit is checked as a new message is, before its text is kept anywhere
+        secret_drop.refuse(
+            c,
+            thread_row(c, row["conversation_id"]),
+            str(origin.get("actor") or row["sender_id"]),
+            str(body or ""),
+            "slack",
+        )
     row["refs"] = _refs_of(row)  # the table's JSON text, as H.message_view decodes it
     if c.execute("SELECT 1 FROM message_revisions WHERE origin_id=? AND revision=?", (oid, revision)).fetchone():
         return None

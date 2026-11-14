@@ -23,7 +23,8 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   const own = (url: string): boolean => { try { return new URL(url, location.href).origin === location.origin; } catch { return false; } };
   addEventListener('error', event => {
     const target = event.target;
-    if (target instanceof HTMLScriptElement && own(target.src)
+    // A page part fetched later (data-part, ui/app/parts.ts) that fails shows Retry in its page, not this card.
+    if (target instanceof HTMLScriptElement && own(target.src) && !target.dataset.part
         || target instanceof HTMLLinkElement && target.rel === 'stylesheet' && own(target.href)
         || !appLoaded && event instanceof ErrorEvent && /\/tico\/ui\//.test(event.filename)) {
       failed = true; check();
@@ -66,7 +67,7 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   if (document.readyState === 'loading') addEventListener('DOMContentLoaded', check, {once: true}); else check();
 })();
 // The sidebar as this browser last left it, so the first paint is the rail that stays (index.html): Company and Library
-// open unless folded here, Rules folded unless opened here, each open on its own pages (ui/app/redesign.ts rdLibSync, the same keys),
+// folded unless opened here, Rules folded unless opened here, each open on its own pages (ui/app/redesign.ts rdLibSync, the same keys),
 // the Team section's fold, and Finance and Finish setup as the last answer for whoever signed in here last said
 // (redesign.js rdNavShow, which corrects them once this visit's answer is in, and forgets them for anyone else and on
 // sign-out). The app's code keeps each mark with its row from then on.
@@ -74,12 +75,10 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   const root = document.documentElement, hash = location.hash.split('?')[0] ?? '';
   const read = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
   const under = (base: string) => hash === base || hash.startsWith(base + '/');
-  root.classList.toggle('nav-co-shut', read('tico.nav.company') === 'closed' && !['#/strategy', '#/growth', '#/finance', '#/automations', '#/listening', '#/rules'].some(under));
+  root.classList.toggle('nav-co-shut', read('tico.nav.company') !== 'open' && !['#/strategy', '#/growth', '#/finance', '#/automations', '#/listening', '#/rules'].some(under));
   // Contacts is on the Team header, so its page leaves Library as it is (redesign.ts rdInLibrary).
   const inLibrary = ['#/docs', '#/meetings', '#/tools', '#/library'].some(under) && !under('#/library/contacts') && !under('#/library/directory');
-  root.classList.toggle('nav-lib-shut', read('tico.nav.library') === 'closed' && !inLibrary);
-  // The Calendar row's day bar, where this server last answered with calendars (ui/app/calendar-row.ts calRowKeep).
-  root.classList.toggle('nav-cal', read('tico.nav.calendar') === 'on');
+  root.classList.toggle('nav-lib-shut', read('tico.nav.library') !== 'open' && !inLibrary);
   // The Team section folded here (ui/app/sidebar.ts renderNavSections).
   let folded = [];
   try { folded = JSON.parse(read('hub.nav.collapsed') || '[]'); } catch { /* unreadable: nothing folded */ }

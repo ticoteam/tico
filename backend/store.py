@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS assignments(
 CREATE TABLE IF NOT EXISTS jobs(
  id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
  bot_id TEXT NOT NULL REFERENCES bots(id), state TEXT NOT NULL DEFAULT 'queued',
- created_at TEXT NOT NULL, attempt_id TEXT);
+ created_at TEXT NOT NULL, attempt_id TEXT, release TEXT, release_after TEXT, released TEXT);
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(bot_id,state,created_at);
 CREATE TABLE IF NOT EXISTS job_recovery(
  job_id TEXT PRIMARY KEY REFERENCES jobs(id), attempt_id TEXT NOT NULL REFERENCES attempts(id),
@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS attempts(
  settled_at TEXT, trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT,
  trigger_kind TEXT, trigger_source TEXT, purpose TEXT, rule_id TEXT, writes INTEGER, outcome TEXT,
  did_nothing INTEGER, rotated TEXT, session_kind TEXT, session_why TEXT,
- input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER, prompt_tokens INTEGER,
+ input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER, prompt_tokens INTEGER, cache_write_tokens INTEGER,
  usage_model TEXT, provider TEXT, est_cost_usd REAL, billing TEXT, usage_reason TEXT,
  CHECK (job_id IS NULL OR (runner_id IS NOT NULL AND generation IS NOT NULL AND token_hash IS NOT NULL
         AND state IS NOT NULL AND lease_until IS NOT NULL)));
@@ -299,7 +299,8 @@ CREATE TABLE IF NOT EXISTS credentials(
  ciphertext BLOB, nonce BLOB, source TEXT NOT NULL DEFAULT '',
  revision INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  updated_by TEXT NOT NULL, created_by TEXT, member_stored INTEGER NOT NULL DEFAULT 0,
- tool_id TEXT REFERENCES tools(id), access_level TEXT NOT NULL DEFAULT 'read_write', expires_on TEXT);
+ tool_id TEXT REFERENCES tools(id), access_level TEXT NOT NULL DEFAULT 'read_write', expires_on TEXT,
+ has_totp INTEGER NOT NULL DEFAULT 0, holder TEXT, has_password INTEGER NOT NULL DEFAULT 1);
 -- Person-owned remote MCP credentials use the same vault cipher, with no reveal/grant door.
 CREATE TABLE IF NOT EXISTS granola_connections(
  actor TEXT PRIMARY KEY, id TEXT NOT NULL, email TEXT NOT NULL,
@@ -1192,7 +1193,7 @@ def _close_idle(conns):
 
 
 # Secrets an answer shows once: never kept with the idempotency record, so a replay answers without them.
-SHOWN_ONCE = ("requester_token", "push_addresses", "push_address")
+SHOWN_ONCE = ("requester_token", "push_addresses", "push_address", "signing_secret")
 
 
 class Store:
@@ -2129,6 +2130,10 @@ class Store:
                 from .org_rules import ensure as ensure_org_rules
 
                 ensure_org_rules(c)
+                # The built-in rule "Asks to a person", once per team (org_rules.ensure_builtin).
+                from .org_rules import ensure_builtin as ensure_builtin_rules
+
+                ensure_builtin_rules(c)
                 # Their verdict cache (backend/org_rule_check.py). Unversioned the same way.
                 from .org_rule_check import ensure as ensure_org_rule_check
 
@@ -2712,7 +2717,7 @@ class Store:
                     # Several receipts contain only an acknowledgement; the route or file request still binds the turn.
                     if operation.startswith("/api/v2/attempts/"):
                         aid = operation.split("/")[4]
-                    elif operation in ("/api/v2/files/uploads", "/api/v2/files/imports"):
+                    elif operation in ("/api/v2/files/uploads", "/api/v2/files/imports", "/api/v2/files/dates"):
                         aid = body.get("attempt") or aid
                 replay_principal = replay_auth.runner_receipt_principal(c, identity, aid)
                 if identity.role == "runner" and operation == "/api/v2/jobs/claim" and isinstance(saved, dict):

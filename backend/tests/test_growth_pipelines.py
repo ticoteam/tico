@@ -114,7 +114,7 @@ def test_monitoring_is_made_only_where_its_experiments_pipeline_is(c):
 def test_a_persons_request_moves_on_by_itself_only_from_a_by_hand_stage_that_says_so(c):
     _set_up(c, software="yes")
     product = PS.read(c, "product")
-    assert [s["requests_move_on"] for s in product["stages"]] == [True] + [False] * (len(product["stages"]) - 1)
+    assert not any(s["requests_move_on"] for s in product["stages"])  # Product's Ideas is not by hand (idea_checks)
     growth = PS.read(c, "growth-experiments")
     assert not any(s["requests_move_on"] for s in growth["stages"])
     record = PS.read(c, "growth-experiments")
@@ -167,6 +167,7 @@ def test_a_persons_idea_rests_in_growth_ideas_while_in_product_it_still_moves_on
     growth = _idea(c, ANA, "Try a referral banner", assignee=OWNER)
     request = X.new_task(c, ANA, "Saved carts", "product")
     X.settled(c)
+    X.ideas_checked(c)
     N.check(c)
     N.check(c)
     assert E.task(c, growth["id"])["stage_id"] == IDEAS

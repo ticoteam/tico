@@ -10,7 +10,7 @@ problem to engineering as a bug.
 Steps:
 1. Write the starting state: the account or test data, the product version, the plan, the browser or client, the
    region and the integration. Use the sandbox where it can show the problem. Otherwise use only the data and access
-   granted for this work (AGENT.md, Sending).
+   granted for this work (AGENTS.md, Sending).
 2. Write the steps as numbered actions, each with the value you used. A step that says "set the time zone" is not
    enough: write the zone.
 3. Run the steps once. Note the result, with the time and the version.

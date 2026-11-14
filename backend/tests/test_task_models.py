@@ -802,11 +802,11 @@ def test_a_fallback_drops_a_task_effort_the_bots_own_model_does_not_take(api):
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"], turn["config"]["compact_at"]) == (
         "grok-4.6",
         "low",
-        600000,
+        500000,  # the task's 600k, lowered to fit grok 4.6's 500k window
     )
     finish(api, machine, turn, {"model": "grok-4.6", "runtime": "grok", "harness": "grok", "effort": "low"})
     note = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
-    assert note.startswith("Ran on the bot's model grok-4.6 (low), context 600k: task model claude-haiku-5-5 (max)")
+    assert note.startswith("Ran on the bot's model grok-4.6 (low), context 500k: task model claude-haiku-5-5 (max)")
     assert note.endswith("(task effort max is not one grok-4.6 takes)")
 
 
@@ -868,7 +868,8 @@ def test_an_old_task_model_record_runs_on_its_model_as_before(api):
         BS.write(c, 'ops', config)
     _, turn = task_turn(api, machine)
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
-    assert "compact_at" not in turn["config"]
+    # No context length in the record: the turn compacts at its model's default (providers.compact_default).
+    assert turn["config"]["compact_at"] == 150_000
 
 
 def test_a_task_context_length_of_100k_saves_and_reads_back(api):

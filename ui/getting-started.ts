@@ -30,14 +30,6 @@ async function gsState(change: {tour?: boolean; checklist?: boolean}): Promise<v
   } catch { /* a choice that did not save is asked again next time */ }
 }
 
-// Setup's last step (ui/app/welcome.ts) still has a row open: the computer (a hosted company's Tico Cloud computers
-// count, as the step shows them ticked) or the subscription line, not done or skipped. Finish setup stays in the
-// sidebar for the owner until both are, or until they hide it for good from that step (the checklist's own `dismissed`).
-function gsSetupOpen(): boolean {
-  if (!GS || GS.dismissed || S.me?.role !== 'owner') return false;
-  const computer = GS.items.find(item => item.id === 'computer'), sub = GS.items.find(item => item.id === 'subscription');
-  return (!!computer && !computer.done && !S.config?.hosted) || (!!sub && !sub.done && !sub.skipped);
-}
 
 // "Ask to add or edit your bots" (it opens Ask, ui/app/ask-panel.ts), for whoever may add bots, until there is one of your own.
 function gsOrgHint(): void {
@@ -62,11 +54,14 @@ function gsTourStart(): void {
   if (GS_TOUR) return;
   const phone = drawerMedia.matches;
   if (phone) setDrawer(true, false, $('#mobile-more'));
+  // Docs, Strategy and Meetings sit in Company and Library, which start folded: the tour shows them open while it runs
+  // and leaves the person's own fold as it was (getting-started.css html.gs-touring).
+  document.documentElement.classList.add('gs-touring');
   const steps = GS_STEPS.filter(([selector]) => {
     const el = $('#side ' + selector);
     return el && el.getClientRects().length;
   });
-  if (!steps.length) { if (phone) setDrawer(false); return; }
+  if (!steps.length) { document.documentElement.classList.remove('gs-touring'); if (phone) setDrawer(false); return; }
   const root = document.createElement('div');
   root.className = 'gs-tour';
   root.setAttribute('role', 'dialog');
@@ -155,6 +150,7 @@ function gsTourEnd(): void {
   const {root, phone, opener} = GS_TOUR;
   GS_TOUR.off?.();
   root.remove();
+  document.documentElement.classList.remove('gs-touring');
   GS_TOUR = null;
   if (phone) setDrawer(false, true);
   // Started from the account menu, which closed as the tour took focus: back to the button that opens it.
@@ -170,7 +166,11 @@ window.gsBoot = function () {
   // owner of a team that came in from the company file gets the welcome (onbWelcome) in its place.
   void gsRefresh().then(async seen => {
     if (!seen || seen.tour_seen || S.config?.onboarding_needed || S.route === '#/welcome') return;
-    if (!(await onbWelcome())) gsTourStart();
+    // Only the owner of a team that came in from the company file gets the welcome: its code (a page part,
+    // ui/parts.json, with Settings') loads only then, so every other first visit stays the shell alone.
+    if (S.me?.role !== 'owner') { gsTourStart(); return; }
+    const setup = await get<Partial<OnbRecord> | null>('/v2/setup').catch(() => null);
+    if (!(setup?.completed && setup.company_import && await onbWelcome(setup))) gsTourStart();
   });
   // What is set up changes seldom, and this tab's own steps write it at once (gsState): every 5 minutes is enough.
   setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 300000);

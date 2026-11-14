@@ -6,7 +6,8 @@ they add up to, and the sources each number's truth lives in.
   monthly budget, the source its numbers come from, and an optional guardrail (a KPI that must stay at or under a max).
   A channel's marketing work is the open tasks labelled `channel:<slug>` (backend/marketing_tasks.py).
 - Sources (`gtm_sources`): which system is the truth for what, and how a bot reaches it. Two live sources for the
-  same thing are a conflict the page shows.
+  same thing are a conflict the page shows. A source with a sync kind fills numbers itself, and each number records
+  where it came from (backend/growth_sync.py).
 - Cohorts (`growth_cohorts`): one row per channel per month (no channel is Unknown). `economics` turns them into CAC,
   LTV and payback.
 - The KPI tree is four columns on `kpis` (parent, growth role, funnel stage, loop): at most one North Star.
@@ -15,11 +16,15 @@ Who may: everyone signed in reads. The owner and admins (people) write channels,
 owns a channel may change its why, stage and budget; any bot or admin records cohorts.
 """
 
+import asyncio
 import json
 import math
+import secrets
 
 from fastapi import Request
 
+from . import growth_finance as GF
+from . import growth_sync as GS
 from . import hubdb as H
 from . import models as M
 from .brand import admin
@@ -104,7 +109,14 @@ def economics_row(cohort, settings):
         "payback_months": round(cac / per_month, 2) if cac is not None and per_month else None,
         "quality": cohort.get("quality") or "actual",
         "sources": cohort.get("sources") or {},
+        "origins": cohort.get("origins") or {},
+        **{k: cohort[k] for k in BESIDE if k in cohort},
     }
+
+
+# What `beside` adds to a channel's month and its economics carry: each figure's origin, and with customer facts how many
+# customers it was computed from, the windows not yet due or too few, their dates, counts and a differing typed actual.
+BESIDE = ("computed_or_typed", "computed_from", "status", "fills_on", "counts", "typed")
 
 
 def economics_total(cohorts, settings):
@@ -112,6 +124,7 @@ def economics_total(cohorts, settings):
     total = aggregate(cohorts, settings)
     return {
         **economics_row({**total, "channel": "all"}, settings),
+        "computed_or_typed": None,
         "channel": None,
         "name": "All channels",
         "track": None,
@@ -155,6 +168,7 @@ def aggregate(cohorts, settings):
         "profit_month": weighted(profit),
         "quality": "estimate" if any(c.get("quality") == "estimate" for c in cohorts) else "actual",
         "sources": {},
+        "origins": {},
     }
     if total["new_customers"] is not None:
         total["new_customers"] = int(total["new_customers"])
@@ -170,6 +184,9 @@ def settings(c):
         "unit": row.get("unit") or "customers",
         "revenue_month": row.get("revenue_month"),
         "margin_pct": row.get("margin_pct"),
+        "min_cohort": row.get("min_cohort") or 30,
+        "time_zone": row.get("time_zone") or "UTC",
+        "key_readers": json.loads(row.get("key_readers") or "[]"),
     }
 
 
@@ -212,13 +229,14 @@ def channel_tasks(c, auth, who, slug, limit=CHANNEL_TASKS_MAX):
 
 
 def source_view(row):
-    return {k: row.get(k) for k in SOURCE_FIELDS}
+    """A source and, when it syncs, its kind, what it fills, its mapping and health (backend/growth_sync.py)."""
+    return {**{k: row.get(k) for k in SOURCE_FIELDS}, **GS.view(row)}
 
 
 def sources(c, include_retired=False):
     rows = H._rows(
         c.execute(
-            "SELECT * FROM gtm_sources"
+            f"SELECT {GS.listed(c)} FROM gtm_sources"
             + ("" if include_retired else " WHERE retired_at IS NULL")
             + " ORDER BY truth_for COLLATE NOCASE, system COLLATE NOCASE"
         )
@@ -233,7 +251,7 @@ def sources(c, include_retired=False):
     }
 
 
-def _cohort_view(row, slugs):
+def _cohort_view(row, slugs, origins=None):
     return {
         "id": row["id"],
         "channel": slugs.get(row["channel_id"]) if row["channel_id"] else None,
@@ -253,6 +271,7 @@ def _cohort_view(row, slugs):
             )
         },
         "sources": json.loads(row["sources"] or "{}"),
+        "origins": (origins or {}).get(row["id"], {}),
         "updated_by": row["updated_by"],
         "updated_at": row["updated_at"],
     }
@@ -262,7 +281,310 @@ def _slugs(c):
     return {r[0]: r[1] for r in c.execute("SELECT id, slug FROM growth_channels")}
 
 
+def cohort_months(c, until=None):
+    """Every month with a typed cohort row or customer facts, newest first; `until` (YYYY-MM) leaves out later ones."""
+    from . import growth_computed as GX
+
+    found = {r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts")} | set(GX.months(c))
+    return sorted((m for m in found if not until or m <= until), reverse=True)
+
+
+# A typed figure customer facts can compute. The rest (spend, bot cost, revenue, margin) stay typed.
+COMPUTED_FIELDS = ("new_customers", "kept_d30", "kept_d90", "kept_d180")
+TYPED_FIELDS = (
+    "spend",
+    "bot_cost",
+    "new_customers",
+    "kept_d30",
+    "kept_d90",
+    "kept_d180",
+    "revenue_month",
+    "margin_pct",
+)
+
+
+UPLOAD_NAME = "Upload in Growth"  # what a computed figure's origin calls customers loaded as a CSV in Growth
+
+
+def customer_sources(c):
+    """{growth_customers.source: {source_id, source, at}}: each customers source by name, with its newest load."""
+    names = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, system FROM gtm_sources")}
+    out = {}
+    for source, at in c.execute("SELECT source, max(loaded_at) FROM growth_customer_loads GROUP BY source"):
+        sid = source.removeprefix("source:") if source.startswith("source:") else None
+        out[source] = {"source_id": sid, "source": names.get(sid, "") if sid else UPLOAD_NAME, "at": at}
+    return out
+
+
+def choices(c, cohort_ids):
+    """{cohort id: {field: growth_computed_choices row}}: what each channel's owner was asked and chose."""
+    out = {}
+    for i in range(0, len(cohort_ids), 500):
+        part = cohort_ids[i : i + 500]
+        for r in H._rows(
+            c.execute(f"SELECT * FROM growth_computed_choices WHERE cohort_id IN ({','.join('?' * len(part))})", part)
+        ):
+            out.setdefault(r["cohort_id"], {})[r["field"]] = r
+    return out
+
+
+def _same(a, b):
+    return a is not None and b is not None and abs(float(a) - float(b)) < 1e-9
+
+
+def beside(row, computed, slug, month, sources=None, chosen=None):
+    """A channel's month with its computed figures laid over the typed ones (#287's rule: computed wins over a typed
+    estimate; a typed actual that differs is kept in `typed`, beside it). Every figure's `computed_or_typed` says which,
+    and its `origins` entry (#304's) says where it came from: typed or synced as before, or `computed` with
+    `computed_from` and the customers `sources` it was loaded from (`customer_sources`). A computed window that has not
+    come due, or a cohort under the minimum, is null with its `status` (not_yet, too_few) and `fills_on` date.
+
+    A typed actual that differs from a computed figure that is due is the channel's owner's to choose (`choose`): the
+    figure's origin carries `differs` {typed, chosen}. Keeping the typed number makes it the figure again (typed, with the
+    computed value in `differs`); keeping the computed one drops the typed number from beside it. `chosen` is the
+    growth_computed_choices rows of this cohort row: a choice holds while the typed number is the one it was about. No
+    customer facts: the typed row as it was."""
+    view = (
+        dict(row)
+        if row
+        else {
+            "id": None,
+            "channel": slug,
+            "month": month,
+            **{k: None for k in TYPED_FIELDS},
+            "quality": "actual",
+            "sources": {},
+            "origins": {},
+            "updated_by": None,
+            "updated_at": None,
+        }
+    )
+    view["computed_or_typed"] = {k: "typed" for k in TYPED_FIELDS if view.get(k) is not None}
+    if not computed:
+        return view
+    actual = bool(row) and (row.get("quality") or "actual") == "actual"
+    known = sources or {}
+    named = [known.get(s) or {"source_id": None, "source": s, "at": None} for s in computed.get("sources") or ()]
+    origins = view["origins"] = dict(view.get("origins") or {})
+    typed, status, fills, counts = {}, {}, {}, {}
+    for field in COMPUTED_FIELDS:
+        figure, old = computed[field], view.get(field)
+        held = actual and old is not None and (figure["status"] != "ok" or old != figure["value"])
+        differs = held and figure["status"] == "ok"
+        choice = (chosen or {}).get(field) if differs else None
+        keep = choice["keep"] if choice and _same(choice["typed"], old) else None
+        if keep == "typed":
+            was = origins.get(field) or {"origin": "typed", "quality": "actual", "source_id": None, "source": None}
+            origins[field] = {**was, "differs": {"typed": old, "chosen": "typed", "computed": figure["value"]}}
+            continue
+        if held and keep is None:
+            typed[field] = old
+        conflict = (origins.get(field) or {}).get("conflict")  # a synced source's value held beside the typed one
+        origins[field] = {
+            "origin": "computed",
+            "quality": "actual",
+            "source_id": None,
+            "source": None,
+            "sources": named,
+            "computed_from": computed["computed_from"],
+            "at": max((s["at"] for s in named if s.get("at")), default=None),
+            "by": None,
+            "conflict": conflict,
+            "differs": {"typed": old, "chosen": keep} if differs else None,
+        }
+        view[field] = figure["value"]
+        view["computed_or_typed"][field] = "computed"
+        if figure["status"] != "ok":
+            status[field] = figure["status"]
+        if figure.get("fills_on"):
+            fills[field] = figure["fills_on"]
+        if "denominator" in figure:
+            counts[field] = {"count": figure["count"], "denominator": figure["denominator"]}
+    view.update(computed_from=computed["computed_from"], status=status, fills_on=fills, counts=counts, typed=typed)
+    return view
+
+
 def cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
+    """Monthly cohorts by channel, newest month first, each with its computed figures beside the typed ones
+    (`beside`). A channel's month with customer facts and no typed row is listed too."""
+    from . import growth_computed as GX
+
+    typed = _typed_cohorts(c, channel_slug, month, limit)
+    computed = GX.by_channel_month(c, month)
+    if channel_slug:
+        computed = {k: v for k, v in computed.items() if (k[0] or UNKNOWN) == channel_slug}
+    names = customer_sources(c) if computed else {}
+    chosen = choices(c, [r["id"] for r in typed]) if computed else {}
+    out, seen = [], set()
+    for row in typed:
+        key = (row["channel"], row["month"])
+        seen.add(key)
+        out.append(beside(row, computed.get(key), *key, names, chosen.get(row["id"])))
+    out += [beside(None, figures, *key, names) for key, figures in computed.items() if key not in seen]
+    out.sort(key=lambda r: (r["channel"] is None, r["channel"] or ""))
+    out.sort(key=lambda r: r["month"], reverse=True)
+    return out[: max(1, min(int(limit or COHORTS_PAGE), COHORTS_MAX))]
+
+
+# The owner's choice between a typed actual and the computed figure (spec AC-14): how the ask names each figure.
+CHOICE_WORDS = {
+    "new_customers": "new customers",
+    "kept_d30": "kept to day 30",
+    "kept_d90": "kept to day 90",
+    "kept_d180": "kept to day 180",
+}
+MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _said(field, value):
+    if value is None:
+        return "none"
+    return f"{float(value):g}" + ("" if field == "new_customers" else "%")
+
+
+def _month_said(month):
+    return f"{MONTH_NAMES[int(month[5:7]) - 1]} {month[:4]}"
+
+
+def may_choose(found, actor, is_admin):
+    """The channel's owner or an admin; Unknown has no owner, so only an admin."""
+    return bool(is_admin or (found and found.get("owner_ref") and found["owner_ref"] == actor))
+
+
+def choose(c, actor, is_admin, slug, month, field, keep):
+    """The channel's owner (or an admin) keeps a typed actual or the computed figure it differs from. The choice holds
+    across later loads while the typed number stays the one it was about; asking again for it never happens."""
+    found = channel(c, slug) if slug else None
+    if slug and not found:
+        raise Problem("not_found", f"No channel {slug}", 404)
+    if not may_choose(found, actor, is_admin):
+        who = f"{found['name']}'s owner or an admin" if found else "An admin"
+        raise Problem("forbidden", f"{who} chooses between the typed and the computed number", 403)
+    if keep not in ("typed", "computed"):
+        raise Problem("validation", "keep is typed or computed", 422)
+    view = next((r for r in cohorts(c, slug or UNKNOWN, month, COHORTS_MAX) if r["month"] == month), None)
+    differs = ((view or {}).get("origins") or {}).get(field, {}).get("differs") if field in COMPUTED_FIELDS else None
+    if not view or not view.get("id") or not differs:
+        raise Problem(
+            "not_found", f"No typed {field} for {slug or UNKNOWN} in {month} differs from the computed one", 404
+        )
+    at = H.now()
+    c.execute(
+        "INSERT INTO growth_computed_choices (cohort_id, field, typed, keep, chosen_by, chosen_at) VALUES (?,?,?,?,?,?) "
+        "ON CONFLICT(cohort_id, field) DO UPDATE SET typed=excluded.typed, keep=excluded.keep, "
+        "chosen_by=excluded.chosen_by, chosen_at=excluded.chosen_at",
+        (view["id"], field, differs["typed"], keep, actor, at),
+    )
+    computed = differs.get("computed", view.get(field)) if differs.get("chosen") == "typed" else view.get(field)
+    H.event(
+        c,
+        actor,
+        "growth.cohort.choice",
+        view["id"],
+        {"field": field, "month": month, "kept": keep, "typed": differs["typed"], "computed": computed},
+    )
+    return {
+        "cohort": view["id"],
+        "field": field,
+        "kept": keep,
+        "value": differs["typed"] if keep == "typed" else computed,
+    }
+
+
+def typed_beside(c, computed_rows, actor, is_admin):
+    """For the Retention card cut by channel, monthly: on each computed cohort with a typed actual that differs, `typed`
+    {field: {typed, chosen, may}} (`beside`'s `differs`, and whether the reader may choose)."""
+    months = {r["period"] for r in computed_rows}
+    if not months:
+        return
+    slugs = _slugs(c)
+    rows = []
+    for month in months:
+        rows += H._rows(c.execute("SELECT * FROM growth_cohorts WHERE month=?", (month,)))
+    origins = GS.origins_view(c, [r["id"] for r in rows])
+    chosen = choices(c, [r["id"] for r in rows])
+    typed = {}
+    for raw in rows:
+        row = _cohort_view(raw, slugs, origins)
+        typed[(row["channel"] or UNKNOWN, row["month"])] = row
+    owners = {r[0]: r for r in c.execute("SELECT slug, owner_ref FROM growth_channels")}
+    for figures in computed_rows:
+        row = typed.get((figures["value"], figures["period"]))
+        if not row:
+            continue
+        view = beside(row, figures, row["channel"], row["month"], None, chosen.get(row["id"]))
+        found = owners.get(figures["value"])
+        may = may_choose({"owner_ref": found[1]} if found else None, actor, is_admin)
+        said = {}
+        for field in COMPUTED_FIELDS:
+            differs = view["origins"].get(field, {}).get("differs")
+            if differs:
+                said[field] = {"typed": differs["typed"], "chosen": differs["chosen"], "may": may}
+        if said:
+            figures["typed"] = said
+
+
+def ask_owners(c, month=None):
+    """Tell each channel's owner, once per month and figure, of the numbers typed as actual that differ from the ones
+    computed from customers: after a customers load (every month) and after a number is typed as actual (its month).
+    Every such number is on the Growth page to choose. A channel with no owner (Unknown, or none set) is an admin's
+    there and is not marked asked, so an owner set later is told at the next load. Returns how many numbers were asked
+    about."""
+    from . import growth_computed as GX
+
+    computed = GX.by_channel_month(c, month)
+    if not computed:
+        return 0
+    slugs = _slugs(c)
+    sql, args = "SELECT * FROM growth_cohorts", ()
+    if month:
+        sql, args = sql + " WHERE month=?", (month,)
+    rows = H._rows(c.execute(sql, args))
+    origins = GS.origins_view(c, [r["id"] for r in rows])
+    chosen = choices(c, [r["id"] for r in rows])
+    found = {r["slug"]: r for r in H._rows(c.execute("SELECT slug, name, owner_ref FROM growth_channels"))}
+    asked, at = {}, H.now()
+    for raw in rows:
+        row = _cohort_view(raw, slugs, origins)
+        key = (row["channel"], row["month"])
+        ch = found.get(row["channel"]) if row["channel"] else None
+        if key not in computed or not ch or not ch.get("owner_ref"):
+            continue
+        mine = chosen.get(row["id"], {})
+        view = beside(row, computed[key], *key, None, mine)
+        for field in COMPUTED_FIELDS:
+            differs = view["origins"].get(field, {}).get("differs")
+            if not differs or differs["chosen"]:
+                continue
+            was = mine.get(field)
+            if was and was.get("asked_at") and _same(was["typed"], differs["typed"]):
+                continue
+            c.execute(
+                "INSERT INTO growth_computed_choices (cohort_id, field, typed, asked_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(cohort_id, field) DO UPDATE SET typed=excluded.typed, asked_at=excluded.asked_at, "
+                "keep=NULL, chosen_by=NULL, chosen_at=NULL",
+                (row["id"], field, differs["typed"], at),
+            )
+            line = (
+                f"{CHOICE_WORDS[field]} in {_month_said(row['month'])} "
+                f"(typed {_said(field, differs['typed'])}, computed {_said(field, view[field])})"
+            )
+            asked.setdefault(row["channel"], []).append(line)
+    for slug, lines in asked.items():
+        ch = found[slug]
+        shown = "; ".join(lines[:5]) + (f"; and {len(lines) - 5} more" if len(lines) > 5 else "")
+        H.notice(
+            c,
+            H.KEEPER,
+            ch["owner_ref"],
+            f"Growth: numbers typed as actual for {ch['name']} differ from the ones computed from customers: {shown}. "
+            "Keep the typed number or the computed one on the Growth page.",
+            refs={"growth_channel": slug},
+        )
+    return sum(len(lines) for lines in asked.values())
+
+
+def _typed_cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
     where, args = [], []
     if channel_slug:
         if channel_slug == UNKNOWN:
@@ -286,7 +608,8 @@ def cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
             args + [limit],
         )
     )
-    return [_cohort_view(r, slugs) for r in rows]
+    origins = GS.origins_view(c, [r["id"] for r in rows])
+    return [_cohort_view(r, slugs, origins) for r in rows]
 
 
 def _latest_value(c, kpi_id):
@@ -327,7 +650,7 @@ def guardrails(c, hidden=()):
 def economics(c, month=None, hidden=()):
     """One month by channel: each channel's row for it, the Unknown row beside them, the total and the guardrails.
     The latest month with cohorts by default."""
-    months = [r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts ORDER BY month DESC")]
+    months = cohort_months(c)
     month = month or (months[0] if months else None)
     conf = settings(c)
     by_slug = {r["slug"]: r for r in H._rows(c.execute("SELECT * FROM growth_channels"))}
@@ -364,11 +687,11 @@ def economics(c, month=None, hidden=()):
     if not rows:
         # A month with no numbers yet still lists every active channel and Unknown, each blank, for the first entry.
         rows = [
-            {"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}}
+            {"channel": ch["slug"], "name": ch["name"], "track": ch["track"], **blank, "sources": {}, "origins": {}}
             for ch in by_slug.values()
             if not ch.get("retired_at")
         ]
-        rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}})
+        rows.append({"channel": UNKNOWN, "name": "Unknown", "track": None, **blank, "sources": {}, "origins": {}})
     rows.sort(key=lambda r: (r["channel"] == UNKNOWN, (by_slug.get(r["channel"]) or {}).get("sort", 0), r["name"]))
     total = economics_total(inputs, conf)
     if not inputs:
@@ -503,24 +826,184 @@ def channel_retire(c, actor, slug):
     return channel_view(channel(c, slug))
 
 
-def source_create(c, actor, body):
+def _sync_fields(c, fields, sid, kind, catalog=None, before=None):
+    """A synced source's mapping, checked (backend/growth_sync.py check_map), as the JSON column holds it. A database
+    query source's bot must be a live bot and its query a named query of that database that needs no parameter; it
+    keeps the daily automation it had (`before`, the map it held)."""
+    mapping = fields.get("sync_map")
+    if hasattr(mapping, "model_dump"):
+        mapping = mapping.model_dump(exclude_none=True)
+    if kind == "db_query" and before and isinstance(mapping, dict):
+        mapping = {**{k: before[k] for k in GS.DB_KEYS if before.get(k)}, **mapping}  # a remap keeps what it runs
+    out = GS.check_map(c, kind, mapping, sid)
+    if kind == "db_query":
+        found = H.resolve_bot(c, out["bot"])
+        if not found or found.get("state") == "archived":
+            raise Problem("validation", f"No bot {out['bot']} to run the query", 422)
+        out["bot"] = found["id"]
+        _check_query(catalog, out["database"], out["query"])
+        had = (before or {}).get("automation")
+        if had:
+            out["automation"] = had
+    return json.dumps(out, sort_keys=True)
+
+
+def _check_query(catalog, database, query_id):
+    """A daily run passes no parameters, so the named query must exist and need none without a default."""
+    if catalog is None:
+        return
+    try:
+        page = catalog.resolve(database)
+    except Problem:
+        raise Problem(
+            "validation",
+            f"No database {database}: add its page and named queries to the team's config (docs/databases.md)",
+            422,
+        ) from None
+    query = next((q for q in page.get("queries") or [] if q.get("id") == query_id), None)
+    if query is None:
+        raise Problem(
+            "validation",
+            f"No query {query_id} in the {database} catalog (integrations/queries/{database}.yaml); "
+            f"`tico tool query-search {database} <term>` lists them",
+            422,
+        )
+    needs = [p["name"] for p in query.get("params") or [] if p.get("required") and "default" not in p]
+    if needs:
+        raise Problem(
+            "validation",
+            f"Query {query_id} needs {', '.join(needs)}; a daily run passes none, so give each a default",
+            422,
+        )
+
+
+DB_RUN_VIA = "growth source"
+# Fixed words and the source's id only: nothing a person types reaches the bot's turn. The command reads the source's
+# query and database itself.
+DB_RUN_PROMPT = (
+    "Run `tico growth source run {sid}` and reply with the line it prints. It runs this Growth source's named query on "
+    "this computer and posts its rows, or the reason the query failed. Do nothing else."
+)
+
+
+def _start_db_run(c, who, row):
+    """`sync` on a database query source: its query runs on its bot's computer, so start its daily run now. The bot's
+    turn posts the result, which `tico growth source list` then shows. Starting it is running the bot's automation, so
+    it takes the rule POST /api/v2/automations/{id}/run takes (automations.may_change); the source's bot may always
+    start its own run."""
+    from . import automations as AU
+
+    mapping = json.loads(row.get("sync_map") or "{}")
+    found = AU._row(c, mapping.get("automation") or "")
+    if found and who.actor != GS.run_bot(row):
+        AU._require(c, who, AU.flow_of(found), "start the daily run of " + AU.flow_of(found)["owner"])
+    if not found:
+        raise Problem(
+            "conflict", f"{row['system']} has no daily run: connect it again (tico growth source update)", 409
+        )
+    run = AU.queue(c, found, {"manual": {"by": who.actor}}, "manual", manual=True, chain=(found["id"],))
+    if not run:
+        raise Problem("on_hold", f"{row['system']}'s daily run is on hold: release or drop its held runs first", 409)
+    return {
+        "run": None,
+        "source": row["id"],
+        "started": run,
+        "ok": None,
+        "text": f"Started: {mapping['query']} runs on {mapping['database']} now; "
+        "tico growth source list shows the result.",
+    }
+
+
+def _schedule(c, actor, sid, had=None, who=None):
+    """Keep a database query source's daily run in step with it: a schedule automation whose one step is a turn by the
+    bot granted the database. Made when it connects, changed when its bot or query changes, removed when it is retired
+    or stops being a database query source (`had`: the automation its map named before the change). Making or changing
+    it follows the automation rule for its bot (`who`, automations.may_change), as POST /api/v2/automations does: an
+    admin not above the bot may not schedule its turn through a source."""
+    from . import automation_flow as F
+    from . import automations as AU
+
+    row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
+    if not row:
+        return
+    mapping = json.loads(row.get("sync_map") or "{}")
+    aid = mapping.get("automation") or had
+    existing = AU._row(c, aid) if aid else None
+    if row.get("sync_kind") != "db_query" or row.get("retired_at"):
+        if existing:
+            AU.remove(c, actor, existing, via=DB_RUN_VIA)
+        return
+    bot = mapping["bot"]
+    flow = F.check(
+        {
+            "name": f"Growth: sync {row['system']}"[:120],
+            "description": f"Runs {mapping['query']} on {mapping['database']} daily and posts its rows to Growth.",
+            "owner": "bot:" + bot,
+            "enabled": True,
+            "trigger": {"type": "schedule", "cron": GS.DB_CRON, "tz": "UTC"},
+            "steps": [
+                {
+                    "id": "sync",
+                    "type": "bot_turn",
+                    "bot": "bot:" + bot,
+                    "prompt": DB_RUN_PROMPT.format(sid=sid),
+                }
+            ],
+        }
+    )
+    if existing:
+        before = AU.flow_of(existing)
+        if {k: before.get(k) for k in flow} != flow:
+            if who is not None:
+                AU._require(c, who, flow, "schedule a daily run for " + flow["owner"])
+            AU._save(c, actor, aid, flow, before, via=DB_RUN_VIA)
+        return
+    if who is not None:
+        AU._require(c, who, flow, "schedule a daily run for " + flow["owner"])
+    aid = "auto_" + H.new_id()
+    AU._save(c, actor, aid, flow, None, via=DB_RUN_VIA)
+    mapping["automation"] = aid
+    c.execute("UPDATE gtm_sources SET sync_map=? WHERE id=?", (json.dumps(mapping, sort_keys=True), sid))
+
+
+def source_create(c, actor, body, catalog=None, who=None):
     H._writer(c, actor)
+    # A file or bot cost comes from a person; Finance ad spend through its own import and stored keys.
+    reach = body.reach_kind or {"file": "person", "bot_cost": "person", GF.KIND: "credential"}.get(body.sync_kind or "")
+    if not reach:
+        raise Problem("validation", "reach_kind is mcp, credential, url or person", 422)
+    sid = H.new_id()
     row = {
-        "id": H.new_id(),
+        "id": sid,
         "truth_for": body.truth_for,
         "system": body.system,
-        "reach_kind": body.reach_kind,
+        "reach_kind": reach,
         "reach_ref": body.reach_ref,
         "may": body.may,
         "owner_ref": _owner_ref(c, body.owner_ref),
         "created_at": H.now(),
     }
+    if body.sync_kind == GF.KIND:
+        GF.may_connect(c, actor)
+    if body.sync_kind:
+        row.update(
+            sync_kind=body.sync_kind,
+            sync_map=_sync_fields(c, {"sync_map": body.sync_map}, sid, body.sync_kind, catalog),
+            refresh_hours=body.refresh_hours,
+        )
     c.execute(f"INSERT INTO gtm_sources ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})", list(row.values()))
-    H.event(c, actor, "growth.source.create", row["id"], {"truth_for": body.truth_for, "system": body.system})
+    H.event(
+        c,
+        actor,
+        "growth.source.create",
+        row["id"],
+        {"truth_for": body.truth_for, "system": body.system, "sync_kind": body.sync_kind},
+    )
+    _schedule(c, actor, sid, who=who)
     return source_view(H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (row["id"],)))
 
 
-def source_update(c, actor, sid, fields, retire=False):
+def source_update(c, actor, sid, fields, retire=False, catalog=None, who=None):
     H._writer(c, actor)
     row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
     if not row:
@@ -530,6 +1013,13 @@ def source_update(c, actor, sid, fields, retire=False):
     for required in ("truth_for", "system", "reach_kind", "reach_ref", "may"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
+    if "sync_map" in fields or "sync_kind" in fields:
+        kind = fields.get("sync_kind", row.get("sync_kind"))
+        if kind == GF.KIND:
+            GF.may_connect(c, actor)
+        mapping = fields.get("sync_map") if "sync_map" in fields else json.loads(row.get("sync_map") or "{}")
+        before = json.loads(row.get("sync_map") or "{}")
+        fields["sync_map"] = _sync_fields(c, {"sync_map": mapping}, sid, kind, catalog, before) if kind else "{}"
     if retire and not row["retired_at"]:
         fields["retired_at"] = H.now()
     changed = {k: v for k, v in fields.items() if row.get(k) != v}
@@ -537,7 +1027,15 @@ def source_update(c, actor, sid, fields, retire=False):
         c.execute(
             f"UPDATE gtm_sources SET {', '.join(k + '=?' for k in changed)} WHERE id=?", list(changed.values()) + [sid]
         )
-        H.event(c, actor, "growth.source." + ("retire" if retire else "update"), sid, changed)
+        logged = dict(changed)
+        if "sync_map" in logged and (changed.get("sync_kind") or row.get("sync_kind")) == GF.KIND:
+            # The event log is read more widely than Finance: it says how many campaigns are mapped, never which.
+            logged["sync_map"] = json.dumps(GF.public_map(json.loads(logged["sync_map"] or "{}")), sort_keys=True)
+        H.event(c, actor, "growth.source." + ("retire" if retire else "update"), sid, logged)
+        _schedule(c, actor, sid, json.loads(row.get("sync_map") or "{}").get("automation"), who)
+        after = {**row, **changed}
+        if GS.is_customers(row) and (after.get("retired_at") or not GS.is_customers(after)):
+            GS.forget_customers(c, actor, row)
     return source_view(H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,)))
 
 
@@ -556,6 +1054,7 @@ def cohort_set(c, actor, body):
     fields = {k: getattr(body, k) for k in body.model_fields_set if k not in ("channel", "month", "sources")}
     if "quality" in fields and fields["quality"] is None:
         fields["quality"] = "actual"
+    GS.refuse_typed(c, row, [k for k in fields if k in GS.FIELDS], slug or UNKNOWN, body.month)
     sources = dict(json.loads(row["sources"] or "{}")) if row else {}
     if body.sources is not None:
         for key, text in body.sources.items():
@@ -577,8 +1076,20 @@ def cohort_set(c, actor, body):
             f"INSERT INTO growth_cohorts ({', '.join(fields)}) VALUES ({', '.join('?' * len(fields))})",
             list(fields.values()),
         )
+    if "quality" in fields:
+        c.execute("UPDATE growth_origins SET quality=? WHERE cohort_id=? AND origin='typed'", (fields["quality"], cid))
+    saved = H._one(c, "SELECT * FROM growth_cohorts WHERE id=?", (cid,)) or {}
+    GS.record_typed(
+        c, cid, {k: v for k, v in fields.items() if k in GS.FIELDS}, saved.get("quality") or "actual", actor
+    )
     H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month})
-    return _cohort_view(H._one(c, "SELECT * FROM growth_cohorts WHERE id=?", (cid,)), _slugs(c))
+    if (saved.get("quality") or "actual") == "actual" and (
+        "quality" in fields or any(k in COMPUTED_FIELDS for k in fields)
+    ):
+        # A typed actual (newly typed, or an estimate now said to be actual) that differs from a computed figure: its
+        # owner is asked, once.
+        ask_owners(c, saved["month"])
+    return _cohort_view(saved, _slugs(c), GS.origins_view(c, [cid]))
 
 
 def settings_update(c, actor, fields):
@@ -586,6 +1097,17 @@ def settings_update(c, actor, fields):
     c.execute("INSERT OR IGNORE INTO growth_settings (id) VALUES (1)")
     if "unit" in fields and fields["unit"] is None:
         raise Problem("validation", "unit cannot be cleared", 422)
+    if fields.get("time_zone"):
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(fields["time_zone"])
+        except (ZoneInfoNotFoundError, ValueError):
+            raise Problem("validation", "time_zone is an IANA zone, such as Europe/London", 422) from None
+    if "key_readers" in fields:
+        # Who besides the owner and admins sees customer keys in a figure's trace: people and bots, by any name.
+        readers = {str(_owner_ref(c, ref)) for ref in fields["key_readers"] or [] if ref}
+        fields["key_readers"] = json.dumps(sorted(readers))
     if fields:
         c.execute(f"UPDATE growth_settings SET {', '.join(k + '=?' for k in fields)} WHERE id=1", list(fields.values()))
         H.event(c, actor, "growth.settings", "settings", fields)
@@ -622,7 +1144,23 @@ def kpi_fields(c, actor, kpi_id, fields):
 
 # ----------------------------------------------------------------------------- routes
 def install(app, store, auth, mutate):
+    from . import growth_setup as SETUP
     from .goal_routes import _hidden_owners, kpi_editable
+
+    def answer(who, out, seen=False):
+        """A read's answer with what the caller may do and Growth's setup (backend/growth_setup.py)."""
+        return SETUP.attach(store, auth, who, out, seen=seen)
+
+    def wrote(c, who, result):
+        """After a write: the setup steps it finished get their first done date, and the answer says what is next,
+        so the four steps chain without a read between them."""
+        SETUP.record(c, who.actor)
+        return {**result, "setup": SETUP.block(c, auth, who)}
+
+    from . import growth_computed, growth_customers
+
+    growth_customers.install(app, store, auth, mutate)  # customer facts in: load, delete
+    growth_computed.install(app, store, auth)  # cohorts computed from them
 
     def reader(who):
         auth.domain(who)
@@ -634,23 +1172,26 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/growth/channels")
     def growth_channels(request: Request, include_retired: bool = False):
-        """The channels, by sort then name. `may_edit`: the caller adds and changes any channel (owner or admin)."""
+        """The channels, by sort then name. `may_edit`: the caller adds and changes any channel (owner or admin);
+        `you_may` says what the caller may do per action and `setup` what is left to set up (backend/growth_setup.py)."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return {"channels": channels(c, include_retired), "may_edit": admin(auth, who)}
+            out = {"channels": channels(c, include_retired), "may_edit": admin(auth, who)}
+        return answer(who, out)
 
     @app.get("/api/v2/growth/channels/{slug}")
     def growth_channel(request: Request, slug: str):
         """One channel, retired or not, with its open marketing tasks (`tasks`: labelled channel:<slug>, the ones the
-        reader may see)."""
+        reader may see), what the caller may do and what is left to set up."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
             row = channel(c, slug)
             if not row:
                 raise Problem("not_found", f"No channel {slug}", 404)
-            return {**channel_view(row), "tasks": channel_tasks(c, auth, who, slug)}
+            out = {**channel_view(row), "tasks": channel_tasks(c, auth, who, slug)}
+        return answer(who, out, seen=True)
 
     @app.post("/api/v2/growth/channels")
     def growth_channel_add(request: Request, body: M.GrowthChannelCreate):
@@ -659,7 +1200,7 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "adds a channel")
-            return channel_create(c, who.actor, body)
+            return wrote(c, who, channel_create(c, who.actor, body))
 
         return mutate(request, body, work)
 
@@ -686,7 +1227,7 @@ def install(app, store, auth, mutate):
                         "an admin changes the rest",
                         403,
                     )
-            return channel_update(c, who.actor, slug, fields)
+            return wrote(c, who, channel_update(c, who.actor, slug, fields))
 
         return mutate(request, body, work)
 
@@ -704,11 +1245,12 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/growth/sources")
     def growth_sources(request: Request, include_retired: bool = False):
         """Where each number's truth lives, and the things two live sources both claim. `may_edit`: the caller
-        changes sources (owner or admin)."""
+        changes sources (owner or admin); `you_may` per action, `setup` what is left to set up."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return {**sources(c, include_retired), "may_edit": admin(auth, who)}
+            out = {**sources(c, include_retired), "may_edit": admin(auth, who)}
+        return answer(who, out)
 
     @app.post("/api/v2/growth/sources")
     def growth_source_add(request: Request, body: M.GrowthSourceCreate):
@@ -717,7 +1259,9 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "adds a source")
-            return source_create(c, who.actor, body)
+            return wrote(
+                c, who, source_create(c, who.actor, body, getattr(request.app.state, "integrations", None), who)
+            )
 
         return mutate(request, body, work)
 
@@ -728,7 +1272,18 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "changes a source")
-            return source_update(c, who.actor, sid, {k: getattr(body, k) for k in body.model_fields_set})
+            return wrote(
+                c,
+                who,
+                source_update(
+                    c,
+                    who.actor,
+                    sid,
+                    {k: getattr(body, k) for k in body.model_fields_set},
+                    catalog=getattr(request.app.state, "integrations", None),
+                    who=who,
+                ),
+            )
 
         return mutate(request, body, work)
 
@@ -743,14 +1298,113 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
+    @app.post("/api/v2/growth/sources/{sid}/rows")
+    def growth_source_rows(request: Request, sid: str, body: M.GrowthSourceRows):
+        """Owner, admin or the source's own owner: one run of a synced source from a CSV, rows, or the error its
+        fetch ended with. A run that cannot write answers ok false with the reason; nothing it wrote changes."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            row = GS.may_run(c, sid, who.actor, admin(auth, who))
+            sent = [k for k in ("csv", "rows", "error") if getattr(body, k) is not None]
+            if len(sent) != 1:
+                raise Problem("validation", "Send one of csv, rows or error", 422)
+            return GS.run(c, who.actor, row, rows=body.rows, csv_text=body.csv, error=body.error)
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/growth/sources/{sid}/address")
+    def growth_source_address(request: Request, sid: str, body: M.Empty):
+        """Owner, admin or the source's own owner: a signed address for a file source, so a script can post its CSV.
+        The old one stops working; the address and its signing secret are shown this once."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            row = GS.may_run(c, sid, who.actor, admin(auth, who))
+            if row["sync_kind"] != "file":
+                raise Problem("validation", "Only a file source has an address", 422)
+            secret = secrets.token_urlsafe(32)
+            c.execute(
+                "INSERT INTO growth_source_secrets (source_id, signing_secret) VALUES (?,?) "
+                "ON CONFLICT(source_id) DO UPDATE SET signing_secret=excluded.signing_secret",
+                (sid, request.app.state.vault.cipher.seal(c, GS.sealed_as(sid), secret)),
+            )
+            H.event(c, who.actor, "growth.source.address", sid, {})
+            return {
+                "source": sid,
+                "address": request.app.state.store.settings.public_url.rstrip("/") + GS.IN_PATH + sid,
+                "signing_secret": secret,
+                "signed_with": "HMAC-SHA256 of the body in the X-Signature header, as sha256=<hex>",
+            }
+
+        return mutate(request, body, work)
+
+    @app.post(GS.IN_PATH + "{sid}")
+    async def growth_source_post(request: Request, sid: str):
+        """A signed address: a script posts a CSV (the request body) with `X-Signature: sha256=<hmac of the body>`. A
+        bad or missing signature is refused and writes nothing; a good one runs the source as an upload does."""
+        raw = await request.body()
+        if len(raw) > GS.PAYLOAD_MAX:
+            raise Problem("too_large", f"The file is over {GS.PAYLOAD_MAX // 1000} KB", 413)
+        signature = request.headers.get("x-signature", "")
+        vault = request.app.state.vault
+
+        def take():
+            with store.transaction() as c:
+                row = H._one(c, "SELECT * FROM gtm_sources WHERE id=?", (sid,))
+                kept = H._one(c, "SELECT signing_secret FROM growth_source_secrets WHERE source_id=?", (sid,))
+                secret = vault.cipher.unseal(c, GS.sealed_as(sid), kept["signing_secret"]) if row and kept else None
+                if not row or not secret or row.get("sync_kind") != "file" or row.get("retired_at"):
+                    raise Problem("not_found", "No such address", 404)
+                if not GS.signed(secret, raw, signature):
+                    raise Problem("unauthorized", "The signature does not match the body", 401)
+                try:
+                    text = raw.decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    raise Problem("validation", "The file is not UTF-8 text", 422) from None
+                return GS.run(c, row.get("owner_ref") or H.KEEPER, row, csv_text=text)
+
+        return await asyncio.to_thread(take)
+
+    @app.post("/api/v2/growth/sources/{sid}/sync")
+    def growth_source_sync(request: Request, sid: str, body: M.Empty):
+        """Owner, admin or the source's own owner: run a synced source now. A file source runs its last file again
+        (after a remap, say)."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            row = GS.may_run(c, sid, who.actor, admin(auth, who))
+            if row["sync_kind"] == "file":
+                if not row.get("last_payload"):
+                    raise Problem(
+                        "conflict", f"{row['system']} has no file yet: send one with tico growth source push", 409
+                    )
+                return GS.run(c, who.actor, row, csv_text=row["last_payload"])
+            if row["sync_kind"] == "db_query":
+                return _start_db_run(c, who, row)
+            if row["sync_kind"] == GF.KIND:
+                return GF.sync(c, who.actor, row)
+            if row["sync_kind"] == "bot_cost":
+                rows, notes = GS.bot_cost_rows(c, first=not row.get("last_good_run_at"))
+                return GS.run(c, who.actor, row, rows=rows, notes=notes)
+            raise Problem("conflict", f"{row['system']} cannot be run from here yet", 409)
+
+        return mutate(request, body, work)
+
     @app.get("/api/v2/growth/cohorts")
     def growth_cohorts(
         request: Request, channel: str | None = None, month: str | None = None, limit: int = COHORTS_PAGE
     ):
-        """Monthly cohorts, newest month first; `channel=unknown` is the Unknown row."""
-        reader(request.state.identity)
+        """Monthly cohorts, newest month first; `channel=unknown` is the Unknown row. `you_may` and `setup` as the other
+        Growth reads."""
+        who = request.state.identity
+        reader(who)
         with store.read() as c:
-            return {"cohorts": cohorts(c, channel, month, limit)}
+            out = {"cohorts": cohorts(c, channel, month, limit)}
+        return answer(who, out)
 
     @app.put("/api/v2/growth/cohorts")
     def growth_cohort_set(request: Request, body: M.GrowthCohortSet):
@@ -761,25 +1415,58 @@ def install(app, store, auth, mutate):
             auth.domain(who)
             if who.role != "bot" and not admin(auth, who):
                 raise Problem("forbidden", "The owner, an admin or a bot records a cohort", 403)
-            return cohort_set(c, who.actor, body)
+            return wrote(c, who, cohort_set(c, who.actor, body))
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/growth/cohorts/conflicts")
+    def growth_cohort_conflict(request: Request, body: M.GrowthConflictResolve):
+        """The source's owner or an admin: a number someone typed as actual that a synced source disagrees with. Keep
+        the typed number (the source's value is not raised again) or use the source's (it then belongs to it). With
+        `against: computed` (or `keep: computed`), the channel's owner or an admin: a typed actual that differs from the
+        figure computed from customer facts; keep typed or computed, and the choice holds across later loads."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            slug = body.channel if body.channel not in (None, "", UNKNOWN) else None
+            if body.keep == "computed" or body.against == "computed":
+                # A typed actual beside the figure computed from customer facts: the channel's owner chooses.
+                return choose(c, who.actor, admin(auth, who), slug, body.month, body.field, body.keep)
+            channel_id = ""
+            if slug:
+                found = channel(c, slug)
+                if not found:
+                    raise Problem("not_found", f"No channel {slug}", 404)
+                channel_id = found["id"]
+            row = H._one(
+                c, "SELECT id FROM growth_cohorts WHERE coalesce(channel_id,'')=? AND month=?", (channel_id, body.month)
+            )
+            if not row:
+                raise Problem("not_found", f"No numbers for {slug or UNKNOWN} in {body.month}", 404)
+            return GS.resolve(c, who.actor, admin(auth, who), row["id"], body.field, body.keep)
 
         return mutate(request, body, work)
 
     @app.get("/api/v2/growth/economics")
     def growth_economics(request: Request, month: str | None = None):
-        """CAC, LTV and payback per channel for one month (the latest by default), the total and the guardrails."""
+        """CAC, LTV and payback per channel for one month (the latest by default), the total and the guardrails;
+        `you_may` and `setup` as the other Growth reads."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return economics(c, month, _hidden_owners(c, auth, who))
+            out = economics(c, month, _hidden_owners(c, auth, who))
+        return answer(who, out, seen=True)
 
     @app.get("/api/v2/growth/settings")
     def growth_settings(request: Request):
-        """The unit counted, the default revenue and margin. `may_edit`: the caller changes them (owner or admin)."""
+        """The unit counted, the default revenue and margin. `may_edit`: the caller changes them (owner or admin);
+        `you_may` per action, `setup` what is left to set up."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return {**settings(c), "may_edit": admin(auth, who)}
+            out = {**settings(c), "may_edit": admin(auth, who)}
+        return answer(who, out)
 
     @app.put("/api/v2/growth/settings")
     def growth_settings_update(request: Request, body: M.GrowthSettingsUpdate):
@@ -788,14 +1475,44 @@ def install(app, store, auth, mutate):
 
         def work(c):
             editor(who, "changes the growth settings")
-            return settings_update(c, who.actor, {k: getattr(body, k) for k in body.model_fields_set})
+            return wrote(c, who, settings_update(c, who.actor, {k: getattr(body, k) for k in body.model_fields_set}))
 
         return mutate(request, body, work)
 
     @app.get("/api/v2/growth/kpis")
     def growth_kpis(request: Request):
-        """Every KPI the caller may read with its latest value, target and place in the KPI tree."""
+        """Every KPI the caller may read with its latest value, target and place in the KPI tree; `you_may` and `setup`
+        as the other Growth reads."""
         who = request.state.identity
         reader(who)
         with store.read() as c:
-            return kpis(c, _hidden_owners(c, auth, who), lambda record: kpi_editable(c, who, record))
+            out = kpis(c, _hidden_owners(c, auth, who), lambda record: kpi_editable(c, who, record))
+        return answer(who, out)
+
+    @app.get("/api/v2/growth/setup")
+    def growth_setup(request: Request):
+        """Growth's first run: the four steps (settings, a channel, its source, its first month), when each was first
+        done, the next one with its CLI command and MCP tool and whether the caller may do it (else who may), what the
+        caller may do per action, and when the team first opened Growth and first saw its numbers."""
+        who = request.state.identity
+        reader(who)
+        answer(who, {})  # the first open, when it is one
+        with store.read() as c:
+            return SETUP.show(c, auth, who)
+
+    @app.post("/api/v2/growth/setup/shown")
+    def growth_setup_shown(request: Request, body: M.Empty):
+        """A person's Get started panel said "you're set up" (ui/app/growth-start.ts): it is said once per team, so the
+        panel does not come back. Before setup is done it records nothing. Answers as GET /api/v2/growth/setup."""
+        who = request.state.identity
+
+        def work(c):
+            reader(who)
+            if who.role == "bot":
+                raise Problem(
+                    "forbidden", "The Get started panel is a person's; a bot reads GET /api/v2/growth/setup", 403
+                )
+            SETUP.shown(c)
+            return SETUP.show(c, auth, who)
+
+        return mutate(request, body, work)

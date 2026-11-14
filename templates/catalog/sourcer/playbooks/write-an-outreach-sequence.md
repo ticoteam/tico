@@ -3,7 +3,7 @@
 Triggered by the slate, or by a task that names a person to approach for a role. Budget 10 minutes a person.
 
 Inputs: the person's public profile link and the one piece of their work that matches a required criterion; the role file;
-the sender named in `state.md`; and the pay range and location rule from the role file, where the team allows them to be
+the sender named in `knowledge/sourcing-practice.md`; and the pay range and location rule from the role file, where the team allows them to be
 stated.
 
 Outcome: three short messages for one person. Each one goes out only when the task asks for it, a granted Tool allows it, and
@@ -26,7 +26,7 @@ If you cannot find one specific thing, the person does not get a message. A gene
 3. The range and location or remote rule, where the team allows it.
 4. One easy question ("Open to a 20 minute chat next week?").
 
-Sign as the sender named in `state.md`. No flattery, no "exciting opportunity", no pressure.
+Sign as the sender named in `knowledge/sourcing-practice.md`. No flattery, no "exciting opportunity", no pressure.
 
 ## 3. Touch two (day 5), under 60 words
 

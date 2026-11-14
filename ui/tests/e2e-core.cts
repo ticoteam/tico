@@ -23,8 +23,12 @@ const tasks = (() => {
   const CREATED = /[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M/;
 
   async function detail(page: Page) {
+    // A phone shows the rows on its Info tab: the Chat tab hides them.
+    await page.evaluate(() => document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click());
     return page.evaluate(() => {
       const m = document.querySelector('#task-modal') as HTMLDialogElement | null;
+      // Details is one line until opened: its rows are read open.
+      m?.querySelectorAll<HTMLDetailsElement>('details.task-details').forEach(x => { x.open = true; });
       const row = (label: string) => [...(m?.querySelectorAll<HTMLElement>('.prop') || [])]
         .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
       return {
@@ -79,11 +83,16 @@ const tasks = (() => {
 
     // Dana makes the task in the page, for the engineering-manager bot, in the Launch pipeline: it opens once made.
     const page = await open(browser, hub, 'dana', {phone, hash: `#/tasks?pipeline=${pipeline}`});
-    await page.click('#task-new');
+    await page.click('#task-menu');      // New task is in the header's ⋯
+    await page.click('#task-mi-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
-    const owner = await form.locator('select[name=owner] option', {hasText: 'engineering-manager'}).getAttribute('value');
-    await form.locator('select[name=owner]').selectOption(owner!);
+    // For whom: Give to…, searched by the bot's slug.
+    await form.locator('button[data-give-to]').click();
+    await page.locator('.gv-pop input[role=combobox]').fill('engineering-manager');
+    await page.keyboard.press('Enter');
+    await page.locator('.gv-pop').waitFor({state: 'detached'});
+    assert.ok(await form.locator('input[name=owner]').inputValue(), `${where}: an owner is picked`);
     await form.locator(`select[name=pipeline] option[value="${pipeline}"]`).waitFor({state: 'attached', timeout: t(20000)});
     assert.equal(await form.locator('select[name=pipeline]').inputValue(), pipeline, `${where}: the form files it in the pipeline shown`);
     await form.locator('textarea[name=body]').fill('Write the note and send it to the list.');
@@ -147,7 +156,7 @@ const tasks = (() => {
     // The pipeline's columns draw the task, and the page does not scroll sideways.
     go(page, `#/tasks?pipeline=${pipeline}&layout=columns`);
     // A phone shows one stage at a time, under its tabs.
-    await page.locator(phone ? `.pv-phone .tk-row[data-task="${id}"]` : `.tk-card[data-task="${id}"]`).waitFor({timeout: t(20000)});
+    await page.locator(phone ? `.pv-phone .tk-card[data-task="${id}"]` : `.tk-card[data-task="${id}"]`).waitFor({timeout: t(20000)});
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert.ok(overflow <= 1, `${where}: the columns scroll the page sideways by ${overflow}px`);
     assertClean(page, `${where}: columns`);
@@ -172,7 +181,9 @@ const needsYou = (() => {
       assert.ok(rid, `${where}: ${what} is recorded`);
       return async () => (await read(id)).to_leave?.find(r => r.requirement_id === rid);
     };
-    const question = await ask('Plan the beta', {line: QUESTION, choices: ['Yes', 'No']}, 'the bot asks a question');
+    // A bot's question to a person says why it matters, what each choice does and which it recommends (backend/ask_shape.py).
+    const question = await ask('Plan the beta', {line: QUESTION, why: 'The beta invitations go out on Friday.', choices: ['Yes', 'No'],
+      details: ['The beta opens to the waiting list on Friday.', 'The beta waits a week for the fixes.'], recommend: 'Yes'}, 'the bot asks a question');
     const ok = await ask('Set the beta budget', {line: OK, kind: 'ok'}, 'the bot asks for an OK');
 
     const page = await open(browser, hub, 'dana', {phone, hash: '#/tasks'});
@@ -180,7 +191,9 @@ const needsYou = (() => {
     expectFailure(page, 404, '^/api/v2/oks/[^/]+$', 'GET');
     const row = (text: string) => page.locator('#task-body [data-need]', {hasText: text}).first();
     await row(QUESTION).waitFor({timeout: t(20000)});
-    await row(OK).waitFor({timeout: t(20000)});
+    // An OK row leads with its task's title, the ask is its tooltip (a question keeps its line under the title).
+    const okRow = page.locator('#task-body [data-need]', {hasText: 'Set the beta budget'}).first();
+    await okRow.waitFor({timeout: t(20000)});
     assertClean(page, `${where}: needs you drawn`);
 
     // The question: answer it on its card.
@@ -194,7 +207,7 @@ const needsYou = (() => {
     assertClean(page, `${where}: answered`);
 
     // The OK: the card goes on to it (or its row opens it), and she approves it there.
-    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await row(OK).click();
+    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await okRow.click();
     await card.locator('.dc-q', {hasText: OK}).first().waitFor({timeout: t(20000)});
     await card.locator('[data-dc="approve"]:not([disabled])').first().click();
     await until(async () => (await ok())?.met, `${where}: the OK given on the hub`);
@@ -244,12 +257,15 @@ const newBot = (() => {
 
     // A task for it, made in the Tasks page: the owner choice is its id, labelled with its name.
     go(page, '#/tasks');
-    await page.click('#task-new');
+    await page.locator('#task-scope').waitFor();
+    await page.keyboard.press('c');      // C makes a task (the ⋯ › New task case is above)
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
-    const option = form.locator('select[name=owner] option', {hasText: 'Sales Helper'}).first();
-    assert.equal(await option.getAttribute('value'), bot, `${where}: the owner choice is the bot's id`);
-    await form.locator('select[name=owner]').selectOption(bot);
+    await form.locator('button[data-give-to]').click();
+    await page.locator('.gv-pop input[role=combobox]').fill('Sales Helper');
+    await page.keyboard.press('Enter');
+    await page.locator('.gv-pop').waitFor({state: 'detached'});
+    assert.equal(await form.locator('input[name=owner]').inputValue(), bot, `${where}: the owner choice is the bot's id`);
     await form.locator('textarea[name=body]').fill('The sheet is in Files; send it with a short note.');
     await form.locator('button[type=submit]').click();
     // The new task opens once made.
@@ -294,8 +310,12 @@ const newBot = (() => {
     go(page, '#/task/' + task);
     await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
       && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === text, TITLE, {timeout: t(20000)});
-    const owner = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
-      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '');
+    const owner = await page.evaluate(() => {
+      document.querySelector<HTMLElement>('#task-modal [data-task-tab="info"]')?.click();
+      document.querySelectorAll<HTMLDetailsElement>('#task-modal details.task-details').forEach(x => { x.open = true; });
+      return [...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
+      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Owner')?.innerText || '';
+    });
     assert.match(owner, /Sales Helper|revenue-helper/, `${where}: the task's owner row names the bot`);
     assert.doesNotMatch(owner, new RegExp(bot), `${where}: the owner row shows no id`);
     assertClean(page, `${where}: after the rename`);

@@ -8,10 +8,13 @@
 # origin/main on a pull request so a baseline that grew fails too (scripts/ui_baseline.py).
 # ui/sw.ts, the service worker, is left out of ui/tsconfig.json too: it is its own program (ui/tsconfig.worker.json, the
 # WebWorker lib), which must report nothing (check_ui_strict.py --worker-only, run here as well).
+# The page parts (ui/parts.json) are checked with the same TypeScript: no code outside a part uses its names other than
+# through its entries (scripts/check_ui_parts.cjs).
 #   scripts/check_ui_types.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 python3 scripts/gen_ui_types.py
 python3 scripts/ui_baseline.py tsc --check "$@"
 python3 scripts/check_ui_strict.py --worker-only
+npx --yes -p typescript@5.9.3 -c 'node scripts/check_ui_parts.cjs'
 echo "ui types: ok"

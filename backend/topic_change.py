@@ -7,7 +7,7 @@ The gate is plain code, read from what runners already report. The session is th
 would continue (its `bot_sessions` row); its last turn is the newest finished turn on that thread.
 - Warm: that turn finished within its harness's prompt-cache lifetime (CACHE_LIFETIME, WARM_SECONDS when the harness
   is not listed) and read at least WARM_SHARE of its input from the cache (`cached_tokens` over `input_tokens +
-  cached_tokens`). Anything else is cold: no turn, an older one, a small cache hit, or a harness that reports no cache
+  cache_write_tokens + cached_tokens`). Anything else is cold: no turn, an older one, a small cache hit, or a harness that reports no cache
   use (Grok, today).
 - Context size: that turn's newest request of the bot's own (not a subagent's) whole prompt (`attempts.prompt_tokens`,
   uncached + cached), when its runner marked its requests. The turn's summed `input_tokens + cached_tokens` count every
@@ -106,7 +106,7 @@ def last_turn(c, settings, bot):
     if not session or not session[0]:
         return None
     row = c.execute(
-        "SELECT settled_at AS finished_at,input_tokens,cached_tokens,prompt_tokens FROM attempts "
+        "SELECT settled_at AS finished_at,input_tokens,cached_tokens,cache_write_tokens,prompt_tokens FROM attempts "
         "WHERE bot_id=? AND thread_id=? AND settled_at IS NOT NULL ORDER BY settled_at DESC LIMIT 1",
         (bot, session[0]),
     ).fetchone()
@@ -118,6 +118,8 @@ def warmth(turn, now=None):
     if not turn:
         return False, None
     cached, fresh = int(turn.get("cached_tokens") or 0), turn.get("input_tokens")
+    if fresh is not None:
+        fresh = int(fresh) + int(turn.get("cache_write_tokens") or 0)  # a cache write is not a cache hit
     lifetime = CACHE_LIFETIME.get(turn.get("runtime"), WARM_SECONDS)
     context = turn.get("prompt_tokens")
     context = int(context) if context is not None else None

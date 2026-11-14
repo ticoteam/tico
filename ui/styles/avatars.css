@@ -1,11 +1,6 @@
-/* ui/styles/avatars.css — Runtime mark, bot avatars and blobs, status dots.
+/* ui/styles/avatars.css — bot avatars and blobs, status dots.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* Which harness runs a bot: a small muted mark beside the name. The name truncates before the mark does. */
-.rt{flex:none;display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;margin-left:3px;color:var(--muted);opacity:.8}
-.rt svg{width:100%;height:100%;display:block}
-.rt .tool-initials{font-size:8px;font-weight:600;line-height:var(--lh-none);letter-spacing:var(--track-normal)}
 .tree a.node .nm{flex:0 1 auto}
-.botid h1 .rt{width:16px;height:16px;margin-left:8px;vertical-align:middle}
 .tree .cnt{margin-left:auto;font-size:var(--t-xs);color:var(--muted);font-variant-numeric:tabular-nums;background:var(--surface2);padding:0 6px;border-radius:9px}
 /* A bot's DM unread (sidebar.js treeDmBadge): plain, beside any Needs you count. */
 .tree .cnt.tree-dm{color:var(--ink);font-weight:600}
@@ -28,6 +23,9 @@
 .av.bot-tico{background:#172221;box-shadow:inset 0 0 0 1px #ffffff26}
 .av.bot-tico::before{content:"";position:absolute;inset:20%;background:#f7f7f3;-webkit-mask:url('/assets/tico/tico-glyph.svg') center/contain no-repeat;mask:url('/assets/tico/tico-glyph.svg') center/contain no-repeat}
 .av.av-initials{background-image:none;background:hsl(var(--hue,210) 38% 33%);color:#fff;font-weight:600;line-height:var(--lh-none);letter-spacing:.02em}
+/* A group (groupAvatar, ui/app/tools.ts): a rounded square, not a circle, with the groups icon in muted. */
+.av.av-group{border-radius:6px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line)}
+.av.av-group .nav-icon{width:16px;height:16px;font-size:16px;color:var(--muted)}
 img.av-photo{object-fit:cover;background:var(--surface2)}
 .av.needs::after,.av.failed::after{content:"";position:absolute;inset:-4px;border-radius:inherit;pointer-events:none}
 .av.needs::after{inset:auto -1px -1px auto;width:8px;height:8px;background:var(--wait);border:2px solid var(--surface);box-shadow:none;animation:none}  /* a quiet dot, not a pulsing ring */
@@ -47,6 +45,8 @@ img.av-photo{object-fit:cover;background:var(--surface2)}
 .node.cur{background:linear-gradient(90deg,var(--surface2),transparent)}
 .chip{display:inline-flex;align-items:center;gap:6px;color:var(--ink);white-space:nowrap}
 .chip:hover{text-decoration:none;color:var(--ink)}
+/* A person's reports and bots (person-page.ts): chips 16px apart in a row, 8px between rows. */
+.chip-list{display:flex;flex-wrap:wrap;gap:8px 16px}
 @media (prefers-reduced-motion:reduce){.av::after,.av,.av-shape{animation:none!important}}
 
 .proj{color:var(--muted);font-size:.85em;margin-right:5px}

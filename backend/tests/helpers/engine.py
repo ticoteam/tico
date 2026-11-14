@@ -180,6 +180,8 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
                 now,
             ),
         )
+        if spec.get("pick"):
+            c.execute("UPDATE stages SET pick=? WHERE id=?", (json.dumps(spec["pick"]), sid))
         out["stages"][spec["name"]] = sid
         out["requirements"][spec["name"]] = [
             requirement(c, sid, **dict(r, position=i)) for i, r in enumerate(spec.get("requirements") or ())
@@ -190,6 +192,12 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
 def settled(c):
     """Every wake so far has had its run: what is left queued is what a test adds."""
     c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+
+
+def ideas_checked(c):
+    """Jev's duplicate check answered "new" for every idea filed into Product's Ideas (backend/idea_checks.py): they
+    move on when Spec has room, as after the Heartbeat's check."""
+    c.execute("UPDATE idea_checks SET checked_at=?, outcome='new' WHERE checked_at IS NULL", (H.now(),))
 
 
 def new_task(c, by, title, pipeline_id="general", assignee=None, parent=None):

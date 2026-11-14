@@ -72,7 +72,10 @@ def test_follows_model_session_fallback_and_refuses_definition_edits(api):
     ready(api, computer, [branch_id])
     post(api, 'chat/cpo', {'text': 'Review this'}, 'cara-test')
     attempt = claim(api, computer, branch_id)
-    assert all(attempt['config'][key] == value for key, value in settings.items())
+    # The turn's fallback also carries a compact window: with none of its own, the turn's ("Same as bot").
+    fallback = attempt['config']['fallback']
+    assert fallback == {**settings['fallback'], 'compact_at': attempt['config']['compact_at']}
+    assert all(attempt['config'][key] == value for key, value in settings.items() if key != 'fallback')
     post(api, f'attempts/{attempt["id"]}/started', {'thread_id': 'branch-thread'}, computer['token'])
     with api.app.state.store.read() as c:
         session = c.execute("SELECT runtime,model FROM bot_sessions WHERE bot=?", (branch_id,)).fetchone()

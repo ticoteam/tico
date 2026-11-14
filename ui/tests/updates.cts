@@ -21,8 +21,14 @@ type Msg = {id: string; sender_id: string; body: string; created_at: string; con
 type Update = {id: string; bot: string; kind: string; day: string; headline: string; body: string; created_at: string; updated_at: string; read: boolean; replies: number; superseded?: boolean; slides?: unknown};
 type Gate = {held: Promise<unknown>; received: boolean};
 interface PageWin { __badges: (string | null)[]; __staleLoadDone: boolean }
-declare const UPD: {mine: boolean; loading: boolean; fromCache: boolean};
+declare const UPD: {mine: boolean; loading: boolean; fromCache: boolean; archivePending: Set<string>; pending: Set<string>; io?: IntersectionObserver; manualUnread: Set<string>; data: {updates: {id: string; read: boolean}[]}};
+declare const UPD_READS: {sending: Set<string>};
 declare function updLoad(state: typeof UPD): Promise<unknown>;
+declare function updUnreadRefresh(): Promise<unknown>;
+declare function updRender(state: typeof UPD): void;
+declare function updSeen(state: typeof UPD, id: string): void;
+declare function updToggle(state: typeof UPD, id: string): Promise<unknown>;
+declare function updArchive(state: typeof UPD, id: string): Promise<unknown>;
 const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), hour = 3600e3;
 const day = (ms: number) => new Date(now + ms).toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['game', 'Temp Game']].map(([name, display_name]) =>
@@ -53,7 +59,8 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
   const threads: Record<string, Msg[]> = {'u-fin': [{id: 'm1', sender_id: 'human:ana', body: 'Re your update "Brex balance is fine": Thanks, flag anything under $10k', created_at: iso(-2 * hour)},
                              {id: 'm2', sender_id: 'bot:finance', body: 'Will do.', created_at: iso(-hour)}]};
   const archivedIds = new Set<string>(), archiveRequests: Body[] = [];
-  let archiveFails = false, nextListGate: Gate | null = null, holdList: Promise<unknown> | null = null, holdReply: Promise<unknown> | null = null, keepUnread: string | null = null;
+  let holdArchive: Promise<unknown> | null = null;
+  let archiveFails = false, nextListGate: Gate | null = null, holdList: Promise<unknown> | null = null, holdReply: Promise<unknown> | null = null, holdRead: Promise<unknown> | null = null, readFails = false, keepUnread: string | null = null;
   const isArchived = (u: Update) => archivedIds.has(u.id) || !!u.superseded;
   const feed = (kind: string | null, archive = false, includeArchive = false) => {
     const source = kind === 'weekly' ? weekly : updates;
@@ -92,6 +99,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
       if (p === '/api/v2/updates/unread') return json({unread: updates.filter(u => !isArchived(u) && !u.read).length});
       if (p === '/api/v2/updates/archive' && req.method() === 'POST') {
         const body = req.postDataJSON(); archiveRequests.push(body);
+        if (holdArchive) await holdArchive;
         if (archiveFails) return json({error: {code: 'storage_unavailable', detail: 'Synthetic archive failure'}}, 500);
         for (const id of body.ids) { if (body.archived) archivedIds.add(id); else archivedIds.delete(id); }
         return json({updated_at: body.ids.length, archived: body.archived, unread: updates.filter(u => !isArchived(u) && !u.read).length});
@@ -105,6 +113,8 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
       }
       if (p === '/api/v2/updates/read') {
         const body = req.postDataJSON(); posted.push({path: p, body});
+        if (holdRead) await holdRead;                    // held: the server does not count these reads yet
+        if (readFails) return json({error: {code: 'storage_unavailable', detail: 'Synthetic read failure'}}, 500);
         for (const u of updates) if ((body.all || body.ids.includes(u.id)) && u.id !== keepUnread) u.read = body.read !== false;
         return json({marked: body.ids.length, read: body.read !== false});
       }
@@ -146,15 +156,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await company.waitFor();
     assert.match(await company.innerText(), /Company/, 'search finds Company by "overview"');
     await page.evaluate(() => (document.querySelector('#search-modal') as HTMLDialogElement).close());
-    // A folded group's pages are still in search.
-    await page.locator('#side .rd-co-toggle').click();
-    assert.equal(await page.locator('#rd-co').isVisible(), false, 'Company folds');
+    // A folded group's pages are still in search; Company starts folded.
+    assert.equal(await page.locator('#rd-co').isVisible(), false, 'Company folded');
     await page.keyboard.press('Control+k');
     await page.locator('#search-input').fill('strat');
     await page.locator('#search-results li[data-href="#/strategy/market"]').waitFor();
     await page.evaluate(() => (document.querySelector('#search-modal') as HTMLDialogElement).close());
     await page.locator('#side .rd-co-toggle').click();
-    assert.equal(await page.locator('#rd-co').isVisible(), true, 'and opens again');
+    assert.equal(await page.locator('#rd-co').isVisible(), true, 'and opens');
     assert.equal(await page.locator('.side-scroll .nav-link:visible').first().getAttribute('data-nav'), 'tasks', 'Tasks heads the rail');
     await page.waitForFunction(() => (window as unknown as PageWin).__badges.length > 0);
     assert.equal(await page.evaluate(() => (window as unknown as PageWin).__badges[0]), '2', 'the badge opens on the unread count');
@@ -174,9 +183,18 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await page.locator('#upd-mine .upd-lbl').isVisible(), true, 'words on a desktop');
     assert.equal(await page.locator('#upd-feed .upd-headline, #upd-feed .upd-day, #upd-today, .upd-missed, [data-upd-open], .upd-body.clamp').count(), 0);
     assert.match(await page.locator('[data-upd="u-seo"] .upd-body').innerText(), /Published the vacation rental checklist page/);
-    // Seen is read: the visible unread cards are marked in one small request.
+    // Seen is read: the visible unread cards are marked in one small request. While it is unsent or in flight the
+    // server still counts them, so an unread refresh then (the 30 s one, or after a load) must not put the badge back.
+    let releaseRead!: (value?: unknown) => void; holdRead = new Promise(r => { releaseRead = r; });
     await page.waitForFunction(() => !document.querySelector('#upd-feed .upd-card.unread'));
     await page.waitForFunction(() => (document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null)?.hidden === true);
+    await page.evaluate(() => updUnreadRefresh());
+    assert.equal(await page.locator('.side-scroll [data-upd-badge]').evaluate(el => (el as HTMLElement).hidden), true, 'a count asked for before the reads landed leaves the badge alone');
+    // A reload of the list then (switching My bots, a new day) has them unread too: they stay read and off its count.
+    await page.evaluate(() => updLoad(UPD));
+    assert.equal(await page.locator('#upd-feed .upd-card.unread').count(), 0, 'a list asked for before the reads landed keeps them read');
+    assert.equal(await page.locator('.side-scroll [data-upd-badge]').evaluate(el => (el as HTMLElement).hidden), true, 'and off the badge');
+    holdRead = null; releaseRead();
     for (const end = Date.now() + t(10000); !posted.some(x => x.path === '/api/v2/updates/read') && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
     const reads = posted.filter(x => x.path === '/api/v2/updates/read');
     assert.equal(reads.length, 1, 'batched: ' + JSON.stringify(reads));
@@ -185,25 +203,56 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     // No Unread filter. Unread first, then newest; marking one unread (or read)
     // never moves anything while the page is open.
     assert.equal(await page.locator('#upd-unread').count(), 0);
-    // The actions are icons, each named for a screen reader and a tooltip; no words on the card. Reply, Mark unread and
-    // Archive sit at the top right, on the line with the name and the time; no row is left under the update.
+    // One worded action and ⋯ (#282): a bot's card says Reply (with its count, "Reply 1"), at the top right on the line
+    // with the name and the time; Mark read and Archive are words in the ⋯ menu. No icon-only action, no row under the update.
     const acts = page.locator('[data-upd="u-cmo"] .upd-actions .upd-act'), corner = page.locator('[data-upd="u-cmo"] .upd-corner .upd-act');
-    const named = (locator: import('playwright').Locator) => locator.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), (b as HTMLElement).title, b.querySelector('.nav-icon')?.textContent]));
-    const words = (locator: import('playwright').Locator) => locator.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => !(n as Element).classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()));
+    const named = (locator: import('playwright').Locator) => locator.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), b.textContent!.replace(/\s+/g, ' ').trim()]));
     assert.equal(await acts.count(), 0, 'no bottom row');
-    assert.equal(await page.locator('[data-upd="u-cmo"] .upd-actions').evaluate(r => getComputedStyle(r).display), 'none');
-    assert.deepEqual(await named(corner), [['Reply', 'Reply', 'chat_bubble'], ['Mark unread', 'Mark unread', 'mark_email_unread'], ['Archive', 'Archive', 'archive']],
-      'reply, read and archive at the top right');
+    assert.equal(await page.locator('[data-upd="u-cmo"] .upd-actions').count(), 0, 'no row under the update');
+    assert.deepEqual(await named(corner), [['Reply', 'Reply'], ['More', '']], 'Reply as a word, then ⋯');
+    assert.deepEqual(await named(page.locator('[data-upd="u-fin"] .upd-corner .upd-act')), [['Reply, 1 reply', 'Reply 1'], ['More', '']], 'the count follows Reply');
+    assert.equal(await page.locator('#upd-feed .upd-corner .nav-icon').count(), 0, 'no glyph in any corner');
+    assert.equal(await page.locator('#upd-feed [data-upd-toggle], #upd-feed [data-upd-archive]').count(), 0, 'Mark read and Archive are not icons on the card');
+    assert.equal(await page.locator('[data-upd="u-cmo"] .upd-corner').evaluate(c => getComputedStyle(c).opacity), '1', 'the corner does not fade');
     assert.deepEqual(await page.locator('[data-upd="u-cmo"] .upd-corner').evaluate((c: HTMLElement) => {
       const m = c.closest('.upd-meta')!.getBoundingClientRect(), r = c.getBoundingClientRect(), body = c.closest('.upd-main')!.querySelector('.upd-body')!.getBoundingClientRect();
-      // The icons' centre is on the name line; the button's box may reach a little past it (its negative margins).
+      // The actions' centre is on the name line; the button's box may reach a little past it (its negative margins).
       const mid = (r.top + r.bottom) / 2;
       return {onNameLine: mid >= m.top && mid <= m.bottom, atRight: Math.abs(m.right - r.right) <= 10, aboveBody: mid < body.top};
     }), {onNameLine: true, atRight: true, aboveBody: true}, 'the corner is on the name line, at its right end, above the body');
-    assert.deepEqual(await words(corner), ['', '', ''], 'no visible words');
     assert.equal(await page.locator('#upd-feed [data-upd-kids]').count(), 0, 'the List has no reports toggle');
-    await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').click();
-    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-toggle]').getAttribute('aria-label'), 'Mark read', 'Mark unread marked it unread');
+    // ⋯ opens a menu of words; it behaves like every Tico menu.
+    const more = page.locator('[data-upd="u-cmo"] [data-upd-menu]'), menu = page.locator('.thv-pop[role=menu]');
+    const menuItems = () => menu.locator('[role=menuitem]').evaluateAll(els => els.map(e => e.textContent));
+    await more.click();
+    assert.deepEqual(await menuItems(), ['Mark unread', 'Archive']);
+    assert.equal(await more.getAttribute('aria-expanded'), 'true');
+    const selBefore = await page.evaluate(() => document.querySelector('#upd-feed .upd-card.sel')?.getAttribute('data-upd') ?? null);
+    await page.keyboard.press('j');
+    assert.equal(await page.evaluate(() => document.querySelector('#upd-feed .upd-card.sel')?.getAttribute('data-upd') ?? null), selBefore, 'j waits while the menu is open');
+    assert.equal(await menu.count(), 1, 'and the menu stays');
+    await more.click();
+    assert.equal(await menu.count(), 0, 'a second click on ⋯ closes it');
+    assert.equal(await more.getAttribute('aria-expanded'), 'false');
+    await more.click(); await page.keyboard.press('Escape');
+    assert.equal(await menu.count(), 0, 'Escape closes it');
+    await more.click();
+    await page.evaluate(() => { updRender(UPD); });
+    assert.equal(await menu.count(), 0, 'a redraw of the feed closes it');
+    await more.click();
+    await menu.locator('[role=menuitem]', {hasText: 'Mark unread'}).click();
+    await page.waitForFunction(() => document.activeElement?.matches('[data-upd="u-cmo"] [data-upd-menu]'));
+    await more.click();
+    assert.deepEqual(await menuItems(), ['Mark read', 'Archive'], 'Mark unread marked it unread');
+    await page.keyboard.press('Escape');
+    // With a card selected (j/k), Enter on its ⋯ opens the menu, not the card: ⋯ is the keyboard's way to Archive.
+    await page.keyboard.press('j');
+    const selId = await page.evaluate(() => document.querySelector('#upd-feed .upd-card.sel')?.getAttribute('data-upd') ?? null);
+    assert.ok(selId, 'j selected a card');
+    await page.locator(`[data-upd="${selId}"] [data-upd-menu]`).focus(); await page.keyboard.press('Enter');
+    await menu.waitFor();
+    assert.equal(await page.locator(`[data-upd="${selId}"] .upd-thread`).count(), 0, 'Enter on ⋯ does not open the card');
+    await page.keyboard.press('Escape');
     assert.deepEqual(await page.locator('#upd-feed .upd-card').evaluateAll(els => els.map(e => e.dataset.upd)), ['u-seo', 'u-fin', 'u-cmo'],
       'nothing re-sorts while you are on the page');
     // Archive failure leaves the card and its unsent reply draft in place. A later successful
@@ -212,10 +261,15 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     const archiveDraft = page.locator('[data-upd="u-cmo"] textarea');
     await archiveDraft.fill('Keep this reply draft');
     archiveFails = true;
-    await page.locator('[data-upd="u-cmo"] [data-upd-archive]').click();
-    await page.waitForFunction(() => {
-      const b = document.querySelector('[data-upd="u-cmo"] [data-upd-archive]') as HTMLButtonElement | null; return b && !b.disabled;
-    });
+    let releaseArchive!: (value?: unknown) => void; holdArchive = new Promise(r => { releaseArchive = r; });
+    await more.click(); await menu.locator('[role=menuitem]', {hasText: 'Archive'}).click();
+    await page.waitForFunction(() => UPD.archivePending.size === 1);
+    await more.click();
+    assert.deepEqual(await menuItems(), ['Mark read'], 'no Archive while one is in flight');
+    await page.keyboard.press('Escape');
+    holdArchive = null; releaseArchive();
+    for (const end = Date.now() + t(10000); archiveRequests.length < 1 && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+    await page.waitForFunction(() => !UPD.archivePending.size);
     assert.equal(await page.locator('[data-upd="u-cmo"] textarea').inputValue(), 'Keep this reply draft');
     assert.equal(archiveRequests.length, 1);
     archiveFails = false;
@@ -229,23 +283,30 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     });
     for (const end = Date.now() + t(30000); !staleGate.received && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
     assert(staleGate.received, 'the stale inbox request is held before archiving');
-    const archiveButton = page.locator('[data-upd="u-cmo"] [data-upd-archive]');
-    await archiveButton.focus(); await page.keyboard.press('Enter');
+    await more.focus(); await page.keyboard.press('Enter');
+    await menu.locator('[role=menuitem]').first().waitFor();
+    await menu.locator('[role=menuitem]', {hasText: 'Archive'}).focus(); await page.keyboard.press('Enter');
     await page.locator('[data-upd="u-cmo"]').waitFor({state: 'detached'});
     releaseStale(); await staleList;                    // the stale payload returns after the archive write
     await page.waitForFunction(() => (window as unknown as PageWin).__staleLoadDone);
     assert.equal(await page.locator('[data-upd="u-cmo"]').count(), 0, 'a delayed old inbox load cannot restore an archived card');
     assert.deepEqual(archiveRequests[1], {ids: ['u-cmo'], archived: true});
+    // Archive is in the header's ⋯ (the shared page header): it lists Archive, which opens the Archive as before.
+    await page.locator('.upd-head .ph-more').click();
+    assert.deepEqual(await page.locator('.upd-head .ph-menu :is(button,a)').allInnerTexts(), ['Archive'], '⋯ lists Archive');
     await page.locator('#upd-view').click();
     await page.waitForFunction(() => location.hash === '#/updates?view=archive' && document.querySelector('[data-upd="u-cmo"]'));
+    assert.equal(await page.locator('.ph-menu:popover-open').count(), 0, 'choosing it closes ⋯');
     assert.equal(await page.locator('#upd-allread').isHidden(), true);
     assert.equal(await page.locator('.upd-head h1').innerText(), 'Archive', 'the reader knows they are in the Archive');
-    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-archive]').getAttribute('aria-label'), 'Restore');
-    assert.equal(await page.locator('[data-upd="u-cmo"] [data-upd-archive] .nav-icon').textContent(), 'unarchive');
-    await page.locator('[data-upd="u-cmo"] [data-upd-archive]').click();
+    await more.click();
+    assert.deepEqual(await menuItems(), ['Mark read', 'Restore to Inbox'], 'the Archive restores');
+    await menu.locator('[role=menuitem]', {hasText: 'Restore to Inbox'}).click();
     await page.locator('[data-upd="u-cmo"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests[2], {ids: ['u-cmo'], archived: false});
-    await page.locator('#upd-view').click();
+    // The Archive is a sub-page: "Updates ›" before its title goes back to the inbox.
+    assert.equal(await page.locator('.upd-head .ph-back').innerText(), 'Updates ›');
+    await page.locator('.upd-head .ph-back').click();
     await page.locator('[data-upd="u-cmo"]').waitFor();
     assert.equal(await page.locator('.upd-head h1').innerText(), 'Updates');
     await page.locator('[data-upd="u-cmo"] [data-upd-reply]').click();
@@ -336,11 +397,10 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.setViewportSize({width: 390, height: 844});
     await p.waitForFunction(() => document.querySelector('#mobile-nav')!.getBoundingClientRect().width > 380);
     assert.equal(await p.locator('#mobile-nav [data-nav="overview"]').count(),0);
-    // Day, week, unread and my bots are icons on a phone.
-    for (const sel of ['[data-upd-kind="daily"]', '[data-upd-kind="weekly"]', '#upd-mine']) {
-      assert.equal(await p.locator(sel + ' .nav-icon').isVisible(), true, sel + ' shows its icon');
-      assert.equal(await p.locator(sel + ' .upd-lbl').isVisible(), false, sel + ' hides its word');
-    }
+    // My bots is an icon on a phone; Daily and Weekly are the header's tabs, in words on their own row.
+    assert.equal(await p.locator('#upd-mine .nav-icon').isVisible(), true, '#upd-mine shows its icon');
+    assert.equal(await p.locator('#upd-mine .upd-lbl').isVisible(), false, '#upd-mine hides its word');
+    for (const kind of ['daily', 'weekly']) assert.equal(await p.locator(`.upd-head .ph-tab[data-upd-kind="${kind}"]`).isVisible(), true, kind + ' tab shows');
     assert.equal(await p.locator('#mobile-nav [data-nav="updates"]').evaluate(el => el.classList.contains('cur')), true);
     const card = (await p.locator('#upd-feed .upd-card').first().boundingBox())!;
     assert(card.x >= 8 && card.x + card.width <= 390 - 8, 'cards fit the phone with a gutter');
@@ -380,12 +440,14 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.locator('[data-upd="u-game"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests.at(-1), {ids: ['u-game'], archived: true});
     // The swipe's click guard applies only to that card; the Archive header remains usable.
+    await p.locator('.upd-head .ph-more').click();
     await p.locator('#upd-view').click();
     await p.waitForFunction(() => location.hash === '#/updates?view=archive' && document.querySelector('[data-upd="u-game"]'));
-    await p.locator('[data-upd="u-game"] [data-upd-archive]').click();
+    await p.locator('[data-upd="u-game"] [data-upd-menu]').click();
+    await p.locator('.thv-pop[role=menu] [role=menuitem]', {hasText: 'Restore to Inbox'}).click();
     await p.locator('[data-upd="u-game"]').waitFor({state: 'detached'});
     assert.deepEqual(archiveRequests.at(-1), {ids: ['u-game'], archived: false});
-    await p.locator('#upd-view').click(); await p.locator('[data-upd="u-game"]').waitFor();
+    await p.locator('.upd-head .ph-back').click(); await p.locator('[data-upd="u-game"]').waitFor();
     const beforeDeckGesture = archiveRequests.length;
     await p.evaluate(() => { location.hash = '#/updates?kind=weekly'; });
     const phoneDeck = p.locator('[data-upd="w-seo"] [data-upd-deck]'); await phoneDeck.waitFor();
@@ -399,6 +461,84 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await p.locator('.side-scroll [data-nav="overview"]').isVisible(), true, 'Overview remains in More');
     assert.deepEqual(phone.errors, []);
     await p.close();
+
+    // A feed reply counted before the seen cards' read was saved does not bring the badge back, or their unread dots.
+    for (const u of updates) u.read = u.id !== 'u-seo' && u.id !== 'u-fin';
+    posted.length = 0;
+    let saveRead!: (value?: unknown) => void; holdRead = new Promise(r => { saveRead = r; });
+    const race = await open({width: 1280, height: 900});
+    await race.page.goto('http://tico-ui.test/#/updates');
+    await race.page.waitForFunction(() => UPD && !UPD.loading && !UPD.fromCache);
+    await race.page.waitForFunction(() => !document.querySelector('#upd-feed .upd-card.unread'));
+    await race.page.waitForFunction(() => (document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null)?.hidden === true);
+    for (const end = Date.now() + t(10000); !posted.some(x => x.path === '/api/v2/updates/read') && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+    assert(posted.some(x => x.path === '/api/v2/updates/read'), 'the read is sent and held');
+    await race.page.evaluate(() => updLoad(UPD));         // still counts u-seo and u-fin unread
+    assert.equal(await race.page.locator('.side-scroll [data-upd-badge]').evaluate(b => (b as HTMLElement).hidden), true, 'no stale badge');
+    assert.equal(await race.page.locator('#upd-feed .upd-card.unread').count(), 0, 'the seen cards stay read');
+    await race.page.evaluate(() => updUnreadRefresh());   // the 30 s count, asked for in the same window
+    assert.equal(await race.page.locator('.side-scroll [data-upd-badge]').evaluate(b => (b as HTMLElement).hidden), true, 'no stale badge from the count');
+    // A seen card marked unread by hand stays unread in such a reply, and counts.
+    await race.page.locator('[data-upd="u-fin"] [data-upd-menu]').click();
+    await race.page.locator('.thv-pop[role=menu] [role=menuitem]', {hasText: 'Mark unread'}).click();
+    await race.page.locator('#upd-feed [data-upd="u-fin"].unread').waitFor();
+    await race.page.evaluate(() => updLoad(UPD));
+    assert.deepEqual(await race.page.locator('#upd-feed .upd-card.unread').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.upd)), ['u-fin'], 'only the card marked unread');
+    assert.equal(await race.page.locator('.side-scroll [data-upd-badge]').innerText(), '1');
+    holdRead = null; saveRead();
+    // Once the read is saved, a later reply is the truth again: another device marking one unread shows.
+    await race.page.waitForFunction(() => !UPD.pending.size && !UPD_READS.sending.size);
+    for (const u of updates) if (u.id === 'u-seo' || u.id === 'u-fin') u.read = false;
+    await race.page.evaluate(() => updLoad(UPD));
+    await race.page.locator('#upd-feed [data-upd="u-seo"].unread').waitFor();
+    await race.page.waitForFunction(() => (document.querySelector('.side-scroll [data-upd-badge]') as HTMLElement | null)?.textContent === '2');
+    // A seen card marked unread, or archived, before its read is sent leaves nothing unsaved: the count still follows the hub.
+    await race.page.evaluate(() => UPD.io?.disconnect());   // no seeing from here on; let any seen timer and its read settle
+    await race.page.waitForTimeout(2500);
+    const hubUnread = () => updates.filter(u => !isArchived(u) && !u.read).length;
+    // Refreshes the count until the badge shows the hub's number (other replies of the archive may land in between);
+    // a badge that stopped following the hub never gets there.
+    const badgeFollowsHub = async () => {
+      let shown = '';
+      for (const end = Date.now() + t(5000); Date.now() < end;) {
+        await race.page.evaluate(() => updUnreadRefresh());
+        shown = await race.page.locator('.side-scroll [data-upd-badge]').evaluate(b => (b as HTMLElement).hidden ? '0' : b.textContent || '0');
+        if (shown === String(hubUnread())) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      return shown;
+    };
+    await race.page.evaluate(async () => {
+      const u = UPD.data.updates.find(x => x.id === 'u-cmo')!; u.read = false;
+      updSeen(UPD, 'u-cmo'); await updToggle(UPD, 'u-cmo');   // marked unread inside the 900 ms before the read is sent
+    });
+    updates.find(u => u.id === 'u-game')!.read = false;       // a new unread on the hub
+    assert.equal(await badgeFollowsHub(), String(hubUnread()), 'the count follows the hub after Mark unread before the send');
+    await race.page.evaluate(async () => {
+      const u = UPD.data.updates.find(x => x.id === 'u-seo')!; u.read = false;
+      updSeen(UPD, 'u-seo'); await updArchive(UPD, 'u-seo');  // archived inside the same window
+    });
+    updates.find(u => u.id === 'u-game')!.read = true;        // read on another device, so the hub's count moves
+    assert.equal(await badgeFollowsHub(), String(hubUnread()), 'the count follows the hub after archiving before the send');
+    // A read whose save failed is sent again by the next count refresh, and the count after that follows the hub.
+    readFails = true;
+    const failed = race.page.waitForResponse(r => r.url().includes('/api/v2/updates/read') && r.status() === 500);
+    await race.page.evaluate(() => {
+      const u = UPD.data.updates.find(x => x.id === 'u-cmo')!; u.read = false; UPD.manualUnread.delete('u-cmo');
+      updSeen(UPD, 'u-cmo');
+    });
+    await failed;
+    await race.page.waitForFunction(() => UPD.pending.has('u-cmo'));   // the failed save has been put back to be sent again
+    readFails = false;
+    const resent = race.page.waitForResponse(r => r.url().includes('/api/v2/updates/read') && r.ok());
+    await race.page.evaluate(() => updUnreadRefresh());
+    await resent;
+    await race.page.waitForFunction(() => !UPD.pending.size && !UPD_READS.sending.size);
+    assert.equal(updates.find(u => u.id === 'u-cmo')!.read, true, 'the failed read was sent again');
+    updates.find(u => u.id === 'u-fin')!.read = true;         // read on another device, so the hub's count moves
+    assert.equal(await badgeFollowsHub(), String(hubUnread()), 'the count follows the hub after a failed read is resent');
+    assert.deepEqual(race.errors, []);
+    await race.page.close();
 
     // Nothing yet: one short line, with no sentence under it and no Chat with us (Support is the ? in the sidebar).
     updates = [];

@@ -15,7 +15,18 @@ from typing import Annotated, Literal
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
-from . import delivery, org_rule_check, reach, teammate_access, thread_rail, thread_search, threads
+from . import (
+    delivery,
+    events,
+    org_rule_check,
+    page_owners,
+    reach,
+    secret_drop,
+    teammate_access,
+    thread_rail,
+    thread_search,
+    threads,
+)
 from .store import H, Problem
 
 # How a person's message reaches the bot across a bot's Home or a DM with it (backend/delivery.py). Optional: with none
@@ -57,6 +68,8 @@ class ThreadPost(BaseModel):
     in_reply_to: str | None = None  # the message this one replies to, in the same root (flat replies)
     delivery: Way | None = None  # only in a bot's Home or a DM with one bot
     defer_for: str | None = None  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
+    # Digests of suspect keys the person un-marked in the Tools chat (backend/secret_drop.py); never stored.
+    unmarked: list[str] = Field(default_factory=list, max_length=50)
 
 
 class MessagePatch(BaseModel):
@@ -106,6 +119,12 @@ class ThreadUpload(BaseModel):
     defer_for: str | None = None
 
 
+def _unmarked(who, body):
+    """The suspects a person un-marked in the Tools chat (backend/secret_drop.py), which the backstop lets through only
+    from the web chat: a post made with a personal access token is an API client, whose suspects are refused (AC-15)."""
+    return [] if getattr(who, "via_token", False) else list(getattr(body, "unmarked", None) or [])
+
+
 def _delivery_words(body):
     """The `delivery` and `defer_for` a post named, checked before anything is read: 422 when they do not hold together."""
     if wrong := delivery.check(body.delivery, body.defer_for):
@@ -113,6 +132,7 @@ def _delivery_words(body):
     if body.delivery and getattr(body, "kind", "say") != "say":
         raise Problem("delivery", "delivery goes with a plain message (kind say)", 422)
     refs = getattr(body, "refs", None) or {}
+    page_owners.check_from(refs)  # a message written on a page names it and what was open there
     # The way's marks are the route's own (threads.WAY_KEYS): a client never writes them. A refs.delivery a client
     # sends with no `delivery` goes as it always did; beside a named way it would contradict it.
     if any(k in refs for k in threads.WAY_KEYS):
@@ -436,7 +456,18 @@ def install(app, store, auth, mutate, rule_check):
     def check(who, thread_id, body):
         """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write. A
         bot's post to someone out of its reach is refused first (reach.check_thread), so it spends no judgment; so is a
-        reply to a message the poster can't reply to."""
+        reply to a message the poster can't reply to. A key in a message to the Tools owner is refused before anything
+        reads the text (backend/secret_drop.py)."""
+        with store.read() as c:
+            secret_drop.refuse(
+                c,
+                threads.thread_row(c, thread_id),
+                who.actor,
+                body.text,
+                None,
+                _unmarked(who, body),
+                audit=False,
+            )
         if getattr(body, "in_reply_to", None):
             with store.read() as c:
                 _reply_check(c, auth, who, thread_id, body)
@@ -490,10 +521,14 @@ def install(app, store, auth, mutate, rule_check):
     @app.get("/api/v2/threads/rail")
     def rail(request: Request, cursor: str | None = None, limit: int | None = None):
         """The threads the viewer is in, by title: `pinned` (first page), then `threads`, paged. Never a 1:1 DM, a Home,
-        a task's thread or a meeting. The first page also has Catch up's count and the unread in each one-teammate DM."""
+        a task's thread or a meeting. The first page also has Catch up's count and the unread in each one-teammate DM,
+        and `seq`: the change number it is as of (read first, in the same snapshot), so a live stream that resumes from
+        it (`GET /api/v2/events?after=`) misses nothing since and the page need not read the rail again when it connects."""
         v = threads.viewer(auth, request.state.identity)
         with store.read_transaction() as c:
-            return thread_rail.rail(c, v, cursor=cursor, limit=limit)
+            seq = None if cursor else events.latest(c)
+            page = thread_rail.rail(c, v, cursor=cursor, limit=limit if limit is not None else thread_rail.RAIL_LIMIT)
+            return page if seq is None else {**page, "seq": seq}
 
     @app.get("/api/v2/threads/browse")
     def browse(request: Request, q: str | None = None, cursor: str | None = None, limit: int | None = None):
@@ -540,6 +575,10 @@ def install(app, store, auth, mutate, rule_check):
             row = threads.home(c, _home_owner(actor), create=False)
             if row is not None:
                 return threads.get(c, v, row["id"])
+        if getattr(
+            request.state.identity, "view", ""
+        ):  # a bot's read-only view of the app makes nothing (backend/app_view.py)
+            raise Problem("no_home", "This teammate has no Home yet", 404)
         with store.transaction() as c:
             _read_or_404(c, v, actor)
             row = threads.home(c, _home_owner(actor))
@@ -551,7 +590,9 @@ def install(app, store, auth, mutate, rule_check):
         reply-back rule applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message
         them. `create=false` makes nothing: 404 `no_dm` when there is none yet."""
         v = threads.viewer(auth, request.state.identity)
-        if not create:
+        if not create or getattr(
+            request.state.identity, "view", ""
+        ):  # a read-only view never starts a DM (backend/app_view.py)
             with store.read() as c:
                 return threads.dm(c, v, [peer], make=False)
         with store.transaction() as c:
@@ -747,6 +788,7 @@ def install(app, store, auth, mutate, rule_check):
                 checked=rc,
                 reach=True,
                 in_reply_to=replying,
+                unmarked=_unmarked(who, body),
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
@@ -770,6 +812,9 @@ def install(app, store, auth, mutate, rule_check):
                 threads._own_say(c, *threads._actor_of(viewer), message_id, check_writer=False).get("conversation_id")
                 or ""
             )
+        if thread_id:  # a key in an edit to the Tools owner is refused before the rule check reads it
+            with store.read() as c:
+                secret_drop.refuse(c, threads.thread_row(c, thread_id), who.actor, body.text, audit=False)
         # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
         reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text, viewer))
         rc = (
@@ -888,6 +933,9 @@ def install(app, store, auth, mutate, rule_check):
             raise Problem("delivery", "delivery goes with a first message (body)", 422)
         _delivery_words(body)
         start = {"dm": body.members, "title": body.title}
+        if body.body:  # a first message to the Tools owner holding a key makes no DM and reaches no check
+            with store.read() as c:
+                secret_drop.refuse_start(c, who.actor, body.members, body.body)
         rc = (
             rule_check(
                 who,

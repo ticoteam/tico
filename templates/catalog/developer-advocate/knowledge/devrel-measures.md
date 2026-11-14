@@ -22,7 +22,7 @@ figure carries its source and the year it was read. Where a source was read only
 - GitHub's Issue Metrics action (GitHub Blog, 2023-07-19) reports time to first response, time to close and, for
   discussions, time to answer. Use it to check the figures where the repository is on GitHub.
 - No external reply-time benchmark for developer questions was found in the sources read. The two-working-day target in
-  `AGENT.md` is the team's own.
+  `AGENTS.md` is the team's own.
 
 ## Code samples and CI
 

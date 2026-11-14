@@ -1104,7 +1104,7 @@ def install(app, store, auth, mutate, settings):
 
     @app.post("/api/v2/goals/read-back")
     def goal_read_back(request: Request, body: M.GoalReadBack):
-        """The owner's Assistant, in their own chat: Tico writes the read-back of up to 20 changes as its reply and
+        """The owner's Assistant, in their own chat: Tico writes the read-back of the whole plan as its reply and
         stores the exact saves; the owner's yes to it is what lets them through (backend/goal_read_back.py)."""
         who = request.state.identity
         if not GR.strategy_turn(who):

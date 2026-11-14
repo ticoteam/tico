@@ -18,30 +18,6 @@ interface HumanSlackThread {
 // ----------------------------------------------------------------- Web Push for this browser
 // On with Browser notifications, so a call rings while Tico is hidden or closed (backend/web_push.py, docs/push.md).
 // A browser without push, or a page that cannot reach its service worker (ui/app/boot.ts registers it), skips it.
-async function pushRegistration(): Promise<ServiceWorkerRegistration | null> {
-  const sw = serviceWorkerContainer();
-  if (!sw || !('PushManager' in window)) return null;
-  return Promise.race([sw.ready, new Promise<null>(done => setTimeout(() => done(null), 5000))]);
-}
-function pushKeyBytes(key: string): Uint8Array<ArrayBuffer> {
-  const text = atob(key.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - key.length % 4) % 4));
-  return Uint8Array.from(text, ch => ch.charCodeAt(0));
-}
-function samePushKey(held: ArrayBuffer | null, key: Uint8Array): boolean {
-  const bytes = held ? new Uint8Array(held) : null;
-  return !!bytes && bytes.length === key.length && bytes.every((b, i) => b === key[i]);
-}
-// This browser's subscription, made or kept, sent to the server. One made for another key (a copy of the install, a
-// new key) is replaced.
-async function pushSubscribe(): Promise<void> {
-  const reg = await pushRegistration();
-  if (!reg) return;
-  const key = pushKeyBytes((await get<{key: string}>('/v2/push/key')).key);
-  let sub = await reg.pushManager.getSubscription();
-  if (sub && !samePushKey(sub.options.applicationServerKey, key)) { await sub.unsubscribe(); sub = null; }
-  sub = sub || await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: key});
-  await post('/v2/push/subscriptions', sub.toJSON());
-}
 async function pushUnsubscribe(opts?: ApiWriteOptions): Promise<void> {
   const reg = await pushRegistration();
   const sub = reg && await reg.pushManager.getSubscription();
@@ -63,10 +39,6 @@ document.addEventListener('click', e => {
   void Promise.race([pushUnsubscribe({keepalive: true, timeout: PUSH_SIGN_OUT_MS}).catch(() => {}),
     new Promise(done => setTimeout(done, PUSH_SIGN_OUT_MS))]).then(() => { location.href = href; });
 }, true);
-// Each browser the person opens Tico in with Browser notifications on and allowed takes push too.
-function pushKeep(on: boolean | undefined) {
-  if (on && 'Notification' in window && Notification.permission === 'granted') void pushSubscribe().catch(() => {});
-}
 
 // ----------------------------------------------------------------- human page (team tree)
 const PERSON_TABS = ['profile', 'slack'];
@@ -74,10 +46,6 @@ const PERSON_TABS = ['profile', 'slack'];
 // Assistant page (ui/app/assistant-page.ts), the owner's too. The old #/person/<you>/assistant link lands there too.
 const personTabs = (p: RosterPerson) => S.me?.id === p.id ? ['assistant', ...PERSON_TABS] : PERSON_TABS;
 const PERSON_TAB_LABELS: Record<string, string> = {assistant: 'Assistant', profile: 'Profile', slack: 'Slack'};
-// Manage on them, as the server says it: yourself, the owner, an admin, or anyone they report up to.
-function personCanEdit(p: Pick<RosterPerson, 'id' | 'my_access'>) {
-  return p.my_access ? !!p.my_access.manage : S.me?.role === 'owner' || S.me?.id === p.id;
-}
 function fieldEditor(label: string, value: string | null | undefined, {placeholder, rows, save}: {placeholder?: string; rows?: number; save: boolean}) {
   const current = String(value || '');
   return `<section class="card"><header><h2>${esc(label)}</h2>
@@ -157,9 +125,9 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
     ${fieldEditor('Goals', p.goals, {placeholder: 'What they are trying to get done.', save: edit})}
     ${fieldEditor('Notes', p.notes, {placeholder: 'Working notes about this human. Visible to humans who can open this profile.', rows: 8, save: edit})}
     ${reports.length ? `<section class="card"><header><h2>Reports</h2></header>
-      <div>${reports.map(row => `<a class="chip" href="#/person/${encodeURIComponent(row.id)}">${personAvatar(row, 20)}<span>${esc(firstName(row.name) || row.id)}</span></a>`).join('')}</div></section>` : ''}
+      <div class="chip-list">${reports.map(row => `<a class="chip" href="#/person/${encodeURIComponent(row.id)}">${personAvatar(row, 20)}<span>${esc(firstName(row.name) || row.id)}</span></a>`).join('')}</div></section>` : ''}
     ${(bots.length || under.length) ? `<section class="card"><header><h2>Bots</h2></header>
-      <div>${[...new Map([...bots, ...under].map(e => [e.id, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${encodeURIComponent(e.id)}">${avatar(e.id, 20, stateOf(e.id))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
+      <div class="chip-list">${[...new Map([...bots, ...under].map(e => [e.id, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${encodeURIComponent(e.id)}">${avatar(e.id, 20, stateOf(e.id))}<span>${shownName(e)}</span></a>`).join('')}</div></section>` : ''}
     <section class="card" id="person-access" hidden><header><h2>Access</h2>
         <button class="linkish person-edit-btn" type="button" id="person-access-edit">Edit</button></header>
       <div class="muted" id="person-access-text"></div></section>
@@ -342,9 +310,6 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   void personTasksLoad(p);
   if (tab === 'slack') personSlackLoad(p);
 }
-// The human's tasks: what they own, active first, finished behind a toggle. The rows are
-// the shared task row (S1), opening the shared task detail.
-/** The person whose tasks the page shows: ui/app/refresh.ts reads it on every live change. */ let PERSON_TASKS: string | null = null;
 // Shown only to whoever manages this person: the read is refused to everyone else.
 async function personAccessLoad(p: RosterPerson) {
   const data = await teammateAccessRead('human', p.id), card = $('#person-access');
@@ -487,7 +452,7 @@ async function personSlackLoad(p: RosterPerson) {
         ${msgs.map(m => `<div class="bubble ${String(m.sender_id || '').startsWith('bot:') ? 'bot reply' : 'you'}">
             <span class="who">${esc(actorLabel(m.sender_id))}</span>
             ${m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`
-              : `<div class="md">${safeMd(m.body || '')}</div>`}${chatCopyHTML(m.body)}</div>`).join('') || '<div class="empty">No messages yet.</div>'}
+              : messageMd('md', m.body || '', m.sender_id)}${chatCopyHTML(m.body)}</div>`).join('') || '<div class="empty">No messages yet.</div>'}
         </div>`;
     }).join('');
   } catch (e) {

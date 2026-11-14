@@ -29,7 +29,7 @@ All of these before the job is done:
 ## The flow
 
 1. **Register it, first.** Do not ask for a slug, a repository, sources, outputs or limits: pick them from the
-   request (`playbooks/set-up-a-bot.md` §1, AGENT.md Defaults, not questions) and create the bot now:
+   request (`playbooks/set-up-a-bot.md` §1, AGENTS.md Defaults, not questions) and create the bot now:
    `tico bot create --record-only --name "<Display>" --description "<one line>"`. Tico picks the slug from the
    name (adding -2 when it is taken, archived bots included) and prints it; use that slug from here on. They become
    an owner. If they may not add bots, or are at their limit, say exactly that and stop.
@@ -39,7 +39,7 @@ All of these before the job is done:
    real instructions, `tico bot check <slug>` clean, committed. Read `tico bot create`'s exit status and the
    repository state it reports before going on: a non-zero exit or a refusal is not a built bot. A
    `retryable: false` refusal (`github_permission_missing`, `repository_missing`) stops the build: ask the
-   person once for the exact fix it names and end the run (AGENT.md rule 6).
+   person once for the exact fix it names and end the run (AGENTS.md rule 6).
 3. **What it needs.** If the bot talks to a tool (Jira, GitHub, a mailbox), find out what credential it
    takes and open the card for each: `playbooks/connect-a-tool.md`. Do not wait for the answer to
    finish everything else. When the human saves it you are woken. Missing optional access (cloud logs,
@@ -64,7 +64,7 @@ All of these before the job is done:
    computer to use: run go-live again with that `--computer`. On `waiting_for_repository`, remember that
    waiting for a computer to get the repository is not a failure: the bot is placed and its computer is
    fetching the repository, and Tico turns it on and starts the setup by itself once the computer has it. Say
-   so, do not call go-live again or wait for it, do not copy the repository there yourself (AGENT.md rule 9),
+   so, do not call go-live again or wait for it, do not copy the repository there yourself (AGENTS.md rule 9),
    and skip step 7. A refusal is read as in step 2.
 7. **Optionally, test it once.** Give the bot one small, read-only job that proves the connection, with
    `tico task create --owner <slug> --title "..." --body "..."`, and wait for the answer. If it fails,
@@ -113,7 +113,7 @@ off) happen at once, and each can be undone from Settings > Bots history.
   Team Owner's rights. A successful response says `deleted: true`; a 404 is not proof of removal.
 - "Read a different mailbox" or "that's not my address" on a message bot: as them,
   `tico api POST access/people/<person id> '{"inbox_bot": "<bot>", "mailbox": "<address>"}'`.
-  Change the `Mailbox:` line in its `AGENT.md`
+  Change the `Mailbox:` line in its `AGENTS.md`
   and its `gmail` identity in `bot.yaml` to match.
 - Anything else in the app: `tico api GET <path>`, or `tico api POST <path> '{json}'` (PUT, PATCH and DELETE the same way), as them, with their rights.
 
@@ -128,5 +128,5 @@ off) happen at once, and each can be undone from Settings > Bots history.
   members' bots. The bot starts by itself when one can.
 - **A refusal says `retryable: false`.** Stop: no retry loop, no `sleep`. If a person must act, one Needs you
   item with the exact fix, then end the run. If the command should have worked, it is a Tico bug: file it and say
-  "Blocked on a Tico bug, reported as <ticket>" (AGENT.md rules 6 and 9).
+  "Blocked on a Tico bug, reported as <ticket>" (AGENTS.md rules 6 and 9).
 - **The product cannot do what they asked.** Say so in one line and `tico support file "..."`.

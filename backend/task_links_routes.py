@@ -2,10 +2,13 @@
 
 from .store import H
 from . import models as M
-from .store import Problem
+from .store import Problem, refusal_problem
 from fastapi import Request
 from . import task_relations as TR
 from . import task_privacy as privacy
+from . import reach
+from . import task_caps
+from . import task_merge as TM
 
 
 def register(app, auth, mover, mutate, person_only, settings, store, task_view):
@@ -106,13 +109,89 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             auth.task(c, who, task_id)
             auth.task(c, who, other_id)
             changed = TR.relate(
-                c, who.actor, task_id, other_id, body.kind, remove=body.remove, mover=mover(c, who) or None
+                c,
+                who.actor,
+                task_id,
+                other_id,
+                body.kind,
+                remove=body.remove,
+                mover=mover(c, who) or None,
+                until=body.until,
             )
             # The stored direction in words, from both ends (Dev 256): a reversed write shows in the reply.
             return {
                 "readback": TR.readback(c, task_id, other_id, body.kind, remove=body.remove, changed=changed),
                 "task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who),
             }
+
+        return mutate(request, body, work)
+
+    # ------------------------------------------------------------------ drop a task on another (task_merge)
+    def _drop_pair(c, who, tid, other):
+        task_id = auth.resolve_task(c, who, tid)
+        other_id = auth.resolve_task(c, who, other)
+        auth.task(c, who, task_id)
+        auth.task(c, who, other_id)
+        return task_id, other_id
+
+    @app.get("/api/v2/tasks/{tid}/merge")
+    def task_merge_checks(request: Request, tid: str, into: str):
+        """Before the board's dialog confirms a drop of this task on `into`: both tasks, why each choice cannot be
+        done (null when it can) and what a merge would move. People only."""
+        who = request.state.identity
+        person_only(who, "merges tasks")
+        with store.read() as c:
+            task_id, into_id = _drop_pair(c, who, tid, into)
+            try:
+                return TM.checks(c, who.actor, task_id, into_id, mover=mover(c, who) or None)
+            except H.Refused as exc:
+                raise refusal_problem(exc) from None
+
+    @app.post("/api/v2/tasks/{tid}/merge")
+    def task_merge(request: Request, tid: str, body: M.TaskMerge):
+        """Merge this task into `into` as its duplicate, in one write: `into` gains its details, its open subtasks
+        move under `into`, and this task is Closed and linked as a duplicate. `owner` (either task's owner) keeps
+        `into`, through the usual hand-over checks. People only."""
+        who = request.state.identity
+        person_only(who, "merges tasks")
+
+        def work(c):
+            task_id, into_id = _drop_pair(c, who, tid, body.into)
+
+            def reassign(c, kept_id, owner):
+                # The checks POST /tasks/{id}/owner makes: someone the person may give work to and reach, within
+                # their task cap.
+                target = auth.target(c, who, owner, need="write")
+                auth.require_bot_contact(c, who, target, task_id=kept_id, kind="task")
+                reach.check(c, who, target, "task", task_id=kept_id)
+                task_caps.check(c, who.actor, target)
+                H.task_reassign(c, who.actor, kept_id, target, "Kept the merged task", mover=mover(c, who) or None)
+                task_caps.record(c, kept_id, who.actor, target)
+
+            owner = H.resolve_actor(c, body.owner) if body.owner else None
+            if body.owner and not owner:
+                raise Problem("not_found", f"No one called {body.owner} owns either task", 422)
+            done = TM.merge(c, who.actor, task_id, into_id, owner=owner, reassign=reassign, mover=mover(c, who) or None)
+            view = auth.task_sql(c, who)
+            return {
+                "task": task_view(done["task"], c, visible_sql=view, who=who),
+                "closed": task_view(done["closed"], c, visible_sql=view, who=who),
+                "note": done["note"],
+            }
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/parent")
+    def task_parent(request: Request, tid: str, body: M.TaskParent):
+        """Put this task under `parent` as its subtask. Both keep their owners, stages and pipelines; the parent waits
+        on it. People only."""
+        who = request.state.identity
+        person_only(who, "sets a task's parent")
+
+        def work(c):
+            task_id, parent_id = _drop_pair(c, who, tid, body.parent)
+            row = TM.set_parent(c, who.actor, task_id, parent_id, mover=mover(c, who) or None)
+            return {"task": task_view(row, c, visible_sql=auth.task_sql(c, who), who=who)}
 
         return mutate(request, body, work)
 

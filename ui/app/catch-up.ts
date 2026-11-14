@@ -103,7 +103,7 @@ const cuMsgHTML = (m: CUMsg) => {
   const who = m.sender_id, bot = String(who || '').startsWith('bot:');
   return `<article class="cu-msg" style="--d:${Math.min(Number(m.depth) || 0, 3)}">${actorAvatar(who, 30)}<div class="cu-msg-main">
     <div class="cu-msg-head"><strong>${esc(actorName(who) || 'Someone')}</strong>${bot ? '<span class="cu-bot">BOT</span>' : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
-    <div class="cu-msg-body md">${safeMd(m.body || '', {shortLinks: true})}${m.clipped ? '<span class="muted">…</span>' : ''}</div></div></article>`;
+    ${messageMd('cu-msg-body md', m.body || '', m.sender_id, {shortLinks: true}, m.clipped ? '<span class="muted">…</span>' : '')}</div></article>`;
 };
 function cuCardHTML(it: CUItem) {
   const t = it.thread, n = Number(it.new_count) || 0, more = Number(it.more) || 0, hash = threadOnRail(t);

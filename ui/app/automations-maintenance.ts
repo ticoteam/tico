@@ -110,7 +110,7 @@ interface MaintPatch {
 type MaintOpts = (pairs: ReadonlyArray<readonly [string | number, string]>, cur: unknown) => string;
 
 const AU_MAINT = 'maintenance';
-const AU_MAINT_OWNER = 'tico';   // the list's Owner: Tico itself runs it
+   // the list's Owner: Tico itself runs it
 const AU_MAINT_SCHEDULES: Array<[string, string]> = [['hourly', 'Every hour'], ['2h', 'Every 2 hours'], ['3h', 'Every 3 hours'], ['6h', 'Every 6 hours'],
   ['12h', 'Every 12 hours'], ['daily', 'Once a day']];
 const AU_MAINT_OFTEN: Array<[string, string]> = [['run', 'Every run'], ['day', 'At most once a day'], ['week', 'At most once a week'], ['custom', 'Custom']];
@@ -123,8 +123,6 @@ const AU_MAINT_BETA = new Set(['learn']);
 const AU_MAINT_PRIVACY = '#/settings/general/settings-privacy';
 const AU_MAINT_RUNS_PAGE = 25;
 
-const AU_SYSJOBS = 'system-jobs';
-const AU_BUILTIN_PILL = '<span class="pill">Built-in</span>';
 const auMaintOk = (m: MaintView | null | undefined): m is MaintView => !!m && Array.isArray(m.steps) && !!m.settings;
 const auMaintStep = (key: string): MaintStep | undefined => {
   const steps: MaintStep[] = automationsState()?.maint?.steps || [];
@@ -195,7 +193,7 @@ function auMaintHead(hd: HTMLElement): void {
     <span class="au-sp"></span>
     <div class="au-hd2">
       <span class="au-sp au-sp-phone"></span>
-      <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
+      <div class="au-seg ph-seg" role="tablist" aria-label="View">${seg}</div>
       ${can ? `<button class="primary mt-now" type="button" data-mt-now${live || au?.mtStarting ? ' disabled' : ''}>${live || au?.mtStarting ? 'Running…' : 'Run now'}</button>` : ''}
     </div>`;
 }
@@ -396,14 +394,14 @@ function auMaintClick(t: Element): boolean {
   if ((m = t.closest<HTMLElement>('[data-mt-more]'))) { void auMaintRunsLoad(au, true); return true; }
   return false;
 }
-function auMaintChange(e: Event): void {
+async function auMaintChange(e: Event): Promise<void> {
   const t = e.target;
   const au = automationsState();
   if (!(t instanceof HTMLInputElement || t instanceof HTMLSelectElement) || !au || au.id !== AU_MAINT || !t.closest('.au-hd,.au-pane')) return;
   if (au.mtBusy) { auDrawHead(); auDrawPane(); return; }
   const d = t.dataset, step = (k: string): Partial<MaintStep> => auMaintStep(k) || {};
   if (t instanceof HTMLInputElement && 'mtPause' in d) {
-    if (!t.checked && !confirm('Pause Maintenance? No step runs until it is back on.')) { t.checked = true; return; }
+    if (!t.checked && !(await askConfirm('Pause Maintenance? No step runs until it is back on.', t))) { t.checked = true; return; }
     void auMaintSave({paused: !t.checked});
   } else if ('mtSchedule' in d) void auMaintSave({schedule: t.value});
   else if ('mtCap' in d) void auMaintSave({monthly_cap_usd: Number(t.value)});

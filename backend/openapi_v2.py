@@ -219,6 +219,31 @@ STABLE = [
         "BotBrowserExitView",
     ),
     (
+        "/api/v2/bots/{bot}/app-view",
+        "get",
+        "Bots",
+        "getBotAppView",
+        "Whether the bot may view the app read only, for its own screenshots, and who turned that on",
+        None,
+    ),
+    (
+        "/api/v2/bots/{bot}/app-view",
+        "post",
+        "Bots",
+        "setBotAppView",
+        "Turn Can view the app (read only) on or off for a bot: an owner or admin, as themselves. Off ends its open views",
+        None,
+    ),
+    (
+        "/api/v2/app-view",
+        "post",
+        "Bots",
+        "openAppView",
+        "A bot, from inside its run, opens a read-only view of the app: a token for 15 minutes that reads as the bot and "
+        "is refused every write",
+        None,
+    ),
+    (
         "/api/v2/bots/{bot}/subscription",
         "get",
         "Subscriptions",
@@ -1030,8 +1055,36 @@ STABLE = [
         "post",
         "Tasks",
         "relateTask",
-        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after), or take the relation "
-        "off with remove. A task waits on no relation but after, in Merge: its PRs are not queued until task merged",
+        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after, depends_on), or take "
+        "the relation off with remove. A task waits on after, in Merge (its PRs are not queued until task merged), and "
+        "on depends_on, in any stage (Blocked by task until it ends; with until: released, until production runs a "
+        "release that holds task's merged PRs)",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/merge",
+        "get",
+        "Tasks",
+        "taskMergeChecks",
+        "Before dropping this task on ?into=: both tasks, why each choice (subtask, merge) cannot be done or null, and "
+        "what a merge would move. People only",
+        "TaskMergeChecks",
+    ),
+    (
+        "/api/v2/tasks/{tid}/merge",
+        "post",
+        "Tasks",
+        "mergeTask",
+        "Merge this task into another as its duplicate ({into, owner?}), in one write: the other gains its details and "
+        "open subtasks, and this one is Closed and linked as a duplicate. People only",
+        "TaskMergeResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/parent",
+        "post",
+        "Tasks",
+        "setTaskParent",
+        "Put this task under another as its subtask ({parent}); both keep their owners and stages. People only",
         "TaskResult",
     ),
     (
@@ -1289,7 +1342,9 @@ STABLE = [
         "get",
         "Files",
         "listBotFiles",
-        "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page",
+        "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; "
+        "q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) "
+        "narrow the same list",
         "BotFileList",
     ),
     (
@@ -1331,6 +1386,14 @@ STABLE = [
         "listFileActivity",
         "A file's append-only activity, newest first",
         "FileActivity",
+    ),
+    (
+        "/api/v2/files/{fid}/info",
+        "get",
+        "Files",
+        "getBotFile",
+        "One file as its bot's Files list shows it (404 when the viewer cannot see it)",
+        "BotFileResult",
     ),
     (
         "/api/v2/files/{fid}/versions",
@@ -1832,11 +1895,12 @@ STABLE = [
         "post",
         "Goals",
         "readBackGoalChanges",
-        "The Strategy Owner only, in the owner's own chat: Tico writes the read-back of up to 20 "
+        "The Strategy Owner only, in the owner's own chat: Tico writes the read-back of the whole plan (up to 500 "
         "changes to goals, measures and "
-        "suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) "
-        "within 30 minutes lets exactly those saves through (each step's method, path and body, sent as it is), cited "
-        "with X-Tico-On-Behalf-Of; anything else is 403 not_agreed. "
+        "suggestions) as its reply and stores the exact saves. The owner's reply agreeing to the newest read-back (in "
+        "any words, or a yes to some by number) lets exactly those saves through (each step's method, path and body, "
+        "sent as it is), cited with X-Tico-On-Behalf-Of, until a newer read-back replaces it or the owner says stop; "
+        "anything else is 403 not_agreed. "
         "A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click",
         None,
     ),
@@ -2059,7 +2123,7 @@ STABLE = [
         "getUsage",
         "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, "
         "filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run "
-        "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
+        "or own. ?bot=<bot id or slug> is that bot's daily series, top routines, top 10 tasks (the rest summed) and models instead",
         "Usage",
     ),
     (
@@ -2552,6 +2616,10 @@ SCHEMAS = {
             "late": {
                 "oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}],
             },
+            "stuck": {
+                "type": "boolean",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
+            },
             "lane": "s",
             "labels": items({"type": "string"}),
             "acceptance_criteria": items({"type": "string"}),
@@ -2578,13 +2646,22 @@ SCHEMAS = {
             "labels",
         ],
         owner_name={"type": "string", "description": "Display name of owner (`owner_id` stays the actor id)"},
+        human_id={
+            "type": ["string", "null"],
+            "description": "The task's Human: the person accountable for it whoever owns it, first on its ladder (asks "
+            "that name nobody go to them). Set with `human` on create and update; left out of a brief row when none",
+        },
         requester_name={"type": "string", "description": "Display name of requester"},
         filer={
             "type": "string",
             "description": "Who really filed it, when not its requester: a bot id (BotOps on a person's rights) or a "
             "built-in source key (check-health, postal-mail). Display only; absent otherwise",
         },
-        snoozed={"type": "boolean", "description": "On a list row: whether the task is set aside"},
+        snoozed={
+            "type": "boolean",
+            "description": "On a list row: whether the task is set aside. A blocked task is not (see blocked_by), and "
+            "snoozed=only leaves it out",
+        },
         pipeline={
             "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
             "description": "On the task's own read: the pipeline it is in",
@@ -2597,6 +2674,20 @@ SCHEMAS = {
             "description": "On the task's own read: the stage it is in",
         },
         pushed_past={"type": "boolean", "description": "On a list row: it entered its stage pushed past a requirement"},
+        blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}}))
+        | {
+            "description": "On a list row with a dependency: the open tasks it depends on (\"Blocked by #304\"), oldest "
+            "first; one the reader may not open has a null id and number. Absent when there are none"
+        },
+        blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}}))
+        | {
+            "description": "On a list row: the open tasks that depend on it and the reader may open (\"Blocks #307\"). "
+            "Absent when there are none"
+        },
+        stage_since={
+            "type": ["string", "null"],
+            "description": "On a list row: when it entered its stage, else when it was filed",
+        },
         waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
         to_leave=items(ref("TaskRequirement"))
         | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},
@@ -2649,15 +2740,17 @@ SCHEMAS = {
         relations={
             "type": "object",
             "description": "Related tasks the reader may open, by kind (parent, related, duplicate_of, follow_up, "
-            "after): each {id, title, status, owner, direction}; an `after` entry also has the other task's number and "
-            "stage (out: this task merges after it; in: it merges after this one). A task waits on no relation but "
-            "after, in Merge. Sub-tasks are in the task's children.",
+            "after, depends_on): each {id, title, status, owner, direction}; an `after` or `depends_on` entry also has "
+            "the other task's number and stage (after out: this task merges after it; in: it merges after this one; "
+            "depends_on out: this task is blocked by it; in: it blocks this one). A task waits on after, in Merge, and "
+            "on depends_on. Sub-tasks are in the task's children.",
             "additionalProperties": items(
                 obj(
                     {"id": "s", "title": "s", "status": "s", "owner_id": "s", "direction": "s"},
                     ["id", "title", "status", "owner_id", "direction"],
                     number={"type": ["integer", "null"]},
                     stage={"type": ["string", "null"]},
+                    since={"type": "string", "description": "depends_on only: when the dependency was written"},
                 )
             ),
         },
@@ -2685,7 +2778,7 @@ SCHEMAS = {
         {
             "state": {
                 "type": "string",
-                "enum": ["snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "by_hand"],
+                "enum": ["snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "pick", "by_hand"],
             },
             "who": "n",
             "line": "s",
@@ -2704,6 +2797,12 @@ SCHEMAS = {
             "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
             "again",
         },
+        share={
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "A private task waits on these actors being let in (the next stage's owner and those it "
+            "asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list",
+        },
     ),
     "TaskRequirement": obj(
         {
@@ -2715,6 +2814,18 @@ SCHEMAS = {
             "who": "n",
             "asked_by": "n",
             "choices": {"type": ["array", "null"], "items": {"type": "string"}},
+            # A bot's question to a person: why it matters, a line per choice on what happens (in the choices' order)
+            # and the choice it recommends (backend/ask_shape.py). Absent on an ask that carried none.
+            "brief": obj(
+                {
+                    "why": "s",
+                    "details": {"type": ["array", "null"], "items": {"type": "string"}},
+                    "recommend": "n",
+                },
+                required=["why", "details", "recommend"],
+            ),
+            # The ask's short title (at most 60 characters), the decision view's heading. Absent on an ask without one.
+            "title": "s",
             "shows": items({"type": "string"}),
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
@@ -2954,12 +3065,29 @@ SCHEMAS = {
                             "unlock_cloud",
                             "add_credit",
                             "open_computers",
+                            "open_ask",
                             None,
                         ]
                     },
+                    "task": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}, "title": {"type": "string"}},
+                        "description": "The task a planned bot is being made on, for a caller who may open it",
+                    },
+                    "ask": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"enum": ["ok", "answer"]},
+                            "mine": {"type": "boolean"},
+                            "line": {"type": "string"},
+                        },
+                        "description": "The ask on that task the bot waits on: whether it is the caller's, and its "
+                        "words for a caller who may open the task",
+                    },
                 },
                 "description": "For a caller who can read it: why the bot can't run (a sentence) and the one fix, "
-                "or null while it can run",
+                "or null while it can run. A bot being made on a task names it (`task`) and the ask it waits on "
+                "(`ask`); `open_ask` opens that ask on its task",
             },
             "access": ref("Access"),
             "onboarding_state": "s",
@@ -3239,6 +3367,17 @@ SCHEMAS = {
         actors=ACTORS,
     ),
     "TaskResult": obj({"task": ref("Task")}),
+    "TaskMergeResult": obj({"task": ref("Task"), "closed": ref("Task"), "note": "s"}),
+    "TaskMergeChecks": obj(
+        {
+            "task": {"type": "object"},
+            "into": {"type": "object"},
+            "same_owner": "b",
+            "subtask": {"type": ["string", "null"]},
+            "merge": {"type": ["string", "null"]},
+            "moves": {"type": "object"},
+        }
+    ),
     "OkPreview": obj(
         {
             "requirement_id": "s",
@@ -3601,10 +3740,36 @@ SCHEMAS = {
             "due_at": "n",
             "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
+            "stuck": {
+                "type": "boolean",
+                "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",
+            },
             "snoozed": "b",
             "pushed_past": "b",
+            "stage_since": "n",
             "on_person": "b",
-        }
+        },
+        [
+            "id",
+            "number",
+            "title",
+            "status",
+            "version",
+            "pipeline_id",
+            "stage_id",
+            "owner_id",
+            "assignee_id",
+            "requester_id",
+            "due_at",
+            "turn",
+            "late",
+            "snoozed",
+            "pushed_past",
+            "stage_since",
+            "on_person",
+        ],
+        blocked_by=items(obj({"id": "n", "number": {"type": ["integer", "null"]}})),
+        blocks=items(obj({"id": "s", "number": {"type": ["integer", "null"]}})),
     ),
     "GranolaStatus": obj(
         {
@@ -3936,6 +4101,10 @@ SCHEMAS = {
             "synced": "b",
             "size": {"type": ["integer", "null"]},
             "name": "n",
+            "thumb_blob_id": {
+                "type": ["string", "null"],
+                "description": "set when an image has a small preview at /api/v2/files/{id}/thumb",
+            },
             "open": {
                 "type": ["object", "null"],
                 "description": "{type: tico|external, url}: "
@@ -4546,8 +4715,17 @@ SCHEMAS = {
     "UsageFigures": obj(
         {
             "runs": "i",
-            "input_tokens": {"type": "integer", "description": "Uncached input tokens"},
+            "input_tokens": {
+                "type": "integer",
+                "description": "Uncached input tokens, without cache writes (a run whose runner did not count cache "
+                "writes apart includes them)",
+            },
             "cached_tokens": {"type": "integer", "description": "Input tokens read from the provider's cache"},
+            "cache_write_tokens": {
+                "type": "integer",
+                "description": "Input tokens written to the provider's prompt cache (Claude, Cursor, pi); 0 for runtimes "
+                "that report none (Codex, Gemini, Antigravity, Muse Code) and for runs from before they were counted apart",
+            },
             "output_tokens": "i",
             "est_cost_usd": {
                 "type": ["number", "null"],
@@ -4595,6 +4773,27 @@ SCHEMAS = {
             "name": "s",
             "daily": items({"type": "object", "additionalProperties": True}),
             "routines": items({"type": "object", "additionalProperties": True}),
+            "tasks": items(
+                {
+                    "type": "object",
+                    "description": "?bot only: its top 10 tasks by spend, as group=task names them (value and name), plus runs with no task, "
+                    "each with the usage figures and `share`, its part of the bot's spend",
+                    "additionalProperties": True,
+                }
+            ),
+            "tasks_more": {
+                "type": "object",
+                "description": "?bot only: `count`, the tasks past the top 10, and their usage figures summed",
+                "additionalProperties": True,
+            },
+            "models": items(
+                {
+                    "type": "object",
+                    "description": "?bot only: every model it used, value (null when not recorded) and name, with "
+                    "the usage figures and `share`",
+                    "additionalProperties": True,
+                }
+            ),
         },
         required=["from", "to", "prices_as_of", "totals"],
     ),
@@ -4807,13 +5006,14 @@ SCHEMAS.update(
                 "name": "s",
                 "group": "s",
                 "description": "s",
+                "label": "s",
                 "version": "i",
                 "example": "o",
                 "aliases": items({"type": "string"}),
                 "sourceless": "b",
                 "outbound": "b",
             },
-            required=["name", "group", "description", "version", "example"],
+            required=["name", "group", "description", "label", "version", "example"],
         ),
         "EventTypeList": obj({"items": items(ref("EventType"))}, required=["items"]),
     }
@@ -6986,7 +7186,7 @@ _RUN = obj(
         "trigger_ref": "s",
         "started_at": "s",
         "finished_at": {"type": ["string", "null"]},
-        "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held"]},
+        "status": {"enum": ["queued", "running", "waiting", "ok", "partial", "failed", "empty", "skipped", "held"]},
         "cost": "f",
         "summary": "n",
         "steps": {
@@ -7220,9 +7420,6 @@ SCHEMAS.update(
                 "name": "s",
                 "label": "s",
                 "description": "s",
-                "batch_seconds": "i",
-                "batch_scope": "s",
-                "sweep_seconds": "i",
                 "digest_hour": {"type": ["integer", "null"]},
                 "pulls": "s",
                 "sweeps": "b",
@@ -7411,6 +7608,14 @@ STABLE.extend(
             'Strategy',
             'updateStrategyDraft',
             'Owner only: change the draft, only the fields sent; a stale revision answers 409',
+            None,
+        ),
+        (
+            '/api/v2/strategy/vision',
+            'post',
+            'Strategy',
+            'saveAskedVision',
+            'The Strategy Owner only: save the vision the owner sent on its vision question, in their words',
             None,
         ),
         (
@@ -7839,7 +8044,12 @@ SCHEMAS['ToolIndexRow'] = obj(
         'detail': 's',
         'way': 's',
         'status': TOOL_STATUS,
-        'who': items(obj({'kind': {'enum': ['bot', 'person']}, 'id': 's', 'name': 's', 'initials': 's'})),
+        'who': items(
+            obj(
+                {'kind': {'enum': ['bot', 'person', 'group']}, 'id': 's', 'name': 's', 'initials': 's', 'members': 'i'},
+                required=['kind', 'id', 'name', 'initials'],
+            )
+        ),
         'who_total': 'i',
         'needs_you': 'b',
         'href': 's',
@@ -7942,6 +8152,261 @@ SCHEMAS['ApiToolActivity'] = obj(
         'next': 'n',
     }
 )
+# Website tools (backend/website_tools.py): a site signed in to through a browser, and its accounts. No answer carries a
+# password or a 2FA key; the 2FA code goes only to a signed-in person who uses the account.
+STABLE.extend(
+    [
+        (
+            '/api/v2/website-tools',
+            'post',
+            'Tools',
+            'createWebsiteTool',
+            'Add a website tool (credential administrators): its sites (hostnames; a subdomain matches; http://host '
+            'allows plain http) and whether only the browser host opens it. The name defaults to the first site',
+            'WebsiteToolCreated',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}',
+            'get',
+            'Tools',
+            'getWebsiteTool',
+            'One website tool: its accounts the caller uses or manages (never a password or a 2FA key), each account\'s '
+            'browser session, the browser host, the newest Activity; to whoever may change it, who can see it. A tool '
+            'the caller may not see is a 404',
+            'WebsiteTool',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}',
+            'patch',
+            'Tools',
+            'updateWebsiteTool',
+            'Rename it, change its sites or Central only (credential administrators), or who can see it: audience '
+            'null for Everyone, or an audience for Only listed',
+            'WebsiteToolSettings',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}',
+            'delete',
+            'Tools',
+            'deleteWebsiteTool',
+            'Remove a website tool with its accounts, their grants and its Activity (credential administrators)',
+            'WebsiteDeleted',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/activity',
+            'get',
+            'Tools',
+            'listWebsiteToolActivity',
+            'Who opened, filled, copied or asked for a code, on which page (host and path), with which account and '
+            'where, newest first. Follow next with cursor',
+            'WebsiteToolActivity',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts',
+            'post',
+            'Tools',
+            'addWebsiteAccount',
+            'Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per '
+            'holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again. '
+            'username and password may be left out for a site a person signs in to by hand. Shared accounts default '
+            'to all_bots: true, including future bots; set false for selected teammates only. Own accounts stay private',
+            'WebsiteAccountSaved',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts/{account_id}',
+            'patch',
+            'Tools',
+            'updateWebsiteAccount',
+            'Replace login: the username, the password, or the 2FA key (totp null removes it)',
+            'WebsiteAccountSaved',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts/{account_id}',
+            'delete',
+            'Tools',
+            'deleteWebsiteAccount',
+            'Remove an account and its grants',
+            'WebsiteDeleted',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts/{account_id}/access/{subject}',
+            'put',
+            'Tools',
+            'setWebsiteAccountAccess',
+            'Give a shared account to a person, a bot, a group (group:<id>, credential administrators; every person '
+            'and bot in it and in the groups under it uses it) or All bots (subject: bots, credential administrators; '
+            'every bot, including later ones), or take it away (on: false). Turn off All bots before removing a bot. '
+            'Answers the account\'s whole access list',
+            'WebsiteAccountAccessSet',
+        ),
+        (
+            '/api/v2/website-tools/groups',
+            'get',
+            'Tools',
+            'listWebsiteToolGroups',
+            'Each group with its member count and its people and bots (actors), nested groups included, for Who can use '
+            'it (credential administrators)',
+            'WebsiteToolGroups',
+        ),
+        (
+            '/api/v2/website-tools/{tool_id}/accounts/{account_id}/code',
+            'get',
+            'Tools',
+            'getWebsiteAccountCode',
+            'The current 2FA code, to a signed-in person who uses the account (never a bot, a token or an assistant). '
+            'Logged, without the code',
+            'WebsiteCode',
+        ),
+    ]
+)
+WEBSITE_WHO = obj({'subject': 's', 'kind': {'enum': ['person', 'bot']}, 'id': 's', 'name': 's', 'initials': 's'})
+SCHEMAS['WebsiteToolCreated'] = obj({'id': 's'})
+SCHEMAS['WebsiteDeleted'] = obj({'deleted': 'b', 'id': 's'})
+SCHEMAS['WebsiteAccountSaved'] = obj({'id': 's'})
+# One row of an account's Who can use it: a person, a bot or (to an administrator) a granted group with its member count.
+# `via` names the granted groups a person or bot granted directly is also in.
+WEBSITE_ACCESS = obj(
+    {
+        'subject': 's',
+        'kind': {'enum': ['person', 'bot', 'group']},
+        'id': 's',
+        'name': 's',
+        'initials': 's',
+        'members': 'i',
+        'via': items(_t('s')),
+    },
+    required=['subject', 'kind', 'id', 'name', 'initials'],
+)
+SCHEMAS['WebsiteAccountAccessSet'] = obj({'subject': 's', 'on': 'b', 'access': items(WEBSITE_ACCESS)})
+SCHEMAS['WebsiteToolGroups'] = items(obj({'id': 's', 'name': 's', 'members': 'i', 'actors': items(_t('s'))}))
+SCHEMAS['WebsiteCode'] = obj({'code': 's', 'expires_in': 'i'})
+SCHEMAS['WebsiteToolSettings'] = obj(
+    {'id': 's', 'name': 's', 'kind': {'enum': ['website']}, 'sites': items(_t('s')), 'central_only': 'b'}
+)
+WEBSITE_ACTIVITY_ROW = obj(
+    {
+        'id': 's',
+        'at': 's',
+        'who': WEBSITE_WHO,
+        'verb': {'enum': ['open', 'fill', 'copy', 'code', 'needs_you', 'control', 'sign_in', 'download', 'upload']},
+        'page': 's',
+        'account': {'enum': ['shared', 'own']},
+        'where': {'enum': ['central', 'own']},
+        'result': {'enum': ['sent', 'refused', 'failed', 'use']},
+    }
+)
+SCHEMAS['WebsiteToolActivity'] = obj({'rows': items(WEBSITE_ACTIVITY_ROW), 'next': 'n'})
+SCHEMAS['WebsiteTool'] = obj(
+    {
+        'tool': ref('WebsiteToolSettings'),
+        'status': obj({'label': 's', 'tone': {'enum': ['ok', 'waiting', 'fail', 'neutral']}}),
+        'accounts': items(
+            obj(
+                {
+                    'id': 's',
+                    'kind': {'enum': ['shared', 'own']},
+                    'username': 's',
+                    'has_password': 'b',
+                    'has_totp': 'b',
+                    'all_bots': 'b',
+                    'holder': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
+                    'access': items(WEBSITE_ACCESS),
+                    'session': obj(
+                        {
+                            'state': {'enum': ['needs_you', 'in_use', 'unknown']},
+                            'where': {'type': ['string', 'null'], 'enum': ['central', 'own', None]},
+                            'computer': 'n',
+                            'by': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
+                        },
+                        required=['state'],
+                    ),
+                    'can_use': 'b',
+                    'can_manage': 'b',
+                },
+                # `username` is left out for a bot, a run or a computer.
+                required=[
+                    'id',
+                    'kind',
+                    'has_password',
+                    'has_totp',
+                    'all_bots',
+                    'holder',
+                    'access',
+                    'session',
+                    'can_use',
+                    'can_manage',
+                ],
+            )
+        ),
+        'host': {
+            'anyOf': [obj({'runner_id': 's', 'label': 's', 'online': 'b'}), {'type': 'null'}],
+            'description': 'The company browser host, null when none is set',
+        },
+        'recent': items(WEBSITE_ACTIVITY_ROW),
+        'can_manage': 'b',
+        'private': 'b',
+        'can_set_audience': 'b',
+        'audience': {
+            'anyOf': [ref('AccessAudience'), {'type': 'null'}],
+            'description': 'Only to whoever may change it; null is Everyone',
+        },
+        'seen_by': items(
+            obj(
+                {
+                    'subject': 's',
+                    'kind': {'enum': ['person', 'group', 'bot', 'finance']},
+                    'id': 's',
+                    'name': 's',
+                    'why': {'enum': ['Owner', 'Listed', 'Can use it']},
+                }
+            )
+        )
+        | {'description': 'Only to whoever may change it: who can see an Only listed tool, and why'},
+    },
+    required=['tool', 'status', 'accounts', 'host', 'recent', 'can_manage', 'private', 'can_set_audience'],
+)
+BROWSER = '/api/v2/website-tools/{tool_id}/accounts/{account_id}/browser'
+STABLE.extend(
+    [
+        (
+            BROWSER,
+            'post',
+            'Tools',
+            'openWebsiteBrowser',
+            'Open, or wake, the account\'s browser for your live view: on the computer its session runs on, else the browser '
+            'host. A live session is woken without changing its page',
+            'BrowserOpened',
+        ),
+        (
+            BROWSER + '/frame',
+            'get',
+            'Tools',
+            'getWebsiteBrowserFrame',
+            'The newest picture of the account\'s browser (JPEG; 204 before the first), with X-Page-Url, X-Page-Width and '
+            'X-Page-Height. From the computer the session runs on, at most one a second however many people watch',
+            None,
+        ),
+        (
+            BROWSER + '/control',
+            'post',
+            'Tools',
+            'setWebsiteBrowserControl',
+            'Take control (bots wait until you give it back, or 5 minutes idle), or give it back',
+            'BrowserControlState',
+        ),
+        (
+            BROWSER + '/input',
+            'post',
+            'Tools',
+            'sendWebsiteBrowserInput',
+            'A click (x, y in frame pixels), typed text, a key or a scroll from the person in control',
+            'BrowserInputDone',
+        ),
+    ]
+)
+SCHEMAS['BrowserOpened'] = obj({'ok': 'b', 'where': {'enum': ['central', 'own']}})
+SCHEMAS['BrowserControlState'] = obj({'ok': 'b', 'control': 'b'})
+SCHEMAS['BrowserInputDone'] = obj({'ok': 'b'})
 TAGS['Webhook relay'] = (
     'Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py).'
 )
@@ -8768,6 +9233,65 @@ STABLE.extend(
             None,
         ),
         (
+            '/api/v2/rule-groups',
+            'get',
+            'Rules',
+            'getRuleGroups',
+            'The Rules page\'s groups with a count each (Company, Outside, Pipelines and stages, Due, Wakes, Automations '
+            'on tasks, Built in, Suggested), and the Wakes, Automations on tasks and Built in rows',
+            None,
+        ),
+        (
+            '/api/v2/stage-rules',
+            'get',
+            'Rules',
+            'listStageRules',
+            'Stage rules; with pipeline (and stage) the ones that apply there, most specific first, and the built-in '
+            'behaviours (read-only). status active, suggested, retired or any; mine: the caller\'s own',
+            None,
+        ),
+        (
+            '/api/v2/stage-rules',
+            'post',
+            'Rules',
+            'addStageRule',
+            'Add a stage rule (On, When, If, Then); a bot\'s is a suggestion a person accepts or skips',
+            None,
+        ),
+        ('/api/v2/stage-rules/{rule_id}', 'get', 'Rules', 'getStageRule', 'One stage rule, with its cost', None),
+        (
+            '/api/v2/stage-rules/{rule_id}',
+            'post',
+            'Rules',
+            'editStageRule',
+            'Change a stage rule against the revision read; a bot\'s change is a suggestion',
+            None,
+        ),
+        (
+            '/api/v2/stage-rules/{rule_id}/retire',
+            'post',
+            'Rules',
+            'retireStageRule',
+            'Retire a stage rule in force',
+            None,
+        ),
+        (
+            '/api/v2/stage-rules/{rule_id}/accept',
+            'post',
+            'Rules',
+            'acceptStageRule',
+            'A person accepts a bot\'s suggested stage rule or change',
+            None,
+        ),
+        (
+            '/api/v2/stage-rules/{rule_id}/skip',
+            'post',
+            'Rules',
+            'skipStageRule',
+            'A person skips a suggested stage rule',
+            None,
+        ),
+        (
             '/api/v2/rules/{rule_id}/due',
             'post',
             'Rules',
@@ -9015,7 +9539,7 @@ STABLE.extend(
             'get',
             'Model subscriptions',
             'listComputerSubscriptions',
-            'Which subscription each computer uses per runtime, and the computers that can take one',
+            "Which subscription each computer uses per runtime (for a person's plans: the plan in use and why), the people who own plans per runtime, and the computers that can take one",
             'ComputerSubscriptionList',
         ),
         (
@@ -9023,7 +9547,7 @@ STABLE.extend(
             'put',
             'Model subscriptions',
             'setComputerSubscription',
-            'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true',
+            "Give a computer a subscription for one runtime, or a person's plans for it (`person`: used in turn, the soonest weekly reset with usage left first), switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true",
             'ComputerSubscriptionResult',
         ),
     ]
@@ -9051,6 +9575,8 @@ SCHEMAS['ModelSubscription'] = obj(
                         'cost_usd_month': NUM_N,
                         'resets_at': 'n',
                         'reason': {'type': ['string', 'null']},
+                        'weekly_resets_at': 'n',
+                        'weekly_used_pct': NUM_N,
                     },
                     required=['window', 'used_pct', 'cost_usd_month'],
                 ),
@@ -9063,6 +9589,8 @@ SCHEMAS['ModelSubscription'] = obj(
         'owner_name': 's',
         'created_at': 's',
         'updated_at': 's',
+        'order': {'type': ['integer', 'null']},
+        'in_use_on': items({'type': 'string'}),
     },
     required=[
         'id',
@@ -9083,6 +9611,8 @@ SCHEMAS['ModelSubscription'] = obj(
         'owner_name',
         'created_at',
         'updated_at',
+        'order',
+        'in_use_on',
     ],
 )
 SCHEMAS['ModelSubscriptionList'] = obj(
@@ -9106,10 +9636,23 @@ SCHEMAS['ModelSubscriptionList'] = obj(
 SCHEMAS['ModelSubscriptionDeleted'] = obj(
     {'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'}
 )
+_SET_WHY = obj({'kind': {'enum': ['soonest', 'held', 'reconnect', 'all_held', 'none']}, 'plan': 'n', 'until': 'n'})
+_PERSON_SET = obj({'person': 's', 'person_name': 's', 'plans': 'i', 'on': 'n', 'on_name': 'n', 'why': _SET_WHY})
 SCHEMAS['ComputerSubscriptionList'] = obj(
     {
-        'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
+        'assignments': items(
+            obj(
+                {
+                    'runner_id': 's',
+                    'runtime': {'enum': ['claude', 'codex']},
+                    'subscription_id': 's',
+                    'person': 's',
+                    'set': {'anyOf': [_PERSON_SET, {'type': 'null'}]},
+                }
+            )
+        ),
         'capable': items({'type': 'string'}),
+        'people': items(obj({'id': 's', 'name': 's', 'claude': 'i', 'codex': 'i'}, required=['id', 'name'])),
     }
 )
 SCHEMAS['ComputerSubscriptionResult'] = obj(
@@ -9117,6 +9660,7 @@ SCHEMAS['ComputerSubscriptionResult'] = obj(
         'runner_id': 's',
         'runtime': {'enum': ['claude', 'codex']},
         'subscription_id': 'n',
+        'person': 's',
         'stopped': 'i',
         'sessions_reset': 'i',
     }
@@ -9378,10 +9922,37 @@ SCHEMAS.update(
                     "description": "The root ids `catch_up` counts, at most 99 (first page only; "
                     "[] after): a client keeps the set from the live stream",
                 },
+                "unread": items(ref("ThreadRailUnread")),
                 "dms": ref("ThreadDmCounts"),
                 "next_cursor": "n",
-            }
+                "seq": {
+                    "type": "integer",
+                    "description": "The live change number this first page is as of (first page only): a stream that "
+                    "resumes from it (`GET /api/v2/events?after=`) carries every change since",
+                },
+            },
+            ["pinned", "threads", "catch_up", "catch_up_ids", "dms", "next_cursor"],
         ),
+        "ThreadRailUnread": {
+            **obj(
+                {
+                    "id": "s",
+                    "title": "s",
+                    "name": "s",
+                    "audience": "s",
+                    "dm_with": items(obj({"actor": "s", "name": "s"})),
+                    "dm_with_count": "i",
+                    "home_actor": {"type": ["string", "null"], "description": "The bot or person whose Home it is"},
+                    "new_count": "i",
+                    "mention": "b",
+                    "task_id": {"type": ["string", "null"]},
+                    "last_message_at": {"type": ["string", "null"]},
+                },
+                required=["id", "audience", "new_count", "mention"],
+            ),
+            "description": "A Catch up item the rail does not hold (a 1:1 DM, a Home, a task's thread), in Catch up's "
+            "order: mentions first, then newest activity (first page only; [] after)",
+        },
         "ThreadBrowse": obj(
             {"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}), "next_cursor": "n"}
         ),
@@ -9593,7 +10164,8 @@ STABLE.extend(
             "Threads",
             "listThreadRail",
             "The threads the viewer is in, by title: `pinned` (at most 200 a page) and `threads`, each going on through "
-            "`next_cursor` until both are done; `catch_up`, `catch_up_ids` and `dms` on the first page. "
+            "`next_cursor` until both are done; `catch_up`, `catch_up_ids`, `unread` (each chat Catch up counts that the rail "
+            "does not list) and `dms` on the first page. "
             "Company, team and members threads and group DMs; never a 1:1 DM, a Home, a task's thread or a meeting",
             "ThreadRail",
         ),
@@ -10729,7 +11301,8 @@ SCHEMAS.update(
                 "task_id": "s",
                 "title": "s",
                 "kind": {"enum": "started finished".split()},
-                "outcome": {"enum": ["won", "lost", "inconclusive", "dropped", None]},
+                "outcome": {"enum": ["won", "lost", "inconclusive", "kept", "dropped", None]},
+                "result": {"enum": ["failed", "worked-once", "watching", None]},
                 "at": "s",
                 "channels": items({"type": "string"}),
                 "goal_id": "n",
@@ -11967,7 +12540,7 @@ STABLE.extend(
             "get",
             "Skills",
             "listSkills",
-            "The directory: each skill with its latest approved version and install count",
+            "The directory: each skill with its latest approved version, install count and the first few it is on",
             None,
         ),
         (
@@ -11983,7 +12556,7 @@ STABLE.extend(
             "get",
             "Skills",
             "listSkillProposals",
-            "Proposals: admins see all, anyone else their own",
+            "Proposals waiting for an OK (status=all or a status for history): admins see all, anyone else their own",
             None,
         ),
         (

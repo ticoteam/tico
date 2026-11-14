@@ -67,3 +67,21 @@ def run(store, onboarding, telemetry):
             task_engine.end_release_snoozes(c, releases.version(), settings.release_repo)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("release_snoozes", exc)
+    # A task that depends on another until released (a Validate task on its Engineering task) goes on, or its owner is
+    # woken once, when the release this server runs holds that task's merged PRs (task_depends.on_release).
+    try:
+        from . import releases, task_depends
+
+        with _transaction(store) as c:
+            task_depends.on_release(c, releases.version(), settings.release_repo)
+    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+        telemetry.capture("depends_released", exc)
+    # Once, at the release that brought Validate's proof gate: a bot's bare ask of a person on a task already in
+    # Validate is withdrawn, and a task whose passed page was all else it waited for is Done (validate_gate.sweep).
+    try:
+        from . import validate_gate
+
+        with _transaction(store) as c:
+            validate_gate.sweep(c)
+    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+        telemetry.capture("validate_sweep", exc)

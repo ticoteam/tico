@@ -16,8 +16,17 @@ install from before rules was a default gets that one right at its next start. I
 person approves each one. It is never a finance admin and never changes views, rights, payment settings or bank
 connections.
 
-It sees only what its Finance view covers. The owner gets one task, "Let the Finance Owner see the books", to give it
-Everything in Finance → Access. Payroll's private lines stay private either way.
+It sees the books by default: it gets one Finance view of Everything, once per install, so its Books check and Watch
+have the whole queue to work. The view is granted in the owner's name, so a change of company owner pauses it until
+the new owner decides, and the owner gets one notice saying so. Payroll's private lines stay private: Everything gives it no full detail on a private
+line. Revoking that view in Finance → Access sticks; no later start gives it back. An install from before gets the
+view at its next start, unless an Everything view for the Finance Owner was revoked before, and the owner's old
+"Let the Finance Owner see the books" to-do is closed for them. A paused or archived Finance Owner gets no view.
+
+Its payments ask a finance admin by default: one Finance rule, "A bot's payment asks a finance admin" (any amount,
+any recipient, any bot), is added once per install, before its view, and an install from before gets it at its next
+start. The owner may edit it or turn it off on purpose in Finance; no later start puts it back. It never pays
+against a private payroll line it has no full detail of.
 
 It touches the books only through the [Finance tools](finance-tools.md), as itself. Approvals follow the company's
 rules; it never approves its own action. The owner approves a month's close and each import of a spreadsheet's history.

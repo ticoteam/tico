@@ -21,7 +21,7 @@ engine's modules reach back to hubdb and the store.
 import functools
 import json
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar, cast
 
 from . import hubdb_core, task_effects
 
@@ -273,6 +273,55 @@ def task_move(
 
 
 @_task_write()
+def task_let_see(
+    conn: "sqlite3.Connection",
+    actor: str,
+    task_id: str,
+    whom: list[str],
+    seen_version: int | str | None = None,
+    *,
+    mover: bool | None = None,
+    check: Callable[[list[str]], None] | None = None,
+) -> Row:
+    """A person lets `whom` see private task `task_id` and moves it on, in one write: the stuck card's one fix (task
+    #392). `whom` must be exactly who the task waits on to be let in now (`waiting_on.Wait.share`, as the card showed
+    it: everyone the next stage shuts out, so one press always gets it past them): when that changed, nobody is added
+    and the refusal names who it is now. Only they are added (one reader event each, "<person> let <them> see this
+    task"); then, with nothing else missing, the task moves to the next stage. A bot never lets anyone in: it asks a
+    person (task_engine.fix_for). `check(added)` may refuse a reader (task_privacy.require_readers). A refused move
+    adds nobody: the whole write is undone."""
+    from . import task_engine as E
+    from . import task_requirements as R
+    from . import waiting_on as W
+
+    H = _h()
+    if is_bot(actor):
+        _refuse(conn, actor, "task_needs_person", "Only a person lets someone see a private task. Ask one.", task_id)
+    row = _open(conn, actor, task_id, mover)
+    full = E.task(conn, task_id)
+    if not full:
+        _refuse(conn, actor, "not-found", "No such task")
+    E.check_version(conn, actor, full, seen_version)
+    waits: list[Any] = W.of(conn, full)
+    nobody: list[str] = []
+    now: list[str] = next((list(wait.share) for wait in waits if wait.share), nobody)
+    named: list[str] = [str(H.resolve_actor(conn, who) or who) for who in whom]
+    if not named or sorted(set(named)) != sorted(now):
+        said = (
+            f"{W.names_of(conn, now)} can't see it now. Nobody was added."
+            if now
+            else "Nobody is waiting to see this task now. Nobody was added."
+        )
+        _refuse(conn, actor, "task_changed", said, task_id)
+    H.set_task_readers(conn, actor, task_id, add=now, mover=mover, check=check)
+    after = E.task(conn, task_id)
+    if not after or R.unmet(conn, after):
+        return after or row  # an ask in this stage waited on them: it is theirs now, and the task stays
+    with task_effects.because(actor):
+        return E.move(conn, task_id, NEXT, actor, None, after.get("version"))
+
+
+@_task_write()
 def task_close(
     conn: "sqlite3.Connection",
     actor: str,
@@ -297,10 +346,11 @@ def task_reassign(
     seen_version: int | str | None = None,
     *,
     mover: bool | None = None,
+    set_anyway: bool = False,
 ) -> Row:
     """Give the task to another owner for this stage. Checked as any hand-over is: the actor reaches the new owner,
     the new owner takes tasks, the General Manager stays in the department, and a bot's hand-over to a person passes the
-    strategy rules."""
+    strategy rules. `set_anyway`: a person overturns the stage rule that blocks this owner (E.reassign)."""
     from . import task_engine as E
 
     H = _h()
@@ -309,6 +359,8 @@ def task_reassign(
     if owner:
         H._botops_only(conn, actor, H.resolve_actor(conn, owner))
         target = H._reach(conn, actor, owner)
+    if target != row.get("owner_id"):
+        H.refuse_stage_reader(conn, actor, row)  # a bot that reads it only while it holds the stage gives it to nobody
     if target and target != row.get("owner_id"):
         if actor == H.GENERAL_MANAGER:
             from . import general_manager
@@ -335,7 +387,7 @@ def task_reassign(
         H._takes_tasks(conn, actor, target, row.get("title"), relations.parent_of(conn, task_id), task=task_id)
         H._learner(conn, actor)
         H._learning(conn, actor, target)
-    return E.reassign(conn, task_id, target, actor, why, seen_version)
+    return E.reassign(conn, task_id, target, actor, why, seen_version, set_anyway=set_anyway)
 
 
 # ----------------------------------------------------------------------------- asks and answers
@@ -347,7 +399,7 @@ def bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str) -> None
 
     unshared = E.not_shared(conn, row, who)
     if unshared:
-        _refuse(conn, actor, "private", f"{unshared['cause']}. {unshared['fix']}.", row["id"])
+        _refuse(conn, actor, "private", E.told(conn, actor, row, unshared), row["id"])
 
 
 @_task_write()
@@ -363,9 +415,13 @@ def task_ask(
     shows: object = None,
     seen_version: int | str | None = None,
     mover: bool | None = None,
+    for_action: bool = False,
+    brief: Row | None = None,
+    title: str | None = None,
 ) -> Row:
     """Ask someone on the task: an answer (`kind` "answer", with `choices` where there are some) or an OK (`kind`
-    "ok"). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
+    "ok"). `brief` is a question's why, its choices' lines and the one recommended (backend/ask_shape.py); `title` a
+    short heading for it (at most 60 characters). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
     carries `requirement_id`."""
     from . import task_engine as E
 
@@ -386,7 +442,18 @@ def task_ask(
         # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
         H.require_person_ask(conn, actor, target, line, "ask")
     return E.add_requirement(
-        conn, task_id, actor, kind, target, line, choices=choices, shows=shows, seen_version=seen_version
+        conn,
+        task_id,
+        actor,
+        kind,
+        target,
+        line,
+        choices=choices,
+        shows=shows,
+        seen_version=seen_version,
+        for_action=for_action,
+        brief=brief,
+        title=title,
     )
 
 
@@ -469,12 +536,31 @@ def task_release(
 
 @_task_write()
 def task_page_attach(
-    conn: "sqlite3.Connection", actor: str, task_id: str, requirement: str, ref: str, seen_version: int | None = None
+    conn: "sqlite3.Connection",
+    actor: str,
+    task_id: str,
+    requirement: str,
+    ref: str,
+    seen_version: int | None = None,
+    *,
+    note: str | None = None,
+    changed: list[str] | None = None,
+    answered: list[str] | None = None,
 ) -> Row:
     """Attach a page (task_pages.attach), as a task write: a private task's refusal keeps none of its words."""
     from . import task_pages
 
-    return task_pages.attach(conn, task_id, requirement, ref, actor, seen_version=seen_version)
+    return task_pages.attach(
+        conn,
+        task_id,
+        requirement,
+        ref,
+        actor,
+        seen_version=seen_version,
+        note=note,
+        changed=changed,
+        answered=answered,
+    )
 
 
 @_task_write()
@@ -620,8 +706,8 @@ def _may(
         if answer and answer["answer"] == "no":
             if viewer in (owner, holder):
                 out.append("again")
-        elif asked:
-            out += ["ok", "no"]
+        elif asked and standing.state == R.WAITING and not R.outside(standing.on):
+            out += ["ok", "no"]  # not while it is held on Jev or back with the owner (validate_gate.held)
     owners = R.owners_answer(requirement)
     if kind == "answer" and not standing.met and (works if owners else asked):
         out.append("answer")
@@ -861,6 +947,8 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
                 "who": None,
                 "asked_by": None if private else requirement.get("added_by_id"),
                 "choices": None if private else requirement.get("choices"),
+                **({"brief": _brief_of(requirement)} if _brief_of(requirement) and not private else {}),
+                **({"title": _title_of(requirement)} if _title_of(requirement) and not private else {}),
                 "shows": [] if private else requirement.get("shows") or [],
                 **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
                 "answer": _answer_view(conn, task_id, answer, private),
@@ -868,6 +956,24 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
             }
         )
     return out
+
+
+def _brief_of(requirement: Row) -> Row | None:
+    """A question's why, its choices' lines and the one recommended, as the bot asked it (backend/ask_shape.py), or
+    None for an ask that carried none."""
+    settings: Row = requirement.get("settings") or {}
+    brief: Any = settings.get("brief")
+    if not isinstance(brief, dict) or not cast("Row", brief).get("why"):
+        return None
+    found = cast("Row", brief)
+    return {"why": found.get("why"), "details": found.get("details"), "recommend": found.get("recommend")}
+
+
+def _title_of(requirement: Row) -> str | None:
+    """An ask's short title, as it was asked with one (models.TaskAsk.title), or None."""
+    settings: Row = requirement.get("settings") or {}
+    title: Any = settings.get("title")
+    return title if isinstance(title, str) and title else None
 
 
 def _leave_entry(
@@ -905,6 +1011,8 @@ def _leave_entry(
         "asked_by": None if private else requirement.get("added_by_id") if requirement.get("visit_id") else None,
         "choices": None if private else requirement.get("choices"),
         **({"typed": typed} if typed else {}),
+        **({"brief": _brief_of(requirement)} if _brief_of(requirement) and not private else {}),
+        **({"title": _title_of(requirement)} if _title_of(requirement) and not private else {}),
         "shows": shows,
         # What it shows is where its words come from: a reader who may not open one of those pages reads
         # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
@@ -984,7 +1092,7 @@ def task_view(
         if held and wait["state"] == W.ROOM:
             # Everything is met, and the next stage has someone who cannot read this private task: it waits there
             # until someone who can see it shares it (the never-stuck pass then moves it).
-            wait["line"], wait["fix"] = held["cause"], held["fix"]
+            wait["line"], wait["fix"] = held["cause"], E.fix_for(conn, viewer, row, held)
     # The task that filed this one, and the tasks this one filed, only as far as `viewer` may read them
     # (`_readable`): one they may not read is left out whole, its id, status and that it exists at all.
     above = _cached(conn, _FILED_BY, task_id)

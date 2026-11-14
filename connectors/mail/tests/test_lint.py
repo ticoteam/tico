@@ -58,7 +58,7 @@ class Content(unittest.TestCase):
             "runtime/mail/mail.db",
             "emp-influencer",
             "bot-influencer/knowledge/notes.md",
-            "see AGENT.md",
+            "see AGENTS.md",
         ):
             self.assertIn("L040", ids(lint(CLEAN + f"\n{bad}\n\nAna\n")), bad)
         self.assertNotIn("L040", ids(lint(CLEAN)))

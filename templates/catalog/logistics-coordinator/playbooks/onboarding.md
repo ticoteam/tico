@@ -1,10 +1,9 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 25 minutes. The outcome is five recorded answers, the carrier file with rates and
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers, the carrier file with rates and
 claim deadlines, a first weekly delivery report, and the first routine checked.
 
-Done when: all five answers are in `state.md` under `## Answers`, `knowledge/carriers.md` exists with each claim deadline
+Done when: all five answers are in `knowledge/`, `knowledge/carriers.md` exists with each claim deadline
 marked read or "not found", the first report is attached and labelled, the routine is checked and logged in
 `memory/decisions.md`, and `tico bot setup-done` has run.
 
@@ -37,7 +36,7 @@ Numbered, each with its one-line why and a default.
 
 ## 4. Record
 
-Answers to `state.md` under `## Answers`, dated. Write `knowledge/carriers.md` with each claim deadline
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/carriers.md` with each claim deadline
 read from the carrier's own terms, and the date you read it. A deadline you cannot find is marked "not found", and its claims wait for a person to ask the carrier. Do not fill in a deadline from memory, from a guide or from a default. Reference: `knowledge/claims-practice.md`.
 
 ## 5. Produce the first result now
@@ -51,7 +50,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send this report every Monday at 08:00 and work exceptions as each export arrives." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

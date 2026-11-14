@@ -77,7 +77,6 @@ declare var pageCompanyDocs: () => Promise<void>;
 
 let DOC_DATA: DocsPageData = {docs: [], linked: []};
 let DOC_QUERY = '';
-let DOC_LOAD = 0;
 let DOC_BROWSER_SCROLL = 0;
 const docsHref = (id = '', extra: Record<string, string> = {}): string => {
   const q = new URLSearchParams(extra);
@@ -192,6 +191,19 @@ async function docsSetup(slot: HTMLElement, {asked, current, openImport, reload}
 let DOC_CACHE_KEY = '';
 // An editor with unsaved text asks before a click in the list leaves it.
 const docsDirty = (): boolean => $('form.docs-editor')?.dataset.dirty === '1';
+// Following `link` away from a doc with unsaved changes asks first. The desktop app answers later, so the click is held
+// (true: the caller stops) and made again on OK, with the changes marked discarded so it goes through.
+function docsLeaveDirty(event: Event, link: HTMLAnchorElement): boolean {
+  if (!docsDirty()) return false;
+  event.preventDefault();
+  void (async () => {
+    if (!(await askConfirm('Discard your changes to this doc?')) || !link.isConnected) return;
+    const form = $('form.docs-editor');
+    if (form) form.dataset.dirty = '';
+    link.click();
+  })();
+  return true;
+}
 
 window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   $('#main').classList.add('docs-layout');
@@ -208,14 +220,15 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   const current = () => load === DOC_LOAD && S.route.startsWith(DOCS);
   $('#main').classList.toggle('docs-reading', !!selected);
 
-  $('#main').innerHTML = `<div class="docs-heading"><h1>Docs</h1>
-    <div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder="Search docs" value="${esc(DOC_QUERY)}" autocomplete="off"><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>
-    <button class="docs-ask" id="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>
-    <div class="docs-actions"><button class="docs-new" id="docs-add-source" type="button">Add source</button><a class="docs-new" id="docs-new" href="${docsHref('new')}" role="button">New doc</a>
-      <button class="docs-settings" id="docs-more" type="button" popovertarget="docs-menu" aria-label="More" aria-expanded="false" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div></div>
-    <div id="docs-menu" class="docs-pop" popover aria-label="Docs actions"><button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>
-      ${docsIsPerson() ? `<a id="docs-setup-open" href="${docsHref('', {setup: '1'})}">Set up Docs…</a>` : ''}
-      <a id="docs-archived" href="${docsHref('', archived ? {} : {archived: '1'})}">${archived ? 'Active' : 'Archived'}</a></div>
+  // The one page header (ui/app/page-head.ts): search, Ask and Add source as tools, today's menu in its ⋯, New doc last.
+  $('#main').innerHTML = pageHead({title: 'Docs', hook: 'docs-heading', moreId: 'docs-more', menuId: 'docs-menu',
+    tools: `<div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder="Search docs" value="${esc(DOC_QUERY)}" autocomplete="off"><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>`
+      + `<button class="docs-ask" id="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>`
+      + '<button class="ghost" id="docs-add-source" type="button">Add source</button>',
+    more: '<button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>'
+      + (docsIsPerson() ? `<a id="docs-setup-open" href="${docsHref('', {setup: '1'})}">Set up Docs…</a>` : '')
+      + `<a id="docs-archived" href="${docsHref('', archived ? {} : {archived: '1'})}">${archived ? 'Active' : 'Archived'}</a>`,
+    primary: `<a class="primary ph-go" id="docs-new" href="${docsHref('new')}" role="button">New doc</a>`}) + `
     <p class="docs-feedback" id="docs-feedback" role="status" hidden></p>
     <div id="docs-setup"></div>
     <div class="docs-workspace${selected ? ' has-selection' : ''}"><aside class="docs-browser" aria-label="Docs" id="docs-browser"><p class="docs-loading">Loading…</p></aside>
@@ -224,7 +237,6 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   const feedback: HTMLElement = $('#docs-feedback');
   const say = (message: string) => { feedback.textContent = message || ''; feedback.hidden = !message; };
   const reload = () => { if (S.route.startsWith(DOCS)) pageCompanyDocs(); };
-  docsMenu($('#docs-menu'), $('#docs-more'));
   const openImport = () => DocsEditor.importDialog({onDone: doc => { location.hash = docsHref(doc.id); }});
   const openLink = (link: DocsPageSource | null | undefined) => DocsEditor.linkDialog({link, onDone: source => {
     const target = docsHref(source ? 'source:' + source.id : 'sources');
@@ -315,7 +327,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   browser.onclick = event => {
     // A click's target is an Element (eventElement, ui/app/dom.ts), so `?.` skips the closest() calls for anything else.
     const item = eventElement(event)?.closest<HTMLAnchorElement>('a.docs-item, a.docs-link-main, a.docs-source-all');
-    if (item && docsDirty() && !confirm('Discard your changes to this doc?')) { event.preventDefault(); return; }
+    if (item && docsLeaveDirty(event, item)) return;
     if (eventElement(event)?.closest('[data-docs-import]')) openImport();
     const add = eventElement(event)?.closest('[data-docs-link]'); if (add) openLink(null);
     const edit = eventElement(event)?.closest<HTMLElement>('[data-link-edit]');
@@ -350,7 +362,8 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   const reader: HTMLElement = $('#docs-reader');  // drawn above
   reader.addEventListener('click', event => {
     // A click in the reader targets an Element (eventElement, ui/app/dom.ts), as in the browser handler above.
-    if (eventElement(event)?.closest('.docs-back') && docsDirty() && !confirm('Discard your changes to this doc?')) event.preventDefault();
+    const back = eventElement(event)?.closest<HTMLAnchorElement>('a.docs-back');
+    if (back) docsLeaveDirty(event, back);
   });
   const back = `<a class="docs-back" href="${docsHref('', archived ? {archived: '1'} : {})}">‹ Docs</a>`;
   // No doc open: the docs changed most recently, so the page opens on something to read.

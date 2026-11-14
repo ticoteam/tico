@@ -36,7 +36,7 @@ def test_judge_once_goes_through_the_servers_judge_with_the_work_and_the_evidenc
         return {"p": 0.9, "reason": "ok", "provider": "t", "model": model, "cost_usd": 0.002, "latency_ms": 12}
 
     case = next(c for c in run.load() if c.get("trap") == "old_version")
-    p, cost, ms = adapter.judge_once(engine, case)
+    p, cost, ms, _said = adapter.judge_once(engine, case)
     assert (p, cost, ms) == (0.9, 0.002, 12)
     assert seen["model"] == "jev" and seen["label"] == adapter.QUESTION_SET
     assert seen["state"]["work"]["work_version"] == case["work"]["work_version"]
@@ -149,7 +149,7 @@ def test_a_missing_evidence_case_is_not_met_and_no_model_is_called():
         asked.append(model)
         return {"p": 0.9, "reason": "", "provider": "t", "model": model}
 
-    assert adapter.judge_once(engine, case) == (0.0, 0.0, 0)
+    assert adapter.judge_once(engine, case) == (0.0, 0.0, 0, "not_met")
     assert asked == []
 
 
@@ -224,7 +224,7 @@ def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monk
 def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped_rubrics():
     """The three pages Jev was unsure of on Acme (Nov 11) and the two it passed are cases, built by the page step's own
     builder (page_verdicts.job_of): the page's text, the stage's shipped rubric, the PR and its newest commit."""
-    from backend.pipeline_settings import FIXES_2_RUBRIC, REVIEW_RUBRIC
+    from backend.pipeline_settings import QA_RUBRIC, REVIEW_RUBRIC
 
     cases = {c["id"]: c for c in run.chosen(run.load(), "acme-*")}
     assert set(cases) == {"acme-review-1", "acme-review-2", "acme-fixes-2", "acme-spec", "acme-validate"}
@@ -235,11 +235,11 @@ def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped
     head = state["work"]["context"]["heads"]["ticoteam/pipeline-sandbox#38"]
     assert state["attachment"]["text"].startswith(f"Reviewed commit {head}")
     assert adapter.state_for(cases["acme-validate"])["work"]["context"]["release"] == ["v6"]
-    assert adapter.state_for(cases["acme-fixes-2"])["requirement"]["rubric"] == FIXES_2_RUBRIC
+    assert adapter.state_for(cases["acme-fixes-2"])["requirement"]["rubric"] == QA_RUBRIC
     # Its two cuts are traps: a pre-release page without what the reviewers found, or without the checks, is not met.
     for trap in ("dev-prerelease-no-reviews", "dev-prerelease-unchecked"):
         cut = next(c for c in run.load() if c["id"] == trap)
-        assert cut["expected"] == "not_met" and cut["requirement"]["rubric"] == FIXES_2_RUBRIC
+        assert cut["expected"] == "not_met" and cut["requirement"]["rubric"] == QA_RUBRIC
         assert len(cut["attachment"]["text"]) < len(cases["acme-fixes-2"]["attachment"]["text"])
     assert run.chosen(run.load(), "acme-spec,dev-review-done") and len(run.chosen(run.load(), "acme-spec")) == 1
 
@@ -248,9 +248,9 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
     """The nineteen good pages Jev was too often unsure of on rc.4 (Nov 11) and the traps cut from them: each with the
     stage's shipped rubric, the page shown as made for the work as it is now, and a pre-release page with the PR's newest
     commit beside it (task_pages.judged_against)."""
-    from backend.pipeline_settings import FIXES_2_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
+    from backend.pipeline_settings import QA_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
 
-    shipped = {FIXES_2_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
+    shipped = {QA_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
     live = run.chosen(run.load(), "live-*")
     traps = run.chosen(run.load(), "trap-*")
     assert len(live) == 19 and all(c["expected"] == "met" for c in live)
@@ -259,7 +259,7 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
         state = adapter.state_for(case)
         assert state["requirement"]["rubric"] in shipped, case["id"]
         assert state["attachment"]["work_version"] == state["work"]["work_version"] > 0, case["id"]
-        if state["requirement"]["rubric"] == FIXES_2_RUBRIC:
+        if state["requirement"]["rubric"] == QA_RUBRIC:
             assert state["work"]["context"]["heads"], case["id"]
     assert [c["id"] for c in run.load() if c.get("allow_unsure")] == ["live-c-fixes-2-v2"]
 
@@ -267,9 +267,9 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
 def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut():
     """The six Fixes 2 pages from the Nov 12 stress run that a person OK'd (Jev said 0.13 to 0.70 on them), and the bad
     ones: no check output, one reviewer left out, a failed check at the newest commit, and a real first page that
-    answered Review 2 only. Each is judged with the shipped Fixes 2 rubric beside its PR's newest commit, and the page
+    answered Review 2 only. Each is judged with the shipped QA rubric (Fixes 2's, before QA had a stage of its own) beside its PR's newest commit, and the page
     names that commit."""
-    from backend.pipeline_settings import FIXES_2_RUBRIC
+    from backend.pipeline_settings import QA_RUBRIC
 
     cases = run.chosen(run.load(), "nov12-*")
     good = [c for c in cases if c["expected"] == "met"]
@@ -279,7 +279,7 @@ def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut
     assert all(c["expected"] == "not_met" for c in bad)
     for case in cases:
         state = adapter.state_for(case)
-        assert state["requirement"]["rubric"] == FIXES_2_RUBRIC, case["id"]
+        assert state["requirement"]["rubric"] == QA_RUBRIC, case["id"]
         [head] = state["work"]["context"]["heads"].values()
         assert head[:9] in state["attachment"]["text"], case["id"]
     no_reviewer = next(c for c in bad if c["trap"] == "reviewer_left_out")["attachment"]["text"]
@@ -287,7 +287,7 @@ def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut
     # A red check differs from CI still running: the rubric that lets the second through must say so of the first.
     red = [c for c in bad if c["trap"] == "check_failed"]
     assert len(red) >= 2 and all("fail" in c["attachment"]["text"] for c in red)
-    assert "but not failed" in FIXES_2_RUBRIC and "reports a check failed at the newest commit" in FIXES_2_RUBRIC
+    assert "but not failed" in QA_RUBRIC and "reports a check failed at the newest commit" in QA_RUBRIC
 
 
 def test_the_growth_pages_are_judged_with_the_shipped_rubrics_good_and_cut():
@@ -319,7 +319,7 @@ def test_an_allowed_unsure_is_left_out_of_the_bar_but_a_wrong_answer_on_it_is_no
     def judge(p):
         return lambda c: ((p if c is case else 0.9), 0.0, 5)
 
-    unsure = run.score("j", judge(0.7), [case, *others])
+    unsure = run.score("j", judge(0.4), [case, *others])
     assert unsure["passes_bar"] and unsure["excused"] == [case["id"]] and unsure["cases"] == 3
     assert not run.score("j", judge(0.1), [case, *others])["passes_bar"], "not met on a good page is still a mistake"
     assert run.problems([{**case, "expected": "not_met"}])[0].endswith("only a met case may allow unsure")
@@ -343,3 +343,215 @@ def test_the_long_spec_cases_are_read_whole_with_the_shipped_spec_rubric():
         state = adapter.state_for(case)
         assert state["requirement"]["rubric"] == SPEC_RUBRIC
         assert state["attachment"]["truncated"] is False and state["attachment"]["text"] == case["attachment"]["text"]
+
+
+def test_the_eval_scores_each_case_on_its_checks_own_bar(monkeypatch):
+    """A case whose rubric is one of the four checks is scored on that check's bar in pipeline_judges.BARS, so moving a
+    check's bar moves the eval with it; a rubric of a company's own keeps the default (MET_AT, NOT_MET_AT)."""
+    from backend import pipeline_judges as P
+
+    monkeypatch.setitem(P.BARS, "qa", (0.6, 0.3))
+    qa = next(c for c in run.load() if P.check_of(c["requirement"]["rubric"]) == "qa")
+    own = next(c for c in run.load() if P.check_of(c["requirement"]["rubric"]) is None)
+    # The scored rows come first: on the old code they fail on the bar itself, not on verdict's new second argument.
+    result = run.score("qa-bar", lambda case: (0.65, 0.0, 5), [qa, own])
+    assert [row["got"] for row in result["rows"]] == ["met", "unsure"]
+    assert run.verdict(0.65, "qa") == "met" and run.verdict(0.25, "qa") == "not_met"
+    assert run.verdict(0.65, None) == "unsure" and run.verdict(0.25) == "unsure"
+
+
+def _rows(check, parts_and_outcomes, today="met"):
+    return [{"parts": parts, "outcome": out, "today": today} for parts, out in parts_and_outcomes]
+
+
+def test_a_bot_rewrite_is_not_a_send_back_and_a_persons_no_is():
+    from evals.pipeline_judge import rebuild as R
+
+    assert R.outcome({"next": "new version"}) == "rewritten"
+    assert R.outcome({"next": "sent back"}) == "sent_back"
+    assert R.outcome({"next": "moved on unchanged"}) == "moved_on"
+
+
+def test_a_part_no_is_not_met_a_part_between_is_unsure_and_a_failed_call_is_never_met():
+    from evals.pipeline_judge import rebuild as R
+
+    yes = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    assert R.verdict_at("spec", yes, 0.75) == "met"
+    assert R.verdict_at("spec", yes | {"criteria": 0.1}, 0.75) == "not_met"
+    assert R.verdict_at("spec", yes | {"criteria": 0.6}, 0.75) == "unsure"
+    assert R.verdict_at("spec", yes | {"criteria": 0.6}, 0.6) == "met"
+    assert R.verdict_at("spec", {k: v for k, v in yes.items() if k != "goal"}, 0.5) == "unsure"
+    assert R.verdict_at("spec", {}, 0.5) == "unsure"
+
+
+def test_the_bar_chosen_is_the_lowest_that_keeps_send_backs_at_todays_and_unsure_under_ten_percent():
+    """Today 1 of 10 met pages is sent back with every part at 0.9: no bar holds it, so it is out of reach and today
+    counts 0. At 0.6 a bad page at p 0.65 becomes met and is sent back (worse than today); at 0.7 it stays unsure,
+    send-backs stay at today's, and unsure is 1 in 11 (9%): 0.7 is the bar."""
+    from backend import pipeline_judges as P
+    from evals.pipeline_judge import rebuild as R
+
+    good = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    rows = _rows("spec", [(good, "moved_on")] * 9 + [(good, "sent_back")] + [(good | {"criteria": 0.65}, "sent_back")])
+    rows[-1]["today"] = "unsure"
+    result = R.choose("spec", rows, grid=(0.6, 0.7, 0.8))
+    assert result["today"]["mtsb_rate"] == 0.0 and result["today"]["out_of_reach"] == 1
+    assert result["by_bar"][0.6]["mtsb_rate"] > 0.0
+    assert result["bar"] == (0.7, P.NOT_MET_AT)
+    assert result["by_bar"][0.7]["unsure_rate"] < R.UNSURE_UNDER
+
+
+def test_no_bar_is_chosen_when_none_gets_unsure_under_ten_percent():
+    from evals.pipeline_judge import rebuild as R
+
+    between = {"goal": 0.4, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    good = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    rows = _rows("spec", [(between, "moved_on")] * 2 + [(good, "moved_on")] * 8)
+    assert R.choose("spec", rows, grid=(0.5, 0.6))["bar"] is None
+
+
+def test_a_send_back_no_bar_could_hold_with_unsure_under_ten_percent_does_not_count_and_is_named():
+    """A sent-back page Jev called unsure at p 0.65 is met at 0.5 or 0.6. Holding it needs 0.7, where 2 of 11 pages are
+    unsure (18%): no bar holds it with unsure under 10%, so it does not count against 0.5, the bar is 0.5, and the result
+    names it with its weakest part, beside today's sent-back page whose every part is 0.9. A send-back 0.7 could hold at
+    9% unsure still counts (test above)."""
+    from backend import pipeline_judges as P
+    from evals.pipeline_judge import rebuild as R
+
+    good = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    edge = good | {"goal": 0.65}
+    rows = _rows(
+        "spec", [(good, "moved_on")] * 8 + [(good, "sent_back")] + [(edge, "moved_on")] + [(edge, "sent_back")]
+    )
+    rows[-1]["today"] = "unsure"
+    result = R.choose("spec", rows, grid=(0.5, 0.6, 0.7))
+    assert result["by_bar"][0.7]["unsure_rate"] >= R.UNSURE_UNDER
+    assert result["bar"] == (0.5, P.NOT_MET_AT)
+    assert {"weakest": "goal", "p": 0.65, "today": "unsure"} in result["out_of_reach"]
+    assert len(result["out_of_reach"]) == 2
+    assert result["by_bar"][0.5]["met_then_sent_back"] == 0 and result["by_bar"][0.5]["out_of_reach"] == 2
+
+
+def test_a_rebuilt_page_is_read_as_its_words_not_its_html(tmp_path):
+    """`tico file read` gives a page's stored HTML, whose styles alone can pass TEXT_CHARS: Jev must be shown the page's
+    words, as the server's loader gives them, or every part reads as missing."""
+    import json
+
+    from backend import pipeline_judges as P
+    from evals.pipeline_judge import rebuild as R
+
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "tasks").mkdir()
+    style = "<style>" + ".x{color:red}" * (P.TEXT_CHARS // 10) + "</style>"
+    html = (
+        f"<!doctype html><html><head>{style}</head><body><h2>Acceptance criteria</h2><p>AC-1 works.</p></body></html>"
+    )
+    (tmp_path / "pages" / "file-a@1.json").write_text(json.dumps({"text": html}))
+    (tmp_path / "tasks" / "t.json").write_text(json.dumps({"title": "T", "body": "", "version": 1, "links": []}))
+    row = {"verdict_id": "v", "check": "Spec", "file_id": "file-a", "page_version": "1", "task_id": "t"}
+    check, state = R.state_of(row, tmp_path, None)
+    assert check == "spec"
+    assert "AC-1 works." in state["attachment"]["text"] and "color:red" not in state["attachment"]["text"]
+    assert not state["attachment"]["truncated"]
+
+
+def _gateway_answering(p, calls):
+    """A Gateway that answers every question it is asked at p, as Jev does: the four checks are asked as part_* questions."""
+
+    def gateway(key, url, model, timeout):
+        def ask(state, questions, label):
+            calls.append(sorted(questions))
+            return {"answers": {qid: {"noul": p} for qid in questions}, "usage": {"cost_usd": 0.0001}, "ms": 5}
+
+        return ask
+
+    return gateway
+
+
+def test_the_eval_asks_each_check_in_parts_and_scores_the_servers_verdict(monkeypatch):
+    """Review 1 on #3706: the adapter read one `met` answer, so a real model failed every case on the four checks (a
+    KeyError, then a TypeError the score did not catch). Each check's case is asked its parts and gets the server's
+    verdict: met with every part at 0.9, unsure with a part between the bars."""
+    from backend import pipeline_judges as P
+
+    by_check = {}
+    for case in run.load():
+        by_check.setdefault(run.check_of(case), case)
+    assert {"spec", "review", "qa", "validate"} <= set(by_check)
+    calls = []
+    monkeypatch.setattr(J, "gateway", _gateway_answering(0.9, calls))
+    engine = adapter._decide("jev", "k", "http://gateway.acme.example")
+    for check in ("spec", "review", "qa", "validate"):
+        p, cost, ms, said = adapter.judge_once(engine, by_check[check])
+        assert said == "met" and p == 0.9 and cost == 0.0001, check
+        assert calls[-1] == sorted(f"part_{part.key}" for part in P.CHECKS[check]), check
+    between = (P.BARS["qa"][0] + P.BARS["qa"][1]) / 2
+    monkeypatch.setattr(J, "gateway", _gateway_answering(between, calls))
+    engine = adapter._decide("jev", "k", "http://gateway.acme.example")
+    assert adapter.judge_once(engine, by_check["qa"])[3] == "unsure"
+
+
+def test_a_call_that_fails_twice_is_unsure_never_a_false_met():
+    """At a bar of 0.5 a failed call's stand-in p of 0.5 read as met: the eval blamed the judge for a false met it never
+    gave. A call that fails twice is unsure, whatever the bar."""
+    from backend import pipeline_judges as P
+
+    # A Spec case: Spec's bar is 0.5, where the old stand-in p of 0.5 would band as met, whatever QA's bar is.
+    case = next(c for c in run.load() if c["expected"] == "not_met" and run.check_of(c) == "spec")
+    assert P.BARS["spec"][0] <= 0.5
+
+    def judge(c):
+        raise J.JudgeError("timeout", "no answer")
+
+    row = run.score("j", judge, [case], pause=lambda s: None)
+    assert row["false_met"] == 0 and row["false_met_cases"] == []
+    assert not row["passes_bar"], "a failed call still fails the bar"
+
+
+def test_the_committed_rebuild_result_is_the_bar_the_server_uses():
+    """BARS and the eval result beside it say the same bar for each check (the rebuild's, or the one the eval raised it
+    to), so editing one without the other fails."""
+    import json
+    from pathlib import Path
+
+    from backend import pipeline_judges as P
+
+    result = json.loads((Path(run.__file__).parent / "results" / "bars-2026-11-13.json").read_text())
+    bars = {check: tuple(r["bar"]) for check, r in result["checks"].items()}
+    bars.update({check: tuple(r["bar"]) for check, r in result.get("raised_by_eval", {}).items()})
+    assert bars == P.BARS
+
+
+def test_a_rebuild_call_that_fails_is_not_cached_so_a_rerun_asks_it_again(tmp_path, monkeypatch):
+    import json
+
+    from evals.pipeline_judge import rebuild as R
+
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "tasks").mkdir()
+    (tmp_path / "pages" / "file-a@1.json").write_text(json.dumps({"text": "Goal: x"}))
+    (tmp_path / "tasks" / "t.json").write_text(json.dumps({"title": "T", "body": "", "version": 1, "links": []}))
+    row = {"verdict_id": "v", "check": "Spec", "file_id": "file-a", "page_version": "1", "task_id": "t"}
+    answers = [RuntimeError("tico decision ask: busy")] * 2 + [{"answers": {"part_goal": {"noul": 0.9}}}]
+
+    def tico(*args):
+        said = answers.pop(0)
+        if isinstance(said, Exception):
+            raise said
+        return said
+
+    monkeypatch.setattr(R, "_tico", tico)
+    assert R.ask([row], tmp_path, {}) == ["tico decision ask: busy"]
+    assert not list((tmp_path / "answers").iterdir()), "a failed call leaves no answer behind"
+    assert R.ask([row], tmp_path, {}) == []
+    (saved,) = (tmp_path / "answers").iterdir()
+    assert json.loads(saved.read_text())["parts"] == {"goal": 0.9}
+
+
+def test_the_eval_scores_the_servers_unsure_even_where_its_p_would_band_as_met():
+    """The server says unsure at p 0.5 when Jev could not see the whole page or the spec was cut: at a 0.5 bar, banding
+    that p again would score met. The eval takes the verdict the judge gives."""
+    case = next(c for c in run.load() if c["expected"] == "not_met" and run.check_of(c) == "spec")
+    assert run.verdict(0.5, "spec") == "met", "the case this test is about: p alone would read as met"
+    row = run.score("j", lambda c: (0.5, 0.0, 5, "unsure"), [case], pause=lambda s: None)
+    assert row["false_met"] == 0 and row["rows"][0]["got"] == "unsure"

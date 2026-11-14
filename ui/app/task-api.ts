@@ -51,6 +51,22 @@ interface PipelineStageRec {
   expected_bots_only: boolean;
   on_enter: Record<string, unknown>;
   requirements: PipelineReqRec[];
+  /** Where `owner` is `pick` ("One of several", backend/stage_pick.py): the bots it picks from and how. A save that
+      leaves it out keeps the stored one. */
+  pick?: PipelinePickRec;
+  /** Who gets the next task, in one sentence, as last saved: the server writes it and a save never sends it. */
+  pick_next?: string;
+  /** This stage's own "Keep warm for up to N hours" (backend/keep_warm.py); null takes the pipeline's. */
+  keep_warm_hours?: number | null;
+}
+/** A stage's "One of several". `families` is each listed bot's model family ("Claude", "GPT"; "" when unknown), read only. */
+interface PipelinePickRec {
+  bots: string[];
+  how: 'turns' | 'random';
+  limit_each: number | null;
+  prefer: 'anyone' | 'new' | 'family';
+  owns_task: boolean;
+  families?: Record<string, string>;
 }
 interface PipelineRec {
   id: string;
@@ -64,6 +80,10 @@ interface PipelineRec {
   preset: string | null;
   settings_version: number;
   retired_at: string | null;
+  /** "Keep warm for up to N hours" (backend/keep_warm.py): 0 to 24, 0 is off. */
+  keep_warm_hours?: number;
+  /** Each active bot's model family ("Claude", "GPT"; "" when unknown), for a stage's One of several: read only. */
+  bot_families?: Record<string, string>;
   stages: PipelineStageRec[];
   done: {id: string; name: string} | null;
   closed: {id: string; name: string} | null;
@@ -286,8 +306,13 @@ const taskDone = (id: string, version: number | null, note?: string): Promise<Ta
 /** `to`: next, done, closed, reopen, or a stage's id or name. `why` pushes past what is missing. */
 const taskMove = (id: string, to: string, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/move`, withVersion(version, why ? {to, why} : {to}), newRequestId());
-const taskReassign = (id: string, owner: string, version: number | null, why?: string): Promise<TaskMoved> =>
-  post(`${taskPath(id)}/owner`, withVersion(version, why ? {owner, why} : {owner}), newRequestId());
+/** A person lets `whom` see a private task and moves it on (the stuck card's one fix, task #392). Refused, adding
+    nobody, when the task now waits on someone else. */
+const taskLetSee = (id: string, whom: string[], version: number | null): Promise<TaskMoved> =>
+  post(`${taskPath(id)}/move`, withVersion(version, {to: 'next', let_see: whom}), newRequestId());
+/** `setAnyway`: a person gives it past a stage rule that refused this owner (409 task_stage_rule). */
+const taskReassign = (id: string, owner: string, version: number | null, why?: string, setAnyway?: boolean): Promise<TaskMoved> =>
+  post(`${taskPath(id)}/owner`, withVersion(version, {owner, ...(why ? {why} : {}), ...(setAnyway ? {set_anyway: true} : {})}), newRequestId());
 /** `until`: an ISO date or date-time; null snoozes with no end. */
 const taskSnooze = (id: string, until: string | null, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/snooze`, withVersion(version, {...(until ? {until} : {}), ...(why ? {why} : {})}), newRequestId());

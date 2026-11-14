@@ -43,7 +43,10 @@ def task_context(api, args):
     "the write as ask_refused, with the reason and fix; no task is created. To ask a person something on your own "
     "task, use tico_task_ask.",
     {
-        "owner": _s("Who does it: a bot slug, a person id, or `me`"),
+        "owner": _s(
+            "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "
+            "picks one"
+        ),
         "title": _s("Task title: plain words, no reference numbers or all-caps"),
         "body": _s("The details", default=""),
         "pipeline": _s("The pipeline's id; default general"),
@@ -73,6 +76,11 @@ def task_context(api, args):
             "work, no secret-shaped value, no file or link of it). Parent: that private task, "
             "or none",
         },
+        "for_actor": _s(
+            "A bot filing a person's own ask: the person (human:<id>) it is for, who becomes its requester. "
+            "With from_message"
+        ),
+        "from_message": _s("With for_actor: the id of the message that person asked in; you must be able to read it"),
         "parent": _s(
             "The task that files it (its id, or 8-character short id): the parent waits until this one ends. "
             "Set once, never changed"
@@ -103,17 +111,18 @@ def task_context(api, args):
             "description": "URLs to attach: a pull request, an issue, a document",
         },
         "goal_id": _s("The goal this task serves (tico_goal_list); optional"),
+        "human": _s("Its Human: a person or `me`"),
         "after": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Tasks it merges after (ids or 8+ leading characters): in Merge its PRs are not queued until "
-            "each has merged. Build and review go ahead side by side",
+            "description": "Tasks it merges after (ids or 8+ leading characters): its PRs queue in Merge only once "
+            "each has merged; build and review go ahead",
         },
         "roles": {
             "type": "object",
             "additionalProperties": {"type": "array", "items": {"type": "string"}},
-            "description": "Who is on it by role, {role: [people or bots]}: a named role's people are replaced, [] clears "
-            "it, an unnamed role stays. Roles are short names the team picks (developer, reviewer, qa); one person may hold several",
+            "description": "Who is on it by role, {role: [people or bots]}, e.g. reviewer: each role named is "
+            "replaced ([] clears it), others stay",
         },
         "model": _s(
             "A bot-owned task's own model, from tico_bot_model's list: its runs use it, not the bot's task model"
@@ -122,16 +131,17 @@ def task_context(api, args):
         "harness": _s("A harness from that model's harnesses list (with model)"),
         "dry_run": {"type": "boolean", "default": False},
     },
-    required=("owner", "title"),
+    required=("title",),
     writes=True,
 )
 def task_create(api, args):
     body = {
-        "owner": _target(api, args["owner"]),
+        **({"owner": _target(api, args["owner"])} if args.get("owner") else {}),
         "title": args["title"],
         "body": args.get("body") or "",
         "due": args.get("due"),
         "goal_id": args.get("goal_id") or None,
+        **({"human": _target(api, args["human"])} if args.get("human") else {}),
     }
     for field in (
         "pipeline",
@@ -147,6 +157,8 @@ def task_create(api, args):
         "public_title",
         "public_summary",
         "from_private",
+        "for_actor",
+        "from_message",
         "model",
         "effort",
         "harness",
@@ -229,6 +241,8 @@ def turn_line(turn, actors=None):
     if not turn:
         return ""
     who, line = turn.get("who"), str(turn.get("line") or "")
+    if turn.get("state") == "pick":  # a stage that picks from several has nobody free: "Waiting for a free Reviewer"
+        return line or "Waiting for a free bot"
     if str(turn.get("requirement_id") or "").startswith("merge_order:"):  # it merges after a task: the line names it
         return f"{line} ({who})" if who else line
     if isinstance(who, str) and who and ":" not in who:  # a task's id: the line is its title
@@ -238,10 +252,11 @@ def turn_line(turn, actors=None):
     return text + (f", until {turn['until']}" if turn.get("until") else "")
 
 
-def task_text(task, actors=None):
+def task_text(task, actors=None, events=()):
     """`tico task show` as a bot reads it: the version; pipeline, stage and owner; whose turn it is; what it takes to
-    leave the stage, each requirement met or not with its id; the next stage; the task that filed it. People are
-    named by `actors` (the answer's {id: name}, backend/names.py) where it names them."""
+    leave the stage, each requirement met or not with its id; the next stage; the task that filed it; who each stage
+    that picks from several gave it to (`events` of field `pick`). People are named by `actors` (the answer's
+    {id: name}, backend/names.py) where it names them."""
     stage = task.get("stage") or {}
     lines = [f"{_ref(task)} {task.get('title') or ''}   version {task.get('version')}"]
     owner = task.get("owner_name") or _who(task.get("owner_id") or task.get("owner"), actors)
@@ -291,6 +306,12 @@ def task_text(task, actors=None):
         title = filed.get("title") or "(not yours to read)"
         lines.append(f"Filed: {filed.get('id')} {title} ({filed.get('status')})")
     lines += order_lines(task)
+    # Every pick is written on the task's history: "Build given to Builder 2 · took turns".
+    lines += [
+        f"Picked: {e['note']}"
+        for e in events or ()
+        if isinstance(e, dict) and e.get("field") == "pick" and e.get("note")
+    ]
     return "\n".join(lines)
 
 
@@ -321,7 +342,7 @@ def task_show(api, args):
     if not isinstance(shown, dict):
         return shown
     task = shown.get("task") if isinstance(shown.get("task"), dict) else shown
-    return {**shown, "text": task_text(task, shown.get("actors"))}
+    return {**shown, "text": task_text(task, shown.get("actors"), shown.get("events") or ())}
 
 
 @tool(
@@ -414,6 +435,10 @@ def task_close(api, args):
         "owner": _s("The new owner: a bot slug, a person id, or `me`"),
         "why": WHY,
         "version": VERSION,
+        "set_anyway": {
+            "type": "boolean",
+            "description": "A person gives it all the same when a stage rule refused this owner (a bot is refused)",
+        },
         "on_behalf_of": ASKED,
     },
     required=("id", "owner"),
@@ -422,6 +447,8 @@ def task_close(api, args):
 def task_reassign(api, args):
     version = _seen(args)
     body = {"owner": _target(api, args["owner"]), "version": version, **_why(args)}
+    if args.get("set_anyway"):
+        body["set_anyway"] = True
     return _asked(api, args).post(f"tasks/{args['id']}/owner", body, key=_key(args))
 
 
@@ -476,40 +503,47 @@ def _own_ask(api, task_id, requirement=None):
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task, in one sentence: a question (with choices, or a typed answer) or an OK. The task "
-    "stays in its stage until they answer, it is one line in their Needs you, and their answer wakes you once. "
-    "Asking again in this stage replaces your earlier ask. A rule they set may refuse it with the rule's words: act on "
-    "the rule instead. `withdraw` takes your open ask back.",
+    "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
+    "wakes you once; asking again replaces your ask. `withdraw` takes it back.",
     {
         "id": TASK_ID,
-        "to": _s("The person you ask: their id"),
-        "line": _s("The one sentence they are asked, readable on its own", maxLength=300),
+        "to": _s("The person's id"),
+        "line": _s("The one sentence asked, readable alone", maxLength=300),
         "kind": {
             "type": "string",
             "enum": ["answer", "ok"],
-            "description": "answer (the default): a question; ok: they approve it or send it back with a note",
+            "description": "answer (default): a question; ok: approve or send back",
         },
         "choices": {
             "type": "array",
             "items": {"type": "string", "maxLength": 60},
             "minItems": 2,
             "maxItems": 6,
-            "description": "The answers to pick from; they may also type their own",
+            "description": "Answers to pick; they may type their own",
         },
+        "choice": {
+            "type": "array",
+            "items": _s("Label|what happens", maxLength=221),
+            "minItems": 2,
+            "maxItems": 4,
+            "description": "Instead of choices",
+        },
+        "recommend": _s("The choice you recommend", maxLength=60),
+        "title": _s("Short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
             "maxItems": 10,
-            "description": "What they look at to answer, shown with the ask",
+            "description": "What they look at, shown with the ask",
         },
         "subject": _s(
-            "An OK bound to what you will do, as <kind>:<id> (budget_raise:launch-video): the OK covers exactly "
-            "`content`, and you use it once with tico_ok_use just before you act"
+            "An OK bound to what you will do, <kind>:<id>, covering exactly `content`; "
+            "use it once with tico_ok_use just before acting"
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
-        "withdraw": {"type": "boolean", "description": "Take back your open ask on this task instead"},
-        "requirement": _s("With withdraw: the ask's requirement id, when more than one may be withdrawn"),
-        "why": _s("With withdraw: why, in a sentence"),
+        "withdraw": {"type": "boolean", "description": "Take back your open ask instead"},
+        "requirement": _s("With withdraw: the ask's requirement id, if several"),
+        "why": _s("Why it matters (with withdraw: why)"),
         "version": VERSION,
     },
     required=("id",),
@@ -527,13 +561,21 @@ def task_ask(api, args):
     if args.get("subject"):
         if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
             raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
+        if args.get("title"):
+            raise ValueError("An OK bound to a subject shows its content, not a title: leave out title")
         body.update({"subject": args["subject"], "content": args["content"]})
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show"):
+    for field in ("kind", "choices", "show", "why", "recommend", "title"):
         if args.get(field):
             body[field] = args[field]
+    if args.get("choice"):
+        if args.get("choices"):
+            raise ValueError("Give the answers once: choice (Label|what happens) or choices, not both")
+        pairs = [str(one).partition("|") for one in args["choice"]]
+        body["choices"] = [label.strip() for label, _, _ in pairs]
+        body["details"] = [detail.strip() for _, _, detail in pairs]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
 
 
@@ -605,12 +647,16 @@ def task_give(api, args):
 @tool(
     "tico_task_file",
     "File a task from the task you work on: that task waits until this one ends, and its owner is woken once then. "
-    "Yours by default, in General unless you name a pipeline. Sub-tasks nest at most 5 deep.",
+    "Yours by default, in General unless you name a pipeline; in a pipeline whose first stage picks from several, the "
+    "stage picks its owner unless you name one. Sub-tasks nest at most 5 deep.",
     {
         "parent": TASK_ID,
         "title": _s("What the new task is for, in plain words"),
         "body": _s("The details; default the title"),
-        "owner": _s("Who does it: a bot slug, a person id, or `me` (the default)"),
+        "owner": _s(
+            "Who does it: a bot slug, a person id, or `me` (the default; in a pipeline whose first stage picks, the "
+            "stage picks)"
+        ),
         "pipeline": _s("The pipeline's id; default general"),
         "due": _s("ISO-8601 date-time with timezone"),
         "labels": {"type": "array", "items": {"type": "string"}, "description": "Lower-case labels"},
@@ -618,8 +664,8 @@ def task_give(api, args):
         "after": {
             "type": "array",
             "items": {"type": "string"},
-            "description": "Tasks it merges after (ids or 8+ leading characters): in Merge its PRs are not queued until "
-            "each has merged. Build and review go ahead side by side",
+            "description": "Tasks it merges after (ids or 8+ leading characters): its PRs queue in Merge only once "
+            "each has merged; build and review go ahead",
         },
     },
     required=("parent", "title"),
@@ -629,9 +675,20 @@ def task_file(api, args):
     fields = ("parent", "title", "pipeline", "due", "labels", "private", "after", "operation_id")
     # A task has a body: with none given, its title is its body, as for a sub-task made with tico_task_child_create.
     body = args.get("body") or args["title"]
-    return task_create(
-        api, {**{k: args[k] for k in fields if k in args}, "body": body, "owner": args.get("owner") or "me"}
-    )
+    owner = args.get("owner") or (None if _first_stage_picks(api, args.get("pipeline")) else "me")
+    return task_create(api, {**{k: args[k] for k in fields if k in args}, "body": body, "owner": owner})
+
+
+def _first_stage_picks(api, pipeline):
+    """Whether a named pipeline's first stage picks its owner from several (owner `pick`, backend/stage_pick.py): a task
+    filed into it with no owner named is left for the stage to pick, not given to the filer. General never picks."""
+    if not pipeline or str(pipeline).strip().lower() == "general":
+        return False
+    for row in (api.get("pipelines") or {}).get("pipelines") or []:
+        if str(pipeline).strip().lower() in (str(row.get("id") or "").lower(), str(row.get("name") or "").lower()):
+            stages = row.get("stages") or []
+            return bool(stages) and stages[0].get("owner") == "pick"
+    return False
 
 
 @tool(
@@ -734,6 +791,7 @@ def task_list(api, args):
             "description": "Tighten visibility; only the direct human requester can publish",
         },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
+        "human": _s("Its Human: a person, `me`, or \"\" for none"),
         "note": _s("What changed, in a sentence"),
         "version": VERSION,
         "on_behalf_of": ASKED,
@@ -746,11 +804,13 @@ def task_update(api, args):
     for field in ("title", "body", "due", "labels", "private", "goal_id", "note"):
         if args.get(field) is not None:
             body[field] = args[field]
+    if args.get("human") is not None:
+        body["human"] = _target(api, args["human"]) if args["human"] else ""
     links = s3links.apply(api, body, ("note",))
     return s3links.annotate(_asked(api, args).post("tasks/" + args["id"], body, key=_key(args)), links)
 
 
-RELATION_KINDS = ("related", "duplicate_of", "follow_up")
+RELATION_KINDS = ("related", "duplicate_of", "follow_up", "depends_on")
 
 
 def _after(args):
@@ -762,8 +822,8 @@ def _after(args):
 
 
 BLOCKING_GONE = (
-    'A task does not wait on another by a relation: file a sub-task (tico task file --parent <id> "title") or ask a '
-    "person (tico task ask)."
+    "A task that cannot go on until another ends depends on it: tico task relate <id> depends_on <task>. It shows "
+    "Blocked by that task, with no date, and you are woken when it ends."
 )
 
 
@@ -843,31 +903,48 @@ def task_followers(api, args):
 @tool(
     "tico_task_relate",
     "Relate another task to this one, read as `id kind task`: related (they belong together, the default), "
-    "duplicate_of, follow_up (it was split off or followed up from task). A relation is a note: a task waits only on "
-    "its requirements and the tasks it filed (tico_task_file), and its parent is set when it is filed. `remove` takes "
-    "the relation off. The reply's `readback` says what was stored, both ends: check it before reporting the link as "
-    "fixed.",
+    "duplicate_of, follow_up (it was split off or followed up from task), or depends_on (this task cannot go on until "
+    "task ends: it shows Blocked by it, with no date, nobody is woken for it, and its owner is woken once when task "
+    "ends; use it, never a snooze, when you wait on another task, its PR, a fix for main or a release). With until "
+    "released, a depends_on holds after task is Done, until production runs a release that holds its merged PRs: how a "
+    "Validate task waits for its work to reach production. The other "
+    "relations are notes, and a task's parent is set when it is filed. `remove` takes the relation off. The reply's "
+    "`readback` says what was stored, both ends: check it before reporting the link as fixed.",
     {
         "id": TASK_ID,
         "task": {**TASK_ID, "description": "The other task: its id or 8+ leading characters"},
         # No enum: blocks and blocked_by are answered with what to do instead, not with a list of choices.
-        "kind": _s("related (the default), duplicate_of or follow_up", default="related"),
+        "kind": _s("related (the default), duplicate_of, follow_up or depends_on", default="related"),
         "remove": {"type": "boolean", "default": False},
+        "until": {
+            "type": "string",
+            "enum": ["released"],
+            "description": "depends_on only: stay blocked after task is Done, until production runs its release",
+        },
     },
     required=("id", "task"),
     writes=True,
 )
 def task_relate(api, args):
     kind = args.get("kind") or "related"
-    if kind in ("blocks", "blocked_by"):
+    if args.get("other"):  # the CLI's three words, `tico task relate <id> depends_on <task>`
+        named = str(args.get("kind") or "related").strip().lower().replace("-", "_")
+        if named not in ("related", str(args["task"]).strip().lower().replace("-", "_")):
+            raise ValueError(f"Two kinds given: {args['task']} and --kind {args['kind']}. Give one.")
+        kind, args = str(args["task"]), {**args, "task": args["other"]}
+    kind = kind.strip().lower().replace("-", "_")
+    if kind in ("blocks", "blocked_by", "blocked", "block"):
         raise ValueError(BLOCKING_GONE)
     if kind not in RELATION_KINDS:
         raise ValueError(f"A relation is {', '.join(RELATION_KINDS)}, not {kind}")
-    return api.post(
-        f"tasks/{args['id']}/relations",
-        {"task": args["task"], "kind": kind, "remove": bool(args.get("remove"))},
-        key=_key(args),
-    )
+    body = {"task": str(args["task"]).lstrip("#"), "kind": kind, "remove": bool(args.get("remove"))}
+    if args.get("until"):
+        if kind != "depends_on" or args.get("remove"):
+            raise ValueError(
+                "--until released goes with depends_on: tico task relate <id> depends_on <task> --until released"
+            )
+        body["until"] = args["until"]
+    return api.post(f"tasks/{args['id']}/relations", body, key=_key(args))
 
 
 @tool(

@@ -38,6 +38,9 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # Customer facts a team loaded into Growth (backend/growth_customers.py): its customers' keys never leave the install.
+    "growth_customers",
+    "growth_customer_loads",
     # A file from before the Pipelines v3 cut-over still has the old OKs; the copy's first start drops the table.
     "approvals",
     # Provider jobs and send grants never become actionable in a rehearsal copy.
@@ -87,9 +90,11 @@ EMPTY = (
     "trigger_deliveries",
     "trigger_bodies",
     "trigger_seen",
+    "growth_source_secrets",  # a file source's signing key: the live install's would let a copy post as it
     "rule_events_seen",
     "rule_task_runs",
     "rule_task_state",
+    "stage_rule_marks",  # a stage rule timer's ledger: a pending row is a manager's wake the copy would send
     "trigger_relays",
     "hook_relay_state",
     "sleep_idle_state",
@@ -107,6 +112,7 @@ EMPTY = (
     "bookkeeper_watch_listed",  # the Finance Owner's ledgers: the copy starts its checks fresh
     "org_rule_holds",  # org rules: a held output could still be sent anyway from the copy
     "org_rule_verdicts",  # org rule checks: the model's verdicts, a cache
+    "org_rule_late",  # org rule checks still to run after a write: the copy has its own judge, and never re-warns
     "watcher_pending",
     "watcher_triage",  # support triage: tickets waiting for their check (customer text), and its verdicts
     "screening_pending",
@@ -141,6 +147,10 @@ EMPTY = (
     "browser_exits",
     "bot_browser_exits",
     "browser_exit_marks",
+    # A bot's read-only view of the app: the setting is an admin's grant on the source, and a view is a way in
+    # (backend/app_view.py); a copy keeps neither.
+    "bot_app_view",
+    "app_views",
     # Open windows and their heartbeats belong to the source, not the rehearsal.
     "presences",
     # human sign-in and service keys
@@ -452,6 +462,8 @@ KEEP = (
             "learnings",
             "lens_runs",
             "learned_entries",
+            "assistant_shares",  # who a person lets view their Assistant chat: a choice, it sends nothing
+            "assistant_share_settings",
             "linked_docs",
             "live_meeting_chat",
             "live_meeting_chat_routes",
@@ -525,6 +537,9 @@ KEEP = (
             "rule_reads",
             "rule_suggestions",
             "rules",
+            "stage_rules",
+            "stage_pick_turns",
+            "stage_keep_warm",
             "run_backoff",
             "runners",
             "runner_states",
@@ -574,6 +589,8 @@ KEEP = (
             "github_pr_diffs",
             "requirement_pages",
             "page_verdicts",
+            # Jev's duplicate check on each idea filed into Product's Ideas (backend/idea_checks.py): kept with its tasks.
+            "idea_checks",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
             "run_starts",
             "turns",
@@ -614,7 +631,12 @@ KEEP = (
             "gtm_sources",
             "growth_channels",
             "growth_cohorts",
+            "growth_computed_choices",  # which of a typed and a computed number a channel's owner kept: no customer keys
+            "growth_origins",
             "growth_settings",
+            "growth_sync_runs",
+            "growth_setup",  # the first-run dates the activation rate is read from: the team's history, not work
+            "growth_setup_shown",  # when the Get started panel said "you're set up": history, not work
             # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
             # outside destination that has not gone is made moot below, so the copy never sends it.
             "message_deliveries",

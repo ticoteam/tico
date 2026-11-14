@@ -667,3 +667,27 @@ def test_a_seat_set_up_with_a_template_is_that_job_and_a_coding_one_in_engineeri
     marketing = pinned("Rust engineer", "growth-manager")
     assert [c["template"] for c in marketing["candidates"]] == ["growth-manager"]
     assert marketing["department"] == "marketing" and marketing["agents"] == []
+
+
+def test_a_hire_keeps_the_model_harness_effort_and_window_picked_with_it(api):
+    providers(api, "anthropic", "openai")
+    seat = post(
+        api, "seats", {"title": "Rust engineer", "reports_to": "assistant", "description": "Writes the Rust core."}
+    )
+    card = post(api, f"seats/{seat['id']}/recruit", {})
+    model = next(m for m in card["models"] if m["id"].startswith("claude-"))["id"]
+    hired = post(
+        api,
+        f"seats/{seat['id']}/hire",
+        {
+            "template": card["candidates"][0]["template"],
+            "model": model,
+            "harness": "claude",
+            "effort": "high",
+            "compact_at": 600_000,
+        },
+    )
+    bots = api.get("/api/v2/bots", headers=headers()).json()
+    rows = bots["bots"] if isinstance(bots, dict) else bots
+    bot = next(b for b in rows if hired["bot"] in (b.get("id"), b.get("slug")))
+    assert (bot["model"], bot["compact_at"]) == (model, 600_000)

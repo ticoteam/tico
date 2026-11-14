@@ -1,7 +1,8 @@
 """A computer's and a bot's "Turns at once": the claim holds new turns at the limit, and says so."""
 
+from backend import start_places
 from backend.store import H
-from backend.tests.helpers.api import as_member, claim, get, post, put, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import as_member, claim, get, headers, post, put, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.settings_assistant import mcp
 from backend.tests.helpers.task_lanes import new_task, task_bot
@@ -199,3 +200,104 @@ def test_with_assistant_acts_without_asking_off_a_computer_limit_is_a_confirm_ca
     assert done["status"] == "done", done
     with api.app.state.store.read() as c:
         assert c.execute("SELECT turns_at_once FROM runners WHERE id=?", (rid,)).fetchone()[0] == 3
+
+
+# Each way a bot's turn can start is held to its "Turns at once". Reviewer 1 ran 8 turns at once on Nov 13 at 00:48 UTC,
+# with a limit of 3; its turns before ~01:40 UTC ran with no limit set, and none ran more than 3 at once after it.
+
+
+def test_a_runner_that_negotiates_no_start_places_is_held_to_the_bot_limit_at_its_claim(api):
+    """An older runner starts every lease it is given: the claim alone holds the bot to its limit."""
+    machine = task_bot(api, lanes=True, capacity=4)
+    for title in ("first", "second", "third"):
+        new_task(api, title)
+    set_bot(api, 2)
+
+    def old_claim():
+        return post(api, "jobs/claim", {"bot": None}, token=machine["token"])["attempt"]
+
+    assert old_claim() is not None and old_claim() is not None
+    assert old_claim() is None
+
+
+def test_a_persons_message_waits_for_its_bots_limit_like_any_other_turn(api):
+    """A person's message passes a busy computer, never the bot's own limit."""
+    machine = task_bot(api, lanes=True, capacity=4)
+    new_task(api, "first")
+    set_bot(api, 1)
+    running = claim(api, machine)
+    post(api, f"attempts/{running['id']}/started", {"thread_id": "t"}, machine["token"])
+    post(api, "chat/ops", {"text": "How is it going?"})
+    assert claim(api, machine) is None
+    post(
+        api, f"attempts/{running['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0}, machine["token"]
+    )
+    assert claim(api, machine) is not None
+
+
+def test_a_stopped_turn_holds_its_place_until_it_ends_and_the_turn_that_replaces_it_waits(api):
+    """Stop and redirect puts the person's message back in line at once, while the stopped turn still runs on its
+    computer: the redirect starts only when the stopped turn has ended."""
+    machine = task_bot(api, lanes=True, capacity=4)
+    set_bot(api, 1)
+    post(api, "chat/ops", {"text": "Count the March numbers"})
+    running = claim(api, machine)
+    post(api, f"attempts/{running['id']}/started", {"thread_id": "t"}, machine["token"])
+    redirect = post(api, "chat/ops", {"text": "Stop that; do April instead"})
+    assert post(api, "bots/ops/stop", {"run_id": running["id"], "redirect": redirect["id"]})["stopping"] is True
+    assert claim(api, machine) is None
+    post(
+        api,
+        f"attempts/{running['id']}/complete",
+        {"outcome": "interrupted", "text": "", "last_seq": 0},
+        machine["token"],
+    )
+    nxt = claim(api, machine)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT message_id FROM jobs WHERE id=?", (nxt["job_id"],)).fetchone()[0] == redirect["id"]
+
+
+def test_a_lapsed_turn_put_back_in_line_runs_once_and_never_beside_its_replacement(api):
+    """A lease that lapsed before its turn started goes back in line and no longer holds the bot's place; the computer's
+    late report that it started is refused, so the old start cannot run beside the new one."""
+    machine = task_bot(api, lanes=True, capacity=4)
+    new_task(api, "first")
+    new_task(api, "second")
+    set_bot(api, 1)
+    lapsed = claim(api, machine)
+    assert claim(api, machine) is None
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-1), lapsed["id"]))
+        api.app.state.execution.expire(c)
+    again = claim(api, machine)
+    assert again is not None and claim(api, machine) is None
+    late = api.post(
+        f"/api/v2/attempts/{lapsed['id']}/started",
+        json={"thread_id": "late"},
+        headers=headers(machine["token"]),
+    )
+    assert late.status_code == 409
+    with api.app.state.store.read() as c:
+        assert start_places.bot_held(c, "ops") == 1
+
+
+def test_health_warns_when_a_bot_has_more_turns_than_its_limit_and_clears_when_it_is_back_under(api):
+    """Lowered from 2 to 1 while two turns run: Health's Turn limit row names the bot and both numbers, until one ends."""
+    machine = task_bot(api, lanes=True, capacity=4)
+    new_task(api, "first")
+    new_task(api, "second")
+    set_bot(api, 2)
+    first, second = claim(api, machine), claim(api, machine)
+    for turn in (first, second):
+        post(api, f"attempts/{turn['id']}/started", {"thread_id": turn["id"]}, machine["token"])
+
+    def warning():
+        return next((x for x in get(api, "health")["checks"] if x["id"] == "turn_limit:ops"), None)
+
+    assert warning() is None  # at its limit is not over it
+    set_bot(api, 1)
+    row = warning()
+    assert row["label"] == "Turn limit" and row["status"] == "warn"
+    assert "has 2 turns at once, over its limit of 1." in row["summary"]
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0}, machine["token"])
+    assert warning() is None

@@ -50,7 +50,7 @@ def test_move_refuses_a_destination_that_is_not_ready_for_the_bot(api):
                 "repository_present": False,
                 "repository_revision": "",
                 "configuration_valid": True,
-                "problems": ["Missing bot repository or AGENT.md"],
+                "problems": ["Missing bot repository or AGENTS.md"],
             }
         },
     )

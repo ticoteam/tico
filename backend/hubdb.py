@@ -903,7 +903,7 @@ RULE_TASK_TABLES_SCHEMA = (
 TASK_RUN_MODELS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_run_models (
   task_id TEXT PRIMARY KEY REFERENCES tasks(id), runtime TEXT NOT NULL, model TEXT NOT NULL,
-  harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT);
+  harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT, compact_at INTEGER);
 """
 
 # Browser exits (backend/browser_exit.py): a computer's owner shares its internet with chosen bots under a daily byte
@@ -2987,6 +2987,12 @@ def check_message_refs(refs, *, make_page=False):
         from .store import Problem
 
         raise Problem("forbidden", "Use the task’s Make page control", 403)
+    if refs and ("key_grant" in refs or refs.get("card") == "key_grant"):
+        from . import key_grants
+        from .store import Problem
+
+        if not key_grants.MINTING.get():  # only the Tools owner's proposal route builds a key grant card
+            raise Problem("forbidden", "A key grant card is built from the Tools owner's proposal", 403)
 
 
 def say(
@@ -3482,6 +3488,61 @@ def task_private_readable(conn, actor, row):
     return task_reader(conn, actor, row)
 
 
+def stage_read_held(conn, actor, row):
+    """The stage by whose hold alone `actor` reads private task `row`, or None. Either it holds the task's stage as
+    the bot the pipeline names for it (task_engine.names), as its owner, and would not read the task otherwise; or it
+    filed `row` (or a task above it) from a private task it read that way (`STAGE_READ_FILED`), so what it copied there
+    is held as the source is. Such a bot reads the task and cannot share it: it adds no reader, gives the task to
+    nobody, and what it files from it stays private with the task's readers (spec: a private task's stage bot can read
+    it while it holds the stage)."""
+    if not row or not is_bot(actor):
+        return None
+    row = dict(row)
+    if "owner_id" not in row or "requester_id" not in row or "stage_id" not in row:
+        row = task(conn, row["id"]) or {}
+    if not row or not task_private(conn, row):
+        return None
+    filed = _one(
+        conn,
+        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND new=? LIMIT 1",
+        (row["id"], STAGE_READ_FILED, actor),
+    )
+    if filed:
+        return filed["note"] or "its stage"
+    if actor != row.get("owner_id"):
+        return None
+    stage = _one(conn, "SELECT * FROM stages WHERE id=?", (row.get("stage_id"),)) if row.get("stage_id") else None
+    from . import task_engine
+
+    if not stage or not task_engine.names(stage, actor):
+        return None
+    return None if task_private_readable(conn, actor, {**row, "owner_id": None}) else stage["name"]
+
+
+# The history kind that marks a task filed by a bot from a private task it read only by holding its stage; `new` is
+# the bot, `note` the stage's name. The bot shares that task no more than its source.
+STAGE_READ_FILED = "stage_read_filed"
+
+
+def stage_read_only(conn, actor, row):
+    """Whether `actor` reads private task `row` only by holding a stage (`stage_read_held`)."""
+    return stage_read_held(conn, actor, row) is not None
+
+
+def refuse_stage_reader(conn, actor, row):
+    """Refuse a share (a reader, a give, a new owner, a task for someone else) by a bot that reads the task only by
+    holding a stage."""
+    held = stage_read_held(conn, actor, row)
+    if held:
+        refuse(
+            conn,
+            actor,
+            "identity",
+            f"You can read this while you hold {held}; only someone it is shared with can share it",
+            task=row["id"],
+        )
+
+
 def assistant_turn_person(who):
     """Whether `who` is a person's own Assistant turn: the person acts, and the Assistant's bot is its task actor."""
     return getattr(who, "via", "") == "assistant" and who.role in ("owner", "human")
@@ -3580,6 +3641,7 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
     _task_private_writer(conn, actor, row)
     if not task_private(conn, row):
         refuse(conn, actor, "private", "A company task is seen by everyone: make it private to choose who sees it")
+    refuse_stage_reader(conn, actor, row)
     if not may_change_readers(conn, actor, row, mover):
         refuse(
             conn,
@@ -4533,7 +4595,7 @@ def _demote_sessions(conn, task_id, owner=None):
 
 
 # Bots that keep nothing from one task to the next (the Rules Owner): each task is judged on its own. Their runner starts a
-# session for every task and never resumes one across tasks, reads and keeps no memory/ or state.md, copies no harness
+# session for every task and never resumes one across tasks, reads and keeps no memory/, copies no harness
 # memory into the repository, and gets no nightly learnings (backend/learnings.py roster). A bot's config says
 # `stateless: true`; a template listed here makes its bots stateless too, so bots built before the flag are.
 STATELESS_BY_TEMPLATE = ("rules-owner",)
@@ -5425,9 +5487,31 @@ def review_finding_route(conn, actor, task_id, target):
                 "review_route",
                 f"{repo}#{number} is the pull request of the task “{own[0]}”, now in {own[1]}. A finding on it goes "
                 "back to that task's Builder through its review (blocking on the Review page, or `no` on the "
-                "reviewers' answer in Fixes 2), never to a person: put it there and close this task with a link. Only "
+                "reviewers' answer in QA), never to a person: put it there and close this task with a link. Only "
                 "what the pipeline gives a person (the spec, the OK) is theirs, asked on that task.",
             )
+
+
+def task_human(conn, actor, value):
+    """A task's Human as stored: `value` (`human:ana`, `ana`) as a person's actor. The Human is optional and never a
+    co-owner: the owner still has the work, and the Human is the person the task falls to first
+    (waiting_on.person_for). Refused for a bot, a group, nobody known, or a person who left or cannot sign in."""
+    from . import task_requirements
+
+    found = resolve_actor(conn, value)
+    if not found or not is_human(found):
+        refuse(conn, actor, "kind", f"A task's Human is a person, not {value}")
+    if not task_requirements.active_person(conn, found):
+        refuse(conn, actor, "kind", f"{actor_name(conn, found)} can't sign in, so can't be a task's Human")
+    return found
+
+
+def _task_human_reads(conn, actor, row):
+    """Refuse a private task's Human who cannot read it: naming them never adds a reader. Checked once the task's
+    privacy and readers are written, so a write that sets both is judged as it lands."""
+    who = row.get("human_id")
+    if who and task_private(conn, row) and not task_private_readable(conn, who, row):
+        refuse(conn, actor, "kind", f"{actor_name(conn, who)} can't read this private task")
 
 
 def task_create(
@@ -5454,6 +5538,7 @@ def task_create(
     mover=None,
     private=None,
     requester_actor=None,
+    requester_said=False,
     own_room=True,
     visibility=None,
     public_title=None,
@@ -5472,6 +5557,7 @@ def task_create(
     readers=(),
     readers_check=None,
     unassigned=False,
+    human_id=None,
 ):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7).
 
@@ -5500,8 +5586,10 @@ def task_create(
     `follow` makes the filer a follower of the task (backend/task_followers.py); the owner follows anyway.
     `readers` are who else sees a private task (`set_task_readers`, `readers_check(task_id, added)` its check), set
     before it enters its first stage: the engine lets a private task in only where whoever has it there reads it.
+    `human_id` is the task's Human (`task_human`): the person accountable for it, whoever owns it.
     """
     _writer(conn, actor)
+    human_id = task_human(conn, actor, human_id) if human_id else None
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
     public_title = str(public_title or "").strip()
     public_summary = str(public_summary or "").strip()
@@ -5539,6 +5627,16 @@ def task_create(
         or parent
         and task_private(conn, parent)
     )
+    sealed = stage_read_held(conn, actor, parent) if parent else None
+    if sealed:
+        # A bot that reads the parent only while it holds its stage shares it with nobody: what it files from it is
+        # private, with the parent's readers, and owned by itself or by someone who already reads the parent.
+        shared = task_readers(parent)
+        if any((resolve_actor(conn, r) or r) not in shared for r in readers or ()) or (
+            target and target != actor and not task_private_readable(conn, target, parent)
+        ):
+            refuse_stage_reader(conn, actor, parent)
+        private, readers = True, shared
     # A private pipeline's task is private whatever was asked, `from_private` too; its readers are written before it
     # enters (backend/private_pipelines.py).
     pipeline_id = str(pipeline or GENERAL_PIPELINE)
@@ -5570,8 +5668,13 @@ def task_create(
             conn, actor, 'lint', 'Write a public title to publish this task; its internal title and body stay private'
         )
     if requester_actor is not None:
-        # The keeper may attribute server-filed work to a person; a bot may attribute only its own verified work.
-        if not is_human(requester_actor) or (actor != KEEPER and target != actor) or not human(conn, requester_actor):
+        # The keeper may attribute server-filed work to a person; a bot may attribute only its own verified work, or
+        # a person's own ask, checked against the message they sent (`requester_said`: app.filed_for).
+        if (
+            not is_human(requester_actor)
+            or (actor != KEEPER and target != actor and not requester_said)
+            or not human(conn, requester_actor)
+        ):
             refuse(conn, actor, "identity", "Human requester attribution requires the bot's own verified work")
         requester = requester_actor
     title = str(title or "").strip()
@@ -5717,14 +5820,15 @@ def task_create(
             "occurrence": occurrence or None,
             "occurrence_step": occurrence_step or None,
             "rule_due_id": (rule_due_id or None) if occurrence else None,
+            "human_id": human_id,
         }
         conn.execute(
             "INSERT INTO tasks (id, title, body, requester_id, owner_id, status, due_at, "
             "conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, lane, rank, "
-            "goal_id, number, private, occurrence, occurrence_step, rule_due_id) VALUES "
+            "goal_id, number, private, occurrence, occurrence_step, rule_due_id, human_id) VALUES "
             "(:id, :title, :body, :requester_id, :owner_id, :status, :due_at, "
             ":conversation_id, :created_at, :updated_at, :done_at, :closed_at, :closed_by_id, :note, "
-            ":lane, :rank, :goal_id, :number, :private, :occurrence, :occurrence_step, :rule_due_id)",
+            ":lane, :rank, :goal_id, :number, :private, :occurrence, :occurrence_step, :rule_due_id, :human_id)",
             row,
         )
         _building(conn, row["id"])  # its first stage is part of task.created, not a change
@@ -5743,6 +5847,8 @@ def task_create(
                 mover=mover,
                 check=(lambda added: readers_check(row["id"], added)) if readers_check else None,
             )
+        if sealed:  # after its readers, the parent's, are copied: from here the filer shares it no more than them
+            _task_event(conn, row["id"], actor, STAGE_READ_FILED, None, actor, sealed)
         if in_private_pipeline:
             private_pipelines.admit(conn, row["id"], pipe)
         if dedicated:
@@ -5768,6 +5874,9 @@ def task_create(
                 _task_event(conn, row['id'], actor, field, None, value, '')
         if goal_id:
             _task_event(conn, row["id"], actor, "goal_id", None, goal_id, "")
+        if human_id:
+            _task_human_reads(conn, actor, task(conn, row["id"]) or row)
+            _task_event(conn, row["id"], actor, "human_id", None, human_id, "")
         if plain:
             # warn mode: the problem is on the record, the task still exists (the refuse week follows)
             _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
@@ -5808,8 +5917,9 @@ def task_create(
         )
         # A task a bot files for itself in one of its runs starts its own run only once that run has ended
         # (execution.job_refusal): the filing run may finish it first, and the claim then cancels the wake rather than
-        # start a run that finds nothing left to do.
-        filed_in = RUN.get() if is_bot(target) and target == actor else ""
+        # start a run that finds nothing left to do. A task filed with no owner (`unassigned`) goes to whoever its stage
+        # picks, who starts at once: the filer only stands in as its requester.
+        filed_in = RUN.get() if is_bot(target) and target == actor and not unassigned else ""
         wake = {
             **({"reconcile": reconcile} if reconcile else {}),
             **({"filed_in": filed_in} if filed_in else {}),
@@ -5984,10 +6094,11 @@ def task_update(
     clear_size=False,
     public_allowance=0,
     seen_version=None,
+    human_id=None,
 ):
-    """Edit a task's fields: title, body, due date, note, labels, lane, rank, goal, number, privacy, roles, size and
-    its public text. One edit raises the task's version once. `seen_version` is the version the caller looked at: an
-    edit against an older one is refused.
+    """Edit a task's fields: title, body, due date, note, labels, lane, rank, goal, number, privacy, roles, size, its
+    Human and its public text. One edit raises the task's version once. `seen_version` is the version the caller looked
+    at: an edit against an older one is refused.
 
     This never writes the task's status, stage or owner: the engine does (backend/task_engine.py). For the callers
     that still say it this way, `status="done"` is `task_done`, `status="closed"` is `task_close`, `status="open"` on
@@ -5998,6 +6109,7 @@ def task_update(
     is). `rank` is the position in the owner's queue. `goal_id` names the goal the task serves; "" takes it off.
     `number` gives a task that has none its number; it never changes. `title` renames it, checked as a new task's
     title would be (`_retitle`). `roles` replaces the people in the roles it names ({role: [actors]}; task_roles).
+    `human_id` names the task's Human (`task_human`); "" takes them off.
     """
     if status is not None and status not in ("open", "done", "closed"):
         raise ValueError(f"a task is open, done or closed, not {status!r}: move it with task_move")
@@ -6042,6 +6154,7 @@ def task_update(
                 ("goal", goal_id),
                 ("private", private),
                 ("roles", roles),
+                ("human", human_id),
                 ("visibility", visibility),
                 ("public title", public_title),
                 ("public summary", public_summary),
@@ -6078,6 +6191,7 @@ def task_update(
                 title,
                 private,
                 roles,
+                human_id,
                 visibility,
                 public_title,
                 public_summary,
@@ -6188,6 +6302,12 @@ def task_update(
         sets.append("goal_id=:goal_id")
         args["goal_id"] = goal_id or None
         _task_event(conn, task_id, actor, "goal_id", row.get("goal_id"), goal_id or None, note or "")
+    if human_id is not None:
+        human_id = task_human(conn, actor, human_id) if human_id else None
+        if human_id != row.get("human_id"):
+            sets.append("human_id=:human_id")
+            args["human_id"] = human_id
+            _task_event(conn, task_id, actor, "human_id", row.get("human_id"), human_id, note or "")
     edited = bool(
         sets or roles or clear_size or any(v is not None for v in (visibility, public_title, public_summary, size))
     )
@@ -6241,6 +6361,8 @@ def task_update(
             event(conn, actor, "task.lint", task_id, {"problems": plain})
         event(conn, actor, "task.update", task_id, {"note": note})
         after = isolate_private_task(conn, task(conn, task_id) or row)
+        if args.get("human_id"):
+            _task_human_reads(conn, actor, after)
         if private is not None or task_private(conn, after) != task_private(conn, row):
             conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
         if task_private(conn, after) and not task_private(conn, row):
@@ -7232,7 +7354,8 @@ def rate_limits(conn):
 # An attempt with a job and no trigger failed before its record was written (old history) and has none.
 TURN_SELECT = (
     "id, bot_id AS bot, thread_id, created_at AS started_at, settled_at AS finished_at, trigger, "
-    "message_id, task_id, exit, summary, input_tokens, cached_tokens, output_tokens, usage_model AS model, "
+    "message_id, task_id, exit, summary, input_tokens, cached_tokens, cache_write_tokens, output_tokens, "
+    "usage_model AS model, "
     "provider, est_cost_usd, billing, trigger_kind, trigger_source, writes, outcome, did_nothing, purpose, "
     "rotated, session_kind, session_why, prompt_tokens, usage_reason, rule_id"
 )
@@ -7298,19 +7421,22 @@ def turn_start(
 
 
 # Why a finished run's usage says 0 tokens or no cost (`attempts.usage_reason`). Usage is written on every finish, so a
-# sum over input_tokens, cached_tokens, output_tokens and est_cost_usd counts every run, failed and stopped ones too.
+# sum over input_tokens, cached_tokens, cache_write_tokens, output_tokens and est_cost_usd counts every run, failed and
+# stopped ones too. cache_write_tokens is NULL on a run whose runner did not count cache writes apart (an older runner):
+# its input_tokens include them.
 USAGE_REASONS = {
     "usage_unreported": "its runner sent a result with no token counts (the harness reported none)",
     "usage_limited": "the runtime refused the turn on a usage limit and reported no tokens",
     "no_result": "its runner never sent a result (the lease ran out, or a restore ended it)",
     "cost_unpriced": "tokens were counted, but its model has no list price, so est_cost_usd is null",
 }
-NO_USAGE = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
+NO_USAGE = {"input_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
 
 
 def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, usage_reason="usage_unreported"):
     """Close a turn. `exit_code` is the `exit` column (`exit` is a builtin, not a keyword here).
-    `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
+    `usage` is what the run cost in tokens: input_tokens (uncached, without cache writes), cached_tokens,
+    cache_write_tokens (None when its runner did not count them apart), output_tokens, model, provider,
     est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known.
     Without `usage` the run is recorded at 0 tokens and $0 with `usage_reason` (USAGE_REASONS) saying why; never
     left blank."""
@@ -7332,11 +7458,12 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     if not recorded:
         conn.execute(
             "UPDATE attempts SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
-            "output_tokens=:output_tokens, usage_model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
+            "cache_write_tokens=:cache_write_tokens, output_tokens=:output_tokens, usage_model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
             "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
             {
                 "input_tokens": None,
                 "cached_tokens": None,
+                "cache_write_tokens": None,
                 "output_tokens": None,
                 "model": None,
                 "provider": None,
@@ -7763,6 +7890,12 @@ def task(conn, task_id):
     return row
 
 
+def task_untagged(conn, task_id):
+    """The task row without its tags: for a check that reads none of them (who may read it), so a page of checks
+    primed by prime_tasks(with_tags=False) reads no tags one task at a time."""
+    return _one(conn, TASK_SQL, (task_id,))
+
+
 def task_labels(row):
     return [tag["key"] for tag in (row or {}).get("tags", [])]
 
@@ -7873,7 +8006,11 @@ def tasks(
         where.append("id IN (SELECT value FROM json_each(?))")
         args.append(json.dumps(list(ids)))
     if snoozed in ("hide", "only"):
-        where.append(("NOT " if snoozed == "hide" else "") + SNOOZED % "tasks")
+        # A blocked task is listed as blocked, never as snoozed, even under a snooze a bot left open (task_depends).
+        from . import task_depends
+
+        aside = f"({SNOOZED % 'tasks'} AND NOT {task_depends.BLOCKED % 'tasks'})"
+        where.append(("NOT " if snoozed == "hide" else "") + aside)
     if label:
         where.append(
             "EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
@@ -8178,6 +8315,7 @@ from .task_calls import (
     task_close as task_close,
     task_done as task_done,
     task_give as task_give,
+    task_let_see as task_let_see,
     task_move as task_move,
     task_page_attach as task_page_attach,
     task_reassign as task_reassign,

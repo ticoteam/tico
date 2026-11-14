@@ -1,5 +1,5 @@
 One file per recurring kind of work. A playbook is the checklist you would hand a new hire. Read the one that matches the
-request before you act; AGENT.md says when for the rest.
+request before you act; AGENTS.md says when for the rest.
 
 Inputs: the request or task in hand. Find the playbook that matches it below.
 

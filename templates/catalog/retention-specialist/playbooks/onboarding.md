@@ -1,12 +1,11 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 20 minutes. The outcome is five recorded answers, the save policy written down, a
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers, the save policy written down, a
 first retention report from the last four weeks, and the first routine checked.
 
 Inputs: the task list, `tico team show`, the cancellation and downgrade requests of the last four weeks, and the policy the Librarian cites.
 
-Done when: the five answers are in `state.md`, the save policy and the reasons log are written, the first report is on the task, the routine is checked, and `tico bot setup-done` has run.
+Done when: the five answers are in `knowledge/`, the save policy and the reasons log are written, the first report is on the task, the routine is checked, and `tico bot setup-done` has run.
 
 ---
 
@@ -37,7 +36,7 @@ Numbered, each with its one-line why, offering the defaults.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/save-policy.md`: reason
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/save-policy.md`: reason
 codes, one offer per code with its limits, the owner. Start `knowledge/reasons.md` from the
 requests you collected, coding each one.
 
@@ -52,7 +51,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will write this report every Friday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

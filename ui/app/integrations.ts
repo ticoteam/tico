@@ -112,7 +112,7 @@ async function integrationDetail(service: string, load: number, {base = TOOLS_RO
     const del = target?.closest('[data-delete-learning]');
     if (del) {
       const row = del.closest<HTMLElement>('[data-learning]');
-      if (!confirm('Delete this learning?')) return;
+      if (!(await askConfirm('Delete this learning?', del))) return;
       try {
         if (!row) throw new Error('No learning row for this delete');
         await post(`/v2/tools/${encodeURIComponent(page.service)}/learnings/${encodeURIComponent(String(row.dataset.learning))}/delete`); row.remove(); toast('Deleted');

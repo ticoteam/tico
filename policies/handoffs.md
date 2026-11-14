@@ -10,7 +10,7 @@ to leave. Every command that changes a task carries `--version N`, the version y
 
 ## Starting a task
 
-1. Read `state.md`, then `tico task show <task-id>` and its conversation. It prints the version, the
+1. Read `tico task show <task-id>` and its conversation. It prints the version, the
    stage, whose turn it is and what is missing to leave the stage.
 2. There is no status to set. Your run shows that you are working; keep `tico bot status set` to one
    line about what you are doing now.
@@ -68,23 +68,29 @@ refuses it once the rule is enforced; `tico task create --dry-run` shows what it
 
 `tico task show <task-id>` lists what the stage still needs. A stage moves on by itself the moment
 nothing is missing; you do not say done for a need Tico can see.
-- A page (a Spec, a Review, what was built, Checked in production): write it, publish it with
+- A page (a Spec, a Review, a QA page, Checked in production): write it, publish it with
   `tico file publish <path> --task <task-id>` (it prints the file id), then attach it to the need:
   `tico task attach <task-id> page:<file id> --req "<requirement>" --version N`. Jev checks it; a person OKs it
-  where the stage asks for one. Sent back: change it, publish again and attach the new version.
+  where the stage asks for one. Sent back: change it, publish again and attach the new version with
+  `--changed "<what changed>"` (up to 5 lines) and `--answered "<point>: done|not done, <why>"` for each point
+  of their note. Never quote their note back to them: Tico refuses it.
 - A review page names the pull request's newest commit. New commits make it stale: write it again.
 - A pull request: open it and link it with `tico task link <task-id> <pr url>`. Checks, merges and
   releases are read from GitHub. Never merge a pull request on a stage: the merge queue merges.
 
 ## How a run ends
 
-When you stop, the task must be in one of five states. Your wake says so.
+When you stop, the task must be in one of six states. Your wake says so.
 
 1. Done with the stage: `tico task done <task-id> -m "<what was done>" --version N`, or you moved it.
 2. Asking a person on the task: `tico task ask`.
 3. Waiting on a task you filed: `tico task file`.
-4. Snoozed, with a reason and a date wherever there is one: `tico task snooze`.
+4. Snoozed, with a reason and a date wherever there is one: `tico task snooze`. Only to look again on a date.
 5. Closed, with a reason: `tico task close <task-id> -m "<why>" --version N`.
+6. Blocked: depends_on #N, when another task (its pull request, a merge, a release, a red main's fix) must end first:
+   `tico task relate <task-id> depends_on <task>`. You are woken when it ends. Never snooze for a block.
+
+While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.
 
 Anything else is stopping early, and Tico wakes you again.
 
@@ -162,7 +168,8 @@ conversation, which is twenty runs — far past the point anyone would want it s
 The owner reads asks on a phone between meetings. Ask on the task the work belongs to:
 
 ```text
-tico task ask <task-id> --to <owner> "<one sentence>" [--choices a,b] [--show page:<id>] --version N
+tico task ask <task-id> --to <owner> "<one sentence>" --why "<why it matters>" \
+  --choice "<Label>|<what happens>" --choice "<Label>|<what happens>" --recommend <Label> [--show page:<id>] --version N
 ```
 
 It is one line in their Needs you, with buttons. The task stays in its stage until they answer, and

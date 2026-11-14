@@ -71,19 +71,11 @@ interface MessagingDetail {
   instructions: MessagingInstructions;
 }
 
-// ----------------------------------------------------------------- Message bot review
-// Bots are the primary unit. Provider messages remain evidence behind a run or action.
-let MESSAGING_LOAD = 0, MESSAGING_LIST: MessagingList | null = null;
 // A page element the drawn markup must hold: a missing one throws a plain Error that names it.
 function messagingNeed<T extends Element = HTMLElement>(selector: string, root: ParentNode = document): T {
   const el = root.querySelector<T>(selector);
   if (!el) throw new Error(`${selector} is not on the page`);
   return el;
-}
-function messagingParams(): {bot: string; source: string} {
-  const raw = S.route.startsWith(MESSAGING) ? S.route.slice(MESSAGING.length) : '';
-  const q = new URLSearchParams(raw.startsWith('?') ? raw.slice(1) : '');
-  return {bot: q.get('bot') || '', source: q.get('source') || ''};
 }
 function messagingGo(patch: {bot?: string | undefined; source?: string | undefined}) {
   const state = {...messagingParams(), ...patch}, q = new URLSearchParams();

@@ -404,7 +404,9 @@ def run(case: Scenario, seed: int = 1) -> None:
 
 
 # ----------------------------------------------------------------------------- the ladder
-LADDER_GAPS = [120, 900, 3600]
+# backend/never_stuck.py GAPS after a run that finished: no wake 2 minutes on, the third within the prompt cache's
+# hour. A run cut off (a crash, a limit) is retried after 2 minutes instead.
+LADDER_GAPS = [900, 900, 3000]
 
 
 def _check_ladder(r: Rig, task: str, runs: list[tuple[str, float, str]], owner: str) -> None:
@@ -414,7 +416,7 @@ def _check_ladder(r: Rig, task: str, runs: list[tuple[str, float, str]], owner: 
     gaps = [g for _, g, _ in runs[1:4]]
     expect(
         all(want <= got <= want + 10 for want, got in zip(LADDER_GAPS, gaps, strict=True)),
-        f"the owner was woken {gaps} seconds after each stop, not 2 min, 15 min and 1 h",
+        f"the owner was woken {gaps} seconds after each stop, not 15 min, 15 min and 50 min",
     )
     expect(r.visit(task).get("level") == "person", "the ladder did not end at a person")
     person = r.visit(task).get("person_id")

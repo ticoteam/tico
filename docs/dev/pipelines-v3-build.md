@@ -37,12 +37,13 @@ All in `backend/migrations/20261110010000_pipelines_v3.py`. Times are `H.now()` 
 
 ```
 pipelines     id, name, goal, prefix, manager_id, owner_id, private (0|1), factory_id, preset,
-              settings_version, created_at, updated_at, retired_at
+              settings_version, created_at, updated_at, retired_at, keep_warm_hours (0-24, default 8)
               unique name and unique prefix among rows not retired
 stages        id, pipeline_id, position, kind (work|done|closed), name, purpose, owner, by_hand (0|1),
               requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes, expected_bots_only (0|1),
               on_enter (json), created_at, updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
+stage_keep_warm stage_id, hours (0-24): a stage's own keep-warm hours; no row is the pipeline's (backend/keep_warm.py)
 requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
               who_oks (none|people_only|people_with_exceptions), person_id, added_by_id, by_bot (0|1),
               line, shows (json), choices (json), position, created_at, withdrawn_at
@@ -114,7 +115,7 @@ added to a task, except the person on one, which `answers.give_to` changes.
 NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"     # values for `to`, besides a stage
 MAX_DEPTH = 5          # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3        # a bot's snoozes in one stage before the manager bot gets the task
-FIRST_TRY_S = 120      # seconds a bot is left alone after a wake before the never-stuck check looks at it
+FIRST_TRY_S = 120      # seconds after a change before the never-stuck check looks; the retry gap after a cut-off run
 
 def enter(conn, task_id, pipeline_id, by, *, assignee=None, parent=None, link="sub_task") -> dict
     # New. The row exists with pipeline_id NULL. Puts it in the first stage, opens the visit, wakes the owner.
@@ -227,10 +228,10 @@ turn (`waiting_on.turn`) through `task_wakes.add`; write one `history_events` ro
 A stage with no requirements passes a task straight on when the next stage has room, unless the stage is by hand. The
 never-stuck check does it, on its next pass. A by-hand stage holds every task, unless it has `requests_move_on` (Product's
 Ideas): then a person's request on its first visit (`task_engine.not_held_by_hand`) is moved on by the check when the
-next stage has room, oldest first, before C10's room wake (`never_stuck._requests`). C10 wakes nobody for a by-hand
-stage owned by each task's assignee when `requests_move_on` is off (Growth's Ideas, Watching): every task there rests.
-With it on (Product's Ideas pointed at the assignee, one Product Owner per area), C10 wakes the owner of the task that
-has waited longest there.
+next stage has room, oldest first (`never_stuck._requests`). C10: nothing is written about room, for any by-hand
+stage in any pipeline; the moved task's owner is woken by its turn in the next stage, as after any move. Every other
+task in a by-hand stage rests until someone moves it. (The "has room" wake, keyed `room:<stage>:<freed by>`, was
+removed Nov 12; migration `drop_queued_room_notices` canceled the ones still queued.)
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
@@ -364,7 +365,7 @@ reconnect, and over a limit.
 ## never_stuck.py
 
 ```python
-GAPS = (120, 900, 3600)   # seconds a bot is left alone before try 1, 2 and 3
+GAPS = (120, 900, 3000)   # seconds a bot is left alone before try 1, 2 and 3; 900 before the first after a run that finished
 TRIES = 3
 OWNER_RUNS = 4            # the owner's start and 3 tries
 RUNS = 7                  # then the manager bot's 3 tries: bot runs one visit may start between two changes
@@ -509,6 +510,7 @@ pipeline_settings.PRESETS: dict[str, dict]                   # general (phase 1)
 pipeline_settings.preset(conn, key) -> dict                  # a preset's record for this org, manager filled in
 pipeline_settings.ensure_presets(conn) -> list[str]          # boot: makes the presets the org lacks; the ids made;
                                                              # unedited wording follows the preset (EARLIER)
+                                                             # an older Engineering gets QA once (_add_qa)
 ```
 
 General's ids are fixed: pipeline `general`, stages `general-todo`, `general-done`, `general-closed`.
@@ -556,7 +558,7 @@ item_metadata      id, source, item_type, item_key (nocase), title, fields (json
 releases           id, repo, tag, commit_sha, prerelease, published_at, metadata_version, read_at, created_at
                    unique (repo, tag)
 release_reads      repo (pk), read_at, metadata_version     a read happened, even with no releases (C31)
-release_commits    release_id, commit_sha, included, checked_at              pk (release_id, commit_sha)
+release_commits    release_id, commit_sha, included, checked_at              pk (release_id, commit_sha); index (commit_sha)
 github_deliveries  id (X-GitHub-Delivery), event, received_at               kept 7 days
 requirement_pages  id, visit_id, requirement_id, file_id, version, heads (json), attached_by_id, created_at,
                    replaced_at            one not replaced per (visit_id, requirement_id)
@@ -581,18 +583,19 @@ page          no page attached                          not_met  owner   No page
               verdict owed                               waiting  jev     Jev is checking
               verdict failed (3 tries), a bot holds it,  waiting  manager Decide if it meets the check: OK it or send it
                 manager bot set (not the holder)                          back, and say why. Jev couldn't check this:
-                                                                          <error> [The check: <rubric>]
-              verdict failed otherwise (people only:     waiting  person  Jev couldn't check this: <error> (once per
-                every version)                                            visit, then not_met on the owner)
-              not_met                                    not_met  owner   Jev sent it back: <reasons>
-              unsure, a person OKs it anyway             waiting  person  [Version <n>, after the send back: "<notes>". ]
-                (people only or naming one: every version)               Jev is unsure: <reasons>
-              unsure, a bot holds it, first this visit   not_met  owner   Not yet met: fix it or explain it on the page.
-                                                                          Jev is unsure: <reasons> [The check: <rubric>]
-              unsure again this visit, manager bot set   waiting  manager Decide if it meets the check: OK it or send it
-                (not the holder)                                          back, and say why. Jev is unsure: <reasons>
-              unsure otherwise (a person holds it, no    waiting  person  Jev is unsure: <reasons> (once per visit, then
-                manager bot, the manager holds it)                        not_met on the owner)
+                                                                          <error>
+              not_met (not a Spec page a person OKs)     not_met  owner   Jev sent it back: <the missing parts, one line
+                                                                          each, at most three>
+              not_met, Spec page a person OKs            waiting  person  [Version <n>, after the send back: "<notes>". ]
+                                                                          Jev: <the missing parts>
+              unsure or failed, a person OKs it anyway   waiting  person  [Version <n>, after the send back: "<notes>". ]
+                (people only or naming one: every version)               OK <name> (version <n>)  (nothing from Jev)
+              unsure, a bot holds it, manager bot set    waiting  manager Decide if it meets the check: OK it or send it
+                (not the holder; woken once per version)                  back, and say why. Jev is unsure: <the parts
+                                                                          it can't tell>
+              unsure or failed otherwise (a person       waiting  person  Jev is unsure: <parts> (once per visit, then
+                holds it, no manager bot, the manager                     not_met on the owner)
+                holds it)
               met, person_id set, no OK for this version waiting  person  [Version <n>, after the send back: "<notes>". ]
                                                                           OK <name> (version <n>)
               person said no for this version            not_met  owner   Sent back: <notes>[ Attach the new version; Tico
@@ -601,7 +604,7 @@ page          no page attached                          not_met  owner   No page
               met, no person                             met              Jev passed it
 ```
 
-A page a person OKs that is not `at_head` (Fixes 2's Review page) is not asked of the person while a linked PR's
+A page a person OKs that is not `at_head` (the QA page) is not asked of the person while a linked PR's
 newest commit is one no bot reviewed: no met Review page (`at_head`, Jev passed or OK'd) was attached at it, and no
 bot OK'd it as below (`task_requirements._new_heads`). Once Jev has looked, it waits on the bot that attached the
 newest met Review page (`delta_reviewer`; never the task's owner now): "Review the new commits since the reviews (now
@@ -619,7 +622,7 @@ hashed by `diff_id` from the added and removed lines of each file); until both a
 the same lines". Other lines: the delta review above, its rounds counted from the OK; the reviewer's OK at the newest
 commits is met ("OK'd by <name>; <bot> read the commits since"). After its no, with no such bot, or with the rounds
 spent, the OK is gone: the ask starts "New commits since <name>'s OK." and goes to that person. Back from Merge with no
-page attached on the visit (`page_for`), the OK and page of the Fixes 2 visit before Merge count; when that OK is gone,
+page attached on the visit (`page_for`), the OK and page of the QA visit before Merge count; when that OK is gone,
 the Builder is asked to attach the page again. In Merge a bot's `requeue` of a moved head needs the same lines
 (`COMPARING` while unread, else `SENT_BACK_FOR_NEW`). Answers from before `heads` was kept stand. The Builder's wake says "not
 reviewed by a bot" only when no other bot will review them. A waiting page's `since` is when that version was
@@ -655,9 +658,9 @@ With many PRs the first unmet one, in link order, gives the line.
 
 ### Choices made while building
 
-- **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset. A person's
-  request in Ideas takes the room first, by itself (G5, Nov 10).
-- **The two sign-offs are people only** (Spec page, Fixes 2 Review page). A bot that may change a pipeline (its
+- **Room in Spec (C10)** wakes nobody. A person's request in Ideas takes the room by itself (G5, Nov 10); a bot's
+  own idea waits for a person (Nov 12: the "has room" wake was removed).
+- **The two sign-offs are people only** (Spec page, QA page). A bot that may change a pipeline (its
   manager or owner; BotOps may not) is refused, "This change loosens the person's OK on Spec. A person must make it.",
   when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to
   bots, name a bot on it, put a later stage before it, add or change an on-enter action at or before it, or replace

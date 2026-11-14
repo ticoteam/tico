@@ -82,10 +82,7 @@ interface MarketSetupState {
 }
 
 let MARKET_VIEW: MarketView | null = null;   // what is mounted: {kind: 'page' | 'map', shell, open(at), stop()}
-// Old #/market links land here (ui/app/router.ts), keeping their query or note path.
-const MARKET_ROUTE = '#/strategy/market';
 const MARKET_MAP = MARKET_ROUTE + '/map';
-const isMarketRoute = (r: string) => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');
 // The tab's old views each land on the page at their question; Players opens the map. A note id always has a slash
 // in it, so a bare key is never a note.
 const MARKET_SECTIONS: Record<string, string> = {briefing: 'changed', spend: 'money', buyers: 'money', growth: 'money', 'value-chain': 'reach'};
@@ -183,7 +180,7 @@ window.pageMarket = async function pageMarket() {
     if (MARKET_VIEW) { MARKET_VIEW.stop(); MARKET_VIEW = null; }
     // The section's heading and tabs sit above the shell, and stay while notes open inside it.
     $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + `<div id="market-shell" class="${at.kind === 'map' ? 'market-shell' : 'mkt-host mkt-page'}"><p class="market-loading">Opening the market…</p></div>`;
-    if (at.kind === 'map') $('#strat-actions').innerHTML = `<a class="ghost" href="${MARKET_ROUTE}" data-market-close>Close map</a>`;
+    if (at.kind === 'map') $('.rd-strat-head > .ph-tools').innerHTML = `<a class="ghost" href="${MARKET_ROUTE}" data-market-close>Close map</a>`;
     const shell = $('#market-shell');
     try {
       const mounted = await (at.kind === 'map' ? mountMarket(shell) : mountMarketPage(shell));

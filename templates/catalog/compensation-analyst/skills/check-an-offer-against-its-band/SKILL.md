@@ -16,7 +16,7 @@ Steps:
 4. Compute the compa-ratio: proposed divided by midpoint, to two decimals.
 5. Note where the nearest peers in the same role and level sit: their compa-ratios, by reference only. No names.
 6. Write the result by reference (for example "offer AE-03"). Person-level figures go to the attachment for the owners named in
-   `state.md`, and the local copy is deleted.
+   `knowledge/philosophy.md`, and the local copy is deleted.
 7. If the figure is above maximum, ask the approver one question on the task: what exception was approved, and by whom. If it
    is below minimum, flag it and do not suggest a number.
 

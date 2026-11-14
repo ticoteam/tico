@@ -74,13 +74,13 @@ declare function settingsEditInstructions(slug: string): void;
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/library/tools/github');
-    const org = page.locator('[data-gh-form] input[name=org]'), name = page.locator('[data-gh-form] input[name=name]');
-    await org.fill('acme-inc'); await name.fill('Acme Tico'); await name.focus();
+    const org = page.locator('[data-gh-form] input[name=org]'), choice = page.getByRole('radio', {name: 'An organization'});
+    await choice.click(); await org.fill('acme-inc'); await org.focus();
     // The app's polls, and a redraw of the same route (the old Tools page rebuilt itself and wiped the form).
     // route() decides to keep or redraw the busy page before it returns, so the values can be read at once.
     await page.evaluate(async () => { await refresh(false); await refresh(true); applyConfig(await get('/v2/config')); route(); });
     assert.equal(await org.inputValue(), 'acme-inc', 'Organization survives the refresh');
-    assert.equal(await name.inputValue(), 'Acme Tico', 'App name survives the refresh');
+    assert.equal(await choice.getAttribute('aria-checked'), 'true', 'An organization stays chosen through the refresh');
 
     // Settings: loadSettings and a same-route redraw leave the Add computer and API token fields alone.
     await page.goto('https://tico-ui.test/#/settings/devices');
@@ -190,7 +190,7 @@ declare function settingsEditInstructions(slug: string): void;
     await page.locator('#bot-instructions-editor [type=submit]').click();
     await page.waitForFunction(() => document.querySelector('[data-instructions-status]')?.textContent === 'Changes sent.');
     assert.equal(await page.locator('dialog[open]').count(), 0);
-    assert.match((writes.find(row => row.p === '/api/v2/assistant/messages')!.body.text as string), /Instructions \(AGENT.md\).*Helper/);
+    assert.match((writes.find(row => row.p === '/api/v2/assistant/messages')!.body.text as string), /Instructions \(AGENTS.md\).*Helper/);
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

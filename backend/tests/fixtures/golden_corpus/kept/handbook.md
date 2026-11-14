@@ -35,7 +35,7 @@ rsync -av ./orders/ depot:/srv/orders/   # standing instructions: keep the slash
 printf 'one\ntwo\n'
 ```
 
-    indented: the runner syncs AGENT.md through the runner
+    indented: the runner syncs AGENTS.md through the runner
 
 Inline: `Hub docs`, `standing instructions`, `printf '\n'`.
 Links: [standing instructions](https://example.com/standing-instructions), [Hub docs][hubdocs].

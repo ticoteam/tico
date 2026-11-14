@@ -17,6 +17,8 @@ BY_NAME = {t["name"]: t for t in TOOLS}
 # What a task engine refusal carries beside its rule and detail (docs/dev/pipelines-v3-cutover.md, HTTP): what is
 # missing and the commands allowed next, or the version the task has now. A bot reads them to act instead of retrying.
 REFUSAL_FIELDS = ("missing", "next", "version")
+# Who saved the version a refused doc write did not read (clients/commands/content.py docs_write).
+CONFLICT_FIELDS = ("updated_by_name", "updated_at")
 
 
 def error_payload(exc):
@@ -27,7 +29,7 @@ def error_payload(exc):
         "detail": getattr(exc, "detail", str(exc)),
         "retryable": bool(getattr(exc, "retryable", False)),
         "operation_id": getattr(exc, "operation_id", None),
-        **{k: extra[k] for k in REFUSAL_FIELDS if extra.get(k) not in (None, [])},
+        **{k: extra[k] for k in REFUSAL_FIELDS + CONFLICT_FIELDS if extra.get(k) not in (None, [])},
     }
 
 
@@ -129,19 +131,32 @@ class Protocol:
     is a bug and surfaces as a JSON-RPC error.
     """
 
-    def __init__(self, api, api_error=Exception, local=False, kind=None):
+    def __init__(self, api, api_error=Exception, local=False, kind=None, profile=None):
         self.api, self.api_error, self.local = api, api_error, local
-        self._kind = kind
+        self._kind, self._profile, self._me = kind, profile, None
+
+    def me(self):
+        """`GET /me`, read once; {} when it cannot be read."""
+        if self._me is None:
+            try:
+                self._me = self.api.get("me") or {}
+            except Exception:
+                self._me = {}
+        return self._me
 
     def kind(self):
         """Who is calling: given by the server that binds this protocol, else read once from `GET /me`. None (offer
         everything) when it cannot be told; the server still decides every call."""
         if self._kind is None:
-            try:
-                self._kind = kind_of(self.api.get("me")) or ""
-            except Exception:
-                self._kind = ""
+            self._kind = kind_of(self.me()) or ""
         return self._kind or None
+
+    def profile(self):
+        """The tool list a bot's own turn is offered (`GET /me` `tool_profile`: `developer` for a code bot), or None for
+        the whole list. Only a bot has one."""
+        if self._profile is None:
+            self._profile = str(self.me().get("tool_profile") or "") if self.kind() == "bot" else ""
+        return self._profile or None
 
     def handle(self, message):
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
@@ -168,7 +183,7 @@ class Protocol:
         if method == "ping":
             return self._result(rid, {})
         if method == "tools/list":
-            return self._result(rid, {"tools": listing(self.local, self.kind())})
+            return self._result(rid, {"tools": listing(self.local, self.kind(), self.profile())})
         if method == "tools/call":
             return self._call(rid, params)
         return self._error(rid, -32601, f"Method not found: {method}")

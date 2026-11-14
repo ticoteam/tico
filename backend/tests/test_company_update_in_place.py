@@ -11,6 +11,7 @@ deploy does, and compares what a person would notice. Only HQ's machines API is 
 release tag when one ships, and keep the older ones: an install may skip releases.
 """
 
+import copy
 import gzip
 import json
 import shutil
@@ -143,6 +144,52 @@ def seen(path):
     }
 
 
+def intended(before):
+    """The company as this release means to leave it: the one change an update makes on purpose. The Finance Owner sees
+    the books by default, so the owner's open "Let the Finance Owner see the books" to-do is closed for them
+    (backend/bookkeeper.py grant_view) and leaves their Needs you. Product's Ideas is no longer a stage tasks leave by
+    hand: an idea moves on to Spec by itself (migration ideas_say_it_once, docs/tasks.md "Product's Ideas"). Only a
+    stage still in the preset's shape is changed."""
+    from backend.bookkeeper import VIEW_TITLE
+
+    after = copy.deepcopy(before)
+    for task in after["tasks"].values():
+        if task["title"] == VIEW_TITLE and task["status"] == "open":
+            task.update(status="closed", stage=task["stage"].rsplit("-", 1)[0] + "-closed", asks=[])
+    return migrated(after)
+
+
+def ideas_move_on(reading):
+    """The reading with Product's Ideas no longer left by hand, as migration ideas_say_it_once leaves it (a copy)."""
+    after = copy.deepcopy(reading)
+    product = after.get("pipelines", {}).get("product")
+    if product:
+        product["stages"] = [
+            (name, kind, owner, 0 if name == "Ideas" else by_hand) for name, kind, owner, by_hand in product["stages"]
+        ]
+    return after
+
+
+def picks_at_release(reading):
+    """The reading as migration engineering_picks_at_release leaves it (a copy): with two Reviewers, Review 1 and
+    Review 2 become "One of several" (owner `pick`). Builders' stages change only with two Builders, which this
+    company's fixture lacks (On deck and Build stay the assignee's)."""
+    after = copy.deepcopy(reading)
+    engineering = after.get("pipelines", {}).get("engineering")
+    reviewers = [slug for slug in after.get("bots", {}) if slug.startswith("reviewer")]
+    if engineering and len(reviewers) >= 2:
+        engineering["stages"] = [
+            (name, kind, "pick" if name in ("Review 1", "Review 2") and owner in reviewers else owner, by_hand)
+            for name, kind, owner, by_hand in engineering["stages"]
+        ]
+    return after
+
+
+def migrated(reading):
+    """The reading with every pending migration's one intended change (a copy)."""
+    return picks_at_release(ideas_move_on(reading))
+
+
 def changes(before, after, path=""):
     """Every difference between two readings, one plain line each."""
     if isinstance(before, dict) and isinstance(after, dict):
@@ -163,6 +210,40 @@ def changes(before, after, path=""):
     return [] if before == after else [f"{path}: {before!r} became {after!r}"]
 
 
+def updated(before):
+    """The company an update of the last release's means to make: `before` with each one-time change this code makes to
+    it on purpose, named here with the code that makes it. Anything else the update changes still fails the tests."""
+    after = copy.deepcopy(before)
+    engineering = after["pipelines"].get("engineering")
+    # pipeline_settings._add_qa: Engineering gets a QA stage after Fixes 2, owned by Fixes 2's owner, with Checks pass
+    # and the page a person OKs, moved from Fixes 2 as it was; Fixes 2 gets Owner says done first.
+    names = [stage[0] for stage in engineering["stages"]] if engineering else []
+    page = next(
+        (
+            r
+            for r in (engineering or {}).get("requirements", [])
+            if r["stage"] == "Fixes 2" and r["kind"] == "page" and r["who_oks"] == "people_only"
+        ),
+        None,
+    )
+    if "Fixes 2" in names and "QA" not in names and page:
+        fixes = names.index("Fixes 2")
+        engineering["stages"].insert(fixes + 1, ("QA", "work", engineering["stages"][fixes][2], 0))
+        rule = {"source": None, "condition": None, "who_oks": "none", "can_push_past": 1}
+        requirements = [r for r in engineering["requirements"] if r is not page]
+        last = max(i for i, r in enumerate(requirements) if r["stage"] == "Fixes 2")
+        first = next(i for i, r in enumerate(requirements) if r["stage"] == "Fixes 2")
+        qa = [
+            {**rule, "stage": "QA", "kind": "item", "source": "github", "condition": "checks_pass"},
+            {**page, "stage": "QA"},
+        ]
+        requirements[last + 1 : last + 1] = qa
+        if not any(r["stage"] == "Fixes 2" and r["kind"] == "owner_done" for r in requirements):
+            requirements.insert(first, {**rule, "stage": "Fixes 2", "kind": "owner_done"})
+        engineering["requirements"] = requirements
+    return after
+
+
 class Company:
     """The last release's company on disk, and this code started on it."""
 
@@ -178,8 +259,12 @@ class Company:
         self.settings.company_file_data = starter.pack(employees_file(CHARTS["0.6 hotmic"]), starter.MAX_PACKED)
         self.settings.company_file_configured = True
         self.before = seen(self.db)
+        self.expected = updated(intended(self.before))  # what the update may change on purpose
         # What the person had waiting on the last release, as its own page listed it.
         self.needs_you = set(json.loads((FIXTURES / f"company-{release}.json").read_text())["needs_you"])
+        from backend.bookkeeper import VIEW_TITLE
+
+        self.needs_you_after = self.needs_you - {VIEW_TITLE}  # closed for the owner by the update (intended)
         shared = next(m for m in self.before["cloud"] if m[0] == "_shared")
         self.hq = FakeHQ()
         self.hq.machines[shared[3]] = {
@@ -249,12 +334,13 @@ def test_the_fixture_is_the_company_the_journey_needs(company):
 
 def test_a_company_updated_in_place_is_the_company_it_was(company):
     """The update: this code starts on the last release's company, and then starts again (a deploy is often followed by
-    a restart). Nothing a person set or a bot was doing changes; the only work it may add is named here."""
+    a restart). Nothing a person set or a bot was doing changes; the only work it may add is named here, and the only
+    changes it makes on purpose are named in `updated`."""
     total, titles = company.start()
     first = company.after()
-    found = changes(company.before, first)
+    found = changes(company.expected, first)
     assert not found, "The update changed the company:\n  " + "\n  ".join(found)
-    assert titles == company.needs_you and total == len(titles), (
+    assert titles == company.needs_you_after and total == len(titles), (
         f"Needs you held {sorted(company.needs_you)} before the update and holds {sorted(titles)} after it"
     )
     # No machine is made, stopped or deleted for an update: the shared computer the company had is the one it has.
@@ -312,7 +398,7 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path):
         results.append((schema(path), seen(path)))
     assert results[0][0] == results[1][0], "The schema depends on the order the pending migrations ran in"
     assert not changes(results[0][1], results[1][1])
-    assert not changes(company.before, results[0][1]), "The pending migrations changed the company"
+    assert not changes(migrated(company.before), results[0][1]), "The pending migrations changed the company"
 
 
 REMOVED = ("growth-manager", "legal-owner", "segment-product-owner")  # live seat bots' templates in the fixture
@@ -326,7 +412,7 @@ def test_a_bot_whose_template_the_new_release_no_longer_ships_keeps_working(comp
     company.settings.catalog_dir = catalog
     company.start()
     company.start()
-    found = changes(company.before, company.after())
+    found = changes(company.expected, company.after())
     assert not found, "Starting without three templates changed the company:\n  " + "\n  ".join(found)
     with TestClient(create_app(company.settings)) as api:
         for slug in ("growth-manager", "legal-owner", "creators-product-owner"):

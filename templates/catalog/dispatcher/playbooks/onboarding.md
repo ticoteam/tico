@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is five recorded answers, the crews, job types and areas
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes. The outcome is five recorded answers, the crews, job types and areas
 written down, tomorrow's plan built from a real export, and the first routine checked.
 
 ---
@@ -31,7 +30,7 @@ Numbered, each with its one-line why and a default.
 
 ## 4. Record
 
-Answers to `state.md` under `## Answers`, dated. Write `knowledge/crews.md`, `knowledge/job-types.md`
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/crews.md`, `knowledge/job-types.md`
 and `knowledge/areas.md`. A job type with no length gets the booking default marked "unverified".
 
 ## 5. Produce the first result now
@@ -45,7 +44,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "tomorrow's plan will be ready at 15:00 every weekday, with the arrival notices ready to send when a person has turned mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

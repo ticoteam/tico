@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 20 minutes. The outcome is five recorded answers, the travel policy written down, a
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers, the travel policy written down, a
 first weekly trips page, and the first routine checked.
 
 ---
@@ -32,7 +31,7 @@ Numbered, each with its one-line why and a default.
 
 ## 4. Record
 
-Answers to `state.md` under `## Answers`, dated. Write `knowledge/policy.md`; with no written policy,
+Answers go, dated, into the `knowledge/` files they belong to. Write `knowledge/policy.md`; with no written policy,
 write the answers as the working policy and mark it "working policy, sources recorded" until the owner
 says otherwise. Default advance-booking rule if none is given: 14 days domestic, 21 international. That is a minimum,
 not a target; `knowledge/travel-practice.md` has the fare data.
@@ -48,7 +47,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send this page every Monday at 10:00 and plan each trip as it is requested." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

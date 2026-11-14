@@ -61,6 +61,7 @@ const BOOT_ROSTER_WAIT_MS = 10000;
       applyConfig(me?.config);          // an older response may name the page, but cannot grant native navigation
     }
     S.emps = namedRoster(emps); S.me = me; setPeople(people);
+    viewOnlyStart();                   // a bot's read-only view offers nothing that writes (view-only.ts)
     sessionReturn();                  // restore drafts only after the authenticated org and person are known
     renderVersionMessage();            // once per person, so it waits for who is signed in
   } catch (e) {

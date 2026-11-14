@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{Bug}} · Spec</title>
+<style>
+.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-lg);margin:0 0 8px}
+.pg h2{font-size:var(--t-md);margin:24px 0 8px}
+#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
+#lead p{margin:2px 0}
+#lead cite{color:var(--muted);font-style:normal}
+.top>p{font-size:var(--t-md);margin:0;max-width:72ch}
+.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:16px}
+.pair>div{flex:1 1 300px;min-width:0}
+figure.shot{margin:0;max-width:100%}
+figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
+figcaption{color:var(--muted);margin-top:6px;max-width:640px}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-base) var(--mono)}
+code{font-family:var(--mono);overflow-wrap:anywhere}
+#details{margin-top:32px;border-top:2px dashed var(--line)}
+@media (max-width:600px){.pair{flex-direction:column}}
+</style></head><body><main class="pg">
+<h1>{{Bug, as the person who hit it would say it}} · Spec · {{YYYY-MM-DD}}</h1>
+<div id="lead">
+  <p id="report"><b>Report:</b> "{{what was reported, quoted; cut a long one to two lines}}"
+    <cite>{{who}}, {{where, linked}}, {{date}}</cite></p>
+  <p><b>Decide:</b> {{"OK this spec, or send it back with what is wrong."}}</p>
+</div>
+
+<section id="cause" class="top">
+  <h2>Root cause</h2>
+  <p>{{What in the code makes it happen, with <code>path/to/file:line</code>. A part not yet known: say which part and how it will be found.}}</p>
+</section>
+
+<section id="goal" class="top">
+  <h2>Goal</h2>
+  <p>{{What is true once it is fixed, in one or two sentences.}}</p>
+</section>
+
+<section id="solution">
+  <h2>Solution</h2>
+  <div class="pair">
+    <figure data-shot="shots/{{screen}}-before-390.png" data-arrows="1: {{x,y}} -> {{x,y}}">
+      <figcaption>Phone, 390 px, today. 1: {{what is wrong here}}</figcaption></figure>
+    <figure data-shot="shots/{{screen}}-after-390.png" data-arrows="1: {{x,y}} -> {{x,y}}">
+      <figcaption>Phone, 390 px, with the fix. 1: {{what changed}}</figcaption></figure>
+  </div>
+  <p>{{No screen changes? Replace the pair with two pre blocks: the real call, job or command and what it gives today,
+  then what it will give after the fix. Otherwise delete this line.}}</p>
+</section>
+
+<section id="details">
+  <h2>Details</h2>
+  <section id="criteria"><h2>Done when</h2>
+    <ol><li>Given {{...}}, when {{...}}, then {{...}} (arrow 1). <i>before release</i></li></ol></section>
+  <section id="scope"><h2>Scope</h2><ul><li>In: {{...}}</li><li>Out: {{...}}</li></ul></section>
+  <section id="plan"><h2>Plan</h2><ol><li>{{step, with the files it touches}}</li></ol></section>
+  <section id="release"><h2>Release needs</h2>
+    <p>{{Apps or services that ship it; data changes, settings, flags, a store release. "None" where none.}}</p></section>
+  <section id="questions"><h2>Open questions</h2><ul><li>{{question}}: {{who answers}}, by {{date}}</li></ul></section>
+</section>
+</main></body></html>

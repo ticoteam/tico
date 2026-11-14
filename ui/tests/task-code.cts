@@ -126,7 +126,19 @@ function fixtures() {
        took_s: 3598, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: 'Timeout: max_run_minutes (60 minutes)',
        next: {kind: 'dismissed', by: 'bot:botops', at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'},
        job_state: 'canceled', decision: {decision: 'dismiss', run_id: 'a0', current: true, state: 'canceled', by: 'bot:botops', by_kind: 'botops',
-         at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'}, subagents: [], background: []}]};
+         at: '2026-10-26T09:50:45.103088Z', note: 'Finished before the 60-min limit. Nothing to redo.'}, subagents: [], background: []},
+      // Jobs the release policy let go (backend/wake_presets.py): warm into a fresh session after a wait, with the
+      // run's cache use; then cold into a forked one, whose cache use the runner did not report.
+      {id: 'r2', bot: 'eng', job: 'j2', try: 1, tries: 1, state: 'completed', outcome: 'completed', created_at: ago(9000), started_at: ago(8998), finished_at: ago(8000),
+       took_s: 998, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: null, next: null, subagents: [], background: [],
+       wake: {class: 'batched', reason: 'Daily digest', profile_label: 'Lead',
+         release: {warm: true, session: 'fresh', waited_seconds: 11400, due: ago(20400), wait_seconds: 21600, deadline: 'run'}},
+       cache_read_tokens: 182000, cache_write_tokens: 4000},
+      {id: 'r1', bot: 'eng', job: 'j3', try: 1, tries: 1, state: 'completed', outcome: 'completed', created_at: ago(12000), started_at: ago(11998), finished_at: ago(11000),
+       took_s: 998, ran_on: {segments: [{model: 'claude-opus-5-5'}]}, lease: [], reason: null, next: null, subagents: [], background: [],
+       wake: {class: 'batched', reason: 'Daily digest', profile_label: 'Lead',
+         release: {warm: false, session: 'fork', waited_seconds: 2700, due: ago(14700), wait_seconds: 2700, deadline: 'run'}},
+       cache_read_tokens: null, cache_write_tokens: null}]};
   return {tasks: [parent, plain, ...others], tree, runView};
 }
 
@@ -357,7 +369,7 @@ async function desktop(browser: Browser) {
   assert.match(await runs.locator('.truns-cp').innerText(), /Summary step built; receipts next\.\s*Engineer · 5m ago/);
   assert.deepEqual(await runs.locator('.truns-live li').allInnerTexts(), ['Bash · npm running · started 1m ago']);
   const tries = runs.locator('.truns-try');
-  assert.equal(await tries.count(), 3);
+  assert.equal(await tries.count(), 5);
   assert.match(await tries.first().locator('summary').innerText(), /^Try 2 of 2 · running · for 2m · claude-opus-5-5 \(high\)/);
   // What ran and why: the fallback from the bot's task model (backend/task_models.py).
   assert.match(await tries.first().innerText(), /Ran on the bot's model claude-opus-5-5 \(high\): task model grok-4\.6 \(low\) could not run \(grok is not signed in on this bot's computer\)/);
@@ -365,6 +377,13 @@ async function desktop(browser: Browser) {
   assert.equal(await tries.first().evaluate(x => (x as HTMLDetailsElement).open), true);
   assert.match(await tries.first().locator('.truns-wake').innerText(), /^Woke for: Review comments · Token saver · held until /);
   assert.equal(await tries.nth(1).locator('.truns-wake').count(), 0, 'a run from before presets says nothing about its wake');
+  assert.equal(await runs.locator('.truns-release').count(), 2, 'only a job the release policy let go has a release line');
+  // A released job: warm or cold, fresh or forked, how long it waited, and the cache use the run reported.
+  await tries.nth(3).locator('summary').click();
+  assert.match(await tries.nth(3).locator('.truns-wake').innerText(), /^Woke for: Daily digest · Lead$/);
+  assert.equal(await tries.nth(3).locator('.truns-release').innerText(), 'warm · fresh · waited 3 h 10 min · cache read 182k · cache write 4k');
+  await tries.nth(4).locator('summary').click();
+  assert.equal(await tries.nth(4).locator('.truns-release').innerText(), 'cold · fork · waited 45 min', 'no cache parts when the run reported none');
   assert.equal(await tries.nth(1).evaluate(x => (x as HTMLDetailsElement).open), false);
   assert.match(await tries.first().locator('.truns-sub > .truns-tree > li').innerText(),
     /^general-purpose\s*claude-opus-5-5 \(the run’s model\) · completed · 42s · 3 tool calls · in the background\s*Explore\s*claude-haiku-5-5 · running$/);
@@ -411,7 +430,7 @@ async function desktop(browser: Browser) {
   assert.equal(await form.locator('select').count(), 0);
   assert.equal(await form.locator('input[name=owner]').inputValue(), 'eng');
   await form.locator('[data-sub-owner]').click();
-  await modal.locator('.prop-pop [data-prop-pick="api"]').click();
+  await modal.locator('.gv-pop [data-give-pick="api"]').last().click();
   await page.waitForFunction(() => document.querySelector<HTMLInputElement>('#task-modal [data-sub-add] input[name=owner]')?.value === 'api');
   assert.match((await form.locator('[data-sub-owner]').getAttribute('aria-label'))!, /^For API Engineer/);
   const add = form.locator('input[name=title]');
@@ -457,9 +476,13 @@ async function desktop(browser: Browser) {
 async function phone(browser: Browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
   const modal = page.locator('#task-modal'), rail = modal.locator('[data-task-rail]');
+  // A phone shows the window as tabs (task #409): the rail is in Info, under the details; the chat is its own tab.
+  await rail.locator('.task-subs .sub-row').first().waitFor({state: 'attached'});
+  await modal.getByRole('tab', {name: 'Info'}).click();
   await rail.locator('.task-subs .sub-row').first().waitFor();
-  const main = (await modal.locator('.tmodal-main').boundingBox())!, side = (await rail.boundingBox())!, chat = (await modal.locator('.task-chat').boundingBox())!;
-  assert.ok(side.y >= main.y + main.height - 1 && chat.y >= side.y + side.height - 1, 'details, then the rail, then comments');
+  const main = (await modal.locator('.tmodal-main').boundingBox())!, side = (await rail.boundingBox())!;
+  assert.ok(side.y >= main.y + main.height - 1, 'details, then the rail');
+  assert.equal(await modal.locator('.task-chat').isVisible(), false, 'the chat is a tab away');
   assert.ok(side.x >= 0 && side.x + side.width <= 390, 'inside the screen');
   const overflow = await modal.evaluate(d => d.querySelector('.tmodal-body')!.scrollWidth - d.querySelector('.tmodal-body')!.clientWidth);
   assert.ok(overflow <= 1, 'no sideways scroll');
@@ -539,6 +562,8 @@ async function retirementHistory(browser: Browser) {
   for (const width of [1440, 390]) {
     const {page, errors} = await open(browser, {viewport: {width, height: 900}});
     const rail = page.locator('#task-modal [data-task-rail]');
+    // A phone shows the rail in the task window's Info tab (task #409).
+    if (width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();
     await rail.locator('.code-line').first().waitFor();
     await rail.evaluate(el => {
       const first = {computer_id: 'first', ahead: 2, dirty_files: 1, last_commit: 'a'.repeat(40)};

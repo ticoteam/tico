@@ -41,7 +41,6 @@ connect_token = "sk-ant-oat"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
-packet_only = true
 terminal_login = ["auth", "login"]
 api_keys = "computer"
 # Switch to API key asks Anthropic about the new key before the subscription is signed out: one short reply, in an
@@ -59,6 +58,8 @@ mcp_transports = ["http", "sse"]
 # An expired stored token is refreshed by the first turn, so turns wait for one to land before the rest start.
 serial_cold_start = true
 compaction = true
+# Claude Code compacts at the bot's Compact at (CLAUDE_CODE_AUTO_COMPACT_WINDOW, hosts/claude.rs turn_env), so Settings
+# offers it as for Codex.
 # Every compaction, manual or automatic, is a `compact_boundary` system message in stream-json.
 compaction_events = true
 # A message for the running turn is written into it (stream-json input, needs a CLI that echoes it).

@@ -17,6 +17,10 @@ use serde_json::Value;
 
 pub const MASK: &str = "••••";
 pub const MIN_LENGTH: usize = 8;
+/// The shortest login value (a website password the browser types) that is masked.
+pub const LOGIN_MIN_LENGTH: usize = 4;
+/// How many authenticator codes a redactor keeps: an old code is worthless.
+const CODES_KEPT: usize = 32;
 const COMMON: &[&str] = &[
     "localhost",
     "127.0.0.1",
@@ -96,8 +100,26 @@ struct Built {
     matcher: Option<AhoCorasick>,
 }
 
+/// Login values the browser types: masked down to `LOGIN_MIN_LENGTH` characters, shorter than other secrets, because
+/// a site's password can be short and its holder said it is one.
+fn login_values(secrets: &[String]) -> BTreeSet<String> {
+    let mut found = values(secrets);
+    for value in secrets {
+        let value = value.trim();
+        if value.chars().count() >= LOGIN_MIN_LENGTH && !value.contains('\n') {
+            found.insert(value.to_string());
+        }
+    }
+    found
+}
+
 fn build(secrets: &[String]) -> Built {
-    let mut vals: Vec<String> = values(secrets).into_iter().collect();
+    build_values(values(secrets))
+}
+
+/// A matcher for values already chosen (`values` or `login_values`), not filtered again.
+fn build_values(chosen: BTreeSet<String>) -> Built {
+    let mut vals: Vec<String> = chosen.into_iter().collect();
     vals.sort_by_key(|b| std::cmp::Reverse(b.len()));
     let mut forms = BTreeSet::new();
     for v in &vals {
@@ -120,22 +142,114 @@ fn build(secrets: &[String]) -> Built {
 
 pub struct Redactor {
     inner: RwLock<Built>,
+    /// Authenticator codes the browser typed: too short to mask inside other text, so only a whole run of digits
+    /// equal to one is; the newest few are kept.
+    codes: RwLock<Vec<String>>,
+}
+
+/// `data` with every whole run of digits that equals one of `codes` masked, or None when there is none.
+fn mask_codes(data: &[u8], codes: &[String]) -> Option<Vec<u8>> {
+    if codes.is_empty() {
+        return None;
+    }
+    let (mut out, mut i, mut hit) = (Vec::with_capacity(data.len()), 0, false);
+    while i < data.len() {
+        let end = i + data[i..].iter().take_while(|b| b.is_ascii_digit()).count();
+        if end == i {
+            out.push(data[i]);
+            i += 1;
+            continue;
+        }
+        if codes.iter().any(|c| c.as_bytes() == &data[i..end]) {
+            out.extend_from_slice(MASK.as_bytes());
+            hit = true;
+        } else {
+            out.extend_from_slice(&data[i..end]);
+        }
+        i = end;
+    }
+    hit.then_some(out)
+}
+
+/// What one scrub masks: the secrets' matcher and the codes, each optional.
+struct Masks<'a> {
+    matcher: Option<&'a AhoCorasick>,
+    codes: &'a [String],
+}
+
+impl Masks<'_> {
+    fn hit(&self, s: &str) -> bool {
+        self.matcher.is_some_and(|m| m.is_match(s))
+            || mask_codes(s.as_bytes(), self.codes).is_some()
+    }
+
+    /// `s` masked; called only when `hit` says it holds something.
+    fn apply(&self, s: &str) -> String {
+        let out = match self.matcher {
+            Some(m) if m.is_match(s) => masked(m, s),
+            _ => s.to_string(),
+        };
+        // Only ASCII digits are replaced, so the text stays UTF-8.
+        match mask_codes(out.as_bytes(), self.codes) {
+            Some(b) => String::from_utf8(b).unwrap_or_default(),
+            None => out,
+        }
+    }
 }
 
 impl Redactor {
     pub fn new(secrets: &[String]) -> Redactor {
         Redactor {
             inner: RwLock::new(build(secrets)),
+            codes: RwLock::new(vec![]),
         }
     }
 
+    /// Login values the browser typed or copied (a website password, a username) to mask from now on, any of at
+    /// least `LOGIN_MIN_LENGTH` characters.
+    pub fn add_login(&self, secrets: &[String]) {
+        let mut inner = self.inner.write().unwrap();
+        let fresh: Vec<String> = login_values(secrets)
+            .into_iter()
+            .filter(|v| !inner.values.contains(v))
+            .collect();
+        if fresh.is_empty() {
+            return;
+        }
+        let mut all: BTreeSet<String> = inner.values.iter().cloned().collect();
+        all.extend(fresh);
+        *inner = build_values(all);
+    }
+
+    /// Authenticator codes to mask from now on (digits only, at least six; anything else is not a code).
+    pub fn add_codes(&self, codes: &[String]) {
+        let mut kept = self.codes.write().unwrap();
+        for c in codes
+            .iter()
+            .map(|c| c.trim())
+            .filter(|c| c.len() >= 6 && c.bytes().all(|b| b.is_ascii_digit()))
+        {
+            kept.retain(|k| k != c);
+            kept.push(c.to_string());
+        }
+        let extra = kept.len().saturating_sub(CODES_KEPT);
+        kept.drain(..extra);
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.inner.read().unwrap().matcher.is_none()
+        self.inner.read().unwrap().matcher.is_none() && self.codes.read().unwrap().is_empty()
     }
 
     #[allow(dead_code)]
     pub fn values(&self) -> Vec<String> {
         self.inner.read().unwrap().values.clone()
+    }
+
+    /// Login values and codes used to find replaced browser fields before taking a picture.
+    pub fn browser_values(&self) -> Vec<String> {
+        let mut values = self.values();
+        values.extend(self.codes.read().unwrap().iter().cloned());
+        values
     }
 
     pub fn add(&self, secrets: &[String]) {
@@ -147,43 +261,58 @@ impl Redactor {
         if fresh.is_empty() {
             return;
         }
-        let mut all = inner.values.clone();
+        // The kept values were chosen when they came (a short login value among them): not filtered again.
+        let mut all: BTreeSet<String> = inner.values.iter().cloned().collect();
         all.extend(fresh);
-        *inner = build(&all);
+        *inner = build_values(all);
     }
 
     /// `text` with its secrets masked: borrowed, with nothing copied, when it holds none.
     pub fn scrub_text<'a>(&self, text: &'a str) -> Cow<'a, str> {
-        match &self.inner.read().unwrap().matcher {
-            Some(m) if m.is_match(text) => Cow::Owned(masked(m, text)),
-            _ => Cow::Borrowed(text),
+        let inner = self.inner.read().unwrap();
+        let codes = self.codes.read().unwrap();
+        let masks = Masks {
+            matcher: inner.matcher.as_ref(),
+            codes: &codes,
+        };
+        if masks.hit(text) {
+            Cow::Owned(masks.apply(text))
+        } else {
+            Cow::Borrowed(text)
         }
     }
 
     /// Bytes scrubbed as they are: bytes that are not UTF-8 are kept, not replaced (Python's surrogateescape).
     pub fn scrub_bytes(&self, data: &[u8]) -> Vec<u8> {
-        match &self.inner.read().unwrap().matcher {
+        let out = match &self.inner.read().unwrap().matcher {
             Some(m) => m.replace_all_bytes(data, &vec![MASK.as_bytes(); m.patterns_len()]),
             None => data.to_vec(),
-        }
+        };
+        mask_codes(&out, &self.codes.read().unwrap()).unwrap_or(out)
     }
 
     /// The same structure with every string scrubbed; keys are left as they are. Borrowed, with nothing copied, when
     /// no string in it holds a secret. Otherwise a copy in which only the strings holding one are masked.
     pub fn scrub_json<'a>(&self, v: &'a Value) -> Cow<'a, Value> {
         let inner = self.inner.read().unwrap();
-        let Some(m) = inner.matcher.as_ref() else {
+        let codes = self.codes.read().unwrap();
+        if inner.matcher.is_none() && codes.is_empty() {
             return Cow::Borrowed(v);
+        }
+        let masks = Masks {
+            matcher: inner.matcher.as_ref(),
+            codes: &codes,
         };
-        if !json_holds(v, m) {
+        if !json_holds(v, &masks) {
             return Cow::Borrowed(v);
         }
         let mut owned = v.clone();
-        mask_in_place(&mut owned, m);
+        mask_in_place(&mut owned, &masks);
         Cow::Owned(owned)
     }
 
-    /// Whether these bytes carry a secret in any of its forms (read as latin-1, like the Python check).
+    /// Whether these bytes carry a secret in any of its forms (read as latin-1, like the Python check). Codes are
+    /// left out: they expire in seconds, and a number in a checkout matching one is far likelier chance.
     pub fn holds(&self, data: &[u8]) -> bool {
         match &self.inner.read().unwrap().matcher {
             Some(m) => {
@@ -482,9 +611,9 @@ fn masked(m: &AhoCorasick, text: &str) -> String {
 }
 
 /// Whether a string anywhere in `v` holds a secret.
-fn json_holds(v: &Value, m: &AhoCorasick) -> bool {
+fn json_holds(v: &Value, m: &Masks) -> bool {
     match v {
-        Value::String(s) => m.is_match(s),
+        Value::String(s) => m.hit(s),
         Value::Array(items) => items.iter().any(|i| json_holds(i, m)),
         Value::Object(map) => map.values().any(|i| json_holds(i, m)),
         _ => false,
@@ -492,11 +621,11 @@ fn json_holds(v: &Value, m: &AhoCorasick) -> bool {
 }
 
 /// Masks, in place, the strings of `v` that hold a secret; every other value is left as it is.
-fn mask_in_place(v: &mut Value, m: &AhoCorasick) {
+fn mask_in_place(v: &mut Value, m: &Masks) {
     match v {
         Value::String(s) => {
-            if m.is_match(s.as_str()) {
-                *s = masked(m, s);
+            if m.hit(s.as_str()) {
+                *s = m.apply(s);
             }
         }
         Value::Array(items) => items.iter_mut().for_each(|i| mask_in_place(i, m)),
@@ -633,11 +762,115 @@ fn active() -> &'static Mutex<Vec<(String, Arc<Redactor>)>> {
 }
 
 pub fn register(aid: &str, r: Arc<Redactor>) {
+    // A turn that starts just after the browser typed a login hides it too: the page it reads may still show it.
+    let (logins, codes) = standing_values();
+    if !logins.is_empty() {
+        r.add_login(&logins);
+    }
+    if !codes.is_empty() {
+        r.add_codes(&codes);
+    }
     active().lock().unwrap().push((aid.to_string(), r));
 }
 
 pub fn release(aid: &str) {
     active().lock().unwrap().retain(|(a, _)| a != aid);
+}
+
+/// Login values for a running turn's redactor: a login the browser fills with mid-turn is hidden from that turn's
+/// output like a secret it was handed at the start (any of at least `LOGIN_MIN_LENGTH` characters).
+pub fn add_to(aid: &str, secrets: &[String]) {
+    let found = active()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(a, _)| a == aid)
+        .map(|(_, r)| r.clone());
+    match found {
+        Some(r) => r.add_login(secrets),
+        None => {
+            let r = Redactor::new(&[]);
+            r.add_login(secrets);
+            if !r.is_empty() {
+                active()
+                    .lock()
+                    .unwrap()
+                    .push((aid.to_string(), Arc::new(r)));
+            }
+        }
+    }
+}
+
+/// Authenticator codes for a running turn's redactor, as `add_to` does for login values.
+pub fn add_codes_to(aid: &str, codes: &[String]) {
+    let found = active()
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(a, _)| a == aid)
+        .map(|(_, r)| r.clone());
+    let r = found.unwrap_or_else(|| {
+        let r = Arc::new(Redactor::new(&[]));
+        active().lock().unwrap().push((aid.to_string(), r.clone()));
+        r
+    });
+    r.add_codes(codes);
+}
+
+/// How long a login value the browser typed is still masked in turns that start after it (a code goes sooner).
+const STANDING_LOGIN: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+const STANDING_CODE: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Values the browser typed lately: `(until, is_code, value)`.
+#[allow(clippy::type_complexity)]
+fn standing() -> &'static Mutex<Vec<(std::time::Instant, bool, String)>> {
+    #[allow(clippy::type_complexity)]
+    static STANDING: OnceLock<Mutex<Vec<(std::time::Instant, bool, String)>>> = OnceLock::new();
+    STANDING.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn standing_values() -> (Vec<String>, Vec<String>) {
+    let now = std::time::Instant::now();
+    let mut list = standing().lock().unwrap();
+    list.retain(|(until, _, _)| *until > now);
+    let pick = |code: bool| {
+        list.iter()
+            .filter(|(_, c, _)| *c == code)
+            .map(|(_, _, v)| v.clone())
+            .collect()
+    };
+    (pick(false), pick(true))
+}
+
+/// A value the browser typed or copied on this computer (a login value, or a code when `code`): masked in every
+/// running turn's output from now on, and in turns that start within the next while.
+pub fn hide_everywhere(value: &str, code: bool) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+    let keep = if code { STANDING_CODE } else { STANDING_LOGIN };
+    {
+        let mut list = standing().lock().unwrap();
+        list.retain(|(_, c, v)| !(*c == code && v == value));
+        list.push((std::time::Instant::now() + keep, code, value.to_string()));
+        let extra = list.len().saturating_sub(4 * CODES_KEPT);
+        list.drain(..extra);
+    }
+    let one = [value.to_string()];
+    let live: Vec<String> = active()
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(a, _)| a.clone())
+        .collect();
+    for aid in live {
+        if code {
+            add_codes_to(&aid, &one);
+        } else {
+            add_to(&aid, &one);
+        }
+    }
 }
 
 /// A log line with every running turn's secrets taken out.
@@ -656,6 +889,27 @@ pub fn scrub_log(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_values_include_codes_without_changing_their_text_matching() {
+        let redactor = Redactor::new(&[]);
+        let login: String = std::iter::repeat_n('x', LOGIN_MIN_LENGTH).collect();
+        let code = format!("{:06}", 123 * 456);
+        redactor.add_login(std::slice::from_ref(&login));
+        redactor.add_codes(std::slice::from_ref(&code));
+        let values = redactor.browser_values();
+        assert!(values.contains(&login), "login values are included");
+        assert!(values.contains(&code), "codes are included");
+        assert!(
+            redactor.scrub_text(&code).as_ref() != code,
+            "a code is covered"
+        );
+        let longer = format!("1{code}1");
+        assert!(
+            redactor.scrub_text(&longer) == longer,
+            "a code is still masked only as a whole number"
+        );
+    }
 
     #[test]
     fn a_secret_is_masked_in_every_form_and_short_or_common_values_are_not() {
@@ -841,5 +1095,77 @@ mod tests {
         );
         assert_eq!(*untouched, plain);
         assert!(matches!(r.scrub_text("no secret here"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn a_typed_code_is_masked_as_a_whole_number_only() {
+        let r = Redactor::new(&[]);
+        r.add_codes(&["287082".into(), "abc123".into(), "12345".into()]);
+        assert!(!r.is_empty());
+        assert_eq!(
+            r.scrub_text("value=287082, 2870821 a287082b \"287082\""),
+            "value=••••, 2870821 a••••b \"••••\""
+        );
+        assert_eq!(
+            r.scrub_text("abc123 12345"),
+            "abc123 12345",
+            "not codes, never masked"
+        );
+        assert!(matches!(r.scrub_text("no code 12"), Cow::Borrowed(_)));
+        assert_eq!(
+            r.scrub_bytes(b"\xff287082"),
+            b"\xff\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2"
+        );
+        assert_eq!(
+            r.scrub_json(&serde_json::json!({"out": ["287082"]}))["out"][0],
+            MASK
+        );
+        assert!(!r.holds(b"287082"), "a checkout is not searched for codes");
+        for n in 0..CODES_KEPT as u32 {
+            r.add_codes(&[format!("{:06}", 900000 + n)]);
+        }
+        assert_eq!(
+            r.scrub_text("287082 900001"),
+            "287082 ••••",
+            "the oldest code goes first"
+        );
+        add_codes_to("a-code-turn", &["135790".into()]);
+        assert_eq!(scrub_log("code 135790"), "code ••••");
+        release("a-code-turn");
+    }
+
+    #[test]
+    fn a_short_login_value_is_masked_and_other_short_secrets_are_not() {
+        let r = Redactor::new(&["granted-secret-value".into(), "pw12".into()]);
+        assert_eq!(
+            r.scrub_text("pw12 x"),
+            "pw12 x",
+            "a short vault value is not masked"
+        );
+        r.add_login(&["pw12".into(), "abc".into(), " ".into()]);
+        assert_eq!(
+            r.scrub_text("pw12 granted-secret-value abc"),
+            "•••• •••• abc",
+            "a login value of four or more is, three is not"
+        );
+        // Adding more keeps the short one: the kept values are not filtered again.
+        r.add(&["another-granted-value".into()]);
+        assert_eq!(r.scrub_text("pw12 another-granted-value"), "•••• ••••");
+
+        // A turn running now, and one that starts after the browser typed it, both hide it.
+        let now = Arc::new(Redactor::new(&["a-running-turn-secret".into()]));
+        register("a-browser-turn", now.clone());
+        hide_everywhere("Zq9!", false);
+        hide_everywhere("246813", true);
+        assert_eq!(now.scrub_text("Zq9! 246813"), "•••• ••••");
+        let later = Arc::new(Redactor::new(&["a-later-turn-secret".into()]));
+        register("a-later-browser-turn", later.clone());
+        assert_eq!(
+            later.scrub_text("pass Zq9! code 246813"),
+            "pass •••• code ••••"
+        );
+        release("a-browser-turn");
+        release("a-later-browser-turn");
+        standing().lock().unwrap().clear();
     }
 }

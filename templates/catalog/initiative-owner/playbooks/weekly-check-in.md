@@ -19,7 +19,7 @@ entry, and the task note carries the call and the report path.
     tico task show <id>
     tico strategy show
 
-Find this seat's bet by the id in `state.md`. If the bet is not in the published strategy, or its status is not
+Find this seat's bet by the id in `knowledge/plan.md`. If the bet is not in the published strategy, or its status is not
 `active`, say so in one line on the task and stop: the check-in reports the bet's status, it does not guess one. Note
 its statement, what it rules out, its wrong-if text and check-by date, and any change since last week.
 
@@ -65,7 +65,7 @@ Write `reports/YYYY-MM-DD-initiative.md` in the shape of `knowledge/examples/bet
 
     tico file publish reports/YYYY-MM-DD-initiative.md
 
-Add this week's entry to `knowledge/call-log.md` and update `knowledge/plan.md`. Rewrite `state.md`, and commit this
+Add this week's entry to `knowledge/call-log.md` and update `knowledge/plan.md`. Note progress on the task and commit this
 repository. Finish the task:
 
     tico task done <id> -m "<the call, the bet's id, the report path, what you could not read>" --version N

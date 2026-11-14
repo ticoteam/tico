@@ -42,7 +42,7 @@ turn it off again in one message.
      words, one bullet each ("Reply to support senders that support has it". "Forward job, business-development,
      partnership, investor and press mail to <address> with the subject `🔔 Tico inbound: <subject>`, and add a
      Needs you task").
-   - `AGENT.md`: under `## Boundaries`, the sending line must say it follows `## Sending` in
+   - `AGENTS.md`: under `## Boundaries`, the sending line must say it follows `## Sending` in
      `inbox-preferences.md` now. Nothing else about what it may send changes.
    - `questions/mail-triage.json` must exist in the repository; if it is missing, copy it from
      `$HUB_DIR/questions/mail-triage.json`.

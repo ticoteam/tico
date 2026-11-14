@@ -32,6 +32,8 @@ class FakeGitHub:
         self.withheld = set()  # permissions Tico's App lacks here ("actions", "contents"): cut_release answers no
         self.release_on_cut = None  # a tag: asking for a release publishes it at once, as a release workflow does
         self.diffs = {}  # (repo, sha) -> what the PR changes at that commit (pr_diff); each commit its own unless set
+        self.commits = {}  # (repo, sha) -> the PR's [[sha, title]] up to that commit (pr_diff); None unless set
+        self.files = {}  # (repo, sha) -> {file name: id of its part of the diff} at that commit (pr_diff); None unless set
         self._fail = {}
         self._shas = (f"{n:040x}" for n in itertools.count(1))
         self._run_ids = itertools.count(1)  # check run ids only grow, as GitHub's do
@@ -187,7 +189,11 @@ class FakeGitHub:
 
     def pr_diff(self, repo, number, sha):
         self._call("pr_diff", repo, number, sha)
-        return self.diffs.get((repo, sha), f"diff-{sha}")
+        return {
+            "diff_id": self.diffs.get((repo, sha), f"diff-{sha}"),
+            "commits": self.commits.get((repo, sha)),
+            "files": self.files.get((repo, sha)),
+        }
 
     def ready(self, repo, number):
         self._call("ready", repo, number)

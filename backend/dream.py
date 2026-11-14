@@ -11,8 +11,9 @@ are anyone's to edit, but only this route writes that event. A hand-labelled tas
 still goes through ask ingest. A dream's question skips ask ingest (backend/ask_ingest.py): the person started it to
 be asked.
 
-An auto dream (backend/dream_auto.py) is the same task, started by the nightly run. Its marker is a `dream.auto` event
-under the system actor, and its body opens with the reason line the run wrote. Its requester is a person who did not
+An auto dream (backend/dream_auto.py) is the same task, queued by the Maintenance pass with its wake held on the release
+policy: it starts while the bot's cache is warm, on a fork of the bot's latest session. Its marker is a `dream.auto` event
+under the system actor, and its body opens with the reason line the pass wrote. Its requester is a person who did not
 start it; the question it asks that person goes through the same exemption.
 """
 
@@ -44,11 +45,11 @@ MARKED = (
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {waiting}
 They watch this task's note while you work: at the start of each step below, and whenever you begin something that
 takes a while, set it with `tico_task_update` (the note only) to one short line saying what you are doing now, e.g.
-"2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENT.md". Read the task
+"2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENTS.md". Read the task
 with `tico_task_show` first, and pass the version the last call on it printed with every call.
 
-1. Orient. Read your instructions and memory: AGENT.md, AGENTS.md or CLAUDE.md if present, `memory/` (the working
-   rules at the top of memory/learnings.md first, then memory/decisions.md and any index), state.md and `knowledge/`.
+1. Orient. Read your instructions and memory: AGENTS.md (or CLAUDE.md if present), `memory/` (memory/learnings.md,
+   memory/decisions.md and any index) and `knowledge/`.
    A dream may change all of these files. That is its job: never ask whether you may edit them.
 
 2. Gather. Read your chats and tasks since {since} with the hub tools. Search narrowly; do not dump everything. Note:
@@ -92,7 +93,8 @@ MODES = {
         "wait": "Then stop and wait for the answer.",
     },
     True: {
-        "waiting": "Nobody is waiting: this dream started on its own.",
+        "waiting": "Nobody is waiting: this dream started on its own, on a copy of your latest session, so what you "
+        "remember from it counts as read.",
         "settle": "Apply it as you go, and commit what you have settled before any question (step 7, but do not "
         "finish the task yet).",
         "wait": "If you asked, stop and wait for the answer, apply it, and make the second commit of step 7 before you "
@@ -152,13 +154,18 @@ def exempt(c, row):
     )
 
 
+# A finished dream counts as the bot's last one only when it ran: an auto dream skipped at its release deadline (no warm
+# window) is closed without a run, and the work it was queued for still waits for a dream that reads it.
+RAN = "EXISTS (SELECT 1 FROM attempts a WHERE a.task_id=tasks.id)"
+
+
 def dreams(c, owner):
-    """Every dream of `owner`, open or finished, newest first: (id, created_at)."""
+    """Every dream of `owner` that is open or ran, newest first: (id, created_at). One closed before it ran is left out."""
     return c.execute(
         "SELECT tasks.id, tasks.created_at FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id "
         "JOIN tags g ON g.id=tt.tag_id WHERE g.key=? AND tasks.owner_id=? AND "
         + MARKED
-        + " ORDER BY tasks.created_at DESC, tasks.rowid DESC",
+        + f" AND (tasks.status='open' OR {RAN}) ORDER BY tasks.created_at DESC, tasks.rowid DESC",
         (LABEL, owner),
     ).fetchall()
 
@@ -185,11 +192,11 @@ def _ended_at(row):
 
 
 def since(c, owner):
-    """Where a dream's reading starts: the end of the bot's last finished dream, else SINCE_DAYS ago."""
+    """Where a dream's reading starts: the end of the bot's last finished dream that ran, else SINCE_DAYS ago."""
     row = c.execute(
         "SELECT max(coalesce(tasks.closed_at,tasks.done_at)) FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id "
         f"JOIN tags g ON g.id=tt.tag_id WHERE g.key=? AND tasks.owner_id=? AND tasks.status IN {ENDED} "
-        f"AND {MARKED}",
+        f"AND {MARKED} AND {RAN}",
         (LABEL, owner),
     ).fetchone()
     stamp = (row and row[0]) or H.shift(H.now(), days=-SINCE_DAYS)
@@ -296,15 +303,18 @@ def creator(store):
     return getattr(store, "dream_create", None)
 
 
-def start(c, who, owner, task_create, reason=None):
+def start(c, who, owner, task_create, reason=None, wake_refs=None):
     """File a dream as POST /api/v2/tasks files one: `who` gives `owner` the task, and the marker goes on it. `reason` is
-    an auto dream's line (the nightly run's), shown first in its body and kept on its `dream.auto` event; None is a
-    person's start. Returns (the task's row, None), or (None, what task_create answered) when an org rule held it."""
+    an auto dream's line (the Maintenance pass's), shown first in its body and kept on its `dream.auto` event; None is a
+    person's start. `wake_refs` go on the bot's wake: an auto dream's release policy, which holds it for a warm window
+    (backend/dream_auto.py). Returns (the task's row, None), or (None, what task_create answered) when an org rule held
+    it."""
     name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
     text = instructions(name, since(c, owner), auto=reason is not None)
     if reason is not None:
         text = f"{reason}\n\n{text}"
-    made = task_create(c, who, M.TaskCreate(title=TITLE, body=text, owner=owner, labels=[LABEL]), lint=False)
+    body = M.TaskCreate(title=TITLE, body=text, owner=owner, labels=[LABEL])
+    made = task_create(c, who, body, lint=False, **({"wake_refs": wake_refs} if wake_refs else {}))
     task = made.get("task") if isinstance(made, dict) else None
     if not task:
         return None, made  # held by an org rule: its answer, as POST /api/v2/tasks gives it

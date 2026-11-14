@@ -158,6 +158,9 @@ async function open(browser: Browser, me: Record<string, unknown>, branches = fa
       return json({description: body.redraft ? 'Keeps the books, closes each month and files the taxes.' : 'Keeps the books and closes each month.',
         source: 'catalog'});
     }
+    if (p === '/api/v2/models') return json({models: ['fixture-model', 'other-model'].map(id => ({id, label: id, runtime: 'claude', harnesses: ['claude'], provider: 'anthropic',
+      efforts: ['medium'], default_effort: 'medium', context_tokens: 1_000_000, compact_default: 400_000})),
+      harnesses: [{id: 'claude', label: 'Claude Code', runtime: 'claude', capabilities: {compaction: true}}], default: {runtime: 'claude', model: 'fixture-model'}});
     if (p === '/api/v2/computers') return json({computers: [{id: 'mac', label: 'Office Mac'}]});
     let s: RegExpMatchArray | null;
     if ((s = p.match(/^\/api\/v2\/seats\/([^/]+)(?:\/(recruit|hire))?$/))) {
@@ -358,6 +361,11 @@ async function reportFallback(browser: Browser) {
   assert.deepEqual(await chips('Reports').allTextContents(), ['bea', 'Ben', 'Cara', 'Éli', 'Zoë'], "Ana's page: the same humans' order (Ben too, in his group on the chart)");
   assert.deepEqual((await chips('Bots').allTextContents()).filter(n => ['Scout', 'Builder', 'Analyst'].includes(n)), ['Scout', 'Builder', 'Analyst'],
     "and the same bots' order");
+  // Each bot chip is the avatar and the name, no harness mark; chips sit 16px apart, rows 8px apart (#299).
+  const botList = page.locator('#main section.card', {has: page.locator('h2', {hasText: /^Bots$/})}).locator('.chip-list');
+  assert.equal(await botList.locator('.rt').count(), 0, 'no harness mark on a bot chip');
+  assert.deepEqual(await botList.evaluate(el => { const s = getComputedStyle(el); return [s.display, s.flexWrap, s.rowGap, s.columnGap]; }),
+    ['flex', 'wrap', '8px', '16px']);
   // Two of Ana's reports shown in a group of their own: a drop below the other there swaps them in her order.
   await page.goto('https://tico-ui.test/#/updates');
   groups.push({id: 'campaigns', name: 'Campaigns', parent: ''});
@@ -445,7 +453,9 @@ async function owner(browser: Browser) {
   assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, 'nor are their mailboxes in the sidebar');
 
   // Add a group even when Team is collapsed and showing history.
-  await page.locator('#org-history').click();
+  await page.locator('#org-more').click();
+  await page.locator('#team-more-menu [data-org-more="history"]').click();
+  await page.keyboard.press('Escape');
   await page.locator('[data-section-toggle=organisation]').click();
   await page.locator('#org-add-group').click();
   await page.getByRole('menuitem', {name: 'Add section', exact: true}).click();
@@ -730,7 +740,10 @@ async function teamAdd(browser: Browser) {
   await hireForm.locator('[name=name]').fill('Paymaster');
   await hireForm.locator('[name=reports_to]').selectOption('scout');
   await hireForm.locator('.rc-settings summary').click();
-  await hireForm.locator('[name=model]').selectOption('other-model');
+  await hireForm.locator('[data-hire-model] [data-choice-open]').click();
+  await page.locator('#sb-choice-pop [data-choice-harness] label:has(input[value="claude"])').click();
+  await page.locator('#sb-choice-pop [data-choice-model] label:has(input[value="other-model"])').click();
+  await page.locator('#sb-choice-pop [data-choice-apply]').click();
   await shot(page, 'team-add-bot-applicant');
   calls.length = 0;
   seatSave.hire = 403;
@@ -743,7 +756,7 @@ async function teamAdd(browser: Browser) {
   await page.waitForFunction(() => location.hash === '#/bot/paymaster');
   assert.deepEqual(calls.filter(c => c[0] === 'PATCH'), [['PATCH', 'seat2', {reports_to: 'scout'}]], 'the new manager is saved once');
   assert.deepEqual(calls.filter(c => c[1] === 'hire').map(c => c[3]),
-    [{template: 'controller', model: 'other-model', name: 'Paymaster'}, {template: 'controller', model: 'other-model', name: 'Paymaster'}]);
+    [1, 2].map(() => ({template: 'controller', model: 'other-model', harness: 'claude', effort: 'medium', name: 'Paymaster'})));
   assert.deepEqual(calls.find(c => c[0] === 'hired with')!, ['hired with', 'Runs payroll.']);
   calls.length = 0;
   await page.evaluate(() => { location.hash = '#/updates'; });
@@ -940,7 +953,7 @@ async function personalBranches(browser: Browser) {
   for (const [id, role] of [['ana', 'owner'], ['ben', 'viewer'], ['cara', 'viewer']]) {
     const {page, errors} = await open(browser, {id, role, cloud: true}, true);
     for (const history of [false, true]) {
-      if (history) await page.locator('#org-history').click();
+      if (history) { await page.locator('#org-more').click(); await page.locator('#team-more-menu [data-org-more="history"]').click(); await page.keyboard.press('Escape'); }
       assert.equal(await node(page, 'b:cmo').count(), 1, 'the canonical bot stays on the chart');
       for (const person of ['ana', 'ben', 'unknown', 'limited']) {
         const branch = node(page, 'b:cmo-' + person);
@@ -948,7 +961,9 @@ async function personalBranches(browser: Browser) {
         if (person === id) assert.equal(await branch.locator('.org-branch').textContent(), 'Your branch');
       }
     }
-    await page.locator('#org-mine').click();
+    await page.locator('#org-more').click();
+    await page.locator('#team-more-menu [data-org-more="mine"]').click();
+    await page.keyboard.press('Escape');
     assert.equal(await node(page, 'b:cmo-unknown').count(), 0);
     const recent = await page.evaluate(() => {
       orgHistoryStore(['b:cmo-ben', 'b:cmo-ana', 'b:cmo-unknown', 'b:cmo'], Date.now());

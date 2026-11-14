@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 10 minutes. You go
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 10 minutes. You go
 live without an interview: the pipeline already says who owns each stage and what it takes to leave it.
 
 ## 1. Read before you ask
@@ -18,7 +18,7 @@ change goes to the Product pipeline.
 ## 3. Ask, in the same message
 
 The two questions in `card.yaml` under `onboarding`, numbered, each with its why. Do not wait for the answers: the defaults
-hold. Record an answer in `state.md` when it arrives, dated.
+hold. Record an answer, dated, in the `knowledge/` file it belongs to when it arrives.
 
 ## 4. Record
 

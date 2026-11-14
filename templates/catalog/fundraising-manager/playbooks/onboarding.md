@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is five recorded answers, the `knowledge/` files written, a first result built from a real export, and the
 first routine checked.
 
@@ -34,7 +34,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Answers to `state.md` under `## Answers`, dated. Write the `knowledge/` files listed in `AGENT.md`. Anything nobody
+Write each answer, dated, into the `knowledge/` files listed in `AGENTS.md`. Anything nobody
 answered goes in `knowledge/open-questions.md`, not guessed.
 
 ## 5. Produce the first result now
@@ -47,7 +47,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`. Tell the human in one line what it does: "I will review the raise every Monday at
 09:00 team time." They can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
+Record it in `memory/decisions.md`. If they asked for a different schedule or to
 leave it off, adjust the routine (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

@@ -102,7 +102,7 @@ function taDrawHead(): void {
       <div class="tt-title-act">${toolsPill(status)}${tool.base_url && tool.check_path ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}${
         manage ? '<button type="button" class="ghost small" data-ta-settings>Settings</button>' : ''}</div></header>
     <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
-      `<a href="${href}" data-ta-tab="${k}"${(state.tab || 'overview') === k ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+      `<a href="${href}" data-ta-tab="${k}"${(state.tab || 'overview') === k ? ' class="ph-tab cur" aria-current="page"' : ' class="ph-tab"'}>${label}</a>`).join('')}</nav>`;
 }
 
 // ----------------------------------------------------------------- Overview
@@ -304,7 +304,6 @@ async function taClick(ev: Event): Promise<void> {
 }
 // ----------------------------------------------------------------- Finance: ad spend (finance admins only)
 const TAF_SERVICES: (string | null | undefined)[] = ['google-ads', 'meta-ads'];
-const tafMoney = (cents: number, currency?: string | null): string => { try { return (cents / 100).toLocaleString('en-US', {style: 'currency', currency: currency || 'USD'}); } catch { return (cents / 100).toFixed(2); } };
 const tafOptions = (rows: string[][], picked: string | null | undefined, empty: string): string => `<option value="">${esc(empty)}</option>${rows.map(([v, label]) =>
   `<option value="${esc(v)}"${v === picked ? ' selected' : ''}>${esc(label)}</option>`).join('')}`;
 function taFinanceSlot(d: ToolApiData): string {

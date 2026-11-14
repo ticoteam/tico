@@ -56,7 +56,8 @@ Each month has one row per channel and one **Unknown** row. A row holds:
 
 - spend and bot cost, in dollars;
 - new customers;
-- the share still customers at 30, 90 and 180 days, blank until the cohort is that old;
+- the share still customers at 30, 90 and 180 days, blank until the cohort is that old (or computed from customers:
+  see "Computed from customers" below);
 - revenue per customer per month and margin (`--revenue`, `--margin`, with the margin as a percent);
 - a quality mark: `actual` when every input came from a source, `estimate` when one did not.
 
@@ -81,6 +82,87 @@ decides which channel a customer came from. Unknown has no CAC, LTV or payback.
 **Blank is not zero.** A channel with no inputs yet is blank. A retention share the cohort is too young for is left out,
 not written as 0.
 
+### Computed from customers
+
+A team that knows its customers can load them instead of typing retention. Growth then computes new customers,
+retention, LTV, CAC and payback itself, cut by channel, segment or plan, monthly or weekly, and each figure opens to the
+customers behind it.
+
+**Customer facts.** One row per customer, as a CSV: **Upload customers** in Growth's Settings or on the Retention card,
+or `tico growth customers load customers.csv`. Growth keeps only these columns:
+
+| Column | Required | What it holds |
+| --- | --- | --- |
+| customer key | yes | your own id for the customer, never a name, an email or a phone number |
+| signed up | no | a date |
+| became customer | yes | the date the customer first paid |
+| channel | yes | a Growth channel slug; anything else counts as Unknown |
+| segment | no | a short label, such as `agency` |
+| plan | no | a short label, such as `pro` |
+| churned | no | the date the customer stopped paying; blank while they pay |
+| revenue per month | no | for this customer; blank uses the channel's month or the settings value |
+
+Each load replaces the last one: a customer left out is deleted, which is how you remove someone who asks to be
+forgotten. A customer who left and came back is a second row with the same key and a new became customer date, after
+the first row's churned date. A customer counts where they were when they became a customer; a later load that moves
+them to another channel, segment or plan does not move them between cohorts. Only the owner and admins load or delete
+customer facts (`tico growth customers delete` deletes them all; the figures go back to typed values).
+
+**From a synced source.** A source connected with `--sync file --map customers` takes the same columns: each file you
+push (`tico growth source push ID --file customers.csv`) is a load of that source's customers only, so an upload in
+Growth and two sources never replace each other's. A file the rules refuse fails the run, with the rule, and leaves its
+last customers as they were. Retiring the source, stopping its sync or mapping it to numbers deletes its customers and
+its stored file at once.
+
+**What is refused.** Nothing loads when any of these hold, and the message names the rule and the column, never a value:
+a column outside the list; a customer key that looks like an email address or a phone number; a segment or plan longer
+than 40 characters; a segment or plan column with more than 50 different values or more than one per two rows (a name
+went into it); a date that is not a date; two rows of one customer that overlap. Keys are stored as you give them. You
+may replace them with tokens before loading, as long as the same customer always gets the same token.
+
+**The figures.** A cohort is the customers who became customers in the same month, or the same Monday-to-Sunday week.
+For each cohort Growth computes:
+
+- **New customers**: how many it holds.
+- **Day 30, 90 and 180**: the share still paying on that day. A day shows only once every customer in the cohort is at
+  least that old; until then it says "not yet" and the date it fills. September's day 90 fills on 29 December. It is
+  never shown as 0%.
+- **LTV and expected months**: the maths above, on the computed retention.
+- **CAC and payback**: by channel only, from the month's spend. Spend is not split by segment or plan, and typed spend
+  is monthly, so weekly cohorts and segment or plan cuts say so instead of a number.
+
+A cohort under 30 customers shows counts only ("12 of 19") and too few for a rate, for retention, LTV and revenue. Change
+the minimum with `tico growth settings --set min_cohort=N` (never below 5). Dates are read in the Growth time zone
+(`--set time_zone=Europe/London`, default UTC).
+
+Figures are worked out when they are read, so a load shows at once and day 90 and day 180 fill in as cohorts age, with
+nobody typing. A two-week test shows its new customers and CAC by week; its day-30 retention appears 30 days after its
+last week ends.
+
+**On the Growth page.** With customer facts, the Retention card shows the picked month's cohorts. **Cut by** chooses
+channel, segment or plan, and **Weekly / Monthly** the grain; a month shows every whole week that touches it. Each row has
+its new customers, day 30, 90 and 180, LTV and CAC; the foot says how many customers the figures come from and when and
+where they were loaded. The month picker lists the months with customer facts too. Each Number card says whether its
+figure is computed, typed, or both (every channel together, some of each), and the Channels table dots its computed
+figures.
+
+**Computed beside typed.** A channel's month with customer facts shows the computed figures, each marked computed and
+with the number of customers it comes from and the customers source(s) they were loaded from (`origins` in
+`tico growth cohort list --json`: `computed`, `computed_from`, `sources`). A typed estimate for the same month is
+replaced. A typed actual that differs is kept beside it, on the Number cards and the Retention card, and the channel's
+owner or an admin keeps one (`tico growth cohort resolve ... --keep typed|computed --against computed`). After a load,
+and after a number is typed as actual, the channel's owner gets one notice naming the numbers that differ; each
+channel, month and figure is asked about once. A channel with no owner is asked once an owner is set, at the next load.
+On the Retention card, LTV uses the computed shares even where a typed number was kept.
+The choice holds across later loads; typing a new number for that month and figure asks again. Channels and months
+with no customer facts read exactly as before. Every figure says which it is.
+
+**The customers behind a figure.** On the Retention card, a day's figure opens to its customers. In the CLI,
+`--customers` adds the rule ("became customer 2026-09-01 to 2026-09-30, channel
+search-ads, still paying on day 30") and the customer keys, split into still customers and churned with the date. Anyone
+who reads Growth sees the counts and the rule; the keys and churn dates show only to the owner, admins and the people or
+bots they name (`--set key_readers=growth-product-owner`).
+
 **KPI readings.** Each measurement a KPI tracks is a reading, logged with the period it covers. A correction supersedes
 the earlier reading. The KPI views (Tree, Loops, Journey) are on Strategy's Goals tab; see
 [Goals and KPIs](goals-and-kpis.md).
@@ -88,7 +170,91 @@ the earlier reading. The KPI views (Tree, Loops, Journey) are on Strategy's Goal
 ## Sources
 
 **Sources** lists the systems that hold each number (spend, customers, retention) and which number each one is the truth
-for. The numbers are entered from them each week; the rows stay in those systems.
+for. A source that only names a system is typed by hand: someone reads its numbers and enters them.
+
+**Synced sources.** A source can fill its numbers itself, from a **file** or a **database query**. A file is a CSV with a `month` column
+(`YYYY-MM`), a `channel` column (a channel's slug or name; blank or `unknown` is Unknown) and one column per number. Map
+each number to its column once; the month and channel columns may have other names too:
+
+```
+tico growth source add --truth-for "new customers" --system "Signups sheet" --sync file \
+  --map new_customers=signups --map revenue_month=revenue --map channel=source
+tico growth source push <id> --file signups.csv
+```
+
+A **database query** source runs one named query (docs/databases.md, step 4) every day, on the computer of the bot
+granted that database. The query returns the same columns as the file, and needs no parameter without a default.
+Connecting it makes a daily automation (06:00 UTC) whose turn by that bot runs `tico growth source run <id>`: the query
+runs there through `tico db`, audited as any other, and its rows are posted to the source. When it fails (a column is
+missing, it times out, the database refuses the login) the reason is posted instead and the source shows Failing. The
+server never holds the connection string.
+
+```
+tico growth source add --truth-for "new customers" --system "Signups (warehouse)" --sync db_query \
+  --database warehouse --query signups-by-channel --bot data-bot --map new_customers=signups
+tico growth source sync <id>      # starts the bot's run now
+```
+
+- **Months.** The first good run fills up to 12 months back. Later runs rewrite only the current month and the two
+  before it, for late data and restatements. A future month is never written.
+- **Rows it does not write.** A row naming a channel Growth does not have is not written; the run lists it, with
+  the rows outside the months it may write.
+- **Where each number came from.** Every number records whether it was synced (which source, when) or typed (by whom),
+  and whether it is actual or an estimate. `tico growth cohort list --json` and `tico growth numbers --json` show it
+  under `origins`.
+- **Who wins.** A number a synced source filled belongs to it: typing it is refused, naming the source, until the source
+  is retired. A sync never overwrites a number someone typed as actual. When the two differ, the typed number stays and
+  the source's value is held beside it, and the source's owner or an admin keeps one
+  (`tico growth cohort resolve ... --keep typed|source`). A value they chose not to use is not raised again. A typed
+  estimate is replaced by the synced actual.
+- **One source per number.** Two live synced sources never fill the same number.
+- **Health.** `tico growth source list` shows each synced source as fresh, waiting (never run), stale (no good run in
+  twice its refresh time, `--refresh-hours`; a file's is a week) or failing, with the reason. A failed run changes
+  nothing already written. The source's owner gets one notice when it starts failing and one when it recovers.
+- **Run again.** `tico growth source sync <id>` runs a source now: a file source's last file again (after a remap,
+  say), a Finance ad spend source from Finance's latest import, a database query source on its bot's computer.
+
+
+**Finance ad spend.** Spend can come from Finance's Google Ads and Meta import. Growth reads its daily spend per
+campaign in the book's currency and adds it up per channel and month. A day counts in the month the ad platform reports
+it. Map each campaign to a channel once. A campaign left out, or mapped to `unknown`, counts on Unknown. Growth shows
+only the channel-month totals, never a campaign. The source runs after each Finance import, so a day the platform
+restates reaches Growth on the next import. An ad account in another currency than the books makes the source failing,
+naming the account; nothing is converted. Connecting or remapping it also needs someone who sees every connected ad
+account in Finance (a finance admin). The `--campaign` flags of an update replace the whole map, so a remap lists
+every campaign to keep:
+
+```
+tico growth source campaigns
+tico growth source add --truth-for spend --system "Finance ad spend" --sync finance_ad_spend \
+  --campaign meta_ads:111:brand=search-ads --campaign meta_ads:111:retarget=social-ads
+```
+
+The owner and admins connect, remap and retire a synced source; retiring a database query source removes its daily
+run. The daily run is an automation owned by the query's bot, so naming or changing that bot also needs the right to
+make automations for it (its owner, or someone above it), and so does starting it early with `sync` (the bot itself
+may always start its own run). Retiring the source, or switching it to another kind, removes its daily run whoever
+does it: that run exists only for the source, and the owner and admins must be able to stop a source. `tico growth source update <id> --bot BOT` moves the run to
+another bot and keeps the columns it maps. The owner, an admin, the source's own owner or its query's bot sends it rows.
+
+**On the web.** Sources shows each synced source's numbers and health (Fresh, Stale or Failing, and since when), and a
+source typed by hand as "not synced". **Connect a source** takes a name, a CSV and the column for each number (a picked
+file's columns that match a number's name are filled in), and runs the file at once, saying what it wrote, held and
+could not write. Opening a synced source changes its columns, takes a new file or runs its last one again. On Growth, a
+banner over the cards names each Stale or Failing source and the numbers it fills; each Number card has a line saying
+where its figure came from (the source and how long ago it synced, marked stale or failing, or who typed it, actual or
+estimate; CAC, LTV and payback name the sources of the numbers they are worked out from). A number a source disagrees
+with shows both values, and the source's owner or an admin picks **Keep** or **Use**, on the card or in a month's
+numbers under Settings, where a synced number is locked.
+
+**A signed address for a file source.** `POST /api/v2/growth/sources/<id>/address` (the owner, an admin or the source's
+owner) gives a file source an address and a signing secret, shown once; a new one stops the old. A script posts the CSV
+as the request body to `/api/v2/growth/in/<id>` with `X-Signature: sha256=<HMAC-SHA256 of the body under the secret>`, and
+the result is the same as an upload. A missing or wrong signature is refused with 401 and writes nothing.
+
+**Bot cost.** A `bot_cost` source (`tico growth source add --sync bot_cost`) fills only bot cost: each month, the run cost
+of the bot that owns a channel goes on that channel. A bot that owns several channels cannot be split, so its cost goes on
+Unknown and the run result carries a note. `sync` runs it.
 
 ## Marketing tasks
 
@@ -105,18 +271,62 @@ Ads and Social Ads (the growth channel packs in the same section).
 - **Ending.** A measured experiment is Done; one stopped before it is measured is Closed with the reason. A Monitoring
   task that can no longer be fixed is Closed with the reason, and an idea is filed for what to try instead.
 
+The page reads both forms. An open task in Growth Experiments or Growth Monitoring shows on the Growth board in the
+lane its stage gives (Running is Live, Watching and Slipping are Working, with Slipping marked, Building is In
+development, Ideas is On deck) and on its channel's row; a move into Running is a test's start marker, and a move from
+Growth Experiments to Done (kept, with its `result:` tag) or Closed (dropped) its finish marker. A stage a team added
+to Growth Experiments or Monitoring reads as that pipeline's first stage. Success Experiments and
+Success Monitoring are not read here.
+
 The older form, an idea as a General task with a stage label (`growth:ideas` or `idea:on-deck`, `idea:in-development`,
 `growth:running` or `idea:live`, `idea:working`, `growth:measuring`, `idea:paused`; backend/marketing_tasks.py), is still
-read: a test's start and finish markers on the charts come from those labels. The Growth Manager and the segment
-Marketing Owners still file ideas that way.
+read the same way: taking a running label starts a test, and Done or Closed finishes it. A task in a Growth pipeline
+that also carries a stage label shows once, where its pipeline stage says, and starts by its moves alone. The Growth Manager and the segment Marketing
+Owners still file ideas that way.
 
 Bets are company claims and live on the Strategy page. A marketing task does not link to a bet, so this page has no bet
 view.
+
+## First run
+
+An empty Growth needs four things, in this order, before it shows a team's first numbers:
+
+1. **Settings**: revenue per customer per month and the margin (the unit has a default).
+2. **A channel**: at least one active channel. Unknown is not a channel.
+3. **Its source**: an active channel names a live source.
+4. **Its first month**: an active channel that names a live source has a month with spend and new customers.
+
+Every Growth read (`channel list` and `show`, `source list`, `cohort list`, `economics`, `numbers`, `kpis`, `settings`)
+carries `setup` while any step is not done: each step and whether it is done, and the next one with its CLI command, its
+MCP tool, whether the caller may do it and, if not, who may (the owner and admins by name). The CLI prints that next step
+under its normal output. Once all four have been done, `setup` is only `{"done": true}` and stays so, even if a channel is
+retired later. `tico growth setup` shows each step with the date it was first done.
+
+Growth records once per team when it was first opened (any Growth read, by a person or a bot), when each step was first
+done, and when its numbers were first seen (the Growth page, `economics`, `numbers` or a channel read after all four
+steps are done). The Growth activation rate is read from these dates. A team whose first read already finds all four
+steps done (set up before this was counted) is marked `set_up_before_first_open`, so the rate can leave it out. A Tico
+support session reading Growth records nothing.
+
+On the web, the Growth page shows a **Get started** panel over its cards while any step is not done: the four steps in
+order, each done step with what was set, and the next one with a button that opens its form (Settings, a new channel,
+the channel's source picker or Sources when there is no source yet, and the Months form on the channel and the last full
+month). Someone who may not do the next step sees who may, by name, instead of the button. A team that finishes the
+steps after first opening Growth is told once that it is set up, with a link to the channel's numbers
+(`POST /api/v2/growth/setup/shown`); after that the panel does not come back. Each empty card names the step that fills
+it, with a link; the Funnel, which reads the growth KPIs, links to Goals.
 
 ## Who may do what
 
 A channel's stage and budget are its owner's, and the owning bot may change its why, stage and budget. Anyone else
 proposes the change. The owner and admins may change any channel, source or setting.
+
+Every Growth read carries `you_may`: per action, what this caller may do: change settings (`settings`), add or change
+any channel (`channels`), add or change sources (`sources`), record months (`months`). `channels` false does not stop a
+bot that owns a channel changing that channel's why, stage and budget. Each setup write (settings, a channel, a source,
+a month) answers with `setup` too, so the next step follows without another read.
+`may_edit` stays as it was: in `channel list`, `source list` and `settings` it is "may change channels, sources and
+settings"; in `numbers` it is "may record months".
 
 Everyone signed in reads the Growth page. The owner and admins arrange it, and so does a bot acting as itself, which
 pins only the cards it made there (a bot pins no pages to it). Its audience is everyone; it has no audience to change.
@@ -125,9 +335,22 @@ pins only the cards it made there (a bot pins no pages to it). Its audience is e
 
 ```
 tico growth numbers                       the page: each month's rows, Unknown and the totals
+tico growth setup                         the four first-run steps, each done or not, and the next one
 tico growth channel list | show SLUG | add | update SLUG | retire SLUG
 tico growth source list | add | update ID | retire ID
+tico growth source add --truth-for TEXT --system NAME --sync file --map NUMBER=COLUMN [--map channel=COLUMN]
+tico growth source add ... --sync db_query --database NAME --query ID --bot BOT --map NUMBER=COLUMN
+tico growth source push ID --file FILE.csv | sync ID | run ID
+tico growth source push ID --file FILE.csv | sync ID
+tico growth source campaigns [--months N]  Finance's ad campaigns and their keys, to map
+tico growth source add --truth-for spend --system NAME --sync finance_ad_spend --campaign KEY=CHANNEL
+tico growth source add --truth-for customers --system NAME --sync file --map customers
+tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|source
+tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|computed --against computed
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
+tico growth cohort list --by channel|segment|plan|all [--grain week|month] [--week YYYY-MM-DD]
+                 [--segment LABEL] [--plan LABEL] [--customers] [--json]
+tico growth customers load customers.csv | delete
 tico growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot-cost N] [--new N]
                  [--d30 N] [--d90 N] [--d180 N] [--revenue N] [--margin N]
                  [--quality actual|estimate] [--source FIELD=TEXT]

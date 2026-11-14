@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{Change}} · Spec</title>
+<style>
+.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-lg);margin:0 0 8px}
+.pg h2{font-size:var(--t-md);margin:24px 0 8px}
+#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
+#lead p{margin:2px 0}
+.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:16px}
+.pair>div{flex:1 1 300px;min-width:0}
+#details{margin-top:32px;border-top:2px dashed var(--line)}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-base) var(--mono)}
+</style></head><body><main class="pg">
+<h1>{{Change}} · Spec · {{YYYY-MM-DD}}</h1>
+<div id="lead">
+  <p id="goal"><b>Goal:</b> {{who it is for and what they can do after that they cannot now, in one sentence: "A
+  script can list a task's pages with one call."}}</p>
+  <p><b>Decide:</b> {{"OK this spec, or send it back with what is wrong."}}</p>
+</div>
+
+<section id="behaviour">
+  <h2>Solution</h2>
+  <div class="pair">
+    <div><b>Today</b><pre>{{the real call or steps, and what it gives today}}</pre></div>
+    <div><b>After</b><pre>{{the same call, and what it will give}}</pre></div>
+  </div>
+</section>
+
+<section id="details">
+  <h2>Details</h2>
+  <section id="criteria"><h2>Done when</h2>
+    <ol><li>Given {{...}}, when {{...}}, then {{...}}. <i>before release</i></li></ol></section>
+  <section id="scope"><h2>Scope</h2><ul><li>In: {{...}}</li><li>Out: {{...}}</li></ul></section>
+  <section id="why"><h2>Why now</h2><p>{{Who needs it and how often, with the evidence and its source.}}</p></section>
+  <section id="plan"><h2>Plan</h2><ol><li>{{step, with the files it touches}}</li></ol></section>
+  <section id="release"><h2>Release needs</h2>
+    <p>{{Services that ship it; data changes, settings, flags. "None" where none.}}</p></section>
+  <section id="questions"><h2>Open questions</h2><ul><li>{{question}}: {{who answers}}, by {{date}}</li></ul></section>
+</section>
+</main></body></html>

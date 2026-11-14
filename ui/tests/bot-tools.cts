@@ -12,7 +12,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RoutesSupport.Api;
 const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 interface PageWin { opened: string[]; open: (url: string) => null }
-interface OpenData { updates?: unknown[]; files?: unknown[]; bots?: unknown[]; goals?: unknown[]; status?: Record<string, unknown>; cantRun?: {cause: string; fix: string | null} | null }
+interface OpenData { updates?: unknown[]; files?: unknown[]; bots?: unknown[]; goals?: unknown[]; status?: Record<string, unknown>; cantRun?: {cause: string; fix: string | null; task?: {id: string; title: string}; ask?: {kind: string; mine: boolean; line?: string}} | null; pin?: boolean }
 // Page-defined function (the bot page script), called inside page.evaluate.
 declare function botLatestUpdate(bot: string): void;
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -91,6 +91,12 @@ async function open(browser: Browser, viewport: {width: number; height: number},
     if (p === '/api/v2/conversations') return json({conversations: q.get('chat_with') ? [{id: 'c-cmo', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:cmo']}] : []});
     if (p === '/api/v2/conversations/c-cmo/snapshot') return json({messages: CHAT});
     if (p === '/api/v2/bots/cmo/tools') return json({bot: 'cmo', tools: TOOLS, computer: 'Test Mac', online: true, reported_at: null});
+    // A sidebar with one pinned page between Tasks and Updates (GET task-tabs and the place's pins), when asked.
+    if (data.pin && p === '/api/v2/bots/cmo/task-tabs') return json({bot: 'cmo', saved: true, personal: false, can_edit: false,
+      tabs: [['needs', 'Needs you'], ['active', 'Open'], ['blocked', 'Waiting'], ['done', 'Done recently']].map(([builtin, name]) => ({builtin, name})),
+      widgets: ['tasks', 'page:p1', 'updates', 'files'].map(id => ({id, hidden: false, height: null}))});
+    if (data.pin && decodeURIComponent(p) === '/api/v2/places/bot:cmo') return json({place: 'bot:cmo', kind: 'bot', saved: true, can_edit: false,
+      pins: [{id: 'pin1', item: 'page:p1', position: 0, size: 'medium', page: {file_id: 'p1', title: 'Launch plan', bot: 'cmo', updated_at: iso(-hour), archived: false}}]});
     if (p === '/api/v2/bots/cmo/files') {
       const limit = Number(q.get('limit'));
       return json({bot: 'cmo', files: files.slice(0, limit), total: files.length, next_cursor: files.length > limit ? 'next' : null, has_more: files.length > limit, can_manage: true, actors: {}});
@@ -159,6 +165,30 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
     }
 
     {
+      // AC-14: at 1440x900, three one-line tasks, one pinned page, Updates as two bullets and 3 files all fit without
+      // scrolling the rail.
+      const {page, errors, context} = await open(browser, {width: 1440, height: 900}, {colorScheme: 'light'}, {pin: true});
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      await page.locator('#t-open .tk-row').first().waitFor();
+      await page.locator('#bot-files .bf-row').first().waitFor();
+      await page.locator('#bot-latest:not([hidden])').waitFor();
+      await page.locator('#pane-tasks .bot-w[data-widget="page:p1"] a.pg-open').waitFor();
+      assert.deepEqual(await page.evaluate(() => [...(document.querySelectorAll('#pane-tasks>.bot-w') as unknown as HTMLElement[])].filter(w => w.offsetParent).map(w => w.dataset.widget)),
+        ['tasks', 'page:p1', 'updates', 'files'], 'AC-14: the four sections, the pin second');
+      const fit = await page.evaluate(() => {
+        const rail = document.querySelector('#pane-tasks') as HTMLElement, files = document.querySelector('#bot-files') as HTMLElement;
+        const box = rail.getBoundingClientRect();
+        return {scrolls: rail.scrollHeight > rail.clientHeight + 1, filesInside: files.getBoundingClientRect().bottom <= box.bottom + 1,
+          tasks: document.querySelectorAll('#t-open .tk-row').length, bullets: document.querySelectorAll('#bot-latest .upd-body li').length,
+          files: document.querySelectorAll('#bot-files .bf-row').length};
+      });
+      assert.deepEqual(fit, {scrolls: false, filesInside: true, tasks: 3, bullets: 2, files: 3}, 'AC-14: all four sections fit at 1440x900');
+      if (shots) await page.locator('#pane-tasks').screenshot({path: path.join(shots, 'bot-rail-1440.png')});
+      assert.deepEqual(errors, [], 'AC-14: page errors');
+      await context.close();
+    }
+
+    {
       const scheme = 'dark';
       const {page, errors, read, context} = await open(browser, {width: 1440, height: 900}, {colorScheme: scheme});
       await page.goto('https://tico-ui.test/#/bot/cmo');
@@ -172,21 +202,29 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       assert.equal(await page.locator('#bot-history-btn').count(), 0, 'all updates is in the rail now');
       // Updates: its age, and a quiet way to all of them; showing it there reads it.
       assert.match(await page.locator('#bot-latest .rail-age').innerText(), /10h ago/);
-      assert.equal(await page.locator('#bot-latest a.rail-ico').getAttribute('href'), '#/bot/cmo/history');
+      // No icon in the header, which is not a link; "All updates" sits under the text, beside More.
+      assert.equal(await page.locator('#bot-latest .rail-head :is(a, .nav-icon, .rail-ico)').count(), 0, 'Updates: a plain header');
+      assert.equal(await page.locator('#bot-latest .rail-foot [data-latest-all]').innerText(), 'All updates');
+      assert.equal(await page.locator('#bot-latest [data-latest-all]').getAttribute('href'), '#/bot/cmo/history');
       assert.match(await page.locator('#bot-latest .upd-body').innerText(), /two headline options/);
       for (const end = Date.now() + t(10000); !read.includes('u1') && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
       assert.deepEqual(read, ['u1'], 'the latest update counts as read once the rail shows it');
-      // Files: names only, three of them, and a small "+2" for the rest.
+      // Files: three rows, each a mark and a name, and "2 more" for the rest.
       assert.equal(await page.locator('#bot-files .bf-row').count(), 3);
-      assert.equal(await page.locator('#bot-files .nav-icon').count(), 0, 'no icon before a name');
-      assert.equal((await page.locator('#bot-files [data-bf-all]').innerText()).trim(), '+2');
+      assert.equal(await page.locator('#bot-files .bf-row .bf-mark').count(), 3, 'a mark before each name');
+      assert.equal((await page.locator('#bot-files [data-bf-all]').innerText()).trim(), '2 more');
       // No routines on the rail: they are Automations now.
       assert.equal(await page.locator('#bot-recurring').count(), 0);
       // Assigned to others is a tab now, not a folded section; Done recently is a tab that stays closed.
       assert.equal(await page.locator('#bot-assigned').count(), 0);
       assert.equal(await page.locator('#pane-tasks .bot-done').isHidden(), true);
       // The top line keeps no tool icons; the Tools card under More lists them.
-      assert.equal(await page.locator('.bot-nameline .rt').count(), 1);
+      // The title is the name alone: no harness or provider mark beside it (#299).
+      assert.equal(await page.locator('.rt').count(), 0, 'no harness mark anywhere on the page');
+      assert.equal((await page.locator('.bot-nameline h1').innerText()).trim(), 'AI CMO');
+      // A bot with a harness still leaves the model out of the tool strip.
+      await page.locator('#bot-tool-strip .bts-icon').first().waitFor({state: 'attached'});
+      assert.equal(await page.locator('#bot-tool-strip [data-tool="model"]').count(), 0, 'the strip leaves the model out');
       assert.equal(await page.locator('#bot-tool-strip').isVisible(), false, 'no tool icons in the top line');
       await page.goto('https://tico-ui.test/#/bot/cmo/tools');
       const list = page.locator('#bot-tools');
@@ -398,6 +436,30 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       await page.locator('#bot-alert .bot-cant-run').waitFor();
       assert.equal(await page.locator('#bot-alert button, #bot-alert a').count(), 0);
       assert.deepEqual(errors, [], "can't run, no fix errors");
+      await context.close();
+      // #411: a bot being made on a task, waiting on the viewer's answer there: the one button opens that task.
+      const making = {id: 'add-cmo', title: 'Add AI CMO'}, asked = 'OK to start its cloud machine?';
+      ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: {bot: 'cmo', state: 'idle', bot_state: 'planned'},
+        cantRun: {cause: 'AI CMO is waiting for your answer', fix: 'open_ask', task: making, ask: {kind: 'answer', mine: true, line: asked}}}));
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      await page.locator('#bot-alert .bot-cant-run').waitFor();
+      const answer = page.locator('#bot-alert a');
+      assert.equal(await answer.count(), 1);
+      assert.equal(await answer.innerText(), 'Answer');
+      assert.equal(await answer.getAttribute('href'), '#/task/add-cmo');
+      assert.equal(await answer.getAttribute('title'), asked);
+      assert.deepEqual(errors, [], "can't run, ask errors");
+      await context.close();
+      // Nothing is the viewer's to do: the task is a plain link, and no Finish setup button opens the Info tab.
+      ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: {bot: 'cmo', state: 'idle', bot_state: 'planned'},
+        cantRun: {cause: 'BotOps is still setting up AI CMO', fix: null, task: making}}));
+      await page.goto('https://tico-ui.test/#/bot/cmo');
+      await page.locator('#bot-alert .bot-cant-run').waitFor();
+      assert.equal(await page.locator('#bot-alert button, #bot-alert a.primary').count(), 0);
+      assert.equal(await page.locator('#bot-alert a[data-bot-making]').getAttribute('href'), '#/task/add-cmo');
+      assert.equal(await page.locator('#bot-alert a[data-bot-making]').innerText(), 'Add AI CMO');
+      assert.equal(await page.locator('#bot-alert a[href$="/info"]').count(), 0);
+      assert.deepEqual(errors, [], "can't run, making errors");
       await context.close();
     }
     console.log('bot page: Tasks, Updates and Files; tools open under More; desktop and phone navigation; quarantine says why and when it resumes; Resume bot beside the warning and under More; Try now on a usage limit; a last run that ended unfinished says why');

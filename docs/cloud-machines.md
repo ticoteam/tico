@@ -257,6 +257,16 @@ The runner knows it is on a cloud machine by the marker `/etc/tico/cloud-machine
 user), which the base step writes. Machines made before Tico models ran here have it too, so they take Tico models, and
 keep their own harnesses current ([What's on a machine](#whats-on-a-machine)), once their runner updates.
 
+Each harness process on a cloud machine runs in a systemd scope of its own (`tico-turn-<attempt>-<pid>.scope`, under
+the user's manager, bound to the runner's unit) with a memory and CPU ceiling: at most max(4 GiB, 60% of RAM) and never
+over 90% of RAM, no swap, and 75% of the cores. A turn that goes past its memory is killed with everything it started,
+and fails with "This turn used more than N GB of memory and was stopped" (category `turn_memory_limit`); the runner
+and the other turns go on, and the kernel picks a turn before the runner when the machine as a whole runs short.
+`TICO_TURN_MEMORY_MAX` (`12G`, `70%`) and `TICO_TURN_CPU_QUOTA` (`400%`, `0` for none) in the runner's environment
+change the ceiling, and `TICO_TURN_LIMITS=0` turns it off. When the scope cannot be made, the runner logs
+`turn_limits_unavailable` once and turns run without limits, as they do on every other computer
+(runner-rs/src/turn_limits.rs).
+
 ## What's on a machine
 
 The base step (below) installs these, so every machine made from the snapshot has them:

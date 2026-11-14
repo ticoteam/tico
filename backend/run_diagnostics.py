@@ -18,6 +18,15 @@ CAP_EVENT = 'attempt.max-run-cap'
 RESTART_TEXT = 'Runner restarted during execution'
 CLEAN_STOP = 'Runner stopped during execution'
 HANDED_BACK = 'Its computer handed the run back before starting it'
+# A run its computer claimed and then went silent on: never started, never renewed its lease, never handed it back
+# (Tico Team, Nov 12: the shared machine did this to Performance Owner ~344 times in a day). Its expiry saves this as
+# the run's final_text (execution.expire), as hand_back saves HANDED_BACK.
+LAPSED = 'Its computer took the run and never started it, renewed its lease or handed it back'
+# Why a run never started, as one word for logs and events: told apart by the text above (run_diagnostics.reason,
+# execution.handed_back_until).
+UNSTARTED_CATEGORIES = {HANDED_BACK: 'handed_back', LAPSED: 'lapsed_unstarted'}
+# A silent lapse as Runs says it: the computer by its name, so a person sees which machine to look at.
+LAPSED_NAMED = '{computer} took it and never started it'
 
 
 def clean_stop_reported(c, attempt_id):
@@ -162,9 +171,16 @@ def reason(c, row: AttemptRow, outcome, summary=''):
         ).fetchone()
         if capped:
             return scrub(json.loads(capped[0]).get('reason') or 'Ended by the server')[:500]
+        if not row['started_at'] and row['final_text'] == LAPSED + '.':
+            found = c.execute('SELECT label FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            return scrub(LAPSED_NAMED.format(computer=found['label'])) if found and found['label'] else LAPSED
         if not row['started_at'] and row['final_text'] == HANDED_BACK + '.':
             return HANDED_BACK
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
+    if row['state'] == 'failed' and not row['started_at'] and row['final_text'] and not row['result']:
+        # Failed by the server before its computer started it (execution.expire, settle_unstarted, after
+        # PRE_START_TRIES or start_holds.SAME): the text it saved says why, where a fallback would say a process failed.
+        return scrub(row['final_text'])[:500]
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
     events = c.execute(
         "SELECT kind,payload FROM attempt_events WHERE attempt_id=? "

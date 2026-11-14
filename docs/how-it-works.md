@@ -215,9 +215,8 @@ Mac that runs it (`~/tico-work` on Ana's Mac). The contract (`templates/employee
 
 | File | What |
 |---|---|
-| `AGENT.md` (with `AGENTS.md`/`CLAUDE.md` pointing at it) | its instructions, what it owns, how it starts and ends a run; read every run |
+| `AGENTS.md` (with `CLAUDE.md` pointing at it in the generic template) | its instructions, what it owns, how it starts and ends a run; loaded every run. A repository still on `AGENT.md` is moved to `AGENTS.md` by the runner on the bot's next turn |
 | `bot.yaml` | `name`, `runtime`, `model`, `reasoning_effort`, `max_run_minutes`, `tools:` (`routines:` only in a template, as the seed) |
-| `state.md` | current focus, open threads, next step |
 | `memory/learnings.md`, `memory/decisions.md` | how to do the job; dated decisions |
 | `knowledge/` | what is true in its domain, one topic per file, dated sources |
 | `playbooks/` | repeatable methods; a routine's text is usually one of these |
@@ -243,7 +242,7 @@ change) or on a server from before it, the runner polls as it always did until t
 and picks up from the last event it saw.
 
 **You send a message or file a task.** hub.acme.example saves it and queues a job for the bot. The bot's
-runner hears of it on its event stream and claims it, does one run (prompt = `AGENT.md`, the thread, the task,
+runner hears of it on its event stream and claims it, does one run (prompt = `AGENTS.md`, the thread, the task,
 your message and attachments), and streams the reply back. The thread shows *Saved — queued*,
 *Starting*, *Working*, then the reply. Closing the browser changes nothing.
 
@@ -605,7 +604,7 @@ in Done can be reopened with a note ([Done, closed and reopen](tasks.md#done-clo
 listed under **Settings → History → Runs** and on the bot's **More** tab.
 
 **You change a bot's Instructions.** Open **Bot → More → Instructions → Edit Instructions**
-and ask BotOps to make the change. It commits and pushes the update for the next run. For a manual edit, change `AGENT.md` (or a playbook, `memory/`, `knowledge/`) in
+and ask BotOps to make the change. It commits and pushes the update for the next run. For a manual edit, change `AGENTS.md` (or a playbook, `memory/`, `knowledge/`) in
 `bot-<slug>` and commit. The runner reads the checkout on its Mac at the start of every run, so
 the change is live on the next run once that checkout has it: push, and pull on the runner Mac
 if you edited elsewhere. Do not edit while the bot is running there.
@@ -653,9 +652,11 @@ Starting the server gives each bot without a profile one by its name once: `*-mo
 `sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `reviewer` that
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
 another platform Responders; BotOps, the General Manager and the Librarian Custom; everything else a Doer.
-Each owner gets one notice naming their bots and profiles. The old wake preset is part of the profile: Token saver became a
-Doer with a 30-minute window and Performance a Doer; `wake_preset` and `POST /api/v2/bots/{bot}/wake-preset` still read and
-set that window. **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,
+Each owner gets one notice naming their bots and profiles. The wake presets (Token saver, Performance) are gone, and
+profiles have no wake numbers: every bot's nonblocking notices wait 5 minutes, one wake per conversation (a Lead's wait
+for its digest hour), and a routine's next run starts at least 15 minutes after its last one. A scheduled routine can
+wait for a warm session: released when its bot has been idle 45 to 55 minutes, up to the hours its settings say, then
+run cold or skipped (`backend/wake_presets.py`). **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,
 a Responder with tasks, and a Doer whose runs for a week all did nothing.
 
 ## Calling the API from a script

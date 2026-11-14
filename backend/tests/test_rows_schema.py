@@ -12,6 +12,8 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.GrowthCustomerRow: "growth_customers",
+    rows.GrowthCustomerLoadRow: "growth_customer_loads",
     rows.ListeningSourceRow: "listening_sources",
     rows.ListeningItemRow: "listening_items",
     rows.FactoryRow: "factories",
@@ -118,6 +120,7 @@ TABLES = {
     rows.RequirementRow: "requirements",
     rows.AnswerRow: "answers",
     rows.SnoozeRow: "snoozes",
+    rows.IdeaCheckRow: "idea_checks",
     rows.OkGrantRow: "ok_grants",
     rows.RunStartRow: "run_starts",
     rows.OkShownRow: "ok_shown",
@@ -389,7 +392,9 @@ UNTYPED = frozenset(
         "granola_connections",
         "growth_channels",
         "growth_cohorts",
+        "growth_origins",
         "growth_settings",
+        "growth_sync_runs",
         "gtm_sources",
         "health_findings",
         "health_reports",
@@ -410,6 +415,8 @@ UNTYPED = frozenset(
         "kpi_readings",
         "kpis",
         "learned_entries",
+        "assistant_shares",
+        "assistant_share_settings",
         "learning_cursors",
         "learning_deliveries",
         "learning_items",
@@ -475,6 +482,7 @@ UNTYPED = frozenset(
         "oidc_codes",
         "oidc_sessions",
         "org_rule_holds",
+        "org_rule_late",
         "org_rule_verdicts",
         "org_rules",
         "org_turn_waits",

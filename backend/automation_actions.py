@@ -472,18 +472,47 @@ def _note(c, auto, run_id, args, values):
     return {"ok": ok, "detail": detail}
 
 
+def release_of(c, auto, run_id):
+    """The release policy a scheduled routine's run carries to its bot (backend/wake_presets.py), from the routine's
+    settings (`flow.release`, automation_flow._check_release): Wait for a warm session up to N hours, Run cold or Skip at
+    the deadline, a Fresh session or one continuing the bot's latest. A routine without settings starts at its time
+    (wait 0) and still keeps the repeat guard. None for a run that is not a schedule's, and for a manual run, which
+    starts at once."""
+    from . import wake_presets as W
+
+    if (auto["flow"].get("trigger") or {}).get("type") != "schedule":
+        return None
+    run = c.execute("SELECT trigger_ref FROM automation_runs WHERE id=?", (run_id,)).fetchone() if run_id else None
+    if run and run["trigger_ref"] == "manual":
+        return None
+    given = auto["flow"].get("release") or {}
+    hours = given.get("wait_hours", 0)
+    return W.policy(
+        wait=int(round(float(hours) * 3600)) if isinstance(hours, (int, float)) and not isinstance(hours, bool) else 0,
+        warm=given.get("warm") is True,
+        deadline=W.SKIP if given.get("deadline") == "skip" else W.RUN,
+        session=W.FORK if given.get("session") == "continue" else W.FRESH,
+    )
+
+
 def _wake_bot(c, auto, run_id, args, values):
     bot = R._slug(args.get("bot")) or _owner_bot(c, auto)
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     text = _text(args, "text", "prompt") or f"Automation {auto['flow'].get('name')}: take a look."
     task = task_of(c, auto, values)
     room = _told(c, auto, bot)
+    release = release_of(c, auto, run_id)
     ok, detail = R._tell_bot(
         c,
         "automation:" + auto["id"],
         bot,
         text,
-        {"automation": auto["id"], "automation_run": run_id, **_chain_refs(auto)},
+        {
+            "automation": auto["id"],
+            "automation_run": run_id,
+            **_chain_refs(auto),
+            **({"release": release} if release else {}),
+        },
         wake=True,
         task=task,
         room=room,
@@ -664,6 +693,9 @@ def start_turn(
     from . import bookkeeper
 
     where = bookkeeper.filing(c, H.bot_actor(bot))
+    # A scheduled run waits as the routine's settings say (backend/wake_presets.py); its wake names the routine, which
+    # the repeat guard reads.
+    release = release_of(c, auto, run_id)
     task = H.task_create(
         c,
         actor,
@@ -687,6 +719,7 @@ def start_turn(
             "automation_step": step_id,
             "automation_key": str(key),
             **_chain_refs(auto),
+            **({"release": release, "automation": auto["id"]} if release else {}),
         },
     )
     if run_model:
@@ -695,7 +728,12 @@ def start_turn(
             c,
             actor,
             task["id"],
-            task_run_models.stamped(run_model["model"], run_model.get("effort"), run_model.get("harness")),
+            task_run_models.stamped(
+                run_model.get("model") or "",
+                run_model.get("effort"),
+                run_model.get("harness"),
+                run_model.get("compact_at"),
+            ),
             note=f"Set by routine step {step_id}",
         )
     # The wake names its task; the turn's end finds the run by it (backend/automations.py `turn_done`).

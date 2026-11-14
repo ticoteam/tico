@@ -990,10 +990,11 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     // A recording problem worth knowing about, in plain words; closing it keeps it closed.
     const notice = st.notice && rec ? `<div class="dock-notice" role="status">${icon('alert', 14)}<span class="grow">${esc(st.notice)}</span><button class="icon-btn" data-act="dismiss-notice" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>` : '';
     const speakerPermission = st.speaker_permission && rec ? `<div class="dock-notice" role="status"><span class="grow">Allow Accessibility to show who's speaking</span><button class="link" data-act="allow-speaker-names">Allow</button><button class="icon-btn" data-act="dismiss-speaker-names" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>` : '';
+    const speakerTab = st.speaker_tab && rec ? `<div class="dock-notice" role="status"><span class="grow">Bring the ${esc(st.speaker_tab)} tab to the front to show who's speaking</span></div>` : '';
     const toast = foot ? `<div class="toast">${esc(foot)}</div>` : '';
-    if (!bar && !notice && !toast && !speakerPermission) return '';
+    if (!bar && !notice && !toast && !speakerPermission && !speakerTab) return '';
     const style = side === 'left' ? `style="right:${S.ui.hideSide ? 0 : 'min(400px, 46%)'}"` : '';
-    return `<div class="dock ${side}" ${style}>${speakerPermission}${notice}${toast}${bar}</div>`;
+    return `<div class="dock ${side}" ${style}>${speakerPermission}${speakerTab}${notice}${toast}${bar}</div>`;
   }
 
   // ---- Share live: nothing reaches Tico until Share live or Copy link ----
@@ -1247,7 +1248,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     html += line('Microphone', `<select class="field" data-model="form.microphone">${mics.map((name) => `<option value="${esc(name)}" ${name === f.microphone ? 'selected' : ''}>${esc(name || 'System default')}</option>`).join('')}</select>`);
     html += line('Also record meeting audio', toggle('meeting_audio', f.meeting_audio));
     // macOS only: Meet names need Accessibility, asked for here rather than at launch.
-    if (st.speaker_access != null && f.meeting_audio) html += line('Meet speaker names', st.speaker_access ? '<span class="faint">On</span>' : `<button class="btn small" data-act="allow-speaker-names">Allow</button>`);
+    if (st.speaker_access != null && f.meeting_audio) html += line('Speaker names', st.speaker_access ? '<span class="faint">On</span>' : `<button class="btn small" data-act="allow-speaker-names">Allow</button>`);
     html += `</div></div>`;
     // Updates: version, Check for updates, Move to Applications (update.ts).
     html += window.ticoUpdateRow?.(st.update) || '';

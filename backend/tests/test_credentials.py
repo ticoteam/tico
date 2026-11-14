@@ -493,3 +493,33 @@ def test_a_bot_lists_only_the_names_of_what_it_is_granted(api):
     assert body['can_manage'] is False and body['people'] == [] and body['bots'] == []
     as_bot(api, 'cpo')  # a bot granted nothing sees nothing
     assert api.get('/api/v2/credentials', headers=headers('cpo-test')).json()['credentials'] == []
+
+
+def test_a_website_login_is_sealed_and_never_in_a_table_or_the_inventory(api):
+    """A website tool's account (kind 'login', backend/website_tools.py): its password and 2FA key are in the sealed
+    value only, the list leaves it out for a person and a bot, and the old routes refuse to change or share it."""
+    from backend.tests.helpers.automation_api import as_bot
+
+    setup(api)
+    password, key = 'canary-login-password-7c41d2', 'KRUGS4ZANFZSAYJAMNQW4YLSPEQGWZLZEBTG64RAORSXG5DT'
+    tid = post(api, 'website-tools', {'sites': ['bank.acme.example']})['id']
+    aid = post(
+        api, f'website-tools/{tid}/accounts', {'username': 'ops@acme.example', 'password': password, 'totp': key}
+    )['id']
+    shared = api.put(f'/api/v2/website-tools/{tid}/accounts/{aid}/access/bot:ops', json={'on': True}, headers=headers())
+    assert shared.status_code == 200, shared.text
+    with api.app.state.store.read() as c:
+        row = c.execute('SELECT kind,env,preview,has_totp,ciphertext FROM credentials WHERE id=?', (aid,)).fetchone()
+        assert (row['kind'], row['env'], row['preview'], row['has_totp']) == ('login', '', '', 1)
+        assert isinstance(row['ciphertext'], bytes)
+        for table in ('credentials', 'events', 'idempotency', 'tool_calls', 'messages'):
+            dump = str([tuple(r) for r in c.execute(f'SELECT * FROM {table}')])
+            assert password not in dump and key not in dump and key.lower() not in dump, table
+    assert aid not in json.dumps(get(api, 'credentials'))
+    as_bot(api, 'ops')
+    assert aid not in api.get('/api/v2/credentials', headers=headers('ops-test')).text
+    assert (
+        post(api, f'credentials/{aid}', {'name': 'x', 'secret': 'y'}, expected=409)['error']['code']
+        == 'website_account'
+    )
+    assert post(api, f'credentials/{aid}/reveal', {})['value'] == password  # a signed-in administrator: the password

@@ -1,12 +1,11 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 20 minutes. The outcome is five recorded answers, a first onboarding board from the
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 20 minutes. The outcome is five recorded answers, a first onboarding board from the
 customers in onboarding today, and the first routine checked.
 
 Inputs: the task, `tico team show`, the open tasks, the kickoff calls, and the CRM closed-won deals in your access.
 
-Done when: the five answers are in `state.md`, the milestones file and the first board are on the task, the routine is checked, and `tico bot setup-done` has run.
+Done when: the five answers are in `knowledge/`, the milestones file and the first board are on the task, the routine is checked, and `tico bot setup-done` has run.
 
 ---
 
@@ -35,7 +34,7 @@ Numbered, each with its one-line why, offering the defaults so a human can answe
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/milestones.md`: the
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/milestones.md`: the
 milestones in order, first value, target durations, the stuck rule and the owner.
 
 ## 5. Produce the first result now
@@ -50,7 +49,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will update this board every Monday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

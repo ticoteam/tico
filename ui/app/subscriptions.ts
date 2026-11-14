@@ -1,6 +1,7 @@
-/* ui/app/subscriptions.ts — the company's subscriptions (Settings > Models) and which one each computer runs each AI
-   tool on (Settings > Computers). A subscription is a saved plan login or API key, sealed on the server; a computer
-   holds at most one per AI tool, and every bot on that computer uses it. Bots never pick one.
+/* ui/app/subscriptions.ts — the company's subscriptions (Settings > Models), grouped by owner, and which one each
+   computer runs each AI tool on (Settings > Computers). A subscription is a saved plan login or API key, sealed on the
+   server; a computer holds one per AI tool, or one person's plans for it (used in turn: the soonest weekly reset with
+   usage left, the next when it is spent), and every bot on that computer uses it. Bots never pick one.
    Routes: /v2/model-subscriptions and /v2/computer-subscriptions (backend/model_subscriptions.py).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -9,12 +10,19 @@
 type SubsListAnswer = Partial<import('../types/api').ModelSubscriptionList> & {connect?: string[]; error?: unknown};
 // A kind: the server's rows, or SUBS_KINDS when it sends none.
 interface SubsKindRow {kind: string; label: string; runtime: string; secret_label?: string; owned?: boolean; connect?: boolean; help?: string}
-interface SubsUsage {used_pct?: number | null; resets_at?: string | null; window?: string | null; reason?: string | null; cost_usd_month?: number | null}
+interface SubsUsage {used_pct?: number | null; resets_at?: string | null; window?: string | null; reason?: string | null; cost_usd_month?: number | null; weekly_resets_at?: string | null}
 // A computer as the server names it: {runner_id, label}, or a bare runner id.
 type SubsComputer = string | {runner_id: string; label?: string};
-interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null}
-interface SubsAssignment {runner_id: string; runtime: string; subscription_id: string}
-interface SubsState {rows: SubsRow[]; kinds: SubsKindRow[]; connect: string[] | null; assignments: SubsAssignment[]; capable: string[] | null; listed: boolean; error: string; loaded: boolean; pending: Promise<void> | null}
+// `order`: where a plan comes in its owner's plans for its tool (the plan in use first, then the pick order; null when
+// held or waiting to be reconnected). `in_use_on`: the computers whose turns sign in with it now.
+interface SubsRow {id: string; name: string; kind: string; label?: string; runtime?: string; owner_id?: string; owner_name?: string; computers?: SubsComputer[]; status?: string; status_detail?: string; usage?: SubsUsage | null; order?: number | null; in_use_on?: string[]}
+// A computer given a person's plans: the plan in use (`on`) and why (backend model_subscriptions.set_state).
+interface SubsSetWhy {kind: 'soonest' | 'held' | 'reconnect' | 'all_held' | 'none' | string; plan?: string | null; until?: string | null}
+interface SubsSet {person: string; person_name: string; plans: number; on: string | null; on_name: string | null; why: SubsSetWhy}
+interface SubsAssignment {runner_id: string; runtime: string; subscription_id: string; person?: string; set?: SubsSet | null}
+// A person who owns plans: how many per AI tool.
+interface SubsOwner {id: string; name: string; [runtime: string]: string | number | undefined}
+interface SubsState {rows: SubsRow[]; kinds: SubsKindRow[]; connect: string[] | null; assignments: SubsAssignment[]; capable: string[] | null; people: SubsOwner[]; listed: boolean; error: string; loaded: boolean; pending: Promise<void> | null}
 // A refusal's extra facts; `detail` is the message (an object with the count on an older server).
 interface SubsProblem {code?: unknown; running?: unknown; detail?: unknown}
 // A computer on Settings > Computers, with what its Tico says about each AI tool's sign-in.
@@ -40,7 +48,7 @@ function subsSettle(form: Element) {
 // ---- what the server holds
 // `listed`: the server has the routes (an older one answers neither). `capable`: the computers whose Tico can take a
 // subscription; null when the server does not say.
-const SUBS: SubsState = {rows: [], kinds: [], connect: null, assignments: [], capable: null, listed: false, error: '', loaded: false, pending: null};
+const SUBS: SubsState = {rows: [], kinds: [], connect: null, assignments: [], capable: null, people: [], listed: false, error: '', loaded: false, pending: null};
 // The kinds, in the server's order, when it sends none.
 const SUBS_KINDS: [SubsKindRow, ...SubsKindRow[]] = [
   {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', owned: true},
@@ -55,8 +63,10 @@ const subsRuntime = (sub: SubsRow) => sub?.runtime || subsKind(sub?.kind).runtim
 // The AI tools a subscription can be given to, in the kinds' order (Claude Code, then Codex).
 const subsTools = () => [...new Set((SUBS.kinds.length ? SUBS.kinds : SUBS_KINDS).map(row => row.runtime).filter(Boolean))];
 const subsById = (id: string | null | undefined) => SUBS.rows.find(row => row.id === id);
-// The subscription a computer runs a tool on, or null.
-const subsAssigned = (runner: string, runtime: string) => subsById(SUBS.assignments.find(row => row.runner_id === runner && row.runtime === runtime)?.subscription_id);
+// What a computer is given for a tool: its row (one subscription, or a person's plans), or undefined.
+const subsAssignment = (runner: string, runtime: string) => SUBS.assignments.find(row => row.runner_id === runner && row.runtime === runtime);
+// The subscription a computer runs a tool on now, or null (for a person's plans, the one in use).
+const subsAssigned = (runner: string, runtime: string) => subsById(subsAssignment(runner, runtime)?.subscription_id);
 // Subscriptions can be given to computers: the server says which computers can take one.
 const subsComputersReady = () => SUBS.listed && Array.isArray(SUBS.capable);
 const subsMayEdit = () => settingsIsAdmin();
@@ -67,14 +77,15 @@ async function subsLoad() {
   if (SUBS.pending) return SUBS.pending;
   SUBS.pending = Promise.all([
     get<SubsListAnswer>('/v2/model-subscriptions', {fresh: true}).catch((error: unknown): SubsListAnswer => ({error})),
-    get<import('../types/api').ComputerSubscriptionList>('/v2/computer-subscriptions', {fresh: true}).catch(() => null)
+    get<import('../types/api').ComputerSubscriptionList & {people?: SubsOwner[]}>('/v2/computer-subscriptions', {fresh: true}).catch(() => null)
   ]).then(([list, view]) => {
     SUBS.listed = Array.isArray(list?.subscriptions);
     SUBS.error = list?.error instanceof Error ? list.error.message : '';
     SUBS.rows = SUBS.listed ? list.subscriptions! : [];
     SUBS.kinds = Array.isArray(list?.kinds) && list.kinds.length ? list.kinds : SUBS_KINDS;
     SUBS.connect = Array.isArray(list?.connect) ? list.connect : null;
-    SUBS.assignments = Array.isArray(view?.assignments) ? view.assignments : [];
+    SUBS.assignments = Array.isArray(view?.assignments) ? view.assignments as SubsAssignment[] : [];
+    SUBS.people = Array.isArray(view?.people) ? view.people : [];
     SUBS.capable = Array.isArray(view?.capable) ? view.capable : null;
     SUBS.loaded = true;
   }).finally(() => { SUBS.pending = null; });
@@ -87,63 +98,90 @@ const subsPlural = (n: number, one: string, many = one + 's') => `${n} ${n === 1
 const subsStopWords = (n: number) => `${subsPlural(n, 'running task')} ${n === 1 ? 'stops and restarts' : 'stop and restart'}`;
 
 // ---- Settings > Models > Subscriptions
-// Usage: the share used in the plan's window, a small bar, and the time until it resets ("4d 15h"); the share left and
-// the reset time in the tooltip. An API key shows the month's spend.
-function subsResetIn(iso: string | null | undefined) {
+// Usage: what is left of the plan's tighter window (the server's reading is its most-used one, 5-hour or week), a bar
+// of that share, and the hours until it resets ("62% left · resets in 98h"); the window and the reset time in the
+// tooltip. A plan with no reading says so, with the server's reason in the tooltip. An API key shows the month's spend.
+// Computers never show here: only on the count (subsCountHTML).
+function subsHoursUntil(iso: string | null | undefined) {
   const ms = Date.parse(iso || '') - Date.now();
   if (!(ms > 0)) return '';
-  const m = Math.max(1, Math.round(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60);
-  return d ? `${d}d${h ? ` ${h}h` : ''}` : h ? `${h}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`;
+  return ms >= 3600e3 ? `${Math.round(ms / 3600e3)}h` : `${Math.max(1, Math.round(ms / 60000))}m`;
 }
 function subsUsageHTML(sub: SubsRow) {
   const usage: SubsUsage = sub.usage || {};
   if (typeof usage.used_pct === 'number') {
-    const used = Math.max(0, Math.min(100, Math.round(usage.used_pct)));
-    const resetIn = subsResetIn(usage.resets_at);
-    const at = resetIn ? new Date(usage.resets_at!).toLocaleString(undefined, {weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}) : '';
-    const words = [`${used}% used${usage.window ? ` in the ${usage.window === 'week' ? 'week' : usage.window + ' window'}` : ''}`,
-      `${100 - used}% left`, at ? `resets ${at}` : ''].filter(Boolean).join(' · ');
-    const level = used >= 95 ? ' bad' : used >= 80 ? ' warn' : '';
-    return `<span class="subs-usage" title="${esc(words)}">${usage.window ? `<span class="subs-usage-w">${esc(usage.window)}</span>` : ''}<span class="subs-bar${level}" aria-hidden="true"><b style="width:${used}%"></b></span><span class="tnum">${used}%</span><span class="sr-only"> used</span>${resetIn ? `<span class="subs-reset tnum"><span class="sr-only">resets in </span>${esc(resetIn)}</span>` : ''}</span>`;
+    const left = 100 - Math.max(0, Math.min(100, Math.round(usage.used_pct)));
+    const resetIn = subsHoursUntil(usage.resets_at);
+    const at = resetIn ? new Date(usage.resets_at!).toLocaleString(undefined, {weekday: 'short', hour: 'numeric', minute: '2-digit'}) : '';
+    const window = usage.window === 'week' ? 'Week' : usage.window === '5h' ? '5-hour window' : '';
+    const words = [`${window ? `${window}: ` : ''}${left}% left`, at ? `resets ${at} (in ${resetIn})` : ''].filter(Boolean).join(' · ');
+    const level = left <= 5 ? ' bad' : left <= 20 ? ' warn' : '';
+    return `<span class="subs-usage" title="${esc(words)}">${usage.window ? `<span class="subs-usage-w">${esc(usage.window)}</span>` : ''}<span class="subs-bar${level}" aria-hidden="true"><b style="width:${left}%"></b></span><span class="subs-left tnum">${left}% left</span>${resetIn ? `<span class="subs-reset tnum">resets in ${esc(resetIn)}</span>` : ''}</span>`;
   }
-  if (usage.reason) return `<span class="subs-usage muted">${esc(usage.reason)}</span>`;
   if (typeof usage.cost_usd_month === 'number') {
     const cost = usage.cost_usd_month >= 100 ? Math.round(usage.cost_usd_month).toLocaleString() : usage.cost_usd_month.toFixed(2).replace(/\.00$/, '');
     return `<span class="subs-usage tnum">$${esc(cost)} this month</span>`;
   }
+  if (usage.reason || subsOwned(sub.kind)) return `<span class="subs-usage muted subs-none"${usage.reason ? ` title="${esc(usage.reason)}"` : ''}>No reading yet</span>`;
   return '';
 }
+// The plan's own state, which stops any reading: its sign-in expired.
 function subsStatusHTML(sub: SubsRow) {
-  if (sub.status === 'needs_reconnect') {
-    const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
-    return subsMayEdit() ? `<span class="subs-diagnosis">Sign-in expired</span> <button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Sign in again</button>`
-      : `<span class="pill waiting"${title}>Sign-in expired. Ask an admin to sign in again.</span>`;
+  if (sub.status !== 'needs_reconnect') return '';
+  const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
+  return subsMayEdit() ? `<span class="subs-diagnosis">Sign-in expired</span> <button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Sign in again</button>`
+    : `<span class="pill waiting"${title}>Sign-in expired. Ask an admin to sign in again.</span>`;
+}
+// A short day and time ("Fri 09:00") for a hold's end.
+const subsWhen = (iso: string | null | undefined) => {
+  const at = Date.parse(iso || '');
+  return Number.isFinite(at) ? new Date(at).toLocaleString(undefined, {weekday: 'short', hour: '2-digit', minute: '2-digit'}) : '';
+};
+// The computers a subscription is given to: directly, or (a plan) through its owner's plans for its tool, so a person's
+// next or held plan counts the computers its set is on.
+function subsComputers(sub: SubsRow): SubsComputer[] {
+  const found = new Map<string, SubsComputer>();
+  for (const c of sub.computers || []) found.set(typeof c === 'string' ? c : c.runner_id, c);
+  if (subsOwned(sub.kind) && sub.owner_id) {
+    for (const a of SUBS.assignments) if (a.person === sub.owner_id && a.runtime === subsRuntime(sub) && !found.has(a.runner_id)) found.set(a.runner_id, a.runner_id);
   }
-  const computers = sub.computers || [];
-  if (!computers.length && subsOwned(sub.kind)) return `<span class="subs-diagnosis">No computer assigned</span>${subsMayEdit() ? ' <span class="muted">Assign this plan to a computer in Settings → Computers.</span>' : ''}`;
-  const offline = computers.map(id => {
-    const machine = (SETTINGS_DATA?.machines || []).find(row => row.id === (typeof id === 'string' ? id : id.runner_id));
-    return machine && (machine.online === false || ['stopped', 'stopping'].includes(String(machine.cloud_machine?.state))) ? subsComputerLabel(id) : '';
-  }).filter(Boolean);
-  if (offline.length) return `<span class="subs-usage">Computer offline: ${esc(offline.join(', '))} · Bring it online.</span>`;
-  if (sub.status && sub.status !== 'working') {
-    const names = computers.map(subsComputerLabel).filter(Boolean).join(', ');
-    return `<span class="subs-diagnosis">Connection unavailable${names ? ` on ${esc(names)}` : ''}</span>`;
-  }
+  return [...found.values()];
+}
+const subsOffline = (c: SubsComputer) => {
+  const machine = (SETTINGS_DATA?.machines || []).find(row => row.id === (typeof c === 'string' ? c : c.runner_id));
+  return !!machine && (machine.online === false || ['stopped', 'stopping'].includes(String(machine.cloud_machine?.state)));
+};
+// The count of computers, their names in its tooltip; an amber dot when one is offline, which opens Settings > Computers.
+function subsCountHTML(sub: SubsRow) {
+  const computers = subsComputers(sub);
+  const count = computers.length;
+  const title = count ? computers.map(subsComputerLabel).join(', ') : 'Not on a computer. Give it to one in Settings › Computers.';
+  const offline = computers.filter(subsOffline).map(subsComputerLabel);
+  const words = offline.length ? `${offline.join(', ')} ${offline.length === 1 ? 'is' : 'are'} offline` : '';
+  return `<td class="subs-count" title="${esc(title)}"><span class="nav-icon" aria-hidden="true">computer</span><span class="tnum">${count}</span><span class="sr-only"> ${count === 1 ? 'computer' : 'computers'}</span>${words ? `<button type="button" class="subs-offline" data-subs-offline title="${esc(words)}" aria-label="${esc(words)}. Open Settings › Computers"></button>` : ''}</td>`;
+}
+// In a person's group: the plan in use and the next one get a short mark after the name; the in-use one names its
+// computers in the tooltip.
+function subsPickHTML(sub: SubsRow, next: boolean) {
+  const using = sub.in_use_on || [];
+  if (using.length) return `<span class="pill subs-mark in-use" data-subs-mark="in-use" title="${esc(`In use on ${using.map(subsComputerLabel).join(', ')}`)}">In use</span>`;
+  if (next) return '<span class="pill subs-mark" data-subs-mark="next" title="Next when the plan in use runs out">Next</span>';
   return '';
 }
-function subsRowHTML(sub: SubsRow) {
-  const count = (sub.computers || []).length;
-  const names = (sub.computers || []).map(subsComputerLabel).join(', ');
-  const status = subsStatusHTML(sub);
-  const usage = subsUsageHTML(sub);
-  const offlineWithUsage = status?.includes('Computer offline:') && (typeof sub.usage?.used_pct === 'number' || typeof sub.usage?.cost_usd_month === 'number');
-  return `<tr data-subs-row="${esc(sub.id)}">
-    <td class="subs-name">${esc(sub.name)}</td>
-    <td class="muted subs-kind">${esc(sub.label || subsKind(sub.kind).label)}</td>
-    <td class="subs-owner">${esc(sub.owner_name || '')}</td>
-    <td class="subs-count" title="${esc(names || 'No computers')}"><span class="nav-icon" aria-hidden="true">computer</span><span class="tnum">${count}</span><span class="sr-only"> ${count === 1 ? 'computer' : 'computers'}</span></td>
-    <td class="subs-use">${offlineWithUsage ? `${status} ${usage}` : status || usage}</td>
+// Kind: the tool for a plan ("Claude", "ChatGPT"), the key's kind for an API key.
+function subsKindLabel(sub: SubsRow) {
+  const label = sub.label || subsKind(sub.kind).label;
+  return subsOwned(sub.kind) ? label.replace(/ plan$/i, '') : label;
+}
+function subsRowHTML(sub: SubsRow, next = false) {
+  const pick = subsPickHTML(sub, next);
+  const order = typeof sub.order === 'number' ? String(sub.order) : subsOwned(sub.kind) ? '—' : '·';
+  return `<tr data-subs-row="${esc(sub.id)}"${sub.in_use_on?.length ? ' class="subs-in-use"' : ''}>
+    <td class="subs-order tnum muted" title="${typeof sub.order === 'number' ? `${esc(subsToolName(subsRuntime(sub)))} pick order` : ''}">${order}</td>
+    <td class="subs-name">${esc(sub.name)}${pick ? ` ${pick}` : ''}</td>
+    <td class="muted subs-kind">${esc(subsKindLabel(sub))}</td>
+    ${subsCountHTML(sub)}
+    <td class="subs-use">${subsStatusHTML(sub) || subsUsageHTML(sub)}</td>
     <td class="subs-more-cell">${subsMayEdit() ? `<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
 }
 async function renderSettingsSubs() {
@@ -155,18 +193,51 @@ async function renderSettingsSubs() {
   let html;
   if (!SUBS.listed) html = `<p class="${SUBS.error ? 'err' : 'muted'}">${esc(SUBS.error || 'This server does not keep subscriptions yet.')}</p>`;
   else if (!SUBS.rows.length) html = `<div class="subs-empty"><span class="muted">No subscriptions yet.</span>${subsMayEdit() ? '<button type="button" class="ghost" data-subs-add>Add subscription</button>' : ''}</div>`;
-  else html = `<div class="scroll"><table class="settings-table subs-table"><thead><tr><th>Name</th><th>Kind</th><th>Owner</th><th><span class="sr-only">Computers</span></th><th>Usage</th><th><span class="sr-only">Actions</span></th></tr></thead>
-    <tbody>${SUBS.rows.map(subsRowHTML).join('')}</tbody></table></div>`;
+  else html = `<div class="scroll"><table class="settings-table subs-table"><thead><tr><th><span class="sr-only">Order</span></th><th>Name</th><th>Kind</th><th><span class="sr-only">Computers</span></th><th>Usage</th><th><span class="sr-only">Actions</span></th></tr></thead>
+    ${subsGroups().map(subsGroupHTML).join('')}</table></div>`;
   const restore = computerFocusRestore(el);
   patchHTML(el, html);
   restore();
   el.onclick = (event: MouseEvent) => {
     if (eventElement(event)?.closest('[data-subs-add]')) { planSignIn(); return; }
+    if (eventElement(event)?.closest('[data-subs-offline]')) { settingsShow('computers'); return; }
     const reconnect = eventElement(event)?.closest<HTMLElement>('[data-subs-reconnect]');
     if (reconnect) { const sub = subsById(reconnect.dataset.subsReconnect); if (sub) planSignIn({sub}); return; }
     const more = eventElement(event)?.closest<HTMLElement>('[data-subs-more]');
     if (more) subsMenu(more, subsById(more.dataset.subsMore));
   };
+}
+// The list grouped by owner: the viewer's own group first, then the others by name, then "No owner" (API keys, and any
+// plan without one). Inside a group, each tool's plans in pick order (`order`), then the held ones and keys by name.
+interface SubsGroup {owner: string; name: string; rows: SubsRow[]}
+function subsGroups(): SubsGroup[] {
+  const me = S.me?.id ? 'human:' + S.me.id : '';
+  const groups = new Map<string, SubsGroup>();
+  for (const sub of SUBS.rows) {
+    const owner = subsOwned(sub.kind) && sub.owner_id ? sub.owner_id : '';
+    if (!groups.has(owner)) groups.set(owner, {owner, name: owner ? sub.owner_name || subsPersonId(owner) : 'No owner', rows: []});
+    groups.get(owner)!.rows.push(sub);
+  }
+  const tools = subsTools();
+  for (const group of groups.values()) group.rows.sort((a, b) =>
+    Number(typeof a.order !== 'number') - Number(typeof b.order !== 'number') || tools.indexOf(subsRuntime(a)) - tools.indexOf(subsRuntime(b))
+    || (a.order ?? 0) - (b.order ?? 0) || a.name.localeCompare(b.name));
+  return [...groups.values()].sort((a, b) => Number(!a.owner) - Number(!b.owner) || Number(b.owner === me) - Number(a.owner === me) || a.name.localeCompare(b.name));
+}
+function subsGroupHTML(group: SubsGroup) {
+  const me = S.me?.id && group.owner === 'human:' + S.me.id;
+  const keys = group.rows.every(sub => !subsOwned(sub.kind));
+  const count = subsPlural(group.rows.length, keys ? 'API key' : group.owner ? 'plan' : 'subscription');
+  const person = (SETTINGS_DATA.people || []).find(p => p.id === subsPersonId(group.owner)) || {id: subsPersonId(group.owner), name: group.name};
+  const avatar = group.owner ? personAvatar(person, 22) : '<span class="av subs-noone" aria-hidden="true">—</span>';
+  // The next plan of each tool: the first in pick order after the one in use.
+  const next = new Set<string>();
+  for (const tool of subsTools()) {
+    const plans = group.rows.filter(sub => subsRuntime(sub) === tool && typeof sub.order === 'number');
+    if (plans.some(sub => sub.in_use_on?.length)) { const after = plans.find(sub => !sub.in_use_on?.length); if (after) next.add(after.id); }
+  }
+  return `<tbody class="subs-group" data-subs-group="${esc(group.owner || 'none')}"><tr class="subs-group-head"><th colspan="6" scope="rowgroup"><span class="subs-group-title">${avatar}<span class="subs-group-name">${esc(group.name)}</span><span class="muted">· ${esc(count)}</span>${me ? '<span class="pill subs-you">You</span>' : ''}</span></th></tr>
+    ${group.rows.map(sub => subsRowHTML(sub, next.has(sub.id))).join('')}</tbody>`;
 }
 // Edit, Reconnect, Remove: the shared menu pop-over (styles/task-list.css .tl-pop; a sheet on a phone).
 function subsMenu(anchor: HTMLElement, sub: SubsRow | undefined) {
@@ -289,6 +360,24 @@ async function subsRefresh() {
 const subsSignedInHere = (machine: SubsMachine, runtime: string) => machine.readiness?.runtimes?.[runtime]?.authenticated === 'ready';
 // What runs the tool when the computer has no subscription for it.
 const subsNoneWords = (machine: SubsMachine, runtime: string) => subsSignedInHere(machine, runtime) ? 'Signed in here' : subsGatewayOn() ? 'Gateway' : 'None';
+// A person's plans for a tool, as the picker offers them: "person:<actor>" in the select's value.
+const SUBS_PERSON = 'person:';
+const subsPersonPlans = (name: string, count: number) => `${name}'s plans · ${count}`;
+// The line under a computer's select when it is given a person's plans: which plan is in use, and why.
+function subsSetLine(machine: SubsMachine, runtime: string, set: SubsSet) {
+  const why = set.why || {kind: 'soonest'};
+  const until = subsWhen(why.until);
+  if (why.kind === 'none') return `None of ${set.person_name}'s plans is for ${subsToolName(runtime)}`;
+  if (why.kind === 'all_held') {
+    // Past its own login, the computer's own Fall back to Tico Gateway decides (computer-detail.ts), not the company's switch.
+    const runs = subsSignedInHere(machine, runtime) ? "using this computer's own login" : machine.gateway_fallback ? 'on the Gateway' : 'waiting';
+    return ['All at their limit', until ? `next reset ${until}` : '', runs].filter(Boolean).join(' · ');
+  }
+  const on = `On ${set.on_name || 'a plan'}`;
+  if (why.kind === 'held') return `${on} · ${why.plan} at its limit${until ? ` until ${until}` : ''}`;
+  if (why.kind === 'reconnect') return `${on} · ${why.plan} needs reconnecting`;
+  return `${on} · soonest reset with usage left`;
+}
 function subsPickerHTML(machine: SubsMachine, runtime: string) {
   if (machine.revoked_at) return '<span class="muted">—</span>';
   // An older runner still runs on its own (or a shared) login: its chip, and Needs update beside it.
@@ -296,12 +385,21 @@ function subsPickerHTML(machine: SubsMachine, runtime: string) {
     const chips = machineShown(machine).filter(conn => conn.runtime === runtime).map(conn => machineChipHTML(machine, conn)).join('');
     return `<span class="subs-cell">${chips ? `<span class="machine-chips">${chips}</span>` : ''}<span class="pill waiting" data-subs-needs-update title="Update Tico on ${esc(machine.label)} to give it a subscription">Needs update</span></span>`;
   }
-  const current = subsAssigned(machine.id, runtime);
+  const given = subsAssignment(machine.id, runtime);
+  const set = given?.person ? given.set : null;
+  const current = set ? null : subsAssigned(machine.id, runtime);
+  const value = given?.person ? SUBS_PERSON + given.person : current?.id || '';
+  // People first (each one who owns a plan for this tool, with their count), single plans next with their owner, this
+  // computer's own login (or what runs it without one) last.
+  const people = SUBS.people.filter(person => Number(person[runtime]) > 0);
   const options = SUBS.rows.filter(sub => subsRuntime(sub) === runtime);
   const tool = subsToolName(runtime);
-  const select = `<select class="subs-pick" data-subs-pick="${esc(runtime)}" data-runner="${esc(machine.id)}" data-current="${esc(current?.id || '')}" aria-label="${esc(`${tool} on ${machine.label}`)}"${subsMayEdit() ? '' : ' disabled'}>
-    <option value="">${esc(subsNoneWords(machine, runtime))}</option>${options.map(sub =>
-      `<option value="${esc(sub.id)}"${sub.id === current?.id ? ' selected' : ''}>${esc(sub.name)}</option>`).join('')}</select>`;
+  const option = (v: string, text: string) => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(text)}</option>`;
+  const select = `<select class="subs-pick" data-subs-pick="${esc(runtime)}" data-runner="${esc(machine.id)}" data-current="${esc(value)}" aria-label="${esc(`${tool} on ${machine.label}`)}"${subsMayEdit() ? '' : ' disabled'}>
+    ${people.length ? `<optgroup label="People">${people.map(person => option(SUBS_PERSON + person.id, subsPersonPlans(person.name, Number(person[runtime])))).join('')}</optgroup>` : ''}
+    ${options.length ? `<optgroup label="Single plans">${options.map(sub => option(sub.id, sub.owner_name && subsOwned(sub.kind) ? `${sub.name} · ${sub.owner_name}` : sub.name)).join('')}</optgroup>` : ''}
+    ${option('', subsNoneWords(machine, runtime) === 'Signed in here' ? "This computer's own login" : subsNoneWords(machine, runtime))}</select>`;
+  if (set) return `<span class="subs-cell subs-cell-set">${select}<span class="subs-set-line muted" data-subs-set-line>${esc(subsSetLine(machine, runtime, set))}</span></span>`;
   return `<span class="subs-cell">${select}${current?.status === 'needs_reconnect' ? subsStatusHTML(current) : ''}</span>`;
 }
 // A change: PUT, and when runs would stop, an in-page confirm with the counts, then PUT again with confirm.
@@ -309,8 +407,11 @@ async function subsPick(select: HTMLSelectElement) {
   const runner = select.dataset.runner!, runtime = select.dataset.subsPick!, was = select.dataset.current || '';
   const machine = (SETTINGS_DATA.machines || []).find(m => m.id === runner);
   const computer = machine?.label || runner, tool = subsToolName(runtime);
-  const id = select.value || null, name = id ? subsById(id)?.name || id : select.options[0]?.textContent || 'None';
-  const body = {runner_id: runner, runtime, subscription: id};
+  const person = select.value.startsWith(SUBS_PERSON) ? select.value.slice(SUBS_PERSON.length) : null;
+  const id = person ? null : select.value || null;
+  const owner = person ? SUBS.people.find(p => p.id === person) : null;
+  const name = person ? `${owner?.name || subsPersonId(person)}'s plans` : id ? subsById(id)?.name || id : select.selectedOptions[0]?.textContent || 'None';
+  const body = {runner_id: runner, runtime, subscription: id, ...(person ? {person} : {})};
   select.disabled = true;
   try {
     const done = await subsConfirmed((confirm: boolean): Promise<import('../types/api').ComputerSubscriptionResult> => put('/v2/computer-subscriptions', {...body, confirm}),
@@ -319,7 +420,7 @@ async function subsPick(select: HTMLSelectElement) {
     if (!done) { select.value = was; return; }
     SUBS.assignments = SUBS.assignments.filter(row => !(row.runner_id === runner && row.runtime === runtime));
     if (id) SUBS.assignments.push({runner_id: runner, runtime, subscription_id: id});
-    select.dataset.current = id || '';
+    select.dataset.current = select.value;
     const stopped = Number(done?.stopped) || 0;
     toast(`${computer}'s ${tool}: ${name}${stopped ? ` · ${subsPlural(stopped, 'task')} restarted` : ''}`);
   } catch (error) { toast(errorMessage(error, ''), true); select.value = was; }

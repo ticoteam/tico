@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 35 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 35 minutes.
 The outcome is seven recorded answers, a first delivery report and a first release-notes draft on the task from the last two
 weeks of merges and runs, and the routines checked.
 
@@ -37,7 +37,7 @@ those and use the defaults for the rest, saying which you used.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Then write, as present-tense statements with today's date:
+Record each answer, dated, in the `knowledge/` file it belongs to. Then write, as present-tense statements with today's date:
 - `knowledge/thresholds.md`: the team's choices (answer 6).
 - `knowledge/merge-gates.md`: one line per gating check, with repository, check name and who it is handed to (answer 1).
 - `knowledge/versioning.md`: the numbering scheme, what counts as breaking, the last release and its date, and whether a
@@ -50,7 +50,7 @@ Write each answer to `state.md` under `## Answers`, dated. Then write, as presen
 Merge needs you to push fix commits to pull request branches. Check with `gh repo view <repo> --json viewerPermission`. If
 it is not WRITE or higher, ask the owner once, on the task, to run
 `tico bot repos <your slug> --chosen <owner>/<repo>:write` for each repository that ships. Until then, a queue failure
-you would fix yourself goes back to the Builder in Fixes 2.
+you would fix yourself goes back to the Builder in QA.
 
 ## 5. Produce the first results now
 
@@ -67,7 +67,7 @@ Setting you up switched your routines on: the weekly delivery report (Mondays 09
 09:30", "I will draft release notes every Friday at 14:00", "I will check the merge queue each morning and tell you only when a
 gate stalls." They can change or turn any of them off any time; there is nothing to approve.
 
-Record them in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
+Record them in `memory/decisions.md`. If they asked for a different schedule or to
 leave one off, adjust `knowledge/` and the routine to match.
 
 

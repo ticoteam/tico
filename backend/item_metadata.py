@@ -123,11 +123,11 @@ def linked(conn: "sqlite3.Connection", source: str, item_type: str, key: str) ->
 
 
 def of_task(conn: "sqlite3.Connection", task_id: str, source: str, item_type: str) -> list[Row]:
-    """The items of one type linked to a task, oldest link first: its `task_links` rows, each with `metadata` (`get`)
-    or None."""
+    """The items of one type linked to a task, oldest link first (links made in one millisecond in the order they were
+    made): its `task_links` rows, each with `metadata` (`get`) or None."""
     links = _rows(
         conn,
-        "SELECT * FROM task_links WHERE task_id=? AND source=? AND item_type=? ORDER BY created_at, id",
+        "SELECT * FROM task_links WHERE task_id=? AND source=? AND item_type=? ORDER BY created_at, rowid",
         (task_id, source, item_type),
     )
     return [{**link, "metadata": get(conn, source, item_type, str(link["item_key"]))} for link in links]

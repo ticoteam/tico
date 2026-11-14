@@ -309,7 +309,7 @@ impl CodexHost {
         if self.running() {
             self.stop_and_reap().await;
         }
-        let mut command = crate::isolation::command("codex");
+        let mut command = super::harness_command(None, "codex");
         command
             .arg("app-server")
             .stdin(Stdio::piped())
@@ -997,31 +997,8 @@ impl CodexHost {
         // No memory under this computer's CODEX_HOME, even where the operator's config.toml turns it on: a bot
         // remembers in its repository's memory/ (Dev 301).
         cfg.insert("features.memories".into(), json!(false));
-        if settings.packet_only {
-            // Retain the disabled operator-server entries from base_config.
-            for feature in [
-                "shell_tool",
-                "multi_agent",
-                "multi_agent_v2",
-                "image_generation",
-                "view_image",
-                "skill_search",
-                "tool_suggest",
-                "sleep_tool",
-                "hooks",
-                "plugins",
-                "apps",
-            ] {
-                cfg.insert(format!("features.{feature}"), json!(false));
-            }
-            cfg.insert("tools.view_image".into(), json!(false));
-            cfg.insert("apps._default.enabled".into(), json!(false));
-            cfg.insert("project_doc_max_bytes".into(), json!(0));
-            cfg.insert("features.apply_patch_freeform".into(), json!(false));
-            cfg.insert("web_search".into(), json!("disabled"));
-        }
         let mut params = json!({"cwd": settings.cwd, "approvalPolicy": "never",
-            "sandbox": if settings.packet_only { "read-only" } else { "danger-full-access" }});
+            "sandbox": "danger-full-access"});
         if let Some(m) = settings.model.as_ref().filter(|m| !m.is_empty()) {
             params["model"] = json!(m);
         }
@@ -1524,30 +1501,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn packet_threads_disable_local_external_and_delegated_tools() {
-        let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
-        let settings = Settings {
-            packet_only: true,
-            cwd: "/synthetic/empty".into(),
-            ..Settings::default()
-        };
-        let params = host.thread_params(&settings);
-        assert_eq!(params["sandbox"], "read-only");
-        for key in [
-            "features.shell_tool",
-            "features.multi_agent",
-            "features.image_generation",
-            "features.view_image",
-            "tools.view_image",
-            "apps._default.enabled",
-        ] {
-            assert_eq!(params["config"][key], false, "{key}");
-        }
-        assert_eq!(params["config"]["web_search"], "disabled");
-        assert!(params["config"]["mcp_servers"].get("tico").is_none());
-    }
-
     #[tokio::test]
     async fn a_thread_is_confirmed_by_its_first_turn_not_by_thread_start() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1592,7 +1545,7 @@ mod tests {
         }];
         let sha = crate::company_skills::bundle_sha(&files);
         let (staged, _) =
-            crate::company_skills::stage(&state, "a-1", &[("acme-brief".into(), sha, files)])
+            crate::company_skills::stage(&state, "ops", &[("acme-brief".into(), sha, files)])
                 .unwrap();
         let settings = Settings {
             company_skills: Some(staged.display().to_string()),
@@ -1611,7 +1564,7 @@ mod tests {
         assert!(roots[0].starts_with(
             &state
                 .join("skill-sessions")
-                .join("a-1")
+                .join("ops-")
                 .display()
                 .to_string()
         ));

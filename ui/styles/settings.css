@@ -118,8 +118,8 @@ p:empty{display:none}
 .settings-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
 .settings-toolbar p{margin:0;color:var(--muted);font-size:var(--t-base)}
 .settings-bots-table{table-layout:fixed;min-width:0}
-/* Room for a computer's name ("Ana's Mac mini"): the model and fallback give some of theirs. */
-.settings-bots-table th:nth-child(1){width:30px}.settings-bots-table th:nth-child(2){width:22%}.settings-bots-table th:nth-child(3){width:7%}.settings-bots-table th:nth-child(4){width:19%}.settings-bots-table th:nth-child(5){width:14%}.settings-bots-table th:nth-child(6){width:8%}.settings-bots-table th:nth-child(7){width:15%}.settings-bots-table th:nth-child(8){width:76px}.settings-bots-table th:nth-child(9){width:56px}
+/* Room for a computer's name ("Ana's Mac mini") and a model's whole name, effort and window ("Opus 5.5 MED 400K") beside Tasks. */
+.settings-bots-table th:nth-child(1){width:30px}.settings-bots-table th:nth-child(2){width:19%}.settings-bots-table th:nth-child(3){width:7%}.settings-bots-table th:nth-child(4){width:24%}.settings-bots-table th:nth-child(5){width:12%}.settings-bots-table th:nth-child(6){width:8%}.settings-bots-table th:nth-child(7){width:15%}.settings-bots-table th:nth-child(8){width:76px}.settings-bots-table th:nth-child(9){width:56px}
 .settings-bots-table td{vertical-align:middle;min-width:0;padding-top:7px;padding-bottom:7px;padding-right:var(--s2)}
 /* Model, fallback and computer read as text until hovered; the model pickers open in a popover (.sb-choice-pop). */
 .sb-pick{display:flex;align-items:center;gap:4px;width:100%;max-width:100%;min-width:0;margin-left:-7px;padding:5px 7px;border:1px solid transparent;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
@@ -131,18 +131,49 @@ p:empty{display:none}
 .settings-bots-table .settings-inline-select:not(:hover):not(:focus):not(:disabled){border-color:transparent;background-color:transparent}
 .settings-bots-table .settings-inline-select{margin-left:-7px;width:calc(100% + 7px)}
 .settings-bots-table .settings-inline-select:disabled{background:none;border-color:transparent;opacity:1;color:var(--ink);cursor:default}
-.tl-pop.sb-choice-pop{width:300px;padding:12px 14px 14px}
-@media (max-width:760px){.tl-pop.sb-choice-pop{width:100%;padding:14px 16px max(16px,env(safe-area-inset-bottom))}}
+.tl-pop.sb-choice-pop{width:min(360px,calc(100vw - 16px));max-height:min(80vh,620px);padding:12px 14px 14px;overflow-x:hidden}
+@media (max-width:760px){.tl-pop.sb-choice-pop{width:100%;max-height:86vh;padding:14px 16px max(16px,env(safe-area-inset-bottom))}}
 .sb-choice-head{margin:0 0 10px;font-size:var(--t-sm);font-weight:600;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sb-choice-pop .settings-choice{display:flex;flex-wrap:wrap;gap:8px}
-.sb-choice-pop .settings-model-choice{flex:1 0 100%;gap:8px}
-.sb-choice-pop .settings-choice>small{flex:1 0 100%}
-.sb-choice-pop .settings-choice>[data-choice-apply]{margin-top:4px;padding:6px 14px}
-.sb-choice-pop .settings-choice>[data-choice-cancel]{margin-top:4px}
+/* The model picker's panel: Harness, Model, Effort and Compact read top to bottom, each with a short visible label. */
+.mp-panel{display:grid;gap:10px;min-width:0}
+.mp-row{display:grid;gap:4px;min-width:0;margin:0;padding:0;border:0}
+.mp-row[hidden]{display:none}
+.mp-row>legend,.mp-row>span{padding:0;margin-bottom:4px;font-size:var(--t-xs);font-weight:600;color:var(--muted)}
+.mp-seg{display:flex;flex-wrap:wrap;gap:0;min-width:0;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.mp-seg .mp-opt{flex:1 1 auto;justify-content:center;padding:6px 8px;border-right:1px solid var(--line);text-align:center}
+.mp-seg .mp-opt:last-child{border-right:0}
+/* Harnesses run three to a row, so six make two even rows rather than a lone one under five. */
+[data-choice-harness] .mp-seg .mp-opt{flex:1 1 30%;border-bottom:1px solid var(--line);margin-bottom:-1px}
+.mp-list{display:grid;min-width:0;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.mp-list .mp-opt{padding:7px 10px;border-bottom:1px solid var(--line)}
+.mp-list .mp-opt:last-child{border-bottom:0}
+.mp-opt{position:relative;display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--t-sm);color:var(--ink);cursor:pointer}
+.mp-opt input{position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none}
+.mp-opt:hover{background:var(--surface2)}
+.mp-opt:has(input:checked){background:color-mix(in srgb,var(--accent,var(--ink)) 12%,transparent);font-weight:600}
+.mp-list .mp-opt:has(input:checked)::before{content:"✓";flex:none}
+.mp-opt:has(input:focus-visible){outline:2px solid var(--accent,var(--ink));outline-offset:-2px}
+.mp-opt.off,.mp-opt:has(input:disabled:not(:checked)){color:var(--muted);cursor:default}
+.mp-opt.off:hover{background:none}
+.mp-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-mark{flex:none;font-size:var(--t-xs);color:var(--muted);font-weight:400}
+.mp-compact select{width:100%;min-width:0;padding:6px 8px;font-size:var(--t-sm);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.mp-note{margin:0;font-size:var(--t-sm);color:var(--muted)}
+.mp-note:empty{display:none}
+.mp-foot{display:flex;gap:8px;margin-top:2px}
+.mp-foot .primary{padding:6px 14px}
+.settings-bulk-pick{display:flex;min-width:0}
+/* In a form (the bot editor, Add bot, bulk change, Hire) the picker's button is a dropdown like the selects beside it:
+   the same box, height and type; only the bots table keeps it as text. */
+#bot-editor .settings-choice>.sb-pick,.settings-bulk-pick .sb-pick,[data-add-choice] .sb-pick,[data-hire-model] .sb-pick{margin-left:0;height:var(--ctl);padding:5px 9px;border-color:var(--line);border-radius:var(--r-ctl);background:var(--surface);font-size:var(--t-base);line-height:20px}
+#bot-editor .settings-choice>.sb-pick:hover,.settings-bulk-pick .sb-pick:hover,[data-add-choice] .sb-pick:hover,[data-hire-model] .sb-pick:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--surface)}
+#bot-editor .settings-choice>.sb-pick .sb-pick-caret,.settings-bulk-pick .sb-pick .sb-pick-caret,[data-add-choice] .sb-pick .sb-pick-caret,[data-hire-model] .sb-pick .sb-pick-caret{opacity:1}
 /* The task indicator beside a bot's model: faint until the row is hovered when tasks run on the bot's own model;
    marked, with a dot, when they run on another. It opens the task-model row under the bot (.sb-task-row). */
 .sb-model-wrap{display:flex;align-items:center;gap:4px;min-width:0}
 .sb-model-wrap>.sb-pick{flex:1 1 auto;width:auto}
+/* The cell keeps the button's -7px pull on its box, not the button: a shrink-to-fit box loses a negative margin from its width. */
+.sb-model-wrap>.settings-choice{flex:0 1 auto;margin-left:-7px}.sb-model-wrap>.settings-choice>.sb-pick{width:auto;margin-left:0}
 .sb-model-match{display:block;white-space:normal;overflow-wrap:anywhere;color:var(--muted);font-size:var(--t-xs);margin-top:4px}
 .sb-task-mark{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid transparent;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);cursor:pointer;opacity:.45}
 tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=true]{opacity:1}
@@ -153,19 +184,15 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-bots-table tr.sb-task-row td{padding:4px 0 12px;background:var(--bg)}
 .sb-task-under{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px 12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .sb-task-head{flex:1 0 100%;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
-.sb-task-under .settings-choice{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;flex:1 1 420px;min-width:0}
-.sb-task-under .settings-model-choice{flex:1 1 320px;grid-template-columns:repeat(2,minmax(0,1fr))}
-/* Task effort and Task context length: labelled and drawn like the task model's own pickers beside them. */
+.sb-task-under .settings-choice{display:flex;align-items:flex-end;flex:1 1 240px;min-width:0}
+/* Task effort: labelled and drawn beside the Task model picker. */
 .sb-task-part{display:flex;flex-direction:column;gap:3px;flex:0 1 150px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
 .sb-task-part select{width:100%;min-width:0;max-width:100%;padding:7px 8px;font-size:var(--t-base);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
-.sb-task-under .settings-choice-blocks{grid-column:1/-1}
-.sb-task-under .settings-choice>[data-choice-apply]{margin-top:0}
 .sb-task-warning{margin:8px 0 0;padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent);color:var(--ink);font-size:var(--t-sm)}
 @media (max-width:760px){
   .settings-bots-table tr.sb-task-row{display:block;padding:0 0 10px}
   .settings-bots-table tr.sb-task-row td{display:block}
-  .sb-task-under .settings-choice,.sb-task-under .settings-model-choice{flex:1 0 100%}
-  .sb-task-under .settings-model-choice{grid-template-columns:minmax(0,1fr)}
+  .sb-task-under .settings-choice{flex:1 0 100%}
   .sb-task-part{flex:1 1 calc(50% - 6px)}
   .settings-bots-table td.sb-cell-model .sb-task-mark{min-height:32px}
 }
@@ -284,11 +311,16 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .settings-combo-list button{display:block;width:100%;text-align:left;border:0;background:none;padding:6px 8px;border-radius:4px;font-size:var(--t-sm);color:var(--ink);cursor:pointer}
 .settings-combo-list button[aria-selected=true],.settings-combo-list button:hover{background:var(--surface2)}
 .settings-combo-empty{padding:8px;color:var(--muted);font-size:var(--t-sm)}
+/* The who picker (ui/app/who-picker.ts): a text field with the search icon and no native clear button, and its list in
+   the top layer (popover), placed under the field by script; options carry a 24px face and a muted sub-label. */
+.settings-combo input.who-pick-q{width:100%;min-width:0;padding:7px 10px 7px 32px;font-size:var(--t-base);border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%237f8a96' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 10px center;color:var(--ink)}
+.settings-combo-list[popover]{position:fixed;inset:auto;right:auto;bottom:auto;margin:0;box-sizing:border-box;max-height:234px;color:var(--ink)}
+.settings-combo-list[popover]:popover-open{display:block}
+.settings-combo-opt{display:flex;align-items:center;gap:8px;min-height:32px;box-sizing:border-box;padding:4px 8px;border-radius:4px;font-size:var(--t-base);cursor:pointer}
+.settings-combo-opt[aria-selected=true],.settings-combo-opt:hover{background:var(--surface2)}
+.settings-combo-n{flex:none;max-width:70%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.settings-combo-sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-sm)}
 .settings-choice{min-width:0}
-.settings-model-choice{display:grid;gap:6px;min-width:0}
-.settings-model-choice label{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
-.settings-model-choice select{width:100%;min-width:0;max-width:100%;padding:7px 8px;font-size:var(--t-base);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
-.settings-choice>[data-choice-apply]{margin-top:6px}
 .settings-choice-blocks:empty{display:none}
 .settings-choice-block{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:0;font-size:var(--t-sm);color:var(--muted)}
 .settings-choice-block .ghost{padding:2px 8px;font-size:var(--t-sm)}
@@ -717,21 +749,34 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .wh-type,.wh-outcome{min-width:0;overflow-wrap:anywhere}
 .wh-call-ctl{justify-content:flex-end}
 .wh-sends .wh-call{grid-template-columns:5.5em minmax(0,1fr) minmax(0,1.4fr) 4em 4em auto}
-.wh-events{display:grid;gap:8px;margin:0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;min-width:0}
-.wh-events legend{padding:0 4px;color:var(--muted);font-size:var(--t-sm)}
-.wh-ev-groups{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px 14px}
-.wh-ev-group{display:grid;gap:2px;align-content:start;min-width:0;font-size:var(--t-sm)}
-.wh-ev-group label{gap:6px!important;flex-wrap:nowrap!important;overflow-wrap:anywhere}
-.wh-ev-group label:not(:first-child){padding-left:4px}
 .wh-pre{margin:0;padding:8px 10px;max-height:40vh;overflow:auto;border-radius:6px;background:var(--surface2);font-size:var(--t-xs);white-space:pre-wrap;overflow-wrap:anywhere}
 .wh-payload-meta{margin:0}
 .wh-dialog .wr-sub{margin:0}
-.wh-filter-head{color:var(--muted)}
-.wh-filter-items{display:grid;gap:2px;max-height:180px;overflow:auto}.wh-ev-group .wh-filter-items label{padding-left:0}
+/* Every whDialog: the title alone in the header; one footer, the form's last child, pinned to the scrolling dialog's
+   bottom: a .danger button far left, the refusal, then Cancel and the submit on the right. */
+.wh-dialog .task-rule-form{padding:20px 20px 0}
+.wh-foot{position:sticky;bottom:0;z-index:1;margin:0 -20px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:12px 20px;
+  background:var(--surface);border-top:1px solid var(--line)}
+.wh-foot .spacer{flex:1}.wh-foot .danger{order:-1}.wh-foot .err{margin:0}.wh-foot .err:empty{display:none}
+/* The endpoint form's Events, Sends for and Headers: a label like Name's, then one input-high row (what it is now, one
+   ghost button); a list opens in place below. One type size: nothing here sets a font-size. */
+.wh-sums{display:flex;flex-direction:column;gap:16px}
+.wh-sum{display:grid;gap:4px;min-width:0}
+.wh-sum-k{color:var(--ink)}
+.wh-sum-row{display:flex;align-items:center;gap:12px;min-height:32px}.wh-sum-row>span{flex:1;min-width:0}
+.wh-pick{display:grid;gap:12px;padding:4px 0}
+.wh-dialog .wh-pick label{line-height:20px;gap:8px;flex-wrap:nowrap}
+.wh-area{display:grid;grid-template-columns:120px 1fr;gap:12px;align-items:start}
+.wh-area-k{font-weight:500}
+.wh-area-items{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 16px}
+.wh-filters{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.wh-filter{display:grid;gap:6px;align-content:start;min-width:0}.wh-filter-k{font-weight:500}
+.wh-filter-items{display:grid;gap:6px}
+@media (max-width:560px){.wh-area,.wh-area-items,.wh-filters{grid-template-columns:minmax(0,1fr)}}
 .wh-hdrs{display:grid;gap:6px}.wh-hdrs:empty{display:none}
 .wh-hdr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) auto auto;gap:6px 8px;align-items:center}
 .wh-hdr input:not([type=checkbox]){width:100%}
-.wh-hdr .wh-hdr-secret{gap:6px;font-size:var(--t-sm);white-space:nowrap}
+.wh-hdr .wh-hdr-secret{gap:6px;white-space:nowrap}
 .wh-wake{font-size:var(--t-sm);white-space:nowrap}
 .wh-wake-url{margin-bottom:12px}.wh-wake-url input{width:100%;min-width:0}
 .wh-wake-url .err{margin:0;font-size:var(--t-sm)}
@@ -924,14 +969,44 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-table td,.subs-table th{white-space:nowrap}
 /* The hidden labels in these tables are absolutely placed: keep them inside the scrolling box, not the page. */
 #set-subs .scroll,#set-machines .scroll{position:relative}
+/* A phone: each plan is a stacked row, so why it is not connected and its one action sit under its name, on screen.
+   Name, computer count and ⋯ on the first line; the reason or usage under them; kind and owner last. */
+@media (max-width:760px){
+  .subs-table,.subs-table tbody{display:block}
+  .subs-table thead{display:none}
+  .subs-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;column-gap:8px;padding:8px 6px;border-bottom:1px solid var(--line)}
+  .subs-table tr:last-child{border-bottom:0}
+  .subs-table td{padding:0;border:0;white-space:normal;min-width:0}
+  .subs-table .subs-name{grid-column:1;grid-row:1;overflow-wrap:anywhere}
+  .subs-table .subs-count{grid-column:2;grid-row:1}
+  .subs-table .subs-offline{width:40px;height:40px;margin:-16px -14px -16px -10px}
+  .subs-table .subs-more-cell{grid-column:3;grid-row:1;width:auto}
+  .subs-table .subs-use{grid-column:1/-1;grid-row:2;padding-top:2px}
+  .subs-table .subs-use:empty{display:none}
+  .subs-table .subs-use .subs-usage{flex-wrap:wrap}
+  .subs-table .subs-kind,.subs-table .subs-owner{grid-row:3;font-size:var(--t-sm);padding-top:2px}
+  .subs-table .subs-kind{grid-column:1}
+  .subs-table .subs-owner{grid-column:2/-1;text-align:right}
+}
 .subs-name{font-weight:500}
 .subs-kind{color:var(--muted)}
-.subs-owner{color:var(--muted)}
+.subs-order{width:1%;text-align:center}
+/* Settings > Models: one group per owner (avatar, name, count), in pick order; the plan in use is tinted. */
+.subs-group-head th{padding-top:14px;text-transform:none;letter-spacing:0;font-size:var(--t-base);color:var(--fg);font-weight:600}
+.subs-group:first-of-type .subs-group-head th{padding-top:9px}
+.subs-group-title{display:inline-flex;align-items:center;gap:8px}
+.subs-group-title .muted{font-weight:400}
+.subs-noone{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surface2);color:var(--muted)}
+.subs-you{font-size:var(--t-sm);font-weight:400}
+.subs-in-use td{background:color-mix(in srgb,var(--ok) 8%,transparent)}
+.subs-mark{margin-left:6px;font-size:var(--t-sm);font-weight:400;vertical-align:1px}.subs-mark.in-use{color:var(--ok)}
+.subs-offline{display:inline-grid;place-items:center;width:24px;height:24px;margin:-8px -8px -8px -2px;padding:0;border:0;background:none;cursor:pointer;vertical-align:middle}
+.subs-offline::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--wait)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
 .subs-bar{display:inline-block;width:28px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
 .subs-reset{white-space:nowrap}.subs-reset::before{content:'·';margin-right:6px;opacity:.6}
-.subs-bar b{display:block;height:100%;background:var(--ok)}.subs-bar.warn b{background:var(--wait)}.subs-bar.bad b{background:var(--fail)}
+.subs-bar b{display:block;height:100%;background:var(--ok)}.subs-bar.warn b{background:var(--wait)}.subs-bar.bad b{background:var(--fail)}.subs-bar.bad{box-shadow:inset 0 0 0 1px var(--fail)}
 .subs-more-cell{width:1%;text-align:right}
 .subs-more{min-height:var(--ctl-sm);padding:0 8px;line-height:1}
 .subs-reconnect{cursor:pointer;border:0;font:inherit;font-size:var(--t-sm)}
@@ -982,6 +1057,8 @@ section.card>header .settings-head-act{margin-left:auto}
 }
 @media (prefers-reduced-motion:reduce){.plan-spin{animation-duration:3s}}
 .subs-cell{display:inline-flex;align-items:center;gap:6px}
+.subs-cell-set{flex-direction:column;align-items:flex-start;gap:2px}
+.subs-set-line{font-size:var(--t-sm);white-space:normal;max-width:260px}
 .subs-pick{height:28px;max-width:200px;padding:0 24px 0 8px;font-size:var(--t-sm)}
 .settings-machines td,.settings-machines th{white-space:nowrap}
 .settings-machines td.num,.settings-machines th.num{text-align:right;padding-right:16px}

@@ -5,11 +5,11 @@ description: Write a guidance note for a manager preparing a hard performance co
 # Write a conversation note (SBI)
 
 When to use: when a manager asks for help preparing a conversation about performance, expectations or a missed goal. Not for conduct,
-complaints, health, leave or a possible dismissal: those go to the employee relations owner untouched (see AGENT.md).
+complaints, health, leave or a possible dismissal: those go to the employee relations owner untouched (see AGENTS.md).
 
 Steps:
 1. Confirm the topic is performance or an expectation. If it touches conduct, a complaint, health, leave or a dismissal, stop and
-   route it as AGENT.md says. Write nothing more about it.
+   route it as AGENTS.md says. Write nothing more about it.
 2. Gather the facts from the manager's own words on the task and any dated examples: what happened, when, where.
 3. Write the Situation: when and where, in one or two sentences, without describing the person.
 4. Write the Behavior: what was done or not done, in terms a witness could check. Leave out trait words ("careless", "negative").

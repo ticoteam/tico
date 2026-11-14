@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes.
 The outcome is five recorded answers, a real comparison for one open purchase request, and the first routine checked.
 
 ---
@@ -30,7 +30,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/criteria.md` (must-haves, weights, spending
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/criteria.md` (must-haves, weights, spending
 thresholds, approver for each band) and `knowledge/vendors.md` as present-tense statements, each with its source.
 Write `knowledge/security-questions.md` from the starter list in `playbooks/compare-vendors.md` step 5, marked "starter list, edit it". Anything nobody answered goes in `knowledge/open-questions.md`, not guessed.
 
@@ -45,7 +45,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 --enable`) and tell the human in one line: "I will send you a digest of open purchase requests every Monday at 09:00,
 and a person contacts any vendor."
 
-They can change it or turn it off any time. Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
+They can change it or turn it off any time. Record it in `memory/decisions.md`.
 If they asked for a different schedule or to leave it off, change the routine to match (`tico automation update <id>`, with
 `--disable` to turn it off).
 

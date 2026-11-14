@@ -36,15 +36,15 @@ const NON_RENDERING: string[] = [
 ];
 
 const SHARED: string[] = [
-  'ui/index.html', 'ui/theme.ts', 'ui/sw.ts', 'ui/manifest.webmanifest', 'ui/observability*.ts',
+  'ui/index.html', 'ui/parts.json', 'ui/theme.ts', 'ui/sw.ts', 'ui/manifest.webmanifest', 'ui/observability*.ts',
   'ui/styles/tokens.css', 'ui/styles/base.css', 'ui/styles/layout.css', 'ui/styles/components.css',
   'ui/styles/sidebar.css', 'ui/styles/forms.css', 'ui/styles/motion.css', 'ui/styles/skeleton.css',
   'ui/styles/avatars.css', 'ui/styles/tree-lines.css', 'ui/styles/liquid-dot.css', 'ui/styles/brand.css',
-  'ui/styles/rails.css', 'ui/styles/search.css', 'ui/styles/viewer.css', 'ui/styles/ask.css',
-  'ui/app/router.ts', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.ts', 'ui/app/api.ts', 'ui/app/errors.ts', 'ui/app/dom.ts',
+  'ui/styles/rails.css', 'ui/styles/search.css', 'ui/styles/viewer.css', 'ui/styles/ask.css', 'ui/styles/page-head.css',
+  'ui/app/router.ts', 'ui/app/core.ts', 'ui/app/state.ts', 'ui/app/format.ts', 'ui/app/api.ts', 'ui/app/parts.ts', 'ui/app/pages-shell.ts', 'ui/app/errors.ts', 'ui/app/dom.ts', 'ui/app/page-head.ts', 'ui/app/confirm.ts',
   'ui/app/session.ts', 'ui/app/notices.ts', 'ui/app/sidebar.ts', 'ui/app/drawer.ts', 'ui/app/viewport.ts',
   'ui/app/refresh.ts', 'ui/app/boot.ts', 'ui/app/boot-snap.ts', 'ui/app/boot-timing.ts', 'ui/app/nav-events.ts',
-  'ui/app/markdown.ts', 'ui/app/tooltip.ts', 'ui/app/avatars.ts', 'ui/app/liquid-dot.ts', 'ui/app/heartbeat.ts',
+  'ui/app/markdown.ts', 'ui/app/file-mentions.ts', 'ui/app/tooltip.ts', 'ui/app/avatars.ts', 'ui/app/liquid-dot.ts', 'ui/app/heartbeat.ts',
   'ui/app/pill.ts', 'ui/app/live.ts', 'ui/app/motion.ts', 'ui/app/rails.ts', 'ui/app/stick-scroll.ts',
   'ui/app/org-fan.ts', 'ui/app/native.ts', 'ui/app/ask-panel.ts', 'ui/app/ask-rules.ts', 'ui/assistant.ts',
   'ui/app/search.ts', 'ui/app/viewer.ts', 'ui/tool-icons.ts', 'ui/assets/**', 'ui/vendor/fonts/**',
@@ -54,11 +54,11 @@ const SHARED: string[] = [
 // Files of features no PAGES entry shows. A change to one says so in the reason instead of shooting every page. A
 // page's own `ui` globs win over this list: a file both name belongs to the page.
 const UNSHOWN: string[] = [
-  'ui/vendor/**', 'ui/app/settings-*.js', 'ui/app/settings-*.ts', 'ui/app/vault.ts', 'ui/app/catalog.ts', 'ui/app/cloud-*.ts', 'ui/app/team-add.ts',
+  'ui/vendor/**', 'ui/app/file-review.ts', 'ui/styles/file-review.css', 'ui/app/settings-*.js', 'ui/app/settings-*.ts', 'ui/app/vault.ts', 'ui/app/catalog.ts', 'ui/app/cloud-*.ts', 'ui/app/team-add.ts',
   'ui/app/integrations.ts', 'ui/app/mail.ts', 'ui/app/email-preview.ts', 'ui/app/messaging.ts', 'ui/app/sql.ts',
   'ui/app/assistant-page.ts', 'ui/app/skills*.ts', 'ui/app/tags.ts', 'ui/app/roadmaps.ts', 'ui/app/company-page.ts',
   'ui/app/computer-*.ts', 'ui/app/dashboard.ts', 'ui/app/overview*.ts', 'ui/app/pages.ts', 'ui/app/replay.ts',
-  'ui/app/person-page.ts', 'ui/app/shared-edit.ts', 'ui/overview/**', 'ui/replay-player.ts', 'ui/first-run.ts',
+  'ui/app/person-page.ts', 'ui/app/shared-edit.ts', 'ui/app/view-only.ts', 'ui/overview/**', 'ui/replay-player.ts', 'ui/first-run.ts',
   'ui/changelog.ts', 'ui/lenses-page.ts', 'ui/org-builder.ts', 'ui/connect-agent.ts', 'ui/credential-card.ts',
   'ui/directory-sync.ts', 'ui/github-connect.ts', 'ui/google-connect.ts', 'ui/model-login.ts',
   'ui/slack-channels.ts', 'ui/slack-connect.ts', 'ui/setup-strategy.ts',
@@ -67,8 +67,10 @@ const UNSHOWN: string[] = [
   'ui/styles/replay.css', 'ui/styles/roadmaps.css', 'ui/styles/tags.css', 'ui/styles/first-run.css',
   'ui/styles/lenses.css', 'ui/styles/credentials.css', 'ui/styles/cloud-agents.css', 'ui/styles/team-add.css',
   // The Settings Inboxes tab is gone (its page was removed from the table); its files are a feature no page shows now.
-  'ui/app/inboxes*.js', 'ui/app/inboxes*.ts', 'ui/app/tools*.ts', 'ui/app/redesign-library.ts', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
+  'ui/app/inboxes*.js', 'ui/app/inboxes*.ts', 'ui/app/tools*.ts', 'ui/app/secret-drop.ts', 'ui/app/who-picker.ts', 'ui/app/redesign-library.ts', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
   'ui/styles/tools.css', 'ui/styles/redesign-library.css',
+  // A website tool's live browser view (Open browser on the tool's page, or a browser ask): no page shows a live browser.
+  'ui/app/browser-view.ts', 'ui/styles/browser-view.css',
 ];
 
 // A change to one of these can change the dark theme on every page, whatever its lines say.

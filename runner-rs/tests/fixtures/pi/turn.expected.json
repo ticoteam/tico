@@ -24,6 +24,7 @@
   "usage": {
    "input": 160,
    "cached": 40,
+   "cache_write": 0,
    "output": 9,
    "requests": [
     [
@@ -69,6 +70,7 @@
   "usage": {
    "input": 188,
    "cached": 150,
+   "cache_write": 8,
    "output": 3,
    "requests": [
     [

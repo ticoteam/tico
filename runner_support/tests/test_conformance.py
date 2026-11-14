@@ -56,7 +56,7 @@ def add_bot(api, computer, tmp_path, slug, bot=None):
         BS.write(c, slug, config)
     repo = tmp_path / "projects" / f"bot-{slug}"
     repo.mkdir(parents=True)
-    (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
+    (repo / "AGENTS.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
     (repo / "bot.yaml").write_text(f"name: {slug}\nruntime: {config['runtime']}\nmodel: {config['model']}\n")
 
 
@@ -118,21 +118,23 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
     assert "--resume" not in call["argv"], "fallback resumed the pre-task-model thread"
     assert call["argv"][call["argv"].index("--session-id") + 1] != old_thread
     assert checkpoint in call["prompt"] and "Where this task stood" in call["prompt"]
-    # A fallback runs in a side session of its own, from the checkpoint, including consecutive fallbacks; the bot's own
-    # thread is neither resumed by it nor forgotten.
+    # A fallback runs in a side session of its own, from the checkpoint; the next fallback on the same model resumes
+    # that side session (its prompt cache), again given the checkpoint. The bot's own thread is neither resumed by
+    # either nor forgotten.
     with api.app.state.store.read() as c:
         latest = c.execute("SELECT checkpoint,checkpoint_at FROM tasks WHERE id=?", (task["id"],)).fetchone()
     assert latest["checkpoint"] and latest["checkpoint"] != checkpoint, "the fallback wrote a newer checkpoint"
     post(api, f"tasks/{task['id']}/chat", {"text": "Continue while the task model is still unavailable."})
     completed(4)
     last = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
-    assert "--resume" not in last["argv"]
+    side = call["argv"][call["argv"].index("--session-id") + 1]
+    assert last["argv"][last["argv"].index("--resume") + 1] == side, "the next fallback did not resume its side session"
+    assert side != old_thread
     assert (
         f"Where this task stood after its last turn ({latest['checkpoint_at']}):\n{latest['checkpoint']}"
         in last["prompt"]
     )
-    assert last["argv"] != call["argv"]
-    assert last["argv"][last["argv"].index("--session-id") + 1] != call["argv"][call["argv"].index("--session-id") + 1]
+    assert "This side session is resumed for another fallback turn" in last["prompt"]
     # Back on the bot's own model, the next turn resumes the thread it had before any of that, and is told a side
     # session ran in between.
     set_task_model(api, None)
@@ -1198,14 +1200,17 @@ def test_a_built_in_bots_product_files_follow_the_release_before_its_turn(api, c
     until(lambda: reply_to(api, first["conversation_id"]), "the bot's reply")
     repo = tmp_path / "projects" / "bot-ops"
     stamp = json.loads((repo / ".tico-template.json").read_text())
-    assert stamp["template"] == "botops" and "AGENT.md" in stamp["files"]
-    agent = (repo / "AGENT.md").read_text()
+    assert stamp["template"] == "botops" and "AGENTS.md" in stamp["files"]
+    agent = (repo / "AGENTS.md").read_text()
     assert agent != "# Ops\n\nAnswer the Acme team.\n" and "{{" not in agent.splitlines()[0]
     # Committed in the checkout (the turn's own push carries it; this fixture's file remote takes no push).
     log = subprocess.run(
         ["git", "-C", str(repo), "log", "--format=%s", "main"], capture_output=True, text=True, check=True
     ).stdout
-    assert log.startswith("Refresh ") and "from the botops template" in log, log
+    # The refresh comes first; the runner then adds Tico's standing section to AGENTS.md in its own commit.
+    newest, refresh = log.splitlines()[:2]
+    assert newest.startswith("Instructions: AGENTS.md") and "<!-- tico:standing" in agent, log
+    assert refresh.startswith("Refresh ") and "from the botops template" in refresh, log
 
 
 def git(cwd, *args):

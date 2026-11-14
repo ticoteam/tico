@@ -7,20 +7,10 @@
    #/automations?q=<words> opens the list searched (a bot's or a webhook's automations, linked from their pages). */
 'use strict';
 
-const AUTOMATIONS = '#/automations';
-// Listening (ui/app/listening.ts) is this page over the automations whose trigger is `listening`: its own sidebar row,
-// its own list, the same header, flow, editors and runs.
-const LISTENING = '#/listening';
-const auUnder = (r: string, base: string): boolean => r === base || r.startsWith(base + '/') || r.startsWith(base + '?');
-function isAutomationsRoute(r: string): boolean { return auUnder(r, AUTOMATIONS) || auUnder(r, LISTENING); }
-/** The page's own address: Listening's while its list is the one shown, else Automations'. */
-const auBase = (): string => AU?.lst ? LISTENING : AUTOMATIONS;
 const AU_BOT = 'botops';                             // builds automations for the Assistant; not offered as a step's bot
 const auPhone = () => matchMedia('(max-width:760px)').matches;
 const auClone = <T>(x: T): T => x == null ? x : JSON.parse(JSON.stringify(x));
 const auApi = (id: string) => '/v2/automations/' + encodeURIComponent(id);
-// One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.
-let AU: AutomationsState | null = null;
 // Where the old code read x.y with x null (AU once the page is left, the open automation, the shell's #au-root or one
 // of its parts) and so threw: the same stop, at the same read, as a plain Error naming what is missing. auNeed gives
 // the value back; auSure is the statement form and auIs the form inside a condition (never false: it throws), both
@@ -58,6 +48,7 @@ function automationsStop() {
   if (!AU) return;
   if (AU.list && !AU.listError && !AU.lst) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range, maint: AU.maint, heart: AU.heart};
   clearTimeout(AU.hbPoll ?? undefined);
+  if (AU.lst) pageChatLeave();
   AU = null;
 }
 
@@ -67,7 +58,6 @@ function auRouteParts(r: string): {id: string; view: AuView} {
   if (id === 'bot') return {id: '', view: 'flow'};
   return {id, view: view === 'runs' ? view : 'flow'};
 }
-const auHref = (id: string | undefined, view?: string) => auBase() + (id ? '/' + encodeURIComponent(id) : '') + (id && view && view !== 'flow' ? '/' + view : '');
 
 // The hub writes people as person:<id> (CONTRACT); older rows say human:<id>.
 const auPersonId = (a: unknown) => /^(person|human):/.test(String(a || '')) ? String(a).split(':').slice(1).join(':') : '';
@@ -231,9 +221,10 @@ function auShell() {
   auHave(AU);
   const lst = !!AU.lst;
   $('#main').innerHTML = `<div class="au${lst ? ' au-lst' : ''}" id="au-root">
-    <header class="au-ph"><div class="au-hrow"><h1>${lst ? 'Listening' : 'Automations'}</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div></div><span class="au-sp"></span>
-      <div class="au-hrow"><button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button><span class="au-newbox"><button class="primary add-ctl au-new" type="button" ${lst ? 'aria-label="New listening"' : 'aria-label="New automation" aria-haspopup="menu" aria-expanded="false"'}>${TL_ICON.plus}</button>
-      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></div></header>
+    ${pageHead({title: lst ? 'Listening' : 'Automations', hook: 'au-ph', pad: true,
+      tools: `<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>${lst ? '<span class="au-chat"></span>' : ''}`,
+      primary: `<span class="au-newbox"><button class="primary ph-go au-new" type="button"${lst ? '' : ' aria-haspopup="menu" aria-expanded="false"'}>${lst ? 'New listening' : 'New automation'}</button>`
+        + `<div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span>`})}
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="${lst ? 'Search listening' : 'Search automations'}"></div>
@@ -241,8 +232,8 @@ function auShell() {
       </aside>
       <section class="au-c" aria-live="polite">
         <div class="au-ov"><div class="au-ctl"><div class="au-tabs" role="tablist" aria-label="View">
-          <button type="button" role="tab" data-tab="list" aria-selected="true">Automations</button>
-          <button type="button" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><span class="au-sels"></span></div><div class="au-tbl"></div></div>
+          <button type="button" class="ph-tab" role="tab" data-tab="list" aria-selected="true">Automations</button>
+          <button type="button" class="ph-tab" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><div class="au-seg au-range ph-seg" role="group" aria-label="Time range"></div><span class="au-sels"></span></div><div class="au-tbl"></div></div>
         <div class="au-crumb"></div><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
       <aside class="au-side"><div class="au-ed" hidden></div></aside>
       <div class="au-scrim" hidden></div>
@@ -266,6 +257,13 @@ function auShell() {
     if ((e.key === 'Enter' || e.key === ' ') && e.target instanceof HTMLElement && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
   });
   auEdWire(root.querySelector('.au-ed'));
+  // Listening's owner's chat (page-chat.ts); a listening's editor takes its place while open (auEdDraw).
+  if (lst) void pageChatMount({page: 'listening', label: 'Listening', button: root.querySelector('.au-chat'), stays: r => auUnder(r, LISTENING),
+    item: () => {
+      const a = AU;
+      if (!a || a.root !== root || !a.lst || !a.cur || !a.id) return null;
+      return {kind: 'automation', id: a.id, name: String(a.cur.name || '').trim() || 'Untitled'};
+    }});
 }
 
 // + New's menu: New inbox (automations-new.js), or which trigger a blank one starts with.
@@ -362,7 +360,7 @@ function auHoldLine(a: AuRow) {
 async function auHoldAct(action: string) {
   auHave(AU);
   const a = AU.cur, state = AU;
-  if (!a?.hold || (action === 'drop' && !confirm(`Drop ${a.hold.held} held runs of ${a.name}?`))) return;
+  if (!a?.hold || (action === 'drop' && !(await askConfirm(`Drop ${a.hold.held} held runs of ${a.name}?`)))) return;
   try {
     const out = auNormal(await post(`${auApi(a.id)}/held`, {action}));
     if (AU !== state) return;
@@ -399,7 +397,7 @@ function auDrawHead() {
         : `<span class="au-chip"><span class="nav-icon" aria-hidden="true">payments</span>${esc(auSpendWords(a))}</span>`}
       <button class="au-help" type="button" aria-label="Spend limit help" data-help="Spend limit per 30 minutes. It resumes on its own.">?</button>`}
       <span class="au-sp au-sp-phone"></span>
-      <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
+      <div class="au-seg ph-seg" role="tablist" aria-label="View">${seg}</div>
     </div>
     <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}${row?.pending ? ' · Proposed' : ''}</button>
     <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
@@ -435,6 +433,7 @@ function auDrawSide() {
   const again = b && html ? ed.querySelector<HTMLInputElement>(`[data-b="${CSS.escape(b)}"]`) : null;
   if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
   AU.root.classList.toggle('ed-open', !!html);
+  if (AU.lst) pageChatHold(!!html);
   // The board's pop-ups float over it on a computer; a phone keeps the sheet.
   AU.root.classList.toggle('ed-pop', !!html && AU.ed?.kind === 'board');
   auEl(AU.root, '.au-scrim').hidden = !html;
@@ -469,7 +468,7 @@ async function auOnSwitch(e: Event) {
   const id = listId || AU.cur?.id, row = (AU.list || []).find(x => x.id === id) || AU.cur;
   if (!row) return;
   // A built-in is paused only by the top of the org (the server decides), and never without saying what stops.
-  if (!t.checked && row.builtin && !confirm(`${row.name} is built in. Turning it off stops it for everyone.`)) { t.checked = true; return; }
+  if (!t.checked && row.builtin && !(await askConfirm(`${row.name} is built in. Turning it off stops it for everyone.`))) { t.checked = true; return; }
   const state = AU;
   try {
     const out = auNormal(await patch(auApi(id as string), {enabled: t.checked}));
@@ -527,7 +526,7 @@ async function auMoreAct(what: string | undefined) {
   if (what === 'versions') { auEdOpen({kind: 'versions'}); return; }
   if (what === 'run') { auSure(a, 'the open automation'); auEdOpen({kind: 'run', text: auSample(a.trigger, a.next_due_at)}); return; }
   if (what === 'apply') { auApplyTemplate(); return; }
-  if (what !== 'delete' || !auIs(a, 'the open automation') || a.builtin || !confirm(`Delete ${a.name}?`)) return;
+  if (what !== 'delete' || !auIs(a, 'the open automation') || a.builtin || !(await askConfirm(`Delete ${a.name}?`))) return;
   try {
     await writeRequest('DELETE', auApi(a.id));
     if (AU !== state || !state.list) return;   // G: the ⋯ menu is drawn on a read list

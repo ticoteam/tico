@@ -27,6 +27,7 @@
   "usage": {
    "input": 14,
    "cached": 3,
+   "cache_write": 1,
    "output": 2
   }
  },

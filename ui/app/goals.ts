@@ -8,7 +8,7 @@
 // comes from its owner: `company`, a human or a bot. Its parent is optional ("Supports"); a goal with
 // none is simply not linked. A bot reads its own with `tico goal list`; nothing here is pushed into a run.
 /** The Goals page's state (pageGoals): the tree's data, what needs the person, and the open panel (ui/goals-kpis.ts). */
-interface GoalsState extends GkState<GkPanel | null> { owners: Record<string, unknown>; open: string }
+interface GoalsState extends GkState<GkPanel | null> { owners: Record<string, unknown>; open: string; pick: string }
 /** A to-do on the Goals page as the server sends it: GkNeed plus the owner fields the built-in-bot filter reads. */
 interface GoalsNeed extends GkNeed { goal_owner?: string; owner_id?: string; goal_id?: string }
 /** GET /v2/goals/tree. */
@@ -34,74 +34,6 @@ interface GoalPatch { title?: string; owner?: string; parent_id?: string; bet_id
 type GoalSheetState = GkState<GkPanel | null> | Pick<GkState<GkPanel | null>, 'goals'>;
 let GOALS_ST: GoalsState | null = null;
 const goalBuiltInOwner = (actor: string | undefined) => String(actor || '').startsWith('bot:') && isBuiltInBot(actor!.slice(4));
-const goalLive = (g: {status?: string | null}) => !['done', 'dropped'].includes(String(g.status));
-const goalRank = (a: GkGoal | GkStrategyBet, b: GkGoal | GkStrategyBet) => (a.rank ?? 1e9) - (b.rank ?? 1e9);
-const GOAL_COMPANY = 'company';
-function goalOwnerInfo(actor: string | undefined) {
-  if (actor === GOAL_COMPANY) return {kind: 'company', id: GOAL_COMPANY, name: S.config?.company_name || 'Team', avatar: '', href: ''};
-  const [kind, id] = String(actor || '').split(':');
-  if (kind === 'bot') {
-    const e = botRow(id);
-    return {kind, id, name: e?.display_name || e?.slug || id, avatar: avatar(id, 20, stateOf(id)), href: `#/bot/${encodeURIComponent(String(id))}`};
-  }
-  const p = (S.people || []).find(x => x.id === id);
-  return {kind: 'person', id, name: p?.name || id, avatar: personAvatar(p || {id, name: id}, 20), href: `#/person/${encodeURIComponent(String(id))}`};
-}
-// Where an owner sits on the org chart: its node key and the chain of keys above it. Who is above whom is who reports
-// to whom, not the groups people are in.
-function goalOrgPlace(owner: string | null | undefined) {
-  const up: Record<string, string> = {};
-  for (const p of S.people || []) up['p:' + p.id] = orgBossKey({kind: 'person', person: p});
-  for (const e of S.emps || []) up['b:' + e.id] = orgBossKey({kind: 'bot', ...e});
-  const key = String(owner || '').startsWith('human:') ? 'p:' + owner!.slice(6) : String(owner || '').startsWith('bot:') ? 'b:' + (owner as string).slice(4) : '';
-  const above = new Set<string>();
-  for (let at = up[key]; at && !above.has(at); at = up[at]) above.add(at);
-  return {key, parent: up[key] || '', above};
-}
-// Mirrors the hub's rule: the goal's owner, the owner of the goal it supports, or anyone above the
-// owner on the org chart; the environment's owner edits every goal.
-function goalMayEdit(g: GoalRef, goals: GkGoal[] = []) {
-  if (S.me?.role === 'owner') return true;
-  const me = mePerson(), actor = me ? 'human:' + me.id : '';
-  if (!actor) return false;
-  const parent = goals.find(x => x.id === g.parent_id);
-  return g.owner_id === actor || parent?.owner_id === actor || goalOrgPlace(g.owner_id).above.has('p:' + me!.id);
-}
-// The options of a "Supports" select: Nothing first (a goal needs no parent), then team goals,
-// goals above the owner on the org chart, and goals alongside it. Never the goal itself or anything
-// under it (that would loop).
-function goalSupportOptions(g: GoalRef, owner: string | null | undefined, goals: GkGoal[]) {
-  const below = new Set(g.id ? [g.id] : []);
-  for (let grew = Boolean(g.id); grew;) {
-    grew = false;
-    for (const x of goals) if (x.parent_id && below.has(x.parent_id) && !below.has(x.id)) { below.add(x.id); grew = true; }
-  }
-  const me = goalOrgPlace(owner);
-  const rows: {company: GkGoal[]; above: GkGoal[]; alongside: GkGoal[]} = {company: [], above: [], alongside: []};
-  for (const x of goals) {
-    if (!goalLive(x) || below.has(x.id)) continue;
-    const them = goalOrgPlace(x.owner_id);
-    const where = x.owner_id === GOAL_COMPANY ? 'company' : me.above.has(them.key) ? 'above'
-      : them.key && (them.key === me.key || (them.parent && them.parent === me.parent)) ? 'alongside' : '';
-    if (where || x.id === g.parent_id) rows[where || 'above'].push(x);
-  }
-  const option = (x: GkGoal) => `<option value="${esc(x.id)}"${x.id === g.parent_id ? ' selected' : ''}>${esc(x.title)}${x.owner_id === GOAL_COMPANY ? '' : ' · ' + esc(goalOwnerInfo(x.owner_id).name)}</option>`;
-  const group = (label: string, list: GkGoal[]) => list.length ? `<optgroup label="${label}">${list.sort(goalRank).map(option).join('')}</optgroup>` : '';
-  return `<option value=""${g.parent_id ? '' : ' selected'}>Nothing</option>`
-    + group('Team', rows.company) + group('Above on the team chart', rows.above) + group('Alongside', rows.alongside);
-}
-const goalLinkOptions = (g: GkGoal, goals: GkGoal[]) => goalSupportOptions(g, g.owner_id, goals);
-// One goal, editable in place (the bot page's Goals card): the words, and what it supports.
-function goalEditorHtml(g: GkGoal, goals: GkGoal[]) {
-  const may = goalMayEdit(g, goals), parent = goals.find(x => x.id === g.parent_id);
-  return `<div class="goal-ed" data-goal-ed="${esc(g.id)}">
-      <div class="goal-ed-row"><input class="goal-ed-text" type="text" maxlength="300" value="${esc(g.title)}" aria-label="Goal"${may ? '' : ' readonly'}>
-        ${may ? `<button class="ghost goal-ed-link" type="button" title="Change the goal this supports" aria-label="Change the goal this supports"><span class="nav-icon" aria-hidden="true">link</span></button>` : ''}</div>
-      ${may ? `<button type="button" class="goal-ed-supports goal-ed-change" aria-label="Change the goal this supports">Supports <u>${esc(parent ? parent.title : 'nothing')}</u></button>`
-        : parent ? `<div class="goal-ed-supports">Supports <a href="${GOALS}/${encodeURIComponent(parent.id)}" data-goal-go="${esc(parent.id)}">${esc(parent.title)}</a></div>` : ''}
-      ${may ? `<select class="goal-ed-pick" hidden aria-label="The goal this supports">${goalLinkOptions(g, goals)}</select>` : ''}
-    </div>`;
-}
 // Enter or leaving the field saves; Escape puts the words back. An emptied goal is removed.
 function bindGoalEditor(el: HTMLElement, g: GkGoal, done?: (removed: boolean) => void) {
   const input = el.querySelector<HTMLInputElement>('.goal-ed-text')!, pick = el.querySelector<HTMLSelectElement>('.goal-ed-pick')!;
@@ -189,6 +121,7 @@ function goalPressed(el: HTMLElement & {_pressed?: boolean}) { if (!el._pressed)
 function goalSheetOpen(state: GoalSheetState, {goal = '', owner = ''}: {goal?: string; owner?: string} = {}) {
   const g = goal ? state.goals.find(x => x.id === goal) : null;
   if (goal && !g) return;
+  goalsPick(state, goal);
   if (!g) { const me = mePerson(); owner = owner || (me ? 'human:' + me.id : S.me?.role === 'owner' ? GOAL_COMPANY : ''); }
   let dlg = document.getElementById('goal-sheet') as HTMLDialogElement;
   if (!dlg) {
@@ -477,22 +410,40 @@ function pageGoals() {
   const was = document.getElementById('goal-panel') as (HTMLDialogElement & {_state?: GkState<GkPanel | null> | null}) | null;
   if (was) { was._state = null; if (was.open) was.close(); }
   const sheet = document.getElementById('goal-sheet') as GkDialog | null; if (sheet?.open) sheet.close();
-  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null, q: ''};
-  // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is the Ask panel's.
+  // The goal last opened stays picked while the person stays on Goals (the page's chat is still Goals'): opening one
+  // draws the page again at its address.
+  const pick = open || (PGC?.page === 'goals' && GOALS_ST?.pick) || '';
+  const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, pick, panel: null, strategy: null, q: ''};
+  // Goals is a Strategy tab: the tree is the page and "New goal" heads it. Talking about goals is its owner's chat.
   $('#main').classList.add('strategy-layout', 'rd-goals');
   $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><input type="search" id="goal-search" class="goal-search" aria-label="Search goals or people" autocomplete="off" placeholder="Search goals or people…"><div id="goal-body"><p class="muted">Loading…</p></div>
     <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
   const actions = $('#strat-actions');
   if (actions && (mePerson() || S.me?.role === 'owner')) {
-    actions.innerHTML = '<button class="primary" type="button" id="goal-new">+ Goal</button>';
+    actions.innerHTML = '<button class="primary ph-go" type="button" id="goal-new">New goal</button>';
     actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
   }
+  // Chat with the page's owner (page-chat.ts), the Strategy Owner by default: the goal last opened rides along. It is a
+  // quiet tool, so it sits with the header's tools and "New goal" stays last (page-head.ts).
+  $('#main header.ph > .ph-tools')?.insertAdjacentHTML('beforeend', '<span class="goal-chat"></span>');
+  const chat = $('#main .goal-chat');
+  if (chat) void pageChatMount({page: 'goals', label: 'Goals', button: chat, stays: r => rdUnder(r, goalsBase()), item: () => goalsPicked(state)});
   // The search sits outside #goal-body, so a redraw keeps it; each redraw filters by what it holds (goalTreeFilter).
   const search = $('#goal-search');
   search.oninput = () => { state.q = search.value; goalsRender(state); };
   search.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Escape' && search.value) { ev.preventDefault(); ev.stopPropagation(); search.value = ''; search.oninput(); } };
   goalsLoad(state);
   goalsKpiViews($('#goal-kpis'));   // Tree · Loops · Journey (ui/app/goals-kpi-views.ts)
+}
+// The goal the person last opened on Goals, for its chat's chip: what "this goal" means in the next message.
+function goalsPick(state: object, id: string) {
+  if (state !== GOALS_ST || !id || id === 'new') return;
+  GOALS_ST.pick = id;
+  pageChatPicked();
+}
+function goalsPicked(state: GoalsState): PageChatItem | null {
+  const g = state.pick ? state.goals.find(x => x.id === state.pick) : null;
+  return g && g.title ? {kind: 'goal', id: g.id, name: g.title} : null;
 }
 function goalsApply(state: GoalsState, data: GoalsTreeData, needs?: {items?: GoalsNeed[]} | null) {
   state.goals = (data.goals || []).filter(g => !goalBuiltInOwner(g.owner_id));
@@ -516,6 +467,7 @@ async function goalsLoad(state: GoalsState) {
   goalsApply(state, data, needs);
   state.loaded = true;
   goalsRender(state);
+  pageChatPicked();   // the picked goal's title is known now
   const g = state.open && state.goals.find(x => x.id === state.open);
   if (g) goalPanelOpen(state, g.owner_id, {goal: g.id});
 }

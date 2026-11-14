@@ -71,8 +71,8 @@ function pageFrame(p: import('../types/api').Page, src: string, height: number, 
   f.src = pageViewSrc(src, size);
   return f;
 }
-// pageCard(page, {size}): one card holding the page's status line and the framed page (or an Open card, the status
-// under its title, when there is no address). A card is a widget: the page at its own height up to the card's size,
+// pageCard(page, {size}): one card holding the page's status line and the framed page (or, when there is no address,
+// one row: a page mark and the title, the whole row a link). A card is a widget: the page at its own height up to the card's size,
 // faded at the bottom when the page runs on, and the whole card one tap that opens the page full size, as its expand icon does.
 // `full` is that full size, where the status line sits under the view's own title. `page` is GET
 // /api/v2/pages/{id}'s page.
@@ -83,12 +83,25 @@ window.pageCard = function pageCard(page: import('../types/api').Page, {size = '
   el.dataset.page = page.file_id;
   const src = pageSrc(page);
   if (!src) {
-    const open = document.createElement(full ? 'div' : 'a');
-    open.className = 'pg-open';
-    if (!full && open instanceof HTMLAnchorElement) open.href = pageHref(page.file_id);
-    open.innerHTML = `<span class="nav-icon" aria-hidden="true">article</span><div class="pg-open-text"><span class="pg-open-title">${esc(page.title || 'Page')}</span>${full ? '' : pageStatusHTML(page, {link: false})}</div>${full ? '' : '<span class="pg-open-btn">Open</span>'}`;
-    if (full) el.innerHTML = pageStatusHTML(page);
-    el.append(open);
+    const title = esc(page.title || 'Page');
+    if (full) {
+      const open = document.createElement('div');
+      open.className = 'pg-open';
+      open.innerHTML = `<span class="nav-icon" aria-hidden="true">article</span><div class="pg-open-text"><span class="pg-open-title">${title}</span></div>`;
+      el.innerHTML = pageStatusHTML(page);
+      el.append(open);
+    } else {
+      // One quiet row, as the rail's other rows: a mark (the page icon, or a lock when restricted) and the title, the
+      // whole row the link. No status line, version or Open button: the page says those when it opens.
+      el.classList.add('pg-row');
+      const open = document.createElement('a');
+      open.className = 'pg-open';
+      open.href = pageHref(page.file_id);
+      open.title = page.title || 'Page';
+      const mark = page.restricted ? '<span class="nav-icon pg-lock" role="img" aria-label="Restricted">lock</span>' : '<span class="nav-icon" aria-hidden="true">article</span>';
+      open.innerHTML = `<span class="pg-mark">${mark}</span><span class="pg-open-title">${title}</span>`;
+      el.append(open);
+    }
     el.pageData = page; el.pageSize = size;     // drawn as its frame once the desktop app trusts it (nativeVisualRepaint)
     return el;
   }
@@ -136,9 +149,12 @@ window.addEventListener('message', ev => {
 });
 
 // ----------------------------------------------------------------- the full view, #/page/<id>
-// A page's version as GET /api/v2/files/{id}/versions lists it.
-interface PageVersion { version: number; created_at?: string | null; }
-// The full view's state: the page as read, its versions, the version on screen, and what the reader may do.
+// One header line (back, title, status line, ⋯), then the page on the view's own surface with no box around it. The
+// ⋯ menu holds who can see it, What's changed?, Version history, Archive, Download and Delete for good.
+// A page's version as GET /api/v2/files/{id}/versions lists it (newest first).
+interface PageVersion { version: number; created_at?: string | null; actor?: string | null; }
+// The full view's state: the page as read, its versions, the version on screen, what the reader may do, and the
+// version What's changed? compares against (null when the page is shown).
 interface PageFullState {
   id: string;
   page: import('../types/api').Page | null;
@@ -146,12 +162,14 @@ interface PageFullState {
   shown: number;
   can: {manage?: boolean; del?: boolean};
   pinned?: {label: string; place: string}[];
+  diff?: number | null;
+  menu?: 'history' | null;
 }
 let PG: PageFullState | null = null;          // {id, page, versions, shown}
-async function pageFullView(id: string) {
+async function pageFullView(id: string, at = 0) {
   const main = $('#main');
   main.innerHTML = `<div class="pg-view" id="pg-view">${skelRows(3, {card: true})}</div>`;
-  const state: PageFullState = PG = {id, page: null, versions: [], shown: 0, can: {}};
+  const state: PageFullState = PG = {id, page: null, versions: [], shown: 0, can: {}, diff: null};
   let read: import('../types/api').GetPageResponse;
   try { read = await get<import('../types/api').GetPageResponse>('/v2/pages/' + encodeURIComponent(id), {fresh: true}); }
   catch (e) {
@@ -162,11 +180,12 @@ async function pageFullView(id: string) {
   if (PG !== state) return;
   state.page = read.page; state.can = {manage: !!read.can_manage, del: !!read.can_delete};
   state.pinned = read.pinned || [];
-  state.shown = read.page.version;
+  // #/page/<id>?v=<n> (the decision view's review history) opens that version; past the newest, the newest.
+  state.shown = at >= 1 && at <= read.page.version ? at : read.page.version;
   pageFullDraw(state);
   get<{versions?: PageVersion[]}>(`/v2/files/${encodeURIComponent(id)}/versions`).then(v => {
     if (PG !== state) return;
-    state.versions = v.versions || [];
+    state.versions = [...(v.versions || [])].sort((a, b) => b.version - a.version);
     pageFullHead(state);
   }).catch(() => {});
 }
@@ -174,10 +193,9 @@ function pageFullDraw(state: PageFullState) {
   const root = $('#pg-view');
   if (!root || !state.page || !state.pinned) return;
   const pinned = state.pinned.map(x => `<a href="${esc(pagePlaceHref(x.place))}">${esc(x.label)}</a>`).join(' · ');
-  root.innerHTML = `<header class="pg-head"></header>${state.can.manage ? `<div class="pg-access"><span>Who can see it</span><button class="ghost" type="button" data-pg-audience>${esc(pagesAudienceText(state.page.audience))}</button></div>` : ''}<div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
+  root.innerHTML = `<header class="pg-head"></header><div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
+  root.onkeydown = pageMenuKeys;
   pageFullHead(state);
-  const access = root.querySelector('[data-pg-audience]');
-  if (access) access.onclick = () => void pagesEditAudience(state);
   pageFullBody(state);
 }
 const pagesAudienceText = (audience: import('../types/api').Page['audience']) => !audience || audience.everyone ? "Everyone who can see where it's filed" : accessLevelText(audience);
@@ -189,7 +207,7 @@ async function pagesEditAudience(state: PageFullState) {
     await accessEditor({name: state.page.title, singleAudience: true,
       initialData: {see: level, read: level, write: level, teams: Array.isArray(result) ? result : result.groups || []},
       save: (audience: import('../types/api').AccessAudience) => patch('/v2/pages/' + encodeURIComponent(state.id), {audience: audience.everyone ? null : audience}),
-      after: (saved: SaSaved) => { if (PG === state) { state.page = saved.page as import('../types/api').Page; pageFullDraw(state); } }});
+      after: (saved: SaSaved) => { if (PG === state) { state.page = saved.page as import('../types/api').Page; pageFullHead(state); } }});
   } catch (error) { toast(errorMessage(error, ''), true); }
 }
 function pagesAccessRefresh() {
@@ -216,33 +234,88 @@ function pagePlaceHref(place: string) {
   const [kind, ...rest] = String(place).split(':'), id = encodeURIComponent(rest.join(':'));
   return kind === 'dashboard' ? OVERVIEW : kind === 'growth' ? '#/growth' : kind === 'person' ? HOME : kind === 'team' ? '#/team/' + id : kind === 'bot' ? '#/bot/' + id : '#/task/' + id;
 }
+// Who published a version, as the rest of the app names them.
+const pageVersionBy = (v: PageVersion) => v.actor ? actorLabel(v.actor) : '';
+// The status line, on the header line: the page's own, or the older version on screen with a way back to the latest.
+function pageFullStatusHTML(state: PageFullState) {
+  const p = state.page;
+  if (!p) return '';
+  if (state.shown === p.version) return pageStatusHTML(p);
+  return `<div class="pg-status">${pageLockHTML(p)}v${state.shown} · an older version · <button type="button" class="linkish" data-pg-act="latest">Latest</button></div>`;
+}
+function pageFullMenuHTML(state: PageFullState) {
+  const p = state.page;
+  if (!p) return '';
+  const item = (act: string, label: string, extra = '') => `<button type="button" role="menuitem" data-pg-act="${act}"${extra}>${label}</button>`;
+  if (state.menu === 'history') return item('menu', '<span class="nav-icon" aria-hidden="true">chevron_left</span><span class="pg-mi-name">Version history</span>', ' class="pg-mi-back"')
+    + state.versions.map(v => {
+      const by = pageVersionBy(v), day = v.created_at ? pageDay(v.created_at.slice(0, 10)) : '';
+      return `<button type="button" role="menuitemradio" aria-checked="${v.version === state.shown}" data-pg-act="version" data-pg-v="${v.version}">`
+        + `<span class="pg-mi-name">v${v.version}${v.version === p.version ? ' · latest' : ''}</span><span class="pg-mi-sub">${esc([day, by].filter(Boolean).join(' · '))}</span></button>`;
+    }).join('');
+  const many = state.versions.length > 1;
+  return [
+    state.can.manage ? item('access', `<span class="pg-mi-name">Who can see it</span><span class="pg-mi-sub">${esc(pagesAudienceText(p.audience))}</span>`) : '',
+    // The oldest version has nothing before it to compare with.
+    pageDiffBases(state).length ? item('diff', "What's changed?") : '',
+    many ? item('history', 'Version history') : '',
+    state.can.manage ? item('archive', p.archived ? 'Restore' : 'Archive') : '',
+    `<a role="menuitem" href="${API}/v2/files/${encodeURIComponent(p.file_id)}?v=${state.shown}" download>Download</a>`,
+    state.can.del ? item('delete', 'Delete for good', ' class="danger"') : ''].join('');
+}
 function pageFullHead(state: PageFullState) {
   const p = state.page, head = $('#pg-view .pg-head');
   if (!head || !p) return;
-  const versions = state.versions.length > 1 ? `<select class="pg-ver" aria-label="Version">${state.versions.map(v =>
-    `<option value="${v.version}"${v.version === state.shown ? ' selected' : ''}>v${v.version} · ${esc(pageDay((v.created_at || '').slice(0, 10)))}</option>`).join('')}</select>` : '';
-  const items = [
-    state.can.manage ? `<button type="button" role="menuitem" data-pg-act="archive">${p.archived ? 'Restore' : 'Archive'}</button>` : '',
-    `<a role="menuitem" href="${API}/v2/files/${encodeURIComponent(p.file_id)}?v=${state.shown}" download>Download</a>`,
-    state.can.del ? `<button type="button" role="menuitem" class="danger" data-pg-act="delete">Delete for good</button>` : ''].join('');
+  const open = head.querySelector('.pg-menu')?.hasAttribute('open');
   head.innerHTML = `<button type="button" class="ghost pg-back" data-pg-act="back" aria-label="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></button>
-    <h1 class="pg-title">${esc(p.title)}</h1>${p.archived ? '<span class="pill pg-archived">Archived</span>' : ''}<span class="spacer"></span>${versions}
-    <details class="pg-menu"><summary aria-label="More" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></summary><div class="pg-menu-list" role="menu">${items}</div></details>`;
-  head.onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('[data-pg-act]'); if (b) void pageFullAct(state, b.dataset.pgAct); };
-  const ver = head.querySelector('.pg-ver');
-  if (ver) ver.onchange = () => { state.shown = Number(ver.value); pageFullHead(state); pageFullBody(state); };
+    <div class="pg-headline"><h1 class="pg-title">${esc(p.title)}</h1>${p.archived ? '<span class="pill pg-archived">Archived</span>' : ''}${pageFullStatusHTML(state)}</div>
+    <details class="pg-menu"${open ? ' open' : ''}><summary aria-label="More" title="More" aria-haspopup="menu"><span class="nav-icon" aria-hidden="true">more_horiz</span></summary><div class="pg-menu-list" role="menu">${pageFullMenuHTML(state)}</div></details>`;
+  head.onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('[data-pg-act]'); if (b) void pageFullAct(state, b.dataset.pgAct, b); };
+  const menu = head.querySelector('.pg-menu') as HTMLDetailsElement | null;
+  if (menu) menu.ontoggle = () => {
+    if (menu.open) { pageMenuItems(menu)[0]?.focus(); return; }
+    if (state.menu) { state.menu = null; pageFullHead(state); }
+  };
 }
+const pageMenuItems = (menu: Element) => [...menu.querySelectorAll<HTMLElement>('.pg-menu-list [role^=menuitem]')];
+function pageMenuClose(state: PageFullState, focus = false) {
+  const menu = document.querySelector<HTMLDetailsElement>('#pg-view .pg-menu');
+  if (!menu?.open) return false;
+  state.menu = null;
+  menu.removeAttribute('open');
+  pageFullHead(state);
+  if (focus) document.querySelector<HTMLElement>('#pg-view .pg-menu summary')?.focus();
+  return true;
+}
+// The arrows, Home and End move through the ⋯ menu's items (Esc: the document handler below).
+function pageMenuKeys(ev: KeyboardEvent) {
+  const menu = eventElement(ev)?.closest('.pg-menu');
+  if (!menu || !(menu as HTMLDetailsElement).open || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) return;
+  ev.preventDefault();
+  const items = pageMenuItems(menu), at = items.indexOf(document.activeElement as HTMLElement);
+  const to = ev.key === 'Home' ? 0 : ev.key === 'End' ? items.length - 1 : ev.key === 'ArrowDown' ? at + 1 : at < 0 ? items.length - 1 : at - 1;
+  items[Math.max(0, Math.min(items.length - 1, to))]?.focus();
+}
+// Esc wherever the focus is (a click on the diff's text leaves it on the body), unless a dialog over the view takes it.
+document.addEventListener('keydown', ev => {
+  const state = PG;
+  if (ev.key !== 'Escape' || ev.defaultPrevented || !state || !document.getElementById('pg-view') || document.querySelector('dialog[open]')) return;
+  if (pageMenuClose(state, true) || (state.diff != null && (pageDiffClose(state), true))) ev.preventDefault();
+});
 // The current version frames from its address; an older one, or any without an address, shows in the file viewer's
-// sandboxed preview (ui/app/viewer.ts), which looks the same: pages run no script.
+// sandboxed preview (ui/app/viewer.ts), which looks the same: pages run no script. The status line is the header's,
+// and the page sits on the view's surface (pg-bare): no border, corner or white backdrop around it.
 async function pageFullBody(state: PageFullState) {
   const p = state.page, body = $('#pg-view .pg-body');
   if (!body || !p) return;
+  if (state.diff != null) { void pageDiffDraw(state); return; }
   const current = state.shown === p.version;
   const card = window.pageCard(p, {size: 'full'});
+  card.classList.add('pg-bare');
+  card.querySelector(':scope > .pg-status')?.remove();
   if (current && card.querySelector('iframe')) { body.replaceChildren(card); return; }
   card.querySelector('.pg-open')?.remove();
   delete card.pageData;                         // this view draws its own frame again (nativeVisualRepaint)
-  if (!current) card.querySelector('.pg-status').innerHTML = pageLockHTML(p) + `v${state.shown} · an older version`;
   const box = document.createElement('div');
   box.className = 'pg-box pg-preview';
   box.innerHTML = skelRows(4);
@@ -255,11 +328,117 @@ async function pageFullBody(state: PageFullState) {
     box.replaceChildren(htmlPreviewFrame(text, p.title));
   } catch (e) { if (box.isConnected) box.innerHTML = `<p class="muted pg-pad">${esc(errorMessage(e, ''))}</p>`; }
 }
-async function pageFullAct(state: PageFullState, act: string | undefined) {
+
+// ----------------------------------------------------------------- What's changed?
+// A page's visible text, one line per heading, paragraph, list item, table row or other block, for a line diff
+// (tfDiff, ui/app/task-files.ts). DOMParser runs no script; scripts, styles and hidden elements say nothing.
+const PAGE_TEXT_BLOCKS = new Set(['ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'BR', 'CAPTION', 'DD', 'DETAILS', 'DIV', 'DL', 'DT',
+  'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'HR', 'LI', 'MAIN', 'NAV', 'OL',
+  'P', 'PRE', 'SECTION', 'SUMMARY', 'TABLE', 'TBODY', 'TFOOT', 'THEAD', 'TR', 'UL', 'svg', 'text']);
+// An SVG's <title> is a tooltip, not text on the page.
+const PAGE_TEXT_SKIP = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'HEAD', 'IFRAME', 'OBJECT', 'title']);
+function pageText(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return doc.body ? pageTextLines(doc.body).join('\n') : '';
+}
+/** The lines pageText reads from one node and what is in it. */
+function pageTextLines(root: Node): string[] {
+  const lines: string[] = [];
+  let line = '';
+  const flush = () => { const l = line.replace(/\s+/g, ' ').trim(); if (l) lines.push(l); line = ''; };
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) { line += node.textContent || ''; return; }
+    if (!(node instanceof Element) || PAGE_TEXT_SKIP.has(node.tagName) || node.hasAttribute('hidden') || node.getAttribute('aria-hidden') === 'true') return;
+    const block = PAGE_TEXT_BLOCKS.has(node.tagName), cell = node.tagName === 'TD' || node.tagName === 'TH';
+    if (block) flush();
+    if (cell && line.trim()) line += ' | ';
+    for (const child of node.childNodes) walk(child);
+    if (block) flush();
+  };
+  walk(root);
+  flush();
+  return lines;
+}
+// Each heading, paragraph, list item or table row of a page whose text is not in an earlier version's lines (pageText)
+// gets a 3 px amber bar in its left margin: the decision view's "Changes since vK" switch, off. The innermost block is
+// marked, so a changed list item marks that item, not its whole list. `marked`: how many blocks.
+const PAGE_MARK_BLOCKS = 'h1,h2,h3,h4,h5,h6,p,li,tr,dt,dd,blockquote,pre,figcaption,caption,summary';
+const PAGE_MARK_STYLE = '[data-tico-changed]{position:relative}[data-tico-changed]::before{content:"";position:absolute;'
+  + 'left:-6px;top:0;bottom:0;width:3px;border-radius:2px;background:#d97706}';
+function pageMarkChanged(html: string, before: string[]): {html: string; marked: number} {
+  const doc = new DOMParser().parseFromString(html, 'text/html'), had = new Set(before);
+  const blocks = [...doc.querySelectorAll<HTMLElement>(PAGE_MARK_BLOCKS)].reverse();   // innermost first
+  let marked = 0;
+  for (const el of blocks) {
+    if (el.querySelector('[data-tico-changed]') || !pageTextLines(el).some(l => !had.has(l))) continue;
+    el.setAttribute('data-tico-changed', ''); marked++;
+  }
+  if (!marked) return {html, marked};
+  const style = doc.createElement('style');
+  style.textContent = PAGE_MARK_STYLE;
+  doc.head.append(style);
+  return {html: (doc.doctype ? '<!DOCTYPE html>' : '') + doc.documentElement.outerHTML, marked};
+}
+// The versions What's changed? may compare against: those before the one on screen.
+const pageDiffBases = (state: PageFullState) => state.versions.filter(v => v.version < state.shown);
+function pageDiffOpen(state: PageFullState) {
+  const base = pageDiffBases(state)[0];
+  if (!base) return;
+  state.diff = base.version;
+  pageFullBody(state);
+}
+function pageDiffClose(state: PageFullState) {
+  state.diff = null;
+  pageFullBody(state);
+  document.querySelector<HTMLElement>('#pg-view .pg-menu summary')?.focus();
+}
+async function pageDiffDraw(state: PageFullState) {
+  const p = state.page, body = $('#pg-view .pg-body'), from = state.diff;
+  if (!body || !p || from == null) return;
+  const shown = body.querySelector('.pg-diff') as HTMLElement | null;
+  if (!shown || shown.dataset.to !== String(state.shown)) pageDiffShell(state, body, from);
+  const out = body.querySelector('.pg-diff-lines') as HTMLElement | null;
+  if (!out) return;
+  out.setAttribute('aria-busy', 'true');
+  try {
+    const [a, b] = await Promise.all([from, state.shown].map(async v => pageText(await (await viewFile(p.file_id, p.title + '.html', v)).blob.text())));
+    if (PG !== state || state.diff !== from || !out.isConnected) return;
+    out.removeAttribute('aria-busy');
+    out.innerHTML = a === b ? '<p class="muted pg-pad">No text changes</p>' : tfDiffHTML(a ?? '', b ?? '');   // strict index access types a destructured list item as possibly undefined
+  } catch (e) { if (out.isConnected) { out.removeAttribute('aria-busy'); out.innerHTML = `<p class="muted pg-pad">${esc(errorMessage(e, ''))}</p>`; } }
+}
+// The diff's header: What's changed?, the version to compare from, → the one on screen, and Close.
+function pageDiffShell(state: PageFullState, body: HTMLElement, from: number) {
+  const options = pageDiffBases(state).map(v => `<option value="${v.version}"${v.version === from ? ' selected' : ''}>v${v.version}</option>`).join('');
+  body.innerHTML = `<section class="pg-diff" data-to="${state.shown}" aria-label="What's changed?"><header class="pg-diff-head"><h2>What's changed?</h2>
+    <select class="pg-diff-from" aria-label="Compare from">${options}</select><span aria-hidden="true">→</span><span class="pg-diff-to">v${state.shown}</span>
+    <span class="spacer"></span><button type="button" class="ghost" data-pg-diff-close>Close</button></header>
+    <div class="pg-diff-lines">${skelRows(4)}</div></section>`;
+  const sel = body.querySelector('.pg-diff-from') as HTMLSelectElement | null;
+  if (sel) sel.onchange = () => { state.diff = Number(sel.value); void pageDiffDraw(state); };
+  const close = body.querySelector('[data-pg-diff-close]') as HTMLElement | null;
+  if (close) close.onclick = () => pageDiffClose(state);
+}
+async function pageFullAct(state: PageFullState, act: string | undefined, el?: HTMLElement) {
   const p = state.page;
-  document.querySelector('#pg-view .pg-menu')?.removeAttribute('open');
+  if (act === 'menu' || act === 'history') {
+    state.menu = act === 'history' ? 'history' : null;
+    pageFullHead(state);
+    const menu = document.querySelector('#pg-view .pg-menu');
+    if (menu) pageMenuItems(menu)[0]?.focus();
+    return;
+  }
+  pageMenuClose(state);
   if (act === 'back') { if (history.length > 1) history.back(); else location.hash = RD_FILES; return; }
   if (!p) return;
+  if (act === 'access') { void pagesEditAudience(state); return; }
+  if (act === 'version' || act === 'latest') {
+    state.shown = act === 'latest' ? p.version : Number(el?.dataset.pgV);
+    state.diff = null;
+    pageFullHead(state); pageFullBody(state);
+    return;
+  }
+  if (act === 'diff') { pageDiffOpen(state); return; }
   try {
     if (act === 'archive') {
       const r: import('../types/api').EditPageResponse = await patch('/v2/pages/' + encodeURIComponent(p.file_id), {archived: !p.archived});
@@ -268,7 +447,7 @@ async function pageFullAct(state: PageFullState, act: string | undefined) {
       pageFullHead(state);
       toast(r.page.archived ? 'Archived' : 'Restored');
     } else if (act === 'delete') {
-      if (!confirm(`Delete “${p.title}” and every version for good? This cannot be undone.`)) return;
+      if (!(await askConfirm(`Delete “${p.title}” and every version for good? This cannot be undone.`))) return;
       await writeRequest('DELETE', '/v2/files/' + encodeURIComponent(p.file_id));
       toast('Deleted');
       location.hash = RD_FILES;
@@ -291,6 +470,8 @@ interface TaskPagesSlot extends HTMLDivElement {
   tpCards?: Map<string | null, TaskPagesRow>;
   tpFollow?: (() => void) | null;
   tpFollowCid?: string | null | undefined;
+  tpMakeOpen?: boolean;
+  tpCanLink?: boolean;
 }
 // The task's dialog, which holds its section (tpEl) and the release of its live handlers (tpOff).
 interface TaskPagesHost extends HTMLDialogElement { tpEl?: TaskPagesSlot | null; tpOff?: (() => void) | null; }
@@ -309,13 +490,20 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
   if (d.tpEl && d.tpEl.dataset.task === id) { slot.replaceWith(d.tpEl); return; }
   d.tpOff?.();
   d.tpEl = slot; slot.dataset.task = id;
-  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><div class="tp-actions"><button type="button" class="ghost" data-tp-link hidden>Link page</button></div></header>
+  // "+" offers Make page or Link page; the Describe box shows only once Make page is chosen (or a draft is kept).
+  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><button type="button" class="prop-add" data-tp-add aria-expanded="false" aria-label="Add a page" title="Add a page" hidden>${TL_ICON.plus}</button></header>
+    <div class="tp-actions" hidden><button type="button" class="ghost" data-tp-make>Make page</button><button type="button" class="ghost" data-tp-link>Link page</button></div>
     <div class="tp-picker" hidden><div class="tp-search"><input type="search" placeholder="Search pages" aria-label="Search pages" autocomplete="off">
       <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div>
     <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
     <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages"></div>`;
   const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
   try { prompt.value = localStorage.getItem(taskMakeDraftKey(id)) || ''; } catch { /* storage may be unavailable */ }
+  slot.tpMakeOpen = !!prompt.value;
+  const add = $('[data-tp-add]', slot), choices = $('.tp-actions', slot);
+  const choose = (open: boolean) => { choices.hidden = !open; add.setAttribute('aria-expanded', String(open)); };
+  add.onclick = () => choose(choices.hidden);
+  $('[data-tp-make]', slot).onclick = () => { choose(false); slot.tpMakeOpen = true; make.hidden = false; prompt.focus(); };
   prompt.oninput = () => { try { if (prompt.value) localStorage.setItem(taskMakeDraftKey(id), prompt.value); else localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ } };
   make.onsubmit = async (ev: Event) => {
     ev.preventDefault();
@@ -325,7 +513,7 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
       const r = await post('/v2/tasks/' + encodeURIComponent(id) + '/make-page', {text: prompt.value.trim()});
       if (d.tpEl !== slot) return;
       if (r.held) throw new Error('Not sent');
-      make.reset();
+      make.reset(); slot.tpMakeOpen = false;      // sent: the box folds back to "+" once the page is made
       try { localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ }
       taskPageMakeDraw(d, {state: 'making', conversation_id: r.message.conversation_id});
       await taskPageMakeLoad(d);
@@ -333,8 +521,8 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
     finally { slot.tpSending = false; $('button', make).disabled = ['making', 'update_required'].includes(slot.tpMaking?.state); }
   };
   const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
-  $('[data-tp-link]', slot).onclick = () => { picker.hidden = false; input.focus(); };
-  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; $('[data-tp-link]', slot).focus(); };
+  $('[data-tp-link]', slot).onclick = () => { choose(false); picker.hidden = false; input.focus(); };
+  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; add.focus(); };
   let soon = 0, search = 0;
   input.oninput = () => {
     clearTimeout(soon);
@@ -399,6 +587,11 @@ function taskPageMakeDraw(d: TaskPagesHost, status: MakePageStatus | null) {
     finally { retry.disabled = false; }
   };
   $('button', $('.tp-make', slot)).disabled = slot.tpSending || pending;
+  taskPageMakeShow(slot);
+}
+// The Describe box shows once Make page is chosen, while a draft is kept, or while a request is on its way or failed.
+function taskPageMakeShow(slot: TaskPagesSlot) {
+  $('.tp-make', slot).hidden = !slot.tpCanLink || !(slot.tpMakeOpen || ['making', 'update_required', 'failed'].includes(slot.tpMaking?.state ?? ''));
 }
 async function taskPageMakeLoad(d: TaskPagesHost) {
   const slot = d.tpEl;
@@ -416,20 +609,28 @@ async function taskPagesLoad(d: TaskPagesHost) {
     if (d.tpEl !== slot || seq !== slot.tpSeq) return;
     const pins = (r.pins || []).filter((x): x is TaskPlacePin & {page: import('../types/api').Page} => !!x.page && !x.page.replaced_by_id && !x.page.archived);
     slot.hidden = !r.can_link && !pins.length;
-    $('[data-tp-link]', slot).hidden = !r.can_link;
-    $('.tp-make', slot).hidden = !r.can_link;
+    // A phone's Pages tab goes with the section: no pages and none to link, no tab that opens empty.
+    const tab = d.querySelector<HTMLElement>('[data-task-tab="pages"]');
+    if (tab) {
+      tab.hidden = slot.hidden;
+      // The last page went while its tab was shown: back to Chat rather than an empty body.
+      if (tab.hidden && tab.getAttribute('aria-selected') === 'true') d.querySelector<HTMLElement>('[data-task-tab="chat"]')?.click();
+    }
+    $('[data-tp-add]', slot).hidden = !r.can_link;
+    slot.tpCanLink = !!r.can_link;
+    taskPageMakeShow(slot);
+    // The Pages tab counts them (a phone's task window, ui/app/task-modal.ts TASK_TABS).
+    const count = d.querySelector<HTMLElement>('[data-task-page-count]');
+    if (count) count.textContent = pins.length ? String(pins.length) : '';
     const kept = slot.tpCards || new Map<string | null, TaskPagesRow>(), cards = new Map<string | null, TaskPagesRow>();
     for (const pin of pins) {
       const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
       let row = kept.get(pin.id);
       if (!row || row.key !== key) {
+        // One row: the page's icon and name, and the row opens the page. Its version is on the chat's chip, not here.
         const el = document.createElement('div'); el.className = 'tp-page';
-        el.append(window.pageCard(pin.page, {size: pin.size || 'medium'}));
-        if (pin.can_unpin) {
-          const b = document.createElement('button'); b.type = 'button'; b.className = 'ghost tp-unlink';
-          b.dataset.tpUnlink = String(pin.id); b.textContent = 'Unlink'; b.setAttribute('aria-label', 'Unlink ' + pin.page.title);
-          el.append(b);
-        }
+        el.innerHTML = `<a class="tp-row" href="${esc(pageHref(pin.page.file_id))}" data-page="${esc(pin.page.file_id)}"><span class="nav-icon" aria-hidden="true">article</span><span class="tp-name">${esc(pin.page.title)}</span></a>${pin.can_unpin
+          ? `<button type="button" class="ghost tp-unlink" data-tp-unlink="${esc(pin.id)}" aria-label="${esc('Unlink ' + pin.page.title)}" title="Unlink">${TL_ICON.x}</button>` : ''}`;
         row = {key, el};
       }
       cards.set(pin.id, row);
@@ -665,7 +866,10 @@ function lfRowHTML(f: LfRow) {
   const kind = f.library_kind || 'other';
   const page = kind === 'page', link = f.locator === 'remote_link' || (f.hit && f.url);
   const url = page ? pageHref(f.id) : link ? (f.open?.url || f.url) : f.open?.url || `${API}/v2/files/${encodeURIComponent(f.id)}`;
-  const attrs = page ? '' : link ? ' target="_blank" rel="noopener noreferrer"' : ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.name || f.title)}"`;
+  // A Google file opens in the review view, in Google's own preview (file-review.ts); any other link at its site.
+  const google = link && !f.hit && !!googlePreviewUrl(String(url || ''));
+  const attrs = page ? '' : link ? ` target="_blank" rel="noopener noreferrer"${google ? ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.title)}"` : ''}`
+    : ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.name || f.title)}"`;
   const kindName = (LF_KINDS.find(([v]) => v === kind)?.[1] || 'Other').replace(/s$/, '');
   const bot = pageBotName(f), when = ago(f.last_activity_at), team = lfTeamName(botRow(f.bot)?.team) || '—';
   const pinned = f.pins || [];
@@ -696,7 +900,11 @@ function lfDraw() {
 // Called by redesignRoute (ui/app/redesign.ts) before the router's own list.
 function pagesRoute(r: string) {
   if (rdUnder(r, RD_FILES)) { pageLibraryFiles(); return true; }
-  if (r.startsWith(PAGE_ROUTE)) { void pageFullView(decodeURIComponent(r.slice(PAGE_ROUTE.length).split('?')[0] ?? '')); return true; }
+  if (r.startsWith(PAGE_ROUTE)) {
+    const [id = '', query = ''] = r.slice(PAGE_ROUTE.length).split('?');
+    void pageFullView(decodeURIComponent(id), Number(new URLSearchParams(query).get('v')) || 0);
+    return true;
+  }
   return false;
 }
 function pagesStop(r: string) {

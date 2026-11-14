@@ -41,20 +41,10 @@ interface BotPillState {
 // ---- tasks on a bot's page (S14): each row is the title, a Late tag, and its stage dimmed at the right
 const V2_ACTIVE = ['open'];
 const V2_ENDED = ['done', 'closed'];
-// Stage names by stage id, from the pipelines list: a list row names only its stage's id.
-const BOT_STAGE_NAMES = new Map<string, string>();
 async function botStageNamesLoad() {
   try {
     for (const p of await pipelinesAll()) for (const st of p.stages) if (st.id) BOT_STAGE_NAMES.set(st.id, st.name);
   } catch { /* rows show without their stage until the next read */ }
-}
-function botTaskStage(t: TaskAny): string {
-  const stage = 'stage' in t ? t.stage as {name?: string} | null | undefined : null;
-  return stage?.name || BOT_STAGE_NAMES.get(t.stage_id || '') || '';
-}
-function botTaskRowHTML(t: TaskAny): string {
-  const stage = t.status === 'open' ? botTaskStage(t) : '';
-  return taskRowHTML(t, {after: stage ? `<span class="muted">${esc(stage)}</span>` : ''});
 }
 // The task a Needs-you item is about: an ask's or a task's own, a stuck stretch's first.
 const botNeedTaskId = (it: NeedsEntry) => String(it.task_id || it.task_ids?.[0] || it.task?.id || '');

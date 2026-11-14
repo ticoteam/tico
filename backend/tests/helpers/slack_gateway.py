@@ -375,16 +375,22 @@ def digests(hub):
     )
 
 
-# ----------------------------------------------------------------------------- the question cap
+# ----------------------------------------------------------------------------- the call's size and question count
+GATEWAY_MOST = 40  # the Gateway answers a call of 41 or more questions with an error (production, 2026-11-13)
+
+
 class CappedJudge:
-    """The real contract's cap and shape check on every call; answers by question id."""
+    """The Gateway's 40-question refusal and the real contract's size and shape check on every call; answers by
+    question id."""
 
     def __init__(self, scores, fail=None):
         self.scores, self.fail, self.calls = scores, fail, []
 
     def __call__(self, state, questions, label=None):
         self.calls.append(list(questions))
-        J.validate(state, questions, label)  # more than J.MAX_QUESTIONS is refused, as the real call does
+        if len(questions) > GATEWAY_MOST:
+            raise J.JudgeError("unavailable", "The decision model answered with an error")
+        J.validate(state, questions, label)  # a call past J.MAX_CALL_CHARS is refused, as the real call does
         if self.fail:
             raise self.fail
         return {

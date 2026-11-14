@@ -20,7 +20,7 @@ interface ReposSaveBody {
   setup_command?: string;
 }
 type ProductRepoPreview = import('../types/api').ProductRepositoryPreview;
-let REPOS: ReposView | null = null;                 // the last GET: {repositories, new_bot_default, github_connected}
+                 // the last GET: {repositories, new_bot_default, github_connected}
 let REPOS_SHOW_BOTS = false;      // bot repositories stay out of Not in use until asked for
 let REPOS_SHOW_ARCHIVED = false;  // archived ones too
 let REPOS_OFF_OPEN = false;       // Not in use opened without a search
@@ -34,11 +34,6 @@ const repoNameHTML = (name: string) => {
   const cut = String(name).indexOf('/');
   return cut < 0 ? esc(name) : `<span class="repo-org">${esc(name.slice(0, cut + 1))}</span>${esc(name.slice(cut + 1))}`;
 };
-// Two to three choices as one row of real radios: arrow keys move between them, as everywhere else.
-function repoSegHTML(name: string, label: string, options: ReadonlyArray<readonly [string, string]>, value: string, disabled: boolean, extra = '') {
-  return `<div class="repo-seg${extra}" role="radiogroup" aria-label="${esc(label)}">${options.map(([v, text]) =>
-    `<label><input type="radio" name="${esc(name)}" value="${esc(v)}"${v === value ? ' checked' : ''}${disabled ? ' disabled' : ''}><span>${esc(text)}</span></label>`).join('')}</div>`;
-}
 const REPO_LOCKED = 'Owners and admins change this';
 
 // The bots whose own repository this is, from the roster already loaded; '' when none is known.

@@ -136,6 +136,12 @@ def _size(tokens):
     return f"{tokens // 1_000_000}M" if tokens >= 1_000_000 and tokens % 1_000_000 == 0 else f"{tokens // 1000}k"
 
 
+def _fit(compact_at, model):
+    """The task context length lowered to fit `model`'s window, so the run note names the size the turn uses."""
+    window = (providers.MODEL_BY_ID.get(model or "") or {}).get("context_tokens")
+    return providers.fit_compact_at(compact_at, window) if compact_at else compact_at
+
+
 def _context_said(compact_at):
     return f", context {_size(compact_at)}" if compact_at else ""
 
@@ -344,10 +350,15 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
     applied. The task's own model is tried first, then the bot's task model, then the bot's own model."""
     tasks = stored(followed)
     mine = task_run_models.of(c, task_id) if task_id else None
-    if not (tasks or mine) or not task_keyed(followed, bot, task_id, session_task_id, conversation_id):
+    # The task's own window comes before the bot's task context length; with no model of its own, it is all it sets.
+    own_window = (mine or {}).get("compact_at")
+    if mine and not mine.get("model"):
+        mine = None
+    if not (tasks or mine or own_window) or not task_keyed(followed, bot, task_id, session_task_id, conversation_id):
         return followed, None
     choice = of(followed)
-    compact_at = tasks["compact_at"] if tasks else None
+    compact_at = own_window or (tasks["compact_at"] if tasks else None)
+    task_effort = tasks["reasoning_effort"] if tasks else ""
     if mine:
         # Saved with its effort checked against its model; a model that has moved on since does not take it.
         mine = {
@@ -376,7 +387,8 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
         # The bot's own model runs the task, with its task effort when that model takes it. The task model field goes
         # off this turn: there is no other model to switch to, and the runner reads that field as one.
         own = providers.bot_choice(c, settings, followed)[1]
-        applied, dropped = _effort_on(own, tasks["reasoning_effort"])
+        compact_at = _fit(compact_at, own)
+        applied, dropped = _effort_on(own, task_effort)
         out = _turn({k: v for k, v in followed.items() if k != KEY}, applied, compact_at)
         note = f"Ran on the bot's model {own}" if own else "Ran on the bot's model"
         note += f" at task effort {applied}" if applied else ""
@@ -384,7 +396,7 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
         note += f" (task effort {dropped} is not one {own or 'its model'} takes)" if dropped else ""
         return out, {
             "source": "task",
-            "asked": {"model": "", "reasoning_effort": tasks["reasoning_effort"]},
+            "asked": {"model": "", "reasoning_effort": task_effort},
             "effort": applied,
             "compact_at": compact_at,
             "note": note,
@@ -401,6 +413,7 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
 def _on_task_model(c, settings, bot, followed, choice, own, compact_at, failed):
     """The turn on a task model that can run: the task's own, or the bot's task model after the task's own could not."""
     named = "the task's model" if own else "the bot's task model"
+    compact_at = _fit(compact_at, choice["model"])
     note = f"Ran on {named} {label(choice)}{_context_said(compact_at)}"
     record = {
         "source": "task",
@@ -439,6 +452,7 @@ def _on_own_model(c, settings, followed, failed, compact_at):
     first = failed[0][0]
     own_model = providers.bot_choice(c, settings, followed)[1]
     own = own_model or "the bot's own model"
+    compact_at = _fit(compact_at, own_model)
     bot_effort = followed.get("reasoning_effort") or ""
     applied, dropped = _effort_on(own_model, first["reasoning_effort"])
     at = f" at task effort {applied}" if applied else (f" ({bot_effort})" if bot_effort else "")

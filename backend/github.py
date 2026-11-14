@@ -84,9 +84,9 @@ def _links_for(c, url):
 
 
 def _due(c, task, burst):
-    # Under a wake preset the preset is the one timer: the burst goes out on the next flush, and the hold coalesces it
-    # from then (backend/wake_presets.py). Current behaviour keeps the three-minute burst.
-    return H.now() if _preset_owner(c, task) else burst.get("due") or H.shift(H.now(), seconds=170)
+    # A bot owner's burst goes out on the next flush and the release policy's notice wait coalesces it from then
+    # (backend/wake_presets.py); a person's keeps the three-minute burst.
+    return H.now() if _bot_owner(task) else burst.get("due") or H.shift(H.now(), seconds=170)
 
 
 def _save_burst(c, task, burst, **parts):
@@ -100,7 +100,7 @@ def queue_wake(c, task, item, batch=None):
     """Keep one bounded, durable burst per task; the scheduler sends it within three minutes.
 
     `batch` is the kind of nonblocking notice the item is (wake_presets.BATCH_KINDS: review comments, a finished
-    request), which the owner's wake preset may hold. A burst stays batchable only while every item in it is;
+    request), which the release policy's notice wait holds. A burst stays batchable only while every item in it is;
     one item that is not (a conflict, a result an armed link waits on) makes the whole burst wake at once. The burst
     also carries `done` (a head's finished checks) and `notes` (reviews that are not a person's), each sent as its own
     message so one can never lift or lower another."""
@@ -134,25 +134,22 @@ def queue_note(c, task, item):
 def queue_checks_done(c, task, head, result, item, armed):
     """Every check on `head` finished with `result` (pass or fail): the one `pr_checks_done` event for it. `armed` is
     the link's `wake_once`, which the same event answers. A result still waiting to be sent for the same head is
-    replaced (a suite GitHub never announced finished late), and keeps an arming it already answered."""
+    replaced (a suite GitHub never announced finished late), and keeps an arming it already answered. `at` is when Tico
+    had the result: a run that began after it already saw it (rules._no_run_needed)."""
     from .repositories import metadata
 
     burst = metadata(c, "github-task-wake:" + task["id"])
     older = [d for d in burst.get("done", []) if d["head"] == head]
     done = [d for d in burst.get("done", []) if d["head"] != head]
     armed = armed or any(d.get("armed") for d in older)
-    done.append({"head": head, "result": result, "item": item[:1000], **({"armed": True} if armed else {})})
+    done.append(
+        {"head": head, "result": result, "item": item[:1000], "at": H.now(), **({"armed": True} if armed else {})}
+    )
     _save_burst(c, task, burst, done=done[-10:])
 
 
-def _preset_owner(c, task):
-    from . import wake_presets
-
-    owner = str(task.get("owner_id") or "")
-    if not owner.startswith("bot:"):
-        return False
-    row = c.execute(BS.ONE_SQL, (owner[4:],)).fetchone()
-    return wake_presets.preset_of(H._json(row[0], {}) if row else {}) != wake_presets.CURRENT
+def _bot_owner(task):
+    return str(task.get("owner_id") or "").startswith("bot:")
 
 
 def fire_once(detail, item):
@@ -168,13 +165,19 @@ def end_own_snooze(c, task_id, why):
     """Every check on a head finished: a snooze the owner bot set on its own task is how it waits for them, so it ends
     here, as SYSTEM, and the head's `pr_checks_done` wakes it (stress run, Nov 12: "wakes when its checks finish" slept
     40 minutes past them). A snooze anyone else set stays, and so does the owner's while the task waits on a person:
-    those results stay notes (`rules._pr_decision`). True when it ended."""
+    those results stay notes (`rules._pr_decision`). When the checks passing was the last thing the stage asked, it is
+    nobody's turn: the snooze ends all the same and the task moves on at once when the next stage has room, else it
+    waits for room like any other (Nov 12: Tico Team's Build tasks sat for hours, snoozed "until checks pass", with
+    their checks passed and Review 1 unlimited). True when it ended."""
     from . import task_engine as E
 
     row = E.task(c, task_id)
-    snooze = (row or {}).get("snooze") or {}
-    if not row or not snooze or snooze.get("by_id") != row.get("owner_id") or not E.is_bot(row.get("owner_id")):
+    if not row or not E.own_snooze(row):
         return False
+    if E.ready_but_snoozed(c, row):
+        if not E.move_on_past_own_snooze(c, task_id, why):
+            E.unsnooze(c, task_id, E.SYSTEM, why)
+        return True
     if E._turn_of(c, {**row, "snooze": None})[0] != row["owner_id"]:
         return False
     E.unsnooze(c, task_id, E.SYSTEM, why)
@@ -220,6 +223,7 @@ def flush_wakes(c):
                         refs={
                             "pr_head": done["head"],
                             "pr_result": done["result"],
+                            **({"pr_done_at": done["at"]} if done.get("at") else {}),
                             **({"pr_armed": True} if done.get("armed") else {}),
                         },
                         trigger="pr_checks",
@@ -1010,7 +1014,10 @@ def _counted(checks, suite_runs=None):
     group cancels the older duplicate workflow run when the newer one starts (Nov 12 stress run, I38). The same
     workflow is a newer suite (ids only grow) of the same App with a check run of the same name (`SUITE_RUNS`). A
     suite with no id, or whose runs were never seen, is never superseded: a cancelled workflow is never hidden behind
-    another workflow of the same App."""
+    another workflow of the same App. Tico's own `tico/merge-ok` is left out too, with the suite it ran in: it is the
+    Merge stage's gate, red on every commit the stage did not queue, never a CI result (#395)."""
+    from .item_sources.github import MERGE_OK
+
     suite_runs = suite_runs or {}
 
     def split(key):
@@ -1028,7 +1035,14 @@ def _counted(checks, suite_runs=None):
             for other in checks
         )
 
-    return {k: v for k, v in checks.items() if not (v == "cancelled" and k.startswith("suite:") and superseded(k))}
+    def gate(key):
+        return key == MERGE_OK or set(suite_runs.get(key) or ()) == {MERGE_OK}
+
+    return {
+        k: v
+        for k, v in checks.items()
+        if not gate(k) and not (v == "cancelled" and k.startswith("suite:") and superseded(k))
+    }
 
 
 def _overall(checks, suite_runs=None):
@@ -1121,9 +1135,10 @@ def _set_dropped(detail, dropped, pending=False):
 
 
 def _still_going(detail):
-    """Whether the stored copy says a check on the head was still going: one it kept, or one it left out."""
+    """Whether the stored copy says a check on the head was still going: one it kept, or one it left out. Tico's own
+    gate is not a check that is going (`_counted`)."""
     return (
-        "pending" in (detail.get("checks") or {}).values()
+        "pending" in _counted(detail.get("checks") or {}, detail.get(SUITE_RUNS)).values()
         or detail.get("checks_dropped") == "pending"
         or bool(detail.get(DROPPED_PENDING))
     )
@@ -1317,7 +1332,8 @@ def apply_checks(c, link_id, head, checks, since=None):
     dropped, dropped_pending = _dropped(checks, kept), _dropped_pending(checks, kept)
     # The stored copy still held a running check (kept or left out): a read that finds none going finishes the head
     # even when its state stays the same.
-    held = _still_going(detail) and "pending" not in checks.values()
+    counted = _counted(checks, suite_runs)
+    held = _still_going(detail) and "pending" not in counted.values()
     if (
         detail.get("checks") == kept
         and link.get("checks") == state
@@ -1332,7 +1348,7 @@ def apply_checks(c, link_id, head, checks, since=None):
     _set_dropped(detail, dropped, dropped_pending)
     changed = state != link.get("checks")
     # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
-    finished = state != "pending" and "pending" not in checks.values() and (changed or held)
+    finished = state != "pending" and "pending" not in counted.values() and (changed or held)
     if finished:
         _finish(c, task, link, detail, head, checks)
     record_health_wait({**link, "checks": state}, detail)
@@ -1343,6 +1359,13 @@ def apply_checks(c, link_id, head, checks, since=None):
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
     return state
+
+
+def _own_app(c, suite):
+    """Whether a check suite is the company GitHub App's own, the one that posts `tico/merge-ok`."""
+    slug = str((suite.get("app") or {}).get("slug") or "").lower()
+    app = c.execute("SELECT slug FROM github_app LIMIT 1").fetchone()
+    return bool(slug and app and str(app["slug"]).lower() == slug)
 
 
 def pr_signal(c, event, payload):
@@ -1416,6 +1439,11 @@ def pr_signal(c, event, payload):
             suite_runs = detail.get(SUITE_RUNS) or {}
             if own.get("id"):
                 _add_suite_run(suite_runs, _suite_key(own, signal), name)
+            if event == "check_suite" and _own_app(c, signal):
+                # The company App posts only `tico/merge-ok`: its suite is the gate's even before its run is seen.
+                from .item_sources.github import MERGE_OK
+
+                _add_suite_run(suite_runs, name, MERGE_OK)
             kept = _kept(checks)
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
             pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
@@ -1426,7 +1454,9 @@ def pr_signal(c, event, payload):
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
             # can be the last one, so it counts too.
-            suite_done = any(k.startswith("suite:") and v != "pending" for k, v in checks.items())
+            # Tico's own gate and its App's suite are not CI (`_counted`): one queued that never runs holds nothing.
+            counted = _counted(checks, suite_runs)
+            suite_done = any(k.startswith("suite:") and v != "pending" for k, v in counted.items())
             if (
                 (
                     event == "check_suite"
@@ -1436,12 +1466,12 @@ def pr_signal(c, event, payload):
                     and state != "pending"
                     or event not in ("check_suite", "workflow_run")
                     and left_pending
-                    and (suite_done or not any(k.startswith("suite:") for k in checks))
+                    and (suite_done or not any(k.startswith("suite:") for k in counted))
                 )
-                and "pending" not in checks.values()
-                and not set(checks.values()) <= {"skipped"}
+                and "pending" not in counted.values()
+                and not set(counted.values()) <= {"skipped"}
                 # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
-                and (not dropped or "failing" in checks.values())
+                and (not dropped or "failing" in counted.values())
                 # A check the copy left out may still be going: the next fresh read (apply_checks) finishes the head.
                 and not _still_going(detail)
             ):
@@ -2607,9 +2637,9 @@ class AppGitHub:
             ((self._get(repo, f"/pulls/{int(number)}", permissions).json() or {}).get("base") or {}).get("ref") or ""
         )
         if not base:
-            return None
+            return {"diff_id": None, "commits": None, "files": None}
         path = f"/compare/{quote(base, safe='')}...{quote(sha, safe='')}"
-        return GS.diff_id((self._get(repo, path, permissions).json() or {}).get("files"))
+        return GS.diff_of(self._get(repo, path, permissions).json() or {})
 
     # ------------------------------------------------------------------ the merge queue
     def ready(self, repo, number):

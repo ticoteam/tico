@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is five recorded answers, the `knowledge/` files written, a first result built from a real export, and the
 first routine checked.
 
@@ -34,7 +34,7 @@ Numbered, each with its one-line why and a default where there is one.
 
 ## 4. Record
 
-Answers go to `state.md` under `## Answers`, dated. Write the `knowledge/` files listed in `AGENT.md`, with
+Answers go, dated, into the `knowledge/` files they belong to. Write the `knowledge/` files listed in `AGENTS.md`, with
 `knowledge/quality-method.md` copied from the standing method. Anything nobody answered goes in
 `knowledge/open-questions.md`, not guessed.
 
@@ -48,8 +48,7 @@ labelled "First draft, not yet reviewed".
 Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id>
 --enable`) and tell the human in one line: "I will send the weekly quality page every Monday at 09:00 team time."
 
-They can change it or turn it off any time; there is nothing to approve. Record it in `memory/decisions.md` and set
-`state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off, change the routine to match
+They can change it or turn it off any time; there is nothing to approve. Record it in `memory/decisions.md`. If they asked for a different schedule or to leave it off, change the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:

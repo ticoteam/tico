@@ -4,7 +4,7 @@ A login is (computer, subscription profile or "" for the computer's own login, r
 login's usage limit, a hold is saved here, in the database, so it outlives a restart of the runner or the server:
 - until the reset the provider gave (Claude says it in words: "resets 2:40am (UTC)"), honored even when it is days
   away, as long as it is in the future and within LIMIT_RESET_MAX;
-- otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 60, then 120 minutes at most);
+- otherwise for BACKOFF[n] after the n-th limit in a row on that login (30, 50, then 120 minutes at most);
 - for CAPACITY_WAIT only when the provider said the model is at capacity or overloaded for now (`capacity`): the
   provider's busy moment, not the login's quota, so it neither waits out a backoff nor counts in the streak.
 While it holds, no bot starts a turn on that login: a bot with a fallback that is ready and not held itself runs
@@ -24,10 +24,13 @@ from datetime import timedelta, timezone
 
 from clients import gateway
 
+from .prompt_cache import CACHE_WARM_S
 from .store import H
 
 PREFIX = "login-hold:"
-BACKOFF = (1800, 3600, 7200)  # seconds held after the 1st, 2nd and later limits in a row with no reset given
+# Seconds held after the 1st, 2nd and later limits in a row with no reset given; the second comes back while the bot's
+# session is still cached (backend/prompt_cache.py).
+BACKOFF = (1800, CACHE_WARM_S, 7200)
 LIMIT_RESET_MAX = 8 * 86400  # a reset further off than a weekly window is not believed
 PROBE_STALE = 900  # a probe job that has not started within this long stops holding the others back
 LIVE_JOB = ("leased", "running")

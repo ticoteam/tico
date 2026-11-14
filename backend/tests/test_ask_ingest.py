@@ -74,7 +74,7 @@ def assert_refused(api, response, before=None):
 # ---- the decision table, plain code ----------------------------------------------------------------------------
 
 
-def answers(clear=True, kind="decision", meets="none", urgency=1, recommends=False, covered="new"):
+def answers(clear=True, kind="chore", meets="none", urgency=1, recommends=False, covered="new"):
     return {
         "clear": clear,
         "kind": kind,
@@ -105,6 +105,9 @@ def answers(clear=True, kind="decision", meets="none", urgency=1, recommends=Fal
         (0, answers(kind="status"), (A.FYI, "status")),  # criterion 7
         (50, answers(kind="chore"), (A.SENT_BACK, "recommends")),  # criterion 8
         (0, answers(kind="own_work"), (A.SENT_BACK, "own_work")),  # criterion 9
+        (0, answers(kind="decision"), (A.SENT_BACK, "decision")),  # asked as a question instead (asks-not-todos AC-6)
+        (0, answers(kind="decision", urgency=3), (A.SENT_BACK, "decision")),
+        (4, answers(kind="setup"), (A.THROUGH, "under_budget")),
         (0, answers(clear=False), (A.SENT_BACK, "unclear")),
         (0, answers(clear=False, urgency=3), (A.THROUGH, "urgent")),
         (0, answers(clear=None), (A.FAILED_OPEN, "below_threshold")),
@@ -1158,3 +1161,103 @@ def test_the_plate_is_the_persons_needs_you_as_the_engine_reads_it(company):
         assert not A.on_plate(c, "human:ben", later)
         offered = {task_id for task_id, _title in A.open_items(c, "human:ben", "bot:ops").values()}
         assert offered == {mine, asked}
+
+
+# ---- #239: replayed items asked several to a call (backend/decide_groups.py) ---------------------------------------
+
+
+class GroupedModel:
+    """The set answered for several items in one call: each item answered by `inner` from its own state and questions
+    alone (an item titled `Vague` is unclear); the answer of any item whose title is in `skip` is left out of a grouped
+    call, and a grouped call raises `down` when set. `calls` holds each call's item count."""
+
+    def __init__(self, inner):
+        self.inner, self.calls, self.skip, self.down = inner, [], set(), None
+
+    def one(self, state, questions):
+        self.inner.clear = 0.1 if "Vague" in state["item"]["title"] else 0.95
+        return self.inner(state, questions)
+
+    def __call__(self, state, questions, label=None):
+        from backend import decide_groups as DG
+
+        held = DG.split(state, questions)
+        if held is None:
+            self.calls.append(1)
+            return self.one(state, questions)
+        self.calls.append(len(held))
+        if self.down:
+            raise self.down
+        answers = {}
+        for _, item, ids in held:
+            if item["item"]["title"] in self.skip:
+                continue
+            got = self.one(item, {qid: questions[key] for qid, key in ids.items()})["answers"]
+            answers.update({ids[qid]: a for qid, a in got.items()})
+        return {"model": "jev-1.14", "usage": {}, "ms": 120, "cost_usd": 0.002, "answers": answers}
+
+
+def replayed_day(gate, count=10):
+    """`count` small bot tasks put on Ben while his check was Off, every other one vague; then the check On."""
+    api, model, token = gate
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
+    for n in range(count):
+        file(api, token, title=f"Vague thing {n}" if n % 2 else f"Pick the date {n}", body=f"Option A or B, {n}?")
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ben", "human:ben", {"mode": "on", "budget": 10, "chores_budget": 5, "criteria": []})
+    grouped = GroupedModel(model)
+    api.app.state.judge = grouped
+    return api, grouped
+
+
+def replay_verdicts(api):
+    r = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]}, headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    return [(i["title"], i["would"], i["reason"]) for i in r.json()["items"]]
+
+
+def test_ten_replayed_items_take_at_most_two_calls_with_the_verdicts_given_alone(gate, monkeypatch):
+    """AC-8 for ask replay: ten small items, at most two calls, each item's verdict the one it gets alone; one
+    judge.call row per call, marked replay."""
+    from backend import decide_groups as DG
+
+    api, grouped = replayed_day(gate)
+    alone = replay_verdicts(api)
+    assert len(grouped.calls) == 10 and {why for _, _, why in alone} >= {"unclear"}
+    monkeypatch.setattr(A, "REPLAY_GROUP", DG.MOST)
+    before = len(calls(api))
+    assert replay_verdicts(api) == alone
+    assert len(grouped.calls) - 10 <= 2 and sum(grouped.calls[10:]) == 10
+    rows = [json.loads(row["detail"]) for row in calls(api)[before:]]
+    assert len(rows) == len(grouped.calls) - 10 and all(row["mode"] == "replay" for row in rows)
+    assert all("Vague thing" not in json.dumps(row) for row in rows)
+
+
+def test_a_replayed_item_missing_from_a_grouped_answer_is_asked_again_alone(gate, monkeypatch):
+    """AC-9: the missing item is asked again on its own and gets its own verdict, never a neighbour's."""
+    from backend import decide_groups as DG
+
+    api, grouped = replayed_day(gate, count=4)
+    alone = replay_verdicts(api)
+    monkeypatch.setattr(A, "REPLAY_GROUP", DG.MOST)
+    grouped.skip.add("Vague thing 1")
+    assert replay_verdicts(api) == alone
+    assert grouped.calls[4:] == [4, 1]
+
+
+def test_a_failed_grouped_replay_call_fails_each_item_open(gate, monkeypatch):
+    """AC-10: a grouped call the Gateway cannot answer is each item's failed call: every item fails open with the
+    call's error, and the call is not repeated per item."""
+    from backend import decide_groups as DG
+    from clients import judge as J
+
+    api, grouped = replayed_day(gate, count=4)
+    monkeypatch.setattr(A, "REPLAY_GROUP", DG.MOST)
+    grouped.down = J.JudgeError("unavailable", "down")
+    before = len(calls(api))
+    got = replay_verdicts(api)
+    assert [(would, why) for _, would, why in got] == [(A.FAILED_OPEN, "unavailable")] * 4
+    assert grouped.calls == [4]
+    (row,) = [json.loads(row["detail"]) for row in calls(api)[before:]]
+    assert (row["error"], row["items"], row["mode"]) == ("unavailable", 4, "replay")

@@ -3,12 +3,13 @@
 
 A wake is a row in `messages` with a `wake_key`: `<task id>:<visit id>:<level>:<try>`. The key is unique, so writing the
 same wake twice is one wake. It is written in the same transaction as the move that causes it. The body says what is
-missing and the five ways a run may end. A bot has at most one wake queued per task: a second one carries the first's
+missing and the six ways a run may end. A bot has at most one wake queued per task: a second one carries the first's
 words before its own, and the first is canceled, so one run starts and nothing said is lost. The wake remembers what
 was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes out its words alone.
 """
 
 import json
+import logging
 from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, cast
 
@@ -19,16 +20,20 @@ if TYPE_CHECKING:
     import sqlite3
 
 Row = dict[str, Any]
+_log = logging.getLogger(__name__)
 # run_triggers is untyped: its functions are Any here.
 RT: Any = run_triggers
 
 ENDINGS = (
-    "Leave the task in one of five states before you stop:\n"
+    "Leave the task in one of six states before you stop:\n"
     "1. Done with the stage: what is missing is met, or you moved the task.\n"
     "2. Asking a person, on the task.\n"
     "3. Waiting on a task you filed.\n"
-    "4. Snoozed, with a reason, to a date where there is one.\n"
+    "4. Snoozed, with a reason, to a date where there is one: only to look again on a date.\n"
     "5. Closed, with a reason.\n"
+    "6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`). You are woken when #N ends. "
+    "Never snooze for a block.\n"
+    "While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.\n"
     "Anything else counts as stopped early and you are woken again."
 )
 
@@ -43,11 +48,21 @@ def key(task_id: str, visit_id: str, level: str = "owner", try_n: int = 0) -> st
     return f"{task_id}:{visit_id}:{level}:{try_n}"
 
 
+def filed_under(wake_key: str, task_id: str) -> bool:
+    """Whether `wake_key` starts with `task_id`, the part `message_task` reads as its run's task."""
+    return wake_key.split(":", 1)[0] == task_id
+
+
+# The task's Human (tasks.human_id): the person its questions and OKs go to, whoever owns it (one sentence).
+HUMAN_LINE = "{name} is this task's Human, so ask them the questions and OKs it needs from a person (--to {to})."
+
+
 def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | None) -> str:
     """What a bot reads when it is woken for a task: the stage, the person's notes on the sign-off that let it in
-    (stage_effects.notes_on_the_way_in), what earlier stages handed on (stage_inputs), what is missing, and how its run
-    may end. Said to `to`, whom it wakes, in words kept in the task's thread: a task this one filed is named only as
-    `told` allows, and the pages of the task that filed this one only when it is not private."""
+    (stage_effects.notes_on_the_way_in), what earlier stages handed on (stage_inputs), what is missing, whom to ask (the
+    task's Human, while they can act on it), and how its run may end. Said to `to`, whom it wakes, in words kept in the
+    task's thread: a task this one filed is named only as `told` allows, and the pages of the task that filed this one
+    only when it is not private."""
     from . import stage_inputs
     from . import waiting_on as W
 
@@ -65,7 +80,7 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
         lines.append(repos)
     handed = stage_inputs.of(conn, task, shown, lambda filer: not _h().task_private(conn, filer))
     if handed:
-        lines.append("From earlier stages (read each before you act):")
+        lines.append("From earlier stages:")
         lines += stage_inputs.lines(conn, handed)
         if any(entry["kind"] == "pr" and entry.get("url") for entry in handed):
             lines.append(stage_inputs.READ_CHECKS)
@@ -87,13 +102,30 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
                 lines.append(f"  {R.decide_commands(str(task['id']), str(s.requirement['id']))}")
             elif R.asked_to_review(s, to):
                 lines.append(f"  {R.review_commands(str(task['id']), str(s.requirement['id']))}")
+    if (human := task.get("human_id")) and W.person_for(conn, task) == human:  # their Human, while they can act on it
+        lines.append(HUMAN_LINE.format(name=_h().actor_name(conn, human), to=human))
+    if any(_review_page(s.requirement) for s in missing):
+        lines.append(FROM_THE_DIFF)
     lines.append(f"Version {task.get('version')}. Send it with every command on this task.")
     lines.append(ENDINGS)
     return "\n".join(lines)
 
 
+# A review stage starts from what changed, not from a walk through the repository (token plan item 8).
+FROM_THE_DIFF = (
+    "Start the review from the diff, the spec and the failing checks. Read more of the repository only where the "
+    "diff needs it."
+)
+
+
+def _review_page(requirement: Row) -> bool:
+    """A page requirement for a review of the PR's newest commit (Review 1 and 2)."""
+    settings: Row = requirement.get("settings") or {}
+    return requirement.get("kind") == "page" and bool(settings.get("at_head"))
+
+
 def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standing]) -> str | None:
-    """On a stage where a person OKs a page that is not a review (Fixes 2's Review page), the commits no bot reviewed
+    """On a stage where a person OKs a page that is not a review (QA's page), the commits no bot reviewed
     (task_requirements.unreviewed), so the page the bot writes says it. Not when the ask already says it, nor once the
     page is OK'd, nor while the bot that wrote the newest review is here to review them before the person is asked
     (task_requirements._new_commits)."""
@@ -191,6 +223,12 @@ def add(
     if not target:
         return None
     wake_key = wake_key or key(task["id"], visit["id"], level, try_n)
+    if not filed_under(wake_key, task["id"]):
+        # The run's task is read from the key's first part (message_task): a key filed under anything else names a
+        # task that is not this one, and its run would be refused at every claim (#240, the "room:" keys). Refused
+        # here, so nothing is queued.
+        _log.warning("wake refused: key %r is not filed under task %s", wake_key, task["id"])
+        return None
     if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (wake_key,)).fetchone():
         return None
     if not H._actor_exists(conn, target):
@@ -226,6 +264,10 @@ def add(
     theirs: Row = {name: value for name, value in (refs or {}).items() if name not in ENGINE_REFS}
     if not theirs.get("wake_batch"):
         carried.pop("wake_batch", None)  # a wake that is not batchable is not held for what it folded (wake_presets)
+    if not theirs.get("release"):
+        # Nor is a task's turn held by a routine run's release policy it folded: a turn in a pipeline is never held.
+        carried.pop("release", None)
+        carried.pop("release_kind", None)
     stamped: Row = RT.stamp({**carried, **theirs, **own}, trigger or "task_turn", source)
     message = H._write_message(
         conn,
@@ -651,9 +693,11 @@ def _runs_of(k: str) -> str:
     # CROSS JOIN keeps this order (task, message, job, run), and `+` keeps a test for "names none" off an index: else
     # SQLite may start from every run with no message or no task.
     alone = " AND +x.task_id IS NULL"
-    out = [f"SELECT {k}.t AS t, x.rowid AS rid FROM {k} CROSS JOIN attempts x ON x.task_id = {k}.t"]
+    # A keep-warm turn (backend/keep_warm.py) is no run on its task: not a try, not one of the 7, not when it stopped.
+    warm = f" AND coalesce(x.purpose, '') <> '{RT.KEEP_WARM}'"
+    out = [f"SELECT {k}.t AS t, x.rowid AS rid FROM {k} CROSS JOIN attempts x ON x.task_id = {k}.t{warm}"]
     for n, way in enumerate(ways):
-        extra = alone if n == 2 else ""
+        extra = (alone if n == 2 else "") + warm
         found = f"SELECT {k}.t, x.rowid FROM {k} CROSS JOIN messages y ON {way} CROSS JOIN "
         out.append(f"{found}attempts x ON x.message_id = y.id{extra}")
         out.append(
@@ -785,6 +829,17 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
         # pursuing a task goal that ended, so it reaches the old owner's session even when the task is no longer
         # theirs. Only the server's own: refs a bot sends are not trusted to skip the hold.
         return True
+    if found[3] == H.KEEPER and refs.get("wake") == "keep_warm":
+        # Tico's keep-warm turn (backend/keep_warm.py) does no work and is no run on the task (`_runs_of`): it needs no
+        # turn and is not held to the 7 runs, only to the task still being in an active stage.
+        from . import keep_warm
+
+        named = message_task(conn, message_id)
+        row = E.task(conn, named) if named else None
+        if row and keep_warm.may_start(conn, row, str(H.actor_id(found[1])), message_id):
+            return True
+        conn.execute("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,))
+        return False
     parts = str(found[0] or "").split(":")
     task = E.task(conn, parts[0]) if found[0] else None
     if task is None:

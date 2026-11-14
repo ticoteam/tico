@@ -52,6 +52,48 @@ that variable when the optional variable field is blank. An explicit variable al
 **Manage access > Every computer** lets computers sign their models in. It gives no bot access: grant a bot separately.
 Older name-only model credentials also offer this choice; granting them fills the missing variable without changing the secret.
 
+## Website logins
+
+A **website tool** (Tools → Add → Website) is a site the company signs in to: its sites (a host such as
+`app.example.com`; its subdomains count; plain `http://` only when written so) and its accounts. Each account is a
+login Credential: a username, a password and, optionally, a **2FA key** (the setup key or `otpauth://` link the site
+shows when 2FA is turned on). The password and the 2FA key are sealed like every other value. The username and the
+password may be left blank for a site a person signs in to by hand (Google or SSO sign-in, an emailed code, a
+passkey): a bot's fill or copy of the missing value is refused with `no_password` (or `no_username`), and the bot asks a
+person to sign in through the live view; **Replace login** adds a password later.
+
+- **Shared** account: used by the people, bots and groups it is shared with (**Who can use it**, the same grants as any
+  Credential). Credential administrators add one. A new shared account defaults to **All bots**, including bots added
+  later; turn that off in **Who can use it** to keep selected grants. People always need their own grant (or a group).
+  Existing accounts keep their saved access. All bots is a website-account grant, not permission to reveal a password
+  or to give an API key to every bot. A group gives it to every person and bot in it and in the groups nested under it,
+  now and later, as a group in **Who can see it** does; leaving the group, removing the group from the account or
+  deleting the group ends it at the next use. Only a credential administrator changes All bots or shares with a group,
+  and only on a website login: never an API key.
+- **Own** account: one person's or one bot's, used by them alone (and by that person's Assistant). It is never shared.
+  A person adds one for themselves or for a bot they manage.
+- Which account a caller gets on a site: their own there, else the shared one shared with them (the oldest when there
+  are two), else "No account".
+- **Central only** (for banks): the site runs only in the browser host's browser (see
+  [Computers](computers.md#browser-host)), and its login is never copied to a clipboard or shown as a code.
+
+What leaves the vault, and to whom:
+
+- The password goes only to the computer whose browser types it, inside one `tico login fill` (or onto the caller's
+  own clipboard for 30 s with `tico login copy`). The computer types it only on the tool's own sites over https, and
+  only into a password box. It is masked in every run's output on that computer.
+- The 2FA key never leaves the server. The server works out the current code when a fill, copy or code is asked for and
+  sends only the 6 to 8 digits. At most 20 successful fills, copies and codes an hour per account; a refused fill does not count.
+- A bot never sees a password or a 2FA key: no environment variable, no file, no list, no event. Login Credentials
+  never go to `credential-runtime` or a computer's secrets.
+- A person who can use the account sees the current code (**Show code**) and may reveal the password (**Reveal
+  password**, logged). A bot, an agent token, BotOps and the Assistant cannot reveal it.
+- Every open, fill, copy, code, download, upload and ask is a row on the tool's Activity: who, the page (no query
+  string), own or central. Never a value.
+
+How a bot uses one is [integrations/website.md](../integrations/website.md); the commands are in
+[the CLI](cli.md#websites-tico-browser-and-tico-login).
+
 ## The key: nothing to set up
 
 During a server-first upgrade, the one-time import of legacy team `HUB_` variables waits for
@@ -201,6 +243,24 @@ If a human pastes a credential into a thread instead, BotOps stores it with `tic
 never on the command line) as that human, and the server takes the pasted words out of their messages, the run's recorded events and the answers kept
 for retries, replacing them with `•••• saved as <VARIABLE>`; later events of the same run are scrubbed as they arrive. The runner masks granted values in
 what it posts and logs. `tico message redact <id>` does the same for one message.
+
+## Keys dropped in the Tools chat
+
+Tools has its owner's chat at the right (the Tools Product Owner by default; Settings > General > Page owners). In that
+chat's composer, and no other, a paste, dropped text or typed words are scanned in the browser before they reach the
+text box, with the rules in `backend/secret_rules.json` (vendor prefixes, PEM blocks, logins in addresses, values after
+words like password or token, `.env`, JSON and YAML lines, Bearer and Basic headers, JWTs, and long random strings as a
+"looks like a key" suspect). Each one becomes a locked item showing its kind, a variable name you can change and a
+preview (first 3 and last 3 of a key, dots for a password); the words go in as text and nothing is kept as a draft. On
+Send each value goes straight to this vault (`POST /api/v2/credentials`, source `tools-chat`), and only then does the
+message go, with `[saved NAME]` in each value's place: the bot reads names, never values. Only a credential admin can
+send keys there; a name already in the vault waits for Replace or a new name.
+
+The server runs the same rules on every message a person puts into that conversation, from any client, and refuses one
+that still holds a key before it is stored or reaches a model ("This looks like a key. Save it instead?"). The owner
+then proposes which tool, level and bots each key is for with `tico_tools_propose_grant`; the server builds the card's
+rows itself (never the owner, every bot or every computer), and only your Grant attaches each key to its tool and grants
+the bots. The tool's check runs on the server and the card says Connected or Didn't work, with Paste a new key.
 
 ## Credential files on the computer
 

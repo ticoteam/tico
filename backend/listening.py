@@ -8,8 +8,11 @@ Two tables (backend/migrations/20261111190425_listening_feed.py):
     listening_items     what the sources saved, and what became of each
 
 An item is `new` when saved, then `duplicate` (a copy of one already here), `kept` or `dropped` (the rules, asked of
-the decision model), `sent` (it went out in a run), `failed` (the model could not score it in three tries) or
-`expired` (not sent within a week, or its source was removed).
+the decision model), `sending` (taken by a send whose run has not ended), `sent` (a step of that run delivered it),
+`failed` (the model could not score it in three tries) or `expired` (not sent within a week, or its source was removed).
+An item a run's steps did not deliver (the spend cap stopped them, or they failed) is `kept` again when the run ends
+(`settle`), with its score, copies and arrival unchanged, and `delivered` names the steps that did deliver it, so the
+next send hands it only to the others (backend/automation_engine.py `_fresh`).
 
 Posts arrive three ways, all through `save`: a bot that read a Search source, the server reading a Page source
 (`read_pages`, the market watch's reader), and a Push address anyone holding its token may post to.
@@ -34,15 +37,19 @@ from pydantic import Field
 
 from clients import judge as J
 
+from . import automation_engine as E
 from . import automation_flow as F
+from . import decide_groups as DG
 from . import hubdb as H
+from . import listening_text as LT
 from .models import Contract
 from .store import Problem
 
 log = logging.getLogger(__name__)
 
 READ_STATUSES = ("ok", "blocked", "rate_limited", "error")
-ITEM_STATUSES = ("new", "duplicate", "kept", "dropped", "sent", "failed", "expired")
+ITEM_STATUSES = ("new", "duplicate", "kept", "dropped", "sending", "sent", "failed", "expired")
+ENDED = ("ok", "partial", "failed", "empty", "skipped")  # a run in one of these has settled what it took
 MAX_ITEMS = 200  # items in one save
 TEXT_MAX = 20_000  # of a post's text kept
 SENT_TEXT = 4_000  # of a post's text carried in a run
@@ -50,7 +57,10 @@ TITLE_MAX = 140
 MAX_SCORE = 50  # items scored in one pass
 CLAIM_MINUTES = 10  # a claim older than this is free again: its pass was cut off
 MAX_TRIES = 3
-MAX_ERRORS = 3  # failed calls in one pass before the rest wait for the next
+MAX_ERRORS = 3  # failed posts in one pass before the rest wait for the next
+# Posts asked about in one call (backend/decide_groups.py). One until the replay through real Jev shows grouped
+# verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
 YES = 0.75  # a rule holds at this score
 COPY_DAYS = 30  # the copy check's window
 COPY_COMPARISONS = 2_000
@@ -175,13 +185,16 @@ def window_start(per, at, zone):
 
 
 def allowance(c, aid, trigger, at):
-    """How many items may go now: the least left over all the limits, each counted in its own calendar window."""
+    """How many items may go now: the least left over all the limits, each counted in its own calendar window. An item
+    a run still holds (`sending`) counts until that run ends; one it did not deliver then stops counting."""
     zone = zone_of(trigger)
     left = []
     for limit in trigger.get("limits") or []:
         since = _iso(window_start(limit["per"], at, zone))
         sent = c.execute(
-            "SELECT count(*) FROM listening_items WHERE automation_id=? AND status='sent' AND sent_at>=?", (aid, since)
+            "SELECT count(*) FROM listening_items WHERE automation_id=? AND status IN ('sent','sending') "
+            "AND sent_at>=?",
+            (aid, since),
         ).fetchone()[0]
         left.append(limit["count"] - sent)
     return max(0, min(left)) if left else 0
@@ -617,7 +630,7 @@ def score(store, row, flow, now, primary=None, left=None):
     earlier item is marked so; the rest are asked of the decision model, every rule in one call. With decisions off
     or a spend cap reached nothing is claimed and the items stay `new`. When the pass's time is used up (`left`) the
     claims still held are released, for the next pass."""
-    from .judge import audit_detail, server_engine
+    from .judge import server_engine
 
     aid, rules = row["id"], flow["trigger"].get("rules") or []
     with store.transaction() as c:
@@ -710,6 +723,54 @@ def score(store, row, flow, now, primary=None, left=None):
 
     out = {"scored": 0, "duplicates": 0, "errors": 0}
     ordered = sorted(claimed, key=lambda r: -r["n"])  # newest first: when time runs out the old ones wait
+
+    def ask(waiting, rest):
+        """Ask about the posts `waiting` (each with its place), several to a call (backend/decide_groups.py), and write
+        what came back. False when the pass stops; the claims still held, from `rest` on included, are released."""
+        pairs = [(_state(item, sources.get(item["source_id"])), questions) for _, item in waiting]
+        for run in DG.packs(pairs, GROUP):
+            # Before each paid call: time left, the listening still on, the cap not reached by what this pass spent.
+            with store.read() as c:
+                go = on(c) and not _capped(c, aid, flow, now)
+            if not go or (left and not left()):
+                release([waiting[n][1] for n in range(run[0], len(waiting))] + ordered[rest:])
+                out["cut"] = True
+                return False
+            assert engine is not None  # rules without an engine returned above
+            calls = []
+            replies = DG.ask_run(engine, [pairs[n] for n in run], label, calls, run)
+            stop = False
+            with store.transaction() as c:
+                for call in calls:
+                    H.event(c, H.KEEPER, "judge.call", label, DG.audit_row(call, label, automation=aid))
+                # Turned off or deleted while the call ran: no result is written, the posts stay `new`.
+                still = on(c)
+                for n, reply in zip(run, replies, strict=True):
+                    item = waiting[n][1]
+                    if isinstance(reply, BaseException):  # one post's failure is that post's; the pass goes on
+                        code = J.error_code(reply) if isinstance(reply, J.JudgeError) else type(reply).__name__
+                        if code != "spend_cap":  # the month's decision cap is not the post's fault, so not a try
+                            c.execute(
+                                "UPDATE listening_items SET tries=tries+1,claimed_at=NULL,updated_at=?,"
+                                "status=CASE WHEN tries+1>=? THEN 'failed' ELSE status END "
+                                "WHERE id=? AND status='new' AND claimed_at=?",
+                                (now, MAX_TRIES, item["id"], now),
+                            )
+                        out["errors"] += 1
+                        stop = stop or code == "spend_cap" or out["errors"] >= MAX_ERRORS
+                        continue
+                    if still:
+                        status, tag, value = verdict(rules, reply.get("answers") or {})
+                        _decided(c, item["id"], now, status, tag, value, float(reply.get("cost_usd") or 0), claimed=now)
+                        out["scored"] += 1
+            if stop or not still:
+                # This call's own posts too: one stopped by the spend cap (no try counted) or not written is free at
+                # once, not after CLAIM_MINUTES. A post already decided is no longer `new`, so it is left as it is.
+                release([waiting[n][1] for n in range(run[0], len(waiting))] + ordered[rest:])
+                return False
+        return True
+
+    waiting = []
     for place, item in enumerate(ordered):
         original = copy_of(item)
         if original:
@@ -727,59 +788,14 @@ def score(store, row, flow, now, primary=None, left=None):
                 break
             out["scored"] += 1
             continue
-        # Before each paid call: time left, the listening still on, the cap not reached by what this pass spent.
-        with store.read() as c:
-            go = on(c) and not _capped(c, aid, flow, now)
-        if not go or (left and not left()):
-            release(ordered[place:])
-            out["cut"] = True
-            break
-        try:
-            state = _state(item, sources.get(item["source_id"]))
-            J.validate(state, questions, label)
-            assert engine is not None  # rules without an engine returned above
-            result = engine(state, questions, label)
-        except Exception as exc:  # noqa: BLE001 - one post's failure is that post's; the pass goes on
-            code = J.error_code(exc) if isinstance(exc, J.JudgeError) else type(exc).__name__
-            with store.transaction() as c:
-                H.event(
-                    c, H.KEEPER, "judge.call", label, {"automation": aid, "questions": len(questions), "error": code}
-                )
-                if code != "spend_cap":  # the month's decision cap is not the post's fault, so not a try
-                    c.execute(
-                        "UPDATE listening_items SET tries=tries+1,claimed_at=NULL,updated_at=?,"
-                        "status=CASE WHEN tries+1>=? THEN 'failed' ELSE status END "
-                        "WHERE id=? AND status='new' AND claimed_at=?",
-                        (now, MAX_TRIES, item["id"], now),
-                    )
-            out["errors"] += 1
-            if code == "spend_cap" or out["errors"] >= MAX_ERRORS:
-                release(ordered[place:])
+        waiting.append((place, item))
+        if len(waiting) == GROUP:
+            if not ask(waiting, place + 1):
+                waiting = []
                 break
-            continue
-        answers = result.get("answers") or {}
-        status, tag, value = verdict(rules, answers)
-        with store.transaction() as c:
-            H.event(
-                c,
-                H.KEEPER,
-                "judge.call",
-                label,
-                {
-                    "label": label,
-                    "automation": aid,
-                    "questions": len(questions),
-                    **audit_detail(result),
-                    "answers": J.summary(answers),
-                },
-            )
-            # Turned off or deleted while the call ran: no result is written, the post stays `new`.
-            if still := on(c):
-                _decided(c, item["id"], now, status, tag, value, float(result.get("cost_usd") or 0), claimed=now)
-        if not still:
-            release(ordered[place:])
-            break
-        out["scored"] += 1
+            waiting = []
+    if waiting:
+        ask(waiting, len(ordered))
     return out
 
 
@@ -790,23 +806,6 @@ def expire(c, aid, now):
         "WHERE automation_id=? AND status IN ('new','kept') AND created_at<?",
         (now, aid, H.shift(now, days=-EXPIRE_DAYS)),
     ).rowcount
-
-
-def _short_url(url):
-    return re.sub(r"^https?://(www\.)?", "", str(url or "")).rstrip("/")
-
-
-def _lines(entries):
-    width = max((len(e["tag"]) for e in entries), default=0)
-    out = []
-    for n, entry in enumerate(entries, 1):
-        head = f"{n}. {entry['tag'].ljust(width)}  " if width else f"{n}. "
-        copies = entry["copies"]
-        about = [entry["site"], f"{copies} {'copy' if copies == 1 else 'copies'}" if copies else ""]
-        about.append(_short_url(entry["url"]))
-        out.append(head + entry["title"])
-        out.append("   " + " · ".join(part for part in about if part))
-    return "\n".join(out)
 
 
 def payload_of(c, row, flow, items, at, now, waiting):
@@ -835,9 +834,14 @@ def payload_of(c, row, flow, items, at, now, waiting):
     for entry in entries:
         groups.setdefault(entry["tag"], []).append(entry)
     last = c.execute(
-        "SELECT max(sent_at) FROM listening_items WHERE automation_id=? AND status='sent'", (aid,)
+        "SELECT max(sent_at) FROM listening_items WHERE automation_id=? AND status IN ('sent','sending')", (aid,)
     ).fetchone()[0]
     since = last or ""
+    delivered = {}  # item id -> the steps that delivered it in an earlier run, for those back from one
+    for item in items:
+        steps = json.loads(item.get("delivered") or "[]")
+        if steps:
+            delivered[item["id"]] = steps
 
     def count(where):
         return c.execute(
@@ -852,29 +856,31 @@ def payload_of(c, row, flow, items, at, now, waiting):
             "sent_at": now,
             "count": len(entries),
             "waiting": waiting,
-            "text": f"{head} · {len(entries)} of {len(entries) + waiting}\n\n{_lines(entries)}",
+            "text": f"{head} · {len(entries)} of {len(entries) + waiting}\n\n{LT.lines(entries)}",
             "items": entries,
             "groups": [
-                {"tag": tag, "count": len(members), "text": _lines(members), "items": members}
+                {"tag": tag, "count": len(members), "text": LT.lines(members), "items": members}
                 for tag, members in groups.items()
             ],
             "counts": {
                 "read": count("created_at>?"),
                 "duplicates": count("status='duplicate' AND updated_at>?"),
                 "dropped": count("status='dropped' AND scored_at>?"),
-                "kept": count("status IN ('kept','sent') AND scored_at>?"),
+                "kept": count("status IN ('kept','sending','sent') AND scored_at>?"),
                 "sent": len(entries),
                 "waiting": waiting,
                 "failed": count("status='failed' AND updated_at>?"),
             },
+            **({"delivered": delivered} if delivered else {}),
         }
     }
 
 
 def send(store, aid, at, now):
     """When the send time has come: the allowance's worth of kept items, best first, go out as one run and are marked
-    `sent` with it, in one transaction. Nothing to send queues no run. The next time is the first one after now, so
-    the times missed while the server was down send once."""
+    `sending` with it, in one transaction, so no other send takes them while it runs; `settle` marks them when it ends.
+    Nothing to send queues no run. The next time is the first one after now, so the times missed while the server was
+    down send once."""
     from . import automations as A
     from . import cloud_access
 
@@ -924,7 +930,7 @@ def send(store, aid, at, now):
         ).fetchone()[0]
         c.execute("UPDATE listening_items SET run_id=? WHERE automation_id=? AND run_id IS NULL AND cost>0", (rid, aid))
         c.execute(
-            f"UPDATE listening_items SET status='sent',run_id=?,sent_at=?,updated_at=? "
+            f"UPDATE listening_items SET status='sending',run_id=?,sent_at=?,updated_at=? "
             f"WHERE id IN ({','.join('?' * len(items))})",
             (rid, now, now, *(i["id"] for i in items)),
         )
@@ -937,6 +943,55 @@ def send(store, aid, at, now):
                 (state["cost"], json.dumps(state, default=str), rid),
             )
         return rid
+
+
+def settle(c, run_id, now=None):
+    """A listening run that ended: each item it took (`sending`) is `sent` when a step delivered it, else `kept` again
+    (expired if its source was removed meanwhile) with its score, copies and arrival unchanged, and `delivered` adds the
+    steps of this run that did deliver it. Only a run the executor saw to its end says what was delivered (its state's
+    `delivery`, backend/automation_engine.py `conclude`); one dropped or given up on before that sends none of its
+    items, and remembers only the steps that delivered them. Settling twice changes nothing: a settled item is no
+    longer `sending`. Returns how many items it settled."""
+    if not H._has_table(c, "listening_items"):
+        return 0
+    run = c.execute("SELECT status, saved_state FROM automation_runs WHERE id=?", (run_id,)).fetchone()
+    if not run or run["status"] not in ENDED:
+        return 0
+    items = c.execute(
+        "SELECT i.id, i.delivered, s.deleted_at FROM listening_items i "
+        "LEFT JOIN listening_sources s ON s.id=i.source_id WHERE i.run_id=? AND i.status='sending'",
+        (run_id,),
+    ).fetchall()
+    if not items:
+        return 0
+    now = now or H.now()
+    state = json.loads(run["saved_state"] or "{}") if run["saved_state"] else {}
+    found = state.get("delivery") if isinstance(state.get("delivery"), dict) else None
+    sent = set(found.get("sent") or []) if found else set()
+    got = (found or (E.delivery(state) if state.get("payload") and "steps" in state else None) or {}).get("got") or {}
+    for item in items:
+        if item["id"] in sent:
+            c.execute("UPDATE listening_items SET status='sent',updated_at=? WHERE id=?", (now, item["id"]))
+            continue
+        before = json.loads(item["delivered"] or "[]")
+        steps = before + [s for s in got.get(item["id"]) or [] if s not in before]
+        c.execute(
+            "UPDATE listening_items SET status=?,sent_at=NULL,delivered=?,updated_at=? WHERE id=?",
+            ("expired" if item["deleted_at"] else "kept", json.dumps(steps) if steps else None, now, item["id"]),
+        )
+    return len(items)
+
+
+def settle_ended(c, aid, now=None):
+    """Settle every ended run that still holds items of this listening: a run dropped, or given up on, ends outside
+    the save that settles it (backend/automations.py)."""
+    runs = [
+        r[0]
+        for r in c.execute(
+            "SELECT DISTINCT run_id FROM listening_items WHERE automation_id=? AND status='sending'", (aid,)
+        ).fetchall()
+    ]
+    return sum(settle(c, rid, now) for rid in runs if rid)
 
 
 def run_pass(store, at=None, primary=None):
@@ -972,6 +1027,7 @@ def run_pass(store, at=None, primary=None):
     for row in rows:
         try:
             with store.transaction() as c:
+                settle_ended(c, row["id"], now)
                 expire(c, row["id"], now)  # on or off: what waits still grows too old
             send(store, row["id"], at, now)
         except Exception:
@@ -980,13 +1036,13 @@ def run_pass(store, at=None, primary=None):
 
 def prune(c, now=None):
     """Maintenance: sent items go after KEEP_SENT_DAYS, the rest after KEEP_DAYS (the copy check's window), and a
-    removed source once nothing of its is left."""
+    removed source once nothing of its is left. An item a run still holds (`sending`) stays until the run settles it."""
     if not H._has_table(c, "listening_items"):
         return 0
     now = now or H.now()
     gone = c.execute(
         "DELETE FROM listening_items WHERE (status='sent' AND coalesce(sent_at,created_at)<?) "
-        "OR (status<>'sent' AND created_at<?)",
+        "OR (status NOT IN ('sent','sending') AND created_at<?)",
         (H.shift(now, days=-KEEP_SENT_DAYS), H.shift(now, days=-KEEP_DAYS)),
     ).rowcount
     c.execute(
@@ -1018,7 +1074,7 @@ def item_view(row, sources):
         "duplicate_of_id": row["duplicate_of_id"],
         "tries": row["tries"],
         "scored_at": row["scored_at"],
-        "run_id": row["run_id"] if row["status"] == "sent" else None,
+        "run_id": row["run_id"] if row["status"] in ("sending", "sent") else None,
         "sent_at": row["sent_at"],
         "created_at": row["created_at"],
     }
@@ -1194,7 +1250,7 @@ def install(app, store, auth, mutate):
             rows = c.execute(
                 "SELECT * FROM listening_items WHERE automation_id=?"
                 + (" AND status=?" if status else "")
-                + (" AND run_id=? AND status='sent'" if run else "")
+                + (" AND run_id=? AND status IN ('sending','sent')" if run else "")
                 + " ORDER BY created_at DESC, rowid DESC LIMIT ?",
                 (
                     automation,

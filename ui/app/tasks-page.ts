@@ -97,49 +97,62 @@ function pageTasks(openId = '') {
   const main = $('#main');
   main.classList.add('tasks-layout');
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
-      <header class="tl-head">
-        <h1>Tasks</h1>
-        <button type="button" class="tl-scope" id="task-scope" aria-haspopup="menu" aria-expanded="false"></button>
-        <button type="button" class="tl-ib" id="task-pipeline-edit" aria-label="Edit pipeline" title="Edit pipeline" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></button>
-        <span class="spacer"></span>
-        <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div>
-        <button type="button" class="tl-ib" id="task-filter" aria-haspopup="true" aria-label="Filter" title="Filter">${TL_ICON.filter}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>
-        <div class="tl-pair" id="task-layout" role="group" aria-label="Layout" hidden>
-          <button type="button" data-layout="list" aria-label="List" title="List">${TL_ICON.list}</button>
-          <button type="button" data-layout="columns" aria-label="Columns" title="Columns">${TL_ICON.board}</button></div>
-        <button type="button" class="tl-ib" id="task-manager" aria-pressed="false" aria-label="Manager" title="Manager" hidden>${TL_ICON.chat}</button>
-        <button type="button" class="tl-ib" id="task-archive" aria-pressed="false" aria-label="Archive" title="Snoozed, Done and Closed">${TL_ICON.archive}</button>
-        <button type="button" class="tl-ib" id="task-play" aria-label="Catch up" title="Catch up"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg></button>
-        <button class="primary add-ctl" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
-      </header>
+      ${pageHead({title: 'Tasks', hook: 'tl-head',
+        after: '<button type="button" class="tl-scope" id="task-scope" aria-haspopup="menu" aria-expanded="false"></button>',
+        // One row (spec "Pipeline board: one-row header", part A): search, Filter, ▶ Review, the manager's face and ⋯. Nothing
+        // on it is accent: New task, Archived, Edit pipeline and List/Columns are in ⋯ (C still makes a task).
+        tools: `<div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd>`
+          + `<button type="button" class="tl-search-x" aria-label="Close search" title="Close search">${TL_ICON.x}</button></div>`
+          + `<button type="button" class="tl-ib" id="task-filter" aria-haspopup="true" aria-label="Filter" title="Filter">${TL_ICON.filter}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
+          + '<button type="button" class="tl-review none" id="task-play" aria-label="Review: nothing waits on you" title="Review"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tl-review-n tnum"></span></button>'
+          + `<button type="button" class="tl-ib" id="task-manager" aria-pressed="false" aria-label="Manager" title="Manager" hidden>${TL_ICON.chat}</button>`,
+        moreId: 'task-menu', menuId: 'task-menu-pop',
+        more: '<button type="button" id="task-mi-new" class="tl-mi-k" data-key="C" aria-keyshortcuts="c">New task</button>'
+          + '<button type="button" id="task-mi-archive">Archived</button>'
+          + '<button type="button" id="task-mi-edit" hidden>Edit pipeline</button>'
+          + '<div class="tl-mi-layout" id="task-mi-layout" role="group" aria-label="View" hidden><hr>'
+          + '<button type="button" role="menuitemradio" data-layout="list" aria-checked="false">List</button>'
+          + '<button type="button" role="menuitemradio" data-layout="columns" aria-checked="false">Columns</button></div>'})}
       <div class="tl-bar" id="task-bar" hidden>
-        <div class="tl-pair" id="task-archives" role="group" aria-label="Archive" hidden>${TASK_ARCHIVES.map(([k, label]) =>
+        <button type="button" class="tl-ib" id="task-archive-x" aria-label="Leave Archived" title="Leave Archived" hidden>${TL_ICON.x}</button>
+        <div class="tl-pair ph-seg" id="task-archives" role="group" aria-label="Archive" hidden>${TASK_ARCHIVES.map(([k, label]) =>
           `<button type="button" data-archive="${k}">${label}</button>`).join('')}</div>
         <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span></div>
       </div>
       <div id="task-body" role="region" aria-label="Tasks"></div>
       <div class="tl-more" id="task-more" hidden><button type="button" class="ghost">More</button></div>
+      <div class="pa-host" id="task-ask" hidden></div>
     </div><aside class="tl-rail" id="task-rail" hidden></aside></div>
     <div id="task-filter-pop" class="tl-pop" popover></div>`;
   const signal = state.abort.signal;
   const anchorOf = (ev: Event) => ev.currentTarget as HTMLElement;
   $('#task-scope').onclick = (ev: MouseEvent) => tasksScopeMenu(state, anchorOf(ev));
   $('#task-manager').onclick = () => pipelineRailToggle();
-  $('#task-pipeline-edit').onclick = () => { const p = tasksPipeline(state); if (p) TASK_PAGE_HOOKS.pipeline?.edit?.(p); };
-  $('#task-layout').onclick = (ev: MouseEvent) => {
+  // ⋯: each item does what its button on the row did (the shared header closes the menu on a pick).
+  $('#task-mi-new').onclick = () => openTaskCreate('', {pipeline: state.pipeline || null});
+  $('#task-mi-archive').onclick = () => tasksShow(state, {archive: state.archive ? '' : 'snoozed'});
+  $('#task-mi-edit').onclick = () => { const p = tasksPipeline(state); if (p) TASK_PAGE_HOOKS.pipeline?.edit?.(p); };
+  $('#task-mi-layout').onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-layout]');
     if (b) tasksShow(state, {layout: b.dataset.layout === 'columns' ? 'columns' : 'list'});
   };
-  $('#task-archive').onclick = () => tasksShow(state, {archive: state.archive ? '' : 'snoozed'});
+  $('#task-archive-x').onclick = () => tasksShow(state, {archive: ''});
   $('#task-archives').onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-archive]');
     const want = TASK_ARCHIVES.find(([k]) => k === b?.dataset.archive)?.[0];
     if (want) tasksShow(state, {archive: want});
   };
-  $('#task-play').onclick = () => decideGoThrough();
+  $('#task-play').onclick = () => void tasksReview(state);
   $('#task-more button').onclick = () => { state.stalled = false; void tasksMore(state); };
-  $('#task-new').onclick = () => openTaskCreate('', {pipeline: state.pipeline || null});
   const search = $('#task-q');
+  // The phone's search opens over the row; its one ✕ empties it and closes it (the input keeps the focus until the click).
+  const searchX = $('.tl-head .tl-search-x');
+  for (const type of ['pointerdown', 'mousedown']) searchX.addEventListener(type, (ev: Event) => ev.preventDefault());
+  searchX.onclick = () => {
+    search.value = '';
+    search.dispatchEvent(new Event('input'));
+    search.blur();
+  };
   search.oninput = () => {
     state.q = search.value;
     clearTimeout(state.searchTimer);
@@ -177,7 +190,7 @@ function pageTasks(openId = '') {
     if (TASKS_ST !== state || ev.metaKey || ev.ctrlKey || ev.altKey || document.querySelector('dialog[open]')) return;
     if (eventElement(ev)?.closest('input, textarea, select, [contenteditable]')) return;
     if (ev.key === '/') { ev.preventDefault(); search.focus(); }
-    else if (ev.key === 'c') { ev.preventDefault(); $('#task-new')?.click(); }
+    else if (ev.key === 'c' && !tasksViewOnly()) { ev.preventDefault(); openTaskCreate('', {pipeline: state.pipeline || null}); }
   }, {signal});
   pullToRefresh($('#tasks-pane'), () => tasksLoad(state), {signal});
   tasksRender(state);
@@ -196,6 +209,7 @@ function tasksLeave() {
   state.abort.abort();
   clearTimeout(state.searchTimer);
   tasksRailOff();
+  tasksAskOff();
   TASKS_ST = null;
 }
 /** A change of view: You or a pipeline, list or columns, the archive. Search and filters stay. */
@@ -232,8 +246,14 @@ function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
   const of = state.pipeline ? {pipeline: state.pipeline} : {};
   if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide', ...of, ...state.narrow};
   if (state.pipeline) return {status: 'open', snoozed: 'all', ...of, ...state.narrow};
+  // A bot's read-only view has no Needs you (a person's list): its You is the bot's own open tasks.
+  if (tasksViewOnly()) return {status: 'open', snoozed: 'all', owner: 'bot:' + (S.me?.id || ''), ...state.narrow};
   return null;
 }
+/** A bot's read-only view of the app (backend/app_view.py). */
+const tasksViewOnly = (): boolean => !!S.me?.read_only_view;
+/** A view's You: the bot's own open tasks (tasksQuery), kept live and paged like a pipeline's rows. */
+const tasksOwnView = (state: TasksPageState): boolean => tasksViewOnly() && !state.pipeline && !state.archive;
 /** The search and the filters as the server takes them (backend/task_match.py): the same meaning as taskFilterMatch, so
  * the server answers only the matches, a page at a time. */
 function tasksNarrow(state: Pick<TasksPageState, 'q' | 'filters'>): TaskBriefQuery {
@@ -267,6 +287,7 @@ function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
   if (state.readKey && !taskFilterMatch(t, state.q, state.filters)) return false;
   if (state.archive === 'snoozed') return t.status === 'open' && !!t.snoozed;
   if (state.archive) return t.status === state.archive;
+  if (tasksOwnView(state)) return t.status === 'open' && t.owner_id === 'bot:' + (S.me?.id || '');
   return !!state.pipeline && t.status === 'open';
 }
 /** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
@@ -357,7 +378,7 @@ function tasksTaskPut(state: TasksPageState, given: TaskAny | null, id: string |
   // You: Needs you says what is on it; a task's change only redraws the item that shows it.
   for (const it of state.needs) if (t && it.task && String(it.task.id) === key) { it.task = {...it.task, ...t} as typeof it.task; moved = true; }
   // A full task carries every list field.
-  if (state.pipeline || state.archive) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row), tasksOrder(state)) || moved;
+  if (state.pipeline || state.archive || tasksOwnView(state)) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row), tasksOrder(state)) || moved;
   if (moved && draw) tasksRender(state);
   return moved;
 }
@@ -400,20 +421,54 @@ const tasksStageName = (state: TasksPageState, id: string | null | undefined) =>
   }
   return '';
 };
+// ▶ Review's count: on a pipeline, what waits on the person in its stages; elsewhere all of Needs you.
+function tasksReviewCount(state: TasksPageState): number {
+  const p = tasksPipeline(state);
+  if (!p) return decideCount();
+  const counts = needsStageCounts();
+  return p.stages.reduce((sum, s) => sum + (counts.get(s.id || '') || 0), 0);
+}
+// ▶ Review: on You, all of Needs you as before; on a pipeline, the phone's open stage first, else the first stage with
+// items, never another pipeline's. Nothing to walk says so.
+async function tasksReview(state: TasksPageState): Promise<void> {
+  const p = tasksPipeline(state);
+  if (!p) { if (!decideGoThrough()) toast('Nothing waits on you'); return; }
+  const counts = needsStageCounts(), open = matchMedia(PHONE).matches ? pvStateFor(p).stage : '';
+  const stage = open && counts.get(open) ? open : p.stages.find(s => counts.get(s.id || ''))?.id || '';
+  if (!stage || !await decideStageOpen(stage)) toast(`Nothing waits on you in ${p.name}`);
+}
 function tasksHeadPaint(state: TasksPageState) {
-  const p = tasksPipeline(state), n = state.needs.length;
+  // A bot's read-only view has no Needs you: its scope is the bot's own open tasks, with their count.
+  const p = tasksPipeline(state), view = tasksViewOnly(), own = view ? state.tasks.length : 0;
+  const you = view ? S.me?.name || 'Bot' : 'You';
   const scope = $('#task-scope');
   const label = p ? `<span class="tl-scope-l">${esc(p.name)}</span>`
-    : `<span class="tl-scope-l">You</span>${n ? `<span class="cnt hot tnum">${n}</span>` : ''}`;
+    : `<span class="tl-scope-l">${esc(you)}</span>${own ? `<span class="cnt tnum">${own}${state.more ? '+' : ''}</span>` : ''}`;
   if (scope.dataset.label !== label) { scope.dataset.label = label; scope.innerHTML = label + TL_ICON.caret; }
-  scope.setAttribute('aria-label', p ? `Showing ${p.name}` : `Showing You${n ? `, ${n}` : ''}`);
-  $('#task-pipeline-edit').hidden = !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive;
-  const layout = $('#task-layout');
-  layout.hidden = !state.pipeline || !!state.archive;
-  for (const b of document.querySelectorAll<HTMLElement>('#task-layout [data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.layout));
-  $('#task-manager').hidden = !p || !!state.archive || !TASK_PAGE_HOOKS.pipeline?.rail || !pipelineRailFor(p);
-  $('#task-archive').setAttribute('aria-pressed', String(!!state.archive));
-  $('#task-play').hidden = !n;
+  scope.setAttribute('aria-label', p ? `Showing ${p.name}` : `Showing ${you}${own ? `, ${own}` : ''}`);
+  // ▶ is always on the row and keeps one width: its count is the one count of what waits on the person.
+  const n = tasksReviewCount(state), play = $('#task-play');
+  play.hidden = view;                       // a view reviews nothing: no Needs you, no answers
+  play.classList.toggle('none', !n);
+  play.querySelector('.tl-review-n')!.textContent = n ? (n > 99 ? '99+' : String(n)) : '';
+  play.setAttribute('aria-label', n ? `Review: ${n} wait${n === 1 ? 's' : ''} on you` : 'Review: nothing waits on you');
+  // The manager's own face opens its panel, where a generic chat icon did.
+  const manager = $('#task-manager');
+  manager.hidden = !p || !!state.archive || !TASK_PAGE_HOOKS.pipeline?.rail || !pipelineRailFor(p);
+  const who = p?.manager_id ? prActor(p.manager_id) : '', face = who ? actorFace(who, 20) : TL_ICON.chat;
+  if (manager.dataset.face !== face) {      // drawn again only when the face changes (its name or picture arrives)
+    manager.dataset.face = face;
+    manager.innerHTML = face;
+    const words = who ? `Chat with ${actorLabel(who)}` : 'Manager';
+    manager.setAttribute('aria-label', words); manager.title = words;
+  }
+  // ⋯
+  const archive = $('#task-mi-archive');
+  archive.textContent = state.archive ? 'Leave Archived' : 'Archived';
+  $('#task-mi-edit').hidden = !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive;
+  $('#task-mi-layout').hidden = !p || !!state.archive || matchMedia(PHONE).matches;
+  for (const b of document.querySelectorAll<HTMLElement>('#task-mi-layout [data-layout]')) b.setAttribute('aria-checked', String(b.dataset.layout === state.layout));
+  $('#task-archive-x').hidden = !state.archive;
   const archives = $('#task-archives');
   archives.hidden = !state.archive;
   for (const b of document.querySelectorAll<HTMLElement>('#task-archives [data-archive]')) b.setAttribute('aria-pressed', String(b.dataset.archive === state.archive));
@@ -450,16 +505,23 @@ function tasksRender(state: TasksPageState | null) {
     const html = hooks.html(p, state.tasks, {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches});
     if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
     hooks.bind?.(body, p);
+    hooks.ask?.($('#task-ask'), p, matchMedia(PHONE).matches);
     return;
   }
+  tasksAskOff();
   const html = state.failed ? `<p class="err" role="alert">${esc(state.failed)} <button type="button" class="linkish" data-reload>Try again</button></p>`
     : state.loading && !state.kept && !state.needs.length && !state.tasks.length ? skelRows(6)
     : state.archive ? tasksArchiveHTML(state)
     : state.pipeline ? tasksPipelineHTML(state)
+    : tasksViewOnly() ? tasksOwnHTML(state)
     : tasksYouHTML(state);
   if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
 }
-/** The rail's host is emptied and hidden away from a pipeline (and the rail's own reads stop, pipeline-rail.ts). */
+/** No Ask bar away from a pipeline's board (pipeline-ask.ts). */
+function tasksAskOff() {
+  if (typeof pipelineAskLeave === 'function') pipelineAskLeave();
+}
+/** The rail's host is emptied and hidden away from a pipeline (and its chat goes, pipeline-rail.ts). */
 function tasksRailOff() {
   const rail = document.getElementById('task-rail');
   if (rail && !rail.hidden) { rail.hidden = true; rail.replaceChildren(); }
@@ -481,13 +543,22 @@ function needsMatch(state: TasksPageState, it: NeedsEntry): boolean {
   const words = state.q.toLowerCase().split(/\s+/).filter(Boolean), line = it.line.toLowerCase();
   return !taskFiltersOn(state.filters) && words.every(w => line.includes(w));
 }
-/** One row of You: the sentence asked; a question with two choices answers in place (S1.8). */
+/** A Needs you row's first line: its task's title; a Paused cause or a mention outside a task by its own line. */
+function needsTitle(it: NeedsEntry): string {
+  return (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
+}
+/** Its second line: the question, under an Answer row's title (its buttons answer it); other asks keep it as the tooltip. */
+function needsAsk(it: NeedsEntry): string {
+  return needsGroup(it) === 'answer' && needsTitle(it) !== it.line ? it.line : '';
+}
+/** One row of You: its task's title (needsTitle), an Answer row's question under it; a question with two choices answers in place (S1.8). */
 function needsRowHTML(it: NeedsEntry): string {
   const ask = it.ask, two = it.kind === 'ask' && ask?.kind === 'answer' && ask.choices?.length === 2 && ask.may.includes('answer');
   const after = two ? ask!.choices!.map((c, i) => `<button type="button" class="${i ? 'ghost' : 'primary'} sm" data-need-answer="${esc(c)}">${esc(c)}</button>`).join('') : '';
   const who = it.kind === 'mention' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
-  return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0">`
-    + `<span class="tk-title">${esc(it.line)}</span>${it.task ? lateTagHTML(it.task) : ''}`
+  const tip = it.kind !== 'task' && needsTitle(it) !== it.line && !needsAsk(it) ? ` title="${esc(it.line)}"` : '';
+  return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
+    + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
     + (after ? `<span class="tk-after">${after}</span>` : '')
     + `<span class="tk-who">${who ? actorFace(who, 18) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }
@@ -511,6 +582,20 @@ function tasksYouHTML(state: TasksPageState): string {
   const of = (g: string) => shown.filter(it => needsGroup(it) === g).map(needsRowHTML);
   const chips = state.q.trim() || taskFiltersOn(state.filters) ? '' : tasksStageChipsHTML(state);
   return chips + tasksGroupHTML('Answer', of('answer')) + tasksGroupHTML('Review', of('review')) + tasksGroupHTML('Do', of('do'));
+}
+/** A bot's read-only view in place of You: a line that Needs you is a person's list, then the bot's open tasks by stage,
+    in the pipelines' order, then Other. */
+function tasksOwnHTML(state: TasksPageState): string {
+  const name = S.me?.name || 'This bot';
+  const note = `<p class="muted tk-view-note">Needs you is a person's list. These are ${esc(name)}'s open tasks.</p>`;
+  const shown = state.tasks.filter(t => taskFilterMatch(t, state.q, state.filters));
+  if (!shown.length) return note + tasksNone(state);
+  const known = new Set<string>(), groups: string[] = [];
+  for (const p of state.pipelines) for (const st of p.stages) {
+    if (st.id) known.add(st.id);
+    groups.push(tasksGroupHTML(st.name, shown.filter(t => t.stage_id === st.id).map(t => taskRowHTML(t))));
+  }
+  return note + groups.join('') + tasksGroupHTML('Other', shown.filter(t => !known.has(t.stage_id || '')).map(t => taskRowHTML(t)));
 }
 /** A pipeline's open tasks by stage, in the pipeline's order, until task-pipelines.ts draws it. */
 function tasksPipelineHTML(state: TasksPageState): string {
@@ -547,14 +632,16 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   }
   if (it) { decideOpen(it.id); return; }
   const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
-  if (task) taskModalOpen(task);
+  // On a pipeline's board on a phone a card opens at its conversation, its box asking the task's owner.
+  const board = !!state.pipeline && !state.archive && matchMedia(PHONE).matches;
+  if (task) void taskModalOpen(task, undefined, board ? {thread: true, ask: true} : {});
 }
 
 // ---- the view button, filters
 function tasksScopeMenu(state: TasksPageState, anchor: HTMLElement) {
   const item = (attr: string, label: string, on: boolean, count = 0) => `<button type="button" role="menuitemradio" aria-checked="${on}" class="tl-mi" ${attr}><span class="tl-mi-t">${esc(label)}</span>${count ? `<span class="tl-mi-n tnum">${count}</span>` : ''}${on ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
   tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Show">
-    ${item('data-scope=""', 'You', !state.pipeline, state.needs.length)}<div class="tl-menu-sep" role="separator"></div>
+    ${item('data-scope=""', tasksViewOnly() ? S.me?.name || 'Bot' : 'You', !state.pipeline, tasksViewOnly() ? state.tasks.length : state.needs.length)}<div class="tl-menu-sep" role="separator"></div>
     ${state.pipelines.map(p => item(`data-scope="${esc(p.id)}"`, p.name, state.pipeline === p.id)).join('')}</div>`, pop => {
     pop.onclick = ev => {
       const b = eventElement(ev)?.closest<HTMLElement>('[data-scope]');
@@ -570,7 +657,7 @@ function tasksScopeMenu(state: TasksPageState, anchor: HTMLElement) {
 const tasksFilterOn = (f: TaskFilters, k: keyof TaskFilters) => { const v = f[k]; return Array.isArray(v) ? v.length > 0 : !!v; };
 /** The rows a filter's values come from: what the view lists, and what it listed with no search or filter. */
 const tasksFilterRows = (state: TasksPageState): TaskBriefV3[] =>
-  state.archive || state.pipeline ? [...state.base, ...state.tasks] : state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t);
+  state.archive || state.pipeline || tasksOwnView(state) ? [...state.base, ...state.tasks] : state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t);
 type TaskFilterValue = {value: string; label: string; face?: string};
 function tasksFilterValues(state: TasksPageState, k: keyof TaskFilters): TaskFilterValue[] {
   if (k === 'due') return [{value: 'overdue', label: 'Overdue'}, {value: 'week', label: 'This week'}, {value: 'any', label: 'Has a date'}];
@@ -634,19 +721,6 @@ function tasksFilterMenu(state: TasksPageState, k: keyof TaskFilters, anchor: HT
 
 // ---- New task (S6): a title, the details, and one row: who it is for, the pipeline, Create. No due date here; it is
 // added on the task. A new task starts in its pipeline's first stage. `parent` files it from that task.
-function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
-  const people = (S.people || []).filter(p => !p.hidden)
-    .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-  const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
-    .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
-  const pick = (value: string) => value === selected ? ' selected' : '';
-  return `<option value="">${esc(blank)}</option>
-    <optgroup label="Humans">${people.map(p =>
-      `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
-    <optgroup label="Bots">${bots.map(e =>
-      `<option value="${esc(e.id)}" title="${esc([(e.resolved_model_label || e.resolved_model) ? `Configured: ${e.resolved_model_label || e.resolved_model}${e.resolved_provider ? ` (${e.resolved_provider})` : ''}` : 'Configured model unavailable',
-        e.latest_runtime_model ? `Latest run: ${e.latest_runtime_model} (${e.latest_runtime_provider}); next run may differ` : ''].filter(Boolean).join(' · '))}"${pick(e.id) || pick('bot:' + e.id)}>${esc(e.display_name || e.slug)}${e.resolved_model ? ` · ${esc(e.resolved_model_label || e.resolved_model)}${e.resolved_provider ? ` (${esc(e.resolved_provider)})` : ''}` : ''}${e.latest_runtime_model ? ` · latest: ${esc(e.latest_runtime_model)} (${esc(e.latest_runtime_provider)})` : ''}</option>`).join('')}</optgroup>`;
-}
 function taskCreateModal() {
   let d = $('#task-create');
   if (d) return d;
@@ -676,7 +750,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
         <input type="text" name="title" required aria-label="Title" placeholder="Title" maxlength="300">
         <textarea name="body" required aria-label="Details" placeholder="Details" rows="6"></textarea>
         <div class="tc-row">
-          <label class="tc-pick"><span>For:</span><select name="owner" required aria-label="For">${taskOwnerOptions(forWho, '…')}</select></label>
+          <div class="tc-pick"><span aria-hidden="true">For:</span>${giveToFieldHTML({name: 'owner', label: 'For', placeholder: 'Who is this for?', selected: forWho, task: parent})}</div>
           <label class="tc-pick"><select name="pipeline" aria-label="Pipeline"><option value="">General</option></select></label>
           <span class="spacer"></span>
           <button class="primary" type="submit">Create</button>
@@ -702,7 +776,8 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
     ev.preventDefault();
     const btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg', d);
     const title = field<HTMLInputElement>('title').value.trim(), body = field<HTMLTextAreaElement>('body').value.trim();
-    const who = field<HTMLSelectElement>('owner').value;
+    const who = field<HTMLInputElement>('owner').value;
+    if (title && body && !who) { giveToFieldOpen(form.querySelector<HTMLButtonElement>('button[data-give-to]')!); return; }   // the hidden field is never "required"
     if (!title || !who || !body || !btn) return;
     btn.disabled = true; msg.hidden = true;
     const labels = (opts.labels || []).map(String).filter(Boolean);

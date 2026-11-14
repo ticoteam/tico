@@ -324,7 +324,15 @@ def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(a
     err, shown = call(api, "tico_task_show", {"id": work["id"]}, token=attempt["token"])
     assert not err and "version" in shown["text"], shown
     version = shown["task"]["version"]
-    ask = {"id": work["id"], "to": "ana", "line": "Run the vendor trial once?", "choices": ["Yes", "No"]}
+    ask = {
+        "id": work["id"],
+        "to": "ana",
+        "line": "Run the vendor trial once?",
+        "choice": ["Yes|The trial runs once.", "No|Nothing runs."],
+        "recommend": "Yes",
+        "why": "It decides what ships next.",
+        "title": "Vendor trial: run it once?",
+    }
     err, refused = call(api, "tico_task_ask", {**ask, "version": version - 1}, token=attempt["token"])
     assert err and refused["error"] == "task_changed" and refused["version"] == version, refused
     err, asked = call(api, "tico_task_ask", {**ask, "version": version}, token=attempt["token"])
@@ -333,6 +341,7 @@ def test_a_bot_asks_a_person_on_its_own_task_and_the_ask_is_in_their_needs_you(a
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 1, "an ask is not a task"
     item = next(i for i in get(api, "needs-you")["items"] if i["kind"] == "ask")
     assert item["line"] == "Run the vendor trial once?"
+    assert item["ask"]["title"] == "Vendor trial: run it once?", "the short title reaches Needs you"
     err, out = call(api, "tico_task_ask", {"id": work["id"], "withdraw": True}, token=attempt["token"])
     assert not err, out
     assert not [i for i in get(api, "needs-you")["items"] if i["kind"] == "ask"]
@@ -389,7 +398,7 @@ def heavy_heartbeat(api, r, bots, n, release="0.4.56", update=None, huge=""):
                 "repository_revision": "f" * 40,
                 "configuration_valid": True,
                 "problems": [] if i or n % 3 else ["The repository is not on this computer yet"],
-                "warnings": ["AGENT.md is 41,000 characters; a run reads it every turn " + "x" * 150] * 3
+                "warnings": ["AGENTS.md is 41,000 characters; a run reads it every turn " + "x" * 150] * 3
                 if bot != huge
                 else ["z" * 50_000],
             }
@@ -483,13 +492,13 @@ def test_the_computer_list_is_a_short_summary_and_one_computer_reads_in_capped_p
     )
     assert rows["Mac 01"]["signed_in"] == ["claude", "codex"] and rows["Mac 01"]["recent_errors"] == 50
     assert rows["Mac 05"]["bots"] == 303 and rows["Mac 01"]["bots"] == 3  # a count, not the names
-    assert "repositories" not in rows["Mac 01"] and "AGENT.md" not in json.dumps(listing)
+    assert "repositories" not in rows["Mac 01"] and "AGENTS.md" not in json.dumps(listing)
 
     err, detail = call(api, "tico_computer_list", {"computer": "mac 04"})
     assert not err and detail["label"] == "Mac 04" and len(json.dumps(detail)) <= hubtools.COMPUTER_DETAIL_CHARS
     assert len(detail["repositories"]) == hubtools.COMPUTER_PAGE and len(detail["readiness"]["bots"]) == 3
     assert detail["readiness"]["recent_errors"][0].startswith("2026-10-18T07:49")  # newest first
-    assert detail["readiness"]["bots"]["bot-12"]["warnings"][0].startswith("AGENT.md is 41,000")
+    assert detail["readiness"]["bots"]["bot-12"]["warnings"][0].startswith("AGENTS.md is 41,000")
     assert detail["readiness"]["bots"]["bot-13"]["warnings"][0].endswith("… (cut)")  # one 50,000-character warning
     assert detail["readiness"]["runtimes"]["claude"]["models"][-1] == "… 10 more"  # catalogs inside a record
     err, bots = call(api, "tico_computer_list", {"computer": detail["id"], "section": "bots"})
@@ -581,10 +590,15 @@ def test_a_bot_sends_raw_bodies_through_the_door_and_they_arrive_as_sent(api, do
     assert api.get("/api/v2/files/" + copy["file"]["id"], headers=headers(token)).content == text
 
     (tmp_path / "pages").mkdir()
-    (tmp_path / "pages" / "weekly.html").write_text("<h1>Weekly</h1><p>Pipeline grew to 42 deals.</p>")
+    # A screenshot saved beside the page goes in with it: the server would drop a reference to a file it cannot reach.
+    (tmp_path / "pages" / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    (tmp_path / "pages" / "weekly.html").write_text(
+        '<h1>Weekly</h1><p>Pipeline grew to 42 deals.</p><img src="shot.png">'
+    )
     shown = hubtools.pages_publish_path(bot, {"path": "pages/weekly.html", "title": "Weekly", "cadence": "weekly"})
     assert shown["page"]["title"] == "Weekly"
-    assert "42 deals" in api.get("/api/v2/files/" + shown["page"]["file_id"], headers=headers(token)).text
+    stored = api.get("/api/v2/files/" + shown["page"]["file_id"], headers=headers(token)).text
+    assert "42 deals" in stored and 'src="data:image/png;base64,' in stored
 
     # An import is copied from S3 by the bot's computer; the server stores the bytes it is sent with their source.
     source = "s3://acme-exports/q3/pipeline.md"

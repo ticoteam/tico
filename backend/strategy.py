@@ -1023,6 +1023,77 @@ def settle_vision(c):
         c.execute("DELETE FROM goal_asks WHERE kind='vision' AND ref=? AND owner=?", (ref, owner))
 
 
+def _words(text):
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _owner_wrote(c, task_id, person):
+    """What `person` wrote on the task: their comments and their answers to its asks, as one casefolded text."""
+    said = [m.get("body") for m in H.task_comments(c, task_id) if m.get("sender_id") == person]
+    said += [
+        part
+        for row in c.execute(
+            "SELECT a.answer, a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=? AND a.by_id=?",
+            (task_id, person),
+        )
+        for part in row
+    ]
+    return "\n".join(_words(part) for part in said if part)
+
+
+# A vision the Strategy Owner saves is at least this many of the owner's words: a scrap of a question they asked back
+# ("a vision") is not one. Chinese, Japanese, Thai, Lao, Khmer and Burmese put no spaces between words, so there a
+# vision counts its characters instead.
+VISION_MIN_WORDS = 3
+VISION_MIN_UNSPACED = 6
+_UNSPACED = re.compile(r"[\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+
+def _vision_long_enough(clean: str) -> bool:
+    return len(clean.split()) >= VISION_MIN_WORDS or len(_UNSPACED.findall(clean)) >= VISION_MIN_UNSPACED
+
+
+def save_asked_vision(c, actor, task_id, text):
+    """The Strategy Owner saves the vision the owner sent on its vision question (backend/goal_asks.py), in their
+    words, and says so on the task; saving it closes the question (settle_vision). Only the Strategy Owner, only while
+    the team has no vision, only on that question's open task, and only text the person it asked wrote there: it never
+    writes a vision of its own, and changing one stays the owner's, on the Strategy page."""
+    from . import goals as G
+    from . import strategy_bot
+
+    name = strategy_bot.name(c)
+    if actor != G.AUTO_ACTOR:
+        raise Problem(
+            "forbidden",
+            f"Only the {name} saves a vision the owner sent on its question; the owner writes it on the Strategy page",
+            403,
+        )
+    if vision(c, editor=True):
+        raise Problem("state", "The team has a vision already; only the owner changes it, on the Strategy page", 409)
+    row = H._one(c, "SELECT owner FROM goal_asks WHERE kind='vision' AND task_id=?", (task_id,))
+    task = H.task(c, task_id) if row else None
+    if not row or not task or task["status"] != "open":
+        raise Problem("not_found", f"No open vision question of the {name} on that task", 404)
+    clean = " ".join(str(text or "").split())
+    if not _vision_long_enough(clean) or _words(clean) not in _owner_wrote(c, task_id, row["owner"]):
+        who = H.actor_name(c, row["owner"]) or "the owner"
+        raise Problem(
+            "invalid",
+            f"Save the vision in {who}'s own words: send text they wrote on this task, as they wrote it, at least "
+            f"{VISION_MIN_WORDS} words",
+            422,
+        )
+    H.task_comment(
+        c,
+        actor,
+        task_id,
+        f"Saved as the team's vision: \u201c{clean[:VISION_MAX]}\u201d. Change it any time on the Strategy page.",
+        wake=False,
+    )
+    update_draft(c, actor, vision=clean)
+    return vision(c, editor=True)
+
+
 def card_view(c, proposal):
     """What a strategy card shows beyond its payload: a lens proposal's lens by name (`lens_name`), and a realign
     card's goals finished, dropped or deleted since it was filed (`closed_goals`), which it lists with no choice."""
@@ -1259,6 +1330,18 @@ def install(app, store, auth, mutate):
             return {
                 "draft": update_draft(c, who.actor, body.revision, body.guide, body.summary, body.vision, body.sections)
             }
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/strategy/vision")
+    def strategy_vision(request: Request, body: M.StrategyVision):
+        """The Strategy Owner only: save the vision the owner sent on its vision question, in their words
+        (save_asked_vision). Saving it closes the question."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            return {"vision": save_asked_vision(c, who.actor, body.task, body.vision)}
 
         return mutate(request, body, work)
 

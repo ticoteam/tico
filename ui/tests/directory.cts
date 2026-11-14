@@ -14,12 +14,12 @@ const shot = async (page: Page, name: string) => { if (!SHOTS) return; await pag
 
 async function flow(page: Page, tag: string) {
   await page.goto(page.url().split('#')[0] + '#/library/contacts');
-  // Contacts is the icon on the Team header, not a Library row, and nothing is called Directory.
+  // Contacts is in the Team header's ⋯ menu, not a Library row, and nothing is called Directory.
   // Each row's name without its icon's ligature text.
   const library = await page.locator('#rd-lib .nav-link').evaluateAll(links => links.map(a =>
     [...a.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent || '').join('').trim()));
   assert.ok(!library.some(name => /contacts|directory/i.test(name)), tag + ': no Contacts or Directory row in Library');
-  assert.equal(await page.locator('#org-contacts-link').getAttribute('href'), '#/library/contacts', tag + ': the Team header opens Contacts');
+  assert.equal(await page.locator('#team-more-menu a[data-nav="contacts"]').getAttribute('href'), '#/library/contacts', tag + ': the Team header\'s ⋯ opens Contacts');
   // The list: People first, the seeded people with their organization, relationship and where they are known from.
   const jane = page.locator('[data-dir-row="person/jane-ortiz"]');
   await jane.waitFor({timeout: t(20000)});

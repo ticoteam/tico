@@ -1,6 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 The outcome is six recorded answers, the roadmap, team and pipeline written down, a first weekly summary attached as a draft, and the routine checked.
 
 ---
@@ -40,7 +40,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/roadmap.md`, `knowledge/team.md` (each segment and its
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/roadmap.md`, `knowledge/team.md` (each segment and its
 Product Owner) and `knowledge/decision-log.md` (headings only, to fill). Write `knowledge/pipeline.md`: the Product pipeline's
 stages in order, each stage's owner, what it takes to leave each stage, its limit and its expected time, from what you read.
 
@@ -54,7 +54,7 @@ and attach it to the task as a draft labelled "First draft, not yet reviewed". C
 Setup switched your routine on. Check it with `tico automation list`. If it shows off, arm it with `tico automation update <id> --enable`.
 Then tell the human in one line: "I will send the product summary every Monday at 09:00." They can change it or turn it off.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
+Record it in `memory/decisions.md`.
 
 ## 7. Finish
 

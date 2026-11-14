@@ -7,7 +7,7 @@ drop the ones you don't need.
 
 The work runs through two pipelines a software company gets by default: [Product](pipelines-v3.md#product) (Ideas →
 Spec → In development → Validate) and [Engineering](pipelines-v3.md#engineering) (On deck → Build → Review 1 → Fixes 1 →
-Review 2 → Fixes 2 → Merge → Release). Each stage has an owner and says what it takes to leave; the roles below own
+Review 2 → Fixes 2 → QA → Merge → Release). Each stage has an owner and says what it takes to leave; the roles below own
 those stages.
 
 ## The roles, in order
@@ -16,7 +16,7 @@ those stages.
 |---|---|---|---|
 | 1 | Product Owner | `segment-product-owner` | Owns Product's stages: writes the Spec page, files the Engineering task, checks it in production |
 | 2 | Product Manager and Engineering Manager | `product-manager`, `engineering-manager` | Each leads its team and manages its pipeline: picks up what is late or stuck and decides what happens next |
-| 3 | Builder | `builder` | Owns Build and the Fixes stages: opens the PR, makes every fix, shows what was built |
+| 3 | Builder | `builder` | Owns Build, the Fixes stages and QA: opens the PR, makes every fix, builds the QA page a person approves to ship |
 | 4 | Reviewer 1 | `reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
 | 5 | Reviewer 2 | `reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
 | 6 | Release Owner | `release-owner` | Owns Merge and Release: sees the PR through the merge queue and into a release |
@@ -71,8 +71,9 @@ approval before merge.
 The Builder opens its PR, links it to the task and pushes freely; Build is done when the PR is open and its checks
 pass. Each review is a Review page for the PR's newest commit, attached to the task with
 `tico task attach <task> page:<file id> --req "<requirement>" --version N`; Jev checks it is a real review. A push
-after a review needs a page for the new head. In Fixes 2 the Builder attaches a page showing what was built, Jev checks
-it and a person OKs it. On entering Merge, Tico queues the PRs in the repository's merge queue
+after a review needs a page for the new head. In Fixes 2 the Builder fixes what Review 2 found and says done (at once, when it found nothing). In QA it
+attaches the QA page (what changed, before and after screenshots or other proof, the checks at the head and what both
+reviewers found), Jev checks it and a person OKs it, which ships the change. On entering Merge, Tico queues the PRs in the repository's merge queue
 ([Merge queue](releasing.md#merge-queue)); no bot runs a merge command. If GitHub drops a PR from the queue, the
 Release Owner pushes a fix to the PR's branch or queues it again with `tico task queue <task> --version N`. The task
 leaves Release once the merge is in a published release (a repo that publishes no releases: once merged).
@@ -80,10 +81,24 @@ leaves Release once the merge is in a published release (a repo that publishes n
 ## Visual specs
 
 A spec can be a visual page. The Product Owner publishes it on the task it describes with
-`tico page publish <file.html> --spec --task <task>`. The page's styles are inlined at publish, so its mockups read as
-Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
-A spec that is narrowed to some readers, or on a private task, gives the link only. Build instructions are in
-`templates/catalog/segment-product-owner/skills/build-the-spec-page/SKILL.md`.
+`tico page publish <file.html> --spec --task <task>`. Tico's styles are inlined into the page at publish, so it
+reads as Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
+A spec that is narrowed to some readers, or on a private task, gives the link only.
+
+Every page a person reads to decide is built the same way, with the `build-the-page` skill
+(`templates/catalog/segment-product-owner/skills/build-the-page/`; the Reviewer, Builder and Release Owner templates
+carry the same copy). Seven templates: a bug spec (the report, the root cause, the goal, then the fix before and
+after), a feature spec for a screen and one for a change with no screen (the goal, then the change before and after),
+a Review page, the Builder's QA page (the result and what was not checked, then each acceptance criterion with its
+result and proof), the release report for a batch (a changelog for customers with a screenshot per change, then why
+we are confident, the plan and at most three risks), and the Checked in production page. Each opens with what it is
+and what to decide in two or three lines, then real
+screenshots of the app at phone (390 px) and desktop width with red numbered arrows, then the details. Screenshots are
+never drawn: production through the read-only view (`tico bot app-shot`), and the branch through the demo
+(`scripts/release_shots.py`). The skill's `page.py` embeds the pictures, checks the page against those rules, and draws
+the published copy at both widths, which the bot looks at before it attaches the page. In Validate, the Product Owner
+does the checking itself; a person never does. Existing bots take the skill and their playbooks at their next template
+refresh ([Bots follow their template](updates.md#bots-follow-their-template)).
 
 ## When Security holds a release
 

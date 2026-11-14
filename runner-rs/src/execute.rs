@@ -125,6 +125,9 @@ impl From<String> for Fail {
 pub(crate) struct Meter {
     input: i64,
     cached: i64,
+    /// The part of `input` written to the prompt cache (Claude, Cursor and pi report it); 0 from a host that reports
+    /// none (Codex, Gemini, Antigravity, Muse Code).
+    cache_write: i64,
     output: i64,
     model: String,
     requests: Option<Vec<Value>>,
@@ -151,6 +154,7 @@ impl Meter {
             }
             self.input += count(&u["input"]);
             self.cached += count(&u["cached"]);
+            self.cache_write += count(&u["cache_write"]);
             self.output += count(&u["output"]);
             if let Some(more) = u["requests"].as_array() {
                 let requests = self.requests.get_or_insert_with(Vec::new);
@@ -184,6 +188,7 @@ impl Meter {
         billing: &str,
     ) -> Option<Map<String, Value>> {
         let cached = self.cached.min(self.input);
+        let cache_write = self.cache_write.min(self.input - cached);
         if !self.used() {
             return None;
         }
@@ -194,8 +199,12 @@ impl Meter {
                 model
             };
         let mut m = Map::new();
-        m.insert("input_tokens".into(), json!(self.input - cached));
+        m.insert(
+            "input_tokens".into(),
+            json!(self.input - cached - cache_write),
+        );
         m.insert("cached_tokens".into(), json!(cached));
+        m.insert("cache_write_tokens".into(), json!(cache_write));
         m.insert("output_tokens".into(), json!(self.output));
         m.insert(
             "model".into(),
@@ -214,8 +223,8 @@ impl Meter {
 }
 
 /// A segment's usage as this server takes it (`feature`: what the server said it takes, follow::feature): without
-/// `usage_requests` no per-request list, without `usage_request_main` no request's fourth count (an older server
-/// refuses either).
+/// `usage_requests` no per-request list, without `usage_request_main` no request's fourth count, without
+/// `usage_cache_writes` no `cache_write_tokens`, counted in `input_tokens` as before (an older server refuses each).
 fn served(
     meter: &Meter,
     model: &str,
@@ -224,6 +233,14 @@ fn served(
     feature: impl Fn(&str) -> bool,
 ) -> Option<Map<String, Value>> {
     let mut part = meter.report(model, runtime, billing)?;
+    if !feature("usage_cache_writes") {
+        let writes = part
+            .remove("cache_write_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let input = part["input_tokens"].as_i64().unwrap_or(0);
+        part.insert("input_tokens".into(), json!(input + writes));
+    }
     if !feature("usage_requests") {
         part.remove("requests");
     } else if !feature("usage_request_main") {
@@ -263,6 +280,22 @@ fn thread_runtime(runtime: &str, harness: &str) -> String {
     } else {
         runtime.to_string()
     }
+}
+
+/// Where a thread records what its cache was last written for (`warm_identity`), read by a keep-warm turn.
+fn warm_key(thread: &str) -> String {
+    format!("keep-warm:{thread}")
+}
+
+/// What a session's cache is for: its harness, model, effort and plan (the subscription the turn runs on). A turn on
+/// any other writes the whole context again, so a keep-warm turn runs only when this is the same as its last turn's.
+fn warm_identity(runtime: &str, config: &Value, plan: Option<&Profile>) -> String {
+    format!(
+        "{runtime}\n{}\n{}\n{}",
+        text_of(&config["model"]),
+        text_of(&config["reasoning_effort"]),
+        plan.map_or("", |p| p.name.as_str())
+    )
 }
 
 /// The provider thread this turn continues (clients/sessions.py session_key).
@@ -2128,8 +2161,6 @@ impl Runner {
         let mut capture: Option<Arc<crate::capture::Capture>> = None;
         let mut started_at = String::new();
         let mut memory_before = String::new();
-        let mut tidy_packet: Option<crate::memory_tidy::Packet> = None;
-        let packet_only = truthy(config.get("memory_tidy_packet"));
         let mut segments: Vec<Segment> = vec![];
         let mut carried: BTreeMap<String, Value> = BTreeMap::new();
         let mut auth_rejected: Option<(String, String)> = None;
@@ -2139,7 +2170,8 @@ impl Runner {
         let mut source_saved = source_resume.clone();
         // How this turn's session began: resumed, or new and why (crate::continuity). Sent with the result.
         let mut session: Option<crate::continuity::Session> = None;
-        // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own.
+        // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own:
+        // it keeps its own, per model, under `side_conv` (crate::continuity::side_session).
         let mut side_run = false;
         // The ChatGPT login this turn's host runs on, held until the host stops (crate::login_turns), and why the turn
         // went to its fallback instead when another bot's turn had it.
@@ -2154,6 +2186,18 @@ impl Runner {
         // The thread a turn the model's capacity stopped after it acted left to continue (backend/execution.py
         // capacity_continuation): only that thread, on the bot's own login, takes it; never a fallback or a fresh one.
         let continuing = text_of(&attempt["continue_thread"]);
+        // A job the server released warm names the bot's latest session on this computer (lanes::FORK_SESSION): a
+        // turn that would start a brand-new thread starts it on a fork of that one instead, which is left as it was.
+        let fork_thread = text_of(&attempt["fork_thread"]);
+        // A job the server releases as a run of its own (lanes::FRESH_SESSION) starts a new thread too, never resuming the
+        // conversation's saved one.
+        let fresh_session = truthy(attempt.get("fresh_session"));
+        // Either makes a release run: it never resumes the conversation's saved session. In a conversation that has one
+        // (the bot's room) the run is one-off and is never saved over it, so the room's long-lived session stays the one
+        // its next ordinary turn resumes; in one that has none (a routine's new task) its thread is that conversation's
+        // first session and is kept like any other. Set once the turn's kind is known.
+        let mut release_run = false;
+        let mut one_off = false;
         let mut uses: Vec<String> = vec![runtime.clone()];
         if let Some(hop) = crate::fallback::configured(&config) {
             uses.push(hop.runtime);
@@ -2282,7 +2326,8 @@ impl Runner {
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), own_user(&runtime, &text_of(&config["harness"]))).map_err(Fail::runtime)?;
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            redactor = redact::for_turn(&pairs, &vault.values);
+            // Always a masker, even with no secrets yet: a website login typed mid-turn (browser/) is added to it.
+            redactor = Some(redact::for_turn(&pairs, &vault.values).unwrap_or_else(|| Arc::new(Redactor::new(&[]))));
             if let Some(s) = &self.socket {
                 let r = redactor.get_or_insert_with(|| Arc::new(Redactor::new(&[]))).clone();
                 s.set_redactor(&token, r);
@@ -2335,19 +2380,18 @@ impl Runner {
             }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
-            memory_before = redact::head(&execution_path);
-            if packet_only {
-                if !crate::harness_tools::caps_of(&config).packet_only {
-                    return Err(Fail::runtime("Nightly memory tidy: named harness cannot run a packet-only pass"));
-                }
-                tidy_packet = Some(crate::memory_tidy::Packet::prepare(&self.client, &p.main_path,
-                    &execution_path, &aid, turn_identity).await?);
-                // The model receives only its packet, never its Hub credentials or MCP tools.
-                crate::memory_tidy::scrub_environment(&mut env);
+            // The instruction file the harness loads by itself, AGENTS.md with Tico's standing section, before the
+            // turn starts (crate::instructions): an older AGENT.md and state.md are moved over in one commit.
+            let app = self.names().await.app;
+            match crate::instructions::ensure(&execution_path, &env, &app, stateless).await {
+                Ok(true) => log(&format!("Tico runner: {bot}: brought its instruction file up to date ({})", crate::instructions::FILE)),
+                Ok(false) => {}
+                Err(e) => log(&format!("Tico runner: {bot}: could not bring its instruction file up to date: {e}")),
             }
+            memory_before = redact::head(&execution_path);
             // What the bot kept in its AI tool's own memory moves into its repository, in whichever checkout the
             // turn runs: the bot's own or a task's worktree (crate::harness_memory). A stateless bot keeps none.
-            if !packet_only && crate::harness_memory::copies_into(p.private, stateless, &execution_path) {
+            if crate::harness_memory::copies_into(p.private, stateless, &execution_path) {
                 // A Gateway turn's HOME is its own empty one (turn_users::Lease::private_home); the tools' memory is in the real one.
                 let own = env.get("HOME").filter(|h| !h.is_empty() && turn_identity.is_none()).cloned();
                 let home = own.or_else(|| std::env::var("HOME").ok()).unwrap_or_default();
@@ -2377,10 +2421,26 @@ impl Runner {
             // task-model fallback runs in a side session of its own, started from the task's checkpoint (prompt()
             // supplies it), and never touches the thread this runtime saved: the turns that use that thread resume it.
             side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
+            // The side session is kept apart from the conversation's own, one per model: the task's next fallback turn
+            // on the same model resumes it, so its prompt cache is read again instead of written anew.
+            let side_conv = crate::continuity::side_session(&conv, model.as_deref().unwrap_or_default());
             let binding_changed = source_resume.as_ref().is_some_and(|s|
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
-            let mut previous = if packet_only || side_run || binding_changed || fresh_chat { None } else { self.state.session(&bot, &conv, &session_runtime)? };
-            if previous.is_none() && !(packet_only || side_run || binding_changed || fresh_chat) && conv == key {
+            release_run = (fresh_session || !fork_thread.is_empty()) && continuing.is_empty() && !side_run && !fresh_chat;
+            if release_run {
+                let adopted = if conv == key { adopted_key(&key) } else { None };
+                one_off = self.state.session(&bot, &conv, &session_runtime)?.is_some()
+                    || match adopted {
+                        Some(old) => self.state.session(&bot, &old, &session_runtime)?.is_some(),
+                        None => false,
+                    };
+            }
+            let mut previous = if binding_changed || fresh_chat || release_run {
+                None
+            } else {
+                self.state.session(&bot, if side_run { &side_conv } else { &conv }, &session_runtime)?
+            };
+            if previous.is_none() && !(side_run || binding_changed || fresh_chat || release_run) && conv == key {
                 // The first native-threads turn of a root resumes the thread its conversation had (adopted_key).
                 if let Some(old) = adopted_key(&key) {
                     previous = self.state.session(&bot, &old, &session_runtime)?;
@@ -2410,12 +2470,14 @@ impl Runner {
             let gids = crate::checkout_groups::gate(paths.clone()).await;
             if let Some((uid, _)) = turn_identity {
                 crate::checkout_groups::grant(uid, &gids);
-                if !packet_only {
-                    self.turn_git(&mut vault, &mut env, &paths)?;
-                }
+                self.turn_git(&mut vault, &mut env, &paths)?;
                 crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
             }
             self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
+            if crate::turn_limits::active() {
+                // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
+                env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
+            }
             let made = if session_runtime != runtime {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
                 // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).
@@ -2441,29 +2503,29 @@ impl Runner {
             mark("harness_started", &aid);
             // The bot's company skills, in a folder of this turn's own that Claude is given with --add-dir and Codex as
             // its extra skill root. A failure runs the turn without them.
-            let company_skills = if !packet_only && matches!(h, Host::Claude(_) | Host::Codex(_)) {
+            let company_skills = if matches!(h, Host::Claude(_) | Host::Codex(_)) {
                 crate::company_skills::prepare(&self.client, &self.state.directory, &aid, &bot).await
             } else {
                 None
             };
             let settings = Settings {
                 identity: turn_identity,
-                cwd: tidy_packet.as_ref().map_or_else(|| execution_path.display().to_string(), |p| p.workspace.display().to_string()),
+                cwd: execution_path.display().to_string(),
                 model: model.clone(),
                 effort: effort.clone(),
                 env: env.clone(),
                 slug: bot.clone(),
                 compact_at: config.get("compact_at").cloned().unwrap_or(Value::Null),
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
-                add_dirs: if packet_only { vec![] } else { crate::company_skills::with_dir(p.add_dirs.clone(), company_skills.as_deref()) },
+                add_dirs: crate::company_skills::with_dir(p.add_dirs.clone(), company_skills.as_deref()),
                 company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                mcp_servers: if packet_only { vec![] } else { self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config) },
+                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
-                packet_only,
+                memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
             };
             let mut resumed = false;
-            if side_run {
+            if side_run && previous.is_none() {
                 session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
             } else if let Some(prev) = &previous {
                 // Be very reluctant to start a new session: a refusal is retried once, and only a thread this
@@ -2476,7 +2538,12 @@ impl Runner {
                     }
                     Err((missing, error)) => {
                         let why = if missing { crate::continuity::NOT_FOUND } else { crate::continuity::RESUME_FAILED };
-                        session = Some(crate::continuity::Session::new(why, Some(error)));
+                        // A side session that cannot be resumed is simply begun again, from the task's checkpoint.
+                        session = Some(if side_run {
+                            crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None)
+                        } else {
+                            crate::continuity::Session::new(why, Some(error))
+                        });
                     }
                 }
                 // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag). A
@@ -2496,23 +2563,55 @@ impl Runner {
                 }
                 if !resumed {
                     left = Some(prev.clone());
-                    since = self.state.cursor(prev, None)?;
+                    if !side_run {
+                        since = self.state.cursor(prev, None)?;
+                    }
                 }
             } else {
-                session = Some(crate::continuity::Session::new(crate::continuity::NONE_SAVED, None));
+                let why = if release_run { crate::continuity::FRESH } else { crate::continuity::NONE_SAVED };
+                session = Some(crate::continuity::Session::new(why, None));
+            }
+            // A keep-warm turn (crate::prompt::keep_warm) only reads a session's cache. With no saved session here to
+            // read, or one cached for another model, effort or plan, there is nothing warm to keep: it ends done, with
+            // no model started, no session made or saved, and the thread's records as they were.
+            let warm = crate::prompt::keep_warm(&attempt);
+            let identity = warm_identity(&session_runtime, &config, selected.as_ref());
+            let skip_warm = warm
+                && (!resumed
+                    || !thread.as_deref().is_some_and(|t| h.session_saved(t))
+                    || self.state.repo_rules(&warm_key(thread.as_deref().unwrap_or_default()), None)?.as_deref() != Some(identity.as_str()));
+            if skip_warm {
+                log(&format!("Tico runner: {bot}: keep-warm turn {aid} ends with nothing to do: no warm session here"));
+                one_off = true;
+                session = None;
+                if thread.is_none() {
+                    thread = Some(previous.clone().unwrap_or_else(|| format!("keep-warm-{aid}")));
+                }
             }
             if thread.is_none() {
                 self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 // A capacity continuation must acknowledge its lost thread so the server holds it for review,
                 // without creating or saving a replacement session before that acknowledgement.
-                thread = Some(if continuing.is_empty() { h.start_thread(&bot, &settings).await? } else { continuing.clone() });
+                // A one-off thread the server named a session for starts on a fork of it.
+                let fork = release_run && !fork_thread.is_empty();
+                thread = Some(if !continuing.is_empty() {
+                    continuing.clone()
+                } else if fork {
+                    let (th, forked) = h.start_thread_forked(&bot, &settings, &fork_thread).await?;
+                    if forked {
+                        session = Some(crate::continuity::Session::new(crate::continuity::FORKED, None));
+                    }
+                    th
+                } else {
+                    h.start_thread(&bot, &settings).await?
+                });
             }
             let th = thread.clone().unwrap();
             self.note_session(&aid, &bot, session.as_ref());
             // A new thread on a host that says when its session is up is kept only then (Fresh): until it is, the
             // thread it replaces stays this conversation's, here and on the task, so a session that never comes up
             // leaves the next turn the old one.
-            fresh = (!resumed && !side_run && continuing.is_empty() && !fresh_chat && h.confirms_threads()).then(|| Fresh {
+            fresh = (!resumed && !side_run && !one_off && continuing.is_empty() && !fresh_chat && h.confirms_threads()).then(|| Fresh {
                 bot: bot.clone(),
                 conversation: conv.clone(),
                 runtime: session_runtime.clone(),
@@ -2522,7 +2621,7 @@ impl Runner {
                 confirmed: Mutex::new(None),
                 source: None,
             });
-            if fresh.is_none() && !side_run && continuing.is_empty() && !fresh_chat {
+            if fresh.is_none() && !side_run && !one_off && continuing.is_empty() && !fresh_chat {
                 self.state.save_session(&bot, &conv, &session_runtime, &th)?;
                 if let Some(old) = left.as_deref().filter(|old| *old != th) {
                     self.state.forget_session(&bot, &conv, &session_runtime, old)?;
@@ -2584,7 +2683,8 @@ impl Runner {
             attempt["_proxied_tools"] = json!(vault.tools.iter().map(|t| json!({"name": t.name, "env": t.env, "url_env": t.url_env})).collect::<Vec<_>>());
             // A new session that replaces a saved one is given the room since the old one's last turn, its own replies
             // included; a resumed one that a side session ran after is given them too, and the task's checkpoint.
-            let side_ran = resumed && self.state.repo_rules(&crate::continuity::side_key(&th), None)?.as_deref() == Some("1");
+            // A resumed side session is given the same: the conversation's own session may have run since its last turn.
+            let side_ran = resumed && (side_run || self.state.repo_rules(&crate::continuity::side_key(&th), None)?.as_deref() == Some("1"));
             let after_interrupt = resumed && self.state.repo_rules(&crate::continuity::interrupted_key(&th), None)?.as_deref() == Some("1");
             attempt["_replaced"] = json!(session.as_ref().is_some_and(|s| s.replaces()));
             attempt["_side_ran"] = json!(side_ran);
@@ -2594,7 +2694,9 @@ impl Runner {
             // It must also have clear room before the harness compacts it, so this turn is unlikely to compact the
             // short form's standing lines away before it acts on them: its last turn's context and the whole prompt
             // are under 60% of Compact at. Should it compact anyway, the host gives the turn what it left out.
-            let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
+            // A keep-warm turn is its one line and leaves the thread's records as they were: what it was given, the room
+            // cursor, what the next turn is sent.
+            let prompt_turn = !warm && !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
             let mut seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
@@ -2606,11 +2708,14 @@ impl Runner {
                 crate::prompt::Seen::default()
             };
             // Until this turn completes with no compaction, the thread may not hold what it is given, repo rules included.
+            // A keep-warm turn gives it nothing new: the records stay unless it compacts (below).
             for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
-                self.state.repo_rules(&key, Some(""))?;
+                if !warm {
+                    self.state.repo_rules(&key, Some(""))?;
+                }
             }
             // What the standing lines tell the bot to read, and who reads them: a change to either sends them again.
-            let agent = match crate::regular_file::read(execution_path.join("AGENT.md"), crate::regular_file::CONTENT) {
+            let agent = match crate::regular_file::read(crate::instructions::path(&execution_path).unwrap_or_else(|| execution_path.join(crate::instructions::FILE)), crate::regular_file::CONTENT) {
                 Ok(bytes) => crate::gitrun::sha256_hex(&bytes),
                 Err(_) => {
                     // A failed hash (including a symlink) cannot establish that the rules are unchanged.
@@ -2630,32 +2735,41 @@ impl Runner {
                 built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
-            if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
+            if let Some(note) = session.as_ref().filter(|_| !warm).and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
                 tail = format!("{tail}\n\n{note}");
             }
-            if side_ran {
-                tail = format!("{tail}\n\n{}", crate::continuity::AFTER_SIDE);
+            if side_ran && !warm {
+                let after = if side_run { crate::continuity::SIDE_RESUMED } else { crate::continuity::AFTER_SIDE };
+                tail = format!("{tail}\n\n{after}");
             }
-            if after_interrupt {
+            if after_interrupt && !warm {
                 tail = format!("{tail}\n\n{}", crate::continuity::AFTER_INTERRUPT);
             }
-            if let Some(line) = crate::afterwatch::still_running(&bot, &key) {
+            if let Some(line) = crate::afterwatch::still_running(&bot, &key).filter(|_| !warm) {
                 tail = format!("{tail}\n\n{line}");
             }
-            let prompt = tidy_packet.as_ref().map_or_else(|| format!("{}{tail}", built.text), |p| p.prompt.clone());
+            if warm && !skip_warm {
+                h.one_turn(&th);
+            }
+            let prompt = format!("{}{tail}", built.text);
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
             // last turn with its own replies, and the new-session note.
-            h.full_prompt(&th, (resumed && !packet_only).then(|| {
+            h.full_prompt(&th, resumed.then(|| {
                 let mut replacing = attempt.clone();
                 replacing["_replaced"] = json!(true);
                 replacing["_side_ran"] = json!(false);
                 replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key)
             }));
-            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| !packet_only && prompt_turn && !r.is_empty()));
+            h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
             let _ = h.compacted(&th);
-            let t = if let Some(_one) = cold_guard {
+            let t = if skip_warm {
+                // Nothing to run: the turn ends at once, done, as a superseded goal control does.
+                let id = format!("keep-warm-{aid}");
+                let _ = own.send(hosts::event("turn_completed", Some(&th), Some(&id), json!({"status": "completed"})));
+                id
+            } else if let Some(_one) = cold_guard {
                 // Held only until the sign-in this turn triggers has landed, not for the length of the turn: the
                 // others follow a few seconds behind, warm.
                 let t = self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?;
@@ -2671,7 +2785,7 @@ impl Runner {
                 self.start_turn(&aid, &bot, h, &th, &prompt, effort.as_deref(), &refs, &attempt, &mut goal, &own).await?
             };
             mark("harness_spawned", &aid);
-            if side_ran || after_interrupt {
+            if (side_ran || after_interrupt) && !warm {
                 // Told once: this turn now holds what they said.
                 for key in [crate::continuity::side_key(&th), crate::continuity::interrupted_key(&th)] {
                     let _ = self.state.repo_rules(&key, Some("0"));
@@ -2681,29 +2795,20 @@ impl Runner {
             let d = Drive { limit_name: &limit_name, aid: &aid, host: h, thread: &th, effort: effort.as_deref(), limit, flags: &flags, wake: &wake, redactor: redactor.as_ref(), runtime: &runtime, bot: &bot, session: &key, login: yields(&attempt, &login_held), fresh: fresh.as_ref() };
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
-            if let Some(packet) = tidy_packet.as_ref().filter(|_| drove.outcome == "completed" && !drove.limited) {
-                let edits = std::mem::replace(&mut drove.reply, "Nightly memory tidy: result received.".into());
-                if let Some(prompt) = packet.propose(&self.client, &aid, &edits).await? {
-                    // A new provider thread cannot see the editing model's reasoning or self-attestation.
-                    let verifier = h.start_thread(&bot, &settings).await?;
-                    let t = h.start_turn(&verifier, &prompt, Some("low")).await?;
-                    let verification = Drive { thread: &verifier, fresh: None, ..d };
-                    let checked = self.during_drain(&aid, self.drive(&verification, rx, t,
-                        segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
-                    if checked.outcome == "completed" && !checked.limited {
-                        packet.verify(&self.client, &aid, &checked.reply).await?;
-                    } else {
-                        drove = checked;
-                        drove.reply = "Nightly memory tidy: verification unavailable.".into();
-                    }
-                } else {
-                    packet.verify(&self.client, &aid, "").await?;
-                }
-            }
             h.compaction_refresh(&th, None);
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
+            if drove.outcome == "completed" && !warm {
+                // What this session's cache is for: a keep-warm turn reads it only on the same model, effort and plan.
+                self.state.repo_rules(&warm_key(&th), Some(&identity))?;
+            }
+            if warm && !kept && !skip_warm {
+                // The keep-warm turn compacted it or began it anew: the next turn is given everything again.
+                for key in [th.clone(), crate::continuity::standing_key(&th), crate::continuity::task_key(&th), crate::continuity::context_key(&th)] {
+                    self.state.repo_rules(&key, Some(""))?;
+                }
+            }
             // The session holds the rules if it held them already or this turn's prompt carried them; a command's
             // prompt and a goal action carry none.
             let held = resumed && !truthy(attempt.get("_repo_rules_changed"));
@@ -2725,7 +2830,17 @@ impl Runner {
         // future, before a fallback can stop this host or settlement applies the interrupt-resume capability.
         if let (Some(h), Some(th)) = (&host, &thread) {
             let saved = h.session_id(th);
-            if session.as_ref().is_some_and(|s| s.resumed) && h.restored(th) {
+            if session
+                .as_ref()
+                .is_some_and(|s| s.why == Some(crate::continuity::FORKED))
+                && h.restored(th)
+            {
+                // The session it was to fork is not on this computer: Claude Code began a plain new one.
+                session = Some(crate::continuity::Session::new(
+                    crate::continuity::FRESH,
+                    Some("the session it was to fork is not on this computer".into()),
+                ));
+            } else if session.as_ref().is_some_and(|s| s.resumed) && h.restored(th) {
                 // Claude Code and Gemini find out only when the turn runs that the saved session is not on this computer.
                 session = Some(crate::continuity::Session::new(
                     crate::continuity::NOT_FOUND,
@@ -2744,9 +2859,16 @@ impl Runner {
                     }
                 }
                 // A continuation already has its saved thread: never write it back over a Clear, a replacement,
-                // or a refused resume. A fresh session that never came up and a side session are not kept.
-                if continuing.is_empty()
-                    && !side_run
+                // or a refused resume. A fresh session that never came up is not kept; a side session is kept under
+                // its own key, never the conversation's.
+                if continuing.is_empty() && side_run {
+                    let side_conv = crate::continuity::side_session(
+                        &conv,
+                        model.as_deref().unwrap_or_default(),
+                    );
+                    keep_session(&self.state, &bot, &side_conv, &session_runtime, &saved).await?;
+                } else if continuing.is_empty()
+                    && !one_off
                     && fresh
                         .as_ref()
                         .is_none_or(|f| f.confirmed.lock().unwrap().is_some())
@@ -2996,22 +3118,63 @@ impl Runner {
                     effort: hop.reasoning_effort.clone(),
                     env: hop_env.clone(),
                     slug: bot.clone(),
-                    compact_at: config.get("compact_at").cloned().unwrap_or(Value::Null),
+                    compact_at: crate::fallback::compact_at(&config, &hop),
                     gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                     add_dirs: crate::company_skills::with_dir(place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(), company_skills.as_deref()),
                     company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
                     mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
-                    packet_only: false,
+                    memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),
                 };
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
-                let th = h.start_thread(&bot, &settings).await?;
+                let kept_runtime = thread_runtime(&hop.runtime, &hop.harness);
+                // A task's hop keeps a side session per model, the one a task-model fallback on that model keeps
+                // (continuity::side_session under `conv`, which names the bot's login and a Clear empties): the task's
+                // next hop on the model resumes it, reading its prompt cache instead of writing it again. Its own
+                // subscription's binding goes after the model, so a thread is never resumed on another login.
+                let side_conv = (key.starts_with("task:") && source_resume.is_none() && !fresh_chat).then(|| {
+                    let bound = crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime).and_then(|d| d.binding());
+                    format!("{}{}", crate::continuity::side_session(&conv, &hop.model), bound.unwrap_or_default())
+                });
+                // One the server asks to compact first (it failed for its size) is not resumed: resumed again it would
+                // fail the same way, and that second failure clears the task's conversation, the primary's session
+                // with it. The hop begins a new one, which is the task's side session from then on. The mark is the
+                // conversation's and does not say which session was too large, so a healthy side session is dropped too
+                // when the primary took it: one cache write, against the risk of that clear.
+                let saved_side = match &side_conv {
+                    Some(side) if !truthy(config.get("compact_first")) => {
+                        self.state.session(&bot, side, &kept_runtime).map_err(Fail::runtime)?
+                    }
+                    _ => None,
+                };
+                // One that cannot be resumed (gone, or refused twice) is begun again, from the checkpoint and the replay.
+                let resumed_side = match &saved_side {
+                    Some(prev) => match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
+                        Ok(t) => Some(t),
+                        Err((missing, error)) => {
+                            let why = if missing { "is not on this computer" } else { "was refused" };
+                            self.diagnose(&aid, &format!("The task's fallback side session {why} ({}); a new one begins.",
+                                crate::continuity::trim(&error)));
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                let side_resumed = resumed_side.is_some();
+                let th = match resumed_side {
+                    Some(t) => t,
+                    None => h.start_thread(&bot, &settings).await?,
+                };
                 thread = Some(th.clone());
                 // Said once the fallback's host is up: a hop that cannot start has run nothing.
-                session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
+                session = Some(if side_resumed {
+                    crate::continuity::Session::resumed()
+                } else {
+                    crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None)
+                });
                 self.note_session(&aid, &bot, session.as_ref());
                 if busy.is_some() || held.is_some() {
                     // The primary never started (its login was busy, or held by the server), so this host
@@ -3029,9 +3192,23 @@ impl Runner {
                     None if hit_limit || held.is_some() => format!("{primary} hit its usage limit"),
                     None => format!("{primary} was unavailable"),
                 };
-                let text = format!("{}\n\n{}", crate::prompt::replayed(&attempt, &names, None, false, &replay), crate::fallback::prompt_note(&because, &primary, &hop));
+                let note = crate::fallback::prompt_note(&because, &primary, &hop);
+                let fresh_text = format!("{}\n\n{note}", crate::prompt::replayed(&attempt, &names, None, false, &replay));
+                let text = if side_resumed {
+                    // Resumed: the checkpoint and the room since its last turn here, its own replies included, not the
+                    // replay a new thread needs; the repo rules again, since nothing records that this thread holds them.
+                    let mut resuming = attempt.clone();
+                    resuming["_side_ran"] = json!(true);
+                    resuming["_repo_rules_changed"] = json!(true);
+                    let after = self.state.cursor(&th, None).map_err(Fail::runtime)?;
+                    let built = crate::prompt::replayed(&resuming, &names, after.as_deref(), true, "");
+                    format!("{built}\n\n{note}\n\n{}", crate::continuity::SIDE_RESUMED)
+                } else {
+                    fresh_text.clone()
+                };
+                // A resumed session that turns out to be missing restarts under its id with what a new one is given.
+                h.full_prompt(&th, side_resumed.then(|| fresh_text.clone()));
                 let live_source = source_continue() && thread_updates();
-                let kept_runtime = thread_runtime(&hop.runtime, &hop.harness);
                 let scope = crate::source_resume::scope(&attempt, selected.as_ref(),
                     place.as_ref().is_some_and(|p| p.session_path.is_some()));
                 let fallback_fresh = if live_source {
@@ -3051,7 +3228,8 @@ impl Runner {
                         }),
                     })
                 } else { None };
-                if !h.confirms_threads() {
+                // A resumed side session's id is known before the turn: it is confirmed at once.
+                if !h.confirms_threads() || side_resumed {
                     if let Some(fresh) = &fallback_fresh {
                         self.confirm_thread(fresh, &h.session_id(&th)).await?;
                     }
@@ -3076,6 +3254,18 @@ impl Runner {
                     fresh: fallback_fresh.as_ref(),
                 };
                 drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                if side_resumed && h.restored(&th) {
+                    // Claude Code finds out only as the turn runs that the saved session is gone: it began a new one.
+                    session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
+                    self.note_session(&aid, &bot, session.as_ref());
+                }
+                // However the hop ended, its thread is the task's side session on this model for the next hop. A
+                // failed local save only costs that hop a new session: it never fails work this one already did.
+                if let Some(side) = &side_conv {
+                    if keep_session(&self.state, &bot, side, &kept_runtime, &h.session_id(&th)).await.is_err() {
+                        self.diagnose(&aid, "Fallback side session not kept on this computer; the task's next fallback turn starts a new one.");
+                    }
+                }
                 if let Some(fresh) = fallback_fresh.as_ref().filter(|f| f.confirmed.lock().unwrap().is_none()) {
                     if let Some(confirmed) = h.confirmed(&th) {
                         // A transient handoff failure must not erase a completed result or start a new provider.
@@ -3629,8 +3819,9 @@ impl Runner {
             .await;
             match sent {
                 Ok(()) => {
-                    if drove.outcome == "completed" {
-                        // The next turn on this thread forwards only what the room said after this.
+                    if drove.outcome == "completed" && !crate::prompt::keep_warm(&attempt) {
+                        // The next turn on this thread forwards only what the room said after this. Not after a
+                        // keep-warm turn: it was given none of the room.
                         if let Some(th) = &thread {
                             let (th, message) = (th.clone(), text_of(&attempt["message"]["id"]));
                             self.state.off(move |s| s.cursor(&th, Some(&message))).await?;
@@ -5950,6 +6141,17 @@ for line in sys.stdin:
     /// entry of `turns`, on a task's room or (`task` false) the bot's main chat; `serves` is whether the server says
     /// it takes `session` in a result.
     async fn session_turns(task: bool, serves: bool, turns: &[Turn]) -> Ran {
+        session_turns_limited(task, serves, turns, &[]).await
+    }
+
+    /// `session_turns`, with pi refusing each prompt of `limited` (counted from 0 across all turns) for its usage
+    /// limit; `prompts` then holds every prompt pi was sent, in order.
+    async fn session_turns_limited(
+        task: bool,
+        serves: bool,
+        turns: &[Turn],
+        limited: &[usize],
+    ) -> Ran {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(serves)));
         let dir =
@@ -5960,6 +6162,13 @@ for line in sys.stdin:
         HOST_COMMAND.with(|command| {
             *command.borrow_mut() = Some(crate::hosts::pi::testing::fake(&dir, &fixture))
         });
+        for n in limited {
+            std::fs::copy(
+                fixture.with_file_name("error.jsonl"),
+                dir.join(format!("fixture-{n}")),
+            )
+            .unwrap();
+        }
         let (url, seen, server) = recording_server().await;
         let path = dir.join("runner.json");
         std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
@@ -6013,7 +6222,8 @@ for line in sys.stdin:
                 runner
                     .state
                     .with(|c| {
-                        c.query_row("SELECT thread FROM sessions WHERE bot='ops'", [], |r| {
+                        // The conversation's own session; a side session is kept apart (continuity::side_session).
+                        c.query_row("SELECT thread FROM sessions WHERE bot='ops' AND instr(conversation, '#side:')=0", [], |r| {
                             r.get::<_, String>(0)
                         })
                         .map(Some)
@@ -6040,7 +6250,7 @@ for line in sys.stdin:
                     .to_string()
             })
             .collect();
-        let prompts = (0..turns.len())
+        let prompts = (0..turns.len() + limited.len())
             .map(|n| std::fs::read_to_string(dir.join(format!("prompt-{n}"))).unwrap_or_default())
             .collect();
         let seen = seen.lock().unwrap().clone();
@@ -6180,55 +6390,248 @@ for line in sys.stdin:
             &[
                 ("m1", json!({}), json!({})),
                 ("m4", json!({}), fallback.clone()),
-                ("m4", json!({}), fallback),
                 ("m4", json!({}), json!({})),
+                ("m4", json!({}), fallback.clone()),
+                (
+                    "m4",
+                    json!({}),
+                    json!({"task_model_fallback": true, "model": "kimi-k3-mini"}),
+                ),
             ],
         )
         .await;
         let primary = &ran.sessions[0];
-        assert!(
-            ran.sessions[1] != *primary
-                && ran.sessions[2] != *primary
-                && ran.sessions[1] != ran.sessions[2],
-            "{:?}",
-            ran.sessions
-        );
+        let side = &ran.sessions[1];
+        assert!(side != primary, "{:?}", ran.sessions);
         assert_eq!(
             ran.saved,
-            vec![Some(primary.clone()); 4],
+            vec![Some(primary.clone()); 5],
             "a fallback's thread replaced or forgot the primary's"
         );
-        for n in [1, 2] {
-            assert_eq!(
-                session_of(&ran.completions[n]),
-                ("new".to_string(), json!("fallback_side"), Value::Null)
-            );
-            // Started from the checkpoint, as before.
-            assert!(ran.prompts[n].contains("Where this task stood after its last turn (2026-10-22T08:00:00Z):\nBuild 40 green; waiting on build 41."), "{}", ran.prompts[n]);
-            assert!(
-                ran.diagnostics[n]
-                    .iter()
-                    .any(|d| d.contains("side session")),
-                "{:?}",
-                ran.diagnostics[n]
-            );
-        }
         assert_eq!(
-            ran.sessions[3], *primary,
+            session_of(&ran.completions[1]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        // Started from the checkpoint, as before.
+        assert!(ran.prompts[1].contains("Where this task stood after its last turn (2026-10-22T08:00:00Z):\nBuild 40 green; waiting on build 41."), "{}", ran.prompts[1]);
+        assert!(
+            ran.diagnostics[1]
+                .iter()
+                .any(|d| d.contains("side session")),
+            "{:?}",
+            ran.diagnostics[1]
+        );
+        assert_eq!(
+            ran.sessions[2], *primary,
             "the next normal turn did not resume the primary session"
         );
         assert_eq!(
-            session_of(&ran.completions[3]),
+            session_of(&ran.completions[2]),
             ("resumed".to_string(), Value::Null, Value::Null)
         );
         // It is told a side session ran, given the checkpoint and the replies made since its own last turn.
-        let back = &ran.prompts[3];
+        let back = &ran.prompts[2];
         assert!(
             back.contains(crate::continuity::AFTER_SIDE)
                 && back.contains("Where this task stood")
                 && back.contains("[m2]: Here's the draft"),
             "{back}"
         );
+        // The task's next fallback on the same model resumes its side session, not a new one, and is given the
+        // checkpoint and what the primary said since its last turn there.
+        assert_eq!(ran.sessions[3], *side, "{:?}", ran.sessions);
+        assert_eq!(
+            session_of(&ran.completions[3]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        let again = &ran.prompts[3];
+        assert!(
+            again.contains(crate::continuity::SIDE_RESUMED)
+                && !again.contains(crate::continuity::AFTER_SIDE)
+                && again.contains("Where this task stood"),
+            "{again}"
+        );
+        // A fallback on another model has another cache: a side session of its own.
+        assert!(
+            ran.sessions[4] != *primary && ran.sessions[4] != *side,
+            "{:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            session_of(&ran.completions[4]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+    }
+
+    /// A task turn whose own login the server holds after a usage limit, run on its fallback on `model`.
+    fn limit_hop(model: &str) -> Value {
+        json!({"primary_held": "2099-01-01T00:00:00Z", "fallback": {"harness": "pi", "model": model}})
+    }
+
+    #[tokio::test]
+    async fn a_tasks_next_limit_fallback_on_the_same_model_resumes_its_side_session() {
+        let ran = session_turns(
+            true,
+            true,
+            &[
+                ("m1", json!({}), json!({})),
+                ("m2", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), limit_hop("kimi-k3-other")),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), json!({})),
+            ],
+        )
+        .await;
+        let primary = &ran.sessions[0];
+        let side = &ran.sessions[1];
+        assert!(side != primary, "{:?}", ran.sessions);
+        // AC-1: the first limit hop starts the side session, the second resumes it.
+        assert_eq!(
+            session_of(&ran.completions[1]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        assert_eq!(ran.completions[1]["fallback"], "pi");
+        assert_eq!(ran.sessions[2], *side, "{:?}", ran.sessions);
+        assert_eq!(
+            session_of(&ran.completions[2]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        // AC-2: told it is resumed, given the checkpoint, not the fresh thread's replay of the room.
+        let again = &ran.prompts[2];
+        assert!(
+            again.contains(crate::continuity::SIDE_RESUMED)
+                && again.contains("Where this task stood after its last turn")
+                && again.contains("hit its usage limit")
+                && !again.contains("fresh fallback thread"),
+            "{again}"
+        );
+        // The room since its last turn (m2): m3 is given, m1 from before it is not.
+        assert!(
+            again.contains("Release build 41 failed its smoke test.")
+                && !again.contains("Watch the Acme release."),
+            "{again}"
+        );
+        assert!(
+            ran.prompts[1].contains("fresh fallback thread"),
+            "{}",
+            ran.prompts[1]
+        );
+        // AC-4: a hop on another model starts its own; the first model's is kept and resumed after it.
+        assert!(
+            ran.sessions[3] != *primary && ran.sessions[3] != *side,
+            "{:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            session_of(&ran.completions[3]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        assert_eq!(ran.sessions[4], *side, "{:?}", ran.sessions);
+        assert_eq!(
+            session_of(&ran.completions[4]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        // AC-6: the primary's saved thread never moved, and its next turn resumes it, told a side session ran.
+        assert_eq!(ran.saved, vec![Some(primary.clone()); 6], "{:?}", ran.saved);
+        assert_eq!(ran.sessions[5], *primary, "{:?}", ran.sessions);
+        assert!(
+            ran.prompts[5].contains(crate::continuity::AFTER_SIDE),
+            "{}",
+            ran.prompts[5]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_primary_out_of_quota_mid_turn_resumes_the_tasks_side_session_on_its_fallback() {
+        // Turn 2's login is held: its fallback starts the side session. Turn 3's primary runs, and pi refuses it for
+        // its usage limit (prompt 2): the hop resumes that side session and says why it hopped (AC-3).
+        let fallback = json!({"fallback": {"harness": "pi", "model": "kimi-k3-fallback"}});
+        let ran = session_turns_limited(
+            true,
+            true,
+            &[
+                ("m1", json!({}), json!({})),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), fallback),
+            ],
+            &[2],
+        )
+        .await;
+        let side = &ran.sessions[1];
+        assert_eq!(ran.sessions.len(), 4, "{:?}", ran.sessions);
+        assert_eq!(
+            ran.sessions[2], ran.sessions[0],
+            "the primary ran on its own session: {:?}",
+            ran.sessions
+        );
+        assert_eq!(ran.sessions[3], *side, "{:?}", ran.sessions);
+        assert_eq!(
+            ran.completions[2]["outcome"], "completed",
+            "{}",
+            ran.completions[2]
+        );
+        assert_eq!(ran.completions[2]["fallback"], "pi");
+        assert_eq!(
+            session_of(&ran.completions[2]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        let hop = &ran.prompts[3];
+        assert!(
+            hop.contains("kimi-k3 hit its usage limit") || hop.contains("pi hit its usage limit"),
+            "{hop}"
+        );
+        assert!(
+            hop.contains(crate::continuity::SIDE_RESUMED) && !hop.contains("fresh fallback thread"),
+            "{hop}"
+        );
+        // The primary's saved thread is the same after the hop.
+        assert_eq!(
+            ran.saved[2],
+            Some(ran.sessions[0].clone()),
+            "{:?}",
+            ran.saved
+        );
+    }
+
+    #[tokio::test]
+    async fn a_limit_fallback_told_to_compact_first_begins_a_new_side_session() {
+        // A side session that failed for its size marks the task compact_first; the next hop, its login still held,
+        // must not resume that session again (it would fail the same way, and the second failure clears the
+        // conversation, the primary's session with it): it begins a new one from the checkpoint and the replay.
+        let mut compact = limit_hop("kimi-k3-fallback");
+        compact["compact_first"] = json!(true);
+        let ran = session_turns(
+            true,
+            true,
+            &[
+                ("m1", json!({}), json!({})),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), compact),
+                ("m4", json!({}), limit_hop("kimi-k3-fallback")),
+                ("m4", json!({}), json!({})),
+            ],
+        )
+        .await;
+        let (primary, side) = (&ran.sessions[0], &ran.sessions[1]);
+        assert!(
+            ran.sessions[2] != *side && ran.sessions[2] != *primary,
+            "{:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            session_of(&ran.completions[2]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        assert!(
+            ran.prompts[2].contains("fresh fallback thread"),
+            "{}",
+            ran.prompts[2]
+        );
+        // The new one is the task's side session from then on.
+        assert_eq!(ran.sessions[3], ran.sessions[2], "{:?}", ran.sessions);
+        assert_eq!(ran.saved, vec![Some(primary.clone()); 5], "{:?}", ran.saved);
+        assert_eq!(ran.sessions[4], *primary, "{:?}", ran.sessions);
     }
 
     /// Turns through a fake Claude process that answers every prompt, one per entry of `turns` (each is the config
@@ -6313,6 +6716,7 @@ for line in sys.stdin:
         ));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         std::fs::write(dir.join("projects/bot-ops/AGENT.md"), "# Ops\n").unwrap();
+        RIG_DIR.with(|d| *d.borrow_mut() = Some(dir.clone()));
         for n in compacting {
             // A process listed twice compacts twice.
             let mut marks =
@@ -6453,6 +6857,95 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn a_limit_fallback_begins_a_new_side_session_when_its_last_one_cannot_serve() {
+        // Two limit hops in a row on Claude, the second after: the side session went from this computer (AC-5), a
+        // Clear (AC-7), the bot's login changed (AC-9), or the turns are a chat's, not a task's (AC-10).
+        for case in ["gone", "cleared", "login", "chat", "kept"] {
+            let task = case != "chat";
+            let mut hop = json!({"runtime": "pi", "harness": "pi", "fallback": {"harness": "claude", "model": "synthetic-fallback"}, "primary_held": "2099-01-01T00:00:00Z"});
+            if task {
+                hop["session"] = json!("task");
+            }
+            let mut second = hop.clone();
+            if case == "cleared" {
+                second["attempt"] = json!({"session_epoch": 1});
+            }
+            let extra = if task {
+                json!({"conversation": {"id": "c-watch", "kind": "task"}, "session_epoch": 0,
+                       "task": {"id": "t-watch", "title": "Watch the Acme release", "checkpoint": "Build 40 green.", "checkpoint_at": "2026-10-22T08:00:00Z"}})
+            } else {
+                json!({})
+            };
+            // The fake Claude says the second hop's saved session is not found (its process 1).
+            let missing: &[usize] = if case == "gone" { &[1] } else { &[] };
+            let (threads, prompts, completions, _, _, dir) = claude_rig_each_turn(
+                &[hop, second],
+                &[],
+                missing,
+                &[],
+                extra,
+                |_| (),
+                |n, projects| {
+                    if n == 1 && case == "login" {
+                        let path = projects.parent().unwrap().join("runner.json");
+                        let mut config: Value =
+                            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                        let login = projects.parent().unwrap().join("lab-login");
+                        std::fs::create_dir_all(&login).unwrap();
+                        config["profiles"] = json!({"lab": {"dir": login, "share_operator": true}});
+                        config["default_profile"] = json!("lab");
+                        std::fs::write(&path, config.to_string()).unwrap();
+                    }
+                },
+            )
+            .await;
+            std::fs::remove_dir_all(&dir).ok();
+            assert_eq!(
+                session_of(&completions[0]),
+                ("new".to_string(), json!("fallback_side"), Value::Null),
+                "{case}"
+            );
+            assert_eq!(
+                completions[1]["outcome"], "completed",
+                "{case}: {}",
+                completions[1]
+            );
+            assert_eq!(completions[1]["fallback"], "claude", "{case}");
+            let last = prompts.last().unwrap();
+            if case == "kept" {
+                // The control: nothing changed, so the second hop resumes the first one's session.
+                assert_eq!(threads, vec![threads[0].clone(); 2], "{case}");
+                assert_eq!(
+                    session_of(&completions[1]),
+                    ("resumed".to_string(), Value::Null, Value::Null)
+                );
+                assert!(last.contains(crate::continuity::SIDE_RESUMED), "{last}");
+                continue;
+            }
+            assert_eq!(
+                session_of(&completions[1]),
+                ("new".to_string(), json!("fallback_side"), Value::Null),
+                "{case}"
+            );
+            // Begun again as a new side session (this rig's room has no history to replay), never told it was resumed.
+            assert!(
+                last.contains("hit its usage limit")
+                    && (!task || last.contains("Where this task stood"))
+                    && !last.contains(crate::continuity::SIDE_RESUMED),
+                "{case}: {last}"
+            );
+            if case == "gone" {
+                // Asked to resume it, Claude found none and began one in its place.
+                assert_eq!(threads.len(), 3, "{threads:?}");
+                assert_eq!(threads[1], threads[0], "{threads:?}");
+            } else {
+                assert_eq!(threads.len(), 2, "{case}: {threads:?}");
+                assert!(threads[1] != threads[0], "{case}: {threads:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn compact_first_compacts_the_resumed_session_and_then_runs_the_turn() {
         let (threads, prompts, completions) =
             claude_turns(&[json!({}), json!({"compact_first": true}), json!({})]).await;
@@ -6507,7 +7000,7 @@ for line in sys.stdin:
         for (n, prompt) in prompts.iter().enumerate() {
             assert!(
                 !prompt.contains(crate::prompt::STANDING_SEEN)
-                    && prompt.contains("Read AGENT.md and state.md"),
+                    && prompt.contains("an AI teammate at"),
                 "turn {n}: {prompt}"
             );
             assert_eq!(completions[n]["outcome"], "completed");
@@ -6558,12 +7051,9 @@ for line in sys.stdin:
     #[tokio::test]
     async fn a_resumed_claude_turn_is_given_its_standing_lines_again_only_after_they_may_be_gone() {
         let held =
-            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI");
-        let full = |p: &str| {
-            !p.contains(crate::prompt::STANDING_SEEN)
-                && p.contains("Use the tico CLI")
-                && p.contains("Read AGENT.md and state.md")
-        };
+            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("an AI teammate at");
+        let full =
+            |p: &str| !p.contains(crate::prompt::STANDING_SEEN) && p.contains("an AI teammate at");
         // 0 new, 1 resumed and unchanged, 2 resumed but Claude compacts during it, 3 after that compaction, 4 unchanged,
         // 5 compact_first (a /compact process, then the turn), 6 unchanged again.
         let turns = [
@@ -6582,8 +7072,7 @@ for line in sys.stdin:
         // Turn 2's short prompt is followed, as soon as Claude compacts, by the standing lines it left out.
         assert!(
             injected[2].contains(crate::prompt::RESTORED)
-                && injected[2].contains("Use the tico CLI")
-                && injected[2].contains("Read AGENT.md and state.md"),
+                && injected[2].contains("an AI teammate at"),
             "{}",
             injected[2]
         );
@@ -6620,16 +7109,157 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
+    async fn a_keep_warm_turn_sends_its_one_line_once_and_the_next_turn_is_sent_as_if_it_never_ran()
+    {
+        let line = "Keep-warm turn: nothing to do. Use no tools; reply with one word: ok.";
+        let turns = [json!({}), json!({}), keep_warm_turn(line), json!({})];
+        let (threads, prompts, completions, _, _, dir) = claude_rig_each_turn(
+            &turns,
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+            |n, _| {
+                if n == 2 {
+                    saved_transcript(&dir_of_args());
+                }
+            },
+        )
+        .await;
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        // The keep-warm turn is its line alone: no standing lines, no "unchanged" line, no tail.
+        assert!(
+            prompts[2].contains(line) && !prompts[2].contains(crate::prompt::STANDING_SEEN),
+            "{}",
+            prompts[2]
+        );
+        assert!(
+            !prompts[2].contains("an AI teammate at") && !prompts[2].contains("Tico-Run"),
+            "{}",
+            prompts[2]
+        );
+        // The turn after it is sent what it would have been without it: the short form, as turn 1 was.
+        for n in [1, 3] {
+            assert!(
+                prompts[n].contains(crate::prompt::STANDING_SEEN),
+                "turn {n}: {}",
+                prompts[n]
+            );
+        }
+        // Only the keep-warm process is limited to one model turn.
+        let args: Vec<String> = std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        for (n, a) in args.iter().enumerate() {
+            assert_eq!(a.contains("--max-turns 1"), n == 2, "process {n}: {a}");
+        }
+        assert!(
+            completions.iter().all(|c| c["outcome"] == "completed"),
+            "{completions:?}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A keep-warm turn's attempt fields (crate::prompt::keep_warm), saying `line`.
+    fn keep_warm_turn(line: &str) -> Value {
+        json!({"attempt": {"message": {"id": "m-warm", "from_actor": "keeper", "body": line, "refs": {"wake": "keep_warm"}}}})
+    }
+
+    thread_local! {
+        /// The rig's folder, for a `before_turn` that reads what the earlier turns ran (`dir_of_args`).
+        static RIG_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    }
+
+    /// The rig's folder while it runs: found from the args log the fake claude writes.
+    fn dir_of_args() -> PathBuf {
+        RIG_DIR
+            .with(|d| d.borrow().clone())
+            .expect("the rig's folder")
+    }
+
+    /// Claude's transcript of the session the last process ran, under the turn's HOME: the session is saved here.
+    fn saved_transcript(dir: &Path) {
+        let last = std::fs::read_to_string(dir.join("args.log")).unwrap();
+        let id = last
+            .lines()
+            .last()
+            .unwrap()
+            .split_whitespace()
+            .skip_while(|a| *a != "--session-id" && *a != "--resume")
+            .nth(1)
+            .unwrap()
+            .to_string();
+        let home = crate::env::tests::OPERATOR_HOME
+            .with(|h| h.borrow().clone())
+            .unwrap();
+        let projects = home.join(".claude/projects/rig");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::fs::write(projects.join(format!("{id}.jsonl")), "{}\n").unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_keep_warm_turn_with_no_warm_session_here_starts_no_model_and_ends_done() {
+        let line = "Keep-warm turn: nothing to do. Use no tools; reply with one word: ok.";
+        // 0: the first turn on the conversation is a keep-warm one (none saved). 1, 2: real turns. 3: keep-warm, but
+        // the session is not on this computer (no transcript). 4: real. 5: keep-warm on a saved session, but on another
+        // model than its cache's. 6: the same on another effort (a plan is checked the same way: warm_identity).
+        let mut other_model = keep_warm_turn(line);
+        other_model["model"] = json!("synthetic-other");
+        let mut other_effort = keep_warm_turn(line);
+        other_effort["reasoning_effort"] = json!("low");
+        let turns = [
+            keep_warm_turn(line),
+            json!({}),
+            json!({}),
+            keep_warm_turn(line),
+            json!({}),
+            other_model,
+            other_effort,
+        ];
+        let (_, prompts, completions, _, _, dir) = claude_rig_each_turn(
+            &turns,
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+            |n, _| {
+                if n >= 5 {
+                    saved_transcript(&dir_of_args());
+                }
+            },
+        )
+        .await;
+        // Only the three real turns started Claude; every keep-warm turn ended done without it.
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert!(prompts.iter().all(|p| !p.contains(line)), "{prompts:?}");
+        assert!(
+            completions.iter().all(|c| c["outcome"] == "completed"),
+            "{completions:?}"
+        );
+        // Skipping left the thread's records alone: turn 4 is still sent the short form after turn 3's skip.
+        assert!(
+            prompts[2].contains(crate::prompt::STANDING_SEEN),
+            "{}",
+            prompts[2]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_session_near_its_compact_at_or_of_unknown_size_gets_the_whole_prompt() {
-        // Each fake turn uses 350 tokens. With the whole prompt (well over 3,400 characters, 850 tokens) that is under
-        // 60% of a 100,000-token Compact at, but over 60% of 2,000, though 350 alone is not; a first turn's size is unknown.
+        // Each fake turn uses 350 tokens. With the whole prompt (over 900 characters, counted as tokens) that is under
+        // 60% of a 100,000-token Compact at, but over 60% of 1,000, though 350 alone is not; a first turn's size is unknown.
         let (_, prompts, _) = claude_turns(&[
             json!({"compact_at": 100_000}),
             json!({"compact_at": 100_000}),
         ])
         .await;
         assert!(
-            prompts[0].len() > 3_400 && !prompts[0].contains(crate::prompt::STANDING_SEEN),
+            prompts[0].len() > 900 && !prompts[0].contains(crate::prompt::STANDING_SEEN),
             "{}",
             prompts[0]
         );
@@ -6639,14 +7269,14 @@ for line in sys.stdin:
             prompts[1]
         );
         let (_, prompts, _) = claude_turns(&[
-            json!({"compact_at": 2_000}),
-            json!({"compact_at": 2_000}),
-            json!({"compact_at": 2_000}),
+            json!({"compact_at": 1_000}),
+            json!({"compact_at": 1_000}),
+            json!({"compact_at": 1_000}),
         ])
         .await;
         for p in &prompts {
             assert!(
-                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the tico CLI"),
+                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("an AI teammate at"),
                 "{p}"
             );
         }
@@ -6678,7 +7308,7 @@ for line in sys.stdin:
         assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
         let rule = "Repo rules for acme/app";
         assert!(
-            prompts[0].contains(rule) && prompts[0].contains("Use the tico CLI"),
+            prompts[0].contains(rule) && prompts[0].contains("an AI teammate at"),
             "{}",
             prompts[0]
         );
@@ -6687,7 +7317,7 @@ for line in sys.stdin:
         let restored = &prompts[2];
         assert!(
             restored.contains(rule)
-                && restored.contains("Use the tico CLI")
+                && restored.contains("an AI teammate at")
                 && restored.contains("Question 1"),
             "{restored}"
         );
@@ -6775,20 +7405,20 @@ for line in sys.stdin:
             injected[1]
         );
         assert_eq!(injected[1].matches(rule).count(), 2, "{}", injected[1]);
-        assert!(injected[1].contains("Use the tico CLI"), "{}", injected[1]);
+        assert!(injected[1].contains("an AI teammate at"), "{}", injected[1]);
         // With no room the prompt is whole but for the unchanged rules: a compaction gives back those alone.
-        let tight = json!({"compact_at": 2_000});
+        let tight = json!({"compact_at": 1_000});
         let (_, prompts, _, injected) =
             claude_rig(&[tight.clone(), tight], &[1], &[], &[], extra, rules).await;
         assert!(
-            prompts[1].contains("Use the tico CLI") && !prompts[1].contains(rule),
+            prompts[1].contains("an AI teammate at") && !prompts[1].contains(rule),
             "{}",
             prompts[1]
         );
         assert!(
             injected[1].contains(crate::prompt::RESTORED)
                 && injected[1].contains(rule)
-                && !injected[1].contains("Use the tico CLI"),
+                && !injected[1].contains("an AI teammate at"),
             "{}",
             injected[1]
         );
@@ -6873,13 +7503,13 @@ for line in sys.stdin:
         );
         assert!(
             !ran.prompts[0].contains(crate::prompt::STANDING_SEEN)
-                && ran.prompts[0].contains("Use the tico CLI"),
+                && ran.prompts[0].contains("an AI teammate at"),
             "{}",
             ran.prompts[0]
         );
         for p in &ran.prompts[1..] {
             assert!(
-                p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI"),
+                p.contains(crate::prompt::STANDING_SEEN) && !p.contains("an AI teammate at"),
                 "{p}"
             );
         }
@@ -7452,7 +8082,42 @@ for line in sys.stdin:
             ),
             (Some(0), Some(15), Some(5))
         );
+        assert_eq!(
+            r["cache_write_tokens"],
+            json!(0),
+            "a host with no cache writes reports 0"
+        );
         assert!(r.get("requests").is_none());
+    }
+
+    #[test]
+    fn meter_reports_cache_writes_apart_from_input() {
+        let mut m = Meter::default();
+        m.add(&json!({"usage": {"input": 3010, "cached": 4, "cache_write": 3000, "output": 3}}));
+        m.add(&json!({"usage": {"input": 100, "cached": 20, "cache_write": "50", "output": 2}}));
+        let r = m.report("m", "claude", "api").unwrap();
+        assert_eq!(
+            (
+                r["input_tokens"].as_i64(),
+                r["cached_tokens"].as_i64(),
+                r["cache_write_tokens"].as_i64(),
+                r["output_tokens"].as_i64()
+            ),
+            (Some(36), Some(24), Some(3050), Some(5))
+        );
+        let server = |takes: &'static [&'static str]| move |name: &str| takes.contains(&name);
+        let current = served(&m, "m", "claude", "api", server(&["usage_cache_writes"])).unwrap();
+        assert_eq!(
+            (&current["input_tokens"], &current["cache_write_tokens"]),
+            (&json!(36), &json!(3050))
+        );
+        let older = served(&m, "m", "claude", "api", server(&[])).unwrap();
+        assert_eq!(
+            older["input_tokens"],
+            json!(3086),
+            "an older server counts them as input"
+        );
+        assert!(older.get("cache_write_tokens").is_none(), "{older:?}");
     }
 
     #[test]
@@ -8676,6 +9341,298 @@ else:
             server.abort();
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    /// A synthetic Claude process that answers every turn under the session it was given (`--session-id`, else the one
+    /// it resumes), and refuses a fork of `gone-session` as a session not on this computer. Every argv is kept in
+    /// argv.jsonl.
+    fn one_off_host(dir: &Path) {
+        let script = dir.join("synthetic_claude.py");
+        std::fs::write(&script, r#"import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+if '--version' in sys.argv:
+    print('2.1.999'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+with (root / 'argv.jsonl').open('a') as f:
+    f.write(json.dumps(sys.argv[1:]) + '\n')
+sys.stdin.readline()
+if 'gone-session' in sys.argv:
+    print(json.dumps({'type':'result','subtype':'error_during_execution','is_error':True,'num_turns':0,
+                      'errors':['No conversation found with session ID: gone-session']}), flush=True)
+    sys.exit(1)
+flag = '--session-id' if '--session-id' in sys.argv else '--resume'
+sid = sys.argv[sys.argv.index(flag) + 1]
+print(json.dumps({'type':'system','subtype':'init','session_id':sid}), flush=True)
+print(json.dumps({'type':'result','subtype':'success','result':'Sent the Acme invoice.'}), flush=True)
+"#).unwrap();
+        HOST_COMMAND.with(|command| {
+            *command.borrow_mut() = Some(vec![
+                crate::env::python().display().to_string(),
+                script.display().to_string(),
+            ])
+        });
+        HOST_CLAUDE.with(|on| on.set(true));
+        RUN_SESSION.with(|on| on.set(Some(true)));
+    }
+
+    /// A turn in the bot's own room, with `extra` merged into the claim (`fresh_session`, `fork_thread`).
+    fn room_attempt(id: &str, extra: Value) -> Value {
+        let mut attempt = json!({"id": id, "bot": "ops", "token": "synthetic", "lease_seconds": 120,
+               "conversation": {"id": "c1"}, "message": {"refs": {}},
+               "config": {"runtime": "claude", "harness": "claude", "model": "synthetic", "session": "bot"}});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            attempt[k] = v;
+        }
+        attempt
+    }
+
+    async fn run_room_turns(
+        runner: &Arc<Runner>,
+        seen: &Mutex<Vec<(String, String, Value)>>,
+        turns: &[(&str, Value)],
+    ) {
+        for (id, extra) in turns {
+            tokio::time::timeout(
+                Duration::from_secs(12),
+                runner.clone().execute(room_attempt(id, extra.clone())),
+            )
+            .await
+            .expect("the turn ends")
+            .unwrap();
+            assert_eq!(completion(seen, id)["outcome"], "completed", "{id}");
+        }
+    }
+
+    fn argvs(dir: &Path) -> Vec<Vec<String>> {
+        std::fs::read_to_string(dir.join("argv.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn session_kind_why(completion: &Value) -> (Option<&str>, Option<&str>) {
+        (
+            completion["session"]["kind"].as_str(),
+            completion["session"]["why"].as_str(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_fresh_release_job_in_the_bots_room_starts_a_new_session_and_leaves_the_rooms_own() {
+        let _controls = RunControls;
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "fresh-session");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        one_off_host(&dir);
+        // The room already has its long-lived session (the daily update request posted into the bot's own room).
+        runner
+            .state
+            .save_session("ops", "bot", "claude", "room-session")
+            .unwrap();
+        run_room_turns(
+            &runner,
+            &seen,
+            &[
+                ("a-fresh", json!({"fresh_session": true})),
+                ("a-next", json!({})),
+            ],
+        )
+        .await;
+        let args = argvs(&dir);
+        assert_eq!(args.len(), 2, "{args:?}");
+        assert!(!args[0].contains(&"room-session".to_string()), "{args:?}");
+        let new = args[0]
+            .windows(2)
+            .find(|w| w[0] == "--session-id")
+            .map(|w| w[1].clone())
+            .expect("a new session");
+        assert!(!args[0].contains(&"--resume".to_string()), "{args:?}");
+        assert_eq!(
+            session_kind_why(&completion(&seen, "a-fresh")),
+            (Some("new"), Some("fresh"))
+        );
+        // The room's session is still the one its next ordinary turn resumes; the fresh one was not saved over it.
+        assert_eq!(
+            runner
+                .state
+                .session("ops", "bot", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("room-session")
+        );
+        assert!(
+            args[1]
+                .windows(2)
+                .any(|w| w == ["--resume", "room-session"]),
+            "{args:?}"
+        );
+        assert!(!args[1].contains(&new), "{args:?}");
+        assert_eq!(
+            session_kind_why(&completion(&seen, "a-next")).0,
+            Some("resumed")
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_release_run_in_a_conversation_with_no_session_keeps_its_thread_for_the_next_turn() {
+        // A routine's run gets a task of its own, with a conversation that has no session yet: its fresh or forked
+        // thread is that conversation's first session, and the next turn there (a person's answer, the next stage)
+        // resumes it rather than starting over.
+        for (name, extra, why) in [
+            ("fresh-empty", json!({"fresh_session": true}), "fresh"),
+            (
+                "fork-empty",
+                json!({"fork_thread": "latest-session"}),
+                "forked",
+            ),
+        ] {
+            let _controls = RunControls;
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = runner_at(&url, name);
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            one_off_host(&dir);
+            assert!(runner
+                .state
+                .session("ops", "bot", "claude")
+                .unwrap()
+                .is_none());
+            run_room_turns(&runner, &seen, &[("a-first", extra), ("a-next", json!({}))]).await;
+            let args = argvs(&dir);
+            assert_eq!(args.len(), 2, "{name}: {args:?}");
+            let first = args[0]
+                .windows(2)
+                .find(|w| w[0] == "--session-id")
+                .map(|w| w[1].clone())
+                .expect("a new session");
+            assert_eq!(
+                session_kind_why(&completion(&seen, "a-first")),
+                (Some("new"), Some(why)),
+                "{name}"
+            );
+            assert_eq!(
+                runner
+                    .state
+                    .session("ops", "bot", "claude")
+                    .unwrap()
+                    .as_deref(),
+                Some(first.as_str()),
+                "{name}: the first session is kept as the conversation's"
+            );
+            assert!(
+                args[1]
+                    .windows(2)
+                    .any(|w| w == ["--resume", first.as_str()]),
+                "{name}: {args:?}"
+            );
+            assert_eq!(
+                session_kind_why(&completion(&seen, "a-next")).0,
+                Some("resumed"),
+                "{name}"
+            );
+            server.abort();
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_release_job_forks_the_bots_latest_session_and_leaves_the_rooms_own() {
+        let _controls = RunControls;
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "fork");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        one_off_host(&dir);
+        runner
+            .state
+            .save_session("ops", "bot", "claude", "room-session")
+            .unwrap();
+        run_room_turns(
+            &runner,
+            &seen,
+            &[
+                ("a-fork", json!({"fork_thread": "latest-session"})),
+                ("a-next", json!({})),
+                // A fork source that is not on this computer: Claude Code begins a plain new session instead.
+                (
+                    "a-gone",
+                    json!({"fork_thread": "gone-session", "fresh_session": true}),
+                ),
+                ("a-last", json!({})),
+            ],
+        )
+        .await;
+        let args = argvs(&dir);
+        assert_eq!(
+            args.len(),
+            5,
+            "the fork of gone-session restarts once: {args:?}"
+        );
+        let fork = args[0]
+            .windows(5)
+            .find(|w| {
+                w[..4]
+                    == [
+                        "--resume",
+                        "latest-session",
+                        "--fork-session",
+                        "--session-id",
+                    ]
+            })
+            .map(|w| w[4].clone())
+            .unwrap_or_else(|| panic!("a fork: {args:?}"));
+        assert_ne!(fork, "room-session");
+        assert_eq!(
+            session_kind_why(&completion(&seen, "a-fork")),
+            (Some("new"), Some("forked"))
+        );
+        assert!(
+            args[1]
+                .windows(2)
+                .any(|w| w == ["--resume", "room-session"]),
+            "{args:?}"
+        );
+        assert!(!args[1].contains(&"--fork-session".to_string()), "{args:?}");
+        assert_eq!(
+            session_kind_why(&completion(&seen, "a-next")).0,
+            Some("resumed")
+        );
+        assert!(
+            args[2]
+                .windows(3)
+                .any(|w| w == ["--resume", "gone-session", "--fork-session"]),
+            "{args:?}"
+        );
+        assert!(
+            !args[3]
+                .iter()
+                .any(|a| a == "--fork-session" || a == "gone-session" || a == "room-session"),
+            "{args:?}"
+        );
+        let gone = completion(&seen, "a-gone");
+        assert_eq!(
+            session_kind_why(&gone),
+            (Some("new"), Some("fresh")),
+            "{gone:?}"
+        );
+        assert!(
+            args[4]
+                .windows(2)
+                .any(|w| w == ["--resume", "room-session"]),
+            "{args:?}"
+        );
+        assert_eq!(
+            runner
+                .state
+                .session("ops", "bot", "claude")
+                .unwrap()
+                .as_deref(),
+            Some("room-session")
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

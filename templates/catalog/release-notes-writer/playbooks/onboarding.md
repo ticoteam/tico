@@ -1,7 +1,6 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 25 minutes. The outcome is five recorded answers, a real draft of the next release's notes on the task, and the first routine checked.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers, a real draft of the next release's notes on the task, and the first routine checked.
 
 ---
 
@@ -30,7 +29,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/versioning.md` (how versions are numbered and what makes a breaking change) and `knowledge/voice.md` (the format and voice, with the two pasted examples).
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/versioning.md` (how versions are numbered and what makes a breaking change) and `knowledge/voice.md` (the format and voice, with the two pasted examples).
 
 ## 5. Do the first piece of work now
 
@@ -42,7 +41,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will draft the release notes every Friday at 14:00, and a human publishes them." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

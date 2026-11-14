@@ -57,6 +57,13 @@ a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:
 .org-history .nav-icon{font-size:18px}
 .org-history[aria-pressed="true"]{background:color-mix(in srgb,var(--ink) 8%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 40%,transparent)}
 .org-history[aria-pressed="true"] .nav-icon{color:var(--ink)}
+/* ⋯ on the Team header: a dot when a filter or sort in its menu is on (ui/app/sidebar.ts orgMoreSync). */
+.org-more{position:relative;color:var(--muted)}
+.org-more:hover{color:var(--ink)}
+.org-more.on::after{content:'';position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;background:var(--ink)}
+/* With Only bots I can open on, the list's first row says so and offers Show all. */
+.tree .org-filter-note{padding:4px 8px 6px calc(var(--tree-lead) + 6px);color:var(--muted);font-size:var(--t-xs)}
+.tree .org-filter-note button{border:0;background:none;padding:0;color:var(--ink);font:inherit;text-decoration:underline;cursor:pointer}
 .inbox-list{list-style:none;margin:0;padding:0 0 6px}
 .inbox-list a{display:flex;align-items:center;gap:8px;padding:6px 10px 6px 12px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:var(--t-base)}
 .inbox-list a:hover{background:var(--surface2);text-decoration:none}
@@ -189,19 +196,39 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 .chev{order:1;margin-left:2px;background:none;border:0;color:var(--muted);width:24px;height:24px;padding:0;cursor:pointer;font-size:16px;line-height:var(--lh-none);transform:var(--chev-open);flex:none;border-radius:4px}
 .chev.col{transform:none}
 .chev:hover{color:var(--ink);background:var(--surface2)}
-.tree a.node{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--ink);font-size:var(--t-base);min-width:0}
+.tree a.node{flex:1;display:flex;align-items:center;gap:6px;padding:6px;border-radius:6px;color:var(--ink);font-size:var(--t-base);min-width:0}
 .tree a.node:hover{background:var(--surface2);text-decoration:none}
 .tree a.node.cur{background:var(--surface2);font-weight:600}
 .tree a.node.planned{color:var(--muted)}.tree a.node.planned .av{opacity:.35;filter:saturate(.4)}
 .tree a.node.paused{opacity:.6}
 /* A Recruiting seat: a role with no bot yet (ui/app/sidebar.ts renderTree). */
-.tree .node.seat{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:pointer;text-decoration:none}
-.tree .node.seat .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree .node.seat{flex:1;display:flex;align-items:center;gap:6px;padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:pointer;text-decoration:none}
 .tree .node.seat .seat-icon{font-size:16px;width:20px;text-align:center}
-.tree .node.seat .seat-pill{margin-left:auto;font-size:var(--t-xs);padding:1px 6px;flex:none}
+/* The seat's state word and its applicants count are a line under the name, not a pill or words after it: the name keeps
+   the row's whole width, so a long title three levels down at the 200px minimum takes three lines, not four. */
+.tree .node.seat .seat-text{display:flex;flex-direction:column;flex:1 1 auto;min-width:0}
+/* The state word is never split: where it and the count do not fit on one line, the count drops to the next. */
+.tree .node.seat .seat-line{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;min-width:0}
+.tree .node.seat .seat-word{color:var(--muted);font-size:var(--t-xs);font-weight:400;line-height:1.25;white-space:nowrap}
 .person-mail-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:2px;border-radius:6px;color:var(--muted);font-family:"Material Symbols Outlined";font-size:18px;text-decoration:none}
 .person-mail-link:hover,.person-mail-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
-.tree .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree .nm{display:block;min-width:0;white-space:normal;overflow-wrap:break-word;line-height:1.25}
+/* A name wraps between words and is never cut, at any depth and at the 200px minimum: no line clamp, so a long title
+   deep in the tree takes a fourth line rather than ending in "…" (rc.31 clamped two seats three levels down). Its marks
+   ride its last word (ui/app/sidebar.ts treeName), so a mark never sits alone on a line. display:block because
+   thread-rail.css's global .nm is a flex column, which would stack the name's words one per line. */
+.tree .nm-end{white-space:nowrap}
+/* overflow:hidden puts an inline-block's baseline at its bottom edge, so the icon font's tall line box never makes the
+   name's line taller than its 1.25 line-height (the onboarding gear made a line 2px taller). */
+.tree a.node .nm .tree-goal,.tree a.node .nm .tree-setup{display:inline-block;vertical-align:-2px;margin-left:4px;width:13px;height:13px;font-size:13px;line-height:13px;overflow:hidden}
+.tree a.node .nm .tree-setup .nav-icon{display:block;width:13px;height:13px;font-size:13px;line-height:13px}
+.tree a.node .nm .org-branch{white-space:normal;margin-left:4px}
+.tree .cnt{flex:none}
+/* Beside another count the DM unread is a dot with the same words (treeDmBadge): one count per row. */
+.tree .cnt.tree-dm.dot{width:6px;height:6px;padding:0;min-width:0;border-radius:50%;background:var(--ink)}
+/* A folded row whose subtree needs you: the dot on its chevron (treeChev), not in the row. */
+.chev{position:relative}
+.chev.needs::after{content:'';position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--wait)}
 
 /* Keep the personal branch label visible even when a long bot name is clipped. */
 .org-branch{flex:none;color:var(--muted);font-size:var(--t-2xs);font-weight:500;white-space:nowrap}
@@ -218,3 +245,5 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
   transform-origin:0 0;pointer-events:none}
 .nav-ind.slide{transition:transform var(--dur-fast) var(--ease)}
 @media (prefers-reduced-motion:reduce){.nav-ind.slide{transition:none}}
+/* On a phone ⋯ is the only way to Contacts and the list's switches: the 40px target the rail's other row buttons have. */
+@media (max-width:760px){.org-head .org-history{width:40px;height:40px}}

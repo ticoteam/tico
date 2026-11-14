@@ -646,7 +646,7 @@ class Gateway:
         self.pin_workspace = False  # tokens the owner pasted into Tico define the workspace
         self.heartbeat = None  # called every loop turn; the process uses it for health
         self._auth = None  # who may write to which bot (backend/bot_access.py)
-        self.last_model, self.last_usage = "", []  # the last `ask`'s model and usage per call, for the audit
+        self.last_model, self.last_usage, self.last_calls = "", [], 0  # the last `ask`'s model, usage and calls
         self.last_cost = 0.0  # and what its calls cost, in USD (backend/judge.py cost_usd)
         self.last_provider = ""  # and who answered (the Tico AI Gateway or TypeSafe)
         from .slack_threads import Bridge  # imported here: slack_threads reads this module's helpers
@@ -1121,21 +1121,22 @@ class Gateway:
         return out
 
     def ask(self, state, fleet):
-        """The decision model's answers to every question, in calls of at most `J.MAX_QUESTIONS`.
+        """The decision model's answers to every question, in one call: more only when the questions do not fit
+        beside the message in one (`J.split`).
 
         The questions are independent and their ids unique, so the calls' answers merge into one
         map. A call that fails fails the whole ask; nothing is routed from half the answers. Each call goes through
         the team's monthly spend cap (backend/judge.py `metered`), which writes down its cost as it returns and
         refuses `spend_cap` before a call that would not fit under the cap, so a big fleet stops there too."""
         questions = self.questions(fleet)
-        ids = list(questions)
         from .judge import metered, step_models
 
         judge = self.judge
         asks_as = step_models(getattr(judge, "steps", None) or [judge])
         answers, self.last_model, self.last_usage, self.last_cost, self.last_provider = {}, "", [], 0.0, ""
-        for start in range(0, len(ids), J.MAX_QUESTIONS):
-            batch = {qid: questions[qid] for qid in ids[start : start + J.MAX_QUESTIONS]}
+        self.last_calls = 0
+        for batch in J.split(state, questions):
+            self.last_calls += 1
             try:
                 result = metered(
                     self.store, asks_as, state, batch, JUDGE_LABEL, lambda batch=batch: judge(state, batch, JUDGE_LABEL)
@@ -1194,7 +1195,7 @@ class Gateway:
                 "via": "slack",
                 "event_id": event["event_id"],
                 "questions": asked,
-                "calls": -(-asked // J.MAX_QUESTIONS),
+                "calls": self.last_calls or 1,  # the calls the last ask made, a failed one too
                 **outcome,
             },
         )

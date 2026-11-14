@@ -2,7 +2,8 @@
 # Three images from one file, chosen with --target:
 #   server   ghcr.io/ticoteam/tico          the API and web app, plus Litestream. It runs no bots.
 #   runner   ghcr.io/ticoteam/tico-runner   what a bot needs: git, gh, node, python, build tools, and the system
-#            libraries a Playwright Chromium needs (bots install the browser itself). No model CLIs:
+#            libraries a Playwright Chromium needs (bots install the browser itself); Debian's Chromium for
+#            website tools (the runner's own browser, runner-rs/src/browser/launch.rs). No model CLIs:
 #            the runner installs the ones the company's providers need into its volume (docs/harnesses.md).
 #   updater  ghcr.io/ticoteam/tico-updater  the one-click updater (compose service `updater`).
 # Tool versions and sha256 digests come from docker/versions.env, so the server and runner
@@ -155,6 +156,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 fonts-liberation \
       ffmpeg fonts-noto-core fonts-noto-color-emoji \
       xvfb x11vnc matchbox-window-manager \
+      chromium \
     && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10002 ticorun \

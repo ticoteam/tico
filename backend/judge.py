@@ -596,7 +596,9 @@ def record_outcome(c, actor, body):
 
 class Ask(Contract):
     state: Any
-    questions: dict[str, dict] = Field(min_length=1, max_length=J.MAX_QUESTIONS)
+    questions: dict[str, dict] = Field(
+        min_length=1, max_length=J.MAX_QUESTIONS
+    )  # and within J.MAX_CALL_CHARS (`J.validate`)
     label: str | None = Field(default=None, max_length=J.MAX_LABEL)
 
 
@@ -646,6 +648,7 @@ def install_judge(app, store, auth):
             "spent_this_month_usd": round(spent, 4),
             "max_questions": J.MAX_QUESTIONS,
             "max_state_chars": J.MAX_STATE_CHARS,
+            "max_call_chars": J.MAX_CALL_CHARS,
         }
 
     @app.get("/api/v2/judge/readout")

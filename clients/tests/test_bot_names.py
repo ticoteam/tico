@@ -16,7 +16,7 @@ MAP = Path(bot_names.MAP)
 ROOT = MAP.parents[1]
 
 FILES = {
-    "AGENT.md": (
+    "AGENTS.md": (
         "# Acme bot\n"
         "\n"
         "The owner decides. Nothing created yet; the hub status page is green.\n"
@@ -65,12 +65,12 @@ def test_flags_the_old_names_in_code_and_not_the_words_that_look_like_them(tmp_p
     root = write_bot(tmp_path / "bot-acme")
     assert found(root) == sorted(
         [
-            ("AGENT.md", 4, "refs_json", "sql", True),
-            ("AGENT.md", 4, "created", "sql", True),
-            ("AGENT.md", 4, "owner", "sql", False),  # owner stays on other tables: report it
-            ("AGENT.md", 4, "state_json", "sql", True),
-            ("AGENT.md", 5, "tico say", "command", True),
-            ("AGENT.md", 5, "tico routine", "removed", False),
+            ("AGENTS.md", 4, "refs_json", "sql", True),
+            ("AGENTS.md", 4, "created", "sql", True),
+            ("AGENTS.md", 4, "owner", "sql", False),  # owner stays on other tables: report it
+            ("AGENTS.md", 4, "state_json", "sql", True),
+            ("AGENTS.md", 5, "tico say", "command", True),
+            ("AGENTS.md", 5, "tico routine", "removed", False),
             ("playbooks/check.md", 4, "owner", "sql", False),
             ("playbooks/check.md", 4, "created", "sql", True),
             ("playbooks/check.md", 5, "created", "sql", False),  # `AS created` names an alias, not the column
@@ -88,7 +88,7 @@ def test_fix_rewrites_the_unambiguous_names_only_and_a_second_run_finds_the_rest
     root = write_bot(tmp_path / "bot-acme")
     bot_names.fix(root, bot_names.scan(root, bot_names.load_names()))
 
-    agent = (root / "AGENT.md").read_text()
+    agent = (root / "AGENTS.md").read_text()
     assert "SELECT id, refs, created_at FROM tasks WHERE owner = 'x' AND saved_state IS NULL" in agent
     assert "Tasks are `tico message send hello`." in agent
     assert "`tico notice list`" in agent and "`hub routine set --text-file p.txt`" in agent
@@ -105,8 +105,8 @@ def test_fix_rewrites_the_unambiguous_names_only_and_a_second_run_finds_the_rest
 
     left = bot_names.scan(root, bot_names.load_names())
     assert sorted((f.path, f.old) for f in left) == [
-        ("AGENT.md", "owner"),
-        ("AGENT.md", "tico routine"),
+        ("AGENTS.md", "owner"),
+        ("AGENTS.md", "tico routine"),
         ("memory/notes.md", "created"),
         ("playbooks/check.md", "created"),
         ("playbooks/check.md", "owner"),
@@ -128,12 +128,12 @@ def test_the_cli_runs_here_without_a_server_and_finds_a_bot_by_slug(tmp_path, mo
 
     assert hubcli.main(["bot", "check-names", "acme"]) == 1
     out = capsys.readouterr().out
-    assert "AGENT.md:4: refs_json -> refs (sql)" in out
+    assert "AGENTS.md:4: refs_json -> refs (sql)" in out
     assert "old names left" in out
 
     assert hubcli.main(["bot", "check-names", "acme", "--fix"]) == 1  # the unfixable ones remain
     assert "rewritten" in capsys.readouterr().out
-    assert "refs_json" not in (tmp_path / "bot-acme" / "AGENT.md").read_text()
+    assert "refs_json" not in (tmp_path / "bot-acme" / "AGENTS.md").read_text()
 
 
 def test_the_cli_says_when_there_is_no_checkout(tmp_path, monkeypatch, capsys):
@@ -155,7 +155,7 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
     root = scoped_bot(
         tmp_path / "bot-acme",
         {
-            "AGENT.md": (
+            "AGENTS.md": (
                 "`tico sql \"SELECT owner FROM tasks\"`\n"
                 "`tico sql \"SELECT owner FROM meetings\"`\n"
                 "`tico sql \"SELECT m.from_actor, n.from_actor FROM messages m JOIN notes n ON n.id = m.id\"`\n"
@@ -181,10 +181,10 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
     found = {(f.path, f.line, f.old): f for f in bot_names.scan(root, bot_names.load_names())}
     assert sorted(found) == sorted(
         [
-            ("AGENT.md", 1, "owner"),
-            ("AGENT.md", 3, "from_actor"),  # m.from_actor; notes keeps its own, so n.from_actor is not one
-            ("AGENT.md", 4, "due"),
-            ("AGENT.md", 5, "ts"),
+            ("AGENTS.md", 1, "owner"),
+            ("AGENTS.md", 3, "from_actor"),  # m.from_actor; notes keeps its own, so n.from_actor is not one
+            ("AGENTS.md", 4, "due"),
+            ("AGENTS.md", 5, "ts"),
             ("scripts/read.py", 2, "owner"),
             ("scripts/read.py", 3, "from_actor"),
             ("scripts/read.py", 3, "owner"),  # its own SQL reads tasks
@@ -193,18 +193,18 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
             ("scripts/api.py", 4, "ts"),  # event["ts"]; the quoted word, event name, variable and file are not reads
         ]
     )
-    assert found[("AGENT.md", 1, "owner")].new == "owner_id"
-    assert found[("AGENT.md", 1, "owner")].tables == ("tasks",)
-    assert "on tasks" in found[("AGENT.md", 1, "owner")].text()
-    assert found[("AGENT.md", 3, "from_actor")].new == "sender_id"
-    assert found[("AGENT.md", 3, "from_actor")].tables == ("messages",)
+    assert found[("AGENTS.md", 1, "owner")].new == "owner_id"
+    assert found[("AGENTS.md", 1, "owner")].tables == ("tasks",)
+    assert "on tasks" in found[("AGENTS.md", 1, "owner")].text()
+    assert found[("AGENTS.md", 3, "from_actor")].new == "sender_id"
+    assert found[("AGENTS.md", 3, "from_actor")].tables == ("messages",)
     assert found[("scripts/read.py", 3, "from_actor")].new == "sender_id"
-    assert found[("AGENT.md", 5, "ts")].new == "created_at or measured_at"
+    assert found[("AGENTS.md", 5, "ts")].new == "created_at or measured_at"
 
     # One spelling and no table keeping it: due, in a `tico sql` call. Everything else needs a person.
-    assert sorted(key for key, f in found.items() if f.fixable) == [("AGENT.md", 4, "due")]
+    assert sorted(key for key, f in found.items() if f.fixable) == [("AGENTS.md", 4, "due")]
     bot_names.fix(root, list(found.values()))
-    agent = (root / "AGENT.md").read_text()
+    agent = (root / "AGENTS.md").read_text()
     assert "SELECT due_at FROM tasks" in agent and "SELECT owner FROM tasks" in agent
     assert (root / "scripts/read.py").read_text().count("from_actor") == 1
 
@@ -228,7 +228,7 @@ def test_sql_split_over_adjacent_strings_and_writes_are_read_as_one_statement(tm
 
 def test_a_renamed_table_is_flagged_with_its_new_name_and_fixed_only_in_hub_sql(tmp_path):
     files = {
-        "AGENT.md": (
+        "AGENTS.md": (
             "# Entity bot\n"
             "\n"
             "The market_watches table is prose here, so it is not read.\n"
@@ -242,12 +242,12 @@ def test_a_renamed_table_is_flagged_with_its_new_name_and_fixed_only_in_hub_sql(
         (root / rel).write_text(text)
 
     assert found(root) == [
-        ("AGENT.md", 4, "market_entities", "sql", True),  # a hub sql call: the new name is the only one, so --fix runs
+        ("AGENTS.md", 4, "market_entities", "sql", True),  # a hub sql call: the new name is the only one, so --fix runs
         ("scripts/graph.py", 2, "market_edges", "sql", False),  # the bot's own database may have the old name
     ]
     assert bot_names.fix(root, bot_names.scan(root, bot_names.load_names())) == 1
-    assert "SELECT name FROM entities WHERE type" in (root / "AGENT.md").read_text()
-    assert "The market_watches table is prose" in (root / "AGENT.md").read_text()
+    assert "SELECT name FROM entities WHERE type" in (root / "AGENTS.md").read_text()
+    assert "The market_watches table is prose" in (root / "AGENTS.md").read_text()
     assert "FROM market_edges" in (root / "scripts/graph.py").read_text()
 
 
@@ -299,11 +299,11 @@ def test_the_shipped_map_is_the_applied_rename_data_and_the_cli_command_table():
 def test_a_line_written_with_tico_is_read_like_one_written_with_hub(tmp_path):
     root = tmp_path / "bot-acme"
     root.mkdir()
-    (root / "AGENT.md").write_text("Say it with `tico say hello`.\n\n```\ntico meetings granola status\n```\n")
+    (root / "AGENTS.md").write_text("Say it with `tico say hello`.\n\n```\ntico meetings granola status\n```\n")
     (root / "run.py").write_text('subprocess.run(["tico", "meetings", "list"])\n')
     olds = {(f.path, f.kind, f.fixable) for f in bot_names.scan(root, bot_names.load_names())}
-    assert olds == {("AGENT.md", "command", True), ("run.py", "command", False)}
+    assert olds == {("AGENTS.md", "command", True), ("run.py", "command", False)}
     bot_names.fix(root, bot_names.scan(root, bot_names.load_names()))
     assert (
-        root / "AGENT.md"
+        root / "AGENTS.md"
     ).read_text() == "Say it with `tico message send hello`.\n\n```\ntico meeting granola status\n```\n"

@@ -213,8 +213,9 @@ function sourceLineHTML(m: SourceRow, {src = rowSource(m), at = m.created_at, te
 // Every other row is drawn by `draw`. `open(run)` says whether a group is open, so a redraw keeps it: the surface keeps
 // the ids of the rows in groups opened (sourceGroupToggle), nothing is stored, and a group stays open when updates join
 // it at either end, live or from an older page.
-function sourceRunsHTML<T extends SourceRunRow>(items: T[], {line, draw, open = () => false, isUpdate = it => rowSource(it).kind === 'task_update'}: {
-  line: (it: T) => string; draw: (it: T, i: number) => string; open?: (run: T[]) => boolean; isUpdate?: (it: T) => boolean;
+// `min`: the shortest run that folds (the task window folds three or more); `noun`: what its row counts.
+function sourceRunsHTML<T extends SourceRunRow>(items: T[], {line, draw, open = () => false, isUpdate = it => rowSource(it).kind === 'task_update', min = 2, noun = 'task updates'}: {
+  line: (it: T) => string; draw: (it: T, i: number) => string; open?: (run: T[]) => boolean; isUpdate?: (it: T) => boolean; min?: number; noun?: string;
 }) {
   const out: string[] = [];
   for (let i = 0; i < items.length;) {
@@ -223,11 +224,11 @@ function sourceRunsHTML<T extends SourceRunRow>(items: T[], {line, draw, open = 
     let end = i;
     while (end < items.length && isUpdate(items[end]!)) end++;
     const run = items.slice(i, end), first = run[0]!;
-    if (run.length === 1) out.push(line(first));
+    if (run.length < min) out.push(...run.map(line));
     else {
       const key = String(first.id || first.message?.id || ''), last = run.at(-1)!, at = last.created_at || last.ts || last.message?.created_at;
       out.push(`<details class="src-group" data-src-group="${esc(key)}"${open(run) ? ' open' : ''}><summary class="src-line src-task_update">${
-        run.length} task updates<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
+        run.length} ${esc(noun)}<span class="src-chev" aria-hidden="true">▸</span>${at ? `<time class="src-time" data-ago="${esc(at)}" title="${esc(fmt(at))}">${esc(ago(at))}</time>` : ''}</summary>${
         run.map(line).join('')}</details>`);
     }
     i = end;
@@ -257,7 +258,11 @@ const unsigned = (body: unknown) => String(body || '').replace(/\n*_?— [^\s_]+
 async function v2Get<T = UntypedJson>(path: string, opts?: {fresh?: boolean}): Promise<T | null> { try { return await get<T>(path, opts); } catch { return null; } }
 
 async function v2Refresh() {
-  const [st, needs] = await Promise.all([v2Get<V2StatusReply>('/v2/status'), v2NeedsRead()]);
+  const needsRead = v2NeedsRead();
+  // The first live stream names the Needs you version it starts at; it waits for the list to be read (live.ts), so the
+  // two can be compared (the Threads rail's first connect, threads.ts) even when another first read started it early.
+  liveProbe(needsRead);
+  const [st, needs] = await Promise.all([v2Get<V2StatusReply>('/v2/status'), needsRead]);
   S.v2.on = !!st;
   if (st) S.v2.status = Object.fromEntries((st.bots || []).map(b => [b.bot, b]));
   // when Tico is updating itself, say so at the top of the sidebar

@@ -13,15 +13,15 @@ It works on a phone too.
 
 In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the
 header: opening flies it up from the row (or tab) to its place beside the name, quickly, closing flies it back down; while the
-panel is open a close mark holds the dot's place. Bots' questions
-and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
+panel is open a close mark holds the dot's place. The thread holds only your conversation and the Confirm previews of
+a send, a spend or a publish, by when they were asked. What waits on you stays in Needs you, and the Assistant names it
+when you ask ("anything need me?"): one plain line per item, or per group of alike items.
 
 The Ask panel is only the Assistant. Talking to the people at Tico is a separate chat: the **?** beside Search (on a
 phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
 reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
-Nothing speaks up beside the dot. Bot questions and Confirm cards wait in the panel, and the dot never carries a sound
-or a count.
+Nothing speaks up beside the dot. Confirm cards wait in the panel, and the dot never carries a sound or a count.
 
 The dot is cheap by rule: it moves by transform and opacity only, so nothing lays out or paints per frame; one dot on
 the screen moves at a time and the rest hold still; it pauses off screen and in a background tab, where no timer is
@@ -32,10 +32,8 @@ Opening and closing change no `hidden` attribute anywhere and add nothing to the
 a real hub either restyles the whole page (30-50 ms before the flight could start). So the closed panel keeps its box
 but draws nothing (a class, not `hidden`), and the dot's flying copy is made once, in a layer of its own, and reused.
 
-What waits on you from elsewhere comes at the end of the DM as cards: a Confirm card BotOps (or another bot) left in
-its own Home, with its Confirm and Cancel, and up to three bots' asks to you from Needs you. An ask with two to
-six choices is answered with a tap, any other with a line of words (an ask with several picks at once links to its
-task). You can also just tell the Assistant: "tell BotOps yes" answers BotOps' open ask in your words, and the Assistant
+A Confirm card BotOps (or another bot) left in its own Home comes into the DM with its Confirm and Cancel. Bots' asks
+to you are never added to the chat: they wait in Needs you. You can answer one by telling the Assistant: "tell BotOps yes" answers BotOps' open ask in your words, and the Assistant
 records it as your answer. It answers only when your words give what the ask needs, such as a price, a pick, a yes or
 no, or a date. Words that give none of that, such as "just add it like the others" when BotOps asked for a price, answer
 nothing: the ask stays open, and the Assistant may comment on the task, or ask you one short question if it cannot tell
@@ -70,15 +68,23 @@ On the first start after the update, Confirm cards still waiting there move to t
 ### Goals, agreed in words
 
 For your own goals, measures and targets, and for the Strategy Owner's goal suggestions, the Assistant saves nothing on the first ask. It writes the change back to you
-in your chat as a numbered read-back, with the exact steps. Only your yes saves it:
+in your chat as one numbered read-back of the whole plan, however many changes it has, with the exact steps. One yes
+saves all of it:
 
-- A plain yes as your next message, such as **yes**, **ok**, **go ahead** or **save it**, saves every change in it.
+- A reply that agrees, in your own words, such as **yes** or **sure, go for it**, saves every change in it. The Assistant
+  judges your words, and asks once when a reply might not be a yes.
 - **Yes to 1 and 3** saves only changes 1 and 3.
 - **Yes except 2** saves every change but number 2.
 
-Your yes counts only if it is your very next message after the read-back, with nothing from anyone else in between and
-nothing else from you after it, and within 30 minutes of the read-back. Any other reply saves nothing. Ask again, and the
-Assistant reads it back again.
+After a yes to some, the Assistant reads back what is left before it saves any more of it. A reply that stops or changes
+the plan, such as "wait" or "no, make it 50", is never taken as the yes.
+
+A question or a "thanks" before your yes keeps the plan: the Assistant answers, and your later yes saves it without
+reading it back again. Asking for a change makes a new read-back, which replaces the old one; nothing is saved until you
+agree to the changed plan. The plan does not expire. Once you agree, everything agreed is saved and the Assistant replies
+once with links. A "thanks" while it saves changes nothing; **stop** (or wait, or no) halts the saves not yet made, and the
+Assistant says what was and wasn't saved. Tico saves only the exact changes the read-back showed, and only after a reply
+from you.
 
 Colour, done or dropped and archive are not agreed in words. They stay your click on the Goals page. If a read-back would
 include one, Tico refuses the whole read-back and saves nothing, and the Assistant says why in one sentence and leaves
@@ -94,8 +100,7 @@ message is kept as the reason, unless it is only a no. Another measure's card on
 waiting cards of the same kind are about the same measure on the same goal, nothing is turned down, and the Assistant
 asks which one you mean. With no waiting card, the no is still stored as a turned-down suggestion. A reply that opens
 with "no" but means yes, such as "No problem", is not a no and turns nothing down, unless it goes on to say to leave it,
-skip it, not or don't: "No problem, just leave it" is a no. A read-back takes only the yes forms above, so "No problem,
-save it" saves nothing. A "no" to a Why line stays a click on its card. Only the owner's Assistant agrees goal changes
+skip it, not or don't: "No problem, just leave it" is a no. "No problem, save it" agrees to a read-back. A "no" to a Why line stays a click on its card. Only the owner's Assistant agrees goal changes
 in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
@@ -116,7 +121,20 @@ meetings, docs, files, bots, humans), and the links open inside the app.
 The DM is a personal thread (`scope: personal`, `room_key: assistant`) owned by you. Only you can read it or post in it.
 Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
-chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
+chat routes still refuse it (`403`).
+
+You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
+**Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is
+on it at first, and only you change it, on your own click in Tico: not your Assistant, not BotOps acting for you, not a
+personal API token, not the owner or an admin (`GET`/`POST /api/v2/assistant/viewers`, `DELETE /api/v2/assistant/viewers/{bot}`). A bot on your list
+reads your messages, the Assistant's replies and its cards (what each proposed and what became of it, never its
+request or result) with `tico assistant shared` and `tico assistant shared-read <person>` (`GET
+/api/v2/assistant/shared/{person}`). It can never post, react or act on a card there: those routes still refuse it.
+**Remove** refuses its next read at once. What it has learned about you stays out unless you also tick **Include what
+it has learned about me** (`PUT /api/v2/assistant/viewers/learned`), which goes back to off when you remove the last
+bot; the company layer is never shared. If you leave the team or your sign-in is turned off, every read is refused. Each bot's
+last read shows beside it, and every read is in the audit log (`assistant.shared_read`, naming the bot and you). The
+list is never shared with people or another team, and no team-wide switch shares everyone's chat. Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or BotOps
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
@@ -312,7 +330,8 @@ Tell it how you like things ranked and summarised ("launches matter more than hi
 saves that as one short line in your own words and says so in its reply. **What it has learned** at the top of your DM
 (`#/assistant/learned`) lists everything it saved about you, under **About you**; edit a line or delete it there (delete
 asks once more). Only you see this layer: not the owner, not administrators, not SQL, not another person's
-Assistant, and not a bot doing other work for you, BotOps included. The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
+Assistant, and not a bot doing other work for you, BotOps included; a bot you let view your chat reads it only if you
+tick **Include what it has learned about me** ([Private to you](#private-to-you)). The audit log names an entry by id, never by its words. It goes with you: it stays yours if you become the owner, and back again.
 
 Each turn in your DM is handed the layer as it is when the turn starts, so a line you delete is not used from the
 next reply on. It holds up to 100 lines of up to 280 characters; saving the same line twice keeps one. The Assistant
@@ -356,7 +375,7 @@ Names come with ids (`sender_name`, `owner_name`, and an `actors` map), as elsew
 
 ## For the assistant bot
 
-Its instructions are `templates/catalog/assistant/AGENT.md` and its playbooks: `assistant-chat.md` (the DM run),
+Its instructions are `templates/catalog/assistant/AGENTS.md` and its playbooks: `assistant-chat.md` (the DM run),
 `tico-map.md` (how Tico is organised) and `acting-for-them.md`. The core rules: how to route work to the right bot, to
 answer briefly with links, never to act beyond you, to do the task actions you ask for (answers included), never to
 give an OK, to propose anything else with a side effect, several at once on one card, and to report what it did and what

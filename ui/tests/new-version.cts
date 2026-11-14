@@ -15,6 +15,7 @@ interface NewVersionUpdate {current: string; latest: string; available: boolean;
 interface VisitOptions {role?: string; update?: NewVersionUpdate | null; updater?: string | null; changelog?: {unread_count: number} | null; context?: import('playwright').BrowserContext}
 // The page's own globals, which the spec drives from the page.
 declare const PAGE_BUILD: string | null | undefined;
+declare const SETTINGS_ADDRESS: string;
 declare function get(path: string): Promise<Record<string, unknown>>;
 declare function applyConfig(config: unknown): void;
 const UPDATE: NewVersionUpdate = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https://github.com/ticoteam/tico/releases/tag/v0.2.0',
@@ -58,6 +59,8 @@ const UPDATE: NewVersionUpdate = {current: '0.1.0', latest: '0.2.0', available: 
       });
       await page.goto('https://tico-ui.test/#/settings');
       await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
+      // Settings is a page part (ui/parts.json): it writes its own address once drawn, which is not a reload.
+      await page.waitForFunction(() => typeof SETTINGS_ADDRESS === 'string' && SETTINGS_ADDRESS !== '' && location.hash === SETTINGS_ADDRESS);
       page.on('framenavigated', () => reloads++);
       return {page, ctx, errors, posts, reloads: () => reloads, serve: (version: string) => { served = version; }};
     };

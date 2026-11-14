@@ -26,7 +26,7 @@ Otherwise write the check-in (step 6). If the task names one, do that.
 
 The strategy first: the published version's active bets are what the quarter serves, and each goal's `bet_id`
 says which. `health_by_bet` shows which bets have a KPI-backed goal and how it is going. Nothing published: plan
-against the setup answer in `state.md`, marked unconfirmed. Then `knowledge/scorecard.md` and last quarter's
+against the setup answer in `knowledge/rhythm.md`, marked unconfirmed. Then `knowledge/scorecard.md` and last quarter's
 report. A source you cannot read is named in the closing line.
 
 ## 3. Grade last quarter

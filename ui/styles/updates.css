@@ -1,14 +1,9 @@
 /* ui/styles/updates.css — Updates feed.
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* updates feed: friendly, dense, fast; one column, like a feed */
-.upd-page{max-width:720px;margin:0 auto}
-.upd-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-.upd-head h1{font-size:var(--t-lg);margin-right:4px}
-.upd-seg{display:inline-flex;background:var(--surface2);border-radius:999px;padding:3px}
-.upd-seg button{border:0;background:none;border-radius:999px;padding:5px 14px;font-weight:600;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
-.upd-seg .nav-icon,.upd-chip .nav-icon{display:none;font-size:20px;width:20px;height:20px;color:inherit}
+.upd-page{max-width:720px;margin:0}
+.upd-chip .nav-icon{display:none;font-size:20px;width:20px;height:20px;color:inherit}
 .upd-chip{display:inline-flex;align-items:center;gap:6px}
-.upd-seg button[aria-selected=true]{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .upd-chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 12px;cursor:pointer;color:var(--muted)}
 .upd-chip[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
 .upd-allread{font-size:var(--t-base)}
@@ -57,11 +52,10 @@
 .upd-deck-dot[aria-current]::after{background:var(--ink);width:16px;border-radius:3px}
 .upd-actions{display:flex;flex-wrap:nowrap;align-items:center;gap:2px;margin:6px 0 0 -8px}
 .upd-actions:not(:has(*)){display:none}
-/* Reply, Mark read and Archive sit quietly at the card's top right. */
-.upd-corner{display:inline-flex;gap:0;margin:-6px -8px -6px auto;opacity:.55;transition:opacity .15s}
-.upd-card:hover .upd-corner,.upd-corner:focus-within{opacity:1}
+/* One worded action (Reply, Edit or New update) and ⋯ at the card's top right, never faded (#282). */
+.upd-corner{display:inline-flex;align-items:center;gap:2px;margin:-6px -8px -6px auto}
 .upd-corner .upd-act{min-width:30px;height:30px;padding:0 6px}
-/* the reports' toggle ("8 >") follows Archive on the name's line, outside the corner so it never fades */
+/* the reports' toggle ("8 reports >") follows the corner on the name's line */
 .upd-meta>.upd-corner:not(:last-child){margin-right:0}
 .upd-meta>.upd-kids{height:30px;margin:-6px -8px -6px 0}
 /* A nested card is narrow on a phone: the top line does not wrap, and the name and time give way (ellipsis) so the corner stays on it.
@@ -100,31 +94,29 @@
 .bot-history-item .upd-meta{font-size:var(--t-sm)}
 @media (prefers-reduced-motion:reduce){.upd-deck-dot::after{transition:none}}
 @media (max-width:760px){:root{--upd-pad:12px;--upd-pad-y:12px}.upd-card{border-radius:12px}.upd-slide{padding:12px 12px 4px;min-height:150px}
-  .upd-deck-btn{display:none}.upd-slide ul.upd-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.upd-head h1{font-size:var(--t-lg)}.upd-allread{display:none}
-  /* Day, week, unread and my bots are icons on a phone, on one row with the title at 390px */
-  .upd-seg .nav-icon,.upd-chip .nav-icon{display:inline-flex}.upd-lbl{display:none}
-  .upd-head{gap:6px}.upd-seg button{padding:6px 10px}.upd-chip{padding:6px 8px}}
+  .upd-deck-btn{display:none}.upd-slide ul.upd-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.upd-allread{display:none}
+  /* Whole org, my bots and list are icons on a phone, on the header's tools row */
+  .upd-chip .nav-icon{display:inline-flex}.upd-lbl{display:none}
+  .upd-chip{padding:6px 8px}}
 /* Updates nested by the org chart: each report's card hangs under its manager's, opened by the "8 v" toggle at the
    right of the manager's card. The lines (tree-lines.css): a rail under the middle of the manager's avatar, from the
-   bottom of its card (the update runs under the avatar, so the line does not cross it), and an elbow into each report's
-   avatar, across the report's card edge (drawn over the card, under its unread mark). Every offset follows from the
-   card's padding and the avatar's size; a "No update yet" row has the same avatar at the same inset, so a thread's
-   avatars line up whatever their cards are. The reports' cards start just past the round of the elbow. */
+   bottom of its card (the update runs under the avatar, so the line does not cross it), and an elbow to each report's
+   card, level with its avatar's middle, that ends on the card's outer left edge (a T with its border, or with an unread
+   card's mark): nothing is drawn inside a card. Every offset follows from the card's padding and the avatar's size; a
+   "No update yet" row has the same avatar at the same inset, so a thread's avatars line up whatever their cards are.
+   The reports' cards start just past the round of the elbow. */
 .upd-node{display:flex;flex-direction:column;gap:10px;--tree-up:10px}
 .upd-kids{margin-left:auto;padding:0 6px 0 10px;gap:0}
 .upd-kids[aria-expanded=true] .nav-icon{transform:var(--chev-open)}
 .upd-kids .upd-dot{position:absolute;top:5px;right:3px;margin:0}
 .upd-sub{display:flex;flex-direction:column;gap:10px;margin-left:calc(var(--upd-cx) + var(--upd-in))}
 .upd-sub>.upd-node{position:relative;--tree-x:calc(-1 * var(--upd-in))}
-/* a report's card: the elbow, from the node, over the card into its avatar */
-.upd-sub>.upd-node:has(>.upd-card){--tree-y:calc(1px + var(--upd-pad-y) + var(--upd-av) / 2);
-  --tree-elbow:calc(var(--upd-in) + 1px + var(--upd-pad) - var(--tree-gap))}
-.upd-sub>.upd-node:has(>.upd-card)::before{z-index:1}
-/* "No update yet": the elbow from the row itself (measured inside its border), into the middle of its height (set
-   here, not inherited from a card further up the thread) */
-.upd-sub>.upd-node>.upd-none{--tree-x:calc(-1px - var(--upd-in));--tree-up:11px;--tree-y:50%;
-  --tree-elbow:calc(var(--upd-in) + 1px + var(--upd-pad) - var(--tree-gap))}
-/* The editor has no avatar: its elbow ends at its edge, and its rail leaves from its bottom. */
+/* a report's card: the elbow, from the node, to the card's edge on its avatar's row */
+.upd-sub>.upd-node:has(>.upd-card){--tree-y:calc(1px + var(--upd-pad-y) + var(--upd-av) / 2);--tree-elbow:var(--upd-in)}
+/* "No update yet": the elbow from the row itself (measured inside its border, so it ends on the dashed border's outer
+   edge), level with the middle of its height (set here, not inherited from a card further up the thread) */
+.upd-sub>.upd-node>.upd-none{--tree-x:calc(-1px - var(--upd-in));--tree-up:11px;--tree-y:50%;--tree-elbow:var(--upd-in)}
+/* The editor: its elbow ends at its edge like every report's, and its rail leaves from its bottom. */
 .upd-sub>.upd-node:has(>.upd-edit){--tree-elbow:var(--upd-in)}
 /* the manager's stub, under its avatar's middle: from a card's bottom (its update fills the card under the avatar), or
    from the avatar's foot in a "No update yet" row, through the gap below it */
@@ -172,3 +164,6 @@
 .upd-card.upd-flash{animation:upd-flash 2.4s var(--ease)}
 @keyframes upd-flash{0%,40%{box-shadow:0 0 0 3px var(--ink);background:color-mix(in srgb,var(--ink) 6%,var(--surface))}}
 @media (prefers-reduced-motion:reduce){.upd-card.upd-flash{animation:none;box-shadow:0 0 0 3px var(--ink)}}
+
+.upd-corner .upd-word{min-width:0;padding:0 8px;font-size:var(--t-sm);color:var(--muted)}
+@media (max-width:760px){.upd-n-w{display:none}}

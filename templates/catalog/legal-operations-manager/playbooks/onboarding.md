@@ -1,10 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 30 minutes.
 
 Inputs: engagement letters and past invoices in the docs or on tasks, open tasks that name live matters, and the answers the human gives.
 Outcome: five recorded answers; the firms, billing rules and matter list written down; a first invoice review and a first spend summary; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first review and summary are on the task.
+Done when: `tico bot setup-done` has run, and the first review and summary are on the task.
 
 ---
 
@@ -42,7 +42,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/firms.md` from the letters (rates by
+Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowledge/firms.md` from the letters (rates by
 role, with the letter's date), `knowledge/billing-rules.md` in the human's words with any defaults marked as
 defaults, and `knowledge/matters.md` with the open matters and their leads and budgets ("no budget" where there is none).
 
@@ -60,7 +60,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 summary on the 5th of every month and review each invoice the day it arrives." They can change it or turn it off
 any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
+Record it in `memory/decisions.md`. If they asked for a different schedule
 or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 

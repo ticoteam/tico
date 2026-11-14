@@ -1,11 +1,10 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 25 minutes. The outcome is five recorded answers, a duties register with an owner and a date on every row, a real first weekly page on the task, and the first routine checked.
+Runs once, on the first message or task you receive, while setup has not finished (Tico marks you Needs setup). Budget 25 minutes. The outcome is five recorded answers, a duties register with an owner and a date on every row, a real first weekly page on the task, and the first routine checked.
 
 Inputs: the task, open tasks, the calendar, the Operations bots' published reports, and any vendor mailbox the bot can reach.
 
-Done when: the five answers are in `state.md` under `## Answers`; `knowledge/duties.md`, `knowledge/vendors.md` and
+Done when: the five answers are in `knowledge/`; `knowledge/duties.md`, `knowledge/vendors.md` and
 `knowledge/rhythm.md` exist, with a row for every duty ("needs an owner" where none was given); the first page is
 attached and labelled; the routine is checked and logged in `memory/decisions.md`; and `tico bot setup-done` has run.
 
@@ -38,7 +37,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/duties.md` (one row per duty: what, owner, cadence, next due, lead time, proof, source of the date),
+Record each answer, dated, in the `knowledge/` file it belongs to. Write `knowledge/duties.md` (one row per duty: what, owner, cadence, next due, lead time, proof, source of the date),
 `knowledge/vendors.md` and `knowledge/rhythm.md` (recipient, day, exclusion list, wait thresholds) as
 present-tense statements. A duty with no owner is listed under "needs an owner", never given one.
 
@@ -54,7 +53,7 @@ Setting you up switched your first routine on. Check it with `tico automation li
 `tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you this page every Monday at 08:30, and a human sends anything to a vendor." They
 can change it or turn it off any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
+Record it in `memory/decisions.md`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
 (`tico automation update <id>`, with `--disable` to turn it off).
 

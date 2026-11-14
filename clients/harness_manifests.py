@@ -39,6 +39,7 @@ FIELDS = {
     "one_turn_per_login": (bool, False),
     "isolated_user": (bool, False),
     "compaction": (bool, False),
+    "own_compaction": (bool, False),
     "compaction_events": (bool, False),
     "resume_command": (str, ""),
     "model_list": (str, ""),
@@ -46,7 +47,6 @@ FIELDS = {
     "readiness": (bool, True),
     "repo_permission_lint": (bool, False),
     "repo_commands": (bool, False),
-    "packet_only": (bool, False),
     "sign_in_status": (dict, {}),
 }
 CHOICES = {

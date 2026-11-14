@@ -2,7 +2,7 @@
 // Every request is answered from the fixtures below, in the shapes backend/openapi_v2.py gives them (ui/types/api.d.ts):
 // GET /api/v2/pipelines, /needs-you (NeedsYou), /tasks (TaskBrief rows), /tasks/{id} (TaskDetail), and the writes on a
 // task (edit with its version, done, move, owner, snooze, an ask's answer, a comment). Checks here:
-//  - You: Needs you under Answer, Review and Do, each row the sentence asked; a question with two choices answers in
+//  - You: Needs you under Answer, Review and Do, each row its task's title (an Answer row the question under it); a question with two choices answers in
 //    place and leaves (not on a phone); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
 //  - the view button lists You and every pipeline still in use (a retired one is not offered); picking one puts it in
 //    the address and reads its open tasks, snoozed ones too, drawn last in their stage and dimmed;
@@ -78,6 +78,10 @@ export interface OpenOptions {
   needs?: Need[];
   /** A task's comments, by task id, as GET /api/v2/tasks/{id} sends them. */
   comments?: Record<string, unknown[]>;
+  /** A task's history events, by task id, as GET /api/v2/tasks/{id} sends them. */
+  events?: Record<string, unknown[]>;
+  /** A task's bot runs, by task id, as GET /api/v2/tasks/{id} sends them (`runs`). */
+  runs?: Record<string, unknown[]>;
   bots?: unknown[];
   beforeGoto?: ((page: Page) => unknown) | null;
 }
@@ -221,7 +225,7 @@ const BOTS = [['pm', 'PM'], ['eng', 'Engineer'], ['ops', 'Ops'], ['writer', 'Wri
 const CONFIG = {version: '0.6.0', app_name: 'Tico', local: true};
 
 async function open(browser: Browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/tasks', mover = true, tasks: given,
-  needs: givenNeeds, comments = {}, bots = BOTS, beforeGoto = null}: OpenOptions = {}) {
+  needs: givenNeeds, comments = {}, events = {}, runs = {}, bots = BOTS, beforeGoto = null}: OpenOptions = {}) {
   const tasks = given ?? fixtures();
   let needs = givenNeeds ?? needsOf(tasks);
   const posts: Posted[] = [], reads: URL[] = [];
@@ -330,7 +334,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
         return json(moved(t, fields));
       }
       // TaskDetail: the task with its history, comments and messages.
-      return json({task: t, children: [], comments: comments[t.id] || [], events: [], messages: [], has_more: false, mover});
+      return json({task: t, children: [], comments: comments[t.id] || [], events: events[t.id] || [], runs: runs[t.id] || [], messages: [], has_more: false, mover});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/messages')) return json({messages: []});
@@ -338,8 +342,9 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
   });
   await beforeGoto?.(page);
   await page.goto('https://tico-ui.test/' + hash);
+  // A task waiting on Ana's own answer opens on its ask (decideTaskOpen), any other on its page.
   const ready = hash.startsWith('#/task/')
-    ? page.locator('#task-modal[open] .tmodal-title').waitFor()
+    ? page.locator('#task-modal[open] .tmodal-title, #need-card[open] .dc-q').first().waitFor()
     : hash.startsWith('#/tasks')
       ? page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tk-row, #task-body .empty, #task-body .pv'))
       : Promise.resolve();
@@ -355,8 +360,15 @@ async function you(browser: Browser) {
   for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
     const {page, errors, posts} = await open(browser, {viewport});
     assert.deepEqual(await groups(page), ['Answer', 'Review', 'Do']);
-    assert.deepEqual(await rowTitles(page), ['Which plan do new signups get?', 'Approve the spec for Checkout flow', 'Book the team offsite']);
-    assert.match(await page.locator('#task-scope').innerText(), /You\s*3/);
+    // Each row leads with its task's title; only the Answer row keeps the question as a second line, an OK's ask is its tooltip.
+    assert.deepEqual(await rowTitles(page), ['Signup plans', 'Checkout flow', 'Book the team offsite']);
+    assert.deepEqual(await page.locator('#task-body .tk-row .tk-ask').allInnerTexts(), ['Which plan do new signups get?']);
+    assert.equal(await page.locator('[data-need="r2"] .tk-ask').count(), 1, 'the question under its title');
+    assert.equal(await page.getByRole('button', {name: /^Signup plans Which plan do new signups get\?/}).count(), 1, 'a screen reader hears the title and its question apart');
+    assert.equal(await page.locator('[data-need="r1"]').getAttribute('title'), 'Approve the spec for Checkout flow', 'an OK has its ask as the tooltip');
+    assert.equal(await page.locator('[data-need="task:t-3"]').getAttribute('title'), null, 'a task of your own has no tooltip');
+    assert.equal((await page.locator('#task-scope').innerText()).trim(), 'You', 'the count shows once, in ▶');
+    assert.equal(await page.locator('#task-play .tl-review-n').innerText(), '3');
     assert.ok(await sideways(page) <= 1, `nothing scrolls sideways at ${viewport.width}px`);
     // Search narrows the rows; Escape clears it.
     await page.locator('#task-q').fill('offsite');
@@ -374,7 +386,31 @@ async function you(browser: Browser) {
     assert.deepEqual(errors, []);
     await page.close();
   }
-  console.log('You: Answer, Review and Do; search; a two-choice answer in place: ok');
+  console.log('You: Answer, Review and Do; rows by task title; search; a two-choice answer in place: ok');
+}
+
+/** Rows with the same ask read by their tasks' titles; a Paused cause and a mention outside a task by their own line. */
+async function youByTitle(browser: Browser) {
+  const tasks = fixtures(), of = (id: string) => brief(tasks.find(t => t.id === id)!), done = 'Say when the work is done';
+  const needs = [
+    {kind: 'task', id: 'task:t-3', task_id: 't-3', line: done, since: at(300), task: of('t-3')},
+    {kind: 'task', id: 'task:t-4', task_id: 't-4', line: done, since: at(200), task: of('t-4')},
+    {kind: 'paused', id: 'paused:google', line: 'Connect Google', since: at(100), task: of('t-1'), bots: ['ops']},
+    {kind: 'mention', id: 'mention:m1', line: '@ana are we on for Friday?', since: at(50), from_id: 'human:sam'},
+  ] as unknown as Need[];
+  for (const viewport of [{width: 1440, height: 900}, {width: 400, height: 844}]) {
+    const {page, errors} = await open(browser, {viewport, tasks, needs});
+    await page.locator('#task-body .tk-row').nth(3).waitFor();
+    const titles = await rowTitles(page);
+    assert.deepEqual([...titles].sort(), ['@ana are we on for Friday?', 'Book the team offsite', 'Connect Google', 'Rounding in the API'], `titles at ${viewport.width}`);
+    assert.equal(new Set(titles).size, titles.length, 'no two rows read the same');
+    assert.equal(await page.locator('[data-need="task:t-3"] .tk-ask').count(), 0, 'a Do row is one line');
+    assert.equal(await page.locator('[data-need="paused:google"] .tk-title').innerText(), 'Connect Google', 'Paused keeps its cause');
+    assert.ok(await sideways(page) <= 1, `nothing scrolls sideways at ${viewport.width}px`);
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+  console.log('You: rows with the same ask read by their titles; Paused and a mention by their line: ok');
 }
 
 async function views(browser: Browser) {
@@ -407,7 +443,9 @@ async function archive(browser: Browser) {
     assert.deepEqual(await rowTitles(page), titles);
     assert.equal(await page.locator(`#task-archives [data-archive="${which}"]`).getAttribute('aria-pressed'), 'true');
   };
-  await page.locator('#task-archive').click();
+  await page.locator('#task-menu').click();
+  await page.locator('#task-mi-archive', {hasText: 'Archived'}).click();
+  await page.waitForFunction(() => document.querySelector('#task-menu')?.getAttribute('aria-expanded') === 'false');   // ⋯ is not left expanded
   await shows('snoozed', {status: 'open', snoozed: 'only'}, ['Renew the domain']);
   // A write's reply is the full task, `snooze` without `snoozed`: the snoozed task stays in Snoozed.
   await page.evaluate(() => {
@@ -423,8 +461,11 @@ async function archive(browser: Browser) {
   await page.locator('#task-body [data-task="t-7"]').click();
   await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Old pricing test'}).waitFor();
   await page.keyboard.press('Escape');
-  await page.locator('#task-archive').click();
+  // ✕ at the bar's left leaves the archive.
+  assert.equal(await page.locator('#task-bar #task-archive-x').getAttribute('aria-label'), 'Leave Archived');
+  await page.locator('#task-archive-x').click();
   await page.waitForFunction(() => !TASKS_ST.archive && !TASKS_ST.loading);
+  assert.equal(await page.locator('#task-archive-x').isVisible(), false);
   assert.deepEqual(await groups(page), ['Answer', 'Review', 'Do']);
   assert.deepEqual(errors, []);
   await page.close();
@@ -526,6 +567,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [you, views, archive, pipelineArchive, pages]) await run(browser);
+    for (const run of [you, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

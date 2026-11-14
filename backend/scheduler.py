@@ -1,6 +1,7 @@
 """Deterministic, transactionally deduplicated scheduling independent of local runners."""
 
 import logging
+import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -17,7 +18,7 @@ from .store import H, encode
 from . import sources as SRC
 
 if TYPE_CHECKING:
-    from .heartbeat import Context
+    from .heartbeat import Context, Outside
     from .drains import Drains
 
 LOG = logging.getLogger("tico.scheduler")
@@ -443,6 +444,9 @@ class Scheduler:
         # The server's drain workers (backend/drains.py) while it runs them: the automation queue, its email sends and
         # the Workspace key check run on them, beside this pass; without them the tick drains the queue itself.
         self.drains: "Drains | None" = None
+        # The outside polls' worker (backend/heartbeat.py `Outside`) while the server runs it: the steps that call
+        # GitHub run on it, beside the beat; without it the beat runs them in its own order.
+        self.outside: "Outside | None" = None
 
     def finance_due(self, key, at, every):
         last = self.finance_checked.get(key)
@@ -607,6 +611,14 @@ class Scheduler:
             market_watch.tick(self.store, at)
         except Exception as exc:
             failures.append({"market_watch": type(exc).__name__})
+        # The release sweep of decisions filed as to-dos (backend/decision_todos.py): once per team, on its own thread.
+        try:
+            from . import decision_todos
+
+            app = getattr(ctx, "app", None)
+            decision_todos.tick(self.store, getattr(getattr(app, "state", None), "judge", None))
+        except sqlite3.Error as exc:
+            failures.append({"decision_todos": type(exc).__name__})
         try:
             from . import automations
 
@@ -617,11 +629,20 @@ class Scheduler:
         if self.drains is not None:
             # The drains' failures since the last pass go on this pass's health row, as when they ran in it.
             failures.extend(self.drains.take_failures())
+        if self.outside is not None:
+            # Likewise the outside polls' failures (backend/heartbeat.py `Outside`).
+            failures.extend(self.outside.take_failures())
         with SR.recording(self.store, "screening", failures) as run:
             from . import screening
 
             screening.tick(self.store)  # outside text a restart left waiting for its check
             run.did("Done", quiet=True)
+        try:
+            from . import org_rule_check
+
+            org_rule_check.late_tick(self.store)  # org rule checks a restart left for after their writes
+        except Exception as exc:  # noqa: BLE001 - one step's fault goes on this pass's health row, never stops the tick
+            failures.append({"org_rule_late": type(exc).__name__})
         try:
             from . import webhook_delivery
 

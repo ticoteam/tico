@@ -116,10 +116,17 @@ app is installed the row goes by itself, and each task's bot is woken once to ca
 repository In use, the row is **Choose a repository** instead, linked to Settings > General › Repositories, on the
 same terms.
 
-1. As the owner, open Tools, GitHub. Enter the GitHub account or organization (a personal account
-   works too; Tico tells which one it is) and optionally rename the app. **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
-   create every bot's repository by hand. Select Connect GitHub.
-2. GitHub shows the app to create. Confirm it. GitHub returns to Tico, which stores the app's
+1. As the owner, open Tools, GitHub. Under **Create the app in**, choose where GitHub makes the app:
+   - **My GitHub account** (the default): nothing to type. GitHub makes the app for whoever is signed in to GitHub
+     in that browser.
+   - **An organization**: type the organization's name. Tico checks it with GitHub first; a name that turns out to
+     be a person's account is connected as a personal account.
+
+   **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
+   create every bot's repository by hand. Select Connect GitHub. The line under the button says the name GitHub
+   will propose, "<team name> Tico".
+2. GitHub shows the app to create, with the account it is for and its name, which you can change there (for
+   example when the name is taken). Confirm it. GitHub returns to Tico, which stores the app's
    credentials and sends you to install the app on the account or organization.
 3. On the install page, choose **All repositories** (recommended). Bots then get new repositories
    automatically, with nothing to add each time a bot is created. This does not widen what a bot can
@@ -173,10 +180,11 @@ Bots' repositories must live in the connected account or organization. A bare re
 
 ## Personal accounts
 
-The app can be made under a personal GitHub account instead of an organization. Tico asks GitHub which kind of
-account the name is, and the setup and settings links go to that account's pages (`github.com/settings/apps/...`
-rather than `github.com/organizations/<org>/settings/apps/...`). GitHub makes the app for whoever is signed in,
-so the connected account is the one GitHub reports, which may differ from the name typed.
+The app can be made under a personal GitHub account instead of an organization: choose **My GitHub account**, or
+`tico github connect` with no name. Nothing is looked up first: GitHub makes the app for whoever is signed in, and
+the connected account is the login GitHub reports. When an organization's name is typed, Tico asks GitHub which kind
+of account it is, and a person's account is connected the same way. The setup and settings links go to that
+account's pages (`github.com/settings/apps/...` rather than `github.com/organizations/<org>/settings/apps/...`).
 
 What works the same as for an organization: connecting, installing on **All repositories**, each bot's run token
 (scoped to its own repository and its grants), the bot's work in its own repository, and deleting a repository

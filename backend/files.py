@@ -10,6 +10,7 @@ that question, so a private chat never leaks a name, a count, a version or a byt
 import asyncio
 import base64
 import binascii
+import functools
 import hashlib
 import json
 import logging
@@ -18,10 +19,13 @@ import secrets
 import sqlite3
 import tempfile
 from collections import namedtuple
+from collections.abc import Iterable
 from contextlib import ExitStack
+from datetime import datetime, timezone
+from typing import Annotated
 from urllib.parse import quote, unquote, urlsplit
 
-from fastapi import Request
+from fastapi import Query, Request
 from pydantic import Field
 
 from . import models as M
@@ -119,6 +123,8 @@ ACTIONS = (
     "reviewed",
 )
 LIST_MAX = 100
+MENTIONS_MAX = 60  # names one message lookup asks about
+DATES_MAX = 500  # files one date correction carries (runner-rs/src/files_publish.rs DATE_BATCH)
 
 
 def new_id():
@@ -151,6 +157,44 @@ def is_file_id(value):
 def series(bot, relative):
     """The stable identity of a published path: the same report edited is the same file."""
     return "blob-series:" + hashlib.sha256((bot + "\0" + relative).encode()).hexdigest()[:20]
+
+
+EARLIEST_CONTENT_TIME = "2000-01-01T00:00:00.000000Z"
+
+
+def content_time(value, now):
+    """When a published file's content last changed by its source's clock: `modified` from the bot's computer, the
+    commit time of the file (or its own time when it is not committed), as epoch seconds or ISO-8601. As this server
+    writes times; None when not given or not believable (before 2000, or after `now`, which it is then)."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        stamp = datetime.fromtimestamp(float(text), timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        stamp = H.parse_ts(text)
+        if stamp is None:
+            return None
+        stamp = stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+        stamp = stamp.astimezone(timezone.utc)
+    out = stamp.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    if out < EARLIEST_CONTENT_TIME:
+        return None
+    return min(out, now)
+
+
+class FileDate(M.Contract):
+    path: str = Field(min_length=1, max_length=1024)
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    modified: float | None = None
+
+
+class FileDates(M.Contract):
+    """When the content of files a bot's computer already published was written: no bytes, only times (Files.dates)."""
+
+    bot: str = Field(default="", max_length=200)
+    attempt: str = Field(default="", max_length=200)
+    files: list[FileDate] = Field(max_length=DATES_MAX)
 
 
 class FileEdit(M.Contract):
@@ -533,6 +577,9 @@ def page_reference(value):
     """One file identity, versioned attachment, pin, page route or absolute app page URL."""
     if not isinstance(value, str):
         return None
+    # Every form holds "file-", or an escape that unquotes to it, or a tab, CR or LF that urlsplit drops from it.
+    if "file-" not in value and "%" not in value and "\t" not in value and "\r" not in value and "\n" not in value:
+        return None
     try:
         value = unquote(value)
         url = urlsplit(value)
@@ -548,46 +595,94 @@ def page_reference(value):
         return None
 
 
+def _plain_name(part):
+    """The candidate identity `_names` reads from `part` when it can be told without parsing (perf P08), else None.
+    Most text in an answer is an id, a time, an actor or a sentence: with no "/", escape, page id, JSON or web scheme
+    in it, unquote, urlsplit and the path prefixes change nothing, so the candidate is the text up to its first "?" or
+    "@", after a page:, file: or blob: prefix. Anything else takes the full parse."""
+    if "/" in part or "%" in part or "file-" in part or part.startswith(("{", "[")):
+        return None
+    if ":" in part:
+        # urlsplit strips leading controls and spaces and drops tabs and newlines before it reads a scheme.
+        if part[0] <= " " or "\t" in part or "\r" in part or "\n" in part:
+            return None
+        if part.partition(":")[0].lower() in ("http", "https"):
+            return None
+        if part.startswith(("page:", "file:", "blob:")):
+            part = part[5:]
+    return part.partition("?")[0].partition("@")[0]
+
+
+# A string's scan is a pure function of its text, so it is kept across reads: one read primes and checks the same
+# ids, actors and refs many times (a long task: about 9,000 strings, under 500 distinct). Long strings are scanned
+# each time, so the cache holds at most CACHED_SCANS short ones. Nothing about a reader or a snapshot belongs in it.
+CACHED_SCANS, CACHED_LENGTH = 8192, 512
+
+
+@functools.lru_cache(maxsize=CACHED_SCANS)
+def _cached_string_names(part):
+    return _string_names(part)
+
+
+def _string_names(part):
+    """(the file ids `part` names outright, ((candidate identity, file ids or None), ...)) for one string, JSON text
+    inside it included. None stands for the file ids of the structure around the string."""
+    plain = _plain_name(part)
+    if plain is not None:
+        return frozenset(), ((plain, None),)
+    found, names = set(), []
+    fid = page_reference(part)
+    if fid:
+        found.add(fid)
+    candidate = unquote(part)
+    try:
+        url = urlsplit(candidate)
+        if url.scheme in ("http", "https"):
+            candidate = url.path
+        candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
+        candidate = re.sub(r"^(?:page|file|blob):", "", candidate)
+        names.append((re.split(r"[/?@]", candidate, maxsplit=1)[0], None))
+    except ValueError:
+        pass
+    if part.startswith(("{", "[")):
+        _collect(H._json(part, None), None, found, names)
+    return frozenset(found), tuple(names)
+
+
+def _collect(part, explicit, found, names):
+    if isinstance(part, str):
+        named, candidates = (_cached_string_names if len(part) <= CACHED_LENGTH else _string_names)(part)
+        if named:
+            found.update(named)
+        for candidate, ids in candidates:
+            names.append((candidate, explicit if ids is None else ids))
+    elif isinstance(part, dict):
+        ids = frozenset(fid for key in ("file", "file_id", "page", "page_id") if (fid := page_reference(part.get(key))))
+        for child in part.values():
+            _collect(child, ids or explicit, found, names)
+    elif isinstance(part, (list, tuple)):
+        for child in part:
+            _collect(child, explicit, found, names)
+
+
 def _names(value, file_ids=None):
     """The file ids `value` names outright, and every (candidate identity, the file ids its structure names) in it."""
     found, names = set(), []
-
-    def collect(part, explicit=None):
-        if isinstance(part, str):
-            fid = page_reference(part)
-            if fid:
-                found.add(fid)
-            candidate = unquote(part)
-            try:
-                url = urlsplit(candidate)
-                if url.scheme in ("http", "https"):
-                    candidate = url.path
-                candidate = re.sub(r"^/(?:api/(?:v2/)?)?files/", "", candidate)
-                candidate = re.sub(r"^(?:page|file|blob):", "", candidate)
-                names.append((re.split(r"[/?@]", candidate, maxsplit=1)[0], explicit))
-            except ValueError:
-                pass
-            if part.startswith(("{", "[")):
-                collect(H._json(part, None), explicit)
-        elif isinstance(part, dict):
-            ids = {fid for key in ("file", "file_id", "page", "page_id") if (fid := page_reference(part.get(key)))}
-            for child in part.values():
-                collect(child, ids or explicit)
-        elif isinstance(part, (list, tuple)):
-            for child in part:
-                collect(child, explicit)
-
-    collect(value, file_ids)
+    _collect(value, file_ids, found, names)
     return found, names
 
 
 def page_references(value, c=None, *, file_ids=None):
     """Resolve file, version, blob and digest identities through one recognizer on every transport. Every candidate in
     `value` is gathered first and looked up in one batch, so a response naming many pages costs no more statements."""
+    if c is not None and _primed_names_none(c, value):
+        return set()
     found, names = _names(value, file_ids)
     if c is None or not names:
         return found
     aliases = page_identities(c, {candidate for candidate, _ in names})
+    if not aliases:
+        return found
 
     # A structured live version identifies its own bytes; matching digests on unrelated pages do not.
     def narrowed(candidate, explicit):
@@ -639,15 +734,55 @@ def prime_page_references(c, values):
     """Look up together every identity these values name, and the tombstones and audiences of the pages they find, so
     checking each value afterwards (page_references, page_ref_denials, readable_page_refs) reads nothing more: a list
     of messages, comments or events costs one lookup, not one per item."""
-    found, candidates = set(), set()
-    for value in values:
-        named, names = _names(value)
+    # Only the candidates and the ids named outright matter here, not which structure named them: each distinct
+    # string is scanned once, however many of these values repeat it.
+    found, candidates, strings = set(), set(), set()
+    stack: list[Iterable[object]] = [list(values)]
+    while stack:
+        for child in stack.pop():
+            if isinstance(child, str):
+                strings.add(child)
+            elif isinstance(child, dict):
+                stack.append(child.values())
+            elif isinstance(child, (list, tuple)):
+                stack.append(child)
+    # One read primes the same messages several times (task_privacy.prime_messages per page of a long task): a string
+    # this snapshot primed already is skipped, so each is scanned and looked up once per read. Each primed string
+    # records whether it names a page, which lets page_references answer a value naming none without its scan.
+    primed = _memo(c, "primed_page_strings")
+    fresh = {}
+    for text in strings - primed.keys():
+        named, names = (_cached_string_names if len(text) <= CACHED_LENGTH else _string_names)(text)
+        fresh[text] = (named, [candidate for candidate, _ in names])
         found.update(named)
-        candidates.update(candidate for candidate, _ in names)
-    found.update(fid for ids in page_identities(c, candidates).values() for fid in ids)
+        candidates.update(fresh[text][1])
+    if not fresh:
+        return
+    aliases = page_identities(c, candidates) if candidates else {}
+    found.update(fid for ids in aliases.values() for fid in ids)
+    for text, (named, names) in fresh.items():
+        primed[text] = bool(named) or any(candidate in aliases for candidate in names)
     if found:
         deleted_page_refs(c, found)
         restricted_page_rows(c, found)
+
+
+def _primed_names_none(c, value):
+    """Whether every string in `value` was primed in this snapshot and none of them names a page."""
+    primed = _memo(c, "primed_page_strings")
+    if not primed:
+        return False
+    stack: list[Iterable[object]] = [[value]]
+    while stack:
+        for child in stack.pop():
+            if isinstance(child, str):
+                if primed.get(child) is not False:
+                    return False
+            elif isinstance(child, dict):
+                stack.append(child.values())
+            elif isinstance(child, (list, tuple)):
+                stack.append(child)
+    return True
 
 
 def page_ref_denials(c, auth, who, refs):
@@ -672,6 +807,34 @@ def page_ref_denials(c, auth, who, refs):
     }
 
 
+REMOVED_LABELS = ("A page you can't open", "A deleted page")
+
+
+def _marked(value):
+    """Whether `value` holds a removed page's placeholder, or an ask's answers or options whose labels may name a page
+    (an option with no source or file): then readable_page_refs cleans it even when it names no denied page. One walk
+    without recursion, as most answers hold neither."""
+    stack = [value]
+    while stack:
+        part = stack.pop()
+        if isinstance(part, dict):
+            if (
+                part.get("removed") is True
+                and part.get("label") in REMOVED_LABELS
+                or isinstance(part.get("answers"), dict)
+                or any(
+                    not option.get("source") and not option.get("file")
+                    for option in part.get("options") or []
+                    if isinstance(option, dict)
+                )
+            ):
+                return True
+            stack.extend(part.values())
+        elif isinstance(part, list):
+            stack.extend(part)
+    return False
+
+
 def readable_page_refs(c, auth, who, refs, *, task_id=None):
     """Remove the entire metadata object of a denied page, even on undecorated message transports."""
     original = refs
@@ -682,25 +845,12 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
         if isinstance(value, dict):
             return (
                 value.get("removed") is True
-                and value.get("label") in ("A page you can't open", "A deleted page")
+                and value.get("label") in REMOVED_LABELS
                 or any(removed_page(v) for v in value.values())
             )
         return isinstance(value, list) and any(removed_page(v) for v in value)
 
-    def legacy_labels(value):
-        if isinstance(value, dict):
-            return (
-                isinstance(value.get("answers"), dict)
-                or any(
-                    not option.get("source") and not option.get("file")
-                    for option in value.get("options") or []
-                    if isinstance(option, dict)
-                )
-                or any(legacy_labels(v) for v in value.values())
-            )
-        return isinstance(value, list) and any(legacy_labels(v) for v in value)
-
-    if not denied and not legacy_labels(refs) and not removed_page(refs):
+    if not denied and not _marked(refs):
         return original
 
     def hidden_titles(tid):
@@ -1202,10 +1352,16 @@ class Files:
         repo_path="",
         explicit_title=False,
         fid=None,
+        modified=None,
     ):
         """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
-        file's id (for a caller that writes the file's id somewhere before the file exists)."""
+        file's id (for a caller that writes the file's id somewhere before the file exists). `modified` is when the
+        content last changed at its source (content_time): the file's activity time when it is new or changed, so a
+        repository published for the first time lists by when each file was written, not by when it was copied. An
+        unchanged publish is no activity: it leaves the time alone, except that it may move a time that only says when
+        Tico copied the current version back to when that content was written."""
         now = H.now()
+        when = content_time(modified, now) or now
         row, created = self.open_row(
             c,
             bot=bot,
@@ -1217,7 +1373,7 @@ class Files:
             locator="tico_blob",
             task=task,
             conversation=conversation,
-            now=now,
+            now=when,
             fid=fid,
         )
         last = c.execute(
@@ -1264,11 +1420,75 @@ class Files:
             fields["title"] = title[:300]
         if task and not row["task_id"]:
             fields["task_id"] = task
-        fields["last_activity_at"] = now
+        if changed and not created:
+            fields["last_activity_at"] = max(when, row["last_activity_at"])
+        elif not changed and last is not None:
+            fields.update(self.redated(c, row, last, when))
         c.execute(
             "UPDATE bot_files SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), row["id"])
         )
         return c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone(), created, changed
+
+    @staticmethod
+    def redated(c, row, current, when):
+        """The times that move a stored file back to when its current content was written (`when`, content_time), or {}.
+        Only a time that says when Tico copied the current version moves, so only when nothing has happened since that
+        copy (the last activity is the version's own time); never forward, and never before the version it replaced."""
+        if not when or when >= row["last_activity_at"] or row["last_activity_at"] != current["created_at"]:
+            return {}
+        prior = c.execute(
+            "SELECT MAX(created_at) FROM bot_file_versions WHERE file_id=? AND version<?",
+            (row["id"], current["version"]),
+        ).fetchone()[0]
+        back = max(when, prior or "")
+        if back >= row["last_activity_at"]:
+            return {}
+        return {"last_activity_at": back, "first_activity_at": min(row["first_activity_at"], back)}
+
+    def dates(self, request, body):
+        """A bot's computer says when the content of files it holds was written, with each file's digest and no bytes
+        (POST /api/v2/files/dates): every file of that bot from that path whose current version has that digest moves
+        back to that time, as an unchanged upload would move it (redated). The answer names the paths whose current
+        version has the digest, which the computer then need not upload; any other path it uploads as before."""
+        who = request.state.identity
+        if who.via == "assistant" or who.role not in ("bot", "runner"):
+            raise Problem("forbidden", "Only a bot, or the computer running it, dates its files", 403)
+        with self.store.read() as c:
+            bot = self.writer_bot(c, who, body.bot)
+        payload = body.model_dump()
+
+        def work(c):
+            # A computer dates only for a turn it ran of this bot (turn_context refuses another computer's turn).
+            attempt = who.attempt_id if who.role == "bot" and not who.agent else body.attempt
+            if who.role == "runner" and not attempt:
+                raise Problem("validation", "Say the turn (attempt) these files come from", 422)
+            self.turn_context(c, who, bot, attempt)
+            now, known, moved = H.now(), [], 0
+            for item in body.files:
+                relative = item.path.replace("\\", "/").strip("/")
+                if not relative or ".." in relative.split("/"):
+                    continue
+                rows = c.execute(
+                    "SELECT f.*,v.version,v.created_at AS version_at FROM bot_files f JOIN bot_file_versions v "
+                    "ON v.file_id=f.id AND v.version=f.current_version "
+                    "WHERE f.bot_id=? AND f.identity=? AND f.locator='tico_blob' AND v.digest=?",
+                    (bot, series(bot, relative), item.digest),
+                ).fetchall()
+                if not rows:
+                    continue
+                known.append(item.path)
+                when = content_time(item.modified, now)
+                for row in rows:
+                    times = self.redated(c, row, {"created_at": row["version_at"], "version": row["version"]}, when)
+                    if times:
+                        c.execute(
+                            "UPDATE bot_files SET last_activity_at=?,first_activity_at=? WHERE id=?",
+                            (times["last_activity_at"], times["first_activity_at"], row["id"]),
+                        )
+                        moved += 1
+            return {"bot": bot, "known": known, "dated": moved}
+
+        return self.write(request, who, payload, work)
 
     def publish_task_deliverable(self, c, who, task_id, item, digest):
         """Compatibility hook for attachment upload paths, including streaming uploads."""
@@ -1591,6 +1811,7 @@ class Files:
                 else "",
                 repo_path=relative,
                 explicit_title=bool(fields.get("title")),
+                modified=fields.get("modified"),
             )
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
             if changed:
@@ -2002,18 +2223,45 @@ class Files:
             return None
         return f"{base.removesuffix('.git')}/blob/{version['commit_sha']}/{quote(version['repo_path'])}"
 
-    def listing(self, who, bot, limit, cursor):
+    def matching(self, c, bot, q, kind_sql, kind_args, rows):
+        """The ids among `rows` (the bot's, with `repo_path`) that Library search finds for `q`, every word, or whose
+        path in the bot's checkout holds every word ("winberg" finds drafts/2026-11-11-winberg-reply/letter.docx)."""
+        from . import manual
+
+        words = [w.casefold() for w in str(q).split() if w.strip()]
+        tokens = manual.query_words(q)
+        found = (
+            {r["id"] for r in file_library.Library.candidates(c, tokens, kind_sql, kind_args, bot=bot, every=True)}
+            if tokens
+            else set()
+        )
+        for r in rows:
+            where = (str(r["repo_path"] or "") + " " + str(r["title"] or "")).casefold()
+            if words and all(w in where for w in words):
+                found.add(r["id"])
+        return found
+
+    def listing(self, who, bot, limit, cursor, q="", kind=""):
+        """The bot's files the caller sees, newest activity first, a page at a time. `kind` is a Library kind
+        (file_library.KINDS); `q` keeps the files whose name, text (Library search, file_library) or path in the bot's
+        checkout holds every word. Both narrow the same list, so the order, the cursor and the total stay its own."""
+        kind_sql, kind_args = file_library.kind_filter(kind)
         with self.store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
             cache, caches = {}, {"task": {}, "repo": {}}
             rows = c.execute(
-                "SELECT * FROM bot_files WHERE bot_id=? AND archived=0 "
-                "AND (identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions v "
-                "WHERE v.file_id=bot_files.id AND v.actor='bot:' || bot_files.bot_id)) "
-                "ORDER BY last_activity_at DESC, id DESC",
-                (bot,),
+                "SELECT f.*,v.repo_path AS repo_path FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id "
+                "LEFT JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
+                "WHERE f.bot_id=? AND f.archived=0 AND (" + kind_sql + ") "
+                "AND (f.identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions o "
+                "WHERE o.file_id=f.id AND o.actor='bot:' || f.bot_id)) "
+                "ORDER BY f.last_activity_at DESC, f.id DESC",
+                (bot, *kind_args),
             ).fetchall()
+            if q.strip():
+                found = self.matching(c, bot, q, kind_sql, kind_args, rows)
+                rows = [r for r in rows if r["id"] in found]
             prime_visible(c, rows)
             rows = [r for r in rows if self.visible(c, who, r, cache)]
             start = 0
@@ -2041,11 +2289,59 @@ class Files:
                 "can_manage": who.role in ("owner", "human") and self.auth.bot_admin(who),
             }
 
+    def mentions(self, who, bot, said):
+        """The bot's files its messages name, for the links a message draws (docs/files.md, Files named in messages):
+        {what was said: the file as the rail lists it}. A path matches the file published from that path in the bot's
+        checkout (or the one path it ends with); a bare name the one file with that name. Two candidates are no answer,
+        never a guess; what matches nothing the caller sees is left out."""
+        said = list(dict.fromkeys(str(t).strip() for t in said if str(t).strip()))[:MENTIONS_MAX]
+        wanted = {}
+        for text in said:
+            path = text.replace("\\", "/").removeprefix("./")
+            name = path.rsplit("/", 1)[-1]
+            if name and len(path) <= 300:
+                wanted[text] = (path, name)
+        with self.store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            self.bot_row(c, who, bot)
+            out = {}
+            if not wanted:
+                return {"bot": bot, "files": out}
+            rows = c.execute(
+                "SELECT f.*,v.repo_path AS repo_path,v.name AS version_name FROM bot_files f "
+                "JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
+                "WHERE f.bot_id=? AND f.archived=0 AND f.locator='tico_blob' "
+                "AND v.name IN (SELECT value FROM json_each(?))",
+                (bot, json.dumps(sorted({name for _, name in wanted.values()}))),
+            ).fetchall()
+            prime_visible(c, rows)
+            cache, caches = {}, {"task": {}, "repo": {}}
+            rows = [r for r in rows if self.visible(c, who, r, cache)]
+            for text, (path, name) in wanted.items():
+                named = [r for r in rows if r["version_name"] == name]
+                if "/" in path:
+                    exact = [r for r in named if r["repo_path"] == path]
+                    named = exact or [
+                        r
+                        for r in named
+                        if r["repo_path"]
+                        and (r["repo_path"].endswith("/" + path) or path.endswith("/" + r["repo_path"]))
+                    ]
+                if len(named) == 1:
+                    out[text] = self.view(c, who, named[0], caches)
+            return {"bot": bot, "files": out}
+
     def visible_file(self, c, who, fid):
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not row or not self.visible(c, who, row, {}):
             raise Problem("not_found", "File not found", 404)
         return row
+
+    def info(self, who, fid):
+        """One file as the Files rail lists it, for a view opened from a link (the review view, docs/files.md)."""
+        with self.store.read() as c:
+            row = self.visible_file(c, who, fid)
+            return {"file": self.view(c, who, row, {"task": {}, "repo": {}})}
 
     def versions(self, who, fid):
         with self.store.read() as c:
@@ -2226,9 +2522,27 @@ def install_files(app, store, auth, blobs, mutate):
         address only: it never fetches the document or holds a provider token."""
         return files.link(request, body)
 
+    @app.post("/api/v2/files/dates")
+    def file_dates(request: Request, body: FileDates):
+        """When files the bot's computer already published were written, by digest and without their bytes."""
+        return files.dates(request, body)
+
     @app.get("/api/v2/bots/{bot}/files")
-    def bot_files(request: Request, bot: str, limit: int = 20, cursor: str = ""):
-        return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor)
+    def bot_files(
+        request: Request,
+        bot: str,
+        limit: int = 20,
+        cursor: str = "",
+        q: Annotated[str, Query(max_length=200)] = "",
+        kind: str = "",
+    ):
+        return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
+
+    @app.get("/api/v2/bots/{bot}/files/mentions")
+    def bot_file_mentions(
+        request: Request, bot: str, m: Annotated[list[str] | None, Query(max_length=MENTIONS_MAX)] = None
+    ):
+        return files.mentions(request.state.identity, bot, m or [])
 
     @app.patch("/api/v2/files/{fid}")
     def edit(request: Request, fid: str, body: FileEdit):
@@ -2312,6 +2626,10 @@ def install_files(app, store, auth, blobs, mutate):
     @app.get("/api/v2/files/{fid}/activity")
     def activity(request: Request, fid: str):
         return files.activity_log(request.state.identity, fid)
+
+    @app.get("/api/v2/files/{fid}/info")
+    def info(request: Request, fid: str):
+        return files.info(request.state.identity, fid)
 
     @app.get("/api/v2/files/{fid}/versions")
     def versions(request: Request, fid: str):

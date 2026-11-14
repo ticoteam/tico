@@ -12,7 +12,8 @@
 # check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet),
 # check_node_types.py (the .cts/.mts scripts under scripts/ and recorder/, and the Recorder window's .ts, type-check
 # strictly), the
-# OpenAPI document (backend.openapi_v2 --check), check_ui_lint.sh (Biome), check_ui_routes.sh (API paths),
+# OpenAPI document (backend.openapi_v2 --check), the status value table (build_status_docs.py --check),
+# check_ui_lint.sh (Biome), check_ui_routes.sh (API paths),
 # check_wire_contract.py (runner wire contract), check_types.sh (basedpyright on the backend against its baseline), and
 # cargo fmt for the Rust crates scripts/rust_checks.sh formats (the merge queue runs that one; the static job does not).
 set -uo pipefail
@@ -217,7 +218,7 @@ done
 if [ "$rust_any" = 0 ]; then skip "rust fmt" "no Rust crate changed"; fi
 
 # 6. The UI's generated API types (the check imports the backend) and tsc over the UI, as CI runs check_ui_types.sh.
-if touched '\.pyi?$|^ui/|^scripts/(gen_ui_types\.py|check_ui_types\.sh|ui_baseline\.py)$'; then
+if touched '\.pyi?$|^ui/|^scripts/(gen_ui_types\.py|check_ui_types\.sh|check_ui_parts\.cjs|ui_baseline\.py)$'; then
   UI_TYPES_JOB=${#NAMES[@]}
   job "ui types (tsc, API types)" bash scripts/check_ui_types.sh ${RATCHET_ARGS[@]+"${RATCHET_ARGS[@]}"}
 else
@@ -231,6 +232,13 @@ if touched '^backend/.*\.pyi?$|^docs/api\.md$|^scripts/build_api_docs\.py$'; the
   job "API guide tags (docs/api.md)" python3 scripts/build_api_docs.py --check
 else
   skip "openapi spec (generates the same bytes twice)" "no backend Python or API guide changed"
+fi
+
+# 6b'. The value table in docs/status-and-state.md is generated from backend/status_values.py.
+if touched '^backend/status_values\.py$|^docs/status-and-state\.md$|^scripts/build_status_docs\.py$'; then
+  job "status value lists (docs/status-and-state.md)" python3 scripts/build_status_docs.py --check
+else
+  skip "status value lists (docs/status-and-state.md)" "no status list or its page changed"
 fi
 
 # 6c. Every UI script is TypeScript, and every .ts file type-checks strictly (scripts/check_ui_strict.py).
