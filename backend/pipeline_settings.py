@@ -43,7 +43,17 @@ _core: Any = hubdb_core
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
-PIPELINE_FIELDS = ("name", "goal", "prefix", "manager_id", "owner_id", "private", "factory_id", "preset")
+PIPELINE_FIELDS = (
+    "name",
+    "goal",
+    "prefix",
+    "manager_id",
+    "owner_id",
+    "private",
+    "factory_id",
+    "preset",
+    "keep_warm_hours",
+)
 STAGE_FIELDS = (
     "name",
     "purpose",
@@ -55,6 +65,7 @@ STAGE_FIELDS = (
     "expected_bots_only",
     "on_enter",
     "pick",
+    "keep_warm_hours",
 )
 REQUIREMENT_FIELDS = (
     "kind",
@@ -76,6 +87,9 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 BUILT_IN = ("done", "closed")
 PREFIX = re.compile(r"^[A-Za-z]{1,2}$")
 ASSIGNEE = "assignee"
+# "Keep warm for up to N hours" (backend/keep_warm.py): the pipeline's N, and a stage's own (None: the pipeline's).
+KEEP_WARM_DEFAULT = 8
+KEEP_WARM_MAX = 24
 
 PRESETS: dict[str, Row] = {
     "general": {
@@ -481,9 +495,16 @@ def _stage_out(conn: "sqlite3.Connection", row: Row) -> Row:
         "expected_minutes": row.get("expected_minutes"),
         "expected_bots_only": bool(row.get("expected_bots_only")),
         "on_enter": _loads(row.get("on_enter")) or {},
+        "keep_warm_hours": stage_keep_warm(conn, row["id"]),
         "requirements": [_requirement_out(r) for r in R.on_stage(conn, row["id"])],
         **_pick_out(conn, row),
     }
+
+
+def stage_keep_warm(conn: "sqlite3.Connection", stage_id: str) -> int | None:
+    """A stage's own "Keep warm for up to N hours", or None when it takes the pipeline's."""
+    found = conn.execute("SELECT hours FROM stage_keep_warm WHERE stage_id=?", (stage_id,)).fetchone()
+    return int(found[0]) if found else None
 
 
 def _pick_out(conn: "sqlite3.Connection", row: Row) -> Row:
@@ -507,6 +528,7 @@ def read(conn: "sqlite3.Connection", pipeline_id: str) -> Row | None:
     out: Row = {"id": row["id"], **{key: row.get(key) for key in PIPELINE_FIELDS}}
     out["goal"] = out["goal"] or ""
     out["private"] = bool(out["private"])
+    out["keep_warm_hours"] = int(row.get("keep_warm_hours", KEEP_WARM_DEFAULT) or 0)
     out["settings_version"] = int(row.get("settings_version") or 1)
     out["retired_at"] = row.get("retired_at")
     out["stages"] = [_stage_out(conn, s) for s in order if s["kind"] == "work"]
@@ -549,6 +571,20 @@ def _count(value: object, sentence: str, problems: list[str]) -> int | None:
         return value
     problems.append(sentence)
     return None
+
+
+def _hours(item: Row, what: str, problems: list[str]) -> Row:
+    """`keep_warm_hours` as given: {"keep_warm_hours": N} for a whole number of hours from 0 (off) to KEEP_WARM_MAX, or
+    None (a stage: the pipeline's); {} when the record leaves it out, so a save that never names it keeps what is set."""
+    if "keep_warm_hours" not in item:
+        return {}
+    value = item["keep_warm_hours"]
+    if value is None or value == "":
+        return {"keep_warm_hours": None}
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= KEEP_WARM_MAX:
+        return {"keep_warm_hours": value}
+    problems.append(f"{what} is a whole number of hours from 0 to {KEEP_WARM_MAX}.")
+    return {}
 
 
 def _dict(value: object, sentence: str, problems: list[str]) -> Row:
@@ -634,6 +670,7 @@ def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
             _requirement_in(r, label, problems)
             for r in _list(item.get("requirements"), f"The requirements on {label} are not a list.", problems)
         ],
+        **_hours(item, f"Keep warm on {label}", problems),
     }
 
 
@@ -652,6 +689,7 @@ def _parse(record: object) -> tuple[Row, list[str]]:
         "private": _flag(item.get("private"), "Private", problems),
         "factory_id": _ref(item.get("factory_id"), "The factory", problems),
         "preset": _ref(item.get("preset"), "The preset", problems),
+        **_hours(item, "Keep warm", problems),
     }
     out["stages"] = [
         _stage_in(s, i, problems)
@@ -1101,18 +1139,21 @@ def _write_pipeline(conn: "sqlite3.Connection", record: Row, existing: Row | Non
         1 if record["private"] else 0,
         record["factory_id"],
     ]
+    # Left out, or None: what is set stays (a new pipeline: KEEP_WARM_DEFAULT).
+    hours = record.get("keep_warm_hours")
     if existing:
         conn.execute(
             "UPDATE pipelines SET name=?, goal=?, prefix=?, manager_id=?, owner_id=?, private=?, factory_id=?, "
-            "settings_version = settings_version + 1, updated_at=? WHERE id=?",
-            (*values, ts, existing["id"]),
+            "keep_warm_hours=COALESCE(?, keep_warm_hours), settings_version = settings_version + 1, updated_at=? "
+            "WHERE id=?",
+            (*values, hours, ts, existing["id"]),
         )
         return str(existing["id"])
     pid = record["id"] or H.new_id()
     conn.execute(
         "INSERT INTO pipelines (id, name, goal, prefix, manager_id, owner_id, private, factory_id, preset, "
-        "settings_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)",
-        (pid, *values, record["preset"], ts, ts),
+        "keep_warm_hours, settings_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)",
+        (pid, *values, record["preset"], KEEP_WARM_DEFAULT if hours is None else hours, ts, ts),
     )
     return pid
 
@@ -1213,6 +1254,15 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
                 (*values, sid, pid, ts, ts),
             )
+        if "keep_warm_hours" in stage:  # left out of the record, what is set stays
+            if stage["keep_warm_hours"] is None:
+                conn.execute("DELETE FROM stage_keep_warm WHERE stage_id=?", (sid,))
+            else:
+                conn.execute(
+                    "INSERT INTO stage_keep_warm (stage_id, hours) VALUES (?,?) "
+                    "ON CONFLICT(stage_id) DO UPDATE SET hours=excluded.hours",
+                    (sid, stage["keep_warm_hours"]),
+                )
         loosened = _write_requirements(conn, by, sid, stage["requirements"], ts) or loosened
     end = len(record["stages"])
     for offset, kind in enumerate(BUILT_IN):

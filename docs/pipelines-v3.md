@@ -65,7 +65,8 @@ architecture) and C (the screens).
 
 - **All tasks** sit in a pipeline, in this build. General is a visible pipeline with a generic manager.
 - **General:** when the bot says done, it is Done. It can be reopened with a note.
-- **Never stuck:** a bot gets 3 tries (2 min, 15 min, 50 min), then its manager bot, then a person.
+- **Never stuck:** a bot gets 3 tries (15 min, 15 min, 50 min; 2 min for the first after a run that was cut off),
+  then its manager bot, then a person.
 - **One ask:** everything you are asked is the task. You see the page itself, then Approve, or Send back with notes. The
   notes go to the bot.
 - **Person OKs** on the new Tico Team: the spec before it is built, and the review page before merge. The rest is bots
@@ -215,6 +216,11 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
 - **On enter:** nothing, "file a linked task into pipeline X", or "queue the PRs to merge". There are no other actions. A
   stage that files a task always has Linked work done among its requirements.
 - **Expected time** and **limit** (how many tasks fit). The first stage of a pipeline has no limit.
+- **Keep warm for up to N hours:** a setting on the pipeline (`keep_warm_hours`, default 8, 0 is off) that a stage may
+  set for itself (empty: the pipeline's). While a task is in a work stage that does not leave by hand, each bot's
+  session on it that has been idle 45 to 55 minutes gets one short "nothing to do" turn, which reads the session's
+  cache and keeps it warm for the next real run. It stops when the task leaves the active stages, N hours after the
+  bot's last real run on it, or when that session ran on a fallback model (backend/keep_warm.py).
 
 That gives three kinds of stage, and no others:
 
@@ -517,7 +523,8 @@ asks three things: what is missing, who has to supply it, and are they on it?
 
 Every 10 s, for each open task: what is missing, who has it, and are they on it?
 
-1. **The owner bot.** Woken with what is missing. Stops early: woken again after 2 min, then 15 min, then 50 min.
+1. **The owner bot.** Woken with what is missing. Stops early: woken again after 15 min (2 min when its run was cut
+   off: a crash or a limit), then 15 min, then 50 min.
 2. After 3 tries with no change: **the manager bot.** Told who tried and what is missing. Same 3 tries. Also gets tasks
    that are Late.
 3. After 3 tries with no change: **a person.** One item in Needs you: Try again, Reassign, Move back, Close or Snooze. No
@@ -525,7 +532,7 @@ Every 10 s, for each open task: what is missing, who has it, and are they on it?
 
 At any of the three steps: if the task changed, the count goes back to zero and the check asks again whose turn it
 is. While the owner bot has it, a person's comment that wakes the bot also puts the count back to zero: the run it
-starts is the first of a new count, so a bot that says "I'll carry on" and stops is woken again 2 min later. A comment
+starts is the first of a new count, so a bot that says "I'll carry on" and stops is woken again 15 min later. A comment
 the Assistant or BotOps writes for a person does not.
 
 ### What the check does for each kind of wait
@@ -563,7 +570,7 @@ cases.
 
 - One run lasts at most 60 minutes. That is today's limit, a setting on the bot.
 - The run ends with new commits and the stage not finished. Something changed, so no try is counted. The bot is woken
-  again 2 minutes later.
+  again 15 minutes later.
 - A day of building is up to 23 runs, back to back. The row shows a spinner. The task's top line says "Builder working".
 - A run that ends with nothing changed is "stopped early", try 1 of 3.
 - At 1 day the task is Late and the Eng Manager gets it. At 3 days it is in your list.
@@ -1753,7 +1760,7 @@ into a test in phase 1.
   nobody. There are no "Find why" tasks. The end of the ladder is the task itself in a person's list, and it leaves when
   the task moves or closes.
 - **F4. 173 tasks stranded in "doing".** Prevented. There is no "doing". A run that ends without one of the five endings
-  is "stopped early", and the bot is woken again in 2 minutes.
+  is "stopped early", and the bot is woken again in 15 minutes (2 when its run was cut off).
 - **F5. A stage whose owner never pulls work.** Caught. Bots don't pull. The engine wakes the stage's owner. An owner
   that does nothing gets 3 tries, then the manager, then a person. One wake per task, so 134 jobs can't queue. Post
   Release QA itself is dropped (D46).
@@ -2001,7 +2008,7 @@ failure can be replayed exactly. It runs in CI, not on your machine.
 
 Numbered in order so they can be cited (scenario 1 to 52).
 
-1. A bot stops early with nothing changed: woken at 2 min, 15 min and 50 min, then the manager, then one person's list. At
+1. A bot stops early with nothing changed: woken at 15 min, 15 min and 50 min, then the manager, then one person's list. At
    most 7 runs.
 2. A bot comments "working on it" and stops: counts as stopped early.
 3. A wake is lost: the next pass queues it again. Never two.

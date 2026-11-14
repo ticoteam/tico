@@ -37,12 +37,13 @@ All in `backend/migrations/20261110010000_pipelines_v3.py`. Times are `H.now()` 
 
 ```
 pipelines     id, name, goal, prefix, manager_id, owner_id, private (0|1), factory_id, preset,
-              settings_version, created_at, updated_at, retired_at
+              settings_version, created_at, updated_at, retired_at, keep_warm_hours (0-24, default 8)
               unique name and unique prefix among rows not retired
 stages        id, pipeline_id, position, kind (work|done|closed), name, purpose, owner, by_hand (0|1),
               requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes, expected_bots_only (0|1),
               on_enter (json), created_at, updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
+stage_keep_warm stage_id, hours (0-24): a stage's own keep-warm hours; no row is the pipeline's (backend/keep_warm.py)
 requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
               who_oks (none|people_only|people_with_exceptions), person_id, added_by_id, by_bot (0|1),
               line, shows (json), choices (json), position, created_at, withdrawn_at
@@ -114,7 +115,7 @@ added to a task, except the person on one, which `answers.give_to` changes.
 NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"     # values for `to`, besides a stage
 MAX_DEPTH = 5          # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3        # a bot's snoozes in one stage before the manager bot gets the task
-FIRST_TRY_S = 120      # seconds a bot is left alone after a wake before the never-stuck check looks at it
+FIRST_TRY_S = 120      # seconds after a change before the never-stuck check looks; the retry gap after a cut-off run
 
 def enter(conn, task_id, pipeline_id, by, *, assignee=None, parent=None, link="sub_task") -> dict
     # New. The row exists with pipeline_id NULL. Puts it in the first stage, opens the visit, wakes the owner.
@@ -364,7 +365,7 @@ reconnect, and over a limit.
 ## never_stuck.py
 
 ```python
-GAPS = (120, 900, 3000)   # seconds a bot is left alone before try 1, 2 and 3
+GAPS = (120, 900, 3000)   # seconds a bot is left alone before try 1, 2 and 3; 900 before the first after a run that finished
 TRIES = 3
 OWNER_RUNS = 4            # the owner's start and 3 tries
 RUNS = 7                  # then the manager bot's 3 tries: bot runs one visit may start between two changes

@@ -41,6 +41,7 @@ else was said in between, so the same words sent again after an answer are a new
 """
 
 import json
+import logging
 
 from . import hubdb as H
 from . import bot_settings as BS
@@ -295,7 +296,8 @@ HELD_DUE_SQL = (
 def tick(c, at=None):
     """The one release check. Plan each newly held job's Due, then let go of what is due: a notice batch at its Due, a
     policy job at Due when it does not prefer warm, in the bot's warm window when it does, and at its deadline cold or
-    skipped. Runs in the scheduler's write transaction every tick."""
+    skipped; then keep active task sessions warm (backend/keep_warm.py, once a minute). Runs in the scheduler's write
+    transaction every tick."""
     at = at or H.now()
     hours = {}
     for job in c.execute(HELD_NEW_SQL).fetchall():
@@ -332,6 +334,17 @@ def tick(c, at=None):
         _release(c, bot, jobs)
     for bot, jobs in waiting.items():
         _release_policy(c, bot, jobs, at)
+    # Task sessions in an active stage that reach the warm window get their one-line turn (backend/keep_warm.py). Its
+    # own savepoint: a keep-warm that fails is logged and never undoes the releases above.
+    from . import keep_warm
+
+    c.execute("SAVEPOINT keep_warm")
+    try:
+        keep_warm.sweep(c, at)
+    except Exception:  # noqa: BLE001 - keep-warm is a saving, never a reason to hold the release check
+        c.execute("ROLLBACK TO keep_warm")
+        logging.getLogger("tico.keep_warm").warning("keep warm sweep failed", exc_info=True)
+    c.execute("RELEASE keep_warm")
 
 
 def _repeat_slot(c, job, due):

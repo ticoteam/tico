@@ -678,9 +678,11 @@ def _runs_of(k: str) -> str:
     # CROSS JOIN keeps this order (task, message, job, run), and `+` keeps a test for "names none" off an index: else
     # SQLite may start from every run with no message or no task.
     alone = " AND +x.task_id IS NULL"
-    out = [f"SELECT {k}.t AS t, x.rowid AS rid FROM {k} CROSS JOIN attempts x ON x.task_id = {k}.t"]
+    # A keep-warm turn (backend/keep_warm.py) is no run on its task: not a try, not one of the 7, not when it stopped.
+    warm = f" AND coalesce(x.purpose, '') <> '{RT.KEEP_WARM}'"
+    out = [f"SELECT {k}.t AS t, x.rowid AS rid FROM {k} CROSS JOIN attempts x ON x.task_id = {k}.t{warm}"]
     for n, way in enumerate(ways):
-        extra = alone if n == 2 else ""
+        extra = (alone if n == 2 else "") + warm
         found = f"SELECT {k}.t, x.rowid FROM {k} CROSS JOIN messages y ON {way} CROSS JOIN "
         out.append(f"{found}attempts x ON x.message_id = y.id{extra}")
         out.append(
@@ -812,6 +814,17 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
         # pursuing a task goal that ended, so it reaches the old owner's session even when the task is no longer
         # theirs. Only the server's own: refs a bot sends are not trusted to skip the hold.
         return True
+    if found[3] == H.KEEPER and refs.get("wake") == "keep_warm":
+        # Tico's keep-warm turn (backend/keep_warm.py) does no work and is no run on the task (`_runs_of`): it needs no
+        # turn and is not held to the 7 runs, only to the task still being in an active stage.
+        from . import keep_warm
+
+        named = message_task(conn, message_id)
+        row = E.task(conn, named) if named else None
+        if row and keep_warm.may_start(conn, row, str(H.actor_id(found[1])), message_id):
+            return True
+        conn.execute("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,))
+        return False
     parts = str(found[0] or "").split(":")
     task = E.task(conn, parts[0]) if found[0] else None
     if task is None:

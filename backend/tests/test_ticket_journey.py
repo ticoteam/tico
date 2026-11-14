@@ -286,13 +286,13 @@ def test_the_person_sends_the_spec_back_and_the_product_owner_writes_it_again(co
 
 
 def test_a_builder_that_keeps_stopping_goes_to_the_engineering_manager_who_can_settle_it(co):
-    """The Builder ends run after run without doing the work: it is woken again after 2 minutes, 15 minutes and an
-    hour, then the task goes to the pipeline's Manager, who can reassign it, snooze it, move it on, move it back and
+    """The Builder ends run after run without doing the work: it is woken again after 15 minutes, 15 minutes and an
+    hour (a run that finished is not woken 2 minutes on), then the task goes to the pipeline's Manager, who can reassign it, snooze it, move it on, move it back and
     close it."""
     before = co.needs_you()
     product, engineering = to_build(co)
     co.handoff(engineering, "Build", "builder").end("I could not do it.")
-    for minutes in (3, 16, 61):
+    for minutes in (16, 16, 61):
         co.later(minutes)
         co.beat()
         again = co.turn_on("builder", engineering, f"again {minutes} minutes after it stopped")

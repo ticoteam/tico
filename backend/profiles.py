@@ -649,7 +649,7 @@ def mismatches(c):
         elif name == DOER:
             seen = c.execute(
                 "SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM attempts WHERE bot_id=? "
-                "AND created_at>? AND settled_at IS NOT NULL",
+                "AND created_at>? AND settled_at IS NOT NULL AND coalesce(purpose,'')<>'keep warm'",
                 (bot, since),
             ).fetchone()
             created = c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()

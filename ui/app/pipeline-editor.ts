@@ -102,6 +102,9 @@ function peExpected(minutes: number | null): {n: string; unit: number} {
 /** A field: its name above its control, as every form in the app. `size` narrows it ('short': a number or a prefix). */
 const peF = (label: string, control: string, size = ''): string =>
   `<label class="pe-f${size ? ' pe-f-' + size : ''}"><span>${esc(label)}</span>${control}</label>`;
+/** Keep-warm hours as typed: a whole number from 0 to 24, or null for empty. */
+const peHours = (value: string): number | null =>
+  value.trim() === '' || !Number.isFinite(Number(value)) ? null : Math.min(24, Math.max(0, Math.round(Number(value))));
 /** Fields side by side on one line; they wrap on a narrow screen. */
 const peRow = (fields: string): string => `<div class="pe-row">${fields}</div>`;
 
@@ -225,7 +228,9 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
     + `<h4 class="pe-h">Who works on it</h4>`
     + peRow(peF('Owner', `<select data-pe-sf="owner" ${at}>${peChoice(owners, stage.owner, 'Not set')}</select>`)
       + `<div class="pe-f pe-f-time"><span>Expected time</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="None" aria-label="Expected time">`
-      + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`)
+      + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`
+      // Empty: the pipeline's hours.
+      + peF('Keep warm (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-sf="keep_warm_hours" ${at} value="${stage.keep_warm_hours ?? ''}" placeholder="${state.draft.keep_warm_hours ?? 8}">`, 'short'))
     + (picks ? pePickHTML(state, stage, at) : '')
     + `<h4 class="pe-h">To leave</h4>`
     + `<div class="pe-f"><span>Tasks leave</span>${peSeg('by_hand', 'Tasks leave', [['0', 'When requirements are met'], ['1', 'By hand']], stage.by_hand ? '1' : '0', at)}</div>`
@@ -265,7 +270,9 @@ function peBodyHTML(state: PeState): string {
     + peRow(peF('Manager', `<select data-pe-pf="manager_id">${peChoice(peBots(), d.manager_id, 'Not set')}</select>`)
     + (state.factories ? peF('Factory', `<select data-pe-pf="factory_id">${peChoice(factories, d.factory_id, 'None')}</select>`) : '')
     // An empty prefix shows the pipeline's first letter as the example.
-    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" placeholder="${esc(d.name.trim().charAt(0).toUpperCase())}" autocomplete="off">`, 'short'));
+    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" placeholder="${esc(d.name.trim().charAt(0).toUpperCase())}" autocomplete="off">`, 'short')
+    // Hours an active task's session is kept warm after its last work (backend/keep_warm.py); 0 is off.
+    + peF('Keep warm (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-pf="keep_warm_hours" value="${d.keep_warm_hours ?? 8}">`, 'short'));
   const stages = d.stages.map((s, i) => peStageHTML(state, s, i, d.stages.length)).join('');
   return `${peClashHTML(state)}<div class="pe-fields">${fields}</div><div class="pe-stages">${stages}</div>`
     + `<p class="err" role="alert" data-pe-error${state.error ? '' : ' hidden'}>${esc(state.error)}</p>`
@@ -295,6 +302,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
     else if (pf === 'prefix') d.prefix = value.trim() || null;
     else if (pf === 'manager_id') d.manager_id = value || null;
     else if (pf === 'factory_id') d.factory_id = value || null;
+    else if (pf === 'keep_warm_hours') d.keep_warm_hours = peHours(value) ?? 0;
     return;
   }
   const stage = d.stages[peIndex(el, 'peSi')];
@@ -314,6 +322,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
     else if (sf === 'requests_move_on') stage.requests_move_on = checked;
     else if (sf === 'on_enter') stage.on_enter = peOnEnter(value);
     else if (sf === 'task_limit') stage.task_limit = Number(value) > 0 ? Math.round(Number(value)) : null;
+    else if (sf === 'keep_warm_hours') stage.keep_warm_hours = peHours(value);
     else if (sf === 'expected_n' || sf === 'expected_unit') {
       const panel = el.closest('.pe-pair');
       const n = Number(panel?.querySelector<HTMLInputElement>('[data-pe-sf="expected_n"]')?.value ?? '');
