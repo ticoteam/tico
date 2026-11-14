@@ -15,6 +15,7 @@ that chat.
                              the card, as create_proposal answers it
   steps_of(page, steps)      a stored card's steps, checked against its page's one route (422 otherwise)
   writer(c, room)            the bot that speaks for a page card in its room
+  words(steps, person, ...)  a card's summary and description for the rows it holds (again after drops, at Confirm)
 """
 
 from typing import Any, cast
@@ -56,6 +57,15 @@ def steps_of(page: str | None, steps: object) -> list[Row]:
             raise Problem("operation", "A page card's rows are " + method + " " + path + " only", 422)
         out.append({"method": method, "path": path, "body": dict(cast("Row", body))})
     return out
+
+
+def words(steps: list[Row], person: str, decided: bool = False) -> tuple[str, str]:
+    """A Goals card's summary ("Add 3 goals") and description for the rows it holds; once decided, no drop hint."""
+    n = len(steps)
+    count = f"{n} goal" + ("" if n == 1 else "s")
+    mine = all(cast("Row", s.get("body") or {}).get("owner") == person for s in steps)
+    what = count + (", owned by you" if mine else "") + "."
+    return "Add " + count, what if decided else what + " Drop any you don't want."
 
 
 def members(c: Any, room: Row | None) -> set[str]:
@@ -124,20 +134,18 @@ def propose(
             body["parent_id"] = row["parent_id"]
         steps.append({"method": method, "path": path, "body": body})
         shown.append({"field": row["title"], "new": H.actor_name(c, made_by)})  # pyright: ignore[reportUnknownMemberType]
-    n = len(steps)
-    count = f"{n} goal" + ("" if n == 1 else "s")
-    mine = all(s["body"]["owner"] == person for s in steps)
+    summary, what = words(steps, person)
     return assistant.create_proposal(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         c,
         settings,
         asker,
         room,
         PROPOSER + page,
-        "Add " + count,
+        summary,
         "POST",
         assistant.BATCH_PATH,
         {"actions": steps},
-        what=count + (", owned by you" if mine else "") + ". Drop any you don't want.",
+        what=what,
         routes=routes,
         shown=shown,
     )

@@ -3,7 +3,7 @@
 //  - AC-7 the card lists one row per goal with its owner, and one accent button that counts the kept rows ("Add 4
 //    goals"); × drops a row (it stays, struck, with ↺ to bring it back) and the button counts 3; Cancel is on the left;
 //  - with every row dropped the button is off; ↺ brings a row back;
-//  - Confirm sends the dropped rows' indexes (`drop`) and the card then shows what ran, with no buttons.
+//  - Confirm sends the dropped rows' indexes (`drop`) and the card then shows what ran, worded for it, with no buttons.
 //  - at 1680 the chat with its card sits beside the page.
 // TICO_UI_SHOTS=<dir> keeps the screenshots (1440 and 1680, light and dark).
 // Run: node scripts/ui-tests.cts page-chat-goals-card
@@ -23,7 +23,9 @@ declare const S: {route: string; me?: unknown; emps?: unknown[]};
 const step = (title: string) => ({method: 'POST', path: '/api/v2/goals', body: {title, owner: 'human:ana'}});
 function action(status = 'pending', kept = TITLES) {
   return {id: 'act-1', status, method: 'POST', path: '/api/v2/assistant/batch', proposer: 'page:goals', proposed_via: 'page:goals',
-    by_name: 'Strategy Owner', summary: `Add ${kept.length} goals`, description: `${kept.length} goals, owned by you. Drop any you don't want.`,
+    by_name: 'Strategy Owner', summary: `Add ${kept.length} goals`,
+    // As the server words it (page_chat_cards.words): the drop hint only while the card waits.
+    description: `${kept.length} goals, owned by you.` + (status === 'pending' ? " Drop any you don't want." : ''),
     body: {actions: kept.map(step)}, diff: kept.map(t => ({field: t, new: 'Ana'})), result: status === 'done' ? {error: null} : null};
 }
 
@@ -100,6 +102,7 @@ const add = (page: Page) => page.locator('aside.pgc .pgk [data-confirm]');
         assert.deepEqual((await rows(page)).map(r => [r.title, r.button]), TITLES.filter((_, i) => i !== 2).map(t => [t, undefined]));
         assert.equal(await page.locator('aside.pgc .pgk button').count(), 0);
         assert.match(await page.locator('aside.pgc .pgk .asst-state').innerText(), /^Done\./);
+        assert.equal(await page.locator('aside.pgc .pgk [data-what]').innerText(), '3 goals, owned by you.');
       }
       assert.deepEqual(errors, []);
       await page.close();

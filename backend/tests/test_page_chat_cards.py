@@ -74,6 +74,14 @@ def test_a_pasted_list_becomes_one_card_and_only_the_kept_rows_are_made_as_the_p
     stored = get(api, f"assistant/actions/{action['id']}", 'cara-test')['action']
     assert [d['field'] for d in stored['diff']] == [r['title'] for i, r in enumerate(ROWS) if i != 2]
     assert len(stored['body']['actions']) == 3
+    # Its words name the three that ran, with no drop hint left: the chat and the record never say four.
+    assert (stored['summary'], stored['description']) == ('Add 3 goals', '3 goals, owned by you.')
+    with api.app.state.store.read() as c:
+        said = [
+            json.loads(r['detail'])['summary']
+            for r in c.execute("SELECT detail FROM events WHERE action='assistant.action.confirmed'")
+        ]
+    assert said == ['Add 3 goals']
 
 
 def test_a_card_with_every_row_dropped_or_a_drop_out_of_range_makes_nothing(api):
@@ -85,7 +93,8 @@ def test_a_card_with_every_row_dropped_or_a_drop_out_of_range_makes_nothing(api)
     post(api, f"assistant/actions/{aid}/confirm", {'drop': [0, 1]}, 'cara-test', expected=422)
     post(api, f"assistant/actions/{aid}/confirm", {'drop': [5]}, 'cara-test', expected=422)
     assert goal_titles(api) == []
-    assert post(api, f"assistant/actions/{aid}/confirm", {}, 'cara-test')['action']['status'] == 'done'
+    done = post(api, f"assistant/actions/{aid}/confirm", {}, 'cara-test')['action']
+    assert (done['status'], done['summary'], done['description']) == ('done', 'Add 2 goals', '2 goals, owned by you.')
     assert goal_titles(api) == sorted(r['title'] for r in ROWS[:2])
 
 
@@ -174,13 +183,20 @@ def test_a_card_goes_only_into_the_persons_own_chat_with_the_bot(api):
 
 
 def test_a_stored_page_card_with_another_route_runs_nothing(api):
-    # A Goals card holds only POST /api/v2/goals steps: one stored with any other route fails at Confirm, and nothing runs.
+    # A Goals card holds only POST /api/v2/goals steps: one stored with any other route, though a valid task, fails at
+    # Confirm and nothing runs. steps_of is the only guard here: auth's check lets through any step stored on the card.
     machine = goals_owned_by_ops(api)
     said_from(api, 'goals')
     turn = claim(api, machine)
     card = post(api, 'page-chat/cards', {'page': 'goals', 'for_person': 'human:cara', 'rows': ROWS[:1]}, turn['token'])
     other = {
-        'actions': [{'method': 'POST', 'path': '/api/v2/tasks', 'body': {'title': 'Not a goal', 'owner': 'human:cara'}}]
+        'actions': [
+            {
+                'method': 'POST',
+                'path': '/api/v2/tasks',
+                'body': {'title': 'Not a goal', 'body': 'A valid task', 'owner': 'human:cara'},
+            }
+        ]
     }
     with api.app.state.store.transaction() as c:
         tasks = c.execute('SELECT count(*) FROM tasks').fetchone()[0]

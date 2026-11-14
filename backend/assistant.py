@@ -1286,7 +1286,8 @@ def batch_steps(body, proposer="assistant"):
 
 def keep_rows(c, row, drop):
     """The person dropped rows from a page card (`drop`, their indexes) before Confirm: the card keeps only the rest, in
-    its steps and its lines, so a dropped row can never run. Only a page card's rows are dropped; at least one is kept."""
+        its steps, its lines and its words ("Add 3 goals"), so a dropped row can never run and the card and its record name only
+    what ran. Only a page card's rows are dropped; at least one is kept."""
     from . import page_chat_cards
 
     steps = (json.loads(row["body"] or "{}") or {}).get("actions") if row["path"] == BATCH_PATH else None
@@ -1297,9 +1298,14 @@ def keep_rows(c, row, drop):
     if len(drop) >= len(steps):
         raise Problem("drop", "Keep at least one row, or Cancel the card", 422)
     lines = json.loads(row.get("diff") or "[]")
-    row["body"] = json.dumps({"actions": [s for i, s in enumerate(steps) if i not in drop]})
+    kept = [s for i, s in enumerate(steps) if i not in drop]
+    row["body"] = json.dumps({"actions": kept})
     row["diff"] = json.dumps([d for i, d in enumerate(lines) if i not in drop] if len(lines) == len(steps) else lines)
-    c.execute("UPDATE assistant_actions SET body=?, diff=? WHERE id=?", (row["body"], row["diff"], row["id"]))
+    row["summary"], row["description"] = page_chat_cards.words(kept, row["owner"], decided=True)
+    c.execute(
+        "UPDATE assistant_actions SET body=?, diff=?, summary=?, description=? WHERE id=?",
+        (row["body"], row["diff"], row["summary"], row["description"], row["id"]),
+    )
 
 
 def teammate(who):
@@ -2506,12 +2512,13 @@ def install(app, store, auth, mutate, onboarding):
                 row = load(c, who, aid)
                 if row["status"] != "pending":
                     raise Problem("state", "This proposal is already " + row["status"], 409)
-                if drop:
-                    keep_rows(c, row, drop)
                 if row["created_at"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
                     return None
+                if drop or str(row.get("proposer") or "").startswith("page:"):
+                    # A page card names only the rows it runs, dropped or not, and stops offering drops.
+                    keep_rows(c, row, drop)
                 # Only the run that holds this secret (the in-process call below) is "confirmed".
                 c.execute(
                     "UPDATE assistant_actions SET status='running', decided_at=?, running_since=?, "
