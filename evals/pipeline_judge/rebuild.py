@@ -245,6 +245,9 @@ def ask(rows, cache, contexts):
         }
         parts = {k: v for k, v in parts.items() if v is not None}
         cost = ((said.get("usage") or {}).get("cost_usd")) or 0.0
+        if not parts:
+            # A call that gave no answer is not cached, so a rerun asks it again; until then `bars` counts it unsure.
+            return said.get("error") or "no parts in the answer"
         out.write_text(
             json.dumps({"verdict_id": row["verdict_id"], "parts": parts, "cost_usd": cost, "error": said.get("error")})
         )

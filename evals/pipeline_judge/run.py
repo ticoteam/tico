@@ -18,10 +18,10 @@ acceptance criteria (and a long one with none). A case may be `allow_unsure` (me
 unsure answer on it is left out of the bar's counts (live-c-fixes-2-v2, a pre-release page whose reviews are of an
 earlier commit than its checks). No customer data belongs in cases.json.
 
-Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.75 or
-more, not_met at 0.2 or less (backend/pipeline_judges.py MET_AT, NOT_MET_AT; a case whose rubric is one of the four
-checks is scored on that check's own bar in pipeline_judges.BARS), and unsure between (the engine's rule:
-unsure passes the call up to a person and never passes the work). A call that raises is retried once after RETRY_WAIT_S
+Each case is one call per model, through the server's judge_once: a case whose rubric is one of the four checks is
+asked its parts and scored on the verdict the server gives (each part on that check's bar in pipeline_judges.BARS); any
+other is one yes/no question, met at 0.75 or more, not_met at 0.2 or less (MET_AT, NOT_MET_AT), and unsure between (the
+engine's rule: unsure passes the call up to a person and never passes the work). A call that raises is retried once after RETRY_WAIT_S
 seconds; a call that fails twice is an error and fails the bar. Per model the report gives accuracy, false "met" count
 (a met verdict where the label says not_met or unsure: it must be 0 to pass), the unsure rate, the retries, cost, p50
 and p95 latency; it is written as JSON and a markdown table into --out (evals/pipeline_judge/results by default).
@@ -121,30 +121,33 @@ def percentile(values, q):
 
 
 def score(name, judge, cases, pause=time.sleep, clock=time.monotonic):
-    """Every case through `judge(case) -> (p, cost_usd, ms)`: one model's row and its mistakes. A call that raises is tried
+    """Every case through `judge(case) -> (p, cost_usd, ms[, verdict])`: one model's row and its mistakes. A judge that
+    gives the server's verdict (the adapter does) is scored on it; one that gives p alone is banded by `verdict`. A call that raises is tried
     once more after RETRY_WAIT_S (`pause` is the wait, injectable); a second failure is an error. A retried case's time is
     the whole wait for its answer: the failed call (timed by `clock`), the RETRY_WAIT_S pause and the retry (both calls
     and the pause when the retry fails too), so a retry cannot hide a case from the p95 bar."""
     rows, mistakes, errors = [], [], []
     for case in cases:
         retries = 0
+        said = None
         started = clock()
         try:
-            p, cost, ms = judge(case)
+            p, cost, ms, *said = judge(case)
         except J.JudgeError:
             retries = 1
             spent = round((clock() - started) * 1000) + RETRY_WAIT_S * 1000  # the failed call and the pause
             pause(RETRY_WAIT_S)
             retried = clock()
             try:
-                p, cost, ms = judge(case)
+                p, cost, ms, *said = judge(case)
                 ms = spent + ms
             except J.JudgeError as exc:
                 errors.append(f"{case['id']}: {exc.code}")
                 # A failed call is unsure: it goes to a person and never passes the work. Its time is both calls and the
                 # pause, so a case that timed out twice still counts in the p95.
-                p, cost, ms = 0.5, 0.0, spent + round((clock() - retried) * 1000)
-        got = verdict(p, check_of(case))
+                # p 0.5 only stands in for the report: the verdict is unsure on every bar, never banded.
+                p, cost, ms, said = 0.5, 0.0, spent + round((clock() - retried) * 1000), ["unsure"]
+        got = said[0] if said else verdict(p, check_of(case))
         rows.append(
             {
                 "id": case["id"],

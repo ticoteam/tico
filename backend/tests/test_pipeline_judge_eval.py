@@ -36,7 +36,7 @@ def test_judge_once_goes_through_the_servers_judge_with_the_work_and_the_evidenc
         return {"p": 0.9, "reason": "ok", "provider": "t", "model": model, "cost_usd": 0.002, "latency_ms": 12}
 
     case = next(c for c in run.load() if c.get("trap") == "old_version")
-    p, cost, ms = adapter.judge_once(engine, case)
+    p, cost, ms, _said = adapter.judge_once(engine, case)
     assert (p, cost, ms) == (0.9, 0.002, 12)
     assert seen["model"] == "jev" and seen["label"] == adapter.QUESTION_SET
     assert seen["state"]["work"]["work_version"] == case["work"]["work_version"]
@@ -149,7 +149,7 @@ def test_a_missing_evidence_case_is_not_met_and_no_model_is_called():
         asked.append(model)
         return {"p": 0.9, "reason": "", "provider": "t", "model": model}
 
-    assert adapter.judge_once(engine, case) == (0.0, 0.0, 0)
+    assert adapter.judge_once(engine, case) == (0.0, 0.0, 0, "not_met")
     assert asked == []
 
 
@@ -453,3 +453,92 @@ def test_a_rebuilt_page_is_read_as_its_words_not_its_html(tmp_path):
     assert check == "spec"
     assert "AC-1 works." in state["attachment"]["text"] and "color:red" not in state["attachment"]["text"]
     assert not state["attachment"]["truncated"]
+
+
+def _gateway_answering(p, calls):
+    """A Gateway that answers every question it is asked at p, as Jev does: the four checks are asked as part_* questions."""
+
+    def gateway(key, url, model, timeout):
+        def ask(state, questions, label):
+            calls.append(sorted(questions))
+            return {"answers": {qid: {"noul": p} for qid in questions}, "usage": {"cost_usd": 0.0001}, "ms": 5}
+
+        return ask
+
+    return gateway
+
+
+def test_the_eval_asks_each_check_in_parts_and_scores_the_servers_verdict(monkeypatch):
+    """Review 1 on #3706: the adapter read one `met` answer, so a real model failed every case on the four checks (a
+    KeyError, then a TypeError the score did not catch). Each check's case is asked its parts and gets the server's
+    verdict: met with every part at 0.9, unsure with a part between the bars."""
+    from backend import pipeline_judges as P
+
+    by_check = {}
+    for case in run.load():
+        by_check.setdefault(run.check_of(case), case)
+    assert {"spec", "review", "qa", "validate"} <= set(by_check)
+    calls = []
+    monkeypatch.setattr(J, "gateway", _gateway_answering(0.9, calls))
+    engine = adapter._decide("jev", "k", "http://gateway.acme.example")
+    for check in ("spec", "review", "qa", "validate"):
+        p, cost, ms, said = adapter.judge_once(engine, by_check[check])
+        assert said == "met" and p == 0.9 and cost == 0.0001, check
+        assert calls[-1] == sorted(f"part_{part.key}" for part in P.CHECKS[check]), check
+    between = (P.BARS["qa"][0] + P.BARS["qa"][1]) / 2
+    monkeypatch.setattr(J, "gateway", _gateway_answering(between, calls))
+    engine = adapter._decide("jev", "k", "http://gateway.acme.example")
+    assert adapter.judge_once(engine, by_check["qa"])[3] == "unsure"
+
+
+def test_a_call_that_fails_twice_is_unsure_never_a_false_met():
+    """At a bar of 0.5 a failed call's stand-in p of 0.5 read as met: the eval blamed the judge for a false met it never
+    gave. A call that fails twice is unsure, whatever the bar."""
+    case = next(c for c in run.load() if c["expected"] == "not_met" and run.check_of(c))
+
+    def judge(c):
+        raise J.JudgeError("timeout", "no answer")
+
+    row = run.score("j", judge, [case], pause=lambda s: None)
+    assert row["false_met"] == 0 and row["false_met_cases"] == []
+    assert not row["passes_bar"], "a failed call still fails the bar"
+
+
+def test_the_committed_rebuild_result_is_the_bar_the_server_uses():
+    """BARS and the eval result beside it say the same bar for each check (the rebuild's, or the one the eval raised it
+    to), so editing one without the other fails."""
+    import json
+    from pathlib import Path
+
+    from backend import pipeline_judges as P
+
+    result = json.loads((Path(run.__file__).parent / "results" / "bars-2026-11-13.json").read_text())
+    bars = {check: tuple(r["bar"]) for check, r in result["checks"].items()}
+    bars.update({check: tuple(r["bar"]) for check, r in result.get("raised_by_eval", {}).items()})
+    assert bars == P.BARS
+
+
+def test_a_rebuild_call_that_fails_is_not_cached_so_a_rerun_asks_it_again(tmp_path, monkeypatch):
+    import json
+
+    from evals.pipeline_judge import rebuild as R
+
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "tasks").mkdir()
+    (tmp_path / "pages" / "file-a@1.json").write_text(json.dumps({"text": "Goal: x"}))
+    (tmp_path / "tasks" / "t.json").write_text(json.dumps({"title": "T", "body": "", "version": 1, "links": []}))
+    row = {"verdict_id": "v", "check": "Spec", "file_id": "file-a", "page_version": "1", "task_id": "t"}
+    answers = [RuntimeError("tico decision ask: busy")] * 2 + [{"answers": {"part_goal": {"noul": 0.9}}}]
+
+    def tico(*args):
+        said = answers.pop(0)
+        if isinstance(said, Exception):
+            raise said
+        return said
+
+    monkeypatch.setattr(R, "_tico", tico)
+    assert R.ask([row], tmp_path, {}) == ["tico decision ask: busy"]
+    assert not list((tmp_path / "answers").iterdir()), "a failed call leaves no answer behind"
+    assert R.ask([row], tmp_path, {}) == []
+    (saved,) = (tmp_path / "answers").iterdir()
+    assert json.loads(saved.read_text())["parts"] == {"goal": 0.9}
