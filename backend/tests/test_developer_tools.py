@@ -1,5 +1,6 @@
 """The developer tool list (clients/commands/_access.py DEVELOPER_TOOLS, backend/mcp.py tool_profile): a code bot's MCP
-server lists only the tools a code bot uses, and no code bot loses one its instructions tell it to run.
+server lists only the tools a code bot uses, and no code bot loses one its instructions tell it to run. A Feature Owner
+writes code too: it gets the feature list (FEATURE_TOOLS), the developer list plus the product tools its template names.
 
 Every `tico ...` command in a code bot's template (AGENTS.md, playbooks, skills, knowledge) is parsed with
 clients/hubcli.py and named as the tool it runs (`remotecli.tool_name`), beside each `tico_...` tool name written out and
@@ -18,6 +19,7 @@ from clients.remotecli import tool_name
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
 CODE_TEMPLATES = sorted(t for t in MCP.DEVELOPER_TEMPLATES if (CATALOG / t).is_dir())
+FEATURE_TEMPLATES = sorted(t for t in MCP.FEATURE_TEMPLATES if (CATALOG / t).is_dir())
 TOOL = re.compile(r"\btico_[a-z0-9_]+\b")
 SCRIPT_CALL = re.compile(r"""\[\s*["']tico["']\s*,\s*["']([a-z-]+)["']\s*,\s*["']([a-z-]+)["']""")
 
@@ -62,6 +64,7 @@ def named_tools(template):
 
 def test_the_code_templates_are_there():
     assert {"builder", "reviewer", "qa-owner", "release-owner"} <= set(CODE_TEMPLATES)
+    assert FEATURE_TEMPLATES == ["feature-owner"]
 
 
 def test_every_tool_a_code_bot_is_told_to_run_is_in_the_developer_list():
@@ -75,6 +78,19 @@ def test_every_tool_a_code_bot_is_told_to_run_is_in_the_developer_list():
     assert not missing, "\n".join(missing)
 
 
+def test_every_tool_a_feature_owner_is_told_to_run_is_in_the_feature_list():
+    offered = {t["name"] for t in hubtools.listing(True, "bot")}
+    named = {name: where for template in FEATURE_TEMPLATES for name, where in named_tools(template).items()}
+    missing = [
+        f"{name} ({where})" for name, where in named.items() if name in offered and name not in hubtools.FEATURE_TOOLS
+    ]
+    assert not missing, "\n".join(missing)
+    # It builds, so it is told to run the code bot's core tools, and the product ones its review and pitch need.
+    assert {"tico_task_show", "tico_task_done", "tico_page_publish", "tico_task_attach", "tico_goal_list"} <= set(named)
+    # Every product tool on the list is one its template names: the list does not grow by itself.
+    assert hubtools.FEATURE_TOOLS - hubtools.DEVELOPER_TOOLS <= set(named)
+
+
 def test_the_builder_and_reviewer_name_the_core_tools():
     # The walk above finds commands: a regression in it would pass the check with nothing to check.
     builder, reviewer = named_tools("builder"), named_tools("reviewer")
@@ -84,7 +100,8 @@ def test_the_builder_and_reviewer_name_the_core_tools():
 
 def test_every_developer_tool_is_a_tool_a_bot_is_offered():
     tools = {t["name"]: t for t in hubtools.TOOLS}
-    assert hubtools.DEVELOPER_TOOLS <= set(tools)
+    assert hubtools.DEVELOPER_TOOLS <= hubtools.FEATURE_TOOLS <= set(tools)
+    assert all("bot" in hubtools.offered_to(tools[n]) for n in hubtools.FEATURE_TOOLS - hubtools.DEVELOPER_TOOLS)
     # A person-only tool named in a skill (a person turns the app view on) stays a person's; everything else a bot gets.
     assert {n for n in hubtools.DEVELOPER_TOOLS if "bot" not in hubtools.offered_to(tools[n])} == {"tico_bot_app_view"}
 
@@ -94,7 +111,11 @@ def test_the_developer_listing_is_a_small_part_of_the_bots():
     dev = hubtools.listing(True, "bot", hubtools.DEVELOPER)
     assert {t["name"] for t in dev} == hubtools.DEVELOPER_TOOLS & {t["name"] for t in full}
     assert len(dev) * 8 < len(full)
+    feature = hubtools.listing(True, "bot", hubtools.FEATURE)
+    assert {t["name"] for t in feature} == hubtools.FEATURE_TOOLS & {t["name"] for t in full}
+    assert len(feature) * 8 < len(full)
     assert hubtools.listing(True, "bot", "") == full  # no profile: the whole list
+    assert hubtools.listing(True, "bot", "a-newer-profile") == full  # one this client does not know: the whole list
 
 
 class FakeApi:
@@ -132,9 +153,11 @@ def test_me_says_which_bots_get_the_developer_list(api):
         ids = [r[0] for r in c.execute("SELECT id FROM bots ORDER BY id")]
         BS.update(c, ids[0], {"template": "builder"})
         BS.update(c, ids[1], {"template": "librarian"})
+        BS.update(c, ids[2], {"template": "feature-owner"})
         auth = api.app.state.auth
         assert MCP.tool_profile(c, auth, Identity(f"bot:{ids[0]}", "bot")) == "developer"
         assert MCP.tool_profile(c, auth, Identity(f"bot:{ids[1]}", "bot")) == ""
+        assert MCP.tool_profile(c, auth, Identity(f"bot:{ids[2]}", "bot")) == "feature"
         assert MCP.tool_profile(c, auth, Identity("human:ana", "owner")) == ""
     me = api.get("/api/v2/me", headers=headers()).json()
     assert "tool_profile" not in me

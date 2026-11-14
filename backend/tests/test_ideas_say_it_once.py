@@ -17,7 +17,7 @@ from backend import task_engine as E
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.product_engineering_presets import _answers, _team
+from backend.tests.helpers.product_engineering_presets import _answers, _team, legacy_pair
 
 ANA = X.ANA
 START = datetime(2026, 11, 12, 7, tzinfo=timezone.utc)
@@ -29,6 +29,7 @@ def product(company, time_machine):
     with company.transaction() as c:
         _team(c)
         _answers(c, software="yes")
+        legacy_pair(c)  # Ideas is the pair's Product's
         PS.ensure_presets(c)
     return company
 

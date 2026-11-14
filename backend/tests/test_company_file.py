@@ -52,7 +52,7 @@ def depts(draft):
     return counts
 
 
-SPEC_COUNTS = {"everything": 70, "software": 48, "services": 35, "local": 38, "store": 36}
+SPEC_COUNTS = {"everything": 69, "software": 48, "services": 35, "local": 38, "store": 36}
 
 
 def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or_a_seat_to_build():
@@ -134,7 +134,7 @@ def test_2_a_saas_for_dentists_starts_from_the_software_company_model():
     assert len(draft["bots"]) >= 45
     counts = depts(draft)
     assert all(counts.get(team, 0) >= 1 for team in ("legal", "hr", "finance", "operations")), counts
-    assert counts["engineering"] == 9 and "Product Lead" in titles(draft)
+    assert counts["engineering"] == 8 and "Product Lead" in titles(draft)
 
 
 def test_3_a_house_cleaning_company_starts_from_the_local_service_business_model():
@@ -191,7 +191,7 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert not results[0]["ok"]
     # "cap table" names the Equity Manager role for bot_add.
     assert A.find_role("cap table")["slug"] == "equity-manager"
-    assert A.find_role("engineer")["slug"] == "builder" and A.find_role("reviewer")["slug"] == "reviewer"
+    assert A.find_role("engineer")["slug"] == "feature-owner" and A.find_role("reviewer")["slug"] == "reviewer"
     # The built-in's old name and its new one both name it; a bare "CEO" is a person's title, not the bot.
     assert A.find_role("CEO Bot")["slug"] == A.find_role("Strategy Owner")["slug"] == "strategy-owner"
     assert A.find_role("CEO") is None
@@ -212,8 +212,8 @@ def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
         ("model_use", {"model": "everything"}),
     )
     assert all(r["ok"] for r in results), results
-    assert results[2]["said"] == "The chart is now the Everything model (70 seats)."
-    assert len(draft["bots"]) == 70 and depts(draft)["finance"] == 11
+    assert results[2]["said"] == "The chart is now the Everything model (69 seats)."
+    assert len(draft["bots"]) == 69 and depts(draft)["finance"] == 11
     assert next(b for b in draft["bots"] if b["title"] == "Equity Manager")["person"] == "ana", "a held seat stays"
     assert "undo" in draft, "switching models is a change the visitor can undo"
     for key in ("software", "services", "local", "store"):
@@ -265,7 +265,7 @@ def test_filling_a_seat_on_an_empty_team_keeps_the_visitor_the_owner():
 
 def test_8_a_company_no_model_fits_starts_from_everything():
     draft, line = first_chart("We do a bit of everything.", ["small_team"])
-    assert len(draft["bots"]) == 70
+    assert len(draft["bots"]) == 69
     assert line == "Nothing you said points to one kind of company, so we started from the Everything model."
 
 
@@ -757,22 +757,22 @@ BAD = [
     ("bot_add", {"template": "billing-specialist"}),
     ("bot_add", {"template": "billing-specialist", "reason": ""}),
     ("bot_add", {"template": "billing-specialist", "reason": "x", "colour": "red"}),
-    ("bot_add", {"template": "billing-specialist", "reason": "x", "title": "Builder"}),
+    ("bot_add", {"template": "billing-specialist", "reason": "x", "title": "Feature Owner"}),
     ("bot_add", {"template": "botops", "reason": "a second one"}),
     ("bot_add", {"template": "billing-specialist", "reason": "x" * 301}),
     ("bot_add", {"template": 7, "reason": "x"}),
     ("bot_remove", {"bot": "botops"}),
     ("bot_remove", {"bot": "ghost"}),
-    ("bot_rename", {"bot": "builder", "title": "Reviewer 1"}),
-    ("bot_rename", {"bot": "builder", "title": " "}),
-    ("bot_set_reports_to", {"bot": "engineering-manager", "to": "builder"}),
-    ("bot_set_reports_to", {"bot": "builder", "to": "builder"}),
-    ("bot_set_reports_to", {"bot": "builder", "to": "Dispatcher"}),
-    ("bot_set_reports_to", {"bot": "builder", "to": "Nobody Here"}),
-    ("bot_set_start", {"bot": "builder", "start": "soon"}),
+    ("bot_rename", {"bot": "feature-owner", "title": "Reviewer 1"}),
+    ("bot_rename", {"bot": "feature-owner", "title": " "}),
+    ("bot_set_reports_to", {"bot": "engineering-manager", "to": "qa-owner"}),
+    ("bot_set_reports_to", {"bot": "feature-owner", "to": "feature-owner"}),
+    ("bot_set_reports_to", {"bot": "feature-owner", "to": "Dispatcher"}),
+    ("bot_set_reports_to", {"bot": "feature-owner", "to": "Nobody Here"}),
+    ("bot_set_start", {"bot": "feature-owner", "start": "soon"}),
     ("bot_set_start", {"bot": "botops", "start": "later"}),
     ("bot_set_first_job", {"bot": "assistant", "job": "x"}),
-    ("bot_set_routine", {"bot": "builder", "routine": "x" * 201}),
+    ("bot_set_routine", {"bot": "feature-owner", "routine": "x" * 201}),
     ("team_remove", {"team": "core"}),
     ("team_remove", {"team": "kitchen"}),
     ("goal_add", {"title": ""}),
@@ -807,7 +807,7 @@ BAD = [
     ("person_set", {"name": ""}),
     ("person_set", {"person": "ghost", "name": "Al"}),
     ("agent_set", {"runtime": "skynet", "job": "x"}),
-    ("agent_set", {"agent": "builder", "runtime": "codex", "job": "x"}),
+    ("agent_set", {"agent": "feature-owner", "runtime": "codex", "job": "x"}),
     ("rules_set_never", {"never": ["send", "launch"]}),
     ("rules_set_review", {"review": "none"}),
     ("tools_set", {"connect": ["bank"]}),
@@ -875,7 +875,7 @@ def test_a_draft_that_breaks_its_shape_or_limits_is_refused():
 def test_pending_rides_along_outside_the_file_and_the_undo_and_lets_go_of_a_team_that_is_gone():
     draft = started(pending=["sales", "marketing", "legal"])
     draft["bots"] = [b for b in draft["bots"] if b["dept"] != "legal"]
-    after, _ = run(draft, ("bot_rename", {"bot": "builder", "title": "Ada"}))
+    after, _ = run(draft, ("bot_rename", {"bot": "feature-owner", "title": "Ada"}))
     assert after["pending"] == ["sales", "marketing"], "no legal team on the chart"
     assert "pending" not in after["undo"] and "pending" not in C.to_yaml(after, CREATED)
     after, _ = run(after, ("team_remove", {"team": "sales"}))
@@ -887,10 +887,10 @@ def test_one_bot_has_the_first_job_and_it_starts_now():
     draft, results = run(
         started(),
         ("bot_set_first_job", {"bot": "billing-specialist", "job": "Chase last month's invoices"}),
-        ("bot_set_first_job", {"bot": "Builder", "job": "Fix the signup bug"}),
+        ("bot_set_first_job", {"bot": "Feature Owner", "job": "Fix the signup bug"}),
     )
     marked = [b for b in draft["bots"] if b.get("first_job")]
-    assert all(r["ok"] for r in results) and [(b["title"], b["start"]) for b in marked] == [("Builder", True)]
+    assert all(r["ok"] for r in results) and [(b["title"], b["start"]) for b in marked] == [("Feature Owner", True)]
     assert [
         e.get("first_job") for e in yaml.safe_load(C.to_yaml(draft, CREATED))["employees"] if e.get("first_job")
     ] == ["Fix the signup bug"]
@@ -900,7 +900,7 @@ def test_an_agent_the_visitor_already_runs_keeps_only_what_the_file_can_hold():
     draft, results = run(
         started(),
         ("agent_set", {"runtime": "codex", "job": "Reviews pull requests"}),
-        ("bot_set_first_job", {"bot": "Builder", "job": "Fix the signup bug"}),
+        ("bot_set_first_job", {"bot": "Feature Owner", "job": "Fix the signup bug"}),
     )
     agent = next(b for b in draft["bots"] if b["existing"])
     turn = C.Turn(draft, TODAY)
@@ -916,7 +916,7 @@ def test_an_agent_the_visitor_already_runs_keeps_only_what_the_file_can_hold():
     next(b for b in sent["bots"] if b["existing"]).update(start=False, routine="Daily", first_job="x")
     text = C.to_yaml(sent, CREATED)
     assert C.to_yaml(C.from_yaml(text), CREATED) == text == C.to_yaml(draft, CREATED)
-    assert [b["title"] for b in C.from_yaml(text)["bots"] if b.get("first_job")] == ["Builder"]
+    assert [b["title"] for b in C.from_yaml(text)["bots"] if b.get("first_job")] == ["Feature Owner"]
     # No rule needing a person is written as an empty list, not as nothing.
     none, _ = run(draft, ("rules_set_never", {"never": []}))
     assert yaml.safe_load(C.to_yaml(none, CREATED))["rules"]["never_without_a_person"] == []
@@ -974,16 +974,16 @@ def test_a_reports_to_whose_target_left_the_chart_falls_back_to_the_line_the_fil
         started(),
         ("person_set", {"name": "Maya", "role": "CEO"}),
         ("person_set", {"name": "Jo", "role": "Ops"}),
-        ("bot_set_reports_to", {"bot": "Builder", "to": "Jo"}),
+        ("bot_set_reports_to", {"bot": "Feature Owner", "to": "Jo"}),
     )
-    assert next(b for b in draft["bots"] if b["title"] == "Builder")["reports_to"] == "jo"
+    assert next(b for b in draft["bots"] if b["title"] == "Feature Owner")["reports_to"] == "jo"
     # The visitor took Jo off the team on the page; an invented id is treated the same way.
     sent = {**draft, "people": [p for p in draft["people"] if p["name"] != "Jo"]}
     next(b for b in sent["bots"] if b["title"] == "Reviewer 1")["reports_to"] = "nobody"
     out = C.Turn(sent, TODAY).finish()
-    assert not any(b.get("reports_to") for b in out["bots"] if b["title"] in ("Builder", "Reviewer 1"))
+    assert not any(b.get("reports_to") for b in out["bots"] if b["title"] in ("Feature Owner", "Reviewer 1"))
     doc = yaml.safe_load(C.to_yaml(out, CREATED))
-    assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Builder"] == "engineering-manager"
+    assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Feature Owner"] == "product-lead"
     assert C.to_yaml(C.from_yaml(C.to_yaml(out, CREATED)), CREATED) == C.to_yaml(out, CREATED)
 
 

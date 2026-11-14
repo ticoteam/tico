@@ -11,7 +11,7 @@ Steps:
 2. List every factual claim in the copy: numbers, comparisons, "fastest", "only", customer counts, time to value and guarantees.
 3. Check each claim against `tico brand show --section claims`. An approved claim is used with its source. A claim not in that list is not used. Ask the Design Owner (`design-owner`) on a task whether it can be added with its evidence, or rewrite the line without it.
 4. Save the final copy to a file and run `tico brand check <file>`, or `tico brand check -` to read it from stdin. Fix each flag, or say on the task why a flag is wrong.
-5. Check the offer against the segment's counting rule and activation step in `knowledge/segment.md`. If the offer promises something the product does not do for this segment, stop, and ask the Product Owner for this segment on its task.
+5. Check the offer against the segment's counting rule and activation step in `knowledge/segment.md`. If the offer promises something the product does not do for this segment, stop, and ask the Feature Owner for this segment on its task.
 6. Write the idea's body with the segment, the change, the channel and the measure: the new customers and cost per customer from `skills/read-cost-per-customer-for-a-segment/SKILL.md`. Do not write a prediction, a hypothesis or a score. The Marketing task has no field for them.
 7. Record the message's version, its date, and each claim with its check in `knowledge/message.md`.
 

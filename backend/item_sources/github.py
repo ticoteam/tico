@@ -2222,11 +2222,36 @@ def _silent(task: Row, requirement: Row, link: Row, found: Standing, heard: obje
     )
 
 
+NO_NEW_PR = "No open PR for this work: open one and link it"
+
+
+_BUILD_SINCE = (
+    "SELECT MIN(v.entered_at) FROM visits v WHERE v.task_id=? AND v.stage_id IN (SELECT r.stage_id FROM requirements r "
+    "WHERE r.source='github' AND r.condition='pr_open' AND r.visit_id IS NULL AND r.stage_id IS NOT NULL)"
+)
+
+
 def pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    """Met by a PR that is open, or one linked or merged since the task first entered a stage that asks for an open PR
+    (Build). A PR that merged or closed before that (an old one linked to the task before its spec) is not this work:
+    Tico Team, Nov 14, a task skipped Build on one."""
     prs, said = _prs(conn, task, requirement)
     if said:
         return said
-    return _first(requirement, [_open_one(task, requirement, link) for link in prs])
+    found = conn.execute(_BUILD_SINCE, (task["id"],)).fetchone()
+    visit: Row = task.get("visit") or {}
+    since = str((found[0] if found else None) or visit.get("entered_at") or "")
+    fresh = [
+        link
+        for link in prs
+        if not link["metadata"]
+        or link["metadata"]["state"] == "open"
+        or str(link.get("created_at") or "") >= since
+        or str(link["metadata"].get("merged_at") or "") >= since
+    ]
+    if not fresh:
+        return Standing(requirement, NOT_MET, task.get("owner_id"), NO_NEW_PR)
+    return _first(requirement, [_open_one(task, requirement, link) for link in fresh])
 
 
 def _open_one(task: Row, requirement: Row, link: Row) -> Standing:

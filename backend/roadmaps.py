@@ -145,7 +145,7 @@ def settings(c):
 
 def suggestions_receiver(c):
     """The bot that gets visitor suggestions and the suggestions-full notice, and why: the bot chosen in settings
-    while it is active; otherwise Automatic, the first active or planned Product Owner, then an active Product
+    while it is active; otherwise Automatic, the first active or planned Feature Owner, then an active Product
     Lead. Returns (id or None, 'chosen' | 'automatic' | 'chosen_archived' | 'chosen_inactive'), the last two
     saying the chosen bot was passed over because it is archived (or gone), or paused, quarantined or planned."""
     chosen = settings(c)['suggestions_bot']
@@ -157,7 +157,7 @@ def suggestions_receiver(c):
             return chosen, 'chosen'
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
     for template, states in (
-        ('segment-product-owner', ('active', 'planned')),
+        ('feature-owner', ('active', 'planned')),
         ('product-lead', ('active',)),
         ('product-manager', ('active',)),
     ):

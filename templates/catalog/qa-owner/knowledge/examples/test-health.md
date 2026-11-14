@@ -28,7 +28,7 @@ Nothing was rerun, skipped or changed. First draft, not yet reviewed.
 
 ## Product bugs handed over
 - `test_invoice_totals_rounding` fails on commit a41c9e0 in runs 88140 and 88141 with a real rounding error. Handed to the
-  Builder on task 4411 with the runs and the commit range.
+  billing feature owner on task 4411 with the runs and the commit range.
 
 ## Fix plans
 1. **Freeze the clock in the reminder test** (`api/tests/test_reminders.py`): set the test time to 10:00 in the studio's zone.

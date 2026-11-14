@@ -155,12 +155,12 @@ ALIASES = tuple(
         (r"\bcro\b", "chief revenue officer"),
         (r"\bpmm\b", "product marketing manager"),
         (r"\bsoftware (?:development )?engineer in test\b|\bsdets?\b", "qa engineer"),
-        # A plain software engineer builds the change: the Builder. One with a field ("Software Engineer, Security")
-        # keeps it and is that field's engineer.
+        # A plain software engineer builds the change: the Feature Owner. One with a field ("Software Engineer,
+        # Security") keeps it and is that field's engineer.
         (
             r"^(?:(?:senior|sr\.?|staff|principal|junior|jr\.?)\s+)?software (?:development )?(?:engineer|developer)s?"
             r"(?:\s+(?:i|ii|iii|iv))?$",
-            "builder",
+            "feature owner",
         ),
         (r"\b(?:sales development|business development) (?:representatives?|reps?)\b|\b[sb]drs?\b", "outbound sales"),
         (r"\bsales development\b", "outbound sales"),

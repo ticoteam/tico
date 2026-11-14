@@ -17,7 +17,7 @@ from backend import stage_pick
 from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.product_engineering_presets import _answers, _role_bot, _seat, _team
+from backend.tests.helpers.product_engineering_presets import _answers, _role_bot, _seat, _team, legacy_pair
 
 MIGRATION = importlib.import_module("backend.migrations.20261113033639_engineering_picks_at_release")
 ANA = X.ANA
@@ -41,6 +41,7 @@ def _engineering(c, builders=2):
         _role_bot(c, "builder-2", "builder")
         _seat(c, "Builder 2", "builder", "builder-2")
     _answers(c)
+    legacy_pair(c)
     PS.ensure_presets(c)
     assert E.stage(c, BUILD)["owner"] == "bot:builder"
 

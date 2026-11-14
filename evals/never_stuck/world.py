@@ -60,7 +60,7 @@ BOTS = (BUILDER, WRITER, REVIEWER, MANAGER)
 PM, REVIEWER_1, REVIEWER_2, RELEASE = "bot:pm", "bot:rev1", "bot:rev2", "bot:rm"
 PPM, EM = "bot:product-manager", "bot:engineering-manager"
 ROLE_TEMPLATES = {
-    PM: "segment-product-owner",
+    PM: "feature-owner",
     PPM: "product-manager",
     EM: "engineering-manager",
     BUILDER: "builder",
@@ -260,7 +260,8 @@ def _people() -> dict[str, Any]:
 def _fill(c: sqlite3.Connection, software: bool = False) -> None:
     """People, four bots on one computer, General managed by the Manager bot, and the Work pipeline. A software company
     also has the role bots, each with its template, a finished setup, the presets the end of setup makes
-    (`ensure_presets`): Product and Engineering, and its GitHub App installed."""
+    (`ensure_presets`) on the Product and Engineering pair a company set up before 0.6 keeps, and its GitHub App
+    installed."""
     from backend import bot_settings as BS
     from backend import pipeline_settings as PS
     from backend import task_engine as E
@@ -295,6 +296,11 @@ def _fill(c: sqlite3.Connection, software: bool = False) -> None:
         from backend import onboarding as O
 
         O.Onboarding._store(c, {**O.load(c), "completed": H.now()}, "human:ana")
+        # The rig's cases walk the Product and Engineering pair, as a company set up before 0.6 has it (Product, one
+        # pipeline, replaced it for new companies: backend/tests/test_product_pipeline.py and test_ticket_journey.py).
+        from backend.tests.helpers.product_engineering_presets import legacy_pair
+
+        legacy_pair(c)
         PS.ensure_presets(c)
         from backend.tests.helpers import engine as X
 

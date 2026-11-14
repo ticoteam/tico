@@ -9,12 +9,13 @@ from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.helpers.product_engineering_presets import legacy_pair
 
 REPO = "acme/app"
 ANA = X.ANA
 # The role bots, each found by its seat as setup seats them (test_product_engineering_presets.py has the full set).
 SEATS = [
-    ("pm", "segment-product-owner", "Product Owner"),
+    ("pm", "feature-owner", "Product Owner"),
     ("builder", "builder", "Builder"),
     ("rev-a", "reviewer", "Reviewer 1"),
     ("rev-b", "reviewer", "Reviewer 2"),
@@ -98,6 +99,7 @@ def _product_task(c):
         "INSERT INTO registry_metadata VALUES('onboarding',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (json.dumps({"answers": {"software_product": "yes"}, "completed": at}),),
     )
+    legacy_pair(c)  # Product's Spec and In development, which files into Engineering
     PS.ensure_presets(c)
     X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
     row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="product", lint=False)

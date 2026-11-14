@@ -5500,7 +5500,8 @@ PR_IN_TEXT = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", r
 
 def review_finding_route(conn, actor, task_id, target):
     """A bot never gives a person a General task about a pull request that an open pipeline task owns: a finding on a
-    task's own pull request goes back to that task's Builder through its review (docs/pipelines-v3.md, Engineering),
+    task's own pull request goes back to whoever builds that task (its feature owner, or a Builder on Engineering of the
+    pair Product replaced) through its review (docs/pipelines-v3.md, "Product"),
     and what only a person decides there (the spec, the OK) is asked on that task. The pull request is one the task
     links, or one its title or body names by URL. Refused as `review_route`, naming the task it belongs on."""
     if not is_bot(actor) or not is_human(target):
@@ -5531,7 +5532,7 @@ def review_finding_route(conn, actor, task_id, target):
                 actor,
                 "review_route",
                 f"{repo}#{number} is the pull request of the task “{own[0]}”, now in {own[1]}. A finding on it goes "
-                "back to that task's Builder through its review (blocking on the Review page, or `no` on the "
+                "back to whoever builds that task through its review (blocking on the Review page, or `no` on the "
                 "reviewers' answer in QA), never to a person: put it there and close this task with a link. Only "
                 "what the pipeline gives a person (the spec, the OK) is theirs, asked on that task.",
             )

@@ -234,7 +234,8 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             "agent": who.agent,
             "kind": caller_kind(auth, who),
             **({"slug": slug} if slug else {}),
-            # The tool list this caller's MCP server offers: `developer` for a code bot (backend/mcp.py tool_profile).
+            # The tool list this caller's MCP server offers: `developer` for a code bot, `feature` for a Feature Owner
+            # (backend/mcp.py tool_profile).
             **({"tool_profile": profile} if profile else {}),
         }
 

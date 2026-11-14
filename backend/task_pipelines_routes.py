@@ -1,5 +1,6 @@
 # pyright: strict
-"""The pipelines' settings records (docs/dev/pipelines-v3-cutover.md, "HTTP"): read them, save one, retire one.
+"""The pipelines' settings records (docs/dev/pipelines-v3-cutover.md, "HTTP"): read them, save one, add one from a
+preset, retire one.
 
 The record is `pipeline_settings`'s: these routes read and write it whole, and every check is there. Everyone on the
 team reads every pipeline record, a private one too: its tasks are private (backend/private_pipelines.py), not it.
@@ -65,6 +66,21 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             seen = given.pop("settings_version", None)
             given.pop("may_change", None)
             pipeline_settings.save(c, who.actor, {**given, "id": pipeline_id}, seen)
+            return {"pipeline": record(c, who, pipeline_id)}
+
+        return mutate(request, body, write)
+
+    @app.post("/api/v2/pipelines/{pipeline_id}/from-preset")
+    def pipeline_from_preset(request: Request, pipeline_id: str, body: M.PipelineFromPreset):
+        """Make a pipeline from a preset the company does not have, under this new id: Product (`features`) beside the
+        Product and Engineering pair it replaced, whose open tasks finish there. The company's owner and Admins."""
+        who: Any = request.state.identity
+        auth.domain(who)
+
+        def write(c: Any) -> dict[str, Any]:
+            if pipeline_id in RESERVED or not NEW_ID.match(pipeline_id):
+                raise Problem("not_found", "No such pipeline", 404)
+            pipeline_settings.add_preset(c, who.actor, body.preset, pipeline_id, body.name, body.prefix)
             return {"pipeline": record(c, who, pipeline_id)}
 
         return mutate(request, body, write)

@@ -257,15 +257,19 @@ def caller_kind(auth, who):
     return None
 
 
-# The code bots, offered only the tools a code bot uses (clients/commands/_access.py DEVELOPER_TOOLS): the Builder, both
-# Reviewers, and the QA, Release and Code Hygiene Owners. A bot is one by its template, its slug (a slug is its name), or
-# the pipeline seat it fills (backend/pipeline_seats.py). Everyone else is offered the whole list.
+# The code bots, offered only the tools a code bot uses (clients/commands/_access.py DEVELOPER_TOOLS): both Reviewers, the
+# QA, Release and Code Hygiene Owners, and a Builder a company still has. A bot is one by its template, its slug (a slug is
+# its name), or the pipeline seat it fills (backend/pipeline_seats.py). A Feature Owner writes code too, and is offered
+# that list plus the product tools its template names (FEATURE_TOOLS), by its template or the Product Owner seat.
+# Everyone else is offered the whole list.
 DEVELOPER_TEMPLATES = frozenset(("builder", "reviewer", "qa-owner", "release-owner", "code-hygiene-owner"))
 DEVELOPER_SLUGS = DEVELOPER_TEMPLATES | {"reviewer-1", "reviewer-2"}
+FEATURE_TEMPLATES = frozenset(("feature-owner",))
 
 
 def tool_profile(c, auth, who):
-    """`developer` for a code bot's own turn (DEVELOPER_TEMPLATES), else "": the tool list `tools/list` offers it
+    """`developer` for a code bot's own turn (DEVELOPER_TEMPLATES), `feature` for a Feature Owner's (FEATURE_TEMPLATES),
+    else "": the tool list `tools/list` offers it
     (hubtools.listing). Only the listing is smaller: every call the caller's kind allows still runs, and the `tico` CLI
     still reaches every route."""
     from . import hubdb as H
@@ -277,9 +281,13 @@ def tool_profile(c, auth, who):
     row = c.execute(
         "SELECT b.slug, s.template FROM bots b LEFT JOIN bot_settings s ON s.bot_id=b.id WHERE b.id=?", (bot,)
     ).fetchone()
+    if row and row[1] in FEATURE_TEMPLATES:
+        return hubtools.FEATURE
     if row and (row[1] in DEVELOPER_TEMPLATES or row[0] in DEVELOPER_SLUGS):
         return hubtools.DEVELOPER
     seats = pipeline_seats.resolve(c)
+    if who.actor == seats.get(pipeline_seats.PRODUCT_OWNER):
+        return hubtools.FEATURE
     roles = (
         pipeline_seats.BUILDER,
         pipeline_seats.REVIEWER_1,

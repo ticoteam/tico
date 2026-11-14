@@ -35,13 +35,13 @@ The page brings the proof. It never asks its reader to test, look at the app, or
 
 | Page | Template | Kind | Who |
 |---|---|---|---|
-| A spec for a bug | `templates/bug-spec.html` | `bug-spec` | Product Owner, Spec |
-| A spec for a new feature or change on a screen | `templates/screen-spec.html` | `screen-spec` | Product Owner, Spec |
-| A spec for a change with no screen (API, command, job) | `templates/change-spec.html` | `change-spec` | Product Owner, Spec |
+| A spec for a bug | `templates/bug-spec.html` | `bug-spec` | Feature Owner, Spec |
+| A spec for a new feature or change on a screen | `templates/screen-spec.html` | `screen-spec` | Feature Owner, Spec |
+| A spec for a change with no screen (API, command, job) | `templates/change-spec.html` | `change-spec` | Feature Owner, Spec |
 | A Review page | `templates/review.html` | `review` | Reviewers, Review 1 and 2 |
-| The QA page | `templates/qa.html` | `qa` | Builder, QA |
+| The QA page | `templates/qa.html` | `qa` | Feature Owner, QA |
 | The release report, one for a batch | `templates/release.html` | `release` | Release Owner |
-| Checked in production | `templates/validation.html` | `validation` | Product Owner, Validate |
+| Checked in production | `templates/validation.html` | `validation` | Feature Owner, Validate |
 
 What goes at the top, before `#details`:
 - **Bug spec:** the report (quoted, cut to two lines, who and where), the root cause with `path:line`, the goal, then

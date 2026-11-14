@@ -509,6 +509,15 @@ class PipelineRetire(Contract):
     settings_version: int | None = None
 
 
+class PipelineFromPreset(Contract):
+    """Add a preset the company does not have (pipeline_settings.add_preset): Product beside the pair it replaced.
+    `name` and `prefix` default to the preset's; give others while a pipeline in use has them."""
+
+    preset: str
+    name: str | None = None
+    prefix: str | None = None
+
+
 class ReleaseScheduleUpdate(Contract):
     """The team's release schedule (backend/release_schedule_routes.py); only what is sent changes. `bot` and `writer`
     name the Release Owner and Technical Writer ("" finds them by starter template)."""

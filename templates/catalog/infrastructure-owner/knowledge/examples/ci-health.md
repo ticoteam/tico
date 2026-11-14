@@ -36,7 +36,7 @@ The QA Owner decides fix or quarantine for each.
 ## Fix plans
 1. **Cache the api install** (`ci.yml`, job `test-api`): point the cache key at `api/package-lock.json`.
    Expected: about 6 minutes off every run. Check: the step "Restore cache" reports a hit. Owner: the Engineering Team
-   Manager, who routes it to a builder.
+   Manager, who routes it to the owner of that area.
 2. **Cache the browser install** (`ci.yml`, job `e2e`): key the cache on the browser version. Expected: about 1 minute off
    each e2e run. Check: the "Install browsers" step reports a cache hit. Owner: the Engineering Manager.
 3. **Split the e2e job across two runners** (`ci.yml`, job `e2e`) by spec file. Expected: the job's median falls from

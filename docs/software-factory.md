@@ -14,21 +14,22 @@ those stages.
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Product Owner | `segment-product-owner` | Owns Product's stages: writes the Spec page, files the Engineering task, checks it in production |
+| 1 | Feature Owner | `feature-owner` | One per area: takes each feature from pitch to production in one task and one session: the pitch, the Spec page, the build and both Fixes, the QA page, the check in production |
 | 2 | Product Manager and Engineering Manager | `product-manager`, `engineering-manager` | Each leads its team and manages its pipeline: picks up what is late or stuck and decides what happens next |
-| 3 | Builder | `builder` | Owns Build, the Fixes stages and QA: opens the PR, makes every fix, builds the QA page a person approves to ship |
-| 4 | Reviewer 1 | `reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
-| 5 | Reviewer 2 | `reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
-| 6 | Release Owner | `release-owner` | Owns Merge and Release: sees the PR through the merge queue and into a release |
-| 7 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
-| 8 | Technical Writer | `technical-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
-| 9 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
+| 3 | Reviewer 1 | `reviewer`, preferably on a different model company from the Feature Owner's tasks | Review 1: a Review page for the newest commit |
+| 4 | Reviewer 2 | `reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
+| 5 | Release Owner | `release-owner` | Owns Merge and Release: sees the PR through the merge queue and into a release |
+| 6 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
+| 7 | Technical Writer | `technical-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
+| 8 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
-The **Product Owner** (`segment-product-owner`) decides *what* to build: it triages feature ideas, writes the spec and
-acceptance tests, and keeps the roadmap. The **Product Manager** (`product-manager`) and the **Engineering Manager**
+The **Feature Owner** (`feature-owner`, the Product Owner and Builder templates in one) owns an area of the product,
+or a customer segment, and takes each feature from a pitch of 280 characters to production in one task: a person OKs
+the pitch, the spec and the release, and it writes the spec, the code, the fixes and the proof pages itself. The
+Builder template stays in the catalog for teams that want one, but no default chart has a Builder. The **Product Manager** (`product-manager`) and the **Engineering Manager**
 (`engineering-manager`) each lead their team's bots and keep their pipeline's tasks moving: when one stops, the Manager
 reassigns, moves back, moves on, snoozes or closes it, and never does a stage's work. A small team can
-let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and Reviewer 2, and add the
+let one bot cover Security and DevOps. Start with a Feature Owner, Reviewer 1 and Reviewer 2, and add the
 rest as your release pace grows.
 
 The starter templates were written for a person-in-the-loop team: a reviewer drafts a review for a human to post,
@@ -86,10 +87,10 @@ reads as Tico does. Every task filed under that task, and their own sub-tasks, g
 A spec that is narrowed to some readers, or on a private task, gives the link only.
 
 Every page a person reads to decide is built the same way, with the `build-the-page` skill
-(`templates/catalog/segment-product-owner/skills/build-the-page/`; the Reviewer, Builder and Release Owner templates
+(`templates/catalog/feature-owner/skills/build-the-page/`; the Reviewer, Builder and Release Owner templates
 carry the same copy). Seven templates: a bug spec (the report, the root cause, the goal, then the fix before and
 after), a feature spec for a screen and one for a change with no screen (the goal, then the change before and after),
-a Review page, the Builder's QA page (the result and what was not checked, then each acceptance criterion with its
+a Review page, the Feature Owner's QA page (the result and what was not checked, then each acceptance criterion with its
 result and proof), the release report for a batch (a changelog for customers with a screenshot per change, then why
 we are confident, the plan and at most three risks), and the Checked in production page. Each opens with what it is
 and what to decide in two or three lines, then real

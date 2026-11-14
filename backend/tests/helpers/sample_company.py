@@ -30,7 +30,12 @@ PEOPLE = {
 # What a fresh environment seeds (templates/environment-registry/employees.yaml): the assistant and BotOps, planned.
 SEED = {"assistant": {"name": "assistant", "status": "planned"}, "botops": {"name": "botops", "status": "planned"}}
 TOKEN = "local-owner-secret-token-0123456789"
-ROLE_BOTS = {"head-of-product": "claude", "builder": "codex", "support-agent": "codex", "content-marketer": "codex"}
+ROLE_BOTS = {
+    "head-of-product": "claude",
+    "feature-owner": "codex",
+    "support-agent": "codex",
+    "content-marketer": "codex",
+}
 
 
 def settings_for(tmp_path, **overrides):

@@ -37,5 +37,5 @@ Score = reach × impact × confidence ÷ effort. Show all four numbers and every
 
 On the task, in five lines: the problem, the score and its weakest input, the goal it serves (or "no
 goal: park"), a recommendation (build, research first, park) and the owner of the next step:
-`ux-researcher` to raise confidence, `segment-product-owner` for a spec. Ask only for missing facts with `tico task ask <id> --to <person> "<question>" --version N`, as in `skills/ask-with-recommended-answers/SKILL.md`. Route requested next steps with `tico task create --owner <slug> --parent <id>` and log it in
+`ux-researcher` to raise confidence, `feature-owner` for a spec. Ask only for missing facts with `tico task ask <id> --to <person> "<question>" --version N`, as in `skills/ask-with-recommended-answers/SKILL.md`. Route requested next steps with `tico task create --owner <slug> --parent <id>` and log it in
 `knowledge/decision-log.md`.
