@@ -571,6 +571,10 @@ def test_a_campaign_mapped_by_channel_name_counts_in_its_weeks_and_one_with_no_c
     }
     _, every = _weeks(api, "all", "all")
     assert every["2026-08-31"]["cac"]["value"] == round(1200.0 / every["2026-08-31"]["new_customers"]["value"], 2)
+    # Nowhere is not Unknown: Unknown's week holds only the unmapped podcast campaign's 500.
+    with api.app.state.store.read() as c:
+        spent = GF.weeks(c, {"campaigns": campaigns}, "2026-08-31", "2026-09-06")
+    assert spent == {("search-ads", "2026-08-31"): 1200.0, (None, "2026-08-31"): 500.0}
 
 
 def test_a_day_spent_in_another_currency_leaves_weekly_cac_monthly(api: Any, monkeypatch: Any):
@@ -596,3 +600,5 @@ def test_when_only_some_weeks_say_monthly_the_note_says_which(api: Any, monkeypa
     result, weeks = _weeks(api)
     assert weeks["2026-08-31"]["cac"]["status"] == "spend_monthly" and weeks["2026-09-07"]["cac"]["status"] == "ok"
     assert result["cac_note"] == "weeks touching a month with typed spend say monthly"
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "bot_cost": 300})
+    assert _weeks(api)[0]["cac_note"] == "weeks touching a month with typed spend say monthly; bot cost is monthly"
