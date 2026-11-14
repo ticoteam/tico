@@ -3617,7 +3617,9 @@ class GrowthConflictResolve(Contract):
     field: Literal[
         "spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month", "margin_pct"
     ]
-    keep: Literal["typed", "source"]
+    keep: Literal["typed", "source", "computed"]
+    # What the typed number differs from: a synced source's value (the default) or the figure computed from customers.
+    against: Literal["source", "computed"] | None = None
 
 
 class GrowthCohortSet(Contract):

@@ -303,11 +303,47 @@ TYPED_FIELDS = (
 )
 
 
-def beside(row, computed, slug, month):
+UPLOAD_NAME = "Upload in Growth"  # what a computed figure's origin calls customers loaded as a CSV in Growth
+
+
+def customer_sources(c):
+    """{growth_customers.source: {source_id, source, at}}: each customers source by name, with its newest load."""
+    names = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, system FROM gtm_sources")}
+    out = {}
+    for source, at in c.execute("SELECT source, max(loaded_at) FROM growth_customer_loads GROUP BY source"):
+        sid = source.removeprefix("source:") if source.startswith("source:") else None
+        out[source] = {"source_id": sid, "source": names.get(sid, "") if sid else UPLOAD_NAME, "at": at}
+    return out
+
+
+def choices(c, cohort_ids):
+    """{cohort id: {field: growth_computed_choices row}}: what each channel's owner was asked and chose."""
+    out = {}
+    for i in range(0, len(cohort_ids), 500):
+        part = cohort_ids[i : i + 500]
+        for r in H._rows(
+            c.execute(f"SELECT * FROM growth_computed_choices WHERE cohort_id IN ({','.join('?' * len(part))})", part)
+        ):
+            out.setdefault(r["cohort_id"], {})[r["field"]] = r
+    return out
+
+
+def _same(a, b):
+    return a is not None and b is not None and abs(float(a) - float(b)) < 1e-9
+
+
+def beside(row, computed, slug, month, sources=None, chosen=None):
     """A channel's month with its computed figures laid over the typed ones (#287's rule: computed wins over a typed
-    estimate; a typed actual that differs is kept in `typed`, beside it, for the channel's owner to choose). Every
-    figure's `computed_or_typed` says which (beside #304's `origins`: typed or which source); a computed window that has not come due, or a cohort under the minimum,
-    is null with its `status` (not_yet, too_few) and `fills_on` date. No customer facts: the typed row as it was."""
+    estimate; a typed actual that differs is kept in `typed`, beside it). Every figure's `computed_or_typed` says which,
+    and its `origins` entry (#304's) says where it came from: typed or synced as before, or `computed` with
+    `computed_from` and the customers `sources` it was loaded from (`customer_sources`). A computed window that has not
+    come due, or a cohort under the minimum, is null with its `status` (not_yet, too_few) and `fills_on` date.
+
+    A typed actual that differs from a computed figure that is due is the channel's owner's to choose (`choose`): the
+    figure's origin carries `differs` {typed, chosen}. Keeping the typed number makes it the figure again (typed, with the
+    computed value in `differs`); keeping the computed one drops the typed number from beside it. `chosen` is the
+    growth_computed_choices rows of this cohort row: a choice holds while the typed number is the one it was about. No
+    customer facts: the typed row as it was."""
     view = (
         dict(row)
         if row
@@ -327,11 +363,35 @@ def beside(row, computed, slug, month):
     if not computed:
         return view
     actual = bool(row) and (row.get("quality") or "actual") == "actual"
+    known = sources or {}
+    named = [known.get(s) or {"source_id": None, "source": s, "at": None} for s in computed.get("sources") or ()]
+    origins = view["origins"] = dict(view.get("origins") or {})
     typed, status, fills, counts = {}, {}, {}, {}
     for field in COMPUTED_FIELDS:
         figure, old = computed[field], view.get(field)
-        if actual and old is not None and (figure["status"] != "ok" or old != figure["value"]):
+        held = actual and old is not None and (figure["status"] != "ok" or old != figure["value"])
+        differs = held and figure["status"] == "ok"
+        choice = (chosen or {}).get(field) if differs else None
+        keep = choice["keep"] if choice and _same(choice["typed"], old) else None
+        if keep == "typed":
+            was = origins.get(field) or {"origin": "typed", "quality": "actual", "source_id": None, "source": None}
+            origins[field] = {**was, "differs": {"typed": old, "chosen": "typed", "computed": figure["value"]}}
+            continue
+        if held and keep is None:
             typed[field] = old
+        conflict = (origins.get(field) or {}).get("conflict")  # a synced source's value held beside the typed one
+        origins[field] = {
+            "origin": "computed",
+            "quality": "actual",
+            "source_id": None,
+            "source": None,
+            "sources": named,
+            "computed_from": computed["computed_from"],
+            "at": max((s["at"] for s in named if s.get("at")), default=None),
+            "by": None,
+            "conflict": conflict,
+            "differs": {"typed": old, "chosen": keep} if differs else None,
+        }
         view[field] = figure["value"]
         view["computed_or_typed"][field] = "computed"
         if figure["status"] != "ok":
@@ -353,15 +413,175 @@ def cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
     computed = GX.by_channel_month(c, month)
     if channel_slug:
         computed = {k: v for k, v in computed.items() if (k[0] or UNKNOWN) == channel_slug}
+    names = customer_sources(c) if computed else {}
+    chosen = choices(c, [r["id"] for r in typed]) if computed else {}
     out, seen = [], set()
     for row in typed:
         key = (row["channel"], row["month"])
         seen.add(key)
-        out.append(beside(row, computed.get(key), *key))
-    out += [beside(None, figures, *key) for key, figures in computed.items() if key not in seen]
+        out.append(beside(row, computed.get(key), *key, names, chosen.get(row["id"])))
+    out += [beside(None, figures, *key, names) for key, figures in computed.items() if key not in seen]
     out.sort(key=lambda r: (r["channel"] is None, r["channel"] or ""))
     out.sort(key=lambda r: r["month"], reverse=True)
     return out[: max(1, min(int(limit or COHORTS_PAGE), COHORTS_MAX))]
+
+
+# The owner's choice between a typed actual and the computed figure (spec AC-14): how the ask names each figure.
+CHOICE_WORDS = {
+    "new_customers": "new customers",
+    "kept_d30": "kept to day 30",
+    "kept_d90": "kept to day 90",
+    "kept_d180": "kept to day 180",
+}
+MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _said(field, value):
+    if value is None:
+        return "none"
+    return f"{float(value):g}" + ("" if field == "new_customers" else "%")
+
+
+def _month_said(month):
+    return f"{MONTH_NAMES[int(month[5:7]) - 1]} {month[:4]}"
+
+
+def may_choose(found, actor, is_admin):
+    """The channel's owner or an admin; Unknown has no owner, so only an admin."""
+    return bool(is_admin or (found and found.get("owner_ref") and found["owner_ref"] == actor))
+
+
+def choose(c, actor, is_admin, slug, month, field, keep):
+    """The channel's owner (or an admin) keeps a typed actual or the computed figure it differs from. The choice holds
+    across later loads while the typed number stays the one it was about; asking again for it never happens."""
+    found = channel(c, slug) if slug else None
+    if slug and not found:
+        raise Problem("not_found", f"No channel {slug}", 404)
+    if not may_choose(found, actor, is_admin):
+        who = f"{found['name']}'s owner or an admin" if found else "An admin"
+        raise Problem("forbidden", f"{who} chooses between the typed and the computed number", 403)
+    if keep not in ("typed", "computed"):
+        raise Problem("validation", "keep is typed or computed", 422)
+    view = next((r for r in cohorts(c, slug or UNKNOWN, month, COHORTS_MAX) if r["month"] == month), None)
+    differs = ((view or {}).get("origins") or {}).get(field, {}).get("differs") if field in COMPUTED_FIELDS else None
+    if not view or not view.get("id") or not differs:
+        raise Problem(
+            "not_found", f"No typed {field} for {slug or UNKNOWN} in {month} differs from the computed one", 404
+        )
+    at = H.now()
+    c.execute(
+        "INSERT INTO growth_computed_choices (cohort_id, field, typed, keep, chosen_by, chosen_at) VALUES (?,?,?,?,?,?) "
+        "ON CONFLICT(cohort_id, field) DO UPDATE SET typed=excluded.typed, keep=excluded.keep, "
+        "chosen_by=excluded.chosen_by, chosen_at=excluded.chosen_at",
+        (view["id"], field, differs["typed"], keep, actor, at),
+    )
+    computed = differs.get("computed", view.get(field)) if differs.get("chosen") == "typed" else view.get(field)
+    H.event(
+        c,
+        actor,
+        "growth.cohort.choice",
+        view["id"],
+        {"field": field, "month": month, "kept": keep, "typed": differs["typed"], "computed": computed},
+    )
+    return {
+        "cohort": view["id"],
+        "field": field,
+        "kept": keep,
+        "value": differs["typed"] if keep == "typed" else computed,
+    }
+
+
+def typed_beside(c, computed_rows, actor, is_admin):
+    """For the Retention card cut by channel, monthly: on each computed cohort with a typed actual that differs, `typed`
+    {field: {typed, chosen, may}} (`beside`'s `differs`, and whether the reader may choose)."""
+    months = {r["period"] for r in computed_rows}
+    if not months:
+        return
+    slugs = _slugs(c)
+    rows = []
+    for month in months:
+        rows += H._rows(c.execute("SELECT * FROM growth_cohorts WHERE month=?", (month,)))
+    origins = GS.origins_view(c, [r["id"] for r in rows])
+    chosen = choices(c, [r["id"] for r in rows])
+    typed = {}
+    for raw in rows:
+        row = _cohort_view(raw, slugs, origins)
+        typed[(row["channel"] or UNKNOWN, row["month"])] = row
+    owners = {r[0]: r for r in c.execute("SELECT slug, owner_ref FROM growth_channels")}
+    for figures in computed_rows:
+        row = typed.get((figures["value"], figures["period"]))
+        if not row:
+            continue
+        view = beside(row, figures, row["channel"], row["month"], None, chosen.get(row["id"]))
+        found = owners.get(figures["value"])
+        may = may_choose({"owner_ref": found[1]} if found else None, actor, is_admin)
+        said = {}
+        for field in COMPUTED_FIELDS:
+            differs = view["origins"].get(field, {}).get("differs")
+            if differs:
+                said[field] = {"typed": differs["typed"], "chosen": differs["chosen"], "may": may}
+        if said:
+            figures["typed"] = said
+
+
+def ask_owners(c, month=None):
+    """Tell each channel's owner, once per month and figure, of the numbers typed as actual that differ from the ones
+    computed from customers: after a customers load (every month) and after a number is typed as actual (its month).
+    Every such number is on the Growth page to choose. A channel with no owner (Unknown, or none set) is an admin's
+    there and is not marked asked, so an owner set later is told at the next load. Returns how many numbers were asked
+    about."""
+    from . import growth_computed as GX
+
+    computed = GX.by_channel_month(c, month)
+    if not computed:
+        return 0
+    slugs = _slugs(c)
+    sql, args = "SELECT * FROM growth_cohorts", ()
+    if month:
+        sql, args = sql + " WHERE month=?", (month,)
+    rows = H._rows(c.execute(sql, args))
+    origins = GS.origins_view(c, [r["id"] for r in rows])
+    chosen = choices(c, [r["id"] for r in rows])
+    found = {r["slug"]: r for r in H._rows(c.execute("SELECT slug, name, owner_ref FROM growth_channels"))}
+    asked, at = {}, H.now()
+    for raw in rows:
+        row = _cohort_view(raw, slugs, origins)
+        key = (row["channel"], row["month"])
+        ch = found.get(row["channel"]) if row["channel"] else None
+        if key not in computed or not ch or not ch.get("owner_ref"):
+            continue
+        mine = chosen.get(row["id"], {})
+        view = beside(row, computed[key], *key, None, mine)
+        for field in COMPUTED_FIELDS:
+            differs = view["origins"].get(field, {}).get("differs")
+            if not differs or differs["chosen"]:
+                continue
+            was = mine.get(field)
+            if was and was.get("asked_at") and _same(was["typed"], differs["typed"]):
+                continue
+            c.execute(
+                "INSERT INTO growth_computed_choices (cohort_id, field, typed, asked_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(cohort_id, field) DO UPDATE SET typed=excluded.typed, asked_at=excluded.asked_at, "
+                "keep=NULL, chosen_by=NULL, chosen_at=NULL",
+                (row["id"], field, differs["typed"], at),
+            )
+            line = (
+                f"{CHOICE_WORDS[field]} in {_month_said(row['month'])} "
+                f"(typed {_said(field, differs['typed'])}, computed {_said(field, view[field])})"
+            )
+            asked.setdefault(row["channel"], []).append(line)
+    for slug, lines in asked.items():
+        ch = found[slug]
+        shown = "; ".join(lines[:5]) + (f"; and {len(lines) - 5} more" if len(lines) > 5 else "")
+        H.notice(
+            c,
+            H.KEEPER,
+            ch["owner_ref"],
+            f"Growth: numbers typed as actual for {ch['name']} differ from the ones computed from customers: {shown}. "
+            "Keep the typed number or the computed one on the Growth page.",
+            refs={"growth_channel": slug},
+        )
+    return sum(len(lines) for lines in asked.values())
 
 
 def _typed_cohorts(c, channel_slug=None, month=None, limit=COHORTS_PAGE):
@@ -863,6 +1083,12 @@ def cohort_set(c, actor, body):
         c, cid, {k: v for k, v in fields.items() if k in GS.FIELDS}, saved.get("quality") or "actual", actor
     )
     H.event(c, actor, "growth.cohort.set", cid, {"channel": slug or UNKNOWN, "month": body.month})
+    if (saved.get("quality") or "actual") == "actual" and (
+        "quality" in fields or any(k in COMPUTED_FIELDS for k in fields)
+    ):
+        # A typed actual (newly typed, or an estimate now said to be actual) that differs from a computed figure: its
+        # owner is asked, once.
+        ask_owners(c, saved["month"])
     return _cohort_view(saved, _slugs(c), GS.origins_view(c, [cid]))
 
 
@@ -1196,12 +1422,17 @@ def install(app, store, auth, mutate):
     @app.post("/api/v2/growth/cohorts/conflicts")
     def growth_cohort_conflict(request: Request, body: M.GrowthConflictResolve):
         """The source's owner or an admin: a number someone typed as actual that a synced source disagrees with. Keep
-        the typed number (the source's value is not raised again) or use the source's (it then belongs to it)."""
+        the typed number (the source's value is not raised again) or use the source's (it then belongs to it). With
+        `against: computed` (or `keep: computed`), the channel's owner or an admin: a typed actual that differs from the
+        figure computed from customer facts; keep typed or computed, and the choice holds across later loads."""
         who = request.state.identity
 
         def work(c):
             auth.domain(who)
             slug = body.channel if body.channel not in (None, "", UNKNOWN) else None
+            if body.keep == "computed" or body.against == "computed":
+                # A typed actual beside the figure computed from customer facts: the channel's owner chooses.
+                return choose(c, who.actor, admin(auth, who), slug, body.month, body.field, body.keep)
             channel_id = ""
             if slug:
                 found = channel(c, slug)

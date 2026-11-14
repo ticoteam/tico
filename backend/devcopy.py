@@ -631,6 +631,7 @@ KEEP = (
             "gtm_sources",
             "growth_channels",
             "growth_cohorts",
+            "growth_computed_choices",  # which of a typed and a computed number a channel's owner kept: no customer keys
             "growth_origins",
             "growth_settings",
             "growth_sync_runs",

@@ -15,7 +15,8 @@ A cohort is the customer spells whose "became customer" date falls in the same p
 - `cac`, `payback_months`: by channel (and all together) only, from the month's typed spend and bot cost. Spend has no
   segment or plan (`not_split`); typed spend is monthly, so a weekly cohort says `spend_monthly`; Unknown has no spend.
 
-Each figure is {value, status, origin: computed}, with `count` and `denominator` where it is a share. The trace lists
+Each figure is {value, status, origin: computed}, with `count` and `denominator` where it is a share. A cohort's
+`sources` are the customers sources its customers were loaded from ("upload", or "source:<id>"). The trace lists
 the customer keys behind a cohort, split into still customers and churned with the date, and the rule used; keys and
 churn dates go only to the owner, admins and the people or bots in `growth_settings.key_readers`. Everyone else who
 reads Growth gets the counts and the rule.
@@ -63,6 +64,7 @@ class Fact:
     segment: str | None = None
     plan: str | None = None
     revenue_month: float | None = None
+    source: str = ""  # the growth_customers.source it was loaded under: "upload" or "source:<id>"
 
 
 @dataclass(slots=True)
@@ -222,6 +224,7 @@ def _cohort(
         "start": start.isoformat(),
         "end": end.isoformat(),
         "computed_from": n,
+        "sources": sorted({f.source for f, _ in rows if f.source}),
         "too_few": few,
         "new_customers": _figure(n),
         "rule": _rule(cut, group.value, start, end),
@@ -281,10 +284,10 @@ def facts(c: sqlite3.Connection, since: date | None = None, until: date | None =
     if until:
         where.append("became<=?")
         args.append(until.isoformat())
-    sql = "SELECT customer_key, became, churned, channel, segment, plan, revenue_month FROM growth_customers"
+    sql = "SELECT customer_key, became, churned, channel, segment, plan, revenue_month, source FROM growth_customers"
     return [
-        Fact(key, date.fromisoformat(became), date.fromisoformat(churned) if churned else None, ch, seg, plan, rev)
-        for key, became, churned, ch, seg, plan, rev in c.execute(
+        Fact(key, date.fromisoformat(became), date.fromisoformat(churned) if churned else None, ch, seg, plan, rev, src)
+        for key, became, churned, ch, seg, plan, rev, src in c.execute(
             sql + (" WHERE " + " AND ".join(where) if where else ""), args
         )
     ]
@@ -355,7 +358,8 @@ def computed(
     customers: bool = False,
 ) -> Row:
     """The computed figures for a cut, a grain and an optional period and filter. `customers`: each window's rule and
-    counts, and for a reader allowed to see them, the keys and churn dates."""
+    counts, and for a reader allowed to see them, the keys and churn dates. Cut by channel, monthly, a cohort with a
+    typed actual that differs carries it in `typed` (growth.typed_beside), for the channel's owner to choose."""
     if cut not in CUTS:
         raise Problem("validation", f"by is {'|'.join(CUTS)}", 422)
     if grain not in GRAINS:
@@ -401,6 +405,9 @@ def computed(
         trace=customers,
         keys=keys,
     )
+    if cut == "channel" and grain == "month":
+        # A typed actual that differs, beside its computed figure, and whether this reader may choose (growth.beside).
+        G.typed_beside(c, cohorts, who.actor, bool(admin(auth, who)))
     note = {"segment": "spend is not split by segment", "plan": "spend is not split by plan"}.get(cut)
     return {
         "by": cut,
