@@ -94,6 +94,9 @@ def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_reba
     assert "waiting for #<fix pull request> to merge" in text
     # After main is fixed: a new head, not a re-run of the old merge (the QA Owner may not force-push, so it merges).
     assert re.search(r"git (rebase|merge) origin/<base branch>", text) and "never re-run" in text
+    if template == "release-owner":
+        # Its older rule sends every failed_checks removal back to the Builder; main red must be named as the exception.
+        assert "Not after `failed_checks`, which is choice 3, except a main-red failure" in text
 
 
 # The one page skill every bot that writes a spec, a check or a review uses (docs/software-factory.md, "Visual specs").

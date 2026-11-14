@@ -26,8 +26,8 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
   nothing while it waits. If GitHub takes it out of the queue you are woken once with the reason, the check and its link.
   After a removal for `failed_checks`, read the error line of the run's `checks` job first (`gh run view <id> -R <repo>
   --log-failed`). It names the failing leg and step ("Failed: browser-1: ...") or says "No step failed: the run was cancelled
-  from outside". Only that cancelled line allows choice 1, once for that head. Any other line is choice 3, quoting the failing
-  step and the run link. Never queue an unchanged head a second time: a second removal for failed checks at one head is
+  from outside". Only that cancelled line allows choice 1, once for that head. A failing step that main has too is main
+  red (below the choices). Any other line is choice 3, quoting the failing step and the run link. Never queue an unchanged head a second time: a second removal for failed checks at one head is
   choice 3 whatever the line says, and Tico refuses the queue.
   **A conflict is never queued.** Before choice 1, read `gh pr view <n> -R <repo> --json mergeable,mergeStateStatus`.
   `CONFLICTING` (or `DIRTY`), or a removal or refusal that says the pull request conflicts with its base branch, is the
@@ -41,7 +41,8 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
      in what this change touches is real, never queued again as it is, and so is a second removal for the same failure.
      After `failed_checks`, only the cancelled line above allows it. `tico task queue <id> --version N`.
   2. **Push your own fix**: a rebase on the base branch, a broken test, or a small code fix (a conflict is the
-     Builder's, above). Not after `failed_checks`: that is choice 3. Check it out detached in your own worktree
+     Builder's, above). Not after `failed_checks`, which is choice 3, except a main-red failure: once main is fixed, a
+     plain rebase here is how it goes on. Check it out detached in your own worktree
      (`gh pr checkout <n> -R <repo> --detach`), never as its branch: the Builder's worktree has that branch, and moving
      it from yours leaves the Builder's files behind. Fix, push (`git push --force-with-lease origin HEAD:<its branch>`),
      then `tico task queue <id> --version N`. A commit that changes the same lines as the one the person OK'd (a plain
