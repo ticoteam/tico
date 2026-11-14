@@ -10976,8 +10976,9 @@ MENTIONS_DESCRIPTION = (
     "count, by each file's current version; archived files and links never match. A value that is not exactly one "
     "file is absent from `files`: none, two or more (never a guess), or one the caller may not read all look the same. "
     "Tico's web app also tries a bare name inside a folder named earlier in the same paragraph; this route does not, "
-    "so send the joined path yourself. A caller who may see the bot but none of its files gets 200 with `files` empty, as does a request with no m. Errors: 401 not signed in, 404 no such bot or one the "
-    "caller may not see, 422 more than 60 m values."
+    "so send the joined path yourself. A caller who may see the bot but none of its files gets 200 with `files` "
+    "empty, as does a request with no m. Errors: 401 not signed in, 404 no such bot or one the caller may not see, "
+    "422 more than 60 m values."
 )
 
 
