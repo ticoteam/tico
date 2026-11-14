@@ -555,7 +555,7 @@ function computerDetailHTML(machine: DetailMachine) {
     <div class="computer-detail-body">${notes}
       ${machine.turn_summary ? `<p class="computer-detail-note" data-turn-counts>${esc(machine.turn_summary)}</p><p class="muted">A turn has up to 3 minutes to start. Waiting turns leave room for other work.</p>` : ''}
       ${section('connections', 'Connections', empty + conns.map(conn => machineConnectionHTML(machine, conn, online, manage)).join('') + machineAddHTML(machine, online, manage))}
-      ${machineGatewayFallbackHTML(machine) ? section('gateway', 'When plans run out', machineGatewayFallbackHTML(machine)) : ''}
+      ${machine.revoked_at ? '' : section('gateway', 'When plans run out', machineGatewayFallbackHTML(machine))}
       ${section('screen', 'Screen', machineScreenSectionHTML(machine, online))}
       ${machineBrowserExitHTML(machine) ? section('internet', 'Internet', machineBrowserExitHTML(machine)) : ''}
       ${section('bots', 'Bots on this computer', machineBotsHTML(machine))}

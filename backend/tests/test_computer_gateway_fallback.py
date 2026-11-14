@@ -153,3 +153,21 @@ def test_only_an_admin_changes_the_switch_and_everyone_reads_it(api, gateway_com
     with api.app.state.store.read() as c:
         row = c.execute("SELECT detail FROM events WHERE action='runner.gateway_fallback'").fetchone()
     assert row and '"on": true' in row[0]
+
+
+def test_a_persons_set_with_no_plan_left_is_not_signed_in_and_runs_on_the_gateway(api, gateway_company):
+    from backend.tests.helpers.api import headers, put
+
+    m = computer(api)
+    sid = add(api)["id"]
+    put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "person": "ana"})
+    # The person removes their only Claude plan; the set stays on the computer with nothing in it. That is a computer
+    # not signed in, not plans used up: AC-6, "Use until a computer is signed in" runs it on the Gateway.
+    api.delete(f"/api/v2/model-subscriptions/{sid}?confirm=1", headers=headers("ana-test"))
+    with api.app.state.store.read() as c:
+        assert (
+            c.execute("SELECT person FROM computer_subscriptions WHERE runner_id=?", (m["runner_id"],)).fetchone()[0]
+            == "human:ana"
+        )
+    got = turn(api, m)
+    assert got and got["config"]["runtime"] == "pi" and got["config"]["waiting_for_sign_in"] == "claude"

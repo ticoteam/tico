@@ -438,7 +438,8 @@ def passed_over(c, runner_id, runtime, loads=None):
     if not sub:
         return False
     if sub.get("person"):
-        return _pick(c, runner_id, runtime, sub, loads) is None
+        # A person's set with no plan for the runtime left is a computer not signed in, not plans used up.
+        return bool(sub.get("members")) and _pick(c, runner_id, runtime, sub, loads) is None
     return not available(c, sub, runtime, loads)
 
 
