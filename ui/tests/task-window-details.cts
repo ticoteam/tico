@@ -1,6 +1,6 @@
 // The task window's Details line, run lines and needs-you banner (task #419, the rest of the task-window spec).
-// - 1280 × 800: the right column ends in one line "Owner · Team · N tags ›" until opened; opened it holds Owner, Asked by,
-//   Visible to, Followers, Due ("None" when unset), Tags and Part of; empty rows hide.
+// - 1280 × 800: the right column ends in one line "Owner · Team · N tags ›" until opened; opened it holds Owner, Human ("None"
+//   when unset), Asked by, Visible to, Followers, Due ("None" when unset), Tags and Part of; empty rows hide.
 // - A bot's finished run is one chat line, "Builder worked 14 min", in order with the messages.
 // - A task waiting on the reader's own answer shows a banner above the chat with Answer; answering removes it.
 // Fixtures only (tasks-page.cts).
@@ -40,10 +40,11 @@ const RID = 'spec-ok-ana';
       assert.equal(await win.locator('[data-prop-row="owner"]').isVisible(), false, 'its rows wait');
       await details.locator('> summary').click();
       const rows = await win.locator('details.task-details [data-prop-row]').evaluateAll(els => els.map(e => e.getAttribute('data-prop-row')));
-      assert.deepEqual(rows, ['owner', 'asker', 'visible', 'followers', 'due', 'tags'].filter(r => rows.includes(r)));
-      for (const r of ['owner', 'asker', 'visible', 'due', 'tags']) assert.ok(rows.includes(r), `${r} row`);
+      assert.deepEqual(rows, ['owner', 'human', 'asker', 'visible', 'followers', 'due', 'tags'].filter(r => rows.includes(r)));
+      for (const r of ['owner', 'human', 'asker', 'visible', 'due', 'tags']) assert.ok(rows.includes(r), `${r} row`);
       assert.equal(await win.locator('[data-prop-row="parent"]').count(), 0, 'no parent: the row hides');
       assert.match(await win.locator('[data-prop-row="due"]').innerText(), /None/);
+      assert.match(await win.locator('[data-prop-row="human"]').innerText(), /None/, 'no Human: the row says None');
       assert.ok(await win.locator('[data-prop-row="owner"]').isVisible());
       assert.deepEqual(errors, []);
       await page.close();
