@@ -9,11 +9,11 @@
  "seats": [
   {"team": "leadership", "template": "chief-of-staff"},
   {"team": "product", "template": "product-lead"},
+  {"team": "product", "template": "feature-owner", "title": "Feature Owner"},
   {"team": "product", "template": "customer-insights-analyst"},
   {"team": "product", "template": "ux-researcher"},
   {"team": "product", "template": "product-analyst"},
   {"team": "engineering", "template": "engineering-manager"},
-  {"team": "engineering", "template": "builder", "title": "Builder"},
   {"team": "engineering", "template": "reviewer", "title": "Reviewer 1"},
   {"team": "engineering", "template": "reviewer", "title": "Reviewer 2"},
   {"team": "engineering", "template": "qa-owner"},

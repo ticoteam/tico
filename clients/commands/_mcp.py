@@ -152,7 +152,7 @@ class Protocol:
         return self._kind or None
 
     def profile(self):
-        """The tool list a bot's own turn is offered (`GET /me` `tool_profile`: `developer` for a code bot), or None for
+        """The tool list a bot's own turn is offered (`GET /me` `tool_profile`: `developer` for a code bot, `feature` for a Feature Owner), or None for
         the whole list. Only a bot has one."""
         if self._profile is None:
             self._profile = str(self.me().get("tool_profile") or "") if self.kind() == "bot" else ""

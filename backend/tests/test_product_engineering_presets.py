@@ -83,7 +83,7 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     }
     # An archived bot fills no role; another bot from the template does, even with no seat.
     c.execute("UPDATE bots SET state='archived' WHERE id='pm'")
-    _role_bot(c, "zz-product", "segment-product-owner")
+    _role_bot(c, "zz-product", "feature-owner")
     assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
     # A bot named like a role but from another template is not that role.
     _role_bot(c, "product-owner-ish", "assistant")

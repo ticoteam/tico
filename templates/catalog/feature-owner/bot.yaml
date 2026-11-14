@@ -1,0 +1,38 @@
+name: feature-owner                # the slug: it matches the repository bot-feature-owner and the label owner:feature-owner
+display_name: "Feature Owner"
+labels: [owner:feature-owner]
+session: task                      # one task, one session: from the pitch to the check in production
+reads: []                        # other bot repositories this one may clone read-only
+
+# This must agree with the bot's settings on the server, or be left out of this file entirely.
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-area-review
+    title: Weekly area review
+    cron: "0 8 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-area-review.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools:
+  - service: github
+    identity: "the product repositories the owner lists for this bot"
+    can: [read]
+    note: "reads the listed repositories, pull requests and checks; opening branches and pull requests needs write access the owner grants; it never merges"
+# A starter is read only, and the owner grants write once the bot should build. The team's GitHub App token can write,
+# so the only things between this bot and a merge, a release, a force push or a review are the granted access and
+# .claude/settings.json, which allows branches and pull requests and denies merges, reviews, closes, releases, tags, API
+# calls, skipped pre-push hooks and forced pushes (a --force-with-lease after a rebase is allowed). The Merge stage
+# queues each pull request.
+# Optional, uncomment when connected. Read only.
+#   - service: crm
+#     identity: "the customer records the owner lists for this bot"
+#     can: [read]
+#     note: "reads which customers are in this area; never edits"

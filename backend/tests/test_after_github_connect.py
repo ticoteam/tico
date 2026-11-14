@@ -1,4 +1,4 @@
-"""Right after the owner connects GitHub on the default company (21 bots, one shared computer): organization, "All
+"""Right after the owner connects GitHub on the default company (20 bots, one shared computer): organization, "All
 repositories", "Let Tico create bot repositories" ticked (docs/github-app.md "Set up").
 
 The company is the one setup makes, the routes are the server's own, and only GitHub is a fake. Each test is one thing
@@ -123,14 +123,14 @@ def test_every_bot_gets_its_repository_without_anyone_asking_once_each_and_a_few
     api = company
     connect(api)
     team = bots(api)
-    assert len(team) == 21 and "archive" not in team
-    before = token(api, gh, "builder")
+    assert len(team) == 20 and "archive" not in team
+    before = token(api, gh, "feature-owner")
     assert before.status_code == 409 and before.json()["error"]["code"] == "github_repo_missing", before.text
-    assert progress(api) == {"made": 0, "taken": 0, "waiting": 21, "problem": ""}
+    assert progress(api) == {"made": 0, "taken": 0, "waiting": 20, "problem": ""}
     # That refused token leaves a "not reachable" row for a repository GitHub does not have; it must not count as made
     # or as someone else's.
     listed = api.get("/api/v2/repositories", headers=signed_in()).json()["repositories"]
-    assert [r["reachable"] for r in listed if r["full_name"] == f"{ORG}/bot-builder"] == [False]
+    assert [r["reachable"] for r in listed if r["full_name"] == f"{ORG}/bot-feature-owner"] == [False]
 
     # The server's own poll makes them: nobody asked BotOps, and nobody ran `tico bot repo-create`.
     ctx = SimpleNamespace(app=api.app, store=api.app.state.store, settings=api.app.state.store.settings)
@@ -142,14 +142,14 @@ def test_every_bot_gets_its_repository_without_anyone_asking_once_each_and_a_few
     asked = creates(gh)
     assert sorted(asked) == sorted("bot-" + slug for slug in team), "a bot was left without a repository"
     assert set(asked.values()) == {1}, f"GitHub was asked twice for {[n for n, k in asked.items() if k > 1]}"
-    assert progress(api) == {"made": 21, "taken": 0, "waiting": 0, "problem": ""}
+    assert progress(api) == {"made": 20, "taken": 0, "waiting": 0, "problem": ""}
     # Every bot's turn now gets a token for its own repository, so its computer can publish its history.
     for slug in team:
         answer = token(api, gh, slug)
         assert answer.status_code == 200, f"{slug}: {answer.text}"
         assert answer.json()["repository"] == f"{ORG}/bot-{slug}", slug
     audited = rows(api, "SELECT actor,detail FROM events WHERE action='github.repo_created'")
-    assert len(audited) == 21 and {r["actor"] for r in audited} == {"system"}
+    assert len(audited) == 20 and {r["actor"] for r in audited} == {"system"}
     # Nothing more is asked of GitHub once they are all there.
     calls = len(gh.calls)
     assert make(api, passes=3) == [[], [], []] and len(gh.calls) == calls
@@ -163,7 +163,7 @@ def test_a_create_whose_answer_was_lost_is_this_companys_on_the_next_try_never_s
     assert progress(api)["problem"], "Tools > GitHub says nothing about the create that failed"
     api.clock.forward(maker.LONGEST_WAIT)
     make(api)
-    assert progress(api) == {"made": 21, "taken": 0, "waiting": 0, "problem": ""}
+    assert progress(api) == {"made": 20, "taken": 0, "waiting": 0, "problem": ""}
     assert not rows(api, "SELECT 1 FROM registry_metadata WHERE key='bot-repositories-taken' AND value LIKE '%bot-%'")
     lost = next(name for name, count in creates(gh).items() if count == 2)
     answer = token(api, gh, lost.removeprefix("bot-"))
@@ -206,7 +206,7 @@ def test_github_failing_or_limiting_waits_longer_each_time_then_finishes(company
     gh.create_refusal = None
     api.clock.forward(maker.LONGEST_WAIT)
     make(api)
-    assert progress(api) == {"made": 21, "taken": 0, "waiting": 0, "problem": ""}
+    assert progress(api) == {"made": 20, "taken": 0, "waiting": 0, "problem": ""}
     assert sorted(gh.created_repositories) == sorted(f"{ORG}/bot-{slug}" for slug in bots(api))
 
 
@@ -223,12 +223,12 @@ def test_a_refused_permission_stops_it_until_the_owner_accepts_it_again(company,
     assert make(api, passes=5) == [[]] * 5
     assert len(gh.calls) == calls and sum(creates(gh).values()) == asked, "it kept asking GitHub after the refusal"
     status = api.get("/api/v2/github/app", headers=signed_in()).json()
-    assert status["administration"] is False and status["bot_repositories"]["waiting"] == 21 - maker.PER_PASS
+    assert status["administration"] is False and status["bot_repositories"]["waiting"] == 20 - maker.PER_PASS
     gh.permissions = {**gh.permissions, "administration": "write"}
     checked = api.post("/api/v2/github/app/check-permissions", json={}, headers=signed_in())
     assert checked.json()["administration"] is True, checked.text
     make(api)
-    assert progress(api)["made"] == 21
+    assert progress(api)["made"] == 20
 
 
 def test_a_name_someone_else_has_is_left_alone_and_the_rest_are_made(company, gh):
@@ -236,7 +236,7 @@ def test_a_name_someone_else_has_is_left_alone_and_the_rest_are_made(company, gh
     gh.taken = {f"{ORG}/bot-assistant"}  # there for years, not in the App's listing: another company's
     connect(api)
     make(api)
-    assert progress(api) == {"made": 20, "taken": 1, "waiting": 0, "problem": ""}
+    assert progress(api) == {"made": 19, "taken": 1, "waiting": 0, "problem": ""}
     assert creates(gh)["bot-assistant"] == 1, "a taken name was asked for again"
     answer = token(api, gh, "assistant")  # the bot works from its computer: no token, and no refusal either
     assert answer.status_code == 200 and answer.json()["repository"] == "" and answer.json()["history"], answer.text
@@ -304,12 +304,11 @@ def test_one_tap_on_the_product_repository_gives_each_seat_its_access(company, g
     tapped = api.put(f"/api/v2/repositories/{ORG}/tico", json={"enabled": True}, headers=signed_in())
     assert tapped.status_code == 200, tapped.text
     want = {
-        "builder": "write",
+        "feature-owner": "write",
         "release-owner": "write",
         "reviewer-1": "read",
         "reviewer-2": "read",
         "qa-owner": "read",
-        "product-owner": "read",
         "product-manager": "read",
         "engineering-manager": "read",
     }
@@ -322,11 +321,11 @@ def test_one_tap_on_the_product_repository_gives_each_seat_its_access(company, g
     needs = api.get("/api/v2/needs-you", headers=signed_in()).json()
     assert not [i for i in needs.get("items", []) if "repositor" in json.dumps(i).lower()], needs
     # A person sees it on the bot's Repositories: All repos in use, Write (the older github-repos list stays empty).
-    seen = api.get("/api/v2/bots/builder/repositories", headers=signed_in()).json()
+    seen = api.get("/api/v2/bots/feature-owner/repositories", headers=signed_in()).json()
     assert (seen["mode"], seen["all_access"]) == ("all", "write")
     assert {"full_name": f"{ORG}/tico", "access": "write"}.items() <= next(
         r for r in seen["effective"] if r["full_name"] == f"{ORG}/tico"
     ).items()
-    assert api.get("/api/v2/bots/builder/github-repos", headers=signed_in()).json()["repositories"] == []
+    assert api.get("/api/v2/bots/feature-owner/github-repos", headers=signed_in()).json()["repositories"] == []
     for slug in ("assistant", "botops", "general-manager", "growth-manager"):
         assert f"{ORG}/tico" not in token(api, gh, slug).json()["repositories"], slug

@@ -41,30 +41,38 @@ def card(template):
     return yaml.safe_load((CATALOG / template / "card.yaml").read_text())
 
 
-@pytest.mark.parametrize("template", ["builder", "reviewer", "release-owner"])
+@pytest.mark.parametrize("template", ["builder", "feature-owner", "reviewer", "release-owner"])
 def test_no_github_bot_may_merge(template):
     rules = settings(template)
     assert "Bash(gh pr merge *)" in rules["deny"]
     assert not any("gh pr merge" in rule for rule in rules["allow"])
 
 
-def test_the_product_owner_reads_ci_by_repository_and_never_writes_it():
+def test_the_feature_owner_reads_ci_by_repository_and_never_writes_it():
     # Validate runs on a `git archive` copy, which has no remote: gh, and the runner's token for the repository, need
     # the pull request's link or -R to know which repository to read.
-    rules = settings("segment-product-owner")
+    rules = settings("feature-owner")
     for read in ("gh pr checks", "gh pr diff", "gh run list", "gh run view"):
         assert f"Bash({read} *)" in rules["allow"], read
     for write in ("gh pr merge", "gh pr review", "gh run rerun", "gh run cancel", "gh workflow run"):
         assert f"Bash({write} *)" in rules["deny"], write
         assert not any(write in rule for rule in rules["allow"]), write
-    playbook = (CATALOG / "segment-product-owner" / "playbooks" / "validate-in-production.md").read_text()
+    playbook = (CATALOG / "feature-owner" / "playbooks" / "validate-in-production.md").read_text()
     assert "gh pr checks <pull request link>" in playbook and "-R <owner/name>" in playbook
 
 
 # Token plan items 2 and 6 (Nov 13): a resumed turn already has the bot's files in context, so they are read when a session
 # starts or after a compaction, never "every run"; and every bot that writes or reviews code is told to hand simple work to
 # Haiku subagents, in its instructions rather than a hidden setting.
-CODE_BOTS = ["builder", "reviewer", "qa-owner", "release-owner", "devops-engineer", "infrastructure-owner"]
+CODE_BOTS = [
+    "builder",
+    "feature-owner",
+    "reviewer",
+    "qa-owner",
+    "release-owner",
+    "devops-engineer",
+    "infrastructure-owner",
+]
 SUBAGENTS = (
     "Use Haiku 5.5 extra-high-effort subagents whenever possible for simpler work: searching, reading logs, running "
     "tests, mechanical edits. Use Opus for complex work and for anything with substantial UI work."
@@ -88,7 +96,7 @@ def test_reviews_start_from_the_diff():
     assert "Start from the diff, the Spec page and the failing checks." in playbook
 
 
-@pytest.mark.parametrize("template", ["builder", "release-owner"])
+@pytest.mark.parametrize("template", ["builder", "feature-owner", "release-owner"])
 def test_the_builder_and_release_manager_may_push_a_rebased_branch_and_never_a_tag(template):
     # A conflict wake tells the Builder to rebase and push with a lease; the Release Owner rebases in Merge. A tag is a
     # release on a repository that releases from tags, and only a person or the approved rollout makes one.
@@ -104,7 +112,7 @@ def test_the_builder_and_release_manager_may_push_a_rebased_branch_and_never_a_t
     assert "Bash(gh pr checkout *)" in settings("release-owner")["allow"]
 
 
-@pytest.mark.parametrize("template", ["builder", "reviewer", "qa-owner", "release-owner"])
+@pytest.mark.parametrize("template", ["builder", "feature-owner", "reviewer", "qa-owner", "release-owner"])
 def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_rebases_after(template):
     # Nov 13, main red twice (#3335, #3604): 13 duplicate "main red" tasks (3 from the QA and Release Owners, whose
     # templates said nothing), two fix PRs for one break, re-runs that tested the old merge again, and tasks snoozed to
@@ -128,10 +136,38 @@ def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_reba
         assert "Not after `failed_checks`, which is choice 3, except a main-red failure" in text
 
 
+def test_the_feature_owner_takes_a_feature_from_pitch_to_production_in_one_session():
+    # Nov 14 (one Product pipeline): the Product Owner and the Builder are one bot, so the code and the reasons are in
+    # context when it builds. It pitches in 280 characters, owns Build and both Fixes, and never passes a person's gate.
+    text = agent("feature-owner")
+    assert card("feature-owner")["session"] == "task"
+    assert yaml.safe_load((CATALOG / "feature-owner" / "bot.yaml").read_text())["session"] == "task"
+    for stage in (
+        "Pitch",
+        "Spec",
+        "Related input",
+        "OK spec",
+        "Build",
+        "Fixes 1 and Fixes 2",
+        "QA",
+        "OK release",
+        "Validate",
+    ):
+        assert f"**{stage}" in text, stage
+    assert "280 characters at most" in text
+    assert "A person OKs the pitch, the spec and the release: you never pass those yourself." in text
+    for playbook in ("write-a-pitch", "write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
+        assert f"`playbooks/{playbook}.md`" in text, playbook
+        assert (CATALOG / "feature-owner" / "playbooks" / f"{playbook}.md").is_file(), playbook
+    # Token rules: files once per session, learnings once per task.
+    assert "A resumed turn already has them: do not read them again." in text
+    assert "When the task reaches Done or is closed, once per task and not every run" in text
+
+
 # The one page skill every bot that writes a spec, a check or a review uses (docs/software-factory.md, "Visual specs").
 PAGE_SKILL = "build-the-page"
 PAGE_WRITERS = {
-    "segment-product-owner": ("playbooks/write-a-spec-page.md", "playbooks/validate-in-production.md"),
+    "feature-owner": ("playbooks/write-a-spec-page.md", "playbooks/qa.md", "playbooks/validate-in-production.md"),
     "reviewer": ("playbooks/review-a-pull-request.md",),
     "builder": ("playbooks/qa.md",),
     "release-owner": ("playbooks/write-the-release-report.md",),
@@ -139,7 +175,7 @@ PAGE_WRITERS = {
 PAGE_KINDS = ("bug-spec", "screen-spec", "change-spec", "validation", "review", "qa", "release")
 
 
-def page_skill(template="segment-product-owner"):
+def page_skill(template="feature-owner"):
     folder = CATALOG / template / "skills" / PAGE_SKILL
     return {str(p.relative_to(folder)): p.read_bytes() for p in sorted(folder.rglob("*")) if p.is_file()}
 
@@ -148,7 +184,7 @@ def page_tool():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "page_tool", CATALOG / "segment-product-owner" / "skills" / PAGE_SKILL / "page.py"
+        "page_tool", CATALOG / "feature-owner" / "skills" / PAGE_SKILL / "page.py"
     )
     module = importlib.util.module_from_spec(spec)
     # No __pycache__ in the template's folder: a bot would be given it.
@@ -172,9 +208,7 @@ def test_every_bot_that_writes_a_page_a_person_reads_uses_the_one_page_skill():
             assert f"skills/{PAGE_SKILL}/SKILL.md" in text, playbook
             assert "tico page publish" in text and "tico file publish" not in text, playbook
             assert "render" in text, playbook
-    validate = " ".join(
-        (CATALOG / "segment-product-owner" / "playbooks" / "validate-in-production.md").read_text().split()
-    )
+    validate = " ".join((CATALOG / "feature-owner" / "playbooks" / "validate-in-production.md").read_text().split())
     assert "a person never does the QA" in validate and "gh pr checks <pull request link>" in validate
 
 

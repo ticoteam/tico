@@ -60,7 +60,7 @@ BOTS = (BUILDER, WRITER, REVIEWER, MANAGER)
 PM, REVIEWER_1, REVIEWER_2, RELEASE = "bot:pm", "bot:rev1", "bot:rev2", "bot:rm"
 PPM, EM = "bot:product-manager", "bot:engineering-manager"
 ROLE_TEMPLATES = {
-    PM: "segment-product-owner",
+    PM: "feature-owner",
     PPM: "product-manager",
     EM: "engineering-manager",
     BUILDER: "builder",

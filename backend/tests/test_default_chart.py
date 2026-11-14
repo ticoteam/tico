@@ -40,20 +40,20 @@ def test_a_seat_bot_reaches_its_manager_and_its_peers_and_not_the_person_or_anot
         found = reach.decide(ctx, bot[sender], receiver if receiver == person else bot[receiver])
         return found.why if found.allowed else None
 
-    assert why("builder", "engineering-manager") == "manager"
+    assert why("reviewer-1", "engineering-manager") == "manager"
     # Two levels down, the person is not reached: the work goes to the Manager, who passes it on.
-    assert why("builder", person) is None and why("seo-owner", person) is None
+    assert why("reviewer-1", person) is None and why("seo-owner", person) is None
     assert why("engineering-manager", person) == "manager"
-    assert why("builder", "reviewer-1") == "peer"
+    assert why("reviewer-1", "qa-owner") == "peer"
     assert why("product-manager", "engineering-manager") == "peer"  # Managers are peers of each other
-    assert why("engineering-manager", "builder") == "report"
+    assert why("engineering-manager", "reviewer-1") == "report"
     # Sideways, with no task in common: another team's Owner, and another team's Manager.
-    assert why("builder", "seo-owner") is None
-    assert why("builder", "product-owner") is None
-    assert why("builder", "growth-manager") is None
-    assert why("product-manager", "builder") is None
+    assert why("reviewer-1", "seo-owner") is None
+    assert why("reviewer-1", "feature-owner") is None
+    assert why("reviewer-1", "growth-manager") is None
+    assert why("product-manager", "reviewer-1") is None
     # The General Manager's team is reached by everyone.
-    assert why("builder", "general-manager") == "helper" and why("seo-owner", "librarian") == "helper"
+    assert why("reviewer-1", "general-manager") == "helper" and why("seo-owner", "librarian") == "helper"
 
 
 def lines(api):
@@ -160,8 +160,8 @@ def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(envi
 
 
 MANAGERS = (
-    ("product-manager", "product-owner"),
-    ("engineering-manager", "builder"),
+    ("product-manager", "feature-owner"),
+    ("engineering-manager", "reviewer-1"),
     ("growth-manager", "seo-owner"),
     ("success-manager", "support-owner"),
 )

@@ -28,7 +28,7 @@ KEY = "page_owners"
 # The bot that does each page's work (spec chat-on-every-page): Listening and Goals so far; the other pages follow.
 PAGES: dict[str, dict[str, str]] = {
     "listening": {"name": "Listening", "default": "automations-owner"},
-    "tools": {"name": "Tools", "default": "tools-product-owner"},
+    "tools": {"name": "Tools", "default": "tools-feature-owner"},
     "goals": {"name": "Goals", "default": "strategy-owner"},
 }
 FROM_LIMITS = {"page": 40, "label": 80, "kind": 40, "id": 200, "name": 200}

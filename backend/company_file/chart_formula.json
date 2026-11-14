@@ -125,25 +125,25 @@
           "live": true
         },
         {
-          "key": "segment-product",
+          "key": "segment-feature",
           "per": "segment",
           "covers": "product",
-          "id": "{seg}-product-owner",
-          "title": "{label} Product Owner",
-          "template": "segment-product-owner",
+          "id": "{seg}-feature-owner",
+          "title": "{label} Feature Owner",
+          "template": "feature-owner",
           "department": "product",
           "reports_to": "product-manager",
-          "reason": "Owns the {label} segment's product{initiatives}.",
+          "reason": "Owns the {label} segment's features{initiatives}.",
           "live": "first"
         },
         {
-          "key": "product-owner",
-          "id": "product-owner",
-          "title": "Product Owner",
-          "template": "segment-product-owner",
+          "key": "feature-owner",
+          "id": "feature-owner",
+          "title": "Feature Owner",
+          "template": "feature-owner",
           "department": "product",
           "reports_to": "product-manager",
-          "reason": "Owns the product: the Product pipeline's ideas, the spec for each change and its check in production.",
+          "reason": "Owns the product's features: each one from pitch to production, in one task.",
           "unless": "segment",
           "live": true
         }
@@ -160,16 +160,6 @@
           "department": "engineering",
           "reports_to": null,
           "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-          "live": true
-        },
-        {
-          "key": "builder",
-          "id": "builder",
-          "title": "Builder",
-          "template": "builder",
-          "department": "engineering",
-          "reports_to": "engineering-manager",
-          "reason": "Builds the product: writes the code for each change.",
           "live": true
         },
         {

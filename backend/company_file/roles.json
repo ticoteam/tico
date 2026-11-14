@@ -1108,6 +1108,53 @@
    "default": false
   },
   {
+   "slug": "feature-owner",
+   "template": "feature-owner",
+   "name": "Feature Owner",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Owns one area of the product, or the whole product as plain Feature Owner, and takes each feature from pitch to production in one task: a pitch of 280 characters a person OKs, the Spec page a person OKs, the build on a branch with a test that proves it, the fixes for what two reviewers found, the QA page and the check in production. Each week it reads its area's activation and retention and ranks the problems. It never merges: the Merge stage queues the pull request.",
+   "when": "A software team that turns ideas into code. One per product area (Tasks, Files) or customer segment, or one for the whole product.",
+   "tags": [
+    "product",
+    "features",
+    "specs",
+    "acceptance-criteria",
+    "code",
+    "github",
+    "pull-requests",
+    "launches",
+    "activation",
+    "retention",
+    "saas",
+    "b2b",
+    "b2c",
+    "developer-tools"
+   ],
+   "pains": [
+    "an idea loses its meaning when one person writes the spec and another builds it",
+    "we know activation is low, but not for which customers",
+    "one loud customer's request fills the roadmap",
+    "engineers find out what 'done' means after the build",
+    "a change is merged without a test that would have caught the bug",
+    "nobody checks that a shipped change works in production"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_tickets",
+    "uses_meetings",
+    "uses_github"
+   ],
+   "first_routine": "Weekly area review · Mondays at 08:00 team time",
+   "tools": [
+    "crm",
+    "github",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
    "slug": "fpa-analyst",
    "template": "fpa-analyst",
    "name": "FP&A Analyst",
@@ -2341,7 +2388,7 @@
    "department": "product",
    "lead": true,
    "core": false,
-   "summary": "Manages the Product pipeline and leads the product team. When a Product task stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. It never does a stage's work or changes a stage's settings; roadmap changes happen only when asked and a Tool allows them.",
+   "summary": "Manages the Product pipeline and leads the product team. When a Product task stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Runs the product team's week: the roadmap, the decisions waiting on a person, what each Feature Owner found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Feature Owner who owns it. It never does a stage's work or changes a stage's settings; roadmap changes happen only when asked and a Tool allows them.",
    "when": "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place, or to decide what happens when a Product task stops.",
    "tags": [
     "saas",
@@ -3174,51 +3221,6 @@
     "docs"
    ],
    "default": false
-  },
-  {
-   "slug": "segment-product-owner",
-   "template": "segment-product-owner",
-   "name": "Product Owner",
-   "department": "product",
-   "lead": false,
-   "core": false,
-   "summary": "Owns the Product pipeline's work for one customer segment, or for the whole product as plain Product Owner. Each week it reads activation and retention, ranks the problems from support requests, feedback, calls and usage, and files one-page briefs as ideas. For each chosen idea it writes the Spec page a person OKs, sees the Engineering work through, and checks the result in production.",
-   "when": "A software team whose work starts before the problem is written down, or where the product works for one group of customers and the others drop off before they get value. One per segment, or one for the whole product.",
-   "tags": [
-    "product",
-    "activation",
-    "retention",
-    "segments",
-    "customer-problems",
-    "discovery",
-    "specs",
-    "acceptance-criteria",
-    "launches",
-    "saas",
-    "b2b",
-    "b2c"
-   ],
-   "pains": [
-    "we know activation is low, but not for which customers",
-    "one loud customer's request fills the roadmap",
-    "support, sales and calls each hold part of the problem and nobody adds them up",
-    "retention falls and nobody can say which customers left or why",
-    "briefs go from idea to build without the evidence written down",
-    "engineers find out what 'done' means after the build"
-   ],
-   "recommend_when": [
-    "sells_software",
-    "uses_tickets",
-    "uses_meetings",
-    "uses_github"
-   ],
-   "first_routine": "Weekly segment product review · Mondays at 08:00 team time",
-   "tools": [
-    "crm",
-    "github",
-    "meetings"
-   ],
-   "default": true
   },
   {
    "slug": "seo-owner",

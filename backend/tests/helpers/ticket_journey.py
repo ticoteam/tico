@@ -25,9 +25,8 @@ from clients import hubcli
 REPO = "acme/app"
 SEATS = (
     "product-manager",
-    "product-owner",
+    "feature-owner",
     "engineering-manager",
-    "builder",
     "reviewer-1",
     "reviewer-2",
     "qa-owner",

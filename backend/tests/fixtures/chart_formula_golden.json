@@ -46,24 +46,24 @@
             "live": true
           },
           {
-            "id": "creators-product-owner",
-            "template": "segment-product-owner",
-            "title": "Creators Product Owner",
+            "id": "creators-feature-owner",
+            "template": "feature-owner",
+            "title": "Creators Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Creators segment's product and the “Live rooms” initiative (b1).",
+            "reason": "Owns the Creators segment's features and the “Live rooms” initiative (b1).",
             "start": true,
             "live": true
           },
           {
-            "id": "fans-product-owner",
-            "template": "segment-product-owner",
-            "title": "Fans Product Owner",
+            "id": "fans-feature-owner",
+            "template": "feature-owner",
+            "title": "Fans Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Fans segment's product and the “Fan clubs” initiative (b2).",
+            "reason": "Owns the Fans segment's features and the “Fan clubs” initiative (b2).",
             "start": true,
             "live": false
           },
@@ -75,17 +75,6 @@
             "reports_to": null,
             "team": "Engineering",
             "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-            "start": true,
-            "live": true
-          },
-          {
-            "id": "builder",
-            "template": "builder",
-            "title": "Builder",
-            "department": "engineering",
-            "reports_to": "engineering-manager",
-            "team": "Engineering",
-            "reason": "Builds the product: writes the code for each change.",
             "start": true,
             "live": true
           },
@@ -414,24 +403,24 @@
             "live": true
           },
           {
-            "id": "families-product-owner",
-            "template": "segment-product-owner",
-            "title": "Families Product Owner",
+            "id": "families-feature-owner",
+            "template": "feature-owner",
+            "title": "Families Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Families segment's product.",
+            "reason": "Owns the Families segment's features.",
             "start": true,
             "live": true
           },
           {
-            "id": "cosmetic-patients-product-owner",
-            "template": "segment-product-owner",
-            "title": "Cosmetic patients Product Owner",
+            "id": "cosmetic-patients-feature-owner",
+            "template": "feature-owner",
+            "title": "Cosmetic patients Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Cosmetic patients segment's product and the “Offer clear aligner packages to adults” initiative (b2).",
+            "reason": "Owns the Cosmetic patients segment's features and the “Offer clear aligner packages to adults” initiative (b2).",
             "start": true,
             "live": false
           },
@@ -443,17 +432,6 @@
             "reports_to": null,
             "team": "Engineering",
             "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-            "start": true,
-            "live": true
-          },
-          {
-            "id": "builder",
-            "template": "builder",
-            "title": "Builder",
-            "department": "engineering",
-            "reports_to": "engineering-manager",
-            "team": "Engineering",
-            "reason": "Builds the product: writes the code for each change.",
             "start": true,
             "live": true
           },
@@ -812,24 +790,24 @@
             "live": true
           },
           {
-            "id": "startups-product-owner",
-            "template": "segment-product-owner",
-            "title": "Startups Product Owner",
+            "id": "startups-feature-owner",
+            "template": "feature-owner",
+            "title": "Startups Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Startups segment's product and the “Startup retainers” initiative (b1).",
+            "reason": "Owns the Startups segment's features and the “Startup retainers” initiative (b1).",
             "start": true,
             "live": true
           },
           {
-            "id": "small-businesses-product-owner",
-            "template": "segment-product-owner",
-            "title": "Small businesses Product Owner",
+            "id": "small-businesses-feature-owner",
+            "template": "feature-owner",
+            "title": "Small businesses Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Small businesses segment's product and the “Build a fixed-fee package for small” initiative (b2).",
+            "reason": "Owns the Small businesses segment's features and the “Build a fixed-fee package for small” initiative (b2).",
             "start": true,
             "live": false
           },
@@ -841,17 +819,6 @@
             "reports_to": null,
             "team": "Engineering",
             "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-            "start": true,
-            "live": true
-          },
-          {
-            "id": "builder",
-            "template": "builder",
-            "title": "Builder",
-            "department": "engineering",
-            "reports_to": "engineering-manager",
-            "team": "Engineering",
-            "reason": "Builds the product: writes the code for each change.",
             "start": true,
             "live": true
           },
@@ -1180,13 +1147,13 @@
             "live": true
           },
           {
-            "id": "customers-product-owner",
-            "template": "segment-product-owner",
-            "title": "Customers Product Owner",
+            "id": "customers-feature-owner",
+            "template": "feature-owner",
+            "title": "Customers Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Customers segment's product.",
+            "reason": "Owns the Customers segment's features.",
             "start": true,
             "live": true
           },
@@ -1198,17 +1165,6 @@
             "reports_to": null,
             "team": "Engineering",
             "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-            "start": true,
-            "live": true
-          },
-          {
-            "id": "builder",
-            "template": "builder",
-            "title": "Builder",
-            "department": "engineering",
-            "reports_to": "engineering-manager",
-            "team": "Engineering",
-            "reason": "Builds the product: writes the code for each change.",
             "start": true,
             "live": true
           },
@@ -1489,7 +1445,7 @@
         "industry": []
       },
       "removed": [
-        "creators-product-owner"
+        "creators-feature-owner"
       ],
       "expected": {
         "employees": [
@@ -1505,13 +1461,13 @@
             "live": true
           },
           {
-            "id": "fans-product-owner",
-            "template": "segment-product-owner",
-            "title": "Fans Product Owner",
+            "id": "fans-feature-owner",
+            "template": "feature-owner",
+            "title": "Fans Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Fans segment's product and the “Fan clubs” initiative (b2).",
+            "reason": "Owns the Fans segment's features and the “Fan clubs” initiative (b2).",
             "start": true,
             "live": false
           },
@@ -1523,17 +1479,6 @@
             "reports_to": null,
             "team": "Engineering",
             "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-            "start": true,
-            "live": true
-          },
-          {
-            "id": "builder",
-            "template": "builder",
-            "title": "Builder",
-            "department": "engineering",
-            "reports_to": "engineering-manager",
-            "team": "Engineering",
-            "reason": "Builds the product: writes the code for each change.",
             "start": true,
             "live": true
           },
@@ -1839,13 +1784,13 @@
             "live": true
           },
           {
-            "id": "patients-product-owner",
-            "template": "segment-product-owner",
-            "title": "Patients Product Owner",
+            "id": "patients-feature-owner",
+            "template": "feature-owner",
+            "title": "Patients Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Patients segment's product.",
+            "reason": "Owns the Patients segment's features.",
             "start": true,
             "live": true
           },
@@ -1857,17 +1802,6 @@
             "reports_to": null,
             "team": "Engineering",
             "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-            "start": true,
-            "live": true
-          },
-          {
-            "id": "builder",
-            "template": "builder",
-            "title": "Builder",
-            "department": "engineering",
-            "reports_to": "engineering-manager",
-            "team": "Engineering",
-            "reason": "Builds the product: writes the code for each change.",
             "start": true,
             "live": true
           },
@@ -2168,24 +2102,24 @@
             "live": true
           },
           {
-            "id": "stra-e-h-ndler-product-owner",
-            "template": "segment-product-owner",
-            "title": "Straße Händler Product Owner",
+            "id": "stra-e-h-ndler-feature-owner",
+            "template": "feature-owner",
+            "title": "Straße Händler Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Straße Händler segment's product and the “Köln sales” initiative (b2).",
+            "reason": "Owns the Straße Händler segment's features and the “Köln sales” initiative (b2).",
             "start": true,
             "live": true
           },
           {
-            "id": "segment-2-product-owner",
-            "template": "segment-product-owner",
-            "title": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 Product Owner",
+            "id": "segment-2-feature-owner",
+            "template": "feature-owner",
+            "title": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 segment's product.",
+            "reason": "Owns the 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 segment's features.",
             "start": true,
             "live": false
           },
@@ -2197,17 +2131,6 @@
             "reports_to": null,
             "team": "Engineering",
             "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-            "start": true,
-            "live": true
-          },
-          {
-            "id": "builder",
-            "template": "builder",
-            "title": "Builder",
-            "department": "engineering",
-            "reports_to": "engineering-manager",
-            "team": "Engineering",
-            "reason": "Builds the product: writes the code for each change.",
             "start": true,
             "live": true
           },
@@ -2489,13 +2412,13 @@
             "live": true
           },
           {
-            "id": "creators-product-owner",
-            "template": "segment-product-owner",
-            "title": "Creators Product Owner",
+            "id": "creators-feature-owner",
+            "template": "feature-owner",
+            "title": "Creators Feature Owner",
             "department": "product",
             "reports_to": "product-manager",
             "team": "Product",
-            "reason": "Owns the Creators segment's product.",
+            "reason": "Owns the Creators segment's features.",
             "start": true,
             "live": true
           },
@@ -2507,17 +2430,6 @@
             "reports_to": null,
             "team": "Engineering",
             "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
-            "start": true,
-            "live": true
-          },
-          {
-            "id": "builder",
-            "template": "builder",
-            "title": "Builder",
-            "department": "engineering",
-            "reports_to": "engineering-manager",
-            "team": "Engineering",
-            "reason": "Builds the product: writes the code for each change.",
             "start": true,
             "live": true
           },
