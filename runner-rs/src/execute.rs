@@ -3141,7 +3141,9 @@ impl Runner {
                 });
                 // One the server asks to compact first (it failed for its size) is not resumed: resumed again it would
                 // fail the same way, and that second failure clears the task's conversation, the primary's session
-                // with it. The hop begins a new one, which is the task's side session from then on.
+                // with it. The hop begins a new one, which is the task's side session from then on. The mark is the
+                // conversation's and does not say which session was too large, so a healthy side session is dropped too
+                // when the primary took it: one cache write, against the risk of that clear.
                 let saved_side = match &side_conv {
                     Some(side) if !truthy(config.get("compact_first")) => {
                         self.state.session(&bot, side, &kept_runtime).map_err(Fail::runtime)?
