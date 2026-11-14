@@ -47,13 +47,17 @@ const rule = {source: 'tico', action_id: 'act_77aa01', kind: 'rule_create',
 const edition = {url: 'tico:editions/3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f/3', title: 'November update', text: 'We shipped the phone review.', content_sha256: HASH('9'),
   version: 3, audience: 'Investors', audience_id: 'aud_1', period: 'November 2026', disclosure_revision: 4, rules: HASH('8')};
 const proposal = {kind: 'spend_limit', change: {bot: 'ads', monthly_usd: 3000}};
-const webhook = {name: 'Ops alerts', url: 'https://hooks.acme.example/tico', events: ['task.created'], rate_per_hour: 60, allow_http: false, filter: {}};
+const webhook = {name: 'Ops alerts', url: 'https://hooks.acme.example/tico', events: ['task.created'], rate_per_hour: 60, allow_http: false, filter: {events: {task_label: 'billing'}}};
 const raise = {project: 'Launch video', usd: '250.00', task_id: 'T-42'};
 // A stats board, as editions.py _board_content builds it: its url ends in a 64-character hash.
 const board = {url: 'tico:stat-board/aud_1/' + HASH('c'), title: 'Investors stats board', text: 'Revenue: monthly, rounded',
   content_sha256: HASH('d'), audience: 'Investors', audience_id: 'aud_1', disclosure_revision: 4};
 const cap = {kind: 'task_cap', change: {sender: 'bot:ads', receiver: 'bot:pm', per_day: 5}};
 // A euro book, for an approver who may not read pay-from (a manager, a budget owner): payments.py's own sentence.
+// A company with one bank: the payment names no bank, so _approval_payload's `account` is the ledger line.
+const oneBank = {source: 'tico', action_id: 'act_one001', kind: 'payment_create',
+  what: 'Pay Keelson Freight Forwarding $480.00 for bill B-1043 (Finance action act_one001)',
+  payload: {recipient_id: 'ct_91aa', amount: 48000, account_id: 'acc_5400'}, amount: 48000, account: 'acc_5400'};
 const euro = {source: 'tico', action_id: 'act_eu0001', kind: 'payment_create',
   what: 'Pay 1920.00 EUR to Keelson Freight Forwarding by ach (Finance action act_eu0001)',
   payload: {recipient_id: 'ct_91aa', amount: 192000, money_account_id: 'ma_eu1', account_id: 'acc_9999'}, amount: 192000, account: 'ma_eu1'};
@@ -68,8 +72,9 @@ const OKS: Record<string, {subject: string; content: unknown; line: string}> = {
   r8: {subject: 'board:aud_1', content: board, line: 'Show these stats to Investors?'},
   r9: {subject: 'proposal:p2', content: cap, line: 'Change how many tasks a teammate may send a manager a day?'},
   r10: {subject: 'finance:act_eu0001', content: euro, line: 'OK this euro payment in Finance?'},
+  r11: {subject: 'finance:act_one001', content: oneBank, line: 'OK this one-bank payment in Finance?'},
 };
-const SHOWN: Record<string, string> = {r1: HASH('1'), r2: HASH('2'), r3: HASH('3'), r4: HASH('4'), r5: HASH('5'), r6: HASH('6'), r7: HASH('7'), r8: HASH('8'), r9: HASH('9'), r10: HASH('e')};
+const SHOWN: Record<string, string> = {r1: HASH('1'), r2: HASH('2'), r3: HASH('3'), r4: HASH('4'), r5: HASH('5'), r6: HASH('6'), r7: HASH('7'), r8: HASH('8'), r9: HASH('9'), r10: HASH('e'), r11: HASH('f')};
 const email = {preview_complete: true, shown_hash: SHOWN.r3, body: 'Your replacement ships today.',
   bodies: [{type: 'text/plain', text: 'Your replacement ships today.'}],
   send: {id: 'S1', subject: 'Your replacement order', mailbox: 'support@acme.example', recipients: ['jo@customer.example'],
@@ -183,7 +188,7 @@ async function firstScreenClean(page: Page, label: string) {
     // r6: a webhook: name, address, what it sends in words.
     await open('r6');
     text = await firstScreenClean(page, 'webhook');
-    for (const s of ['Ops alerts', 'https://hooks.acme.example/tico', 'A task is filed']) assert.ok(text.includes(s), `webhook shows ${s}`);
+    for (const s of ['Ops alerts', 'https://hooks.acme.example/tico', 'A task is filed', 'Only when']) assert.ok(text.includes(s), `webhook shows ${s}`);
     await details('r6');
 
     // r7: a budget raise: labelled lines.
@@ -222,6 +227,16 @@ async function firstScreenClean(page: Page, label: string) {
     assert.doesNotMatch(text, /\$/, 'no guessed dollar sign');
     assert.match(text, /Paid from\s+A bank account you can.t see here/);
     await details('r10');
+
+    // r11: a one-bank company's payment names no bank; `account` is the ledger line. Its bank is the one pay-from lists,
+    // never "can't see", and the ledger line is not called a bank.
+    payFrom = true;
+    await open('r11');
+    text = await firstScreenClean(page, 'one-bank payment');
+    assert.match(text, /Paid from\s+Operating ••1010/);
+    assert.doesNotMatch(text, /can.t see/);
+    assert.match(text, /Posts to\s+Freight in · 5400/);
+    await details('r11');
 
     assert.deepEqual(errors, []);
     console.log('PASS: every OK kind opens on what will happen in words; JSON and hashes only under Details; Approve sends the same hash.');

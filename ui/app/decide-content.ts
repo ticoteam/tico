@@ -83,7 +83,7 @@ function decideFieldsHTML(content: unknown): string {
 }
 
 // ---- Finance
-interface DcFinNames { banks: Map<string, string>; lines: Map<string, string>; currency: string }
+interface DcFinNames { banks: Map<string, string>; lines: Map<string, string>; currency: string; seesBanks: boolean }
 /** The book's currency and the names of its banks and lines, as far as this person may read them. pay-from needs
     finance.pay, which an approver (a manager, a budget owner) may not hold: then the currency is the one Finance's own
     sentence names ("Pay 1920.00 EUR to …"), else unknown. */
@@ -94,6 +94,7 @@ async function decideFinanceNames(what: string): Promise<DcFinNames> {
   return {
     banks: new Map((pay?.accounts || []).map(a => [a.id, `${a.name}${a.last4 ? ' ••' + a.last4 : ''}`])),
     lines: new Map((chart?.accounts || []).map(a => [a.id, a.number ? `${a.name} · ${a.number}` : a.name])),
+    seesBanks: !!pay,
     currency: pay?.currency || /\b\d[\d,.]*\s([A-Z]{3})\b/.exec(what)?.[1] || ''};
 }
 const DC_EXPECT: Record<string, string> = {post: 'posts', ask: 'asks', none: 'not matched', allow: 'allowed', deny: 'refused',
@@ -108,10 +109,17 @@ async function decideFinanceHTML(content: unknown): Promise<string> {
   const rows: [string, string][] = [];
   const amount = o.amount ?? p.amount;
   if (typeof amount === 'number') rows.push(['Amount', esc(money(amount))]);
-  const from = bank(p.money_account_id) || bank(p.from_account) || bank(o.account);
-  const fromId = p.money_account_id ?? p.from_account ?? o.account;
-  if (from) rows.push(['Paid from', esc(from)]);
-  else if (dcStr(fromId) && dcStr(fromId) !== 'bank') rows.push(['Paid from', 'A bank account you can’t see here (its id is under Details)']);
+  // The bank a payment comes from: the one it names (money_account_id, or from_account for a move between our own
+  // banks). Not `account`: with no bank named, _approval_payload fills it with the ledger line. A company with one bank
+  // need not name it (payments.py _bank), so then the one bank pay-from lists is it. "Can't see" only when pay-from was
+  // refused to this person.
+  if (o.kind === 'payment_create') {
+    const fromId = dcStr(p.money_account_id ?? p.from_account);
+    const only = names.banks.size === 1 ? [...names.banks.values()][0]! : '';
+    const from = fromId ? bank(fromId) : only;
+    if (from) rows.push(['Paid from', esc(from)]);
+    else if (!names.seesBanks) rows.push(['Paid from', fromId ? 'A bank account you can’t see here (its id is under Details)' : 'The company’s bank (you can’t see its name here)']);
+  }
   if (bank(p.to_account)) rows.push(['Into', esc(bank(p.to_account))]);
   if (line(p.account_id)) rows.push(['Posts to', esc(line(p.account_id))]);
   if (typeof p.memo === 'string' && p.memo.trim()) rows.push(['Memo', esc(p.memo)]);
