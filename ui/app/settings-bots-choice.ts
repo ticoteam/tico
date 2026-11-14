@@ -54,7 +54,7 @@ function settingsCompactDefault(id: string | null | undefined) {
   const own = settingsModel(id)?.compact_default;
   if (own) return own;
   const name = String(id || '');
-  return settingsFitCompact(name.includes('opus') ? 400000 : name.includes('haiku') ? 150000 : 250000, settingsModelWindow(id));
+  return settingsFitCompact(name.includes('opus') || name.includes('sonnet') ? 300000 : name.includes('haiku') ? 150000 : 250000, settingsModelWindow(id));
 }
 const settingsSizeWords = (size: number | null | undefined) => modelContextWords(size);
 const settingsEffortShort = (effort: string | null | undefined) => effort === 'as-configured' ? ''

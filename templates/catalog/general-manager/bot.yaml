@@ -3,8 +3,7 @@ display_name: "General Manager"
 labels: [owner:general-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-# These must agree with the bot's settings on the server, or be left out of this file entirely.
-reasoning_effort: low
+# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 20
 
 # No routines and no watchers: it never thinks on a schedule. The server builds each department's report in plain code

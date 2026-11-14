@@ -3,8 +3,7 @@ display_name: "Librarian"
 labels: [owner:librarian]
 reads: []                        # other bot repositories this one may clone read-only
 
-# These must agree with the bot's settings on the server, or be left out of this file entirely.
-reasoning_effort: medium
+# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 45
 
 # The routines this bot starts with. The server seeds them once, when the Librarian is built in; from

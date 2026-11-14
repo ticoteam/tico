@@ -441,6 +441,58 @@ ASSISTANT_TOOLS = frozenset(
 )
 
 
+# The developer tool list (backend/mcp.py tool_profile): what a code bot (the Builder, both Reviewers, and the QA, Release
+# and Code Hygiene Owners) is told to run in its template, playbooks and skills (templates/catalog/<template>), and in
+# the wake and stage text the server sends it. The full list is about 92k tokens of schemas, which a harness without
+# tool search carries on every call; this one is a tenth of that. Only the listing shrinks: a call to any other tool the
+# caller's kind allows still runs, and the `tico` CLI still reaches every route. backend/tests/test_developer_tools.py
+# checks that every tool those files name is here.
+DEVELOPER = "developer"
+DEVELOPER_TOOLS = frozenset(
+    {
+        # Tasks: read, work, ask, hand on.
+        "tico_task_show",
+        "tico_task_list",
+        "tico_task_comment",
+        "tico_task_update",
+        "tico_task_done",
+        "tico_task_move",
+        "tico_task_ask",
+        "tico_task_answer",
+        "tico_task_attach",
+        "tico_task_create",
+        "tico_task_close",
+        "tico_task_link",
+        "tico_task_relate",
+        "tico_task_label",
+        "tico_task_snooze",
+        "tico_task_queue",
+        "tico_task_release",
+        "tico_task_worktree_add",
+        "tico_task_worktree_attach",
+        "tico_conversation_show",
+        # Status and setup.
+        "tico_bot_status_set",
+        "tico_bot_setup_done",
+        "tico_team_show",
+        # Pages, files and docs: specs, review and QA pages, and the screenshots on them.
+        "tico_page_publish",
+        "tico_file_publish",
+        "tico_file_read",
+        "tico_doc_read",
+        "tico_doc_search",
+        "tico_bot_app_view",
+        "tico_bot_app_shot",
+        # Onboarding switches its routines on; the Release Owner tags releases.
+        "tico_automation_list",
+        "tico_automation_update",
+        "tico_tag_create",
+        "tico_tag_show",
+        "tico_tag_update",
+    }
+)
+
+
 def offered_to(tool_):
     """The kinds a tool is offered to. The Assistant's turn is offered the tools it is told to run (ASSISTANT_TOOLS) and
     what its audience already names, minus ASSISTANT_HIDDEN; the gate and the route decide what it may do."""
@@ -463,12 +515,16 @@ def offered_to(tool_):
 UNLISTED = frozenset({"tico_finance_card_fill"})
 
 
-def listing(local=False, kind=None):
+def listing(local=False, kind=None, profile=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
-    when the kind is not known), never an UNLISTED one. Sorted by name, so the order never depends on where a tool is
-    defined (and `tico_<noun>_<verb>` names keep a noun's tools together)."""
+    when the kind is not known), never an UNLISTED one, and with the `developer` profile only DEVELOPER_TOOLS. Sorted by
+    name, so the order never depends on where a tool is defined (and `tico_<noun>_<verb>` names keep a noun's tools
+    together)."""
     return [
         {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
         for t in sorted(TOOLS, key=lambda t: t["name"])
-        if t["name"] not in UNLISTED and (local or not t.get("local")) and (kind is None or kind in offered_to(t))
+        if t["name"] not in UNLISTED
+        and (local or not t.get("local"))
+        and (kind is None or kind in offered_to(t))
+        and (profile != DEVELOPER or t["name"] in DEVELOPER_TOOLS)
     ]

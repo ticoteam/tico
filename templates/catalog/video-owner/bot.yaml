@@ -3,8 +3,7 @@ display_name: "Video Owner"
 labels: [owner:video-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
-# These must agree with the bot's settings on the server, or be left out of this file entirely.
-reasoning_effort: medium
+# This must agree with the bot's settings on the server, or be left out of this file entirely.
 max_run_minutes: 60
 
 # No routines: it never makes video on a schedule. Each project starts when a person asks for it on a task.

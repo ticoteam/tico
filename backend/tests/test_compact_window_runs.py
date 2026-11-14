@@ -69,7 +69,7 @@ def test_a_fallbacks_own_window_is_what_its_turn_compacts_at(api):
     set_fallback(api, {**GROK, "compact_at": 150_000})
     turn = chat_turn(api, machine)
     assert turn["config"]["fallback"]["compact_at"] == 150_000
-    assert turn["config"]["compact_at"] == 250_000  # the bot's own, Sonnet's default, unchanged
+    assert turn["config"]["compact_at"] == 300_000  # the bot's own, Sonnet's default, unchanged
 
 
 # ------------------------------------------------------------------------------------------------- a task's run
@@ -82,7 +82,7 @@ def test_a_new_tasks_run_window_is_what_its_turns_use_and_the_bots_own_stays(api
     assert turn["task"]["id"] == task["id"]
     assert (turn["config"]["model"], turn["config"]["compact_at"]) == ("claude-haiku-5-5", 400_000)
     assert get(api, "tasks/" + task["id"])["run_model"]["compact_at"] == 400_000
-    assert get(api, "bots/ops")["compact_at"] == 250_000
+    assert get(api, "bots/ops")["compact_at"] == 300_000
 
 
 def test_a_run_window_alone_keeps_the_bots_model(api):
@@ -143,7 +143,7 @@ def test_a_routine_steps_window_is_what_its_turn_uses(api):
     turn = claim(api, machine)
     assert (turn["config"]["model"], turn["config"]["compact_at"]) == ("claude-haiku-5-5", 150_000)
     assert get(api, "tasks/" + turn["task"]["id"])["run_model"]["compact_at"] == 150_000
-    assert get(api, "bots/ops")["compact_at"] == 250_000
+    assert get(api, "bots/ops")["compact_at"] == 300_000
 
 
 def test_a_routine_step_may_set_only_its_window(api):
