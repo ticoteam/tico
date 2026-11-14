@@ -163,11 +163,11 @@ p:empty{display:none}
 .mp-foot{display:flex;gap:8px;margin-top:2px}
 .mp-foot .primary{padding:6px 14px}
 .settings-bulk-pick{display:flex;min-width:0}
-/* In a form (the bot editor, Add bot, bulk change, Hire) the picker's button is a dropdown like the selects beside it:
+/* In a form (the bot editor, Add bot, bulk change, Hire, a task's or a step's Runs on) the picker's button is a dropdown like the selects beside it:
    the same box, height and type; only the bots table keeps it as text. */
-#bot-editor .settings-choice>.sb-pick,.settings-bulk-pick .sb-pick,[data-add-choice] .sb-pick,[data-hire-model] .sb-pick{margin-left:0;height:var(--ctl);padding:5px 9px;border-color:var(--line);border-radius:var(--r-ctl);background:var(--surface);font-size:var(--t-base);line-height:20px}
-#bot-editor .settings-choice>.sb-pick:hover,.settings-bulk-pick .sb-pick:hover,[data-add-choice] .sb-pick:hover,[data-hire-model] .sb-pick:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--surface)}
-#bot-editor .settings-choice>.sb-pick .sb-pick-caret,.settings-bulk-pick .sb-pick .sb-pick-caret,[data-add-choice] .sb-pick .sb-pick-caret,[data-hire-model] .sb-pick .sb-pick-caret{opacity:1}
+#bot-editor .settings-choice>.sb-pick,.settings-bulk-pick .sb-pick,[data-add-choice] .sb-pick,[data-hire-model] .sb-pick,[data-run-picker] .sb-pick{margin-left:0;height:var(--ctl);padding:5px 9px;border-color:var(--line);border-radius:var(--r-ctl);background:var(--surface);font-size:var(--t-base);line-height:20px}
+#bot-editor .settings-choice>.sb-pick:hover,.settings-bulk-pick .sb-pick:hover,[data-add-choice] .sb-pick:hover,[data-hire-model] .sb-pick:hover,[data-run-picker] .sb-pick:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line));background:var(--surface)}
+#bot-editor .settings-choice>.sb-pick .sb-pick-caret,.settings-bulk-pick .sb-pick .sb-pick-caret,[data-add-choice] .sb-pick .sb-pick-caret,[data-hire-model] .sb-pick .sb-pick-caret,[data-run-picker] .sb-pick .sb-pick-caret{opacity:1}
 /* The task indicator beside a bot's model: faint until the row is hovered when tasks run on the bot's own model;
    marked, with a dot, when they run on another. It opens the task-model row under the bot (.sb-task-row). */
 .sb-model-wrap{display:flex;align-items:center;gap:4px;min-width:0}

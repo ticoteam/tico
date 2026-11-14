@@ -775,10 +775,9 @@ const BOT_WIDE = window.matchMedia('(min-width: 1100px)');
 function botPageView(): BotPageView | null { return BOT; }
 
 // app/task-modal.ts
-// Runs on (POST /v2/tasks/{id}/model, backend/task_run_models.py): the model this task's runs use, or the bot's task model
-// until one is set on it. The model list is GET /v2/models, read once here and by the automation step editor, which offers
-// the same models. Gateway tier picks (tico-*) are made in the bot's settings, so they stay out of both.
-let TASK_RUN_ROWS: TaskRunRow[] | null = null, TASK_RUN_LOADING: Promise<ModalModelRow[]> | null = null;
+// The models a job post suggests (recruit.ts): GET /v2/models, read once, without retired, meeting and
+// Gateway tier (tico-*) models.
+let TASK_RUN_ROWS: ModalModelRow[] | null = null, TASK_RUN_LOADING: Promise<ModalModelRow[]> | null = null;
 
 // app/settings.ts
 // The team owner's name, for "who can change this" lines; '' when the roster has not loaded.

@@ -1,17 +1,17 @@
-// A bot's task says the model its runs use (Runs on, backend/task_run_models.py). Whoever the server says may set it
-// (`can_set_run_model` in GET /v2/tasks/{id}) picks the task's own model, harness and effort and applies it, or clears
-// it back to the bot's task model; anyone else reads what it runs on. Retired and Gateway tier models are not offered.
-// Its Compact list starts on "Same as bot" and offers only the sizes the picked model holds; a window alone keeps the
-// bot's model (task #237); Claude Code, which compacts on its own default, has none. The form fits a phone's width.
+// A bot's task says the model its runs use (Runs on, backend/task_run_models.py), in the one model picker
+// (ui/app/settings-bots-choice.ts, task #476): closed it reads "Same as bot" or "GPT Test HIGH 400K", with no harness,
+// dots or "compacts at"; open it is the shared panel, "Same as bot" first, then Harness, Model, Effort and a Compact
+// dropdown that starts on "Same as bot" and lists only the sizes the picked model holds. Whoever the server says may set
+// it (`can_set_run_model` in GET /v2/tasks/{id}) applies a pick, a window alone or Same as bot; anyone else opens a panel
+// with nothing to apply. Retired models are not offered. It fits a phone's width.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+const {openPicker, choose, chosen, offered, applyPicker, closedText} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
 // Browser-side globals the test reads or calls inside page.evaluate / waitForFunction.
 declare const S: {emps: {name: string; revision: number}[]; route: string; me?: unknown};
-
-declare var TASK_RUN_ROWS: unknown[] | null;
 declare var taskModalShow: (task: {id: string; title: string}) => unknown;
 const SHOTS = process.env.TICO_UI_SHOTS || '';
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
@@ -20,15 +20,17 @@ const now = Date.now(), at = (m: number) => new Date(now - m * 60000).toISOStrin
 const task = {id: 't-audit', title: 'Audit the billing page', owner_id: 'bot:ops', requester_id: 'human:ana', status: 'open',
   lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-audit'};
 const MODELS = [
-  {id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', harnesses: ['claude'], efforts: ['low', 'medium', 'high'], default_effort: 'high'},
-  {id: 'gpt-test', label: 'GPT Test', context_tokens: 1_050_000, harnesses: ['codex', 'cursor'], efforts: ['low', 'high'], default_effort: 'low'},
-  {id: 'old-model', label: 'Old Model', harnesses: ['claude'], efforts: [], deprecated: true},
-  {id: 'tico-fast', label: 'Gateway fast', harnesses: ['claude'], efforts: []}];
-
-// Claude Code compacts on its own default (own_compaction), so a Claude model offers no Compact; Codex and Cursor do.
+  {id: 'claude-sonnet-5-5', label: 'sonnet 5.5', context_tokens: 1_000_000, harnesses: ['claude'], efforts: ['low', 'medium', 'high'], default_effort: 'high'},
+  {id: 'gpt-test', label: 'gpt test', context_tokens: 1_050_000, harnesses: ['codex', 'cursor'], efforts: ['low', 'high'], default_effort: 'low'},
+  {id: 'gpt-small', label: 'gpt small', context_tokens: 500_000, harnesses: ['codex'], efforts: ['low', 'high'], default_effort: 'low'},
+  {id: 'plain-model', label: 'plain model', context_tokens: 1_000_000, harnesses: ['nocomp'], efforts: ['low'], default_effort: 'low'},
+  {id: 'old-model', label: 'old model', harnesses: ['claude'], efforts: [], deprecated: true}];
 const HARNESSES = [
-  {id: 'claude', capabilities: {compaction: true, own_compaction: true}},
-  {id: 'codex', capabilities: {compaction: true}}, {id: 'cursor', capabilities: {compaction: true}}];
+  {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude', capabilities: {compaction: true}},
+  {id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex', capabilities: {compaction: true}},
+  {id: 'cursor', label: 'Cursor', runtime: 'cursor', capabilities: {compaction: true}},
+  {id: 'nocomp', label: 'Plain', runtime: 'nocomp', capabilities: {}}];
+const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '700K', '800K', '900K', '1M'];
 
 // `canSet` is the server's answer for this reader (`can_set_run_model`), whatever their role in the roster says.
 async function run(viewport: {width: number; height: number}, shot: string, me: unknown, canSet: boolean) {
@@ -47,7 +49,8 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json(me);
-      if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}]}]);
+      if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}],
+        model: 'claude-sonnet-5-5', harness: 'claude', runtime: 'claude', reasoning_effort: 'high'}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -71,62 +74,66 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     await page.evaluate(t => taskModalShow(t), task);
     const modal = page.locator('#task-modal'), sec = modal.locator('[data-task-run-model]');
     if (viewport.width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();   // a phone: Runs on is in Info (task #409)
-    await sec.locator('.task-run-now', {hasText: "The bot's task model"}).waitFor();
+    const box = sec.locator('[data-bot-choice]');
+    await box.waitFor();
+    assert.equal(await closedText(box), 'Same as bot', 'no choice of its own: Same as bot, nothing else');
+    // The old stacked selects are gone: one picker.
+    assert.equal(await sec.locator('select').count(), 0);
+    const panel = await openPicker(box);
 
     if (!canSet) {
-      // Someone the server does not let set the model reads what the task runs on, with nothing to pick, whatever
-      // their role: the owner too, when the answer for this task is no. The models are read either way, so a form would
-      // have appeared by now.
-      await page.waitForFunction(() => Array.isArray(TASK_RUN_ROWS));
-      assert.equal(await sec.locator('form').count(), 0);
+      // Someone the server does not let set the model reads what the task runs on, with nothing to apply, whatever
+      // their role: the owner too, when the answer for this task is no.
+      assert.equal(await panel.locator('[data-choice-apply]').count(), 0, 'no Apply');
+      assert.equal(await panel.locator('[data-choice-harness] input:not(:disabled)').count(), 0, 'nothing to pick');
+      await panel.locator('[data-choice-cancel]').click();
+      assert.deepEqual(posted, []);
       assert.deepEqual(errors, []);
       return;
     }
-    const model = sec.locator('[data-run-model]');
-    await model.waitFor();
-    const offered = await model.locator('option').evaluateAll((os: HTMLOptionElement[]) => os.map(o => o.value));
-    assert.deepEqual(offered, ['', 'claude-sonnet-5-5', 'gpt-test'], 'no retired or Gateway tier model');
-    // The rendered options: the window follows the name when the catalog gives one, and a model without one shows none.
-    assert.deepEqual(await model.locator('option').allInnerTexts(), ["The bot's task model", 'Sonnet 5.5', 'GPT Test · 1.05M'],
-      'the window is in the option label');
-    assert.equal(await sec.locator('[data-run-model-apply]').isDisabled(), true, 'nothing to apply yet');
+    // Same as bot first, then the team's harnesses; the bot runs on Sonnet (Claude Code), so Compact offers its sizes
+    // after Same as bot.
+    assert.deepEqual(await offered(panel, 'harness'), ['Same as bot', 'Claude Code', 'Codex', 'Cursor', 'Plain']);
+    assert.equal(await chosen(panel, 'harness'), '');
+    const compact = panel.locator('[data-choice-compact]');
+    assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Same as bot', ...SIZES]);
+    assert.equal(await panel.locator('[data-choice-apply]').isDisabled(), true, 'nothing to apply yet');
 
-    // A Claude Code model has no Compact: Claude Code compacts as it does for a person.
-    await model.selectOption('claude-sonnet-5-5');
-    await sec.locator('[data-run-effort]').waitFor();
-    assert.equal(await sec.locator('[data-run-compact]').count(), 0, 'no Compact for Claude Code');
-
-    // A model with two harnesses offers both, starting on its first harness and its default effort.
-    await model.selectOption('gpt-test');
-    await sec.locator('[data-run-harness]').waitFor();
-    assert.equal(await sec.locator('[data-run-harness]').inputValue(), 'codex');
-    assert.equal(await sec.locator('[data-run-effort]').inputValue(), 'low');
-    await sec.locator('[data-run-harness]').selectOption('cursor');
-    await sec.locator('[data-run-effort]').selectOption('high');
-    // Compact: "Same as bot" first, then the twelve sizes this 1.05M model holds.
-    const compact = sec.locator('[data-run-compact]');
-    assert.equal(await compact.inputValue(), '', 'Same as bot until a size is picked');
-    assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Same as bot', '100K', '150K', '200K', '250K', '300K',
-      '400K', '500K', '600K', '700K', '800K', '900K', '1M']);
+    // A harness and a model: the model's own efforts, Default first; retired models are not offered.
+    await choose(panel, 'harness', 'codex');
+    assert.deepEqual((await offered(panel, 'model')).map(t => t.replace(/\s+/g, ' ').trim()), ['GPT Test', 'GPT Small']);
+    await choose(panel, 'model', 'gpt-test');
+    assert.deepEqual(await offered(panel, 'effort'), ['Default', 'high']);
+    await choose(panel, 'harness', 'cursor');
+    await choose(panel, 'model', 'gpt-test');
+    await choose(panel, 'effort', 'high');
+    assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Same as bot', ...SIZES]);
     await compact.selectOption('400000');
-    const box = (await sec.boundingBox())!;
-    assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `Runs on fits the ${viewport.width} px width`);
+    const fits = (await panel.boundingBox())!;
+    assert.ok(fits.x >= 0 && fits.x + fits.width <= viewport.width, `the panel fits the ${viewport.width} px width`);
     if (shot) await page.screenshot({path: shot});
-    await sec.locator('[data-run-model-apply]').click();
-    await sec.locator('.task-run-now', {hasText: 'GPT Test'}).waitFor();
+    await applyPicker(panel);
+    await page.waitForFunction(() => document.querySelector('[data-task-run-model] .sb-pick-text')?.textContent?.trim() === 'GPT Test HIGH 400K');
     assert.deepEqual(posted.at(-1), {model: 'gpt-test', harness: 'cursor', effort: 'high', compact_at: 400000});
-    assert.match(await sec.locator('.task-run-now').innerText(), /GPT Test · .+ · high · .+ · compacts at 400K/);
 
-    // Back to the bot's task model keeps the task's own window ("Same as bot 400K")...
-    await sec.locator('[data-run-model]').selectOption('');
-    assert.equal(await sec.locator('[data-run-compact]').inputValue(), '400000', 'the window stays when the model goes');
-    await sec.locator('[data-run-model-apply]').click();
-    await sec.locator('.task-run-now', {hasText: "The bot's task model · compacts at 400K"}).waitFor();
-    assert.deepEqual(posted.at(-1), {model: null, compact_at: 400000});
-    // ...and Same as bot clears the task's own choice.
-    await sec.locator('[data-run-compact]').selectOption('');
-    await sec.locator('[data-run-model-apply]').click();
-    await sec.locator('.task-run-now', {hasText: /^The bot's task model$/}).waitFor();
+    // A smaller model lowers the window to fit and lists nothing larger.
+    let open = await openPicker(sec.locator('[data-bot-choice]'));
+    await choose(open, 'harness', 'codex');
+    await choose(open, 'model', 'gpt-small');
+    assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Same as bot', ...SIZES.slice(0, 7)]);
+    assert.equal(await compact.inputValue(), '400000');
+    await compact.selectOption('500000');
+    // Back to Same as bot keeps the task's own window ("Same as bot 500K")...
+    await choose(open, 'harness', '');
+    assert.equal(await compact.inputValue(), '500000', 'the window stays when the model goes');
+    await applyPicker(open);
+    await page.waitForFunction(() => document.querySelector('[data-task-run-model] .sb-pick-text')?.textContent?.trim() === 'Same as bot 500K');
+    assert.deepEqual(posted.at(-1), {model: null, compact_at: 500000});
+    // ...and Same as bot in Compact clears the task's own choice.
+    open = await openPicker(sec.locator('[data-bot-choice]'));
+    await compact.selectOption('');
+    await applyPicker(open);
+    await page.waitForFunction(() => document.querySelector('[data-task-run-model] .sb-pick-text')?.textContent?.trim() === 'Same as bot');
     assert.deepEqual(posted.at(-1), {model: null, compact_at: null});
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
