@@ -41,7 +41,9 @@ carries the blocking count).
      Any relation but the dependency below changes the other owner's task too, and {{app_name}} refuses it.
    - File one only when none is open, never a second for the same break, titled
      `Main red: <the failing test or check>, since <the pull request or commit that broke it>`.
-     File it as its own task, with no `--parent` and no `--private`: a private one is hidden from the search.
+     Working on a private task, file it with `tico task create --from-private` (company-visible, in your own words:
+     no text copied from the private task) and never `--private`; otherwise file it plainly, never under a private
+     parent. A private one is hidden from the search, and a second bot files another.
    - When your stage cannot finish until main is fixed, make your task depend on it:
      `tico task relate <your task> depends_on <main-red task>` (written on your task only, so allowed on another
      owner's). With no task to depend on, or a refusal, snooze naming the fix pull request,

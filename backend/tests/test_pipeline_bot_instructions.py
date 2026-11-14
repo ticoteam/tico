@@ -86,6 +86,8 @@ def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_reba
     # Look first, snoozed ones included, and give a new one the title the next bot searches for.
     assert 'tico task list --q "Main red" --status open --snoozed all' in text
     assert re.search(r"`Main red: <[^>]+>, since <[^>]+>`", text), "the main-red title"
+    # Filed from a private task, it must still be one the next bot's search finds: plain or --private it is hidden.
+    assert "file it with `tico task create --from-private`" in text and "no `--private`" not in text
     # Say you are blocked on it with a comment: relating it to your task is refused across owners.
     assert re.search(r'tico task comment <main-red task> "Blocks #<[^>]+> \(PR #<[^>]+>\)', text)
     assert "tico task relate <your task> <main-red task>" not in text
