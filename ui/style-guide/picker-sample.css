@@ -1,0 +1,124 @@
+/* The model picker sample with scores (picker-sample.html): a proposal, generated from claude-pareto.json.
+   Every rule sits under .sg-page. The app's tokens and the guide's classes are reused; no token is redefined.
+   The sample has no script: :has() on its radios shows the picked family, the chosen point and the hovered point. */
+
+/* the popover: wider than the app's 360 px so the chart sits beside the rows; the sample shows it whole, not scrolled */
+.sg-page .sgp-pop{max-height:none;max-width:100%}
+.sg-page .sgp-pop.sgp-wide{width:min(720px,100%)}
+.sg-page .sgp-pop.sgp-std{width:min(360px,100%)}
+.sg-page .sgp-panel{gap:var(--s3)}
+@media (min-width:900px){
+  .sg-page .sgp-wide .sgp-panel{grid-template-columns:minmax(0,300px) minmax(0,1fr);grid-template-areas:"harness chart" "model chart" "effort chart" "compact chart" "foot src";column-gap:var(--s4);align-items:start}
+  .sg-page .sgp-wide .sgp-a-harness{grid-area:harness}
+  .sg-page .sgp-wide .sgp-a-model{grid-area:model}
+  .sg-page .sgp-wide .sgp-a-chart{grid-area:chart}
+  .sg-page .sgp-wide .sgp-a-effort{grid-area:effort}
+  .sg-page .sgp-wide .sgp-a-compact{grid-area:compact}
+  .sg-page .sgp-wide .sgp-a-foot{grid-area:foot}
+  .sg-page .sgp-wide .sgp-panel>.sgp-src{grid-area:src;align-self:center;text-align:right}
+}
+.sg-page .sgp-src{margin:0;color:var(--muted);font-size:var(--t-xs)}
+
+/* Model: the four families, two by two */
+.sg-page .sgp-fams{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.sg-page .sgp-fams .mp-opt:nth-child(2n){border-right:0}
+.sg-page .sgp-fams .mp-opt:nth-child(-n+2){border-bottom:1px solid var(--line)}
+
+/* Effort: one list a family, only the picked family's shown */
+.sg-page .sgp-eff{display:none}
+.sg-page .sgp-pop:has(#sg-picker-a-fam-opus:checked) .sgp-eff.sgp-f-opus,
+.sg-page .sgp-pop:has(#sg-picker-a-fam-sonnet:checked) .sgp-eff.sgp-f-sonnet,
+.sg-page .sgp-pop:has(#sg-picker-a-fam-fable:checked) .sgp-eff.sgp-f-fable,
+.sg-page .sgp-pop:has(#sg-picker-a-fam-haiku:checked) .sgp-eff.sgp-f-haiku,
+.sg-page .sgp-pop:has(#sg-picker-b-fam-opus:checked) .sgp-eff.sgp-f-opus,
+.sg-page .sgp-pop:has(#sg-picker-b-fam-sonnet:checked) .sgp-eff.sgp-f-sonnet,
+.sg-page .sgp-pop:has(#sg-picker-b-fam-fable:checked) .sgp-eff.sgp-f-fable,
+.sg-page .sgp-pop:has(#sg-picker-b-fam-haiku:checked) .sgp-eff.sgp-f-haiku{display:grid}
+.sg-page .sgp-head{display:flex;align-items:center;gap:6px;padding:4px 10px 4px 28px;border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--t-xs)}
+.sg-page .sgp-row::before{content:"";flex:none;width:12px}
+.sg-page .sgp-head .mp-name,.sg-page .sgp-fill{flex:1 1 auto}
+.sg-page .sgp-num{flex:none;width:34px;text-align:right;font-variant-numeric:tabular-nums}
+.sg-page .sgp-row .sgp-num{font-weight:400}
+.sg-page .sgp-num.sgp-cost{width:46px}
+.sg-page .sgp-num.sgp-min{width:32px}
+.sg-page .sgp-row :is(.sgp-cost,.sgp-min){color:var(--muted);font-size:var(--t-xs)}
+.sg-page .sgp-none{flex:none;margin-left:auto;color:var(--muted);font-size:var(--t-xs);font-weight:400}
+/* the dot: the one indicator. Its words show on hover and to a screen reader, and once in the legend line. */
+.sg-page .sgp-dot{flex:none;display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink);opacity:.8}
+.sg-page .sgp-legend{display:flex;align-items:center;gap:6px;margin:var(--s1) 0 0;color:var(--muted);font-size:var(--t-xs)}
+
+/* chart: the guide's frame (.ch), an SVG plot in place of the columns */
+.sg-page .sgp-svg{display:block;width:100%;height:auto;overflow:visible;font-family:var(--sans)}
+.sg-page .sgp-grid{stroke:var(--line);stroke-width:1;opacity:.6}
+.sg-page .sgp-base{stroke:var(--line);stroke-width:1}
+.sg-page .sgp-tick{fill:var(--muted);font-size:11px}
+.sg-page .sgp-front{fill:none;stroke:var(--muted);stroke-width:1;stroke-linejoin:round;opacity:.5}
+.sg-page .sgp-f-haiku{--f:var(--run)}
+.sg-page .sgp-f-sonnet{--f:var(--wait)}
+.sg-page .sgp-f-opus{--f:var(--sup-ink)}
+.sg-page .sgp-f-fable{--f:var(--accent)}
+.sg-page .sgp-fpath{display:none;fill:none;stroke:var(--f);stroke-width:1.5;stroke-linejoin:round;opacity:.7}
+.sg-page .sgp-pop:has(#sg-picker-a-fam-opus:checked) .sgp-fpath.sgp-f-opus,
+.sg-page .sgp-pop:has(#sg-picker-a-fam-sonnet:checked) .sgp-fpath.sgp-f-sonnet,
+.sg-page .sgp-pop:has(#sg-picker-a-fam-fable:checked) .sgp-fpath.sgp-f-fable,
+.sg-page .sgp-pop:has(#sg-picker-a-fam-haiku:checked) .sgp-fpath.sgp-f-haiku{display:block}
+.sg-page .sgp-pt{cursor:default;outline:none}
+.sg-page .sgp-hit{fill:transparent}
+.sg-page .sgp-mark{fill:var(--surface);stroke:var(--f);stroke-width:1.5}
+.sg-page .sgp-rec .sgp-mark{fill:var(--f);stroke:var(--surface);stroke-width:1.25}
+.sg-page .sgp-ring{fill:none;stroke:var(--ink);stroke-width:1.5;display:none}
+.sg-page .sgp-pop:has(#sg-picker-a-opt-fable-low:checked) #sg-picker-a-pt-fable-low .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-fable-medium:checked) #sg-picker-a-pt-fable-medium .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-fable-high:checked) #sg-picker-a-pt-fable-high .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-fable-xhigh:checked) #sg-picker-a-pt-fable-xhigh .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-fable-max:checked) #sg-picker-a-pt-fable-max .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-haiku-low:checked) #sg-picker-a-pt-haiku-low .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-haiku-medium:checked) #sg-picker-a-pt-haiku-medium .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-haiku-high:checked) #sg-picker-a-pt-haiku-high .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-haiku-xhigh:checked) #sg-picker-a-pt-haiku-xhigh .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-haiku-max:checked) #sg-picker-a-pt-haiku-max .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-opus-low:checked) #sg-picker-a-pt-opus-low .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-opus-medium:checked) #sg-picker-a-pt-opus-medium .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-opus-high:checked) #sg-picker-a-pt-opus-high .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-opus-xhigh:checked) #sg-picker-a-pt-opus-xhigh .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-opus-max:checked) #sg-picker-a-pt-opus-max .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-sonnet-low:checked) #sg-picker-a-pt-sonnet-low .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-sonnet-medium:checked) #sg-picker-a-pt-sonnet-medium .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-sonnet-high:checked) #sg-picker-a-pt-sonnet-high .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-sonnet-xhigh:checked) #sg-picker-a-pt-sonnet-xhigh .sgp-ring,
+.sg-page .sgp-pop:has(#sg-picker-a-opt-sonnet-max:checked) #sg-picker-a-pt-sonnet-max .sgp-ring{display:block}
+.sg-page .sgp-pt:focus-visible .sgp-hit{stroke:var(--focus);stroke-width:2}
+.sg-page .sgp-tip{display:none;pointer-events:none}
+.sg-page .sgp-tip rect{fill:var(--ink)}
+.sg-page .sgp-tip text{fill:var(--bg);font-size:10px}
+.sg-page .sgp-tip .sgp-tip-a{font-weight:600}
+.sg-page .sgp-tip .sgp-tip-b{font-variant-numeric:tabular-nums}
+.sg-page .sgp-svg:has(#sg-picker-a-pt-fable-low:is(:hover,:focus-within)) #sg-picker-a-tip-fable-low,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-fable-medium:is(:hover,:focus-within)) #sg-picker-a-tip-fable-medium,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-fable-high:is(:hover,:focus-within)) #sg-picker-a-tip-fable-high,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-fable-xhigh:is(:hover,:focus-within)) #sg-picker-a-tip-fable-xhigh,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-fable-max:is(:hover,:focus-within)) #sg-picker-a-tip-fable-max,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-haiku-low:is(:hover,:focus-within)) #sg-picker-a-tip-haiku-low,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-haiku-medium:is(:hover,:focus-within)) #sg-picker-a-tip-haiku-medium,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-haiku-high:is(:hover,:focus-within)) #sg-picker-a-tip-haiku-high,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-haiku-xhigh:is(:hover,:focus-within)) #sg-picker-a-tip-haiku-xhigh,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-haiku-max:is(:hover,:focus-within)) #sg-picker-a-tip-haiku-max,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-opus-low:is(:hover,:focus-within)) #sg-picker-a-tip-opus-low,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-opus-medium:is(:hover,:focus-within)) #sg-picker-a-tip-opus-medium,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-opus-high:is(:hover,:focus-within)) #sg-picker-a-tip-opus-high,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-opus-xhigh:is(:hover,:focus-within)) #sg-picker-a-tip-opus-xhigh,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-opus-max:is(:hover,:focus-within)) #sg-picker-a-tip-opus-max,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-sonnet-low:is(:hover,:focus-within)) #sg-picker-a-tip-sonnet-low,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-sonnet-medium:is(:hover,:focus-within)) #sg-picker-a-tip-sonnet-medium,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-sonnet-high:is(:hover,:focus-within)) #sg-picker-a-tip-sonnet-high,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-sonnet-xhigh:is(:hover,:focus-within)) #sg-picker-a-tip-sonnet-xhigh,
+.sg-page .sgp-svg:has(#sg-picker-a-pt-sonnet-max:is(:hover,:focus-within)) #sg-picker-a-tip-sonnet-max{display:block}
+.sg-page .sgp-key .sgp-k{width:12px;height:12px;flex:none}
+
+/* Which one: two fixed fields and the sentence */
+.sg-page .sgp-cmp{display:flex;flex-direction:column;gap:var(--s2)}
+.sg-page .sgp-pick{min-width:0;flex:0 1 200px;opacity:.75}
+.sg-page .sgp-verdict{margin:0;font-size:var(--t-base)}
+
+/* the 20 source rows scroll in their own box on a phone */
+.sg-page .sgp-scroll{overflow-x:auto;max-width:100%;padding-top:var(--s2)}

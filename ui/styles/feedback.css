@@ -65,7 +65,7 @@ dialog.fb-sheet{box-sizing:border-box;width:min(380px,calc(100vw - 32px));paddin
   background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45)}
 dialog.fb-sheet::backdrop{background:rgba(0,0,0,.35)}
 .fb-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
-.fb-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.fb-head h2{margin:0;font-size:var(--t-card);font-weight:600}
 .fb-corner{position:absolute;top:8px;right:8px}
 dialog.fb-down .fb-chips,dialog.fb-show .fb-reason{padding-right:32px}
 dialog.fb-down .fb-chips[hidden]+.fb-why{margin-right:32px}

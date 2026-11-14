@@ -4,7 +4,7 @@
 .bv{display:flex;flex-direction:column;gap:8px;min-width:0}
 .bv-head{display:flex;align-items:center;gap:8px;min-height:44px}
 .bv-head .spacer{flex:1}
-.bv-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md)}
+.bv-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-card)}
 .bv-x{flex:none;width:36px;height:36px;padding:0;border:0;border-radius:8px;background:none;color:var(--ink);font-size:22px;line-height:1;cursor:pointer}
 .bv-x:hover{background:var(--surface2)}
 .bv-url{display:flex;align-items:center;gap:6px;min-width:0;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:8px;

@@ -179,7 +179,8 @@ function route(hash: string = location.hash): void {
   else if (/^#\/computers\/[^/?]+\/screen$/.test(S.route)) pageComputerScreen(decodeURIComponent(S.route.split('/')[2] ?? ''), from);
   else if (/^#\/computers\/[^/?]+\/performance$/.test(S.route)) pageComputerPerformance(decodeURIComponent(S.route.split('/')[2] ?? ''));
   else if (isAutomationsRoute(S.route)) pageAutomations();
-  else location.hash = HOME;            // unknown or empty routes land on My dashboard, home
+  else if (styleGuideRoute(S.route)) { /* the style guide, out of the navigation (ui/app/style-guide.ts) */ }
+  else location.hash = HOME;           // unknown or empty routes land on My dashboard, home
   redesignAfterRoute();
   thvSweep();         // a thread view the new page replaced stops following
   // A new page starts at its top; a query change (a filter, an open row) or a redraw keeps the reader's place.

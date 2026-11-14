@@ -105,7 +105,7 @@
 .lens-step-card p{margin:3px 0 0;color:var(--g7);font-size:var(--t-base);line-height:var(--lh);overflow-wrap:anywhere}
 
 /* The run panel */
-.lens-flow .tmodal-head h2{margin:0;font-size:var(--t-md)}
+.lens-flow .tmodal-head h2{margin:0;font-size:var(--t-card)}
 .lens-n{font-size:var(--t-sm);margin-left:4px}
 .lens-flow .lens-step{display:flex;flex-direction:column;gap:12px;padding-top:14px}
 .lens-cell{min-width:0}

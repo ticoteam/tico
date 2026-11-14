@@ -230,7 +230,7 @@ a.ref::before,.run-did .ref::before{content:'';display:inline-block;width:.8em;h
 .conv-paused{flex:none;margin:var(--s2) 0 0;padding:6px 10px;border-radius:var(--radius);background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-sm)}
 .conv-paused.agent{background:var(--idle-bg);color:var(--muted)}
 .settings-agent-cell{display:flex;flex-direction:column;gap:2px}.settings-agent-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
-.settings-agents-title{margin:var(--s3) 0 var(--s1);font-size:var(--t-md)}
+.settings-agents-title{margin:var(--s3) 0 var(--s1);font-size:var(--t-card)}
 .agent-credential .agent-credential-body{display:flex;flex-direction:column;gap:var(--s2);max-width:720px}
 .agent-credential label{display:flex;flex-direction:column;gap:6px;font-size:var(--t-base)}.agent-credential code{white-space:pre-wrap;word-break:break-all;flex:1;padding:6px 8px;background:var(--surface2);border-radius:var(--radius)}
 /* one row on a desktop: Label [field]  Expires in [90] days  [New token], every control 32px; stacked on a phone */

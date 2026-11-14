@@ -14,7 +14,6 @@
   --upd-cx:calc(1px + var(--upd-pad) + var(--upd-av) / 2);--upd-in:calc(var(--tree-r) + var(--s1))}
 .upd-card{display:grid;grid-template-columns:minmax(0,1fr);padding:var(--upd-pad-y) var(--upd-pad);background:var(--surface);border:1px solid var(--line);border-radius:14px;position:relative;outline:none;transition:border-color var(--dur-fast) var(--ease)}
 .upd-card.unread{border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
-.upd-card.unread::before{content:"";position:absolute;z-index:2;left:-1px;top:14px;bottom:14px;width:3px;border-radius:3px;background:var(--ink)}
 .upd-card.sel{box-shadow:0 0 0 2px color-mix(in srgb,var(--ink) 40%,transparent)}
 .upd-card.swipeable{touch-action:pan-y}
 .upd-av{display:flex;flex:none;width:var(--upd-av);height:var(--upd-av)}

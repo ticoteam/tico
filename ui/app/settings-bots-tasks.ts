@@ -71,13 +71,14 @@ function settingsTaskIndicator(e: SettingsBot) {
   const context = settingsContextName(task?.compact_at);
   if (!settingsCanManageBot(e) && !set) return '';
   return `<button type="button" class="sb-task-mark${set ? ' on' : ''}" data-task-open="${esc(e.id)}" aria-expanded="${open}"
-    aria-label="${esc(`${label}. Task settings for ${e.display_name || e.slug}`)}" title="${esc(label)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>Tasks${context ? ` · ${esc(context)}` : ''}</button>`;
+    aria-label="${esc(`${label}. Task settings for ${e.display_name || e.slug}`)}" title="${esc(label)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>Tasks${set ? '' : ': same'}${context ? ` · ${esc(context)}` : ''}</button>`;
 }
 // The row a task indicator opens under its bot: the Task model picker (model and window, saved on Apply), Task effort
 // (saved when changed), and Close. The bot's own model never changes here.
 function settingsTaskRow(e: SettingsBot, columns: number) {
   return `<tr class="sb-task-row" data-task-row="${esc(e.id)}"><td colspan="${columns}"><div class="sb-task-under">
     <span class="sb-task-head">Tasks · ${esc(e.display_name || e.slug)}</span>${settingsChoiceCombo(e, 'task')}${settingsTaskParts(e, true)}
+    <label class="sb-task-part sb-cell-fallback">Fallback${settingsChoiceCell(e, 'fallback')}</label>
     <button type="button" class="ghost" data-task-close="${esc(e.id)}">Close</button></div>
     ${settingsTaskWarning(e)}</td></tr>`;
 }

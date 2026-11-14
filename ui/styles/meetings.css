@@ -35,7 +35,7 @@
 .p-save:hover:not(:disabled){background:var(--surface2)}
 .p-save:disabled,.p-go button:disabled{opacity:.45;cursor:default}
 .chat-meta{display:flex;align-items:center;gap:6px}
-   running (spinner) or finished. Muted, iconed, never a bubble. */
+/* running (spinner) or finished. Muted, iconed, never a bubble. */
 /* unsent notes: a quiet count under the pill, expanding to the list */
 /* the kind glyph is used in the strip, the Notes list and the detail heading */
 .nk{flex:none;display:inline-flex;align-items:center;color:var(--muted)}
@@ -199,7 +199,7 @@
 .import-modal{width:min(640px,94vw);max-height:92vh;overflow:auto}
 .import-form{display:flex;flex-direction:column;gap:12px;padding:18px 20px}
 .import-form header{display:flex;align-items:center;justify-content:space-between}
-.import-form h2{margin:0;font-size:var(--t-md)}
+.import-form h2{margin:0;font-size:var(--t-card)}
 .import-form label{display:flex;flex-direction:column;gap:4px;font-size:var(--t-base);color:var(--muted)}
 .import-form label input,.import-form label textarea,.import-form label select{color:var(--ink);font-size:var(--t-md)}
 .import-people{border:0;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}.import-people legend{font-size:var(--t-base);color:var(--muted);padding:0;margin-bottom:4px}.import-form .bot-editor-owners label{flex-direction:row;align-items:center;color:var(--ink)}
@@ -238,7 +238,7 @@ a.meet-made-chip:hover{text-decoration:underline}
 /* Connect Granola: the code and three steps in a small dialog. */
 .mg-dialog{width:min(440px,calc(100vw - 24px));padding:16px 18px 14px}
 .mg-dhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.mg-dhead h2{margin:0;font-size:var(--t-md)}
+.mg-dhead h2{margin:0;font-size:var(--t-card)}
 .mg-dhead .ghost{padding:3px 9px}
 .mg-steps{margin:0;padding:0;list-style:none;counter-reset:mg}
 .mg-steps li{counter-increment:mg;display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;min-height:38px;padding:6px 0;border-top:1px solid var(--line);font-size:var(--t-base)}
@@ -330,7 +330,7 @@ a.mg-open{display:inline-flex;align-items:center;padding:5px 11px;border-radius:
 .live-bot-picker select{min-width:220px;max-width:460px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:7px}
 .live-members{display:flex;flex-wrap:wrap;gap:6px 16px;margin:10px 0;color:var(--muted);font-size:var(--t-sm)}
 .live-section{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
-.live-section h3{margin:0 0 8px;font-size:var(--t-md);letter-spacing:var(--track-snug)}
+.live-section h3{margin:0 0 8px;font-size:var(--t-card);letter-spacing:var(--track-snug)}
 .live-section>p{margin:0 0 8px;font-size:var(--t-sm)}
 .live-transcript,.live-chat{max-height:300px;overflow:auto}
 .live-transcript>p,.live-chat>p{display:grid;grid-template-columns:minmax(80px,130px) minmax(0,1fr);gap:5px 10px;margin:0;padding:7px 4px;border-bottom:1px solid var(--line);font-size:var(--t-base);white-space:pre-wrap;overflow-wrap:anywhere}

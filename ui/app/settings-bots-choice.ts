@@ -346,7 +346,7 @@ function settingsChoicePanelHTML(spec: SettingsChoiceSpec) {
     <p class="mp-note" data-choice-note role="status"></p>
     <div class="settings-choice-blocks" data-choice-blocks></div>
     <div class="mp-foot">${spec.readonly ? '<button type="button" class="ghost" data-choice-cancel>Close</button>'
-      : '<button type="submit" class="primary" data-choice-apply disabled>Apply</button><button type="button" class="ghost" data-choice-cancel>Cancel</button>'}</div>
+      : '<button type="button" class="ghost" data-choice-cancel>Cancel</button><button type="submit" class="primary" data-choice-apply disabled>Apply</button>'}</div>
   </form>`;
 }
 // Open a box's panel in a popover under its button (a sheet on a phone). In a modal dialog it opens inside it, so

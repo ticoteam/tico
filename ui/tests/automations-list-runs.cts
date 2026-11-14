@@ -155,8 +155,8 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       // The header is one row (title, New automation); search, the tabs, the range and every filter section show in place.
       assert.equal(await page.locator('.au-ph h1').isVisible(), true);
       assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, 'no Ask on Automations');
-      // New automation is in words, the header's filled button, 32px high; the range is on the Automations | Runs row.
-      assert.equal((await page.locator('.au-ph > .ph-act .au-new').innerText()).trim(), 'New automation');
+      // New automation is a quiet + in the header, named for a screen reader, 32px high; the range is on the Automations | Runs row.
+      assert.equal(await page.locator('.au-ph > .ph-act .au-new').getAttribute('aria-label'), 'New automation');
       assert.equal(await page.locator('.au-ph .au-range').count(), 0, 'the range left the header');
       const place = await page.evaluate(() => {
         const r = (s: string) => document.querySelector(s)!.getBoundingClientRect();

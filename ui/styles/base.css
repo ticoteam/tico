@@ -84,14 +84,14 @@ h1,h2,h3{margin:0;font-weight:600;text-wrap:balance}
    weights: 400 text, 500 emphasis and controls, 600 names, titles and labels (bold text is 600 too). Set apart from
    the body's grid rule so the layout and the type change independently. Inter's own kerning, ligatures and contextual
    alternates stay on (its defaults). */
-body{font-size:var(--t-base);text-rendering:optimizeLegibility;font-optical-sizing:auto;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{font-size:var(--t-base);font-feature-settings:"ss09" 1;text-rendering:optimizeLegibility;font-optical-sizing:auto;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 b,strong{font-weight:600}
 /* light glyphs on a dark page bloom under subpixel-style smoothing; grayscale keeps them crisp */
 :root:not([data-theme="light"]) body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 @media (prefers-color-scheme:light){:root[data-theme="system"] body{-webkit-font-smoothing:auto;-moz-osx-font-smoothing:auto}}
 /* Inter tightens as it grows: 16px and up --track-tight, 14px --track-snug, 13px and under none (tokens.css) */
-h1{font-size:var(--t-lg);line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
-h2{font-size:var(--t-md);line-height:var(--lh-tight);letter-spacing:var(--track-snug);color:var(--ink)}
+h1{font-size:var(--t-page);line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
+h2{font-size:var(--t-card);line-height:var(--lh-tight);letter-spacing:var(--track-snug);color:var(--ink)}
 h3{font-size:var(--t-base);line-height:var(--lh-tight);letter-spacing:var(--track-normal)}
 /* the one uppercase label, for markup that wants it without a rule of its own */
 .label{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}

@@ -223,7 +223,7 @@ function auShell() {
   $('#main').innerHTML = `<div class="au${lst ? ' au-lst' : ''}" id="au-root">
     ${pageHead({title: lst ? 'Listening' : 'Automations', hook: 'au-ph', pad: true,
       tools: `<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>${lst ? '<span class="au-chat"></span>' : ''}`,
-      primary: `<span class="au-newbox"><button class="primary ph-go au-new" type="button"${lst ? '' : ' aria-haspopup="menu" aria-expanded="false"'}>${lst ? 'New listening' : 'New automation'}</button>`
+      primary: `<span class="au-newbox"><button class="ghost ph-go au-new au-plus" type="button" aria-label="${lst ? 'New listening' : 'New automation'}" title="${lst ? 'New listening' : 'New automation'}"${lst ? '' : ' aria-haspopup="menu" aria-expanded="false"'}><span class="nav-icon" aria-hidden="true">add</span></button>`
         + `<div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span>`})}
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">

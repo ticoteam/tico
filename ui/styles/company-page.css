@@ -48,7 +48,7 @@
 .cp-dlg{width:min(460px,calc(100vw - 32px))}
 .cp-dlg.cp-wide{width:min(720px,calc(100vw - 32px))}
 .cp-dlg .tmodal-head{display:flex;align-items:center;gap:var(--s2)}
-.cp-dlg .tmodal-head b{color:var(--ink);font-size:var(--t-md);overflow-wrap:anywhere}
+.cp-dlg .tmodal-head b{color:var(--ink);font-size:var(--t-card);overflow-wrap:anywhere}
 .cp-dlg .spacer{flex:1}
 .cp-form{display:flex;flex-direction:column;gap:10px}
 .cp-form>label,.cp-two>label{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:var(--t-sm);color:var(--muted)}

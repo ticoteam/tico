@@ -178,7 +178,7 @@ button.strat-pill:hover{filter:brightness(1.1)}
 .strat-memo .strat-sec .strat-md{font-size:var(--t-base)}
 
 /* Versions: a drawer on the right (the Goals panel's shape), the whole screen on a phone. */
-.strat-versions .tmodal-head h2{margin:0;font-size:var(--t-md)}
+.strat-versions .tmodal-head h2{margin:0;font-size:var(--t-card)}
 .strat-back{padding:4px 8px}
 .strat-sv-list{list-style:none;margin:0;padding:0}
 .strat-sv-row{display:grid;grid-template-columns:40px minmax(0,1fr);grid-template-rows:auto auto;column-gap:8px;width:100%;padding:8px 6px;border:0;border-top:1px solid var(--line);border-radius:0;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
@@ -187,7 +187,7 @@ button.strat-pill:hover{filter:brightness(1.1)}
 .strat-sv-n{grid-row:1/3;font-weight:600}
 .strat-sv-note{overflow-wrap:anywhere}
 .strat-sv-meta{font-size:var(--t-xs)}
-.strat-sv-title{margin:4px 0 12px;font-size:var(--t-md)}
+.strat-sv-title{margin:4px 0 12px;font-size:var(--t-card)}
 .strat-sv-title .muted{font-size:var(--t-sm);margin-top:2px}
 .strat-sv-sec{padding:10px 0;border-top:1px solid var(--line)}
 .strat-sv-sec p{margin:0;line-height:var(--lh-read)}

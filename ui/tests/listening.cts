@@ -240,8 +240,8 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.equal((await empty.locator('p').innerText()).trim(), 'Watches the sites and searches you pick, and posts what matters to Updates.', tag + ': what it does');
       assert.equal(await empty.locator('.ea-art').count(), 1, tag + ': its little picture');
       assert.deepEqual(await page.locator('.au-lst :is(button,a).primary:visible').allInnerTexts(), ['New listening'], tag + ': one green action');
-      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': the header\'s New listening stays in place');
-      assert.equal(await empty.locator('[data-lst-new]:not(.primary)').count(), 1, tag + ': the empty state\'s is a plain button');
+      assert.equal(await page.locator('.au-lst .au-new').isVisible(), true, tag + ': the header\'s quiet + stays in place');
+      assert.equal(await page.locator('.au-lst .au-new').getAttribute('aria-label'), 'New listening', tag + ': the + is named');
       await empty.locator('[data-lst-new]').dblclick();
       await page.waitForFunction(() => /^#\/listening\/au_\d+$/.test(location.hash));
       await page.waitForSelector('.lst-blk');

@@ -14,7 +14,7 @@
 .req>summary:hover .req-arrow{color:var(--ink)}
 .req[open] .req-arrow{transform:var(--chev-open)}
 .req-body{padding:12px 8px 16px 42px}
-.req-title{font-size:var(--t-md);line-height:var(--lh-tight);font-weight:600;margin-bottom:6px;letter-spacing:var(--track-snug)}
+.req-title{font-size:var(--t-card);line-height:var(--lh-tight);font-weight:600;margin-bottom:6px;letter-spacing:var(--track-snug)}
 .req-context{color:var(--ink);max-width:78ch}
 .req-context .md{max-width:none}
 .req-context .md>:first-child,.req-next .md>:first-child{margin-top:0}

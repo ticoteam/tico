@@ -300,7 +300,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-grab{display:none}
 .au-ed{display:flex;flex-direction:column;min-height:0;height:100%}
 .au-edh{display:flex;align-items:center;gap:8px;padding:12px 16px;min-height:53px;box-sizing:border-box;border-bottom:1px solid var(--line)}
-.au-edh h3{margin:0;font-size:var(--t-md);letter-spacing:var(--track-snug)}
+.au-edh h3{margin:0;font-size:var(--t-card);letter-spacing:var(--track-snug)}
 .au-x{flex:none;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .au-x:hover{background:var(--surface2);color:var(--ink)}
 .au-edb{flex:1;min-height:0;overflow-y:auto;display:grid;align-content:start;gap:14px;padding:14px 16px}
@@ -573,3 +573,8 @@ button.au-chip:hover{background:var(--surface2)}
   .hb-cells .au-n{min-width:0;text-align:left}
   .hb-sw-none{display:none}
 }
+
+/* New automation: a quiet + in the header; creating one is rare. */
+.au-plus{width:var(--ctl);min-width:var(--ctl);padding:0;display:inline-grid;place-items:center}
+.au-plus .nav-icon{font-size:20px;color:var(--muted)}
+.au-plus:hover .nav-icon{color:var(--ink)}

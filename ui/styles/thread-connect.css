@@ -2,7 +2,7 @@
    of a thread's Who can read sheet. Rows reuse .cn-row. */
 .cn-sec{padding:8px 0 16px}
 .cn-sec-head{display:flex;align-items:center;gap:8px;padding:12px 28px 4px}
-.cn-sec-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.cn-sec-head h2{margin:0;font-size:var(--t-card);font-weight:600}
 .cn-sec-head .spacer{flex:1}
 .cn-form{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:4px 28px 8px}
 .cn-form select,.cn-form input:not([type=checkbox]){min-width:0;flex:1 1 180px}

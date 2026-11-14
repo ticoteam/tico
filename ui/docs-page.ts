@@ -222,7 +222,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
 
   // The one page header (ui/app/page-head.ts): search, Ask and Add source as tools, today's menu in its ⋯, New doc last.
   $('#main').innerHTML = pageHead({title: 'Docs', hook: 'docs-heading', moreId: 'docs-more', menuId: 'docs-menu',
-    tools: `<div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder="Search docs" value="${esc(DOC_QUERY)}" autocomplete="off"><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>`
+    tools: `<div class="docs-search-field"><span class="nav-icon" aria-hidden="true">search</span><input id="docs-search" class="docs-search" type="search" aria-label="Search docs" placeholder=" " value="${esc(DOC_QUERY)}" autocomplete="off"><span class="docs-search-hint docs-search-hint-long" aria-hidden="true">Search docs</span><span class="docs-search-hint docs-search-hint-short" aria-hidden="true">Search</span><kbd class="docs-kbd" aria-hidden="true">/</kbd></div>`
       + `<button class="docs-ask" id="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button>`
       + '<button class="ghost" id="docs-add-source" type="button">Add source</button>',
     more: '<button id="docs-import" type="button">Import a file…</button><button id="docs-link" type="button">Add source…</button>'

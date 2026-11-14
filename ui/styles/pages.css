@@ -67,7 +67,7 @@
 .pg-bare .pg-box,.pg-bare .page-frame,.pg-bare .pg-preview .html-view{border:0;border-radius:0;background:transparent}
 /* What's changed?: the page's text as a line diff (tfDiffHTML, ui/styles/task-files.css). */
 .pg-diff-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px;font-size:var(--t-sm)}
-.pg-diff-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.pg-diff-head h2{margin:0;font-size:var(--t-card);font-weight:600}
 .pg-diff-head .spacer{flex:1}
 .pg-diff-from{flex:none;width:auto;min-width:64px;font-size:var(--t-sm)}
 .pg-diff .tf-diff-lines{max-height:none}

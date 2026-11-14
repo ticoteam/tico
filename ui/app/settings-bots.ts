@@ -235,20 +235,21 @@ function renderSettingsBots() {
   };
   const row = (e: SettingsBot) => {
     const problem = settingsBotProblem(e);
-    const badges = `${isBuiltInBot(e.id) ? '<span class="pill" data-built-in>Built-in</span>' : ''}${botPausedBadge(e.id, true) || (e.status && e.status !== 'active' ? `<span class="pill">${esc(statusWord(e.status))}</span>` : '')}`;
+    // Access shows only when it is narrower than open: a full-access bot says nothing.
+    const word = settingsAccessWord(e), access = word === 'Open' || word === 'You: See · Read · Write' ? '' : `<span class="sb-cell-access" aria-label="Access: ${esc(word)}">${settingsAccessCell(e)}</span>`;
+    const under = [e.team ? esc(teamLabel(e.team)) : '', access, problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''].filter(Boolean).join(' · ');
+    const badges = `${botPausedBadge(e.id, true) || (e.status && e.status !== 'active' ? `<span class="pill">${esc(statusWord(e.status))}</span>` : '')}`;
     const model = e.agent ? `<span class="muted" title="${esc(e.agent.model ? `profile's model · ${e.agent.model}` : "the profile's own model")}">${esc(agentKind(e.agent))}</span>` : settingsChoiceCell(e, 'model');
     return `<tr data-settings-bot="${esc(e.id)}"><td class="settings-pick">${pick(e)}</td>
-      <td class="sb-cell-name"><div class="sb-bot">${avatar(e.id, 27, stateOf(e.id))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${encodeURIComponent(e.id)}">${shownName(e)}</a>${botDisplayName(e.id) !== (e.display_name || e.slug) ? `<span class="mono muted">${esc(e.slug)}</span>` : ''}${badges}</div>${e.team || problem ? `<small>${e.team ? esc(teamLabel(e.team)) : ''}${e.team && problem ? ' · ' : ''}${problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''}</small>` : ''}</div></div></td>
-      <td class="sb-cell-access" aria-label="Access: ${esc(settingsAccessWord(e))}"><span class="sb-access-label" aria-hidden="true">Access:</span>${settingsAccessCell(e)}</td><td class="sb-cell-model"><div class="sb-model-wrap">${model}${e.agent ? '' : settingsTaskIndicator(e)}</div>${settingsBotSearchMatch(e)}</td>
-      <td class="sb-cell-fallback">${e.agent ? '<span class="muted">-</span>' : settingsChoiceCell(e, 'fallback')}</td>
+      <td class="sb-cell-name"><div class="sb-bot">${avatar(e.id, 27, stateOf(e.id))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${encodeURIComponent(e.id)}">${shownName(e)}</a>${botDisplayName(e.id) !== (e.display_name || e.slug) ? `<span class="mono muted">${esc(e.slug)}</span>` : ''}${badges}</div>${under ? `<small>${under}</small>` : ''}</div></div></td>
+      <td class="sb-cell-model"><div class="sb-model-wrap">${model}${e.agent ? '' : settingsTaskIndicator(e)}</div>${settingsBotSearchMatch(e)}</td>
       <td class="sb-cell-owners">${stack(e)}</td><td class="sb-cell-computer">${settingsMachineSelect(e)}</td>
-      <td class="sb-cell-limit">${useLimitButton(e.id, e.display_name, SETTINGS_DATA.limits?.bots?.[e.id])}</td>
-      <td class="settings-row-actions">${settingsCanManageBot(e) ? `<button class="ghost" type="button" data-edit-bot="${esc(e.id)}" aria-label="Edit ${esc(e.display_name)}">Edit</button>` : ''}</td></tr>${
-      !e.agent && settingsCanManageBot(e) && SETTINGS_BOTS_VIEW.taskOpen.has(e.id) ? settingsTaskRow(e, 9) : ''}`;
+      <td class="sb-cell-limit">${useLimitButton(e.id, e.display_name, SETTINGS_DATA.limits?.bots?.[e.id])}</td></tr>${
+      !e.agent && settingsCanManageBot(e) && SETTINGS_BOTS_VIEW.taskOpen.has(e.id) ? settingsTaskRow(e, 6) : ''}`;
   };
   const q = SETTINGS_BOTS_VIEW.q.trim();
   const none = `<div class="empty">No bots match “${esc(q)}”.</div>`;
-  const html = !all.length ? '<div class="empty">No bots are registered.</div>' : `${settingsBotsSearchHTML(rows.length, all.length)}${rows.length ? `<div class="scroll" id="settings-bots-list"><table class="settings-bots-table${SETTINGS_BOTS_VIEW.picking || SETTINGS_BOTS_VIEW.selected.size ? ' picking' : ''}"><thead><tr><th class="settings-pick"><input type="checkbox" data-bots-select-all aria-label="Select all shown bots"></th><th>Bot</th><th>Access</th><th>Model</th><th>Fallback</th><th>Owners</th><th>Computer</th><th>Limit</th><th aria-label="Actions"></th></tr></thead><tbody>
+  const html = !all.length ? '<div class="empty">No bots are registered.</div>' : `${settingsBotsSearchHTML(rows.length, all.length)}${rows.length ? `<div class="scroll" id="settings-bots-list"><table class="settings-bots-table${SETTINGS_BOTS_VIEW.picking || SETTINGS_BOTS_VIEW.selected.size ? ' picking' : ''}"><thead><tr><th class="settings-pick"><input type="checkbox" data-bots-select-all aria-label="Select all shown bots"></th><th>Bot</th><th>Model</th><th>Owners</th><th>Computer</th><th>Limit</th></tr></thead><tbody>
     ${rows.map(row).join('')}
     </tbody></table></div>` : `<div id="settings-bots-list">${none}</div>`}`;
   // While the search box has the cursor (typing, or the refresh loop meanwhile) it stays the same element:

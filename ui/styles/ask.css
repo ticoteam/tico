@@ -29,7 +29,7 @@
 .ask-panel:not(.ask-shown){visibility:hidden;content-visibility:hidden;pointer-events:none}
 .ask-panel:not(.ask-shown) .ldot{opacity:0}   /* closing: the dot is already on its way back to the row */
 .ask-head{display:flex;align-items:center;gap:6px;padding:8px 6px 8px 12px;border-bottom:1px solid var(--line);min-width:0}
-.ask-head h2{min-width:0;margin:0;font-size:var(--t-md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ask-head h2{min-width:0;margin:0;font-size:var(--t-card);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ask-mark{margin:0 2px}
 .ask-sees{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:140px;padding:1px 8px;border-radius:999px;
   font-size:var(--t-xs);color:var(--muted);background:color-mix(in srgb,var(--ink) 7%,transparent)}

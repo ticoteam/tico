@@ -30,7 +30,7 @@
 /* A question: its title, the briefing's one-line answer beside it, and what backs it. */
 .mkt-q{margin-top:28px;scroll-margin-top:12px}
 .mkt-qh{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;margin:0 0 10px}
-.mkt-qh h3{margin:0;font-size:var(--t-md);font-weight:600;line-height:var(--lh-tight)}
+.mkt-qh h3{margin:0;font-size:var(--t-card);font-weight:600;line-height:var(--lh-tight)}
 .mkt-ans{flex:1 1 280px;min-width:0;margin:0;color:var(--g7);font-size:var(--t-base)}
 .mkt-more{margin-left:auto;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
 .mkt-more .linkish{font-size:inherit}

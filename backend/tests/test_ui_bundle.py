@@ -62,9 +62,9 @@ def test_the_page_names_one_versioned_script_and_one_stylesheet(api):
 
 
 def test_a_versioned_font_is_kept_and_an_unversioned_one_revalidates(api):
-    # Inter's font-display is optional: a font the browser must revalidate first can miss the first paint.
+    # The text font's font-display is optional: a font the browser must revalidate first can miss the first paint.
     url = re.search(
-        r'href="(/vendor/fonts/inter-variable\.woff2\?v=[0-9a-f]{12})"',
+        r'href="(/vendor/fonts/atkinson-hyperlegible-next-plain-zero\.woff2\?v=[0-9a-f]{12})"',
         (Path(__file__).resolve().parents[2] / "ui" / "index.html").read_text(),
     ).group(1)
     kept = api.get(url, headers=AUTH)

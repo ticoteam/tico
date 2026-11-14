@@ -34,7 +34,7 @@
 details.card,section.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:var(--s4);margin-bottom:var(--s4)}
 details.card summary{cursor:pointer}
 section.card>header{display:flex;align-items:baseline;gap:var(--s3);margin-bottom:var(--s3)}
-section.card>header h2,details.card>summary{font-size:var(--t-base);font-weight:600;color:var(--ink);letter-spacing:var(--track-normal)}
+section.card>header h2,details.card>summary{font-size:var(--t-card);font-weight:600;color:var(--ink);letter-spacing:var(--track-normal)}
 section.card>header .sub{color:var(--muted);font-size:var(--t-sm);font-weight:400;margin-left:auto;text-align:right}
 table{border-collapse:collapse;width:100%;font-size:var(--t-base)}
 th{text-align:left;font-weight:600;color:var(--muted);font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);padding:0 var(--s3) var(--s2) 0;border-bottom:1px solid var(--line);white-space:nowrap}

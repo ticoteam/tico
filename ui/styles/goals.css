@@ -25,7 +25,7 @@
   --tree-elbow:calc(var(--gt-gpad) + var(--d) * var(--ind) - var(--tree-gap) - var(--tree-x));--tree-from:calc(50% + var(--t-label) / 2)}
 .gt-rail{display:contents;--tree-x:calc(var(--gt-px) + (var(--l) - 1) * var(--ind))}
 .gt-av,.gt-name,.gt-goal,.gt-kpis{display:flex;align-items:center;min-width:0}
-.gt-av{grid-area:av}.gt-name{grid-area:name;padding-right:12px}.gt-goal{grid-area:goal;gap:8px}.gt-kpis{grid-area:kpis;gap:6px;padding-left:12px}
+.gt-av{grid-area:av}.gt-name{grid-area:name;padding-right:12px}.gt-goal{grid-area:goal;gap:8px}.gt-kpis{grid-area:kpis;gap:6px;padding-left:12px;overflow:hidden}
 .gt-name>span,.gt-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gt-co .gt-name{font-weight:600}
 .gt-co-av{width:20px;height:20px;border-radius:5px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:600}

@@ -119,7 +119,7 @@ p:empty{display:none}
 .settings-toolbar p{margin:0;color:var(--muted);font-size:var(--t-base)}
 .settings-bots-table{table-layout:fixed;min-width:0}
 /* Room for a computer's name ("Ana's Mac mini") and a model's whole name, effort and window ("Opus 5.5 MED 400K") beside Tasks. */
-.settings-bots-table th:nth-child(1){width:30px}.settings-bots-table th:nth-child(2){width:19%}.settings-bots-table th:nth-child(3){width:7%}.settings-bots-table th:nth-child(4){width:24%}.settings-bots-table th:nth-child(5){width:12%}.settings-bots-table th:nth-child(6){width:8%}.settings-bots-table th:nth-child(7){width:15%}.settings-bots-table th:nth-child(8){width:76px}.settings-bots-table th:nth-child(9){width:56px}
+.settings-bots-table th:nth-child(1){width:30px}.settings-bots-table th:nth-child(2){width:28%}.settings-bots-table th:nth-child(3){width:36%}.settings-bots-table th:nth-child(4){width:10%}.settings-bots-table th:nth-child(5){width:18%}.settings-bots-table th:nth-child(6){width:84px}
 .settings-bots-table td{vertical-align:middle;min-width:0;padding-top:7px;padding-bottom:7px;padding-right:var(--s2)}
 /* Model, fallback and computer read as text until hovered; the model pickers open in a popover (.sb-choice-pop). */
 .sb-pick{display:flex;align-items:center;gap:4px;width:100%;max-width:100%;min-width:0;margin-left:-7px;padding:5px 7px;border:1px solid transparent;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
@@ -160,7 +160,7 @@ p:empty{display:none}
 .mp-compact select{width:100%;min-width:0;padding:6px 8px;font-size:var(--t-sm);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
 .mp-note{margin:0;font-size:var(--t-sm);color:var(--muted)}
 .mp-note:empty{display:none}
-.mp-foot{display:flex;gap:8px;margin-top:2px}
+.mp-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
 .mp-foot .primary{padding:6px 14px}
 .settings-bulk-pick{display:flex;min-width:0}
 /* In a form (the bot editor, Add bot, bulk change, Hire) the picker's button is a dropdown like the selects beside it:
@@ -233,15 +233,17 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
   .settings-bots-table td.settings-pick{display:none}
   .settings-bots-table.picking td.settings-pick{display:flex;align-items:center;align-self:stretch;grid-column:1;grid-row:1/span 2;min-width:36px;padding:0;cursor:pointer}
   .settings-bots-table.picking td.settings-pick input{width:18px;height:18px}
-  .settings-bots-table td.sb-cell-name{grid-column:2/5;grid-row:1}
+  .settings-bots-table td.sb-cell-name{grid-column:2/-1;grid-row:1}
   .settings-bots-table td.settings-row-actions{grid-column:5;grid-row:1;padding-left:8px}
   .settings-bots-table td.settings-row-actions button{min-height:40px;padding:0 14px}
   .settings-bots-table :is(td.sb-cell-access,td.sb-cell-limit,td.sb-cell-model){grid-row:2;display:flex;align-items:center;min-height:32px;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
   .settings-bots-table td.sb-cell-access{grid-column:2}   /* from the row's left edge, under the avatar: the model name needs the width */
-  .settings-bots-table td.sb-cell-limit{grid-column:3}
+  .settings-bots-table td.sb-cell-limit{grid-column:2}
   .settings-bots-table td.sb-cell-limit:not(:has(button)){display:none}
-  .settings-bots-table td.sb-cell-model{grid-column:4/-1}
-  .settings-bots-table :is(td.sb-cell-limit,td.sb-cell-model)::before{content:"·";flex:none;padding:0 4px;color:var(--muted)}
+  .settings-bots-table td.sb-cell-model{grid-column:3/-1}
+  .settings-bots-table td.sb-cell-model::before{content:"·";flex:none;padding:0 4px;color:var(--muted)}
+  .settings-bots-table tr:not(:has(td.sb-cell-limit button)) td.sb-cell-model{grid-column:2/-1}
+  .settings-bots-table tr:not(:has(td.sb-cell-limit button)) td.sb-cell-model::before{display:none}
   .settings-bots-table .sb-access-label{display:inline;flex:none;margin-right:4px}
   .settings-bots-table .sb-cell-access .sb-access{font-size:inherit;color:inherit}
   .settings-bots-table td.sb-cell-fallback,.settings-bots-table td.sb-cell-owners,.settings-bots-table td.sb-cell-computer{display:none}
@@ -417,7 +419,7 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-harness-toggle{display:inline-flex;align-items:center;gap:3px;font-size:var(--t-sm)}
 .model-login{width:min(520px,calc(100vw - 32px))}
 .model-login header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px 0}
-.model-login h2{margin:0;font-size:var(--t-md)}
+.model-login h2{margin:0;font-size:var(--t-card)}
 .model-login-body{padding:8px 16px}
 .model-login-steps{margin:8px 0;padding-left:20px;display:grid;gap:12px}
 .model-login-where{margin:8px 0;color:var(--muted);font-size:var(--t-sm)}
@@ -1153,3 +1155,9 @@ section.card>header .settings-head-act{margin-left:auto}
 .skills-connect-form p{margin:0;overflow-wrap:anywhere}
 .skills-connect-check{display:flex;align-items:center;gap:8px}
 .skills-connect-form .row{flex-wrap:wrap;gap:8px}
+
+/* Add bot: a quiet + beside the title. Fallback sits with the task model, under the bot. */
+.sb-plus{width:var(--ctl);min-width:var(--ctl);padding:0;display:inline-grid;place-items:center}
+.sb-plus .nav-icon{font-size:20px;color:var(--muted)}
+.sb-plus:hover .nav-icon{color:var(--ink)}
+.sb-task-part.sb-cell-fallback{display:inline-flex;align-items:center;gap:6px}

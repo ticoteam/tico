@@ -71,7 +71,7 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 /* Suggested */
 .ru-sg{max-width:980px;margin:16px 0 8px}
 .ru-sg>header{display:flex;align-items:center;gap:8px;padding:0 8px 6px;border-bottom:1px solid var(--line)}
-.ru-sg h2{margin:0;font-size:var(--t-md);font-weight:600}
+.ru-sg h2{margin:0;font-size:var(--t-card);font-weight:600}
 .ru-prop{display:grid;grid-template-columns:minmax(0,1fr) 180px auto;align-items:center;gap:12px;min-height:44px;padding:6px 8px;border-bottom:1px solid var(--line)}
 .ru-pt{min-width:0;overflow-wrap:anywhere;color:var(--ink);text-decoration:none}
 .ru-pt:hover{text-decoration:underline}
@@ -84,7 +84,7 @@ a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent)
 .ru-side{min-width:0;min-height:0;overflow-y:auto;border-left:1px solid var(--line);background:var(--surface)}
 .ru-side[hidden]{display:none}
 .ru-side-h{position:sticky;top:0;z-index:1;display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
-.ru-side-h h2{margin:0;min-width:0;font-size:var(--t-md);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ru-side-h h2{margin:0;min-width:0;font-size:var(--t-card);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ru-x{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:var(--r-ctl);color:var(--muted);text-decoration:none}
 .ru-x:hover{background:var(--surface2);color:var(--ink);text-decoration:none}
 .ru-side .skel{padding:12px 16px}

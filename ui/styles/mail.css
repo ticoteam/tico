@@ -13,7 +13,7 @@
 .mail-box-link .agent-mark{font-family:"Material Symbols Outlined";font-size:16px;color:var(--ink)}
 .mail-main{min-width:0}
 .mail-main-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
-.mail-main-head h2{font-size:var(--t-md);margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mail-main-head h2{font-size:var(--t-card);margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mail-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line)}
 .mail-tab{border:0;border-bottom:2px solid transparent;background:none;color:var(--muted);padding:8px 10px;font:inherit;font-size:var(--t-base);white-space:nowrap;cursor:pointer}
 .mail-tab.on{color:var(--ink);border-bottom-color:var(--ink);font-weight:600}

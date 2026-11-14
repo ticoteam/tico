@@ -41,7 +41,7 @@ function pageHeadMore(items: string, moreId: string, menuId: string): string {
     + `<span class="nav-icon" aria-hidden="true">more_horiz</span></button><div class="ph-menu" id="${esc(menuId)}" popover aria-label="More">${items}</div>`;
 }
 
-// The header's HTML. Parts are written in order with no whitespace between tags, so :empty and :first-child hold;
+// The header's HTML: title, tabs, tools, the filled button, then ⋯ at the far right. Parts are written in order with no whitespace between tags, so :empty and :first-child hold;
 // an empty part is left out, except the holders a page fills later (tabs nav when tabsHook is set, .ph-act with actId).
 function pageHead(o: PageHeadOptions): string {
   const seq = ++PAGE_HEAD_SEQ;
@@ -56,8 +56,8 @@ function pageHead(o: PageHeadOptions): string {
     + tabs
     + '<span class="ph-sp"></span>'
     + `<div class="ph-tools">${o.tools || ''}</div>`
-    + (o.more ? pageHeadMore(o.more, moreId, menuId) : '')
     + (o.primary || o.actId ? `<div class="ph-act"${o.actId ? ` id="${esc(o.actId)}"` : ''}>${o.primary || ''}</div>` : '')
+    + (o.more ? pageHeadMore(o.more, moreId, menuId) : '')
     + '</header>';
 }
 
@@ -81,11 +81,11 @@ function pageHeadSet(head: HTMLElement, part: PageHeadPart, html: string): void 
     if (!html) { menu?.remove(); btn?.remove(); return; }
     if (menu) { menu.innerHTML = html; return; }
     const seq = ++PAGE_HEAD_SEQ;
-    q('.ph-tools')?.insertAdjacentHTML('afterend', pageHeadMore(html, `ph-more-${seq}`, `ph-menu-${seq}`));
+    head.insertAdjacentHTML('beforeend', pageHeadMore(html, `ph-more-${seq}`, `ph-menu-${seq}`));
     return;
   }
   let act = q('.ph-act');
-  if (!act) { if (!html) return; act = document.createElement('div'); act.className = 'ph-act'; head.append(act); }
+  if (!act) { if (!html) return; act = document.createElement('div'); act.className = 'ph-act'; const more = q('.ph-more'); if (more) more.before(act); else head.append(act); }
   act.innerHTML = html;
   pageHeadFitSoon();
 }
@@ -98,7 +98,7 @@ function pageHeadSet(head: HTMLElement, part: PageHeadPart, html: string): void 
 // A phone's layout is CSS.
 const PAGE_HEAD_PHONE = matchMedia('(max-width:760px)');
 const pageHeadTools = (head: HTMLElement) => head.querySelector<HTMLElement>(':scope > .ph-tools, :scope > .ph-menu > .ph-tools');
-// Move the tools into the ⋯ menu (first, above its own items) or back to their place in the row, just before the ⋯.
+// Move the tools into the ⋯ menu (first, above its own items) or back to their place in the row, after the spacer. The ⋯ is last, after the filled button.
 function pageHeadFold(head: HTMLElement, fold: boolean): void {
   const tools = pageHeadTools(head);
   if (!tools || fold === (tools.parentElement !== head)) return;
@@ -107,7 +107,7 @@ function pageHeadFold(head: HTMLElement, fold: boolean): void {
     let menu = head.querySelector<HTMLElement>(':scope > .ph-menu');
     if (!menu) {
       const seq = ++PAGE_HEAD_SEQ;
-      tools.insertAdjacentHTML('afterend', pageHeadMore('', `ph-more-${seq}`, `ph-menu-${seq}`));
+      head.insertAdjacentHTML('beforeend', pageHeadMore('', `ph-more-${seq}`, `ph-menu-${seq}`));
       menu = head.querySelector<HTMLElement>(':scope > .ph-menu');
       if (!menu) return;
       menu.dataset['phMade'] = '';
@@ -119,7 +119,7 @@ function pageHeadFold(head: HTMLElement, fold: boolean): void {
   }
   const menu = tools.parentElement as HTMLElement;
   if (menu.matches(':popover-open')) menu.hidePopover();
-  head.querySelector(':scope > .ph-more')?.before(tools);
+  head.querySelector(':scope > .ph-sp')?.after(tools);
   if (menu.dataset['phMade'] !== undefined) { head.querySelector(`:scope > .ph-more[popovertarget="${CSS.escape(menu.id)}"]`)?.remove(); menu.remove(); }
   head.classList.remove('ph-fold');
   pageHeadHeld(head);
