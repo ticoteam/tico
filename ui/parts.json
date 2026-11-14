@@ -105,6 +105,7 @@
    "settingsHistoryAddress",
    "settingsMachinesRead",
    "settingsReleasesOpen",
+   "settingsRunPickerMount",
    "teamBuildOpen",
    "cloudAgentsOpen"
   ],

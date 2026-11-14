@@ -1,5 +1,5 @@
-/* ui/app/settings-bots-choice.ts — Settings > Bots: the one model picker (a bot's model, fallback and task model, a new
-   bot's model, bulk change). Closed it is a short button ("Opus 5.5 MED 400K"); open it is one panel: Harness, Model
+/* ui/app/settings-bots-choice.ts — the one model picker: Settings > Bots (a bot's model, fallback and task model, a new
+   bot's model, bulk change), Hire, a task's Runs on and an automation step's Runs on. Closed it is a short button ("Opus 5.5 MED 400K"); open it is one panel: Harness, Model
    (each with its window), Effort and Compact, then Apply.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -76,7 +76,9 @@ function settingsPickWords(spec: SettingsChoiceSpec, value: string, compact: num
   if (!c.model) {
     if (!spec.none) return bot ? {short: settingsDefaultLabel(bot), long: settingsDefaultLabel(bot)} : {short: 'Choose', long: 'Not chosen'};
     // Same as bot with its tasks' own window, or bulk change's window alone; a fallback of None has none.
-    const size = compact && (spec.mode === 'bulk' || (spec.mode === 'task' && settingsCompacts(bot ? settingsBotHarness(bot) : ''))) ? settingsSizeWords(compact) : '';
+    // (a task's or a step's own run on Same as bot runs on the bot's task model).
+    const same = bot && spec.kind === 'run' && bot.task_model?.model ? bot.task_model : bot;
+    const size = compact && (spec.mode === 'bulk' || (spec.mode === 'task' && settingsCompacts(same ? settingsBotHarness(same) : ''))) ? settingsSizeWords(compact) : '';
     return {short: [spec.none, size].filter(Boolean).join(' '), long: [spec.none, size ? `compacts at ${size.toLowerCase()}` : ''].filter(Boolean).join(', ')};
   }
   const compacts = !!spec.mode && settingsCompacts(c.harness);
@@ -151,8 +153,10 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     picked = {harness: 'tico', model: settingsTierId(next), effort: efforts.list.includes(picked.effort) ? picked.effort : efforts.def};
   };
   // What runs, for the Compact row: a task pick on Same as bot runs on the bot's own harness and model.
-  const runHarness = () => picked.harness ? real().harness : mode === 'task' && bot ? settingsBotHarness(bot) : '';
-  const runModel = () => picked.model || (mode === 'task' && bot ? settingsTaskRunsOn(bot, '') : '');
+  // A task's or an automation step's own run (kind `run`) on Same as bot runs on the bot's task model.
+  const sameAs = (): SettingsBotChoice | null => mode !== 'task' || !bot ? null : spec.kind === 'run' && bot.task_model?.model ? bot.task_model : bot;
+  const runHarness = () => picked.harness ? real().harness : settingsBotHarness(sameAs() || {});
+  const runModel = () => picked.model || (bot && sameAs() ? settingsTaskRunsOn(bot, sameAs()!.model) : '');
   // Bulk change with no model picked sets a window alone, each bot keeping its model: every size is offered.
   // The Compact row shows for every pick, so the panel keeps one shape; only a harness that compacts at a size we set
   // offers sizes (one that compacts on its own offers Default alone and says so).
@@ -451,4 +455,34 @@ async function settingsPickChoice(box: SettingsChoiceBox, value: string, compact
   }
   await settingsBeginTransition(box, e, {kind: 'model', model: choice.model, effort: choice.effort,
     harness: choice.harness, expected_generation: e.machine?.generation || 0, expected_revision: revision});
+}
+
+// The catalog the picker reads, fetched once on a page that has not read Settings' own (Hire, a task's or an automation
+// step's Runs on).
+async function settingsChoiceCatalog() {
+  if (SETTINGS_DATA.models.length) return;
+  const catalog = await get('/v2/models');
+  if (!SETTINGS_DATA.models.length) Object.assign(SETTINGS_DATA, {models: catalog.models || [], harnesses: catalog.harnesses || [],
+    enabledProviders: catalog.enabled_providers || [], defaultModel: catalog.default?.model || '', gateway: catalog.gateway || null});
+}
+// What a task's or an automation step's runs use (backend/task_run_models.py): a model with its harness and effort, or
+// none (the bot's task model), and a window of its own or none (the bot's).
+interface SettingsRunChoice { model: string; harness?: string; effort?: string; compact_at: number | null; }
+// Runs on, in the task window and an automation step: the shared picker for the bot that runs it, "Same as bot" first
+// in the panel and in Compact. Apply hands `onPick` the new choice.
+async function settingsRunPickerMount(host: HTMLElement, opts: {bot: string; name: string; run: Partial<SettingsRunChoice> | null | undefined;
+  readonly: boolean; onPick: (run: SettingsRunChoice) => void | Promise<void>}) {
+  try { await settingsChoiceCatalog(); } catch { if (host.isConnected) host.innerHTML = '<p class="muted">Could not read the models.</p>'; return; }
+  if (!host.isConnected) return;
+  const slug = String(opts.bot || '').replace(/^bot:/, ''), bot = S.emps.find(row => row.id === slug || row.slug === slug) || null;
+  const model = opts.run?.model || '', row = settingsModel(model);
+  // A saved run with no harness or effort runs on the model's first harness and its default effort (task_run_models.stamped).
+  const harness = opts.run?.harness || row?.harnesses?.[0] || row?.runtime || '';
+  const current = model ? settingsChoiceValue(harness, model, opts.run?.effort || row?.default_effort || '') : '';
+  host.innerHTML = settingsChoiceBox({bot, kind: 'run', name: opts.name, current, compact: opts.run?.compact_at || null,
+    readonly: opts.readonly, none: 'Same as bot', mode: 'task'});
+  settingsWireCombos(host, async (_box, value, compact) => {
+    const c = value ? settingsChoiceFromValue(value) : null;
+    await opts.onPick(c ? {model: c.model, harness: settingsRealHarness(c.harness), effort: c.effort, compact_at: compact} : {model: '', compact_at: compact});
+  });
 }

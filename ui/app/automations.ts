@@ -430,6 +430,7 @@ function auDrawSide() {
   const sel: [number, number] | null = b && typeof typing?.selectionStart === 'number' ? [typing.selectionStart, typing.selectionEnd!] : null;
   ed.hidden = !html;
   ed.innerHTML = html;
+  auRunPickerMount(ed);
   const again = b && html ? ed.querySelector<HTMLInputElement>(`[data-b="${CSS.escape(b)}"]`) : null;
   if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
   AU.root.classList.toggle('ed-open', !!html);
