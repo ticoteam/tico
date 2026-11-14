@@ -191,10 +191,17 @@ CHECKS: dict[str, tuple[Part, ...]] = {
         ),
     ),
 }
-# Each check's bar: a part is yes at the first number or more, no at the second or less, can't tell between. One place,
-# with the eval result beside it. Today every check has the bar the 30-page eval set on Nov 11; the eval rebuilt from
-# the 826 real verdicts of Nov 11 to 13 and what happened next sets each check's own (task #351's follow-up).
-BARS: dict[str, tuple[float, float]] = {check: (MET_AT, NOT_MET_AT) for check in CHECKS}
+# Each check's bar: a part is yes at the first number or more, no at the second or less, can't tell between. Set by
+# evals/pipeline_judge/rebuild.py from the 826 real verdicts of Nov 11 to 13 and what happened next (the result is
+# evals/pipeline_judge/results/bars-2026-11-13.md): the lowest bar that keeps met-then-sent-back no higher than before
+# and unsure under 10%. A send-back no bar could hold with unsure under 10% (the person sent back the work, every part
+# plainly there) is out of Jev's reach and does not count. Rerun it when what Jev is shown, or a check's parts, change.
+BARS: dict[str, tuple[float, float]] = {
+    "spec": (0.5, NOT_MET_AT),
+    "review": (0.5, NOT_MET_AT),
+    "qa": (0.5, NOT_MET_AT),
+    "validate": (0.5, NOT_MET_AT),
+}
 
 
 def _words(text: object) -> str:

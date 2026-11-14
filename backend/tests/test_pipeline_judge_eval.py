@@ -319,7 +319,7 @@ def test_an_allowed_unsure_is_left_out_of_the_bar_but_a_wrong_answer_on_it_is_no
     def judge(p):
         return lambda c: ((p if c is case else 0.9), 0.0, 5)
 
-    unsure = run.score("j", judge(0.7), [case, *others])
+    unsure = run.score("j", judge(0.4), [case, *others])
     assert unsure["passes_bar"] and unsure["excused"] == [case["id"]] and unsure["cases"] == 3
     assert not run.score("j", judge(0.1), [case, *others])["passes_bar"], "not met on a good page is still a mistake"
     assert run.problems([{**case, "expected": "not_met"}])[0].endswith("only a met case may allow unsure")

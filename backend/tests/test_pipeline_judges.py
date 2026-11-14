@@ -451,10 +451,10 @@ def test_the_verdict_comes_from_the_parts_and_names_at_most_three():
     req = _spec_req()
     every = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({}))
     assert every["verdict"] == "met"
-    unsure = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"criteria": 0.6}))
+    unsure = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"criteria": 0.4}))
     assert (unsure["verdict"], unsure["reason"]) == ("unsure", "Can't tell if the acceptance criteria can be checked.")
     # A no outweighs a can't tell, and each missing part is named, three at most.
-    mixed = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"criteria": 0.6, "goal": 0.1}))
+    mixed = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"criteria": 0.4, "goal": 0.1}))
     assert (mixed["verdict"], mixed["reason"]) == ("not_met", "No goal found.")
     nothing = P.judge_once(
         None,
@@ -476,7 +476,7 @@ def test_each_shipped_check_is_asked_as_its_parts_now_and_as_it_read_before():
     assert [len(P.CHECKS[c]) for c in ("spec", "review", "qa", "validate")] == [4, 3, 5, 3]
     assert set(P.BARS) == set(P.CHECKS), "every check has its bar, in one place"
     req = {"id": "r", "name": "Checked in production", "rubric": PS.VALIDATE_RUBRIC}
-    result = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"version": 0.5}))
+    result = P.judge_once(None, req, ATTACHMENT, engine=_parts_engine({"version": 0.35}))
     assert (result["verdict"], result["reason"]) == ("unsure", "Can't tell if the version production runs is named.")
 
 
