@@ -137,7 +137,7 @@ const PAGES: PageSpec[] = [
     await page.getByText('Draft replies for the open support tickets').first().waitFor();
   }},
   {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?',
-    ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/decide-about.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
+    ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/decide-content.ts', 'ui/app/decide-about.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
     ui: ['ui/app/goals.ts', 'ui/app/goals-kpi-views.ts', 'ui/goals-kpis.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts',
       'ui/app/drag-pan.ts', 'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',

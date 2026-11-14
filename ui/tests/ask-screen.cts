@@ -89,13 +89,13 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('[data-dc="next"]').click();
 
     // The OK: what the server showed, and Approve with its hash.
-    await dialog.getByText('Guests can pay without an account.').waitFor();
+    await dialog.getByText('Guests can pay without an account.', {exact: true}).waitFor();
     assert.equal(await dialog.locator('.dc-q').innerText(), 'Approve the spec for Checkout flow');
     version = 2;                                      // it changes after it was shown
     await dialog.locator('[data-dc="approve"]').click();
     await dialog.locator('.dc-changed').waitFor();
     assert.equal(await dialog.locator('.dc-changed').innerText(), 'It changed. Look again.');
-    await dialog.getByText('Guests can pay. The summary stays visible.').waitFor();
+    await dialog.getByText('Guests can pay. The summary stays visible.', {exact: true}).waitFor();
     await page.waitForTimeout(300);
     assert.deepEqual(writes.map(w => [w.p, w.body['shown_hash']]), [['/api/v2/tasks/t1/asks/r1/ok', 'a'.repeat(64)]], 'not sent again by itself');
     await dialog.locator('[data-dc="approve"]:not([disabled])').click();
