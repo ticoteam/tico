@@ -150,6 +150,9 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       await page.locator('.toast.err', {hasText: "Couldn't load this part of Tico. Check your connection and try again."}).first().waitFor({timeout: t(15000)});
       assert.equal(await page.locator('.pgc-chat [data-kd-mark]').count(), 0, name + ': no key drop without its code');
       const key = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+      // What reached the hub, not only what stayed in the box: no request but a save to Credentials carries the key.
+      const leaks: string[] = [];
+      page.on('request', r => { if (r.method() !== 'GET' && !r.url().includes('/v2/credentials') && (r.postData() || '').includes(key)) leaks.push(r.method() + ' ' + r.url()); });
       await box.fill('Here is the key ' + key);
       const tried = page.waitForEvent('requestfailed', {predicate: r => /\.key-drop\.js/.test(r.url()), timeout: t(15000)});
       await page.locator('.pgc-chat .p-send').click();
@@ -165,6 +168,7 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       await page.locator('.pgc-chat .p-send').click();
       await page.locator('.pgc-chat').getByText('Hello once the network is back').first().waitFor({timeout: t(15000)});
       await page.waitForFunction(() => (document.querySelector<HTMLTextAreaElement>('.pgc-chat .p-text')?.value || '') === '', null, {timeout: t(15000)});
+      assert.deepEqual(leaks, [], name + ': the key never went out in a message');
       assert.deepEqual(open.errors, [], name + ': errors in the Tools chat after the network came back');
       await open.close();
     }
