@@ -647,7 +647,7 @@ function decidePaintSide(st: DecState) {
 function decideBarRoom() {
   const root = $('.decide');
   if (!root) return;
-  const row = decidePhone() ? root.querySelector<HTMLElement>('.dc-side>div:not(.dc-done)>.dc-acts:last-child') : null;
+  const row = decidePhone() ? $('.decide .dc-side>div:not(.dc-done)>.dc-acts:last-child') as HTMLElement | null : null;
   root.style.setProperty('--dc-bar-h', `${row ? row.offsetHeight : 0}px`);
 }
 // ---- a page that comes back: the right side in parts
