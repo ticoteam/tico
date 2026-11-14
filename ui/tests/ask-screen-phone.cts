@@ -9,7 +9,8 @@ import type {Page, Route} from 'playwright';
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
 // - Send back is on with an empty note: a tap focuses Notes with "Say what to change" and sends nothing; Notes starts one
 //   line tall;
-// - an ask with nothing to show opens on its question, right under the header;
+// - an ask with nothing to show opens on its question, right under the header: a question whose task has no text, and an
+//   OK with nothing attached (no grant, no shows: an empty .dc-doc, task #472);
 // - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it;
 // - at 1440 px the screen is as before: two columns, ‹ ›, Notes 7 lines, Send back off until there is a note, no tap guard.
 // Each check is collected, so a run on the old code lists every one that fails.
@@ -78,6 +79,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'bo', name: 'Bo'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
+      // An OK with nothing attached: no grant to read.
+      if (p === '/api/v2/oks/r5') return json({detail: 'not found'}, 404);
       const okRead = p.match(/^\/api\/v2\/oks\/(r\d)$/);
       if (okRead) return json({requirement_id: okRead[1], subject: `spec:${okRead[1]}`, content: long(Q[Number(okRead[1]!.slice(1)) - 1]!),
         shown_hash: okRead[1]!.slice(1).repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
@@ -229,6 +232,25 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(q.y - (head.y + head.height) <= 24, `the question opens the screen (${q.y - (head.y + head.height)} px under the header)`);
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-question.png')});
     await page.close();
+
+    // An OK with nothing attached (no grant, no shows) opens on its question too: no blank pane, no hairline (task #472).
+    needs = [ok(5, 'OK to go ahead?')];
+    const bare = await browser.newPage({viewport: VIEW, serviceWorkers: 'block', hasTouch: true});
+    bare.on('pageerror', (error: Error) => errors.push(error.message));
+    await serve(bare);
+    await bare.goto('http://tico-ui.test/#/tasks');
+    await bare.locator('[data-need="r5"]').click();
+    await bare.locator('#need-card .dc-q', {hasText: 'OK to go ahead?'}).waitFor();
+    await bare.locator(`${approve}:not([disabled])`).waitFor();
+    await bare.locator('#need-card .dc-thing .dc-doc').waitFor({state: 'attached'});
+    await bare.waitForTimeout(100);
+    const head5 = (await box(bare, '#need-card .dc-head'))!, q5 = (await box(bare, '#need-card .dc-q'))!;
+    check(q5.y - (head5.y + head5.height) <= 24, `an empty OK opens on its question (${q5.y - (head5.y + head5.height)} px under the header)`);
+    check(!await bare.locator('#need-card .dc-thing').isVisible(), 'an empty OK shows no blank pane');
+    const rule = await bare.locator('#need-card .dc-side').evaluate(el => getComputedStyle(el).borderTopWidth);
+    check(rule === '0px', `an empty OK has no hairline above its question (${rule})`);
+    if (shots) await bare.screenshot({path: path.join(shots, 'ask-phone-390-empty-ok.png')});
+    await bare.close();
 
     // 1440 px: as before.
     needs = [ok(1, Q[0]!), ok(2, Q[1]!), question(3, Q[2]!), ok(4, Q[3]!)];
