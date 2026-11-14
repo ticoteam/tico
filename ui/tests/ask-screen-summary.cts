@@ -200,8 +200,10 @@ async function firstScreenClean(page: Page, label: string) {
     for (let i = 0; i < 50 && !writes.some(w => w.p === '/api/v2/tasks/t-r7/asks/r7/ok'); i++) await page.waitForTimeout(100);
     assert.deepEqual(writes.find(w => w.p === '/api/v2/tasks/t-r7/asks/r7/ok')?.body, {shown_hash: SHOWN.r7});
 
-    // r8: a stats board: its tico:stat-board link and the hash in it are not on the first screen.
-    await open('r8');
+    // r8: a stats board: its tico:stat-board link and the hash in it are not on the first screen. Approve moves on to it
+    // by itself; clicking Next before it shows would skip it.
+    await dialog.locator('.dc-q', {hasText: OKS.r8!.line}).waitFor();
+    await ready();
     text = await firstScreenClean(page, 'board');
     for (const s of ['Investors stats board', 'Investors', 'Revenue: monthly, rounded']) assert.ok(text.includes(s), `board shows ${s}`);
     assert.doesNotMatch(text, /tico:|Link/);
