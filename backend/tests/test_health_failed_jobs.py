@@ -6,6 +6,7 @@ five says which bot, when and why: "couldn't start on <computer> after N tries",
 from backend import execution
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401 (fixture)
+from backend.tests.helpers.task_lanes import task_bot
 
 
 def lapse(api, machine, attempt):
@@ -152,3 +153,14 @@ def test_a_started_run_its_computer_lost_says_so(api):
     assert (
         failure["state"] == "expired" and failure["why"] == "Computer lost or heartbeat stopped (attempt lease expired)"
     ), failure
+
+
+def test_a_job_refused_for_its_task_says_so_not_that_its_computer_could_not_start(api):
+    machine = task_bot(api, lanes=True)
+    # A queued run for `ops` whose wake names no task (as before #240): the claim refuses it, before any start.
+    message = post(api, "chat/ops", {"text": "Spec has room."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET wake_key='room:product-spec:start' WHERE id=?", (message["id"],))
+    claim(api, machine)
+    [failure] = get(api, "health")["failures"]
+    assert failure["why"] == execution.REFUSED_RUN, failure

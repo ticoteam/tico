@@ -2301,8 +2301,10 @@ def _failed(c):
         {
             r["id"]: r
             for r in c.execute(
-                "SELECT a.id,a.state,a.started_at,a.result,r.label AS computer,d.end_reason,"
-                "(SELECT count(*) FROM attempts t WHERE t.job_id=a.job_id AND t.started_at IS NULL) AS unstarted "
+                "SELECT a.id,a.state,a.started_at,a.result,a.final_text,r.label AS computer,d.end_reason,"
+                # The tries on the computer the line names, so "after N tries" is true of that computer.
+                "(SELECT count(*) FROM attempts t WHERE t.job_id=a.job_id AND t.runner_id=a.runner_id "
+                "AND t.started_at IS NULL) AS unstarted "
                 "FROM attempts a LEFT JOIN runners r ON r.id=a.runner_id "
                 "LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
                 f"WHERE a.id IN ({','.join('?' * len(ids))})",
@@ -2321,9 +2323,16 @@ def _failed(c):
 def _failed_why(row):
     """Why one failed job failed, in one line: a job its computer never started "couldn't start on <computer> after N
     tries" (execution.settle_unstarted failed it), else the error its run stored, as Runs words it
-    (views.attempt_details: the limit it hit, else run_diagnostics' end_reason)."""
+    (views.attempt_details: the limit it hit, else run_diagnostics' end_reason). A job the claim refused because its bot
+    may not read its task never reached a computer, so it says that (execution.REFUSED_RUN), not that a computer failed.
+    Unlike Runs, no `result.error`/`reason`/`message`: Completion forbids fields it does not know, so a runner never
+    sends them."""
+    from .execution import REFUSED_RUN
+
     if not row:
         return "Attempt failed before completion"
+    if not row["started_at"] and row["final_text"] == REFUSED_RUN:
+        return REFUSED_RUN
     if not row["started_at"]:
         where = row["computer"] or "its computer"
         return f"couldn't start on {where} after {_plural(max(row['unstarted'], 1), 'try', 'tries')}"
