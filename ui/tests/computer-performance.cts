@@ -36,7 +36,7 @@ declare const SETTINGS_DATA: {machines: {performance: string}[]};
       busiest: {bots: [{bot: 'ops', model: 'claude-opus-5-5', runs: 1}], processes: [{name: 'cargo', cpu_minutes: 40.5, cpu_max: 400, mem_max: 2e9}]},
       overloads: [{started_at: now - 7200, ended_at: now - 6600, last_seen_at: now - 6660, minutes: 10, reasons: ['cpu'], cpu_max: 99, mem_max: 60, runs_max: 3,
         // A bot over its limit says so; the machine's own services come after the bots' processes, as one row.
-        bots: [{bot: 'ops', runs: 4, limit: 3}, {bot: 'finance', runs: 2}],
+        bots: [{bot: 'ops', runs: 4, limit: 3, over: true}, {bot: 'finance', runs: 2}],
         procs: [{name: 'cargo'}, {name: 'python'}, {name: 'claude'}, {name: 'node'}, {name: 'machine services (disk snapshots)', service: true}]}],
       summary: 'Overloaded once in the last 1 day (CPU over 90%): CPU over 90% for 10 minutes; running: ops; busiest processes: cargo.'});
     const writes: unknown[] = [];

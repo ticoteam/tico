@@ -18,7 +18,8 @@ interface ComputerPerfOverload {
   mem_max: number | null;
   runs_max: number;
   // `limit`: the bot's "Turns at once" when the overload was recorded, if it has one.
-  bots: { bot: string; model?: string; runs: number; limit?: number }[];
+  // `over`: it ran past that limit (the server decides, so the page and Health say the same).
+  bots: { bot: string; model?: string; runs: number; limit?: number; over?: boolean }[];
   // The bots' processes first; `service` marks the one row grouping the machine's own services (disk snapshots).
   procs: { name: string; cpu?: number; mem?: number; service?: boolean }[];
 }
@@ -269,7 +270,7 @@ function perfTicks(d: ComputerPerformance): { ts: number; label: string }[] {
 function perfRunning(b: ComputerPerfOverload['bots'][number]): string {
   const limit = b.limit;
   const count = b.runs > 1 || limit != null ? ` ×${b.runs}` : '';
-  return perfBot(b.bot) + count + (limit == null ? '' : b.runs > limit ? ` (limit ${limit}, over)` : ` (limit ${limit})`);
+  return perfBot(b.bot) + count + (limit == null ? '' : b.over ? ` (limit ${limit}, over)` : ` (limit ${limit})`);
 }
 
 function perfOverloadsHTML(d: ComputerPerformance): string {

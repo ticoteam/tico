@@ -475,16 +475,17 @@ def test_the_alert_shows_each_bots_limit_beside_its_count_and_says_when_it_was_o
         api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"]
     )
     (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
-    assert o["bots"] == [{"bot": "ops", "runs": 3, "limit": 2}]
+    assert o["bots"] == [{"bot": "ops", "runs": 3, "limit": 2, "over": True}]
 
     def load():
         return next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
 
     assert "running: Operations Lead x3 (limit 2, over)" in load()
+    # Raised while the overload is still open: the turns ran under 2, so the row keeps 2.
     revision = get(api, "bots/ops")["revision"]
     post(api, "bots/ops/turns-at-once", {"turns_at_once": 3, "expected_revision": revision})
     post(api, "runners/performance", {"samples": [sample(start + 600, cpu=97.0)]}, token=r["token"])
-    assert "running: Operations Lead x3 (limit 3))." in load()
+    assert "running: Operations Lead x3 (limit 2, over))." in load()
     with api.app.state.store.transaction() as c:  # an overload recorded before limits were kept reads as it did
         c.execute("UPDATE perf_overloads SET bots='[{\"bot\": \"ops\", \"runs\": 3}]' WHERE runner_id=?", (rid,))
     assert "running: Operations Lead x3)." in load()
@@ -508,3 +509,31 @@ def test_the_busiest_processes_lead_with_the_bots_work_and_group_the_machines_ow
     load = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
     assert "busiest processes: python, claude, rustc, machine services (disk snapshots))" in load
     assert "ariana-fswatch" not in load and "ariana-fswatch" not in seen["summary"]
+
+
+def test_a_limit_set_while_the_overload_is_open_is_not_called_over_for_turns_that_started_before_it(api):
+    """Lowering "Turns at once" is the natural answer to a Load alert. Three turns ran with no limit; a limit of 2 set
+    while the machine is still busy is not a breach, so the open overload never says "over" for them."""
+    r, _, attempt = setup_attempt(api)
+    rid = r["runner_id"]
+    start = (int(time.time()) // 60 - 12) * 60
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name='Operations Lead' WHERE id='ops'")
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
+        for n in ("a", "b"):
+            c.execute(
+                "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
+                "started_at,lane) SELECT ?,job_id,bot_id,runner_id,generation,?,'running',lease_until,?,?,? "
+                "FROM attempts WHERE id=?",
+                (f"t-{n}", f"tok-{n}", P._iso(start - 60), P._iso(start - 60), f"lane-{n}", attempt["id"]),
+            )
+    post(
+        api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"]
+    )
+    revision = get(api, "bots/ops")["revision"]
+    post(api, "bots/ops/turns-at-once", {"turns_at_once": 2, "expected_revision": revision})
+    post(api, "runners/performance", {"samples": [sample(start + 600, cpu=97.0)]}, token=r["token"])
+    (o,) = get(api, f"computers/{rid}/performance?hours=1")["overloads"]
+    assert o["bots"] == [{"bot": "ops", "runs": 3}]
+    load = next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
+    assert "running: Operations Lead x3)." in load and "limit" not in load

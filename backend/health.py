@@ -3464,8 +3464,9 @@ def view(c, who, settings, auth, github, config):
                     "turn_limit:" + bot,
                     "Turn limit",
                     "warn",
-                    f"{names[bot]} has {count} turns at once, over its limit of {limit}. "
-                    "No new turn of it starts until it is back under the limit; if this stays, the limit is not holding.",
+                    f"{names[bot]} has {count} turns at once, over its limit of {limit}. Most often the limit was "
+                    "lowered while these turns ran: no new turn of it starts, and this clears as they end. If it stays "
+                    "after they have ended, the limit is not holding.",
                     [_fix(*BOT_SETTINGS)],
                 )
             )

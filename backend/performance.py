@@ -480,7 +480,8 @@ def _update(c, oid, runner_id, started, last, why):
         "AND span=? AND created_at>=? AND created_at<=?",
         (runner_id, MINUTE, started, last),
     ).fetchone()
-    bots = with_limits(c, at_once(c, runner_id, started, last + MINUTE)[:8])
+    seen = c.execute("SELECT bots FROM perf_overloads WHERE id=?", (oid,)).fetchone()
+    bots = with_limits(c, at_once(c, runner_id, started, last + MINUTE)[:8], json.loads(seen[0]) if seen else [])
     procs = c.execute(
         "SELECT key name,sum(cpu*n)/sum(n) cpu,max(mem_max) mem FROM perf_usage WHERE runner_id=? AND "
         "span=? AND created_at>=? AND created_at<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
@@ -556,22 +557,30 @@ def at_once(c, runner_id, start, end):
     return [{"bot": b, "runs": n} for b, n in sorted(peaks.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
-def with_limits(c, bots):
-    """`bots` rows with each bot's "Turns at once" as `limit`, for those that have one: read when the overload is
-    recorded, so the alert compares the count with the limit that held then."""
+def with_limits(c, bots, seen=()):
+    """`bots` rows with each bot's "Turns at once" as `limit`, for those that had one when this overload first named
+    them. `seen` is the overload's rows so far: a bot already in it keeps the limit it had then (none, if it had none),
+    so a limit set or lowered while the overload is still open is never compared with turns that started before it.
+    A bot new to the overload has its limit read now; its turns all started inside the window, under that limit."""
     from . import bot_settings as BS
     from .start_places import bot_limit
 
+    before = {b["bot"]: b.get("limit") for b in seen}
     out = []
     for b in bots:
-        row = c.execute(BS.ONE_SQL, (b["bot"],)).fetchone()
-        limit = bot_limit(H._json(row[0], {}) if row else {})
+        if b["bot"] in before:
+            limit = before[b["bot"]]
+        else:
+            row = c.execute(BS.ONE_SQL, (b["bot"],)).fetchone()
+            limit = bot_limit(H._json(row[0], {}) if row else {})
         out.append(b | {"limit": limit} if limit is not None else b)
     return out
 
 
 # Processes a cloud machine's host runs for itself, never a bot's work: grouped as one "machine services" row after the
-# bots' processes, so the alert leads with what the bots ran. ariana-fswatch watches the disk for the host's snapshots.
+# bots' processes, so the alert leads with what the bots ran. ariana-fswatch watches the disk for the host's snapshots
+# (root runs it from three system units under the one process name). Another host service is one more entry: its
+# executable's name, as a sample carries it (runner-rs/src/perf.rs clean_name), and what it does in a few words.
 MACHINE_SERVICES = {"ariana-fswatch": "disk snapshots"}
 
 
@@ -607,7 +616,8 @@ def overload_view(row):
         "cpu_max": row["cpu_max"],
         "mem_max": row["mem_max"],
         "runs_max": row["runs_max"],
-        "bots": json.loads(row["bots"]),
+        # `over`: the bot ran more turns at once than the limit it had when the overload first named it.
+        "bots": [b | {"over": True} if _over(b) else b for b in json.loads(row["bots"])],
         "procs": grouped_procs(json.loads(row["procs"])),
     }
 
@@ -634,6 +644,10 @@ def recent_overloads(c, runner_ids, within=RECENT_S, now=None):
     return out
 
 
+def _over(b):
+    return b.get("limit") is not None and b.get("runs", 1) > b["limit"]
+
+
 def _who_ran(bots, label=lambda b: b):
     """ "Reviewer 1 x4 (limit 3, over), Builder x2": each bot's turns at once, beside its own limit when it has one."""
     names = []
@@ -643,7 +657,7 @@ def _who_ran(bots, label=lambda b: b):
         if runs > 1 or limit is not None:
             what += f" x{runs}"
         if limit is not None:
-            what += f" (limit {limit}, over)" if runs > limit else f" (limit {limit})"
+            what += f" (limit {limit}, over)" if _over(b) else f" (limit {limit})"
         names.append(what)
     return ", ".join(names)
 
