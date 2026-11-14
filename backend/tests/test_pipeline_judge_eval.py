@@ -494,7 +494,11 @@ def test_the_eval_asks_each_check_in_parts_and_scores_the_servers_verdict(monkey
 def test_a_call_that_fails_twice_is_unsure_never_a_false_met():
     """At a bar of 0.5 a failed call's stand-in p of 0.5 read as met: the eval blamed the judge for a false met it never
     gave. A call that fails twice is unsure, whatever the bar."""
-    case = next(c for c in run.load() if c["expected"] == "not_met" and run.check_of(c))
+    from backend import pipeline_judges as P
+
+    # A Spec case: Spec's bar is 0.5, where the old stand-in p of 0.5 would band as met, whatever QA's bar is.
+    case = next(c for c in run.load() if c["expected"] == "not_met" and run.check_of(c) == "spec")
+    assert P.BARS["spec"][0] <= 0.5
 
     def judge(c):
         raise J.JudgeError("timeout", "no answer")
@@ -542,3 +546,12 @@ def test_a_rebuild_call_that_fails_is_not_cached_so_a_rerun_asks_it_again(tmp_pa
     assert R.ask([row], tmp_path, {}) == []
     (saved,) = (tmp_path / "answers").iterdir()
     assert json.loads(saved.read_text())["parts"] == {"goal": 0.9}
+
+
+def test_the_eval_scores_the_servers_unsure_even_where_its_p_would_band_as_met():
+    """The server says unsure at p 0.5 when Jev could not see the whole page or the spec was cut: at a 0.5 bar, banding
+    that p again would score met. The eval takes the verdict the judge gives."""
+    case = next(c for c in run.load() if c["expected"] == "not_met" and run.check_of(c) == "spec")
+    assert run.verdict(0.5, "spec") == "met", "the case this test is about: p alone would read as met"
+    row = run.score("j", lambda c: (0.5, 0.0, 5, "unsure"), [case], pause=lambda s: None)
+    assert row["false_met"] == 0 and row["rows"][0]["got"] == "unsure"
