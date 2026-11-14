@@ -92,6 +92,10 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
     # may start on the login again; a second job would be a second turn in the same window.
     expire(api, probe["id"])
     ready(api, machine, ["ops"])
+    # The lapsed probe waits before it goes out again (execution.handed_back_until), and no other job takes its place.
+    assert claim(api, machine) is None
+    at(monkeypatch, "2026-10-19T02:17:16.000000Z", api)
+    ready(api, machine, ["ops"])
     again = claim(api, machine)
     assert again and again["job_id"] == probe["job_id"]
     assert claim(api, machine) is None
@@ -99,7 +103,7 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
     limit(api, machine, again, errors=("Quota exceeded. Check your plan and billing details.",))
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
-        assert hold["streak"] == 2 and hold["until"].startswith("2026-10-19T03:07:00")
+        assert hold["streak"] == 2 and hold["until"].startswith("2026-10-19T03:07:16")
         assert "API quota or billing limit" in H.status(c, "ops")["focus"]
     # Health names the provider whose login is held, not just the bot's own.
     issue = next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i.get("bot") == "ops")
@@ -361,6 +365,10 @@ def test_a_fallback_login_whose_hold_ends_gets_one_probe_not_every_waiting_job(a
     assert probe["config"]["primary_held"]
     assert claim(api, machine) is None  # the rest wait for Codex's probe
     expire(api, probe["id"])  # the runner restarts before it begins
+    signed_in(api, machine, ["ops", "finance"], ["codex"])
+    # The lapsed probe waits before it goes out again (execution.handed_back_until), and no other job takes its place.
+    assert claim(api, machine) is None
+    at(monkeypatch, "2026-10-19T02:21:16.000000Z", api)
     signed_in(api, machine, ["ops", "finance"], ["codex"])
     again = claim(api, machine)
     assert again and again["job_id"] == probe["job_id"]

@@ -25,6 +25,8 @@ LAPSED = 'Its computer took the run and never started it, renewed its lease or h
 # Why a run never started, as one word for logs and events: told apart by the text above (run_diagnostics.reason,
 # execution.handed_back_until).
 UNSTARTED_CATEGORIES = {HANDED_BACK: 'handed_back', LAPSED: 'lapsed_unstarted'}
+# A silent lapse as Runs says it: the computer by its name, so a person sees which machine to look at.
+LAPSED_NAMED = '{computer} took it and never started it'
 
 
 def clean_stop_reported(c, attempt_id):
@@ -169,8 +171,11 @@ def reason(c, row: AttemptRow, outcome, summary=''):
         ).fetchone()
         if capped:
             return scrub(json.loads(capped[0]).get('reason') or 'Ended by the server')[:500]
-        if not row['started_at'] and row['final_text'] in (HANDED_BACK + '.', LAPSED + '.'):
-            return row['final_text'][:-1]
+        if not row['started_at'] and row['final_text'] == LAPSED + '.':
+            found = c.execute('SELECT label FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            return scrub(LAPSED_NAMED.format(computer=found['label'])) if found and found['label'] else LAPSED
+        if not row['started_at'] and row['final_text'] == HANDED_BACK + '.':
+            return HANDED_BACK
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
     if row['state'] == 'failed' and not row['started_at'] and row['final_text'] and not row['result']:
         # Failed by the server before its computer started it (execution.expire, settle_unstarted, after
