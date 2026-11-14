@@ -625,7 +625,7 @@ function settingsTransitionDialog() {
   }
   return dialog;
 }
-// Archive's confirm: the same small dialog as settingsConfirm (pages-shell.ts), with who gets the bot's open tasks (its
+// Archive's confirm: the same small dialog as the shell's settingsConfirm, with who gets the bot's open tasks (its
 // owner unless another bot is picked) and, for a Hermes or OpenClaw agent, whether its credential is revoked. Cancel,
 // Esc and ✕ archive nothing. Resolves the choice, or null.
 function settingsArchiveConfirm(e: BotEditRow, slug: string, hermes: boolean): Promise<{successor: string; revoke: boolean} | null> {

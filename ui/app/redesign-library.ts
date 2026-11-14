@@ -1,5 +1,5 @@
 /* ui/app/redesign-library.ts — A tool's own page under Tools, for a tool a bot declares and for a key no tool holds.
-   ui/app/tools.ts lists them and ui/app/pages-shell.ts toolsRoute routes them:
+   ui/app/tools.ts lists them and the shell's toolsRoute routes them:
    - #/tools/<service>: one place for everything about the tool: its issues, who has it (each with what they may change
      there), its keys (set or not, when a bot last used one, Rotate / Access / Reveal, Add for a variable the vault does
      not hold), then what its page says, Slack's and GitHub's connect cards and, on Slack's, the threads linked to Slack

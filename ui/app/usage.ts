@@ -267,7 +267,7 @@ function useFilterMenu(anchor: HTMLElement | null, redraw = false): void {
   const open = document.querySelector<HTMLElement>('#task-filter-pop:popover-open');
   ((hadKey && open?.querySelector<HTMLElement>(hadKey)) || (redraw ? null : open?.querySelector<HTMLElement>('select')))?.focus();
 }
-// The icon opens and closes the menu (pages-shell.ts phFilterWire). The menu's drop-downs keep their own arrow keys.
+// The icon opens and closes the menu (the shell's phFilterWire). The menu's drop-downs keep their own arrow keys.
 function useFilterWire(): void {
   const btn = useMain()?.querySelector<HTMLElement>('.use-filter'), pop = document.querySelector<HTMLElement>('#task-filter-pop');
   if (btn && pop) phFilterWire(USE_MENU, btn, pop, anchor => useFilterMenu(anchor), false);

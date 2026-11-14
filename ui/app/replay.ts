@@ -110,7 +110,7 @@ function pageReplay() {
     const f = replayIso($('#rp-from').value), t = replayIso($('#rp-to').value);
     if (f && t && f < t) { state.from = f; state.to = t; replayLoad(state); }
   };
-  // The Who icon (pages-shell.ts phFilterWire); its chip's ✕ shows everyone and leaves the focus on the icon. ⋯ holds the
+  // The Who icon (the shell's phFilterWire); its chip's ✕ shows everyone and leaves the focus on the icon. ⋯ holds the
   // header's own Copy link: the address is kept up to date on every load and speed change (replaySync).
   const filterBtn = $('#rp-filter') as HTMLElement, pop = $('#task-filter-pop') as HTMLElement;
   phFilterWire(REPLAY_MENU, filterBtn, pop, anchor => replayWhoMenu(state, anchor));

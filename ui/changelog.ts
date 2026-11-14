@@ -74,7 +74,7 @@ window.pageChangelog = async function () {
     filterBtn.setAttribute('aria-label', on ? `Filter changes, ${word}` : 'Filter changes');
   };
   const setView = (value: string) => { filter.value = value; paintFilter(); if (data) render(); void load(); };
-  // The filter icon and its menu (pages-shell.ts phFilterWire): a choice of one view.
+  // The filter icon and its menu (the shell's phFilterWire): a choice of one view.
   phFilterWire(CL_MENU, filterBtn, pop, anchor => tasksMenu(CL_MENU, anchor, `<div class="tl-menu" role="group" aria-label="Show"><div class="tl-menu-list">${CL_VIEWS.map(([v, label]) =>
       `<label class="tl-opt"><input type="radio" name="cl-view" value="${v}"${filter.value === v ? ' checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div></div>`,
     p => { p.onchange = ev => { const t = eventElement(ev); if (t instanceof HTMLInputElement) { tasksMenuClose(); setView(t.value); } }; }));

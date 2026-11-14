@@ -24,7 +24,7 @@
      #/tools/webhooks[/<id>]                          outgoing webhooks, and one (ui/app/settings-webhooks.ts)
      #/tools/key/<id>                                 one stored key no tool holds (ui/app/redesign-library.ts)
      #/tools/<service>                                a declared tool's page: issues, access, keys (same file)
-   The old homes of all of it redirect here (pages-shell.ts toolsRoute): Keys (#/tools/keys[/<service> |
+   The old homes of all of it redirect here (the shell's toolsRoute): Keys (#/tools/keys[/<service> |
    /credentials/<id>], with its who, issues and q filters), Library › Tools and › Connections, Settings › Inboxes and
    the tabs it replaced, #/integrations and #/credentials.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
