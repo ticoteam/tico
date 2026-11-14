@@ -73,6 +73,25 @@ def test_a_versioned_font_is_kept_and_an_unversioned_one_revalidates(api):
     assert api.get(url.split("?")[0], headers=AUTH).headers["cache-control"] == "private, no-cache"
 
 
+def test_vendor_scripts_are_sent_compressed_and_fonts_as_they_are(api):
+    # marked.min.js is on every cold open: 35 KB as it is, about 10 KB compressed (P05, the first-open budget).
+    zipped = api.get("/vendor/marked.min.js", headers={**AUTH, "Accept-Encoding": "gzip"})
+    assert zipped.status_code == 200 and zipped.headers["content-encoding"] == "gzip"
+    assert zipped.content == (Path(__file__).resolve().parents[2] / "ui" / "vendor" / "marked.min.js").read_bytes()
+    assert "Accept-Encoding" in zipped.headers["vary"]
+    assert (
+        api.get("/vendor/marked.min.js", headers={**AUTH, "If-None-Match": zipped.headers["etag"]}).status_code == 304
+    )
+    plain = api.get("/vendor/marked.min.js", headers={**AUTH, "Accept-Encoding": "gzip;q=0"})
+    assert plain.status_code == 200 and "content-encoding" not in plain.headers
+    # A font is compressed already: it goes as it is.
+    font = re.search(
+        r'href="(/vendor/fonts/inter-variable\.woff2\?v=[0-9a-f]{12})"',
+        (Path(__file__).resolve().parents[2] / "ui" / "index.html").read_text(),
+    ).group(1)
+    assert "content-encoding" not in api.get(font, headers={**AUTH, "Accept-Encoding": "gzip"}).headers
+
+
 def served_file(ui, name):
     """The file the server sends for a standalone script: a TypeScript file's compiled output (backend/ui_build.py)."""
     return ui_build.compiled(ui, name) if name.endswith(".ts") else ui / name

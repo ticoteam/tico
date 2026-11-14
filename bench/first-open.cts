@@ -23,18 +23,25 @@ const SETTLE_MS = 5000;
 // Every response the page gets, with its bytes on the wire, and every /api request it makes.
 function record(cdp: CDPSession) {
   const types = new Map<string, string>();
+  const urls = new Map<string, string>();
   const bytes = {js: 0, css: 0, other: 0};
+  // Each script's path and its bytes on the wire.
+  const scripts = new Map<string, number>();
   const api: string[] = [];
   cdp.on('Network.requestWillBeSent', e => {
     const url = new URL(e.request.url);
     if (url.pathname.startsWith('/api/')) api.push(e.request.method + ' ' + url.pathname + url.search);
   });
-  cdp.on('Network.responseReceived', e => { types.set(e.requestId, e.type); });
+  cdp.on('Network.responseReceived', e => { types.set(e.requestId, e.type); urls.set(e.requestId, e.response.url); });
   cdp.on('Network.loadingFinished', e => {
     const type = types.get(e.requestId);
     bytes[type === 'Script' ? 'js' : type === 'Stylesheet' ? 'css' : 'other'] += e.encodedDataLength;
+    if (type === 'Script') {
+      const path = new URL(urls.get(e.requestId) || 'about:blank').pathname;
+      scripts.set(path, (scripts.get(path) || 0) + e.encodedDataLength);
+    }
   });
-  return {bytes, api, reset() { bytes.js = bytes.css = bytes.other = 0; api.length = 0; }};
+  return {bytes, api, scripts, reset() { bytes.js = bytes.css = bytes.other = 0; api.length = 0; scripts.clear(); }};
 }
 
 // The /api URLs requested more than once, and the page's live stream (GET /api/v2/events, whatever its topics; a task's
@@ -73,12 +80,14 @@ async function run(browser: Browser, hub: RealHubSupport.Hub, net: typeof NETWOR
     await page.waitForTimeout(SETTLE_MS);
     line('cold', cold);
     const homeRepeats = repeats(rec.api);
+    const homeScripts = [...rec.scripts].sort((a, b) => b[1] - a[1]).map(([path, n]) => `${kb(n)}  ${path}`);
     rec.reset();
     await page.reload();
     const warm = await paintFresh(page);
     await page.waitForTimeout(SETTLE_MS);
     line('warm', warm);
     if (!detail) return;
+    console.log('\nScripts on a cold open of Home:\n  ' + (homeScripts.join('\n  ') || 'none'));
     console.log('\nRepeated on a cold open of Home:\n  ' + (homeRepeats.join('\n  ') || 'none'));
     console.log('Repeated on a warm open of Home:\n  ' + (repeats(rec.api).join('\n  ') || 'none'));
     rec.reset();
