@@ -16,26 +16,21 @@
       "Bash(gh pr list *)",
       "Bash(gh repo view *)",
       "Bash(gh search prs *)",
-      "Bash(gh search issues *)",
+      "Bash(git push --force-with-lease *)",
+      "Bash(git push --force-with-lease)",
       "Bash(gh issue list *)",
       "Bash(gh issue view *)",
       "Bash(gh run list *)",
       "Bash(gh run view *)",
       "Bash(gh release list *)",
       "Bash(gh release view *)",
-      "Bash(git push --force-with-lease *)",
-      "Bash(git push --force-with-lease)"
+      "Bash(gh search issues *)"
     ],
     "deny": [
       "Bash(gh pr merge *)",
       "Bash(gh pr review *)",
       "Bash(gh pr close *)",
       "Bash(gh pr reopen *)",
-      "Bash(gh issue edit *)",
-      "Bash(gh issue comment *)",
-      "Bash(gh issue create *)",
-      "Bash(gh issue close *)",
-      "Bash(gh release create *)",
       "Bash(gh release edit *)",
       "Bash(gh release delete *)",
       "Bash(gh release upload *)",
@@ -43,7 +38,6 @@
       "Bash(gh api *)",
       "Bash(gh run rerun *)",
       "Bash(gh run cancel *)",
-      "Bash(gh workflow run *)",
       "Bash(git push --force)",
       "Bash(git push --force *)",
       "Bash(git push -f*)",
@@ -53,7 +47,13 @@
       "Bash(git push*--tags*)",
       "Bash(git push*--follow-tags*)",
       "Bash(git push* refs/tags/*)",
-      "Bash(git tag *)"
+      "Bash(git tag *)",
+      "Bash(gh issue edit *)",
+      "Bash(gh issue comment *)",
+      "Bash(gh issue create *)",
+      "Bash(gh issue close *)",
+      "Bash(gh release create *)",
+      "Bash(gh workflow run *)"
     ]
   }
 }

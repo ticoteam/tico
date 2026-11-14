@@ -159,6 +159,13 @@ def test_the_feature_owner_takes_a_feature_from_pitch_to_production_in_one_sessi
     for playbook in ("write-a-pitch", "write-a-spec-page", "build-a-dev-task", "fix-what-review-found", "qa"):
         assert f"`playbooks/{playbook}.md`" in text, playbook
         assert (CATALOG / "feature-owner" / "playbooks" / f"{playbook}.md").is_file(), playbook
+    # Nov 14, Tico Team trial: owners made from the Product Owner's settings could not edit or open a pull request.
+    rules = settings("feature-owner")
+    for write in ("gh pr create", "gh pr edit", "gh pr ready", "gh pr comment"):
+        assert f"Bash({write} *)" in rules["allow"], write
+        assert not any(write in rule for rule in rules["deny"]), write
+    for read in ("gh release list", "gh release view", "gh issue view", "gh run view"):
+        assert f"Bash({read} *)" in rules["allow"] and "Bash(gh release *)" not in rules["deny"], read
     # Token rules: files once per session, learnings once per task.
     assert "A resumed turn already has them: do not read them again." in text
     assert "When the task reaches Done or is closed, once per task and not every run" in text
