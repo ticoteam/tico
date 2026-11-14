@@ -152,7 +152,16 @@ function pageHeadRowShared(head: HTMLElement): boolean {
   const tabs = head.querySelector(':scope > .ph-tabs')?.getBoundingClientRect(), tools = head.querySelector(':scope > .ph-tools')?.getBoundingClientRect();
   return !tabs || !tools || !tools.width || tools.top < tabs.bottom - 0.5;
 }
+// The fit measures the header right after changing its classes, so a transition on what it changes would hand back the
+// old geometry. Reduced motion gives every element a 1ms transition on every property (ui/styles/base.css): taking
+// .ph-wrap off read the second row's margins, the header looked too wide, and it kept its two rows on every later tab
+// until a reload (task #457). .ph-fit turns transitions off in the header while it fits (ui/styles/page-head.css); the
+// style is read once more before it goes, so nothing the fit changed starts a transition after it.
 function pageHeadFit(head: HTMLElement): void {
+  head.classList.add('ph-fit');
+  try { pageHeadFitNow(head); } finally { head.getBoundingClientRect(); head.classList.remove('ph-fit'); }
+}
+function pageHeadFitNow(head: HTMLElement): void {
   // Folded tools someone is using (typing in the search, the ⋯ open) stay where they are until they are done.
   const tools = pageHeadTools(head), menu = tools?.parentElement;
   const busy = !!tools && menu !== head && (tools.contains(document.activeElement) || !!menu?.matches(':popover-open'));

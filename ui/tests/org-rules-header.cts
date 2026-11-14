@@ -196,6 +196,41 @@ function headerShape(page: Page) {
         await page.context().close();
       }
     }
+    // With reduced motion a tab change draws the page at once, without the route's fade (ui/app/router.ts). After Outside
+    // took two rows at 1280, the header kept them on every later tab, a resize included, until a reload (task #457,
+    // Validate). Each tab that fits one row must go back to one row, and a resize must not leave a second row either.
+    {
+      const page = await pageAs(browser, hub, 'dana');
+      try {
+        await page.emulateMedia({reducedMotion: 'reduce'});
+        await page.setViewportSize({width: 1280, height: 800});
+        await page.route('**/api/v2/rules/stats*', r => r.fulfill({json: FULL_STATS}));
+        await ready(page);
+        const settle = async (tab: string) => {
+          await onTab(page, tab);
+          for (const sel of ACTS[tab]!) await page.locator('.ru-ph ' + sel).waitFor({state: 'attached', timeout: t(15000)});
+          await page.waitForFunction(() => (document.querySelector('.ru-ph .ru-checks')?.textContent || '').length > 0, null, {timeout: t(15000)});
+          await page.waitForTimeout(t(300));   // the page's own reads land and the header fits again
+        };
+        const wrapped = () => page.evaluate(() => document.querySelector('.ru-ph')!.classList.contains('ph-wrap'));
+        await go(page, HASH['external']!);
+        await settle('external');
+        if (!await wrapped()) problems.push('reduced motion, 1280px: Outside does not take its second row (the case below needs it)');
+        for (const to of ['stages', 'wakes', 'internal', 'automations', 'builtin', 'suggested'] as const) {
+          await page.locator(`.ru-tabs a[data-ru-tab="${to}"]`).click({timeout: t(3000)});
+          await settle(to);
+          const shape = await headerShape(page);
+          if (await wrapped() || shape.rows > 1) problems.push(`reduced motion, 1280px, after Outside, on ${to}: the header takes ${shape.rows} rows (ph-wrap ${await wrapped()})`);
+        }
+        await page.setViewportSize({width: 1281, height: 800});
+        await page.waitForTimeout(t(200));
+        await page.setViewportSize({width: 1280, height: 800});
+        await page.waitForTimeout(t(300));
+        if (await wrapped() || (await headerShape(page)).rows > 1) problems.push('reduced motion, 1280px: a resize leaves the header on two rows');
+      } finally {
+        await page.context().close();
+      }
+    }
     assert.deepEqual(problems, [], 'Rules header problems:\n' + problems.join('\n'));
     console.log('org-rules-header: every tab clickable with its actions in view at 1440, 1280, 1100, 1024 and 390; one row at 1440 and 1280, two at most at 1100, the title still');
   } finally {
