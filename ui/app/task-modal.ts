@@ -735,6 +735,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   // "changed <field>". A page attached carries its chip (taskEventChipHTML).
   page_attached: (_v, x) => x.old ? 'attached a new version of a page' : 'attached a page',
   jev_verdict: v => `Jev's check: ${JEV_WORDS[String(v)] || String(v || '')}`,
+  ok_kept: v => String(v || 'kept the OK on the new version'),
   answer: v => ANSWER_WORDS[String(v)] || `answered: ${clipLine(String(v || ''), 80)}`,
   requirement: () => 'asked for an answer', requirement_withdrawn: () => 'withdrew an ask',
   snooze: v => v ? `snoozed it to ${new Date(String(v)).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'})}` : 'snoozed it',
@@ -752,7 +753,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
 // The history lines that always show on their own: moves, hand-overs, snoozes, pages, Jev's checks, answers and asks,
 // subtasks. Every other change (tags, due, followers, visibility, GitHub, the queue) folds when three or more come in a
 // row (taskCommentsRender).
-const TASK_EVENT_MILESTONES = new Set(['move', 'status', 'reassign', 'owner', 'give', 'pick', 'page_attached', 'jev_verdict', 'answer', 'requirement',
+const TASK_EVENT_MILESTONES = new Set(['move', 'status', 'reassign', 'owner', 'give', 'pick', 'page_attached', 'ok_kept', 'jev_verdict', 'answer', 'requirement',
   'requirement_withdrawn', 'snooze', 'unsnooze', 'subtask', 'handoff_filed', 'merge_queue_failed', 'comment']);
 // A page attached is a chip that opens that version of the page: `page:<file id>@<version>`.
 function taskEventChipHTML(x: ModalLine) {

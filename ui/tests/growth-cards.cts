@@ -46,6 +46,8 @@ const upTo = (month: string) => MONTHS.slice(0, MONTHS.indexOf(month) + 1);
 // Synced sources (backend/growth_sync.py), on for one block: one Fresh, one Failing, one Stale, one typed by hand; and a
 // conflict on October's new customers for Search (typed 120, the warehouse says 131) until someone chooses.
 const SYNC = {on: false, conflict: true, may: true, many: false, rowsFail: 0};
+// A typed actual of 70% beside Search's computed day 30 (backend/growth.py typed_beside): `chosen` once its owner chose.
+const DIFFERS = {on: false, chosen: null as string | null, may: true};
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3600e3).toISOString();
 const SOURCES = () => [
   {id: 's1', system: 'Finance ad spend', truth_for: 'spend', reach_kind: 'person', may: 'read', owner_ref: 'human:ana', kind: 'file', fills: ['spend'], health: 'fresh', health_since: null,
@@ -98,7 +100,8 @@ const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
     {stage: 'idea', label: 'Idea', count: 0, cards: []}]}),
 };
 // Computed retention (backend/growth_computed.py): September 2026 cut by channel, segment or plan, monthly or weekly.
-// A cohort is [value, new, day 30 [count] or null for not yet, LTV, CAC status].
+// A cohort is [value, new, day 30 [count] or null for not yet, LTV, CAC status]. Weekly CAC comes from Finance's daily spend,
+// except where a month the week touches has typed spend (October here): that week says monthly.
 const fig = (value: number | null, status = 'ok', more: Record<string, unknown> = {}) => ({value: status === 'ok' ? value : null, status, origin: 'computed', ...more});
 const KEYS = {still: ['cus_1042', 'cus_1047'], churned: [{key: 'cus_1044', churned: '2026-09-19'}]};
 function cohortOf(by: string, grain: string, value: string | null, n: number, kept: number, period = '2026-09', start = '2026-09-01', end = '2026-09-30') {
@@ -106,16 +109,17 @@ function cohortOf(by: string, grain: string, value: string | null, n: number, ke
   return {cut: by, value, grain, period, start, end, computed_from: n, too_few: few, new_customers: fig(n),
     kept_d30: fig(Math.round(kept * 1000 / n) / 10, few ? 'too_few' : 'ok', {count: kept, denominator: n, fills_on: '2026-10-30'}),
     kept_d90: fig(null, 'not_yet', {count: null, denominator: n, fills_on: '2026-12-29'}), kept_d180: fig(null, 'not_yet', {count: null, denominator: n, fills_on: '2027-03-29'}),
-    ltv: few ? fig(null, 'too_few') : fig(by === 'segment' ? 612 : 540), cac: by !== 'channel' ? fig(null, 'not_split') : grain === 'week' ? fig(null, 'spend_monthly') : value === 'unknown' ? fig(null, 'no_spend') : fig(45)};
+    ltv: few ? fig(null, 'too_few') : fig(by === 'segment' ? 612 : 540), cac: by !== 'channel' ? fig(null, 'not_split') : grain === 'week' ? (period === '2026-09-21' ? fig(42) : fig(null, 'spend_monthly')) : value === 'unknown' ? fig(null, 'no_spend') : fig(45)};
 }
 function computedView(by: string, grain: string, keys: boolean, customers: boolean) {
   const cohorts = grain === 'week' ? [cohortOf(by, grain, 'search', 31, 25, '2026-09-28', '2026-09-28', '2026-10-04'), cohortOf(by, grain, 'search', 33, 27, '2026-09-21', '2026-09-21', '2026-09-27')]
     : by === 'segment' ? [cohortOf(by, grain, 'agency', 64, 52), cohortOf(by, grain, 'studio', 41, 27), cohortOf(by, grain, 'solo', 19, 12)]
     : by === 'plan' ? [cohortOf(by, grain, 'pro', 71, 56), cohortOf(by, grain, null, 53, 37)]
     : [cohortOf(by, grain, 'search', 64, 52), cohortOf(by, grain, 'unknown', 19, 12)];
+  if (DIFFERS.on && by === 'channel' && grain === 'month') Object.assign(cohorts[0]!, {typed: {kept_d30: {typed: 70, chosen: DIFFERS.chosen, may: DIFFERS.may}}});
   if (customers) for (const c of cohorts) Object.assign(c.kept_d30, {rule: `became customer ${c.start} to ${c.end}, ${by} ${c.value}, still paying on day 30`}, keys ? {customers: KEYS} : {});
   return {by, grain, month: '2026-09', as_of: '2026-11-13', min_cohort: 30, computed_from: 124, cohorts, keys_visible: keys && customers,
-    cac_note: by === 'segment' ? 'spend is not split by segment' : by === 'plan' ? 'spend is not split by plan' : grain === 'week' ? 'spend is monthly' : null,
+    cac_note: by === 'segment' ? 'spend is not split by segment' : by === 'plan' ? 'spend is not split by plan' : grain === 'week' ? 'weeks touching a month with typed spend say monthly' : null,
     loads: [{source: 'upload', customers: 124, removed: 0, loaded_by: 'human:ana', loaded_at: '2026-11-13T06:00:00'}]};
 }
 const NAMES: Record<string, string> = {growth_number: 'Number', growth_funnel: 'Funnel', growth_channels: 'Channels', growth_retention: 'Retention', growth_board: 'Growth board', kpi: 'KPI'};
@@ -214,6 +218,10 @@ function server(me: Person, pipelines: unknown[] = PIPELINES, setup: Setup = set
     if (/^\/api\/v2\/growth\/sources\/[^/]+\/rows$/.test(p) && SYNC.rowsFail > 0) { SYNC.rowsFail--; return [422, {error: {code: 'validation', detail: 'The file has no rows'}}]; }
     if (/^\/api\/v2\/growth\/sources\/[^/]+\/rows$/.test(p)) return [200, {ok: true, error: null, written: 4, held: 1,
       not_written: [{row: 4, channel: 'podcast', month: '2026-10', reason: 'no such channel'}], not_written_count: 1}];
+    if (p === '/api/v2/growth/cohorts/conflicts' && method === 'POST' && (body as unknown as {against?: string}).against === 'computed') {
+      DIFFERS.chosen = String((body as unknown as {keep: string}).keep);
+      return [200, {kept: DIFFERS.chosen, value: DIFFERS.chosen === "typed" ? 70 : 81.3}];
+    }
     if (p === '/api/v2/growth/cohorts/conflicts' && method === 'POST') { SYNC.conflict = false; return [200, {kept: 'source', value: 131}]; }
     return null;
   }};
@@ -527,7 +535,8 @@ async function shot(page: Page, name: string) {
       await card.locator('[data-gr-seg="grx-grain"] button[data-v="week"]').click();
       await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] tr.grx-wk'));
       assert.deepEqual(await card.locator('tr.grx-wk').allInnerTexts(), ['Week of 28 Sep', 'Week of 21 Sep']);
-      assert.match(await card.locator('.grx-foot').innerText(), /Weekly CAC needs daily spend: spend is monthly\./);
+      assert.deepEqual((await rowsOf()).map(r => r[6]), ['monthly', '$42'], 'a week of daily spend shows its CAC; one touching a typed month says monthly');
+      assert.match(await card.locator('.grx-foot').innerText(), /a week touching a month with typed spend says monthly\./);
       assert.ok(fake.reads.includes('by=channel&grain=week&month=2026-09'), 'the weekly read asks for the month');
       await shot(page, 'desktop-growth-computed');
       // A figure opens its customers: the rule, still customers and churned with the date, counts matching the figure.
@@ -691,6 +700,35 @@ async function shot(page: Page, name: string) {
       assert.equal(fake.writes.filter(([m, p]) => m === 'PATCH' && p === '/api/v2/growth/sources/s5').length, 1, 'it changed the one made');
       assert.deepEqual(errors, []);
       await page.close();
+    }
+    {
+      // A typed actual that differs shows under the computed figure (AC-14): the channel's owner keeps one, and once the
+      // typed number is kept it is the cell's figure with the computed one under it. A reader who may not choose sees both.
+      Object.assign(DIFFERS, {on: true, chosen: null, may: true});
+      const {page, errors, fake} = await open(browser, {computed: true});
+      const card = page.locator('#dash-grid [data-grx]');
+      const cell = card.locator('tr[data-grx-row="search"] td.grc-k').first();
+      await cell.waitFor();
+      assert.match(await cell.innerText(), /^81%\s+typed 70%\s*Keep\s*Use 81%$/, 'both values show, with Keep and Use');
+      assert.match(await card.locator('.grx-foot').innerText(), /A number typed as actual that differs shows under the computed one until the channel’s owner keeps one\./);
+      await cell.locator('button[data-keep="typed"]').click();
+      await page.waitForFunction(() => document.querySelector('#dash-grid tr[data-grx-row="search"] td[data-grx-typed="kept"]'));
+      const posted = fake.writes.filter(([m, p]) => m === 'POST' && p === '/api/v2/growth/cohorts/conflicts').map(w => w[2]);
+      assert.deepEqual(posted, [{channel: 'search', month: '2026-09', field: 'kept_d30', keep: 'typed', against: 'computed'}]);
+      const kept = card.locator('tr[data-grx-row="search"] td[data-grx-typed="kept"]');
+      assert.match(await kept.innerText(), /^70% typed\s*computed\s*81%$/, 'the kept typed number is the figure, the computed one under it');
+      assert.equal(await kept.locator('button[data-keep]').count(), 0, 'chosen: nothing more to choose');
+      assert.match(await card.locator('.grx-foot').innerText(), /A kept typed number shows as typed; LTV here uses the computed shares\./);
+      assert.deepEqual(errors, []);
+      await page.close();
+      Object.assign(DIFFERS, {chosen: null, may: false});
+      const member = await open(browser, {computed: true, me: MEMBER});
+      const seen = member.page.locator('#dash-grid tr[data-grx-row="search"] td.grc-k').first();
+      await seen.waitFor();
+      assert.match(await seen.innerText(), /^81%\s+typed 70%$/, 'a reader who may not choose sees both values, no buttons');
+      assert.deepEqual(member.errors, []);
+      await member.page.close();
+      Object.assign(DIFFERS, {on: false, chosen: null, may: true});
     }
     {
       // A member opens a figure to its counts and rule, no keys; uploads nothing.
@@ -862,6 +900,6 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Growth cards: computed retention (cut, grain, not yet, too few, foot, trace with and without keys, upload refused and loaded, phone); head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes; Get started panel (AC-1 to AC-7) on desktop and phone');
+    console.log('Growth cards: computed retention (cut, grain, not yet, too few, typed beside computed and the owner choosing, foot, trace with and without keys, upload refused and loaded, phone); head (North Star, month, board, Settings), Number/Funnel/Channels/Retention/Board renderers, month picker and address, add a Number with metric and channel, form fields, Settings and months, member, phone in both themes, contrast, old routes; Get started panel (AC-1 to AC-7) on desktop and phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

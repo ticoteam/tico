@@ -175,6 +175,8 @@ a.grc-st-in:hover .grc-st-n{text-decoration:underline}
 .grx-foot,.grc-foot{margin:0;font-size:var(--t-xs);line-height:1.4}
 .grx-up{align-self:flex-start}
 .grx-tag{font-size:var(--t-xs);font-weight:400}
+/* A typed actual beside a computed retention figure (growth-retention.ts grxKept): under the figure, centred. */
+.grx-t td .grx-beside{display:flex;justify-content:center;align-items:baseline;gap:4px;margin-top:2px;font-size:var(--t-xs);font-weight:400}
 .grc-comp{text-decoration:underline dotted;text-underline-offset:3px}
 .grc-origin{font-size:var(--t-xs)}
 .grx-rule{margin:0 0 8px}

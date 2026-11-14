@@ -16,10 +16,11 @@ So once SAME of one job's runs in a row come back for the same reason, no wait w
   again.
 
 A computer that claims the run and then says nothing (never starts it, never renews its lease, never hands it back) gives
-no reason to compare, so its lapses are not counted here. On Tico Team (Nov 12) the shared machine did that to
-Performance Owner's runs ~344 times in a day: each job failed after PRE_START_TRIES lapses and the next wake started
-over, with nobody told. So the expiry that spends a job's PRE_START_TRIES on lapses files here too (`file` with
-`lapses`), with LAPSED_WHY as the reason, and the task waits on BotOps the same way.
+no reason to compare, so the lapses themselves are counted (`lapsed_in_a_row`). On Tico Team (Nov 12) the shared
+machine did that to Performance Owner's runs ~344 times in a day: each job failed after ten lapses and the next wake
+started over, with nobody told. So the expiry that makes SAME lapses in a row on one job files here too (`file` with
+`lapses`), with LAPSED_WHY as the reason (MISSED_WHY when the day's budget of missed starts ran out first), and the
+task waits on BotOps the same way.
 """
 
 import json
@@ -31,6 +32,7 @@ from .store import H as _H
 H: Any = _H
 RD: Any = run_diagnostics
 HANDED_BACK: str = RD.HANDED_BACK
+LAPSED: str = RD.LAPSED
 
 SAME = 3  # one job's runs in a row handed back for the same reason before BotOps gets it
 EVENT = "task.cant_start"  # on the task: {bot, review (BotOps's task), reason, job}
@@ -39,6 +41,9 @@ REASON_CHARS = 500
 BOTOPS_HAS_IT = "BotOps is checking why."  # ends the failed run's text: no person is asked (execution.last_stop)
 # The reason a job's runs that only lapsed are filed with: the computer said nothing, so this is all that is known.
 LAPSED_WHY = "it took each run and never started it, renewed its lease or handed it back"
+# The reason when the day's budget of missed starts (execution.PRE_START_TRIES) runs out with fewer than SAME silent
+# lapses in a row: some of those runs may have been handed back or cut, so silence is not claimed.
+MISSED_WHY = "it never started the run on any try before its lease ran out"
 
 
 def reason(c: Any, aid: str) -> str:
@@ -77,6 +82,25 @@ def same_in_a_row(c: Any, job_id: str, why: str) -> int:
     return count
 
 
+def lapsed_in_a_row(c: Any, job_id: str) -> int:
+    """How many of the job's latest runs in a row (up to SAME) its computer took and went silent on before starting
+    them (execution.expire saves LAPSED on each). A run that started, a hand-back, a lapse Tico excused (its own cut,
+    a planned yield: no LAPSED) or a lapse on another computer ends the row: BotOps is told one computer took them."""
+    count, computer = 0, None
+    for row in c.execute(
+        "SELECT state,started_at,final_text,runner_id FROM attempts WHERE job_id=? "
+        "ORDER BY created_at DESC,rowid DESC LIMIT ?",
+        (job_id, SAME),
+    ):
+        if row["started_at"] or row["state"] != "expired" or not str(row["final_text"] or "").startswith(LAPSED):
+            break
+        if count and row["runner_id"] != computer:
+            break
+        computer = row["runner_id"]
+        count += 1
+    return count
+
+
 def stuck(c: Any, row: Any) -> str:
     """The reason this handed-back run (its attempt already expired) is the SAME'th in a row on its job, or ''."""
     if not row["job_id"] or row["stop_requested_at"]:
@@ -99,7 +123,8 @@ def file(c: Any, row: Any, why: str, computer: str, lapses: int = 0) -> str | No
     """Give BotOps the bot's runs that cannot start: one open task per bot, a comment on it naming each further task,
     and the hold on this run's task (EVENT). Answers BotOps's task id, or None when there is no BotOps to give it to
     (the bot is BotOps, or the company has none): then the job still fails, and the task is not held. `lapses` is how
-    many runs its computer took and went silent on (execution.expire), when that, not SAME hand-backs, is why."""
+    many runs in a row its computer took and went silent on (execution.expire), when that, not SAME hand-backs, is
+    why."""
     maintainer = H.FLEET_MAINTAINER
     bot = row["bot_id"]
     if bot == maintainer or not H.bot(c, maintainer):
@@ -119,7 +144,7 @@ def file(c: Any, row: Any, why: str, computer: str, lapses: int = 0) -> str | No
     else:
         about = "a task you cannot read"
     said = (
-        f"{name}'s computer ({computer}) took {lapses} runs on {about} and never started them: {why}"
+        f"{name}'s computer ({computer}) took its last {lapses} runs on {about} and never started them: {why}"
         if lapses
         else f"{name}'s computer ({computer}) handed back its last {SAME} runs on {about} before starting them, each "
         f"time saying: {why}"

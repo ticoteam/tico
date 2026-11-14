@@ -2015,6 +2015,8 @@ def test_a_used_up_login_is_one_plain_finding_and_the_gateway_row_counts_only_un
     for n, isolated in enumerate((True, False)):
         bot = f"{SECRET_BOT}-{n}"
         gateway_choice(api, monkeypatch, rid, isolated)
+        with store.transaction() as c:  # the computer falls back to the Gateway (its own switch)
+            c.execute("UPDATE runners SET gateway_fallback=1 WHERE id=?", (rid,))
         limited(api, bot=bot, config={"runtime": "claude"})
         with store.transaction() as c:
             c.execute(
@@ -2032,6 +2034,11 @@ def test_a_used_up_login_is_one_plain_finding_and_the_gateway_row_counts_only_un
             assert (
                 found[0]["detail"] == f"{CANARY}'s Claude login is used up. Bots are on Tico Gateway until it resets."
             )
+            # A computer that does not fall back to the Gateway gets the plain out-of-quota finding instead.
+            with store.transaction() as c:
+                c.execute("UPDATE runners SET gateway_fallback=0 WHERE id=?", (rid,))
+            [off] = found_for(bot, "limited_no_fallback", "default_login_limited")
+            assert off["check_id"] == "default_login_limited" and "out of quota" in off["title"]
             continue
         # A Mac skips the Gateway row, so the bot is stopped, and that finding says why and what to do.
         stopped = [i for i in found if i["check_id"] == "limited_no_fallback"]

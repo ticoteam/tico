@@ -781,8 +781,9 @@ ORIGIN_CONFLICTS = 5  # conflicts a card lists; `conflict_count` has them all
 
 def growth_origin(ctx, metric, month, channel=""):
     """Where one figure's numbers in `month` came from, over one channel or all of them: each synced source with its
-    newest sync and health, the typed numbers (newest typer, estimate when any is), and the numbers a source disagrees
-    with (spec AC-10, AC-12). A number typed before origins were kept counts as typed by nobody named (revenue and margin
+    newest sync and health (a synced customers source a figure was computed from among them), the typed numbers
+    (newest typer, estimate when any is), and the numbers a source disagrees with (spec AC-10, AC-12) or a typed actual
+    differs from the computed figure on (`against: computed`, computed retention AC-14). A number typed before origins were kept counts as typed by nobody named (revenue and margin
     aside: those may be Settings' figure). None with none."""
     from .brand import admin
 
@@ -802,8 +803,30 @@ def growth_origin(ctx, metric, month, channel=""):
                 continue
             if o["origin"] == "synced" and o.get("source_id"):
                 synced[o["source_id"]] = max(synced.get(o["source_id"], ""), o.get("at") or "")
+            elif o["origin"] == "computed":
+                # Computed from customer facts: a synced customers source shows as a synced one, with its health.
+                for src in o.get("sources") or []:
+                    if src.get("source_id"):
+                        synced[src["source_id"]] = max(synced.get(src["source_id"], ""), src.get("at") or "")
             else:
                 typed.append({"by": o.get("by"), "at": o.get("at") or "", "quality": o.get("quality") or "actual"})
+            differs = o.get("differs")
+            if differs and differs.get("chosen") is None:
+                # A typed actual beside the computed figure: the channel's owner or an admin keeps one (AC-14).
+                conflicts.append(
+                    {
+                        "channel": ch["slug"],
+                        "channel_name": ch["name"],
+                        "month": month,
+                        "field": field,
+                        "typed": differs.get("typed"),
+                        "value": point.get(field),
+                        "source": f"{o.get('computed_from')} customers",
+                        "against": "computed",
+                        "may": admin(ctx.auth, ctx.who)
+                        or bool(ch.get("owner_ref") and ch["owner_ref"] == ctx.who.actor),
+                    }
+                )
             held = o.get("conflict")
             if held:
                 src = known.get(held.get("source_id") or "") or {}

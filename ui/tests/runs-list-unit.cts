@@ -3,7 +3,8 @@
 // - each Log link opens /api/runs/<the row's id>/log: the row has `id` and no `run`;
 // - a live run (state leased, running or input; exit and finished_at null) reads Running, with no failure pill,
 //   no "exit" and no Finished time;
-// - a finished run still reads Done, and a failed one still reads as failed.
+// - a finished run still reads Done, and a failed one still reads as failed;
+// - a run its computer never started reads Didn't start, with the reason that names the computer.
 // Run: node ui/tests/runs-list-unit.cts
 'use strict';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -70,6 +71,18 @@ for (const [where, fn] of [['Settings > History > Runs', 'settingsRunsHTML'], ["
   html = vm.runInContext(`${fn}(__rows)`, ctx) as string;
   assert.ok(html.includes('pill fail'), `${where}: a failed run reads as failed`);
   assert.ok(html.includes('AGO(2026-11-12T12:01:00Z)'), `${where}: a failed run shows when it finished`);
+}
+
+// 4. A run its computer never started reads "Didn't start", with the reason that names the computer.
+const unstarted = row('run-unstarted', 'expired', {outcome: 'expired', exit: 1, finished_at: '2026-11-12T12:02:00Z',
+  didnt_start: true, failure_reason: 'Shared cloud machine took it and never started it'});
+for (const [where, fn] of [['Settings > History > Runs', 'settingsRunsHTML'], ["a bot's Runs card", 'runsTable']]) {
+  ctx.__rows = [unstarted];
+  const html = vm.runInContext(`${fn}(__rows)`, ctx) as string;
+  assert.match(html, /pill fail[^>]*>Didn(?:'|&#39;)t start</, `${where}: a run that never started reads Didn't start`);
+  assert.ok(html.includes('Shared cloud machine took it and never started it'), `${where}: its reason names the computer`);
+  ctx.__rows = [failed];
+  assert.ok(!/Didn(?:'|&#39;)t start/.test(vm.runInContext(`${fn}(__rows)`, ctx) as string), `${where}: a failed run is not called Didn't start`);
 }
 
 console.log('runs-list-unit: ok');

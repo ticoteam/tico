@@ -17,12 +17,13 @@ SITE = "crm.acme.example"
 
 @pytest.fixture
 def s(api, monkeypatch):
-    """A website tool with one shared login; Design (Cara) with Design bots (ops) nested under it, and Empty."""
+    """A website tool with one shared login (All bots off, so only its grants count); Design (Cara) with Design bots (ops)
+    nested under it, and Empty."""
     setup(api)
     closed: list[str] = []
     monkeypatch.setattr(W, "_close", closed.append)
     tid = post(api, "website-tools", {"name": "CRM", "sites": [SITE]})["id"]
-    aid = post(api, f"website-tools/{tid}/accounts", {"username": "", "password": "synthetic"})["id"]
+    aid = post(api, f"website-tools/{tid}/accounts", {"username": "", "password": "synthetic", "all_bots": False})["id"]
     roster(
         api,
         {

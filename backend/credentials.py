@@ -29,6 +29,8 @@ CONTEXT = {'application': 'tico-credentials'}
 # run, a computer's environment or a list with a value: only a signed-in person's reveal (the password alone) and the
 # browser commands that type it. The 2FA key never leaves this process.
 LOGIN = 'login'
+# A shared website account available to current and future bots, without releasing its value to their turns.
+BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
@@ -730,15 +732,16 @@ class Vault:
         if subject.startswith('bot:'):
             subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
         if row['kind'] == LOGIN:
-            # A website account goes to a person or a bot, never every computer; an own account to no one else.
+            # A shared website account goes to selected teammates or all bots, never every computer.
             if row['holder']:
                 raise Problem(
                     'own_account',
                     'This account belongs to its holder alone; add a shared account to grant someone else access.',
                     409,
                 )
-            # A group, too: every person and bot in it uses the account (backend/website_tools.py `_grant`).
-            if not subject.startswith(('human:', 'bot:', 'group:')):
+            # A group, too: every person and bot in it uses the account (backend/website_tools.py `_grant`); and All
+            # bots (BOTS), every non-archived bot now and later.
+            if subject != BOTS and not subject.startswith(('human:', 'bot:', 'group:')):
                 raise Problem('subject', 'Choose a registered person, bot or group.', 422)
         elif subject.startswith('group:'):
             # Groups take a website login only: never an API key or any other credential.
@@ -752,7 +755,10 @@ class Vault:
                 (inferred, H.now(), who.actor, cid),
             )
             row = self.row(c, cid)
-        if subject == COMPUTERS:
+        if subject == BOTS:
+            require_admin(c, who, self.admins)
+            exists = row['kind'] == LOGIN
+        elif subject == COMPUTERS:
             if (
                 row['env'] not in providers.MODEL_KEY_NAMES
                 or row['kind'] not in ('api_key', 'token')

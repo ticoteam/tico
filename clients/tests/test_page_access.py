@@ -30,3 +30,35 @@ def test_page_access_reads_without_writing_and_clears_with_everyone():
         'teams': ['legal'],
         'bots': ['analyst'],
     }
+
+
+def test_page_card_sends_the_rows_to_the_card_route_and_only_bots_are_offered_it():
+    # Spec chat-on-every-page, Release 2: `tico page card` and its MCP twin propose the Goals card.
+    from clients.commands import _access
+    from clients.commands.content import pages_card
+
+    class Api:
+        _tico_is_botops = False
+
+        def __init__(self):
+            self.sent = []
+
+        def post(self, path, body, key=None):
+            self.sent.append((path, body))
+            return {'action': {'status': 'pending'}}
+
+    api = Api()
+    rows = '[{"title": "NPS above 40"}, {"title": "Churn under 3%", "owner": "ana"}]'
+    parsed = hubcli.parser().parse_args(['page', 'card', '--page', 'goals', '--for', 'human:cara', '--rows', rows])
+    pages_card(api, vars(parsed))
+    assert api.sent == [
+        (
+            'page-chat/cards',
+            {
+                'page': 'goals',
+                'for_person': 'human:cara',
+                'rows': [{'title': 'NPS above 40'}, {'title': 'Churn under 3%', 'owner': 'ana'}],
+            },
+        )
+    ]
+    assert _access.AUDIENCE['tico_page_card'] == _access.BOTS

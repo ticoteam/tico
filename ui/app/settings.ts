@@ -5,7 +5,7 @@
 // What this file reads from the server and keeps in SETTINGS_DATA. The other settings files read these through the
 // globals declared here, so each type names the fields its readers use; a field nobody reads is left out.
 type SettingsPerson = import('../types/api').Person & {hidden?: boolean; owner?: boolean; role?: string};
-type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: CloudMachineRow | null; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness & DetailReadiness & DeviceReadiness};
+type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; gateway_fallback?: boolean; cloud_machine?: CloudMachineRow | null; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness & DetailReadiness & DeviceReadiness};
 // A catalog row (backend/providers.py MODEL_CATALOG): every row has an id, a provider and a label.
 type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
   efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null; compact_default?: number};

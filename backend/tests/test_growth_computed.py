@@ -313,7 +313,10 @@ def test_a_computed_month_with_no_typed_row_has_every_key_a_typed_row_has(api):
     load(api, september())
     rows = {r["month"]: r for r in get(api, "growth/cohorts")["cohorts"]}
     assert rows["2026-09"]["id"] is None and set(rows["2026-08"]) <= set(rows["2026-09"])
-    assert rows["2026-09"]["origins"] == {}
+    # Each computed figure's origin names where it came from (part 4: computed beside #304's origins).
+    origins = rows["2026-09"]["origins"]
+    assert set(origins) == {"new_customers", "kept_d30", "kept_d90", "kept_d180"}
+    assert {o["origin"] for o in origins.values()} == {"computed"}
 
 
 def test_a_customer_who_came_back_starts_a_new_spell_and_the_first_keeps_its_churn(api):  # AC-17

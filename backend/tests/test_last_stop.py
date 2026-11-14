@@ -3,6 +3,7 @@ red Crashed for a run its computer took and never started, with nothing lost and
 
 import pytest
 
+from backend import start_holds
 from backend.tests.helpers.api import claim, expire, get, post, ready, setup_attempt  # noqa: F401 (fixture)
 from backend.store import H
 from backend.tests.helpers.execution_review import interrupted
@@ -47,6 +48,9 @@ def test_a_run_whose_lease_lapsed_before_it_started_is_a_soft_line_not_a_crash(a
         "run_id": lapsed["id"],
     }
     assert "lease ran out" in line["last_stop"]["reason"]
+    # Its wait before the next try (execution.handed_back_until) has passed.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), seconds=-301), lapsed["id"]))
     again = claim(api, machine)
     assert again["job_id"] == lapsed["job_id"]
     assert status(api)["last_stop"] is None  # running again: nothing to explain
@@ -220,7 +224,9 @@ def test_ten_failed_starts_within_a_day_fail_the_job_across_server_restarts(api,
     store = api.app.state.store
     who = Identity("runner:" + machine["runner_id"], "runner", runner_id=machine["runner_id"])
     job_id = attempt["job_id"]
-    for _ in range(10):
+    # Hand-backs that give no reason use the whole budget; silent lapses stop at start_holds.SAME in a row.
+    tries = 10 if handed_back else start_holds.SAME
+    for _ in range(tries):
         # A new server reads the same durable jobs and attempts after each failed start.
         restarted = execution.Execution(store, api.app.state.execution.auth)
         with store.transaction() as c:
@@ -238,10 +244,12 @@ def test_ten_failed_starts_within_a_day_fail_the_job_across_server_restarts(api,
     assert attempt is None
     with store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0] == "failed"
-        assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (job_id,)).fetchone()[0] == 10
+        assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (job_id,)).fetchone()[0] == tries
     replies = get(api, f"conversations/{message['conversation_id']}/messages")
     assert [m["body"] for m in replies if m["sender_id"] == "bot:ops"] == [
         "Your ops couldn't start on Test Mac; check that Computer"
+        if handed_back
+        else f"Your ops couldn't start on Test Mac: {start_holds.LAPSED_WHY}; check that Computer"
     ]
 
 

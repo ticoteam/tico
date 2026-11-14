@@ -796,8 +796,8 @@ def last_stop(c, bot, status):
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "failed":
         if str(attempt["final_text"] or "").endswith(start_holds.BOTOPS_HAS_IT):
-            # Handed back for the same reason start_holds.SAME times, or taken and dropped in silence PRE_START_TRIES
-            # times: BotOps has it, so it is no person's to fix.
+            # Handed back for the same reason start_holds.SAME times, or taken and dropped in silence that many times
+            # in a row: BotOps has it, so it is no person's to fix.
             return {
                 "kind": "never_started",
                 "tone": "soft",
@@ -806,13 +806,17 @@ def last_stop(c, bot, status):
                 "at": at,
                 "attempt_id": attempt["id"],
                 "reason": (
-                    f"Its computer took this run {PRE_START_TRIES} times and never started it."
+                    f"Its computer took this run {start_holds.SAME} times and never started it."
                     if start_holds.LAPSED_WHY in str(attempt["final_text"])
+                    else f"Its computer took this run {PRE_START_TRIES} times and never started it."
+                    if start_holds.MISSED_WHY in str(attempt["final_text"])
                     else f"Its computer handed this run back {start_holds.SAME} times for the same reason."
                 ),
                 "text": attempt["final_text"],
             }
-        # PRE_START_TRIES lapses: the reason names the computer and what to do about it (expire()).
+        # start_holds.SAME silent lapses in a row (LAPSED_WHY in its text), or PRE_START_TRIES missed starts: the
+        # text names the computer and what to do about it (expire()).
+        tries = start_holds.SAME if start_holds.LAPSED_WHY in str(attempt["final_text"]) else PRE_START_TRIES
         return {
             "kind": "never_started",
             "tone": "alert",
@@ -820,7 +824,7 @@ def last_stop(c, bot, status):
             "action": None,
             "at": at,
             "attempt_id": attempt["id"],
-            "reason": f"Its computer took this run {PRE_START_TRIES} times and never started it.",
+            "reason": f"Its computer took this run {tries} times and never started it.",
             "text": (attempt["final_text"] or "Last run couldn't start on its computer").rstrip(".") + ".",
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "expired":
@@ -2607,10 +2611,11 @@ def _claim_refusal(
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
     covers = model_subscriptions.covered_runtimes(c, runner, filled, loads)
     ready = model_subscriptions.covered(ready, covers)
+    # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
+    # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out).
+    waits = models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
     access = loads.access if loads is not None else cloud_access.access(c)
-    if cloud_access.frozen(c, access) and (
-        gateway_connection.is_tico(filled.get("model")) or models_preset.waiting(record, ready, filled)
-    ):
+    if cloud_access.frozen(c, access) and (gateway_connection.is_tico(filled.get("model")) or waits):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
         # still runs; this one starts again once credit lands, with no restart.
         return "out_of_credit", None
@@ -2621,7 +2626,7 @@ def _claim_refusal(
         if why not in ignore_refusals:
             return why, None
     check = bot_readiness(ready, bot)
-    if models_preset.waiting(record, ready, filled):
+    if waits:
         # Its subscription is not signed in on this computer yet: the turn runs on the Gateway instead
         # (backend/models_preset.py), so the missing sign-in is the one problem that doesn't hold it. Its checkout,
         # its settings and the Gateway's own runtime still have to be ready.
@@ -2783,7 +2788,7 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     else:
         record = providers.load(c, settings)
         gateway = "gateway_fallback" in models_preset.with_gateway_fallback(
-            record, ready, providers.fill(record, config)
+            record, ready, providers.fill(record, config), falls_back=models_preset.computer_falls_back(c, runner_id)
         )
         rows = [
             r
@@ -3181,9 +3186,8 @@ def handed_back_until(c, job):
     A runner claims every quarter second, so without this wait a step that fails fast before every start would spend
     all PRE_START_TRIES in seconds and fail a run over a short hiccup; with it, ten hand-backs take about half an
     hour, as ten lapsed leases used to take about fifteen minutes.
-    A run its computer took and went silent on (LAPSED) waits the same way from its second lapse in a row: the first
-    already waited out a whole lease, but on Nov 12 a computer that lapsed every run was handed the job again at once,
-    ten times, for every wake."""
+    A run its computer took and went silent on (LAPSED) waits the same way, from its first lapse: on Nov 12 a computer
+    that lapsed every run was handed the job again at once, ten times, for every wake."""
     last = (
         c.execute(
             "SELECT state,started_at,finished_at,final_text FROM attempts WHERE id=?", (job["attempt_id"],)
@@ -3199,7 +3203,7 @@ def handed_back_until(c, job):
         "SELECT count(*) FROM attempts WHERE job_id=? AND started_at IS NULL AND state='expired' "
         "AND substr(final_text,1,?)=?",
         (job["id"], len(kind), kind),
-    ).fetchone()[0] - (kind == LAPSED)
+    ).fetchone()[0]
     if count < 1:
         return None
     return H.shift(last["finished_at"], seconds=min(HAND_BACK_WAIT * 2 ** max(count - 1, 0), HAND_BACK_MAX))
@@ -4233,7 +4237,9 @@ class Execution:
                 gateway_connection.forget(c, row["id"])
                 botops = False
                 lapsed = row["state"] == "leased" and state == "queued" and not benched
-                silent = lapsed and computer_missed(c, row["id"])
+                # Pausing the bot ends its leases itself (bot_settings_routes): Tico took the run, not the computer.
+                paused = c.execute("SELECT 1 FROM bots WHERE id=? AND state='paused'", (row["bot_id"],)).fetchone()
+                silent = lapsed and not paused and computer_missed(c, row["id"])
                 if silent:
                     # Never started and never handed back, and not cut by Tico itself: say so on the run (Runs,
                     # run_diagnostics.reason) and in the log.
@@ -4247,7 +4253,9 @@ class Execution:
                     )
                 if lapsed:
                     tries = failed_starts(c, row["job_id"])
-                    if tries >= PRE_START_TRIES:
+                    # SAME silent lapses in a row are as stuck as SAME hand-backs for one reason (start_holds).
+                    lapses = start_holds.lapsed_in_a_row(c, row["job_id"]) if silent else 0
+                    if tries >= PRE_START_TRIES or lapses >= start_holds.SAME:
                         computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
                         label = (computer["label"] if computer else None) or "its Computer"
                         bot = H.bot(c, row["bot_id"])
@@ -4265,14 +4273,16 @@ class Execution:
                             else "check that Computer"
                         )
                         reason = f"Your {name} couldn't start on {label}; {remedy}"
-                        # Every try lapsed in silence: no wait clears that, and the next wake would loop again. BotOps
-                        # gets it and the task waits on it, as for hand-backs (start_holds.file).
-                        botops = bool(start_holds.file(c, row, start_holds.LAPSED_WHY, label, lapses=tries))
+                        # SAME silent lapses in a row are named as silence; a spent day's budget only as missed starts.
+                        silence = lapses >= start_holds.SAME
+                        why = start_holds.LAPSED_WHY if silence else start_holds.MISSED_WHY
+                        if silence:
+                            reason = f"Your {name} couldn't start on {label}: {why}; {remedy}"
+                        # Its last tries never started: no wait clears that, and the next wake would loop again.
+                        # BotOps gets it and the task waits on it, as for hand-backs (start_holds.file).
+                        botops = bool(start_holds.file(c, row, why, label, lapses=lapses if silence else tries))
                         if botops:
-                            reason = (
-                                f"Your {name} couldn't start on {label}: {start_holds.LAPSED_WHY}. "
-                                f"{start_holds.BOTOPS_HAS_IT}"
-                            )
+                            reason = f"Your {name} couldn't start on {label}: {why}. {start_holds.BOTOPS_HAS_IT}"
                         state = "failed"
                         c.execute("UPDATE attempts SET state='failed',final_text=? WHERE id=?", (reason, row["id"]))
                         job = c.execute(
@@ -5268,8 +5278,14 @@ class Execution:
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
         # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
+        # The Gateway when its plans here run out only where this computer falls back to it (its own switch).
+        plans_out = models_preset.plans_out(c, runner["id"], config)
         config = models_preset.with_gateway_fallback(
-            record, here, models_preset.main_config(record, here, config, tier), tier
+            record,
+            here,
+            models_preset.main_config(record, here, config, tier, plans_out),
+            tier,
+            falls_back=models_preset.computer_falls_back(c, runner["id"]),
         )
         config = models_preset.with_gateway_inputs(config)
         # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).

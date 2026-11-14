@@ -162,6 +162,8 @@ def test_only_the_two_gateway_choices_put_the_gateway_last_and_spend_its_key(api
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
+    # The Gateway is the last hop only on a computer that falls back to it (its own switch, off until turned on).
+    post(api, f"runners/{machine['runner_id']}/gateway-fallback", {"on": True})
     with api.app.state.store.read() as c:
         record = providers.load(c, api.app.state.store.settings)
     rows = providers.default_fallbacks(record)
@@ -186,10 +188,14 @@ def test_a_bot_that_names_its_own_fallback_keeps_it(api, monkeypatch):
     with api.app.state.store.read() as c:
         record = providers.load(c, api.app.state.store.settings)
     own = {**CLAUDE, "fallback": {"harness": "codex", "model": "gpt-5.5"}}
-    assert models_preset.with_gateway_fallback(record, {"isolated": True}, own) == own
-    assert "gateway_fallback" not in models_preset.with_gateway_fallback(record, {"isolated": False}, CLAUDE)
+    assert models_preset.with_gateway_fallback(record, {"isolated": True}, own, falls_back=True) == own
+    assert "gateway_fallback" not in models_preset.with_gateway_fallback(
+        record, {"isolated": False}, CLAUDE, falls_back=True
+    )
     cloud = {"isolated": False, "trust": "cloud_machine"}
-    assert "gateway_fallback" in models_preset.with_gateway_fallback(record, cloud, CLAUDE)
+    assert "gateway_fallback" in models_preset.with_gateway_fallback(record, cloud, CLAUDE, falls_back=True)
+    # A computer that does not fall back to the Gateway never gets it as the last hop (its own switch, off).
+    assert "gateway_fallback" not in models_preset.with_gateway_fallback(record, cloud, CLAUDE)
 
 
 def test_only_isolation_or_a_cloud_machines_trust_group_runs_gateway_work():
@@ -509,6 +515,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
+    post(api, f"runners/{machine['runner_id']}/gateway-fallback", {"on": True})  # it finishes on the Gateway
     post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
     attempt = claim(api, machine, "ops")
     with api.app.state.store.read() as c:

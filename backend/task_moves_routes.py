@@ -639,7 +639,10 @@ def register(
                 changed=body.changed,
                 answered=body.answered,
             )
-            return {"page": {"file_id": made["file_id"], "version": made["version"]}}
+            out: dict[str, Any] = {"page": {"file_id": made["file_id"], "version": made["version"]}}
+            if made.get("said"):
+                out["said"] = made["said"]  # a person's OK this version keeps (task_pages.attach)
+            return out
 
         return work(request, tid, body, call)
 

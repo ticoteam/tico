@@ -269,7 +269,7 @@ def audience_of(tool):
 
 def _can_use(c, tool_id, actor):
     """An effective grant on one of its keys, or (a website tool) an own account `actor` holds or a shared one granted
-    to a group `actor` is in (backend/website_tools.py `_grant`)."""
+    to a group `actor` is in or to All bots (backend/website_tools.py `_grant`)."""
     keys = _keys(c, tool_id)
     if any(_field(k, "holder") == actor or effective_grant(c, k["id"], actor) for k in keys):
         return True
@@ -537,6 +537,12 @@ def access_rows_all(c, tool_id):
     """[{subject, level}] for every person and bot with an effective grant on one of the tool's keys."""
     found = {}
     for key in _keys(c, tool_id):
+        if key['kind'] == 'login':
+            from . import website_tools
+
+            if website_tools.all_bots(c, key):
+                for bot in c.execute("SELECT id FROM bots WHERE state<>'archived'"):
+                    found['bot:' + bot['id']] = 'read_write'
         for grant in c.execute(
             "SELECT * FROM credential_grants WHERE credential_id=? AND revoked_at IS NULL", (key["id"],)
         ):

@@ -23,7 +23,7 @@ health; this module only answers what a run of kind `finance_ad_spend` writes.
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, cast
 
 from .finance.context import load as finance_load
@@ -133,28 +133,73 @@ def _channel(mapping: Mapping[str, Any], key: str) -> str | None:
     return None if not slug or slug == UNKNOWN else slug
 
 
-def rows(c: sqlite3.Connection, mapping: Mapping[str, Any], start: str, end: str) -> list[SpendRow]:
-    """What a run writes for the days [start, end]: spend per channel and month in the book's currency, Unknown for an
-    unmapped campaign. Raises Failing when Finance is not set up or an account is in another currency."""
+def _same_currency(platform: str, account: str, spent_in: str, currency: str) -> None:
+    if spent_in.upper() != currency:
+        raise Failing(f"{_label(platform, account)} spends in {spent_in.upper()}; Finance's books are in {currency}")
+
+
+def _currency(c: sqlite3.Connection) -> str:
+    """The book's currency, once every counting account is in it; else Failing, naming the first that is not."""
     currency = _book_currency(c)
     for a in SA.counting_accounts(c):
-        if a.currency.upper() != currency:
-            raise Failing(
-                f"{_label(a.platform, a.external_id)} spends in {a.currency.upper()}; Finance's books are in {currency}"
-            )
+        _same_currency(a.platform, a.external_id, a.currency, currency)
+    return currency
+
+
+def _slugs(c: sqlite3.Connection) -> dict[str, str]:
+    """Every way the engine names a live channel (slug or name, lowercased) to that channel's slug, so campaigns mapped
+    to one channel by its slug and by its name add up into one row instead of failing the run as a repeat."""
+    from . import growth_sync as GS
+
+    slug_of = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, slug FROM growth_channels WHERE retired_at IS NULL")}
+    known = GS._channels(c)  # pyright: ignore[reportPrivateUsage]
+    return {name: slug_of[cid] for name, cid in known.items() if cid in slug_of}
+
+
+def rows(c: sqlite3.Connection, mapping: Mapping[str, Any], start: str, end: str) -> list[SpendRow]:
+    """What a run writes for the days [start, end]: spend per channel and month in the book's currency, Unknown for an
+    unmapped campaign. A campaign mapped to a live channel's slug or name counts on that channel's slug; any other value
+    is kept as typed, for the engine to list as not written. Raises Failing when Finance is not set up or an account is
+    in another currency."""
+    currency = _currency(c)
+    slugs = _slugs(c)
     spent = SA.campaign_months(c, start, end)
     totals: dict[tuple[str, str | None], int] = {}
     for r in spent:
-        if r.currency.upper() != currency:
-            raise Failing(
-                f"{_label(r.platform, r.account_external_id)} spends in {r.currency.upper()}; Finance's books are in {currency}"
-            )
-        key = (r.month, _channel(mapping, campaign_key(r.platform, r.account_external_id, r.campaign_external_id)))
+        _same_currency(r.platform, r.account_external_id, r.currency, currency)
+        channel = _channel(mapping, campaign_key(r.platform, r.account_external_id, r.campaign_external_id))
+        key = (r.month, slugs.get(channel.lower(), channel) if channel else None)
         totals[key] = totals.get(key, 0) + r.amount
     return [
         SpendRow(month, channel, round(cents / 100, 2))
         for (month, channel), cents in sorted(totals.items(), key=lambda kv: (kv[0][0], kv[0][1] or ""))
     ]
+
+
+def weeks(
+    c: sqlite3.Connection, mapping: Mapping[str, Any], start: str, end: str
+) -> dict[tuple[str | None, str], float]:
+    """Each Monday-to-Sunday week's spend per channel over the days [start, end], in the book's currency:
+    {(channel slug, or None for Unknown, the week's Monday YYYY-MM-DD): spend}. For Growth's weekly CAC, read when a
+    weekly cohort is, from Finance's daily spend; the cohort rows hold only months. A mapped channel is read as the sync
+    engine reads it, a live channel's slug or name in any case; a campaign mapped to anything else counts nowhere, as a
+    run leaves it unwritten. Raises Failing as `rows` does."""
+    from . import growth_sync as GS
+
+    currency = _currency(c)
+    known = GS._channels(c)  # pyright: ignore[reportPrivateUsage]
+    slugs = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, slug FROM growth_channels WHERE retired_at IS NULL")}
+    totals: dict[tuple[str | None, str], int] = {}
+    for r in SA.campaign_days(c, start, end):
+        _same_currency(r.platform, r.account_external_id, r.currency, currency)
+        named = _channel(mapping, campaign_key(r.platform, r.account_external_id, r.campaign_external_id))
+        if named is not None and named.lower() not in known:
+            continue
+        day = date.fromisoformat(r.day)
+        monday = (day - timedelta(days=day.weekday())).isoformat()
+        key = (slugs[known[named.lower()]] if named is not None else None, monday)
+        totals[key] = totals.get(key, 0) + r.amount
+    return {key: round(cents / 100, 2) for key, cents in totals.items()}
 
 
 def window(today: str, months: int) -> tuple[str, str]:

@@ -2,9 +2,9 @@
 
 The commands are read from templates/ and skills/ (`hub <words>`), matched to the parser's own command tree, and run
 with arguments built from each command's arguments and seeded objects. A command must exit 0, or be refused with the
-error recorded in e2e/cli/expected-refusals.json. A command the CLI no longer has (a rename the docs still use) fails
-unless it is a rename the CLI still answers (`hubcli.rename_argv`) or e2e/cli/stale.json names it. Writes that the CLI can
-preview run as dry runs.
+error recorded in its file under e2e/cli/expected-refusals/. A command the CLI no longer has (a rename the docs still
+use) fails unless it is a rename the CLI still answers (`hubcli.rename_argv`) or e2e/cli/stale.json names it. Writes
+that the CLI can preview run as dry runs.
 
 Running every command live costs ~0.7 s each, so the live run is a deterministic sample. The static checks cover every
 command each run: the scan, stale.json, the expected-refusals list, and an argparse parse of the argv built for each one.
@@ -29,13 +29,15 @@ from pathlib import Path
 
 import pytest
 
+from backend.tests import refusal_records
 from backend.tests.live import block_outside_network, live  # noqa: F401
 from backend.tests.helpers.api import post  # noqa: F401
 from backend.tests.helpers.automation_api import NOTE_STEP
 from clients import hubcli
 
 ROOT = Path(__file__).resolve().parents[2]
-EXPECTED = json.loads((ROOT / "e2e" / "cli" / "expected-refusals.json").read_text())
+EXPECTED_DIR = ROOT / "e2e" / "cli" / "expected-refusals"
+EXPECTED = refusal_records.load(EXPECTED_DIR)
 SKIPPED = json.loads((ROOT / "e2e" / "cli" / "skipped.json").read_text())
 # `hub <word>` in running text that is not a command: prose, or a stale reference the CLI no longer answers.
 STALE = json.loads((ROOT / "e2e" / "cli" / "stale.json").read_text())
@@ -401,29 +403,40 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
         elif result == "ok":
             if path in EXPECTED:
                 problems.append(
-                    f"tico {path}: was refused as {EXPECTED[path]!r} and now runs; update expected-refusals.json"
+                    f"tico {path}: was refused as {EXPECTED[path]!r} and now runs; "
+                    "delete its file in e2e/cli/expected-refusals/"
                 )
-        elif EXPECTED.get(path) != result:
-            problems.append(f"tico {path} ({where}): refused as {result!r} (recorded: {EXPECTED.get(path)!r})")
+        elif path not in EXPECTED:
+            problems.append(
+                f"tico {path} ({where}): refused as {result!r} with no recorded refusal; "
+                "add its file in e2e/cli/expected-refusals/"
+            )
+        elif EXPECTED[path] != result:
+            problems.append(f"tico {path} ({where}): refused as {result!r} (recorded: {EXPECTED[path]!r})")
     unlisted = sorted(f"tico {word} (in {where})" for word, where in stale.items() if word not in STALE)
     if unlisted:
         problems.append("`hub` words that name no CLI command and are not in stale.json: " + ", ".join(unlisted))
     if RECORD:
-        Path(RECORD).write_text(json.dumps(dict(sorted(observed.items())), indent=1, ensure_ascii=False) + "\n")
         assert not [p for p in problems if "raised" in p], "\n".join(problems)
+        refusal_records.write(Path(RECORD), observed)
         return
     stale_entries = sorted(set(EXPECTED) - set(used))
     if stale_entries:
-        problems.append("expected-refusals.json names commands no template or skill uses: " + ", ".join(stale_entries))
+        problems.append(
+            "e2e/cli/expected-refusals/ names commands no template or skill uses, delete their files: "
+            + ", ".join(stale_entries)
+        )
     gone = sorted(word for word in STALE if word not in stale)
     if gone:
         problems.append("stale.json lists words no template or skill uses any more: " + ", ".join(gone))
     assert not problems, "\n".join(problems) + (
-        "\nFix unexpected command failures first. For intended refusal changes, edit e2e/cli/expected-refusals.json; "
-        "remove entries no template or skill uses. Fix stale command references or update e2e/cli/stale.json "
-        "(remove unused entries). To regenerate refusals for review: "
-        "TICO_E2E_RECORD_REFUSALS=/tmp/cli-refusals.json python3 -m pytest -q -m slow backend/tests/test_e2e_cli.py. "
-        "Review the diff before copying it over e2e/cli/expected-refusals.json."
+        "\nFix unexpected command failures first. For an intended refusal change, edit that command's file in "
+        "e2e/cli/expected-refusals/ (one file per command, holding its outcome); "
+        "delete files of commands no template or "
+        "skill uses. Fix stale command references or update e2e/cli/stale.json (remove unused entries). To regenerate "
+        "every file for review, run the test with TICO_E2E_RECORD_REFUSALS set to the absolute path of "
+        "e2e/cli/expected-refusals, then review git diff of that folder: "
+        "python3 -m pytest -q -m slow backend/tests/test_e2e_cli.py."
     )
 
 

@@ -285,7 +285,9 @@ def _runner_checks(c, settings):
             )
         )
     starts = None
-    for r in c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
+    for r in c.execute(
+        "SELECT id,label,readiness,gateway_fallback FROM runners_with_state WHERE revoked_at IS NULL"
+    ).fetchall():
         lines = [str(x) for x in (readiness_document(r["readiness"]).get("recent_errors") or [])]
         for check_id, kind, pattern, least, title, fix in LOG_PATTERNS:
             hits = [line for line in lines if pattern.search(line)]
@@ -395,7 +397,10 @@ def _login_checks(c, settings):
     from .store import readiness_document
 
     runners = {
-        r["id"]: r for r in c.execute("SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL")
+        r["id"]: r
+        for r in c.execute(
+            "SELECT id,label,readiness,gateway_fallback FROM runners_with_state WHERE revoked_at IS NULL"
+        )
     }
     labels = {rid: r["label"] for rid, r in runners.items()}
     record = providers.load(c, settings)
@@ -409,9 +414,11 @@ def _login_checks(c, settings):
             login
             and models_preset.fallback_row(record)
             and record.get("auto_fallback")
+            and runners[x["runner_id"]]["gateway_fallback"]
             and models_preset.runs_gateway(readiness_document(runners[x["runner_id"]]["readiness"]))
         ):
-            # Under the two Gateway choices the bots there finish on Tico Gateway, last: one plain line.
+            # Under the two Gateway choices, on a computer that falls back to it, the bots there finish on Tico
+            # Gateway, last: one plain line.
             out.append(
                 _finding(
                     f"default_login_limited:{x['runner_id']}:{x['runtime']}",

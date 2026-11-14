@@ -369,7 +369,8 @@ function subsSetLine(machine: SubsMachine, runtime: string, set: SubsSet) {
   const until = subsWhen(why.until);
   if (why.kind === 'none') return `None of ${set.person_name}'s plans is for ${subsToolName(runtime)}`;
   if (why.kind === 'all_held') {
-    const runs = subsSignedInHere(machine, runtime) ? "using this computer's own login" : subsGatewayOn() ? 'on the Gateway' : 'waiting';
+    // Past its own login, the computer's own Fall back to Tico Gateway decides (computer-detail.ts), not the company's switch.
+    const runs = subsSignedInHere(machine, runtime) ? "using this computer's own login" : machine.gateway_fallback ? 'on the Gateway' : 'waiting';
     return ['All at their limit', until ? `next reset ${until}` : '', runs].filter(Boolean).join(' · ');
   }
   const on = `On ${set.on_name || 'a plan'}`;

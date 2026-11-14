@@ -66,21 +66,46 @@ def gateway_on(record):
     return any((PROVIDER_BY_ID.get(name) or {}).get("gateway") for name in record.get("enabled") or ())
 
 
-def waiting(record, ready, config):
+def waiting(record, ready, config, plans_out=False):
     """Whether a bot on `config` (runtime and model filled in) runs its next turn on the Gateway because its
     subscription is not signed in on this computer yet: only under the recommended choice, with the Gateway connected,
-    on an isolated computer, for a bot on a subscription runtime that names no Tico model of its own."""
+    on an isolated computer, for a bot on a subscription runtime that names no Tico model of its own. `plans_out`
+    (`plans_out` below): the computer's plans for it ran out and it does not fall back to the Gateway, so it waits."""
     from .gateway_connection import is_tico
 
     config = config if isinstance(config, dict) else {}
     runtime = str(config.get("runtime") or "")
     return (
-        of(record) == RECOMMENDED
+        not plans_out
+        and of(record) == RECOMMENDED
         and gateway_on(record)
         and runs_gateway(ready)
         and runtime in SUBSCRIPTION_RUNTIMES
         and not is_tico(config.get("model"))
         and not signed_in(ready, runtime)
+    )
+
+
+def computer_falls_back(c, runner_id):
+    """Whether this computer's turns run on the Gateway when its plans run out: its own "Fall back to Tico Gateway"
+    switch (Settings > Computers, `runners.gateway_fallback`), off unless an admin turned it on."""
+    from .read_cache import one
+
+    row = one(c, "SELECT gateway_fallback FROM runners WHERE id=?", (runner_id,)) if runner_id else None
+    return bool(row and row[0])
+
+
+def plans_out(c, runner_id, config, loads=None):
+    """Whether a turn on `config` here waits for a plan instead of running on the Gateway: every plan given this
+    computer for its runtime is passed over (at its limit, or needing reconnecting) and the computer does not fall
+    back to the Gateway. Without it the turn would read as not signed in yet and `waiting` would send it there."""
+    from . import model_subscriptions
+
+    runtime = str((config or {}).get("runtime") or "")
+    return (
+        runtime in SUBSCRIPTION_RUNTIMES
+        and model_subscriptions.passed_over(c, runner_id, runtime, loads)
+        and not computer_falls_back(c, runner_id)
     )
 
 
@@ -109,19 +134,21 @@ def on_gateway(config, model=None):
     }
 
 
-def main_config(record, ready, config, model=None):
+def main_config(record, ready, config, model=None, plans_out=False):
     """What a claim runs a bot's turn on under the company's choice: `config` itself, or the Gateway while it waits."""
-    return on_gateway(config, model) if waiting(record, ready, config) else config
+    return on_gateway(config, model) if waiting(record, ready, config, plans_out) else config
 
 
-def with_gateway_fallback(record, ready, config, model=None):
-    """`config` with the Gateway as the last fallback when the choice spends it, the computer can run it and the bot
-    names no fallback of its own; the runner tries the company's other signed-in providers first."""
+def with_gateway_fallback(record, ready, config, model=None, falls_back=False):
+    """`config` with the Gateway as the last fallback when the choice spends it, the computer can run it and falls
+    back to it (`falls_back`, its own switch: computer_falls_back), and the bot names no fallback of its own; the
+    runner tries the company's other signed-in providers first."""
     from .gateway_connection import is_tico
 
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     if (
-        not spends_gateway(record)
+        not falls_back
+        or not spends_gateway(record)
         or not record.get("auto_fallback")
         or not gateway_on(record)
         or not runs_gateway(ready)
@@ -172,6 +199,10 @@ def gateway_line(c, bot, ready, settings=None, config=None):
         row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         config = fill(record, json.loads(row[0] or "{}") if row else {})
     if not waiting(record, ready, config):
+        return ""
+    # Its plans on its computer ran out and the computer does not fall back to the Gateway: the claim holds the turn.
+    row = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    if row and plans_out(c, row[0], config):
         return ""
     return (
         "Using Tico AI Gateway; sign in to "

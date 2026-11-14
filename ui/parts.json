@@ -1,5 +1,25 @@
 {
  "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (backend/ui_bundle.py, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "tool-icons": {
+  "files": [
+   "tool-icons.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "task-board": {
+  "files": [
+   "app/task-board.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "taskBoardBind"
+  ],
+  "idle": []
+ },
  "docs-editor": {
   "files": [
    "docs-editor.ts"
@@ -60,7 +80,8 @@
    "app/settings-providers.ts",
    "app/settings-people.ts",
    "app/cloud-agents.ts",
-   "model-login.ts"
+   "model-login.ts",
+   "app/catalog.ts"
   ],
   "deps": [],
   "pages": [
@@ -109,7 +130,8 @@
    "app/inboxes-outbox.ts"
   ],
   "deps": [
-   "webhooks"
+   "webhooks",
+   "tool-icons"
   ],
   "pages": [],
   "calls": [
@@ -163,7 +185,8 @@
   "deps": [
    "settings",
    "task",
-   "bot-files"
+   "bot-files",
+   "tool-icons"
   ],
   "pages": [
    "pageBot",
@@ -323,7 +346,8 @@
    "app/tools.ts",
    "app/tools-api.ts",
    "app/redesign-library.ts",
-   "app/tools-website.ts"
+   "app/tools-website.ts",
+   "app/who-picker.ts"
   ],
   "deps": [
    "finance",
@@ -420,7 +444,9 @@
    "app/meetings-granola.ts",
    "app/meetings-sources.ts"
   ],
-  "deps": [],
+  "deps": [
+   "tool-icons"
+  ],
   "pages": [
    "pageLiveMeetings",
    "pageNotes"

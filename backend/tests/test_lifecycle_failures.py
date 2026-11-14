@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from backend import execution
 from backend.app import create_app
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, headers, post, ready, runner, setup_attempt  # noqa: F401
@@ -69,7 +70,9 @@ def test_events_after_the_attempt_completed_are_refused_as_terminal_and_nothing_
         assert c.execute("SELECT count(*) FROM attempt_events WHERE attempt_id=?", (a["id"],)).fetchone()[0] == 1
 
 
-def test_a_turn_lapsed_before_it_started_is_offered_once_and_its_late_events_do_not_touch_the_new_one(api):
+def test_a_turn_lapsed_before_it_started_is_offered_once_and_its_late_events_do_not_touch_the_new_one(api, monkeypatch):
+    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
+    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
     r, _, old = setup_attempt(api)
     # The runner stops renewing before it starts: the lease passes and the work goes back in line.
     expire(api, old["id"])
@@ -118,7 +121,9 @@ def test_a_finished_turn_whose_lease_lapsed_before_any_sweep_is_settled_not_refu
     assert job_state(api, a["job_id"]) == "completed"
 
 
-def test_a_late_renewal_after_the_task_went_to_another_attempt_is_refused_and_the_old_one_stays_ended(api):
+def test_a_late_renewal_after_the_task_went_to_another_attempt_is_refused_and_the_old_one_stays_ended(api, monkeypatch):
+    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
+    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
     r, _, old = setup_attempt(api)
     expire(api, old["id"])
     ready(api, r, ["ops"])

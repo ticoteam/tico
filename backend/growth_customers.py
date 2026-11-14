@@ -370,6 +370,7 @@ def load(
         (load_id, source, customers, removed, actor, at),
     )
     H.event(c, actor, "growth.customers.load", load_id, {"source": source, "customers": customers, "removed": removed})
+    G.ask_owners(c)  # a typed actual that now differs from a computed figure: its channel's owner is asked, once
     channels: set[str] = {r[0] for r in c.execute("SELECT slug FROM growth_channels")}
     unknown = sum(1 for v in values if v[4] not in channels)
     months: dict[tuple[str, str], int] = {}

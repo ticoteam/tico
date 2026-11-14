@@ -9,6 +9,7 @@ from . import account_routes
 from . import org_routes
 from . import key_grants
 from . import page_owners
+from . import page_chat_cards
 from . import secret_drop
 from . import team_rules
 from . import views
@@ -80,6 +81,18 @@ def register(app, admin_only, auth, mutate, onboarding, owner_only, recruiter, s
         """Grant on the card: exactly the rows kept, then each tool's check; the card with a result per row. A
         credential administrator in that chat."""
         return key_grants.grant(store, request.app.state.vault, request.state.identity, message_id, body.keep)
+
+    @app.post("/api/v2/page-chat/cards")
+    def page_chat_card(request: Request, body: M.PageChatCard):
+        """A page's owner bot proposes a card to a person who just wrote to it from that page: Goals' list of goals,
+        made only on the person's Confirm, as them (backend/page_chat_cards.py). 403 for any other caller."""
+        who = request.state.identity
+        rows = [r.model_dump() for r in body.rows]
+        return mutate(
+            request,
+            body,
+            lambda c: page_chat_cards.propose(c, settings, auth, who, body.page, body.for_person, rows, app.routes),
+        )
 
     @app.put("/api/v2/page-owners/{page}")
     def page_owner_set(request: Request, page: str, body: M.PageOwnerSet):

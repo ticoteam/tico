@@ -95,6 +95,15 @@ interface Window {
 .asst-off{padding:14px 0}
 .asst-err{color:var(--fail);font-size:12.5px}
 .asst-card .asst-once code{color:var(--ink);user-select:all;font-size:13px}
+.pgk-rows{list-style:none;margin:6px 0 10px;padding:0;font-size:13px}
+.pgk-row{display:flex;align-items:center;gap:6px;min-height:28px;border-top:1px solid var(--line)}
+.pgk-row:first-child{border-top:0}
+.pgk-row>span{flex:1;min-width:0;overflow-wrap:anywhere}
+.pgk-o{color:var(--muted)}
+.pgk-off>span{color:var(--muted);text-decoration:line-through}
+button.pgk-x{flex:none;width:28px;height:28px;padding:0;border:0;background:none;color:var(--muted);font-size:16px;line-height:1;border-radius:6px;cursor:pointer}
+button.pgk-x:hover{background:var(--surface2);color:var(--ink)}
+.pgk .asst-row{justify-content:space-between}
 `;
 
   function style() {
@@ -125,6 +134,33 @@ interface Window {
   const SENT = new Set(['message', 'body', 'text', 'comment']);
   // Who says a card's words, by its proposer (a card with `by_name` says its own name instead).
   const SAYS: Record<string, string> = {assistant: 'The assistant says: ', botops: 'BotOps says: '};
+  // A page chat's card (backend/page_chat_cards.py, Goals): one row per goal with its owner, × to drop a row (it stays,
+  // struck, with ↺ to bring it back), Cancel on the left and one accent button that counts the kept rows. Once decided
+  // it lists what ran (the server keeps only the kept rows) with no buttons.
+  const dropped = new Map<string, Set<number>>();            // action id -> the rows the person took off before Confirm
+  const isPageCard = (action: AssistantCardAction): boolean => String(action.proposer || '').startsWith('page:');
+  function pageCard(action: AssistantCardAction, esc: (s: unknown) => string, done: string | undefined, busy: string): string {
+    const off = dropped.get(action.id) || new Set<number>(), lines = action.diff || [];
+    const open = busy !== '' || action.status === 'pending';
+    const kept = lines.length - [...off].filter(i => i < lines.length).length;
+    const rows = lines.map((d, i) => {
+      const gone = open && off.has(i);
+      const toggle = open ? `<button class="pgk-x" type="button" data-drop="${i}" aria-label="${gone ? 'Bring back' : 'Drop'} ${esc(d.field)}"${busy ? ' disabled' : ''}>${gone ? '↺' : '×'}</button>` : '';
+      return `<li class="pgk-row${gone ? ' pgk-off' : ''}"><span><span class="pgk-t">${esc(d.field)}</span><span class="pgk-o"> · ${esc(d.new)}</span></span>${toggle}</li>`;
+    }).join('');
+    const noun = (n: number) => `${n} goal${n === 1 ? '' : 's'}`;
+    const button = (verb: string, cls: string, label: string, doing: string, off = false): string => busy === verb
+      ? `<button class="${cls}" type="button" data-${verb} disabled aria-busy="true">${doing}</button>`
+      : `<button class="${cls}" type="button" data-${verb}${busy || off ? ' disabled' : ''}>${label}</button>`;
+    return `<div class="asst-card pgk" tabindex="-1" data-action="${esc(action.id)}" data-status="${esc(action.status)}">
+      <div class="asst-who">${esc((action.by_name || 'A bot').replace(/^The /, ''))} asks</div>
+      <b data-what>${esc(action.description || action.summary || '')}</b>
+      <ul class="pgk-rows" aria-label="Goals">${rows}</ul>
+      ${open
+        ? `<div class="asst-row">${button('cancel', 'ghost', 'Cancel', 'Canceling…')}${button('confirm', 'primary', 'Add ' + noun(kept), 'Adding…', kept === 0)}</div>`
+        : `<div class="asst-state">${esc(done || action.status)}</div>`}</div>`;
+  }
+
   // `busy`: the button pressed ('confirm' / 'cancel') while its answer is on its way: it spins (chat.css p-spin) and says
   // so, the other is off, and a thread rebuilt meanwhile draws the same.
   function actionCard(action: AssistantCardAction, esc: (s: unknown) => string, open = false, assistantName = '', busy = ''): string {
@@ -132,6 +168,7 @@ interface Window {
     const doneWords: Record<string, string> = {done: 'Done.' + (action.result?.error ? ' ' + action.result.error : ''), failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
       canceled: 'Canceled.', withdrawn: 'Withdrawn: nothing ran.', expired: 'Expired: ask again.', running: 'Confirmed · working on it'};
     const done = doneWords[action.status];
+    if (isPageCard(action)) return pageCard(action, esc, done, busy);
     // Never cut a value: a long one is folded behind "Show more", whole.
     const shown = (v: unknown): string => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
       ? `<details class="asst-long"><summary>${esc(t.slice(0, 120))}… <span>Show more</span></summary>${esc(t)}</details>` : esc(t); };
@@ -227,7 +264,8 @@ interface Window {
         if (focused) drawn.get(action.id)?.card.focus({preventScroll: true});
         let next: AssistantCardAction | null = null;
         try {
-          const answer = await post<AssistantCardAnswer>(`/v2/assistant/actions/${encodeURIComponent(action.id)}/${verb}`, {});
+          const drop = verb === 'confirm' && isPageCard(action) ? [...(dropped.get(action.id) || [])].sort((a, b) => a - b) : [];
+          const answer = await post<AssistantCardAnswer>(`/v2/assistant/actions/${encodeURIComponent(action.id)}/${verb}`, drop.length ? {drop} : {});
           if (answer?.shown_once) shownOnce.set(action.id, answer.shown_once);
           next = answer.action;
         }
@@ -241,6 +279,15 @@ interface Window {
         reload?.();
       };
       const host0 = host;
+      // × / ↺ on a page card's row: redrawn where it is, with the focus kept on that row's button.
+      for (const b of card.querySelectorAll<HTMLButtonElement>('[data-drop]')) b.addEventListener('click', () => {
+        const i = Number(b.dataset.drop), off = dropped.get(action.id) || new Set<number>();
+        off[off.has(i) ? 'delete' : 'add'](i);
+        dropped.set(action.id, off);
+        const now = seenActions.get(action.id) || action;
+        for (const h of new Set([...hostsOf(action.id), card.parentElement || host0])) { painted.delete(h); paint(h, now); }
+        drawn.get(action.id)?.card.querySelector<HTMLButtonElement>(`[data-drop="${i}"]`)?.focus();
+      });
       card.querySelector('[data-confirm]')?.addEventListener('click', () => decide('confirm'));
       card.querySelector('[data-cancel]')?.addEventListener('click', () => decide('cancel'));
     };

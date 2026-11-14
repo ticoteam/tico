@@ -746,10 +746,17 @@ class Auth:
                     or str(row["running_since"] or "") < H.shift(H.now(), seconds=-120)
                 ):
                     raise Problem("assistant_action", "That assistant action is not being confirmed", 403)
-                # Recorded via whoever proposed it (the Assistant, or BotOps for what a person asked it for).
+                # Recorded via whoever proposed it (the Assistant, BotOps for what a person asked it for, or a page's
+                # owner bot for a page chat's card: backend/page_chat_cards.py).
                 who = replace(
                     who,
-                    via=row["proposer"] if row["proposer"] in ("assistant", "botops") else "assistant",
+                    via=(
+                        row["proposer"]
+                        if row["proposer"] in ("assistant", "botops")
+                        else "page_chat"
+                        if str(row["proposer"] or "").startswith("page:")
+                        else "assistant"
+                    ),
                     confirmed=True,
                 )
             return who

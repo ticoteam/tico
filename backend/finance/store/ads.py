@@ -460,6 +460,43 @@ def campaign_months(c: sqlite3.Connection, start: str, end: str) -> list[Campaig
     return out
 
 
+@dataclass(frozen=True)
+class CampaignDay:
+    """One campaign's spend on one day the platform reports, on a counting account."""
+
+    platform: str
+    account_external_id: str
+    campaign_external_id: str
+    day: str  # YYYY-MM-DD
+    currency: str
+    amount: int  # cents
+
+
+def campaign_days(c: sqlite3.Connection, start: str, end: str) -> list[CampaignDay]:
+    """Spend per counting account, campaign, day and currency over the days [start, end]: the daily read behind
+    Growth's weekly CAC (backend/growth_finance.py weeks)."""
+    accounts = {a.id: a for a in counting_accounts(c)}
+    if not accounts:
+        return []
+    marks = ",".join("?" * len(accounts))
+    return [
+        CampaignDay(
+            accounts[str(r[0])].platform,
+            accounts[str(r[0])].external_id,
+            str(r[1]),
+            str(r[2]),
+            str(r[3]),
+            int(r[4]),
+        )
+        for r in c.execute(
+            "SELECT ad_account_id, campaign_external_id, day, currency, SUM(amount_cents) FROM fin_ad_spends "
+            f"WHERE day BETWEEN ? AND ? AND ad_account_id IN ({marks}) "
+            "GROUP BY ad_account_id, campaign_external_id, day, currency ORDER BY day, ad_account_id, campaign_external_id",
+            (start, end, *accounts),
+        )
+    ]
+
+
 def account_label(platform: str, external_id: str) -> str:
     """An ad account as its platform shows it: 123-456-7890 for Google Ads, act_123 for Meta."""
     if platform == "google_ads" and len(external_id) == 10 and external_id.isdigit():

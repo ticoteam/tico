@@ -362,6 +362,9 @@ def test_a_held_subscription_falls_to_the_gateway_under_the_gateway_choice_and_w
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     assert claim(api, m) is None  # no subscription, no sign-in here, no Gateway: it waits
     choose(api, models_preset.RECOMMENDED)
+    # Under the Gateway choice it still waits: the computer does not fall back to the Gateway until an admin says so.
+    assert claim(api, m) is None
+    post(api, f"runners/{m['runner_id']}/gateway-fallback", {"on": True})
     turn = claim(api, m)
     assert turn and turn["config"]["runtime"] == "pi" and turn["config"]["waiting_for_sign_in"] == "claude"
     assert "subscriptions" not in turn and not turn["config"].get("primary_held")
@@ -1172,6 +1175,7 @@ def test_automatic_subscription_fallback_precedes_gateway(api, monkeypatch):
         ready["isolated"] = True
         ready["runtimes"]["pi"] = {"installed": True, "authenticated": "missing"}
         c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (encode(ready), m["runner_id"]))
+    post(api, f"runners/{m['runner_id']}/gateway-fallback", {"on": True})
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     assert turn["config"].get("gateway_fallback")

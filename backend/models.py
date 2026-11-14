@@ -1645,6 +1645,10 @@ class RunnerMemberBots(Contract):
     accepts: bool
 
 
+class RunnerGatewayFallback(Contract):
+    on: bool
+
+
 class RunnerLabel(Contract):
     # Trimmed first (Contract strips), then 1 to 100 characters on one line.
     label: StrictStr = Field(
@@ -2511,6 +2515,23 @@ class KeyGrantProposal(Contract):
     note: str = Field(default="", max_length=500)
 
 
+class PageChatCardRow(Contract):
+    """One goal on a page chat's card: its title, and optionally its owner (a person or bot; the person by default) and
+    the goal it serves."""
+
+    title: str = Field(min_length=1, max_length=300)
+    owner: ID | None = None
+    parent_id: ID | None = None
+
+
+class PageChatCard(Contract):
+    """A page owner bot's card for a person who just wrote to it from that page (backend/page_chat_cards.py)."""
+
+    page: str = Field(min_length=1, max_length=40)
+    for_person: ID
+    rows: list[PageChatCardRow] = Field(min_length=1, max_length=50)
+
+
 class KeyGrantGrant(Contract):
     """Grant on the card: the positions of the rows kept (null: all)."""
 
@@ -3055,6 +3076,13 @@ class DocsAsk(Contract):
     new_conversation: bool = False  # close the docs conversation and start a fresh one (no context)
 
 
+class AssistantConfirm(Contract):
+    """A person's Confirm on a card. `drop`: the indexes of a page card's rows they took off (backend/page_chat_cards.py);
+    the rest run."""
+
+    drop: list[Annotated[int, Field(ge=0, le=99)]] = Field(default_factory=list, max_length=100)
+
+
 class AssistantWithdraw(Contract):
     """A bot takes back a Confirm card it proposed; the reason (optional) goes to the person in one line."""
 
@@ -3589,7 +3617,9 @@ class GrowthConflictResolve(Contract):
     field: Literal[
         "spend", "bot_cost", "new_customers", "kept_d30", "kept_d90", "kept_d180", "revenue_month", "margin_pct"
     ]
-    keep: Literal["typed", "source"]
+    keep: Literal["typed", "source", "computed"]
+    # What the typed number differs from: a synced source's value (the default) or the figure computed from customers.
+    against: Literal["source", "computed"] | None = None
 
 
 class GrowthCohortSet(Contract):

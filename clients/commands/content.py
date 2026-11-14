@@ -527,6 +527,36 @@ def pages_publish(api, args):
     return api.post("pages", body, key=_key(args))
 
 
+@tool(
+    "tico_page_card",
+    "On Goals, as the page's owner bot: propose the goals a person listed as one card in their chat with you. Nothing "
+    "is made until they confirm; they may drop rows first. Only for a person who wrote to you from Goals in the last 30 "
+    "minutes. Never create the goals yourself.",
+    {
+        "page": {"enum": ["goals"], "description": "The page the person wrote from"},
+        "for_person": _s("The person the card is for: human:<id>"),
+        "rows": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "description": 'One per goal: [{"title": "...", "owner": "<person or bot, default the person>", '
+            '"parent_id": "<goal it serves>"}]',
+            "items": {
+                "type": "object",
+                "properties": {"title": _s("The goal"), "owner": _s("Who owns it"), "parent_id": _s("Goal it serves")},
+                "required": ["title"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    required=("page", "for_person", "rows"),
+    writes=True,
+)
+def pages_card(api, args):
+    body = {k: args[k] for k in ("page", "for_person", "rows")}
+    return api.post("page-chat/cards", body, key=_key(args))
+
+
 @tool("tico_page_list", "Readable pages, newest first. Follow next_cursor.",
       {"bot": _s("Only this bot's pages"), "task": _s("Pages filed on or pinned to this task"),
        "archived": {"type": "boolean", "description": "The archived pages instead"},
@@ -922,6 +952,16 @@ PAGE = (
         omit=("name", "text"),  # the file's own, read from `path`
         run=pages_publish_path,
         example="tico page publish reports/weekly.html --title 'Weekly review' --cadence weekly",
+    ),
+    Command(
+        "page card",
+        "propose a person's list as one card in your chat with them (Goals' owner bot)",
+        args=(
+            Arg("page", "--page"),
+            Arg("for_person", "--for"),
+            Arg("rows", "--rows", type=json.loads, metavar="JSON", action="store"),
+        ),
+        example="""tico page card --page goals --for human:ana --rows '[{"title": "NPS above 40"}]'""",
     ),
     Command("page list", "pages you may read, newest first", example="tico page list --task T1"),
     Command("page show", "one page's status", example="tico page show p1"),

@@ -492,7 +492,8 @@ function decidePaintBody(st: DecState) {
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + decideSinceHTML(v)
         + (v.since?.on && !v.since.same ? `<div class="dc-doc dc-diff">${v.since.diff}</div>`
-          : `<div class="dc-doc">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`);
+          // Nothing attached (no grant, no shows): marked bare, so a phone opens on the question (decide.css).
+          : `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`);
   } else if (decideTaskId(it)) {
     // Who asked and when, then the task's own text, its links, files and pages; the heading is on the right only.
     html = decideAboutHTML(it, kind);

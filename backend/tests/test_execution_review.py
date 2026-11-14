@@ -27,6 +27,8 @@ def test_pre_start_retry_limit_fails_unstarted_jobs_and_preserves_running_work(a
     from backend import execution
 
     monkeypatch.setattr(execution, "PRE_START_TRIES", 2)
+    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
+    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
     machine, message, first = setup_attempt(api)
     get(api, "credential-runtime", first["token"])
     expire(api, first["id"])
@@ -1506,7 +1508,11 @@ def test_a_person_writing_or_try_now_lifts_a_usage_limit_cooldown_once(api):
     post(api, "bots/ops/limit/retry", {}, expected=409)
 
 
-def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_partway(api):
+def test_a_claim_that_lapsed_before_its_run_started_does_not_count_as_stopping_partway(api, monkeypatch):
+    from backend import execution
+
+    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
+    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
     machine, message, lapsed = setup_attempt(api)
     expire(api, lapsed['id'])  # the computer never started it: back in the queue
     ready(api, machine, ['ops'])
@@ -1529,8 +1535,11 @@ def test_a_claim_expires_lapsed_leases_in_its_own_write_and_rechecks_one_job_und
     # TK-INSRN53V (102 bots): expiry inside the claim's write, then the full selection it forced there, held the lock
     # 7-26 s. The route expires first in a short write; the read after it sees the requeued job; the claim's write
     # rechecks that one job and hands it out on this same claim.
+    from backend import execution
     from backend.execution import Execution
 
+    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
+    monkeypatch.setattr(execution, "HAND_BACK_WAIT", 0)
     machine, message, lapsed = setup_attempt(api)
     expire(api, lapsed['id'])
     ready(api, machine, ['ops'])

@@ -31,7 +31,7 @@ type Kind = {kind: string; label: string; runtime: string; secret_label: string;
 type Machine = {id: string; label: string; owner_id: string; last_seen_at: string; version: string; platform: string; bots: string[];
   accepts_member_bots: boolean; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>};
   turn_counts: {running: number; starting: number; waiting: number; queued: number; waits: unknown[]}; turn_summary: string;
-  release?: string; cloud_machine?: {state: string};
+  release?: string; cloud_machine?: {state: string}; gateway_fallback?: boolean;
   update?: {state: string; label: string; release: string; commit: string; outdated: boolean; server_release: string; error: string}};
 type Sub = {id: string; name: string; kind: string; runtime: string; label: string; status: string; status_detail: string; computers: string[];
   usage: {window?: string | null; used_pct?: number | null; cost_usd_month?: number | null; resets_at?: string; reason?: string; weekly_resets_at?: string; weekly_used_pct?: number} | null;
@@ -225,6 +225,12 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
         set: {person: body.person, person_name: 'Ana', plans: 3, on: 'p2', on_name: 'Plan 2', why: {kind: 'soonest', plan: null, until: null}}});
       for (const s of data.subs) s.computers = data.assignments.filter(a => a.subscription_id === s.id).map(a => a.runner_id);
       return json({runner_id: body.runner_id, runtime: body.runtime, subscription_id: body.subscription, stopped: body.confirm ? 2 : 0, sessions_reset: body.confirm ? 5 : 0});
+    }
+    const fallback = p.match(/^\/api\/v2\/runners\/([^/]+)\/gateway-fallback$/);
+    if (fallback && method === 'POST') {
+      const body = req.postDataJSON() as Body & {on?: boolean}; writes.push({p, method, body});
+      data.machines.find(m => m.id === fallback[1])!.gateway_fallback = Boolean(body.on);
+      return json({gateway_fallback: Boolean(body.on)});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -830,12 +836,43 @@ async function personGroups(browser: Browser) {
   console.log("a person's plans, grouped and picked: ok");
 }
 
+// Every one of Ana's plans is at its limit on Cloud · shared, which has no Claude login of its own: its bots wait unless
+// the computer's own Fall back to Tico Gateway is on (off until an admin turns it on), and the cell says which.
+async function plansRunOut(browser: Browser) {
+  const {page, errors, writes} = await open(browser, {tab: 'devices', mutate: data => {
+    personPlans(data);
+    data.assignments = data.assignments.filter(a => !(a.runner_id === 'r2' && a.runtime === 'claude'));
+    data.assignments.push({runner_id: 'r2', runtime: 'claude', subscription_id: 'p2', person: 'human:ana',
+      set: {person: 'human:ana', person_name: 'Ana', plans: 3, on: null, on_name: null, why: {kind: 'all_held', plan: null, until: new Date(Date.now() + 864e5).toISOString()}}});
+  }});
+  const line = page.locator('[data-computer-row=r2] [data-subs-set-line]');
+  await line.waitFor();
+  // The company's Gateway switch is on (fixtures), yet the computer's own switch decides.
+  assert.match(await line.innerText(), /^All at their limit · next reset \S.* · waiting$/);
+  await page.locator('[data-computer-row=r2] .machine-name').click();
+  const detail = page.locator('#set-machines dialog.computer-detail[open]');
+  const box = detail.locator('[data-gateway-fallback=r2]');
+  assert.equal(await box.isChecked(), false);
+  await box.check();
+  await page.waitForFunction(() => document.querySelector('[data-computer-row=r2] [data-subs-set-line]')?.textContent?.endsWith('on the Gateway'));
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/runners/r2/gateway-fallback', method: 'POST', body: {on: true}});
+  assert.equal(await detail.locator('[data-gateway-fallback=r2]').isChecked(), true);
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('plans run out: the computer waits unless its own switch is on: ok');
+}
+
 async function gatewayOffAndMember(browser: Browser) {
   const {page, errors} = await open(browser, {tab: 'devices', as: 'member', mutate: data => { data.providers.preset = 'subscriptions'; }});
   await page.locator('#set-machines [data-subs-pick]').first().waitFor();
   const codex = page.locator('[data-computer-row=r2] [data-subs-pick=codex]');
   assert.equal(await codex.locator('option').last().innerText(), 'None', 'Gateway off: no subscription reads None');
   assert.equal(await codex.isDisabled(), true, 'only owners and admins assign');
+  // A member reads a computer's Fall back to Tico Gateway and cannot change it.
+  await page.locator('[data-computer-row=r2] .machine-name').click();
+  const fallback = page.locator('#set-machines dialog.computer-detail[open] [data-gateway-fallback=r2]');
+  assert.deepEqual([await fallback.isChecked(), await fallback.isDisabled()], [false, true]);
+  await page.keyboard.press('Escape');
   await page.evaluate(() => settingsShow('models'));
   await page.locator('#set-subs [data-subs-row]').first().waitFor();
   assert.equal(await page.locator('#subs-add').isVisible(), false);
@@ -1114,6 +1151,6 @@ async function screens(browser: Browser) {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await navigation(browser); await modelsTab(browser); await addSubscription(browser); await connectPlan(browser); await rowMenu(browser);
-    await computersTable(browser); await personGroups(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await phoneReasons(browser); await usageLeft(browser); await screens(browser);
+    await computersTable(browser); await personGroups(browser); await plansRunOut(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await phoneReasons(browser); await usageLeft(browser); await screens(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

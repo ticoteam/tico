@@ -104,6 +104,30 @@ def test_the_builder_and_release_manager_may_push_a_rebased_branch_and_never_a_t
     assert "Bash(gh pr checkout *)" in settings("release-owner")["allow"]
 
 
+@pytest.mark.parametrize("template", ["builder", "reviewer", "qa-owner", "release-owner"])
+def test_every_bot_that_meets_a_red_main_finds_the_one_task_waits_on_it_and_rebases_after(template):
+    # Nov 13, main red twice (#3335, #3604): 13 duplicate "main red" tasks (3 from the QA and Release Owners, whose
+    # templates said nothing), two fix PRs for one break, re-runs that tested the old merge again, and tasks snoozed to
+    # guessed dates. Each bot that sees a red check is taught the same rules, in the same words.
+    text = " ".join(" ".join(body.split()) for _path, body in texts(template))
+    # Look first, snoozed ones included, and give a new one the title the next bot searches for.
+    assert 'tico task list --q "Main red" --status open --snoozed all' in text
+    assert re.search(r"`Main red: <[^>]+>, since <[^>]+>`", text), "the main-red title"
+    # Filed from a private task, it must still be one the next bot's search finds: plain or --private it is hidden.
+    assert "file it with `tico task create --from-private`" in text and "no `--private`" not in text
+    # Say you are blocked on it with a comment: relating it to your task is refused across owners.
+    assert re.search(r'tico task comment <main-red task> "Blocks #<[^>]+> \(PR #<[^>]+>\)', text)
+    assert "tico task relate <your task> <main-red task>" not in text
+    # Wait on it from your own task, or name the fix pull request; never a guessed date.
+    assert "tico task relate <your task> depends_on <main-red task>" in text
+    assert "waiting for #<fix pull request> to merge" in text
+    # After main is fixed: a new head, not a re-run of the old merge (the QA Owner may not force-push, so it merges).
+    assert re.search(r"git (rebase|merge) origin/<base branch>", text) and "never re-run" in text
+    if template == "release-owner":
+        # Its older rule sends every failed_checks removal back to the Builder; main red must be named as the exception.
+        assert "Not after `failed_checks`, which is choice 3, except a main-red failure" in text
+
+
 # The one page skill every bot that writes a spec, a check or a review uses (docs/software-factory.md, "Visual specs").
 PAGE_SKILL = "build-the-page"
 PAGE_WRITERS = {

@@ -150,6 +150,22 @@ def register(
 
         return mutate(request, body, work)
 
+    @app.post("/api/v2/runners/{rid}/gateway-fallback")
+    def runner_gateway_fallback(request: Request, rid: str, body: M.RunnerGatewayFallback):
+        """Whether this computer's turns run on Tico Gateway when its plans run out (backend/models_preset.py
+        computer_falls_back). Off by default; owners and admins turn it on."""
+        who = request.state.identity
+
+        def work(c):
+            admin_only(who, "says which computers fall back to Tico Gateway")
+            if not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone():
+                raise Problem("not_found", "Computer not found", 404)
+            c.execute("UPDATE runners SET gateway_fallback=? WHERE id=?", (int(body.on), rid))
+            H.event(c, who.actor, "runner.gateway_fallback", rid, {"on": body.on})
+            return {"gateway_fallback": body.on}
+
+        return mutate(request, body, work)
+
     # An external agent (a Hermes profile) is a bot with a standing credential instead of a
     # computer: a person mints it here, the agent's box heartbeats with it, and the same token
     # is the bearer for the MCP endpoint and the `tico` CLI (docs/hermes-agents.md).

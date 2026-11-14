@@ -12,8 +12,9 @@ where the tool has it. Outside network names do not resolve during the test.
 
 ## Files
 
-- `expected-refusals.json`: tool name to the outcome it must give, either `"<http status> <code>"` or the bare protocol
-  code (a missing argument has no status). Only tools that do not succeed are listed.
+- `expected-refusals/<tool>.json`: one file per tool that does not succeed, holding the outcome it must give as a JSON
+  string: `"<http status> <code>"`, or the bare protocol code (a missing argument has no status). A tool that succeeds
+  has no file. Two changes that add different tools touch different files.
 - `OVERRIDES` in the test: arguments for a tool that needs state no seed makes. Empty today.
 
 ## Run
@@ -22,8 +23,10 @@ where the tool has it. Outside network names do not resolve during the test.
 
 ## After a deliberate change
 
-Regenerate the recorded outcomes, review the diff, then commit it:
+Regenerate the recorded outcomes in place, review the folder's diff, then commit it:
 
-    TICO_E2E_RECORD_REFUSALS=/path/in/scratchpad/mcp.json python3 -m pytest -q -o addopts='' -m slow backend/tests/test_e2e_mcp.py
+    TICO_E2E_RECORD_REFUSALS=$PWD/e2e/mcp/expected-refusals python3 -m pytest -q -o addopts='' -m slow backend/tests/test_e2e_mcp.py
+    git diff e2e/mcp/expected-refusals
 
-Copy the file over `expected-refusals.json` only after checking each changed line is the intended change.
+The record writes one file per refused tool and removes the files of tools that now succeed or no longer exist. Check
+that each changed line is the intended change.

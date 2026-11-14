@@ -72,7 +72,7 @@ def since_time(value):
     ) + "Z"
 
 
-ATTEMPT_DETAIL_SQL = "SELECT state,result,finished_at FROM attempts WHERE id=?"
+ATTEMPT_DETAIL_SQL = "SELECT state,started_at,result,finished_at FROM attempts WHERE id=?"
 
 
 def prime_attempt_details(c, ids):
@@ -85,7 +85,9 @@ def prime_attempt_details(c, ids):
         marks = ",".join("?" * len(chunk))
         attempts = {
             row["id"]: row
-            for row in c.execute(f"SELECT id,state,result,finished_at FROM attempts WHERE id IN ({marks})", chunk)
+            for row in c.execute(
+                f"SELECT id,state,started_at,result,finished_at FROM attempts WHERE id IN ({marks})", chunk
+            )
         }
         read_cache.prime(c, ATTEMPT_DETAIL_SQL, {(aid,): attempts.get(aid) for aid in chunk})
         diags = {
@@ -125,6 +127,8 @@ def attempt_details(c, turn):
 
     details = {
         "state": runs.state(attempt["state"]) if attempt else None,
+        # Ended before its computer started it (a silent lapse, a hand-back): Runs reads "Didn't start".
+        "didnt_start": failed and not attempt["started_at"],
         **metadata(c, turn["id"]),
         **attempt_snapshots(c, turn["id"]),
     }
@@ -2545,6 +2549,7 @@ def install_views(app, store, auth, mutate, task_view):
             "state": turn.get("state"),
             "outcome": turn.get("exit"),
             "failure_reason": turn.get("failure_reason") or "",
+            "didnt_start": bool(turn.get("didnt_start")),
             **{
                 k: turn.get(k)
                 for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")
@@ -3036,7 +3041,7 @@ def install_views(app, store, auth, mutate, task_view):
             runners = list(
                 c.execute(
                     "SELECT id,label,owner_id,last_seen_at,revoked_at,platform,version,capacity,readiness,"
-                    "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
+                    "accepts_member_bots,turns_at_once,screen,performance,capabilities,gateway_fallback,"
                     "restart_since,"
                     "readiness_at FROM runners_with_state ORDER BY created_at"
                 )
@@ -3063,6 +3068,8 @@ def install_views(app, store, auth, mutate, task_view):
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
                 value["accepts_member_bots"] = bool(row["accepts_member_bots"])
+                # Its own "Fall back to Tico Gateway": everyone reads it, an admin changes it (models_preset).
+                value["gateway_fallback"] = bool(row["gateway_fallback"])
                 # What the computer may run at once now: its setting, or its capacity (start_places.turn_limit).
                 value["turn_limit"] = turn_limit(row)
                 # Since when it says it is restarting after a person pressed Restart; null when it is not.

@@ -136,14 +136,12 @@ def _decide(name, key, url):
     ask = J.gateway(key, url, model=J.GATEWAY_MODEL, timeout=J.GATEWAY_TIMEOUT)
 
     def engine(model, state, questions, label):
+        # Read as the server's live engine reads it (pipeline_judges._read): every asked question, so a check asked in
+        # parts gives its parts, and an answer missing one is a failed call (JudgeError "shape").
         result = ask(state, questions, label)
         return {
-            "p": result["answers"]["met"]["noul"],
-            "reason": "",
+            **P._read(result, list(questions), model, cost_usd(name, result.get("usage"))),
             "provider": result.get("provider") or J.GATEWAY_PROVIDER,
-            "model": result.get("model") or "",
-            "cost_usd": cost_usd(name, result.get("usage")),
-            "latency_ms": result.get("ms") or 0,
         }
 
     return engine
@@ -164,8 +162,10 @@ def build_engine(name, env=None):
 
 
 def judge_once(engine, case):
-    """(probability the requirement is met, cost in USD, milliseconds) for one case, through the server's `judge_once`
-    with `engine` as the model call. Raises J.JudgeError when the model call fails: the caller counts that as unsure."""
+    """(probability the requirement is met, cost in USD, milliseconds, the server's verdict) for one case, through the
+    server's `judge_once` with `engine` as the model call. The verdict is the one the server gives (each part on its
+    check's bar, unsure when Jev could not see the whole page), never p banded again. Raises J.JudgeError when the model
+    call fails: the caller counts that as unsure."""
     failed: list[str] = []
 
     def ask(name, state, questions, label):
@@ -177,6 +177,6 @@ def judge_once(engine, case):
 
     with closing(sqlite3.connect(":memory:")) as c:  # judge_once takes a connection; the judge reads nothing from it
         result = P.judge_once(c, *_job(case), engine=ask)
-    if failed:
-        raise J.JudgeError(failed[0], "the model call failed")
-    return float(result["p"]), float(result["cost_usd"]), int(result["latency_ms"])
+    if failed or result["verdict"] == "failed":
+        raise J.JudgeError(failed[0] if failed else "unreadable", "the model call failed")
+    return float(result["p"]), float(result["cost_usd"]), int(result["latency_ms"]), result["verdict"]

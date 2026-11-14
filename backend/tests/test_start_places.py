@@ -208,6 +208,8 @@ def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypa
     from backend.tests.helpers.api import setup_attempt
 
     monkeypatch.setattr(execution, 'PRE_START_TRIES', 2)
+    # A lapse now waits before the job goes out again (execution.handed_back_until); not what this test is about.
+    monkeypatch.setattr(execution, 'HAND_BACK_WAIT', 0)
     machine, message, first = setup_attempt(api)
     store = api.app.state.store
     attempt = first

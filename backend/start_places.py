@@ -328,6 +328,26 @@ def held_counts(c, bots):
     return {bot: counts.get(bot, 0) for bot in bots}
 
 
+# bot_held for every bot holding turns, in one pass over the live turns (attempts_live_lease).
+BOT_HELD_TOTALS_SQL = (
+    "SELECT a.bot_id,count(*) FROM attempts a INDEXED BY attempts_live_lease WHERE a.state IN ('leased','running') "
+    "AND (a.state='running' OR a.lease_until>?) GROUP BY a.bot_id HAVING count(*)>1"
+)
+
+
+def over_limits(c):
+    """[(bot, turns it holds, its limit)] for each bot holding more turns than its "Turns at once", most over first.
+    The claim and the start place both refuse at the limit, so a bot is over it only when its limit was lowered while
+    its turns ran (they end and nothing new starts) or a start got past the check: Health's "Turn limit" warning."""
+    out = []
+    for bot, count in c.execute(BOT_HELD_TOTALS_SQL, (H.now(),)).fetchall():
+        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
+        limit = bot_limit(H._json(row[0], {}) if row else {})
+        if limit is not None and count > limit:
+            out.append((bot, count, limit))
+    return sorted(out, key=lambda x: (x[2] - x[1], x[0]))
+
+
 def bot_held(c, bot, exclude=None):
     """Turns the bot holds on every computer together: what its "Turns at once" is checked against. A turn holds its
     place from its claim until it ends, whether it is starting, parked on a wait or running: a parked turn still
