@@ -4,7 +4,7 @@ Used in your Engineering review stage (Review 1 or Review 2), and for each pull 
 `playbooks/weekday-review-queue.md`. Budget 15 minutes.
 
 Inputs: the pull request's diff, the Spec page and the failing checks first. Both are listed under "From earlier
-stages" in `tico task show <id>` (in Review 2, also Reviewer 1's page and what the Builder said it fixed). Then the pull
+stages" in `tico task show <id>` (in Review 2, also Reviewer 1's page and what the task's owner said it fixed). Then the pull
 request's description and its linked issue. `knowledge/standards.md`, `knowledge/patterns.md` and
 `knowledge/review-practice.md` are read once per session. Read the rest of the repository only where the diff needs it.
 
@@ -52,13 +52,13 @@ Start from the diff, the Spec page and the failing checks. Read other files only
      `tico task relate <your task> depends_on <main-red task>` (written on your task only, so allowed on another
      owner's). With no task to depend on, or a refusal, snooze naming the fix pull request,
      `waiting for #<fix pull request> to merge`. Never a guessed date.
-   - Once main is fixed, the fix is the Builder's rebase and push (`git rebase origin/<base branch>`), never re-run: a
+   - Once main is fixed, the fix is the task owner's rebase and push (`git rebase origin/<base branch>`), never re-run: a
      re-run tests the same merge with the old main and fails again.
 
 ## 2. Check against the team's standard
 
 Walk `knowledge/standards.md` item by item. Note each item as met, not met, or not checkable from the diff. Look for a pattern from
-`knowledge/patterns.md`. A secret, a removed check or a removed test is blocking. On an Engineering task it goes on the page, and the Builder
+`knowledge/patterns.md`. A secret, a removed check or a removed test is blocking. On a pipeline task it goes on the page, and the task's owner
 fixes it in Fixes (a secret's rotation goes to the Security Owner); never to a person by task. Outside the pipeline, report it
 to the owner in `knowledge/standards.md` at once by task.
 
@@ -72,7 +72,7 @@ suggested seam. Review what you can regardless.
 In `reports/reviews/<task>-<first 7 of the commit>.html`, from the skill's `templates/review.html`, in the comment
 style chosen during setup (default labelled):
 - **The opening**, two or three lines: what the change does and whether anything blocks it, then **Decide:** what the
-  Builder must fix ("fix the 2 blocking issues below", or "nothing blocks"). The title names the head commit read.
+  task's owner must fix ("fix the 2 blocking issues below", or "nothing blocks"). The title names the head commit read.
 - **How it was checked**: what you read and ran, with the real output.
 - **Findings**, in the details:
   - `issue (blocking):` each thing that ships a bug, breaks a stated rule, or costs money or data to undo. File, line, quoted code,
@@ -104,7 +104,7 @@ In a review stage: build, check, publish, look at and attach the page. `page.py 
 change>"` prints the file id. Render the published page (`page.py render <file id> --kind review`) and look at it at
 both widths; a broken page is fixed and published again, never attached. Then `tico task attach <id> page:<file id> --req "<requirement>" --version N`, using the requirement `tico task show`
 names. The page is the whole hand-off: the stage moves on when it covers the newest commit, and every finding on the pull
-request goes to the Builder through it, never to your Manager or a person as a separate task. Commit this repository.
+request goes to the task's owner through it, never to your Manager or a person as a separate task. Commit this repository.
 
 Outside the pipeline: `tico task done <id> -m "..." --version N`: the pull request, the head commit, the number of
 blocking issues, and what you did not check. Post requested comments with the exact text and pull request using your

@@ -1,5 +1,7 @@
-"""The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2): who
-fills each role (backend/pipeline_seats.py), when they are made and retired (pipeline_settings.ensure_presets), the
+"""The Product and Engineering pair (docs/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2), as a
+company set up before 0.6 has it (pipeline_settings.LEGACY; Product replaced it for new companies,
+test_product_pipeline.py): who fills each role (backend/pipeline_seats.py), its upkeep and retiring
+(pipeline_settings.ensure_presets), the
 handoff In development files (backend/stage_effects.py), C10 (nobody is told when Spec has room, never_stuck), and
 company_import.new_company passing over untouched presets.
 
@@ -25,12 +27,27 @@ from backend import task_wakes as TW
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.product_engineering_presets import EPM, PPM, ROLE_BOTS, _answers, _role_bot, _seat, _team
+from backend.tests.helpers.product_engineering_presets import (
+    EPM,
+    PPM,
+    ROLE_BOTS,
+    _answers,
+    _role_bot,
+    _seat,
+    _team,
+    legacy_pair,
+)
 
 
 def _made(c):
     """What ensure_presets made, leaving out the Growth and Success pipelines (test_default_pipelines_more.py)."""
     return [p for p in PS.ensure_presets(c) if p not in more.PRESETS]
+
+
+def _pair(c):
+    """A start of a company that has the pair: made as before 0.6 (`legacy_pair`), then the start's ensure_presets."""
+    legacy_pair(c)
+    return PS.ensure_presets(c)
 
 
 ANA, BEN = X.ANA, "human:ben"
@@ -62,6 +79,7 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
         S.REVIEWER_1: "bot:rev-a",  # its seat's title sorts first
         S.REVIEWER_2: "bot:rev-b",
         S.RELEASE_MANAGER: "bot:rm",  # release_schedule_routes.release_manager, the release hour's bot
+        S.QA_OWNER: None,
     }
     # An archived bot fills no role; another bot from the template does, even with no seat.
     c.execute("UPDATE bots SET state='archived' WHERE id='pm'")
@@ -88,11 +106,11 @@ def test_the_ok_person_is_the_first_person_above_the_manager_else_the_owner(c):
 
 
 # ----------------------------------------------------------------------------- the presets
-def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles(c):
+def test_the_pair_has_its_roles_and_a_start_keeps_it_with_no_product_made_beside_it(c):
     _team(c)
     _answers(c, software="")  # a blank answer is yes (D7)
-    assert _made(c) == ["engineering", "product"]
-    assert _made(c) == []
+    assert "product" not in _pair(c) and "engineering" not in PS.ensure_presets(c)
+    assert PS._made_from(c, PS.PRODUCT) is None, "the pair's Product holds the id `product`: no Product beside it"
     product, engineering = PS.read(c, "product"), PS.read(c, "engineering")
     assert (product["name"], product["prefix"], product["manager_id"], product["factory_id"]) == (
         "Product",
@@ -174,38 +192,10 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     assert len(never) == 2 and not any(r["can_push_past"] for r in never)
 
 
-def test_presets_wait_for_setup_and_a_company_that_builds_no_software_gets_neither(c):
-    _team(c)
-    _answers(c, software="", completed=False)
-    assert _made(c) == []  # setup not finished: only General, as every start makes it
-    _answers(c, software="no")
-    assert _made(c) == []
-    assert [r[0] for r in c.execute("SELECT id FROM pipelines") if r[0] not in more.PRESETS] == ["general"]
-    assert not c.execute("SELECT 1 FROM factories WHERE id='product'").fetchone()
-    _answers(c, software="yes")
-    assert _made(c) == ["engineering", "product"]
-
-
-def test_an_rc1_company_with_general_only_gets_the_pair_and_nothing_else_changes(c):
-    X.bot(c, "general-manager")
-    _answers(c, software="", completed=False)
-    PS.ensure_presets(c)
-    _team(c)
-    before = PS.read(c, "general")
-    events = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
-    _answers(c, software="yes")
-    assert _made(c) == ["engineering", "product"]
-    assert PS.read(c, "general") == before
-    after = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
-    assert after == events + 2 + len(more.PRESETS) - len(
-        more.PRIVATE
-    )  # Growth and Success; no Legal Owner or Bookkeeper
-
-
 def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     _answers(c, software="no")
     assert _made(c) == []
     assert PS.read(c, "product")["retired_at"] and PS.read(c, "engineering")["retired_at"]
@@ -224,7 +214,7 @@ def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
 
 def test_an_untouched_preset_gets_its_roles_once_their_bots_appear_and_a_changed_one_does_not(c):
     _answers(c, software="yes")
-    assert _made(c) == ["engineering", "product"]  # setup finished before any role was hired
+    assert "engineering" not in _pair(c)  # made before any role was hired
     assert set(_owners(PS.read(c, "engineering")).values()) == {None}
     _role_bot(c, "builder", "builder")
     _seat(c, "Builder", "builder", "builder")
@@ -243,7 +233,7 @@ def test_an_untouched_preset_gets_its_roles_once_their_bots_appear_and_a_changed
 def test_a_new_company_passes_over_untouched_presets(c):
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     assert company_import.new_company(c)
     product = PS.read(c, "product")
     product["goal"] = "Specs that ship"
@@ -254,14 +244,14 @@ def test_a_new_company_passes_over_untouched_presets(c):
 def test_a_new_company_is_not_new_once_a_preset_holds_a_task(c):
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     X.new_task(c, ANA, "Saved carts", "product")
     assert not company_import.new_company(c)
 
 
 # ----------------------------------------------------------------------------- what save takes now
 def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_checked(c):
-    PS.ensure_presets(c)
+    _pair(c)
     record = {
         "name": "Ops",
         "prefix": "OP",
@@ -321,7 +311,7 @@ def _filed(c, task_id):
 def _product_task(c):
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="product", lint=False)
     row = E.move(c, row["id"], "product-spec", ANA)
     _spec_page(c, row)
@@ -459,7 +449,7 @@ def _engineering_with_teams(c):
     Engineering team, the Product Owner on Product. The default stage rules are on (ensure_presets seeds them)."""
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
     c.execute("UPDATE stages SET owner='assignee' WHERE pipeline_id='engineering'")
     _in_groups(c, {"engineering": ("Engineering", [EPM, "builder"]), "product": ("Product", [PPM, "pm"])})
@@ -494,7 +484,8 @@ def test_owner_on_the_team_a_task_that_comes_back_to_fixes_owned_outside_enginee
     eng = _owned_by_the_product_owner(c)
     fixes = next(s for s in E.stages(c, "engineering") if s["name"] == "Fixes 1")
     moved = E.move(c, eng["id"], fixes["id"], ANA, "Review found the cart is lost on sign-out")
-    assert (moved["assignee_id"], moved["owner_id"]) == (None, None)
+    # Fixes has nobody, so the manager picks; the assignee stays the task's for the stages after it.
+    assert (moved["assignee_id"], moved["owner_id"]) == ("bot:pm", None)
     assert _move_notes(c, eng["id"])[-1] == (
         "Review found the cart is lost on sign-out. Rule Owner on the team: pm is not on the Engineering team"
     )
@@ -588,7 +579,7 @@ def test_a_private_product_tasks_handoff_is_filed_and_read_by_the_builder_while_
 
 def test_not_validated_files_a_new_task_each_time_even_with_the_same_title(c):
     """Scenario 26 on a pipeline that files into General, whose filed task its owner can finish."""
-    PS.ensure_presets(c)
+    _pair(c)
     X.bot(c, "pm")
     record = {
         "name": "Ops",
@@ -634,7 +625,7 @@ def test_the_product_manager_is_not_told_when_spec_has_room(c):
     Spec has room, whether it had room from the start or a slot frees."""
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     ideas = [X.new_task(c, "bot:pm", f"Idea {n}", "product") for n in range(4)]  # its own briefs: held by hand
     X.settled(c)
     N.check(c)
@@ -666,7 +657,7 @@ def test_ideas_move_into_spec_by_themselves_and_a_bots_own_idea_waits_snoozed(c)
     stays. Nobody is sent a "Spec has room" notice."""
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     c.execute("UPDATE stages SET task_limit=2 WHERE id='product-spec'")  # a full Spec, whatever the preset's limit
     asked = [X.new_task(c, ANA, f"Request {n}", "product") for n in range(3)]
     brief = X.new_task(c, "bot:pm", "Brief", "product")
@@ -707,7 +698,7 @@ def _sign_off(c, stage_id):
     requirement's id."""
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     pipeline = stage_id.split("-")[0]
     row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline=pipeline, lint=False)
     row = E.move(c, row["id"], stage_id, ANA, "Straight to the sign-off for this test")
@@ -726,7 +717,7 @@ def test_when_review_2_found_nothing_the_builder_says_done_and_qa_asks_it_for_th
     a person to move it on past a page it took for a review)."""
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="engineering", lint=False)
     row = E.move(c, row["id"], "engineering-fixes-2", ANA, "Review 2 found nothing")
     # The checks need GitHub: met here by taking them off, so Fixes 2 waits on the Builder's done alone.
@@ -922,7 +913,7 @@ def test_no_bot_loosens_a_sign_off_in_settings_but_a_person_may_and_bots_change_
 ):
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     bots = ("bot:" + seat, X.bot(c, "assistant"), X.bot(c, "botops"))
     c.execute("UPDATE pipelines SET owner_id=? WHERE id=?", ("bot:assistant", pipeline))  # one bot as its owner too
 
@@ -957,7 +948,7 @@ def test_no_bot_loosens_a_sign_off_in_settings_but_a_person_may_and_bots_change_
 def test_no_bot_starts_a_task_past_a_sign_off_or_moves_it_into_another_pipeline(c):
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     task = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="product", lint=False)
     E.reassign(c, task["id"], "bot:builder", ANA)
     for bot in ("bot:builder", "bot:" + PPM):
@@ -972,12 +963,12 @@ def test_no_bot_starts_a_task_past_a_sign_off_or_moves_it_into_another_pipeline(
 def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_them(c):
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     c.execute(
         "UPDATE requirements SET who_oks='people_with_exceptions' "
         "WHERE stage_id IN ('product-spec', 'engineering-qa') AND kind='page'"
     )
-    PS.ensure_presets(c)
+    _pair(c)
     found = c.execute(
         "SELECT stage_id, who_oks FROM requirements WHERE stage_id IN ('product-spec', 'engineering-qa') "
         "AND kind='page' ORDER BY stage_id"
@@ -1001,7 +992,7 @@ def test_no_bot_jumps_a_task_over_a_sign_off_from_any_earlier_stage(c, pipeline,
     people-only OK and is refused: no merge is queued, and no Engineering task is filed without the spec OK."""
     _team(c)
     _answers(c, software="yes")
-    PS.ensure_presets(c)
+    _pair(c)
     manager = "bot:" + (EPM if pipeline == "engineering" else PPM)
     bots = ("bot:builder", "bot:rm", "bot:pm", manager, X.bot(c, "assistant"), X.bot(c, "botops"))
     for stage in before:

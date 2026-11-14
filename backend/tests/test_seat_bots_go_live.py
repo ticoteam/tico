@@ -511,8 +511,9 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
             assert f"`{name}`" in task["body"], (row["slug"], name)
         assert "ask nothing" in task["body"] and "Not yet told:" in task["body"]
         assert _turn(api, task["id"])["state"] == "bot", row["slug"]
-    po = next(row for row in found if row["slug"] == "product-owner")
-    assert "Product (" in rows(api, "SELECT body FROM tasks WHERE id=?", (po["task"],))[0]["body"]
+    # Product's stages a feature owner holds are its tasks' assignee's: its manager is told it manages it.
+    pm = next(row for row in found if row["slug"] == "product-manager")
+    assert "Product (you manage it" in rows(api, "SELECT body FROM tasks WHERE id=?", (pm["task"],))[0]["body"]
 
     assert not rows(api, "SELECT 1 FROM events WHERE action='bot.needs_onboarding'")
     assert not rows(api, "SELECT 1 FROM messages WHERE body LIKE '%set you up%'")

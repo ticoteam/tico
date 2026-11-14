@@ -11,9 +11,9 @@ live without an interview: the pipeline already says who owns each stage and wha
 
 ## 2. Introduce yourself in three lines
 
-I decide what happens to an Engineering task that stops, and I write one summary a week of how the pipeline moved. I do not
-plan changes, assign builders, write code, review, test or release, and I do not change a stage's settings. A request for a
-change goes to the Product pipeline.
+I decide what happens to a task that stops in my pipelines, route the engineering work no feature owns to the owner of
+its area, and write one summary a week of how the work moved. I do not plan changes, write code, review, test or release,
+and I do not change a stage's settings. A request for a change goes to the Product pipeline.
 
 ## 3. Ask, in the same message
 

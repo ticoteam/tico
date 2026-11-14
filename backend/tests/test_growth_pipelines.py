@@ -25,6 +25,7 @@ from backend import task_engine as E
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.helpers.product_engineering_presets import legacy_pair
 
 ANA = X.ANA
 OWNER, OTHER, MANAGER = "bot:channel-owner", "bot:other-owner", "bot:growth-manager"
@@ -161,6 +162,7 @@ def test_a_bot_starts_its_own_idea_when_building_has_room_and_is_told_plainly_wh
 
 # ----------------------------------------------------------------------------- (b) a person's idea stays put
 def test_a_persons_idea_rests_in_growth_ideas_while_in_product_it_still_moves_on(c):
+    legacy_pair(c)  # Ideas is the Product of the pair Product replaced
     _set_up(c, software="yes")
     X.bot(c, "pm")
     c.execute("UPDATE stages SET owner='bot:pm' WHERE id='product-spec'")

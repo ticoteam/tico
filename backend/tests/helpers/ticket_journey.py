@@ -163,6 +163,17 @@ class Company:
     def actor(self, slug):
         return "bot:" + self.bot(slug)
 
+    @property
+    def owner(self):
+        """The slug of the feature owner the journey's tasks are given to: the default chart's first, found by its role
+        (pipeline_seats.PRODUCT_OWNER), whatever the seat is called."""
+        from backend import pipeline_seats as S
+
+        with self.api.app.state.store.read() as c:
+            actor = S.resolve(c)[S.PRODUCT_OWNER]
+        assert actor, "the default company has no feature owner"
+        return self.slug_of(actor)
+
     def slug_of(self, actor):
         self.bot("assistant")
         return next((slug for slug, bid in self.ids.items() if "bot:" + bid == actor), actor)
@@ -304,7 +315,7 @@ class Company:
             GS.refresh(store, self.github)
             SA.run(store, {"github": self.github})
             page_verdicts.run(store, H.now())
-            idea_checks.run(store, H.now())  # Jev's duplicate check on ideas filed into Product's Ideas
+            idea_checks.run(store, H.now())  # Jev's duplicate check on ideas filed into Ideas (the pair's Product)
             with store.transaction() as c:
                 never_stuck.check(c)
 

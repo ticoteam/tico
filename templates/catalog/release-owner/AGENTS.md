@@ -31,7 +31,7 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
   choice 3 whatever the line says, and Tico refuses the queue.
   **A conflict is never queued.** Before choice 1, read `gh pr view <n> -R <repo> --json mergeable,mergeStateStatus`.
   `CONFLICTING` (or `DIRTY`), or a removal or refusal that says the pull request conflicts with its base branch, is the
-  Builder's to rebase: `tico task move <id> "QA" -m "<repo>#<n> conflicts with its base branch: rebase it"
+  task owner's to rebase: `tico task move <id> "QA" -m "<repo>#<n> conflicts with its base branch: rebase it"
   --version N`. `UNKNOWN` means GitHub is still working it out: read it again in a minute, and never queue on it.
   Tico refuses to queue a pull request GitHub says conflicts.
   Read the failed run (`gh run view <id> -R <repo> --log-failed`), then choose one:
@@ -41,17 +41,17 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
      in what this change touches is real, never queued again as it is, and so is a second removal for the same failure.
      After `failed_checks`, only the cancelled line above allows it. `tico task queue <id> --version N`.
   2. **Push your own fix**: a rebase on the base branch, a broken test, or a small code fix (a conflict is the
-     Builder's, above). Not after `failed_checks`, which is choice 3, except a main-red failure: once main is fixed, a
+     task owner's, above). Not after `failed_checks`, which is choice 3, except a main-red failure: once main is fixed, a
      plain rebase here is how it goes on. Check it out detached in your own worktree
-     (`gh pr checkout <n> -R <repo> --detach`), never as its branch: the Builder's worktree has that branch, and moving
-     it from yours leaves the Builder's files behind. Fix, push (`git push --force-with-lease origin HEAD:<its branch>`),
+     (`gh pr checkout <n> -R <repo> --detach`), never as its branch: the task owner's worktree has that branch, and moving
+     it from yours leaves the owner's files behind. Fix, push (`git push --force-with-lease origin HEAD:<its branch>`),
      then `tico task queue <id> --version N`. A commit that changes the same lines as the one the person OK'd (a plain
      rebase) is queued again. One that changes other lines is refused: send it back for Reviewer 2 to read, with
      `tico task move <id> "QA" -m "<what you pushed and why>" --version N`. The person's OK stands on its OK.
-  3. **Send it back to the Builder** when the failure is real and needs real work:
+  3. **Send it back to the task's owner** when the failure is real and needs real work:
      `tico task move <id> "QA" -m "<what failed, with the run link>" --version N`.
   A failing step that fails on the base branch too (the same test on its newest commit) is main red, not this change's
-  and not the Builder's: do not send it back and do not queue the same head again. Follow "When main is red" below;
+  and not the task owner's: do not send it back and do not queue the same head again. Follow "When main is red" below;
   once main is fixed, a plain rebase on it (choice 2) gives a new head to queue.
   Say which you chose and why on the task. Never run `gh pr merge`.
   Never hold a pull request back to merge alone: the queue merges several together. Only pull requests that change the
@@ -84,7 +84,7 @@ Nov 13 the QA and Release Owners filed 3 of 13 duplicate "main red" tasks for tw
    the same failing test or check, file nothing and push no second fix. Say on it what it blocks:
    `tico task comment <main-red task> "Blocks #<your task> (PR #<the pull request>): <test> fails, <run link>"`.
    Any relation but the dependency below changes the other owner's task too, and {{app_name}} refuses it.
-2. **File one only when none is open**, for the Builder (or the Infrastructure Owner, for a runner or workflow), titled
+2. **File one only when none is open**, for the QA Owner (or the Infrastructure Owner, for a runner or workflow), titled
    `Main red: <the failing test or check>, since <the pull request or commit that broke it>`, so the next bot finds it.
    Working on a private task, file it with `tico task create --from-private` (company-visible, in your own words:
    no text copied from the private task) and never `--private`; otherwise file it plainly, never under a private
@@ -123,13 +123,15 @@ Nov 13 the QA and Release Owners filed 3 of 13 duplicate "main red" tasks for tw
 - `playbooks/`, `skills/`, `memory/`.
 
 ## Lines with the rest of engineering
-- The Builder owns the change until Merge. A failure that needs real work goes back to it in QA, with the run link.
+- The task's owner (its feature owner on Product) owns the change until Merge. A failure that needs real work goes back
+  in QA, with the run link.
 - CI health (failing checks, runner problems, slow jobs, red-main streaks) belongs to the Infrastructure Owner
   (`infrastructure-owner`) when the team has one. You never recount its figures. A check that keeps failing for every pull
   request goes to it as a task with the run ids and the check name, only after "When main is red" finds none open.
 - A task stuck in Merge or Release that you cannot move: say why on the task. The Engineering Manager is woken
   for it and decides.
-- A real product bug that a failed deploy exposed goes to the Builder as a new Engineering task, with the deploy's run id.
+- A real product bug that a failed deploy exposed goes to the feature owner of its area as a new Product task, with the
+  deploy's run id. When you can't tell the area, the Engineering Manager routes it.
 - A production incident is handled by its owner. You supply the deploy timeline that goes with it.
 - If the team has no seat for a hand-off, the hand-off goes to the owner as a task. Never leave it unowned.
 
