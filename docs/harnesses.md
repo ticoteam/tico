@@ -99,7 +99,9 @@ or the turn's own folder for a Tico model). The file is written atomically per t
 SSE server is named as not passed. Every server is `exposure: deferred` and the turn's `--tools` names `tool_search`
 and no `mcp__` entry: pi 1.5 declares an MCP tool only when `--tools` names it, and naming every hub tool would add about
 95k tokens to each request. So no MCP tool is declared before the model searches; `tool_search` loads the matches for the
-next request and they stay declared for the rest of the session. The hub server carries a one-line `description`, which
+next request and they stay declared while the same pi process serves the conversation. When Tico starts pi again on
+that session (after 15 idle minutes, or a turn that starts differently), pi drops the loaded tools at resume and the
+model must search again: a direct call to one of them answers "not found". The hub server carries a one-line `description`, which
 lists it in pi's system prompt and ranks its tools in a search. Secrets stay `${VAR}`, and each
 stdio server's environment names the Gateway key empty so it never inherits it. Built-in MCP arrived in pi 0.99.0
 (2026-09-29); the runner installs the latest pi, but an older pi would ignore `mcp.json` without an error.
