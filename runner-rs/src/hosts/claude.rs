@@ -776,7 +776,7 @@ impl ClaudeHost {
         if let Some(e) = effort_for(effort.or(t.settings.effort.as_deref())) {
             argv.extend(["--effort".into(), e]);
         }
-        // Claude Code compacts on its own default, as it does for a person: no `--autocompact`. Its auto memory is
+        // Where it compacts is the turn's "Compact at", handed over in the environment (turn_env). Its auto memory is
         // kept in the bot's repository (Settings::memory_dir), as a flag setting the bot's own settings cannot move.
         if let Some(dir) = t.settings.memory_dir.as_deref() {
             argv.extend([
@@ -2158,6 +2158,12 @@ fn turn_env(settings: &Settings) -> crate::env::Env {
     }
     // Belt and braces: `--strict-mcp-config` already skips the claude.ai connectors.
     env.insert("ENABLE_CLAUDEAI_MCP_SERVERS".into(), "false".into());
+    // The turn's "Compact at", as Codex gets it (`model_auto_compact_token_limit`): Claude Code's auto-compact window,
+    // which it reads ahead of every setting and keeps within its own range and the model's window. Any Claude Code
+    // reads it without a version check; one older than the variable ignores it. A turn given none keeps Claude's own.
+    if let Some(tokens) = super::compact_at_set(&settings.compact_at) {
+        env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), tokens.to_string());
+    }
     // The login and the session files live under HOME; a trimmed environment must keep it.
     if env.get("HOME").is_none_or(|h| h.is_empty()) {
         if let Ok(home) = std::env::var("HOME") {
@@ -2431,7 +2437,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_memory_is_on_in_the_repository_and_claude_compacts_on_its_own_default() {
+    fn auto_memory_is_on_in_the_repository_and_claude_compacts_at_the_turns_compact_at() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
         let mut settings = Settings {
@@ -2456,7 +2462,71 @@ mod tests {
             json!({"autoMemoryDirectory": "/w/bot-acme/memory/claude"})
         );
         assert!(!argv.contains(&"--autocompact".to_string()), "{argv:?}");
-        assert!(!turn_env(&settings).contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
+        let env = turn_env(&settings);
+        assert!(!env.contains_key("CLAUDE_CODE_DISABLE_AUTO_MEMORY"));
+        assert_eq!(env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "120000");
+    }
+
+    #[test]
+    fn claude_gets_the_compact_at_it_is_given_and_none_when_it_is_given_none() {
+        let mut settings = Settings::default();
+        settings.env.insert("HOME".into(), "/h".into());
+        // The 1M variant gets the same: the setting, never Claude's own ~967k "auto".
+        settings.model = Some("claude-opus-5-5[1m]".into());
+        settings.compact_at = json!(400_000);
+        assert_eq!(
+            turn_env(&settings)["CLAUDE_CODE_AUTO_COMPACT_WINDOW"],
+            "400000"
+        );
+        settings.compact_at = json!("150000");
+        assert_eq!(
+            turn_env(&settings)["CLAUDE_CODE_AUTO_COMPACT_WINDOW"],
+            "150000"
+        );
+        for none in [json!(null), json!(0), json!(""), json!("auto")] {
+            settings.compact_at = none.clone();
+            assert!(
+                !turn_env(&settings).contains_key("CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
+                "{none}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turn_starts_claude_with_its_compact_at() {
+        let dir = std::env::temp_dir().join(format!(
+            "tico-claude-compact-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("claude");
+        crate::util::write_script(
+            &exe,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.325 (Claude Code)'; exit 0;; esac\nprintf '%s' \"$CLAUDE_CODE_AUTO_COMPACT_WINDOW\" > window.txt\nIFS= read -r line\nexit 0\n",
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![exe.display().to_string()], tx);
+        let mut settings = Settings {
+            cwd: dir.display().to_string(),
+            compact_at: json!(300_000),
+            ..Default::default()
+        };
+        settings
+            .env
+            .insert("HOME".into(), dir.display().to_string());
+        settings
+            .env
+            .insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+        let thread = host.start_thread(&settings);
+        let t = host.inner().threads[&thread].clone();
+        let (mut child, _stderr, _status) = host.launch(&thread, &t, None).unwrap();
+        drop(child.stdin.take());
+        child.wait().await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("window.txt")).unwrap(),
+            "300000"
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

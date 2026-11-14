@@ -149,6 +149,12 @@ pub const AFTER_INTERRUPT: &str = "Your previous turn in this session was interr
 pub const AFTER_SIDE: &str = "Since your last turn here, a turn ran in a separate side session (a fallback harness), and its replies are in \
     the conversation below. Check what it did (`git log`, `tico task show`) before relying on your own picture of the work.";
 
+/// Told to a side session resumed for another fallback turn: the conversation's own session may have run since, and
+/// its replies are in the conversation below.
+pub const SIDE_RESUMED: &str = "This side session is resumed for another fallback turn. Turns in this task's own session may have run \
+    since your last turn here; their replies are in the conversation below. Check what was done (`git log`, `tico task show`) before \
+    relying on your own picture of the work.";
+
 /// That the turn began a new session or resumed one, and why, for a server that takes it (`run_session`; an older
 /// one refuses the field, and a refused result would never arrive).
 pub fn session_field(
@@ -188,6 +194,15 @@ pub fn trim(text: &str) -> String {
         one
     }
 }
+
+/// The conversation key a side session (a task-model fallback's) is saved under in the state: one per conversation and
+/// model, never the conversation's own, so the next fallback turn of the task on that model resumes it.
+pub fn side_session(conversation: &str, model: &str) -> String {
+    format!("{conversation}{SIDE_MARK}{model}")
+}
+
+/// What joins a conversation key to its side sessions' model (side_session); a Clear of the conversation drops them too.
+pub const SIDE_MARK: &str = "#side:";
 
 /// The key under which the state remembers that a side session ran after this primary thread's last turn.
 pub fn side_key(thread: &str) -> String {

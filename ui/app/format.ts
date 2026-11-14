@@ -141,7 +141,7 @@ function compactOptions(current: number | null | undefined, window: number | nul
 // read here is taken to, and the server ignores a window its harness does not take.
 const compactsOn = (harness: string | undefined): boolean => {
   const caps = harness && typeof harnessRow === 'function' ? harnessRow(harness)?.capabilities : undefined;
-  // A harness that compacts on its own default (Claude Code, as for a person) takes no Compact size.
+  // A harness that compacts on its own default (`own_compaction` in its manifest) takes no Compact size.
   return !caps || (!!caps.compaction && !caps.own_compaction);
 };
 

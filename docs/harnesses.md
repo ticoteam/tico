@@ -100,6 +100,12 @@ SSE server is named as not passed. Each tool is declared directly (`exposure: di
 stdio server's environment names the Gateway key empty so it never inherits it. Built-in MCP arrived in pi 0.99.0
 (2026-09-29); the runner installs the latest pi, but an older pi would ignore `mcp.json` without an error.
 
+**Compact at** applies to Claude Code and Codex turns. Codex gets it as `model_auto_compact_token_limit`. Claude Code gets
+it as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, its auto-compact window, which it reads ahead of its own settings
+(`hosts/claude.rs` `turn_env`, the 1M models included); Claude compacts a little before that size (the window less its
+summary buffer) and keeps it within its own 100k to 1M range and the model's window. A turn that carries no Compact at
+leaves Claude Code its own default.
+
 **Compact at** applies to a pi turn: the turn's `settings.json` (in the same agent folder) sets pi's
 `compaction.reserveTokens` to the model's context window less the bot's Compact at (`reserve_tokens` in `hosts/pi.rs`,
 kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window,
@@ -523,7 +529,10 @@ Goals, chat commands and controls stay probed: the runner reports them per insta
 At the start of each Claude Code or Codex turn the runner asks `GET /api/v2/attempts/{aid}/skills` for the skills installed for
 the bot (the latest approved version, or the pinned one). It fetches each bundle once by sha
 (`GET /api/v2/skills/bundles/{sha256}`) into `<state>/skill-bundles/<sha>.json`, checks the sha on every read, and
-writes the files under `<state>/skill-sessions/<attempt>/.claude/skills/<name>/`. That folder is added with
+writes the files under `<state>/skill-sessions/<bot>-<digest>/.claude/skills/<name>/`, where the digest is of the
+skills' names and shas. The path is the same on every turn of the bot while its skills stay the same, so a resumed
+session's prompt does not change; its contents are written fresh each turn beside it and the folder is replaced when
+anything differs (a skill changed, or a session edited a staged file). That folder is added with
 `--add-dir`, so Claude Code loads the skills and its `/` menu lists them; readiness offers the last staged set as chat
 commands. The runner then reports what it staged (`POST /api/v2/attempts/{aid}/skills/receipt`). Only the attempt's
 runner, or the bot's own run of that attempt, may read its installs or post its receipt.
@@ -533,7 +542,7 @@ skill (or all of them) out and the turn runs on; the failure is logged without f
 routes answers 404 and the runner stages nothing. Harnesses other than Claude Code and Codex stage none yet.
 
 Codex gets the same staged folder: before the thread starts or resumes, the runner gives the turn's own app server
-`<state>/skill-sessions/<attempt>/.claude/skills` as its only extra skill root (`skills/extraRoots/set`, Codex 0.136
+`<state>/skill-sessions/<bot>-<digest>/.claude/skills` as its only extra skill root (`skills/extraRoots/set`, Codex 0.136
 and later), and Codex lists those skills to the model next to its own. Nothing is written under `CODEX_HOME` or the
 repository. An app server without the call runs the turn without company skills. Codex counts a use only for an
 explicit selection: a `skill` item in the turn's input, which the app server echoes in the turn's user message, is

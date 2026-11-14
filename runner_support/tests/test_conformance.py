@@ -118,21 +118,23 @@ def test_task_model_fallback_runs_in_a_side_session_from_the_checkpoint_and_keep
     assert "--resume" not in call["argv"], "fallback resumed the pre-task-model thread"
     assert call["argv"][call["argv"].index("--session-id") + 1] != old_thread
     assert checkpoint in call["prompt"] and "Where this task stood" in call["prompt"]
-    # A fallback runs in a side session of its own, from the checkpoint, including consecutive fallbacks; the bot's own
-    # thread is neither resumed by it nor forgotten.
+    # A fallback runs in a side session of its own, from the checkpoint; the next fallback on the same model resumes
+    # that side session (its prompt cache), again given the checkpoint. The bot's own thread is neither resumed by
+    # either nor forgotten.
     with api.app.state.store.read() as c:
         latest = c.execute("SELECT checkpoint,checkpoint_at FROM tasks WHERE id=?", (task["id"],)).fetchone()
     assert latest["checkpoint"] and latest["checkpoint"] != checkpoint, "the fallback wrote a newer checkpoint"
     post(api, f"tasks/{task['id']}/chat", {"text": "Continue while the task model is still unavailable."})
     completed(4)
     last = [c for c in computer.prompts() if c["harness"] == "claude"][-1]
-    assert "--resume" not in last["argv"]
+    side = call["argv"][call["argv"].index("--session-id") + 1]
+    assert last["argv"][last["argv"].index("--resume") + 1] == side, "the next fallback did not resume its side session"
+    assert side != old_thread
     assert (
         f"Where this task stood after its last turn ({latest['checkpoint_at']}):\n{latest['checkpoint']}"
         in last["prompt"]
     )
-    assert last["argv"] != call["argv"]
-    assert last["argv"][last["argv"].index("--session-id") + 1] != call["argv"][call["argv"].index("--session-id") + 1]
+    assert "This side session is resumed for another fallback turn" in last["prompt"]
     # Back on the bot's own model, the next turn resumes the thread it had before any of that, and is told a side
     # session ran in between.
     set_task_model(api, None)

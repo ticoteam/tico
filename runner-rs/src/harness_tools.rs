@@ -161,7 +161,7 @@ pub struct Capabilities {
     /// run as a leased per-turn OS user (crate::turn_users) and still sign in. Without it the turn runs as `bot`.
     pub isolated_user: bool,
     pub compaction: bool,
-    /// The harness compacts on its own default and takes no Compact at (Settings hides it).
+    /// The harness compacts on its own default and takes no Compact at (Settings hides it). No built-in harness sets it now.
     pub own_compaction: bool,
     /// The harness says in its stream when it compacts a session, so a resumed turn can leave out what it holds.
     pub compaction_events: bool,

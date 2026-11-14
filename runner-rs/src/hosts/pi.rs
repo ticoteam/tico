@@ -71,8 +71,8 @@ pub const GATEWAY_DIR_ENV: &str = "TICOAI_GATEWAY_DIR";
 const GATEWAY_DEFAULT_URL: &str = "https://updates.tico.team/v1/gateway";
 /// The context window every Gateway model is told (`gateway_models_json_for`).
 const GATEWAY_CONTEXT_WINDOW: i64 = 200_000;
-/// pi's own `compaction.reserveTokens`, the least room it keeps, and the least a compaction point is given: Claude's
-/// autocompact floor (hosts/claude.rs AUTOCOMPACT_RANGE).
+/// pi's own `compaction.reserveTokens`, the least room it keeps, and the least a compaction point is given: the least
+/// Compact at Tico offers (backend/providers.py COMPACT_SIZES), which is also Claude Code's own floor.
 const PI_RESERVE_DEFAULT: i64 = 16_384;
 const PI_COMPACT_FLOOR: i64 = 100_000;
 const TOOLS: &str = "read,bash,edit,write,grep,find,ls";

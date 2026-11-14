@@ -2154,7 +2154,8 @@ impl Runner {
         let mut source_saved = source_resume.clone();
         // How this turn's session began: resumed, or new and why (crate::continuity). Sent with the result.
         let mut session: Option<crate::continuity::Session> = None;
-        // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own.
+        // A turn that ran in a side session (a task-model fallback) never saves its thread over the conversation's own:
+        // it keeps its own, per model, under `side_conv` (crate::continuity::side_session).
         let mut side_run = false;
         // The ChatGPT login this turn's host runs on, held until the host stops (crate::login_turns), and why the turn
         // went to its fallback instead when another bot's turn had it.
@@ -2404,6 +2405,9 @@ impl Runner {
             // task-model fallback runs in a side session of its own, started from the task's checkpoint (prompt()
             // supplies it), and never touches the thread this runtime saved: the turns that use that thread resume it.
             side_run = key.starts_with("task:") && truthy(config.get("task_model_fallback"));
+            // The side session is kept apart from the conversation's own, one per model: the task's next fallback turn
+            // on the same model resumes it, so its prompt cache is read again instead of written anew.
+            let side_conv = crate::continuity::side_session(&conv, model.as_deref().unwrap_or_default());
             let binding_changed = source_resume.as_ref().is_some_and(|s|
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
             release_run = (fresh_session || !fork_thread.is_empty()) && continuing.is_empty() && !side_run && !fresh_chat;
@@ -2415,7 +2419,11 @@ impl Runner {
                         None => false,
                     };
             }
-            let mut previous = if side_run || binding_changed || fresh_chat || release_run { None } else { self.state.session(&bot, &conv, &session_runtime)? };
+            let mut previous = if binding_changed || fresh_chat || release_run {
+                None
+            } else {
+                self.state.session(&bot, if side_run { &side_conv } else { &conv }, &session_runtime)?
+            };
             if previous.is_none() && !(side_run || binding_changed || fresh_chat || release_run) && conv == key {
                 // The first native-threads turn of a root resumes the thread its conversation had (adopted_key).
                 if let Some(old) = adopted_key(&key) {
@@ -2501,7 +2509,7 @@ impl Runner {
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
             };
             let mut resumed = false;
-            if side_run {
+            if side_run && previous.is_none() {
                 session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
             } else if let Some(prev) = &previous {
                 // Be very reluctant to start a new session: a refusal is retried once, and only a thread this
@@ -2514,7 +2522,12 @@ impl Runner {
                     }
                     Err((missing, error)) => {
                         let why = if missing { crate::continuity::NOT_FOUND } else { crate::continuity::RESUME_FAILED };
-                        session = Some(crate::continuity::Session::new(why, Some(error)));
+                        // A side session that cannot be resumed is simply begun again, from the task's checkpoint.
+                        session = Some(if side_run {
+                            crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None)
+                        } else {
+                            crate::continuity::Session::new(why, Some(error))
+                        });
                     }
                 }
                 // The turn after a failed one for prompt-too-long: compact the saved thread first (one-shot flag). A
@@ -2534,7 +2547,9 @@ impl Runner {
                 }
                 if !resumed {
                     left = Some(prev.clone());
-                    since = self.state.cursor(prev, None)?;
+                    if !side_run {
+                        since = self.state.cursor(prev, None)?;
+                    }
                 }
             } else {
                 let why = if release_run { crate::continuity::FRESH } else { crate::continuity::NONE_SAVED };
@@ -2635,7 +2650,8 @@ impl Runner {
             attempt["_proxied_tools"] = json!(vault.tools.iter().map(|t| json!({"name": t.name, "env": t.env, "url_env": t.url_env})).collect::<Vec<_>>());
             // A new session that replaces a saved one is given the room since the old one's last turn, its own replies
             // included; a resumed one that a side session ran after is given them too, and the task's checkpoint.
-            let side_ran = resumed && self.state.repo_rules(&crate::continuity::side_key(&th), None)?.as_deref() == Some("1");
+            // A resumed side session is given the same: the conversation's own session may have run since its last turn.
+            let side_ran = resumed && (side_run || self.state.repo_rules(&crate::continuity::side_key(&th), None)?.as_deref() == Some("1"));
             let after_interrupt = resumed && self.state.repo_rules(&crate::continuity::interrupted_key(&th), None)?.as_deref() == Some("1");
             attempt["_replaced"] = json!(session.as_ref().is_some_and(|s| s.replaces()));
             attempt["_side_ran"] = json!(side_ran);
@@ -2685,7 +2701,8 @@ impl Runner {
                 tail = format!("{tail}\n\n{note}");
             }
             if side_ran {
-                tail = format!("{tail}\n\n{}", crate::continuity::AFTER_SIDE);
+                let after = if side_run { crate::continuity::SIDE_RESUMED } else { crate::continuity::AFTER_SIDE };
+                tail = format!("{tail}\n\n{after}");
             }
             if after_interrupt {
                 tail = format!("{tail}\n\n{}", crate::continuity::AFTER_INTERRUPT);
@@ -2786,9 +2803,15 @@ impl Runner {
                     }
                 }
                 // A continuation already has its saved thread: never write it back over a Clear, a replacement,
-                // or a refused resume. A fresh session that never came up and a side session are not kept.
-                if continuing.is_empty()
-                    && !side_run
+                // or a refused resume. A fresh session that never came up is not kept; a side session is kept under
+                // its own key, never the conversation's.
+                if continuing.is_empty() && side_run {
+                    let side_conv = crate::continuity::side_session(
+                        &conv,
+                        model.as_deref().unwrap_or_default(),
+                    );
+                    keep_session(&self.state, &bot, &side_conv, &session_runtime, &saved).await?;
+                } else if continuing.is_empty()
                     && !one_off
                     && fresh
                         .as_ref()
@@ -6056,7 +6079,8 @@ for line in sys.stdin:
                 runner
                     .state
                     .with(|c| {
-                        c.query_row("SELECT thread FROM sessions WHERE bot='ops'", [], |r| {
+                        // The conversation's own session; a side session is kept apart (continuity::side_session).
+                        c.query_row("SELECT thread FROM sessions WHERE bot='ops' AND instr(conversation, '#side:')=0", [], |r| {
                             r.get::<_, String>(0)
                         })
                         .map(Some)
@@ -6223,54 +6247,76 @@ for line in sys.stdin:
             &[
                 ("m1", json!({}), json!({})),
                 ("m4", json!({}), fallback.clone()),
-                ("m4", json!({}), fallback),
                 ("m4", json!({}), json!({})),
+                ("m4", json!({}), fallback.clone()),
+                (
+                    "m4",
+                    json!({}),
+                    json!({"task_model_fallback": true, "model": "kimi-k3-mini"}),
+                ),
             ],
         )
         .await;
         let primary = &ran.sessions[0];
-        assert!(
-            ran.sessions[1] != *primary
-                && ran.sessions[2] != *primary
-                && ran.sessions[1] != ran.sessions[2],
-            "{:?}",
-            ran.sessions
-        );
+        let side = &ran.sessions[1];
+        assert!(side != primary, "{:?}", ran.sessions);
         assert_eq!(
             ran.saved,
-            vec![Some(primary.clone()); 4],
+            vec![Some(primary.clone()); 5],
             "a fallback's thread replaced or forgot the primary's"
         );
-        for n in [1, 2] {
-            assert_eq!(
-                session_of(&ran.completions[n]),
-                ("new".to_string(), json!("fallback_side"), Value::Null)
-            );
-            // Started from the checkpoint, as before.
-            assert!(ran.prompts[n].contains("Where this task stood after its last turn (2026-10-22T08:00:00Z):\nBuild 40 green; waiting on build 41."), "{}", ran.prompts[n]);
-            assert!(
-                ran.diagnostics[n]
-                    .iter()
-                    .any(|d| d.contains("side session")),
-                "{:?}",
-                ran.diagnostics[n]
-            );
-        }
         assert_eq!(
-            ran.sessions[3], *primary,
+            session_of(&ran.completions[1]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        // Started from the checkpoint, as before.
+        assert!(ran.prompts[1].contains("Where this task stood after its last turn (2026-10-22T08:00:00Z):\nBuild 40 green; waiting on build 41."), "{}", ran.prompts[1]);
+        assert!(
+            ran.diagnostics[1]
+                .iter()
+                .any(|d| d.contains("side session")),
+            "{:?}",
+            ran.diagnostics[1]
+        );
+        assert_eq!(
+            ran.sessions[2], *primary,
             "the next normal turn did not resume the primary session"
         );
         assert_eq!(
-            session_of(&ran.completions[3]),
+            session_of(&ran.completions[2]),
             ("resumed".to_string(), Value::Null, Value::Null)
         );
         // It is told a side session ran, given the checkpoint and the replies made since its own last turn.
-        let back = &ran.prompts[3];
+        let back = &ran.prompts[2];
         assert!(
             back.contains(crate::continuity::AFTER_SIDE)
                 && back.contains("Where this task stood")
                 && back.contains("[m2]: Here's the draft"),
             "{back}"
+        );
+        // The task's next fallback on the same model resumes its side session, not a new one, and is given the
+        // checkpoint and what the primary said since its last turn there.
+        assert_eq!(ran.sessions[3], *side, "{:?}", ran.sessions);
+        assert_eq!(
+            session_of(&ran.completions[3]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        let again = &ran.prompts[3];
+        assert!(
+            again.contains(crate::continuity::SIDE_RESUMED)
+                && !again.contains(crate::continuity::AFTER_SIDE)
+                && again.contains("Where this task stood"),
+            "{again}"
+        );
+        // A fallback on another model has another cache: a side session of its own.
+        assert!(
+            ran.sessions[4] != *primary && ran.sessions[4] != *side,
+            "{:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            session_of(&ran.completions[4]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
         );
     }
 
