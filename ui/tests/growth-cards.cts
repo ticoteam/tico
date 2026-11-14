@@ -100,7 +100,8 @@ const DATA: Record<string, (s: CardSettings, month: string) => unknown> = {
     {stage: 'idea', label: 'Idea', count: 0, cards: []}]}),
 };
 // Computed retention (backend/growth_computed.py): September 2026 cut by channel, segment or plan, monthly or weekly.
-// A cohort is [value, new, day 30 [count] or null for not yet, LTV, CAC status].
+// A cohort is [value, new, day 30 [count] or null for not yet, LTV, CAC status]. Weekly CAC comes from Finance's daily spend,
+// except where a month the week touches has typed spend (October here): that week says monthly.
 const fig = (value: number | null, status = 'ok', more: Record<string, unknown> = {}) => ({value: status === 'ok' ? value : null, status, origin: 'computed', ...more});
 const KEYS = {still: ['cus_1042', 'cus_1047'], churned: [{key: 'cus_1044', churned: '2026-09-19'}]};
 function cohortOf(by: string, grain: string, value: string | null, n: number, kept: number, period = '2026-09', start = '2026-09-01', end = '2026-09-30') {
@@ -108,7 +109,7 @@ function cohortOf(by: string, grain: string, value: string | null, n: number, ke
   return {cut: by, value, grain, period, start, end, computed_from: n, too_few: few, new_customers: fig(n),
     kept_d30: fig(Math.round(kept * 1000 / n) / 10, few ? 'too_few' : 'ok', {count: kept, denominator: n, fills_on: '2026-10-30'}),
     kept_d90: fig(null, 'not_yet', {count: null, denominator: n, fills_on: '2026-12-29'}), kept_d180: fig(null, 'not_yet', {count: null, denominator: n, fills_on: '2027-03-29'}),
-    ltv: few ? fig(null, 'too_few') : fig(by === 'segment' ? 612 : 540), cac: by !== 'channel' ? fig(null, 'not_split') : grain === 'week' ? fig(null, 'spend_monthly') : value === 'unknown' ? fig(null, 'no_spend') : fig(45)};
+    ltv: few ? fig(null, 'too_few') : fig(by === 'segment' ? 612 : 540), cac: by !== 'channel' ? fig(null, 'not_split') : grain === 'week' ? (period === '2026-09-21' ? fig(42) : fig(null, 'spend_monthly')) : value === 'unknown' ? fig(null, 'no_spend') : fig(45)};
 }
 function computedView(by: string, grain: string, keys: boolean, customers: boolean) {
   const cohorts = grain === 'week' ? [cohortOf(by, grain, 'search', 31, 25, '2026-09-28', '2026-09-28', '2026-10-04'), cohortOf(by, grain, 'search', 33, 27, '2026-09-21', '2026-09-21', '2026-09-27')]
@@ -118,7 +119,7 @@ function computedView(by: string, grain: string, keys: boolean, customers: boole
   if (DIFFERS.on && by === 'channel' && grain === 'month') Object.assign(cohorts[0]!, {typed: {kept_d30: {typed: 70, chosen: DIFFERS.chosen, may: DIFFERS.may}}});
   if (customers) for (const c of cohorts) Object.assign(c.kept_d30, {rule: `became customer ${c.start} to ${c.end}, ${by} ${c.value}, still paying on day 30`}, keys ? {customers: KEYS} : {});
   return {by, grain, month: '2026-09', as_of: '2026-11-13', min_cohort: 30, computed_from: 124, cohorts, keys_visible: keys && customers,
-    cac_note: by === 'segment' ? 'spend is not split by segment' : by === 'plan' ? 'spend is not split by plan' : grain === 'week' ? 'spend is monthly' : null,
+    cac_note: by === 'segment' ? 'spend is not split by segment' : by === 'plan' ? 'spend is not split by plan' : grain === 'week' ? 'weeks touching a month with typed spend say monthly' : null,
     loads: [{source: 'upload', customers: 124, removed: 0, loaded_by: 'human:ana', loaded_at: '2026-11-13T06:00:00'}]};
 }
 const NAMES: Record<string, string> = {growth_number: 'Number', growth_funnel: 'Funnel', growth_channels: 'Channels', growth_retention: 'Retention', growth_board: 'Growth board', kpi: 'KPI'};
@@ -534,7 +535,8 @@ async function shot(page: Page, name: string) {
       await card.locator('[data-gr-seg="grx-grain"] button[data-v="week"]').click();
       await page.waitForFunction(() => document.querySelector('#dash-grid [data-grx] tr.grx-wk'));
       assert.deepEqual(await card.locator('tr.grx-wk').allInnerTexts(), ['Week of 28 Sep', 'Week of 21 Sep']);
-      assert.match(await card.locator('.grx-foot').innerText(), /Weekly CAC needs daily spend: spend is monthly\./);
+      assert.deepEqual((await rowsOf()).map(r => r[6]), ['monthly', '$42'], 'a week of daily spend shows its CAC; one touching a typed month says monthly');
+      assert.match(await card.locator('.grx-foot').innerText(), /a week touching a month with typed spend says monthly\./);
       assert.ok(fake.reads.includes('by=channel&grain=week&month=2026-09'), 'the weekly read asks for the month');
       await shot(page, 'desktop-growth-computed');
       // A figure opens its customers: the rule, still customers and churned with the date, counts matching the figure.
