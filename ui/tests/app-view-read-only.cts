@@ -162,6 +162,16 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await go(page, `#/bot/${BOT}`);
     await page.locator('#main .view-only-line').waitFor({timeout: t(15000)});
     assert.deepEqual(await writesShown(page), [], 'a thread offers nothing that writes');
+    // A write drawn later (a goal that loads after the page) is greyed out in the turn it is drawn, not a frame later.
+    assert.equal(await page.evaluate(async () => {
+      const b = document.createElement('button');
+      b.textContent = 'Set goal';
+      document.querySelector('#main')!.append(b);
+      await Promise.resolve();
+      const off = b.disabled;
+      b.remove();
+      return off;
+    }), true, 'a write drawn late is off at once');
     // A phone: the bottom bar moves between places (Team, Assistant, More), so none of it is greyed out.
     await page.setViewportSize({width: 390, height: 844});
     await go(page, '#/tasks');
