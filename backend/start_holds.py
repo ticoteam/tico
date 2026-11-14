@@ -84,15 +84,19 @@ def same_in_a_row(c: Any, job_id: str, why: str) -> int:
 
 def lapsed_in_a_row(c: Any, job_id: str) -> int:
     """How many of the job's latest runs in a row (up to SAME) its computer took and went silent on before starting
-    them (execution.expire saves LAPSED on each). A run that started, a hand-back or a lapse Tico excused (its own cut,
-    a planned yield: no LAPSED) ends the row."""
-    count = 0
+    them (execution.expire saves LAPSED on each). A run that started, a hand-back, a lapse Tico excused (its own cut,
+    a planned yield: no LAPSED) or a lapse on another computer ends the row: BotOps is told one computer took them."""
+    count, computer = 0, None
     for row in c.execute(
-        "SELECT state,started_at,final_text FROM attempts WHERE job_id=? ORDER BY created_at DESC,rowid DESC LIMIT ?",
+        "SELECT state,started_at,final_text,runner_id FROM attempts WHERE job_id=? "
+        "ORDER BY created_at DESC,rowid DESC LIMIT ?",
         (job_id, SAME),
     ):
         if row["started_at"] or row["state"] != "expired" or not str(row["final_text"] or "").startswith(LAPSED):
             break
+        if count and row["runner_id"] != computer:
+            break
+        computer = row["runner_id"]
         count += 1
     return count
 

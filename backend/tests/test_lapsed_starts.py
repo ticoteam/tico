@@ -239,3 +239,27 @@ def test_a_job_failed_by_the_day_budget_is_not_called_silent_in_a_row(api, monke
     stop = get(api, "status?bot=ops")["status"]["last_stop"]
     assert stop["needs_person"] is False and stop["text"].endswith(start_holds.BOTOPS_HAS_IT)
     assert stop["reason"] == f"Its computer took this run {tries} times and never started it."
+
+
+def test_silent_lapses_on_two_computers_are_not_one_computers_row(api):
+    """BotOps is told one computer took the last SAME runs, so the row is of one computer: a bot moved to another
+    computer after SAME-1 lapses gets SAME more tries there before its job fails."""
+    studio, _, attempt = start(api)
+    job_id = attempt["job_id"]
+    for n in range(start_holds.SAME - 1):
+        lapse(api, studio, attempt)
+        if n < start_holds.SAME - 2:
+            attempt = claim(api, studio)
+    office = runner(api, "ana", label="Office Mac")
+    with api.app.state.store.read() as c:
+        generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0]
+    assign(api, office, "ops", generation=generation)
+    ready(api, office, ["ops"])
+    for n in range(start_holds.SAME):
+        assert job_state(api, job_id) == "queued" and not botops_tasks(api), n
+        attempt = claim(api, office)
+        assert attempt and attempt["job_id"] == job_id
+        lapse(api, office, attempt)
+    assert job_state(api, job_id) == "failed"
+    [review] = botops_tasks(api)
+    assert f"(Office Mac) took its last {start_holds.SAME} runs" in review["body"]
