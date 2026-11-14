@@ -44,6 +44,7 @@ const PE_KINDS: [string, string][] = [
   ['answer', 'Answer'],
   ['linked_done', 'Linked work done'],
   ['page', 'A page'],
+  ['related_input', 'Related input'],
   ['pr_open', 'PR open'],
   ['checks_pass', 'Checks pass'],
   ['pr_merged', 'PR merged'],

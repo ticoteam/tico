@@ -7,9 +7,12 @@ An account is a vault credential of kind `login` on the tool: its username, and 
 Either may be empty: an account a person signs in to by hand (Google or SSO sign-in, an emailed code, a passkey) has
 no password (`has_password` 0, sealed password ''), and fill or copy of it is refused with `no_password`.
 A shared account (`holder` NULL) is used by whoever it is granted to; an own account only by its holder (and that
-person's Assistant). A shared account may also be granted to a group (`group:<id>`, credential administrators only):
-every person and non-archived bot in it and in the groups nested under it uses it, resolved at each use as API tools
-resolve Who can see it (teammate_access.group_member_actors), so leaving the group ends it. The pick rule for a caller and a site: their own account on the tool, else the oldest shared
+person's Assistant). A new shared account is granted to All bots by default (subject `bots`): every non-archived bot,
+including bots added later; a credential administrator turns it off to keep selected grants. A shared account may also
+be granted to a group (`group:<id>`, credential administrators only): every person and non-archived bot in it and in
+the groups nested under it uses it, resolved at each use as API tools resolve Who can see it
+(teammate_access.group_member_actors), so leaving the group ends it. The pick rule for a caller and a site: their own
+account on the tool, else the oldest shared
 account granted to them, else 403 `no_account`.
 
 The password goes out only in a signed-in person's reveal and in a fill or copy command sent to the computer that types
@@ -327,21 +330,36 @@ def _group_grants(c: Any, account: Any) -> list[str]:
     return out
 
 
+def all_bots(c: Any, account: Any) -> bool:
+    """A shared account's explicit All bots grant (subject `bots`); accounts added before it have none."""
+    return not account["holder"] and vaults.effective_grant(c, account["id"], vaults.BOTS) is not None
+
+
+def _live_bots(c: Any) -> list[str]:
+    return ["bot:" + str(r[0]) for r in c.execute("SELECT id FROM bots WHERE state<>'archived'")]
+
+
 def _grant(c: Any, account: Any, actor: str) -> Any:
     """The grant `actor` uses a shared account through: its own effective grant, else the first group grant whose
-    members (nested groups included) take in `actor`, else None. Only a person or a bot is ever in a group."""
+    members (nested groups included) take in `actor`, else (a non-archived bot) the All bots grant, else None. Only a
+    person or a bot is ever in a group."""
     direct = vaults.effective_grant(c, account["id"], actor)
     if direct is not None or not str(actor or "").startswith(("human:", "bot:")):
         return direct
     for gid in _group_grants(c, account):
         if actor in group_members(c, gid):
             return vaults.effective_grant(c, account["id"], GROUP + gid)
+    if (
+        actor.startswith("bot:")
+        and c.execute("SELECT 1 FROM bots WHERE id=? AND state<>'archived'", (H.actor_id(actor),)).fetchone()
+    ):
+        return vaults.effective_grant(c, account["id"], vaults.BOTS)
     return None
 
 
 def can_use(c: Any, actor: str, account: Any) -> bool:
-    """`actor` uses the account itself: it holds it (own), or holds an effective grant on it, directly or through a
-    group (shared)."""
+    """`actor` uses the account itself: it holds it (own), or holds an effective grant on it, directly, through a
+    group or (a bot) through All bots (shared)."""
     if account["holder"]:
         return account["holder"] == actor
     return _grant(c, account, actor) is not None
@@ -388,10 +406,12 @@ def can_manage(c: Any, who: Any, account: Any, admins: Iterable[str] | None = No
 
 
 def _bot_user_managed(c: Any, who: Any, account: Any, auth: Any = None) -> bool:
-    """`who` manages a bot that uses the account, directly or through a granted group."""
+    """`who` manages a bot that uses the account, directly, through a granted group or through All bots."""
     users = set(_users(c, account))
     for gid in _group_grants(c, account):
         users |= group_members(c, gid)
+    if all_bots(c, account):
+        users |= set(_live_bots(c))
     return any(s.startswith("bot:") and _manages(c, who, s, auth) for s in sorted(users))
 
 
@@ -752,6 +772,7 @@ def _account_view(
         "username": account["username"] or "",
         "has_password": bool(account["has_password"]),
         "has_totp": bool(account["has_totp"]),
+        "all_bots": all_bots(c, account),
         "holder": _who(holder, label.get(holder)) if holder else None,
         # A member's view ("themselves and the grants they made") never names a group or what it covers.
         "access": _access(c, account, users, label, admin and not holder),
@@ -909,6 +930,11 @@ def index_rows(c: Any, who: Any, auth: Any, admins: Iterable[str]) -> list[dict[
         for account in accounts:
             for person in account["access"]:
                 people.setdefault(person["subject"], person)
+        if any(a["all_bots"] for a in accounts):
+            subjects = _live_bots(c) if who.role in ("owner", "human") else [who.actor]
+            labels = _names(c, subjects)
+            for subject in subjects:
+                people.setdefault(subject, _who(subject, labels.get(subject)))
         listed = list(people.values())
         if who.role in ("owner", "human") and not admin and auth is not None:
             bots = sorted({p["id"] for p in listed if p["kind"] == "bot"})
@@ -962,6 +988,7 @@ class WebsiteAccountCreate(Contract):
     password: SecretStr | None = Field(default=None, max_length=10_000)
     totp: SecretStr | None = Field(default=None, max_length=2_000)
     holder: ID | None = None
+    all_bots: bool = True
 
 
 class WebsiteAccountUpdate(Contract):
@@ -1111,6 +1138,8 @@ def add_account(
     )
     H.event(c, who.actor, "credential.created", aid, {"kind": LOGIN, "tool": tool["id"], "own": bool(holder)})
     H.event(c, who.actor, "tool.key_added", tool["id"], {"credential": aid, "own": bool(holder)})
+    if not holder and body.all_bots:
+        vault.grant(c, who, aid, vaults.BOTS)
     return {"id": aid}
 
 
@@ -1205,8 +1234,12 @@ def set_access(
             "This account belongs to its holder alone; add a shared account to grant someone else access.",
             409,
         )
-    subject = str(api_tools.subject_of(c, subject))
-    if not subject.startswith(("human:", "bot:", GROUP)):
+    if subject == vaults.BOTS:
+        if not _admin(c, who, admins):
+            raise Problem("forbidden", "Ask a credential administrator to change All bots access.", 403)
+    else:
+        subject = str(api_tools.subject_of(c, subject))
+    if subject != vaults.BOTS and not subject.startswith(("human:", "bot:", GROUP)):
         raise Problem("subject", "Choose a registered person, bot or group.", 422)
     if subject.startswith(GROUP):
         # Only a credential administrator gives a group a login or takes it away, either way before anything changes.
@@ -1214,6 +1247,8 @@ def set_access(
             raise Problem("forbidden", "Ask a credential administrator to change access to this account.", 403)
         if subject[len(GROUP) :] not in _org_groups(c):
             raise Problem("subject", "Choose a registered person, bot or group.", 422)
+    if not on and subject.startswith("bot:") and all_bots(c, account):
+        raise Problem("all_bots", "Turn off All bots before removing individual bot access.", 409)
     try:
         if on:
             vault.grant(c, who, account["id"], subject)

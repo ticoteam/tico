@@ -51,6 +51,7 @@ export interface OpenOptions {
 declare var taskCodeLineHTML: (link: Record<string, unknown>, mover: boolean, links?: Record<string, unknown>[]) => string;
 declare var taskCodeHTML: (task: Record<string, unknown>) => string;
 declare var taskWorktreeRepo: (link: Record<string, unknown>, links: Record<string, unknown>[]) => string;
+declare var taskPRChips: (link: Record<string, unknown>) => string;
 declare var taskModalOpen: (id: string) => Promise<unknown>;
 declare var commentLineHTML: (line: unknown, index: number, all: unknown[]) => string;
 declare var BOT: unknown;
@@ -307,6 +308,13 @@ async function desktop(browser: Browser) {
   assert.match(lines[4]!, /#212\s*Checkout summary step\s*✕\s*changes requested\s*2 comments/);
   assert.match(lines[5]!, /#214\s*Price rounding\s*checks running\s*conflict/, 'a chip says what it means');
   assert.match(lines[6]!, /#198\s*Cart badge\s*merged/);
+  // Tico's own merge gate (backend/github.py `_merge_gate`) has its own grey chip, never the red ✕ of failing CI (#426).
+  const gate = await page.evaluate(() => (['waiting', 'signed_off', 'none'] as const).map(merge_gate => {
+    const host = document.createElement('div');
+    host.innerHTML = taskPRChips({kind: 'pr', state: 'open', checks: 'passing', detail: JSON.stringify({merge_gate})});
+    return {text: host.textContent, red: host.querySelectorAll('.code-chip.fail').length};
+  }));
+  assert.deepEqual(gate, [{text: '✓merge gate: waits for Merge', red: 0}, {text: '✓merge gate: signed off', red: 0}, {text: '✓', red: 0}]);
   assert.equal(await rail.locator('.code-line.wt a').first().getAttribute('href'), 'https://github.com/acme/web/tree/tico/t-check-checkout');
   // No repo, no GitHub link. Errors are readable inline without hovering or opening a tooltip.
   assert.equal(await rail.locator('.code-line[data-code-link="w2"] a').count(), 0);

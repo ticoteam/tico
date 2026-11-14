@@ -901,11 +901,23 @@ def _may_start(
     pipe: Row = task.get("pipeline") or {}
     late = kind == "late" and bot == pipe.get("manager_id")
     filed = kind == FILED and bot == task.get("owner_id")
-    if not (late or filed) and bot not in W.turns(conn, task):
+    if not (late or filed or _related(conn, task, bot, kind)) and bot not in W.turns(conn, task):
         return False
     return runs_since(conn, task, starting=True, besides=attempt) < RUNS
 
 
+def _related(conn: "sqlite3.Connection", task: Row, bot: str, kind: str) -> bool:
+    """A bot Jev picked for a Related input stage, woken to comment once (related_input): its run needs no turn while
+    the visit still waits on its comment."""
+    if kind != RELATED:
+        return False
+    from . import related_input
+
+    return related_input.asked(conn, task, bot)
+
+
+# The wake key's kind for a bot Jev picked to comment on a Related input stage (backend/related_input.py).
+RELATED = "related"
 # The wake key's kind for "what this task filed has ended" (task_engine._ended): its owner bot's run may start though
 # it has no turn, since the task waits on a person's OK that the filed review was about.
 FILED = "filed"

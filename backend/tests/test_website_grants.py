@@ -32,7 +32,7 @@ def add(s, holder=None, token="ana-test"):
     # The value is synthetic, never included in parametrization IDs or assertion diagnostics.
     result = s.api.post(
         f"/api/v2/website-tools/{s.tid}/accounts",
-        json={"username": "", "password": "synthetic", "holder": holder},
+        json={"username": "", "password": "synthetic", "holder": holder, "all_bots": False},
         headers=headers(token),
     )
     assert result.status_code == 200

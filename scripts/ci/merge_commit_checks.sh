@@ -35,6 +35,7 @@ check python3 scripts/check_ui_strict.py --base "$base"
 check python3 scripts/check_node_types.py
 check bash scripts/check_ui_routes.sh --base "$base"
 check python3 scripts/check_ui_source_suffixes.py
+check python3 scripts/diff_coverage.py pragmas --base "$base" --head "$head"
 check bash scripts/shell_lint.sh
 check bash scripts/pinned_tool.sh actionlint
 exit "$status"

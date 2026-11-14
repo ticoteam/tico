@@ -4966,6 +4966,7 @@ SCHEMAS.update(
                 "is_template": "b",
                 "template_id": "n",
                 "owner": "n",
+                "bot_writers": items("s"),
                 "version": "i",
                 "created_at": "s",
                 "updated_at": "s",
@@ -8208,7 +8209,8 @@ STABLE.extend(
             'addWebsiteAccount',
             'Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per '
             'holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again. '
-            'username and password may be left out for a site a person signs in to by hand',
+            'username and password may be left out for a site a person signs in to by hand. Shared accounts default '
+            'to all_bots: true, including future bots; set false for selected teammates only. Own accounts stay private',
             'WebsiteAccountSaved',
         ),
         (
@@ -8232,9 +8234,10 @@ STABLE.extend(
             'put',
             'Tools',
             'setWebsiteAccountAccess',
-            'Give a shared account to a person, a bot or a group (group:<id>, credential administrators; every person '
-            'and bot in it and in the groups under it uses it), or take it away (on: false). Answers the account\'s '
-            'whole access list',
+            'Give a shared account to a person, a bot, a group (group:<id>, credential administrators; every person '
+            'and bot in it and in the groups under it uses it) or All bots (subject: bots, credential administrators; '
+            'every bot, including later ones), or take it away (on: false). Turn off All bots before removing a bot. '
+            'Answers the account\'s whole access list',
             'WebsiteAccountAccessSet',
         ),
         (
@@ -8306,6 +8309,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'username': 's',
                     'has_password': 'b',
                     'has_totp': 'b',
+                    'all_bots': 'b',
                     'holder': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},
                     'access': items(WEBSITE_ACCESS),
                     'session': obj(
@@ -8326,6 +8330,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'kind',
                     'has_password',
                     'has_totp',
+                    'all_bots',
                     'holder',
                     'access',
                     'session',

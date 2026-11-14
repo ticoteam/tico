@@ -193,6 +193,55 @@ def _label_refusals_on_different_tasks_each_count(api):
     assert about == [tickets[0]["id"]] * 2 + [tickets[1]["id"]] * 2, "the replayed refusal keeps its task"
 
 
+def _a_mover_grants_a_bot_one_tag_and_it_sets_that_tag_and_nothing_else(api):
+    token = bot_token(api, "cpo")
+    tag = post(api, "tags", {"key": "check-passed"}, token="ben-test")["tag"]
+    assert tag["bot_writers"] == []
+    # A bot that owns a tag still cannot grant it, to itself or another bot.
+    own = post(api, "tags", {"key": "area-checks"}, token=token)["tag"]
+    grant = {"version": own["version"], "bot_writers": ["cpo"]}
+    refused = post(api, "tags/" + own["id"], grant, token=token, expected=403)
+    assert refused["error"]["code"] == "identity"
+    # A label Tico acts on is never granted.
+    flow = next((t for t in get(api, "tags")["tags"] if t["key"] == "goal:on"), None)
+    flow = flow or post(api, "tags", {"key": "goal:on"}, token="ben-test")["tag"]
+    r = api.post(
+        "/api/v2/tags/" + flow["id"],
+        json={"version": flow["version"], "bot_writers": ["cpo"]},
+        headers=headers("ben-test"),
+    )
+    assert r.status_code >= 400 and r.json()["error"]["code"] == "kind", r.text
+    granted = post(api, "tags/" + tag["id"], {"version": tag["version"], "bot_writers": ["cpo"]}, token="ben-test")
+    assert granted["tag"]["bot_writers"] == ["bot:cpo"]
+    ticket = post(api, "tasks", {"owner": "cmo", "title": "Build checks", "body": "x", "pipeline": "engineering"})
+    assert label(api, ticket["id"], ["qa"], "ben-test")["labels"] == ["qa"]
+    assert label(api, ticket["id"], ["qa", "check-passed"], token)["labels"] == ["qa", "check-passed"]
+    assert label(api, ticket["id"], ["qa"], token)["labels"] == ["qa"]
+    # Any other label in the same change, added or removed, is refused whole.
+    for wanted in (["qa", "check-passed", "area-checks"], ["check-passed"]):
+        refused = label(api, ticket["id"], wanted, token, expected=403)["error"]
+        assert refused["code"] == "identity", refused
+    assert get(api, "tasks/" + ticket["id"])["task"]["labels"] == ["qa"]
+    # Nothing else on the ticket becomes the bot's, and a task it cannot read stays hidden.
+    r = api.post(
+        "/api/v2/tasks/" + ticket["id"],
+        json={
+            "version": get(api, "tasks/" + ticket["id"])["task"]["version"],
+            "labels": ["qa", "check-passed"],
+            "due": "2026-12-01T00:00:00Z",
+        },
+        headers=headers(token),
+    )
+    assert r.status_code == 403 and r.json()["error"]["code"] == "identity", r.text
+    hidden = post(api, "tasks", {"owner": "ops", "title": "Review the checks", "body": "x", "private": True})
+    label(api, hidden["id"], ["check-passed"], token, expected=404)
+    # An empty list revokes the grant.
+    tag = get(api, "tags/" + tag["id"])["tag"]
+    revoked = post(api, "tags/" + tag["id"], {"version": tag["version"], "bot_writers": []}, token="ben-test")
+    assert revoked["tag"]["bot_writers"] == []
+    label(api, ticket["id"], ["qa", "check-passed"], token, expected=403)
+
+
 def created(api, slug, title):
     with api.app.state.store.read() as c:
         return c.execute(
@@ -317,6 +366,7 @@ def test_who_changes_a_tasks_labels(subtests, api):
         _a_repeated_label_refusal_counts_once_per_task_an_hour_but_other_repeats_still_hold_the_chat,
         _label_refusals_on_different_tasks_each_count,
         _a_mover_and_the_keeper_create_a_task_with_any_label_as_before,
+        _a_mover_grants_a_bot_one_tag_and_it_sets_that_tag_and_nothing_else,
     )
     for check in checks:
         with subtests.test(check.__name__):
