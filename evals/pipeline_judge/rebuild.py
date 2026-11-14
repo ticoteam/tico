@@ -62,10 +62,13 @@ def verdict_at(check, parts, met_at, not_met_at=P.NOT_MET_AT):
 
 
 def measure(rows):
-    """{n, met, unsure, not_met, unsure_rate, met_then_sent_back, mtsb_rate} for rows of {verdict, outcome}."""
+    """{n, met, unsure, not_met, unsure_rate, met_then_sent_back, mtsb_rate, out_of_reach} for rows of {verdict,
+    outcome, reach}: a met page sent back counts unless `reach` is False (no bar could have held it), which is
+    out_of_reach."""
     n = len(rows)
     met = [r for r in rows if r["verdict"] == "met"]
-    back = sum(r["outcome"] == "sent_back" for r in met)
+    back = [r for r in met if r["outcome"] == "sent_back"]
+    beyond = sum(r.get("reach") is False for r in back)
     unsure = sum(r["verdict"] == "unsure" for r in rows)
     return {
         "n": n,
@@ -73,21 +76,41 @@ def measure(rows):
         "unsure": unsure,
         "not_met": sum(r["verdict"] == "not_met" for r in rows),
         "unsure_rate": round(unsure / n, 3) if n else 0.0,
-        "met_then_sent_back": back,
-        "mtsb_rate": round(back / len(met), 3) if met else 0.0,
+        "met_then_sent_back": len(back) - beyond,
+        "mtsb_rate": round((len(back) - beyond) / len(met), 3) if met else 0.0,
+        "out_of_reach": beyond,
     }
 
 
 def choose(check, rows, grid=GRID):
     """Each bar's measure for one check's rows ({parts, outcome, today}: today is the verdict Jev gave then), today's,
     and the bar: the lowest in `grid` whose met-then-sent-back rate is no higher than today's and whose unsure rate is
-    under UNSURE_UNDER, or None when no bar does both."""
-    today = measure([{"verdict": r["today"].replace(" ", "_"), "outcome": r["outcome"]} for r in rows])
-    table = {}
-    for met_at in grid:
-        table[met_at] = measure(
-            [{"verdict": verdict_at(check, r["parts"], met_at), "outcome": r["outcome"]} for r in rows]
+    under UNSURE_UNDER, or None when no bar does both.
+
+    A send-back counts against a bar only when some bar could have held it (not met or unsure there) with unsure under
+    UNSURE_UNDER; one no such bar holds is out of reach, counted apart, today's included, and named in `out_of_reach`
+    with its weakest part. A person who sends back the work itself, every part plainly there, is not Jev's to catch."""
+    verdicts = {met_at: [verdict_at(check, r["parts"], met_at) for r in rows] for met_at in grid}
+    unsure_ok = [met_at for met_at in grid if rows and verdicts[met_at].count("unsure") / len(rows) < UNSURE_UNDER]
+    reach = [
+        r["outcome"] != "sent_back" or any(verdicts[met_at][i] != "met" for met_at in unsure_ok)
+        for i, r in enumerate(rows)
+    ]
+    today = measure(
+        [
+            {"verdict": r["today"].replace(" ", "_"), "outcome": r["outcome"], "reach": ok}
+            for r, ok in zip(rows, reach, strict=True)
+        ]
+    )
+    table = {
+        met_at: measure(
+            [
+                {"verdict": v, "outcome": r["outcome"], "reach": ok}
+                for r, v, ok in zip(rows, verdicts[met_at], reach, strict=True)
+            ]
         )
+        for met_at in grid
+    }
     bar = next(
         (
             met_at
@@ -96,7 +119,17 @@ def choose(check, rows, grid=GRID):
         ),
         None,
     )
-    return {"today": today, "by_bar": table, "bar": None if bar is None else (bar, P.NOT_MET_AT)}
+    beyond = []
+    for r, ok in zip(rows, reach, strict=True):
+        if not ok:
+            weakest = min(r["parts"], key=r["parts"].get) if r["parts"] else None
+            beyond.append({"weakest": weakest, "p": r["parts"].get(weakest), "today": r["today"]})
+    return {
+        "today": today,
+        "by_bar": table,
+        "bar": None if bar is None else (bar, P.NOT_MET_AT),
+        "out_of_reach": beyond,
+    }
 
 
 # ----------------------------------------------------------------------------- the model and data side (not in CI)
@@ -257,19 +290,23 @@ def table(result):
         lines += [
             f"### {NAME_OF[check]}: bar {'none meets both' if chosen is None else f'{chosen:.2f}'}",
             "",
-            "| bar | verdicts | met | unsure | not met | unsure % | met then sent back |",
-            "|---|---|---|---|---|---|---|",
+            "| bar | verdicts | met | unsure | not met | unsure % | met then sent back | sent back, out of reach |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         t = r["today"]
         lines.append(
             f"| today | {t['n']} | {t['met']} | {t['unsure']} | {t['not_met']} | {t['unsure_rate']:.0%} | "
-            f"{t['met_then_sent_back']} ({t['mtsb_rate']:.1%}) |"
+            f"{t['met_then_sent_back']} ({t['mtsb_rate']:.1%}) | {t['out_of_reach']} |"
         )
         for bar, m in r["by_bar"].items():
             mark = " **chosen**" if chosen is not None and f"{chosen:.2f}" == bar else ""
             lines.append(
                 f"| {bar}{mark} | {m['n']} | {m['met']} | {m['unsure']} | {m['not_met']} | {m['unsure_rate']:.0%} | "
-                f"{m['met_then_sent_back']} ({m['mtsb_rate']:.1%}) |"
+                f"{m['met_then_sent_back']} ({m['mtsb_rate']:.1%}) | {m['out_of_reach']} |"
+            )
+        for page in r.get("out_of_reach") or []:
+            lines.append(
+                f"- Out of reach: a page Jev called {page['today']}, weakest part {page['weakest']} at {page['p']}"
             )
         lines.append("")
     return "\n".join(lines)

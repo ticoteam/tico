@@ -385,8 +385,9 @@ def test_a_part_no_is_not_met_a_part_between_is_unsure_and_a_failed_call_is_neve
 
 
 def test_the_bar_chosen_is_the_lowest_that_keeps_send_backs_at_todays_and_unsure_under_ten_percent():
-    """Today 1 of 10 met pages is sent back. At 0.6 a bad page at p 0.65 becomes met and is sent back (2 of 10, worse
-    than today); at 0.7 it stays unsure, send-backs stay at today's, and unsure is 1 in 11 (9%): 0.7 is the bar."""
+    """Today 1 of 10 met pages is sent back with every part at 0.9: no bar holds it, so it is out of reach and today
+    counts 0. At 0.6 a bad page at p 0.65 becomes met and is sent back (worse than today); at 0.7 it stays unsure,
+    send-backs stay at today's, and unsure is 1 in 11 (9%): 0.7 is the bar."""
     from backend import pipeline_judges as P
     from evals.pipeline_judge import rebuild as R
 
@@ -394,8 +395,8 @@ def test_the_bar_chosen_is_the_lowest_that_keeps_send_backs_at_todays_and_unsure
     rows = _rows("spec", [(good, "moved_on")] * 9 + [(good, "sent_back")] + [(good | {"criteria": 0.65}, "sent_back")])
     rows[-1]["today"] = "unsure"
     result = R.choose("spec", rows, grid=(0.6, 0.7, 0.8))
-    assert result["today"]["mtsb_rate"] == 0.1
-    assert result["by_bar"][0.6]["mtsb_rate"] > 0.1
+    assert result["today"]["mtsb_rate"] == 0.0 and result["today"]["out_of_reach"] == 1
+    assert result["by_bar"][0.6]["mtsb_rate"] > 0.0
     assert result["bar"] == (0.7, P.NOT_MET_AT)
     assert result["by_bar"][0.7]["unsure_rate"] < R.UNSURE_UNDER
 
@@ -407,6 +408,28 @@ def test_no_bar_is_chosen_when_none_gets_unsure_under_ten_percent():
     good = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
     rows = _rows("spec", [(between, "moved_on")] * 2 + [(good, "moved_on")] * 8)
     assert R.choose("spec", rows, grid=(0.5, 0.6))["bar"] is None
+
+
+def test_a_send_back_no_bar_could_hold_with_unsure_under_ten_percent_does_not_count_and_is_named():
+    """A sent-back page Jev called unsure at p 0.65 is met at 0.5 or 0.6. Holding it needs 0.7, where 2 of 11 pages are
+    unsure (18%): no bar holds it with unsure under 10%, so it does not count against 0.5, the bar is 0.5, and the result
+    names it with its weakest part, beside today's sent-back page whose every part is 0.9. A send-back 0.7 could hold at
+    9% unsure still counts (test above)."""
+    from backend import pipeline_judges as P
+    from evals.pipeline_judge import rebuild as R
+
+    good = {"goal": 0.9, "in_scope": 0.9, "out_of_scope": 0.9, "criteria": 0.9}
+    edge = good | {"goal": 0.65}
+    rows = _rows(
+        "spec", [(good, "moved_on")] * 8 + [(good, "sent_back")] + [(edge, "moved_on")] + [(edge, "sent_back")]
+    )
+    rows[-1]["today"] = "unsure"
+    result = R.choose("spec", rows, grid=(0.5, 0.6, 0.7))
+    assert result["by_bar"][0.7]["unsure_rate"] >= R.UNSURE_UNDER
+    assert result["bar"] == (0.5, P.NOT_MET_AT)
+    assert {"weakest": "goal", "p": 0.65, "today": "unsure"} in result["out_of_reach"]
+    assert len(result["out_of_reach"]) == 2
+    assert result["by_bar"][0.5]["met_then_sent_back"] == 0 and result["by_bar"][0.5]["out_of_reach"] == 2
 
 
 def test_a_rebuilt_page_is_read_as_its_words_not_its_html(tmp_path):
