@@ -110,10 +110,11 @@ hard-coded; delete our own machinery before adding more; when unsure, run the mo
 
 Tracked as Tico tasks:
 
-- **c99a4b8c** (Models Owner): Gateway (pi) turns should load Tico tools on demand.
-- **37d4ed7b** (Performance Owner): the usage-limit fallback inside a turn should resume its side session.
-- **729e445c** (UI Owner): custom bots (UI Owner, Code Hygiene Owner) need the read-once rule and the subagents line in
+- **37d4ed7b** (Models Owner): Gateway (pi) turns should load Tico tools on demand.
+- **729e445c** (Performance Owner): the usage-limit fallback inside a turn should resume its side session.
+- **c99a4b8c** (UI Owner): custom bots (UI Owner, Code Hygiene Owner) need the read-once rule and the subagents line in
   their own AGENTS.md.
+- **28434211** (Performance Owner): owns this page and the weekly review routine.
 - **Keep-warm pings on Codex** rely on wording alone, because Codex has no per-turn limit.
 - **Cache audit:** measure cache writes on back-to-back warm resumes, including an effort change.
 
