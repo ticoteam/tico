@@ -935,7 +935,8 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
       v.html = await decideSupportHTML(shown.content);
       v.hash = shown.shown_hash;
     } else {
-      v.html = decideContentHTML(shown.content);
+      // What will happen, in words, then the exact content under Details (decide-content.ts).
+      v.html = await decideOkContentHTML(kind ?? '', shown.content);
       v.hash = shown.shown_hash;
     }
     v.state = shown ? 'ready' : 'none';
@@ -994,23 +995,6 @@ async function decideFileHTML(v: AskOkView, content: unknown): Promise<string> {
   const url = URL.createObjectURL(new Blob([await r.arrayBuffer()], {type}));
   v.urls.push(url);
   return head + (image ? `<img class="dc-media" src="${esc(url)}" alt="${esc(name)}">` : `<iframe class="dc-proof" src="${esc(url)}" title="${esc(name)}"></iframe>`) + link;
-}
-/** What an OK is for, any shape: text as Markdown; an object with a subject and a body as a message, then every other
-    field it has (the hash covers them all); else its fields. */
-function decideContentHTML(content: unknown): string {
-  if (content == null || content === '') return '';
-  if (typeof content === 'string') return `<div class="md">${md(content)}</div>`;
-  if (typeof content === 'object' && !Array.isArray(content)) {
-    const o = content as Record<string, unknown>;
-    const textKey = typeof o.body === 'string' ? 'body' : typeof o.text === 'string' ? 'text' : '';
-    const titleKey = typeof o.subject === 'string' ? 'subject' : typeof o.title === 'string' ? 'title' : '';
-    if (textKey) {
-      const rest = Object.fromEntries(Object.entries(o).filter(([k]) => k !== textKey && k !== titleKey));
-      return `${titleKey ? `<h3 class="dc-title">${esc(String(o[titleKey]))}</h3>` : ''}<div class="md">${md(String(o[textKey]))}</div>`
-        + (Object.keys(rest).length ? `<pre class="dc-raw">${esc(JSON.stringify(rest, null, 2))}</pre>` : '');
-    }
-  }
-  return `<pre class="dc-raw">${esc(JSON.stringify(content, null, 2))}</pre>`;
 }
 /** A report to Tico support (backend/support.py ask_report): the message exactly as it goes, and, unless the person
     left them out, the version and install ID that go with it (GET /api/v2/support/compose, what the send adds). The

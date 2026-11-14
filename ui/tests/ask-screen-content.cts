@@ -171,10 +171,11 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     assert.match(await dialog.locator('.dc-doc').innerText(), /Version 0\.6\.0/);
     await dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
 
-    // r7: a message's other fields (who it goes to) are shown with it.
+    // r7: a message's other fields (who it goes to) are shown with it, as labelled lines; the exact content under Details.
     await next('Approve the reply');
-    await dialog.getByText('We refunded it.').waitFor();
+    await dialog.getByText('We refunded it.', {exact: true}).waitFor();
     assert.match(await dialog.locator('.dc-doc').innerText(), /jo@acme\.example/);
+    assert.equal(await dialog.locator('.dc-doc .dc-details .dc-raw').count(), 1, 'the exact content is under Details');
 
     // r8: a page requirement's OK: off until the page at version 2 is shown; Approve sends that version.
     await next('Spec page');

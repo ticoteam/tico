@@ -24,6 +24,14 @@
 .dc-line{margin:0;color:var(--muted);display:flex;align-items:center;gap:6px}
 .dc-doc{display:flex;flex-direction:column;gap:12px;overflow-wrap:anywhere}
 .dc-doc pre,.dc-raw{max-width:100%;overflow-x:auto;white-space:pre-wrap}
+/* an OK's summary (decide-content.ts): labelled lines, then the exact content under Details */
+.dc-facts{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}
+.dc-facts dt{color:var(--muted)}
+.dc-facts dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.dc-sum{margin:0}
+.dc-details>summary{display:inline-flex;align-items:center;min-height:44px;color:var(--muted);cursor:pointer}
+.dc-details>summary:hover{color:var(--ink)}
+.dc-details[open]>summary{color:var(--ink)}
 .dc-quote{margin:12px 0 0;padding:8px 12px;border-left:3px solid var(--line);color:var(--ink)}
 .dc-changed{margin:0 0 12px;padding:8px 12px;border-radius:8px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-weight:600}
 .dc-ref{margin:0;color:var(--muted)}
