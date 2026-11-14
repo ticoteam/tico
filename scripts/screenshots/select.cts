@@ -67,6 +67,8 @@ const UNSHOWN: string[] = [
   'ui/styles/replay.css', 'ui/styles/roadmaps.css', 'ui/styles/tags.css', 'ui/styles/first-run.css',
   'ui/styles/lenses.css', 'ui/styles/credentials.css', 'ui/styles/cloud-agents.css', 'ui/styles/team-add.css',
   // The Settings Inboxes tab is gone (its page was removed from the table); its files are a feature no page shows now.
+  // The style guide (#/style-guide) is a reference page for people who build the UI, not a product page a release shows.
+  'ui/app/style-guide.ts', 'ui/style-guide/**',
   'ui/app/inboxes*.js', 'ui/app/inboxes*.ts', 'ui/app/tools*.ts', 'ui/app/secret-drop.ts', 'ui/app/who-picker.ts', 'ui/app/redesign-library.ts', 'ui/styles/inboxes.css', 'ui/styles/inbound.css',
   'ui/styles/tools.css', 'ui/styles/redesign-library.css',
   // A website tool's live browser view (Open browser on the tool's page, or a browser ask): no page shows a live browser.
