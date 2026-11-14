@@ -400,7 +400,7 @@ function settingsShow(tab: string) {
       window.hlSummaryDraw?.();
       void Promise.all([
         // The owner's one click when the team has no Assistant (ui/assistant.ts): restore it or add it.
-        owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
+        owner && assistantSettingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
         company && settingsIsAdmin() && renderSettingsCompany(), settingsIsAdmin() && renderSettingsPageOwners(), owner && renderSettingsBotReports(),
         !formBusy($('#settings-notifications')) && settingsNotificationsRender()])

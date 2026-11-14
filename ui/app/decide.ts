@@ -107,11 +107,7 @@ interface DecFile {
   error: string;
   run: Promise<void> | null;
 }
-
-let DEC: DecState | null = null;            // the open screen, null while it is shut
-let DECIDE_WANT = '';                       // a deep link's item (#/decide?item=<id>), opened once Tasks has read
-let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
-const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
+                      // the walk of what is in no stage (Tasks › You's Other chip)
 const DEC_UNDO_MS = 10_000;
 const DEC_CALM_MS = 400;
 let DEC_CALM_TIMER = 0;
@@ -132,16 +128,6 @@ function decideSource(): NeedsEntry[] {
 function decideOrdered(items: NeedsEntry[]): NeedsEntry[] {
   const rank = {answer: 0, review: 1, do: 2};
   return items.map((it, i) => ({it, i})).sort((a, b) => rank[needsGroup(a.it)] - rank[needsGroup(b.it)] || a.i - b.i).map(x => x.it);
-}
-// The server sorts Home's Needs you rows by the same rule (backend/cards.py needs_act): a new kind here changes both.
-function decideKind(it: NeedsEntry): AskKind {
-  if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'question' : 'ok';
-  if (it.kind === 'paused') return 'fix';
-  if (it.kind === 'mention') return 'mention';
-  // Stuck: the ladder brought it to the person (stuck or late with them), a bot is Paused on it, or it waits on someone
-  // being let in (turn.share). Its buttons are the stuck card's, never Done, Snooze or Give to (task #392).
-  const t = it.task;
-  return t?.turn?.state === 'paused' || t?.late?.level === 'person' || t?.stuck || t?.turn?.share?.length ? 'stuck' : 'yours';
 }
 const decideRid = (it: NeedsEntry) => it.requirement_id || it.id;
 const decideTaskId = (it: NeedsEntry) => it.task_id || it.task?.id || '';
@@ -177,24 +163,6 @@ function decideSync(st: DecState, items: NeedsEntry[]) {
       || before.slice(0, Math.max(i, 0)).reverse().find(k => keys.has(k) && !st.gone.has(k)) || null;
   }
   st.order = order;
-}
-
-// ---- the count, and the lists that show Needs you
-function decideCount(): number {
-  if (S.me?.role === 'bot') return 0;
-  return S.v2?.needsCount ?? (S.v2?.needs || []).length;
-}
-function needsBadgePaint() {
-  const n = decideCount();
-  for (const badge of document.querySelectorAll<HTMLElement>('[data-needs-badge]')) {
-    badge.hidden = !n; badge.textContent = String(n); badge.setAttribute('aria-label', `${n} need you`);
-  }
-}
-/** Needs you changed: the badge, the Tasks page and a bot's rail draw again. */
-function needsListsRedraw() {
-  needsBadgePaint();
-  if (typeof TASKS_ST !== 'undefined' && TASKS_ST) tasksNeedsLive();
-  if (typeof BOT !== 'undefined' && BOT && $('#t-needs') && typeof botNeedsPaint === 'function') botNeedsPaint(BOT.slug);
 }
 
 // ---- open and close
@@ -282,7 +250,8 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   return true;
 }
 /** ▶: the walk from its first item, or, after Go to, from the item it left (decide-about.ts). */
-const decideGoThrough = () => { const at = DEC_RESUME; DEC_RESUME = ''; return (!!at && decideOpen(at)) || decideOpen(''); };
+// Async so code outside this page part (Tasks' ▶ Review) may use its answer: the shell's stand-in loads the part first.
+async function decideGoThrough(): Promise<boolean> { const at = DEC_RESUME; DEC_RESUME = ''; return (!!at && decideOpen(at)) || decideOpen(''); }
 /** A task page's Answer: the Needs you item that is this task's ask for requirement `rid`. Items are keyed by their own
     id (`<ask id>:<requirement id>`) and a stage's requirement is the same on every task in the stage, so both the task
     and the requirement must match. Not in the list held: read it once more. Still not: say why, never nothing. The Tasks

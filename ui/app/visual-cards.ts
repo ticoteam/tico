@@ -204,7 +204,7 @@ function visualFail(card: HTMLElement | null | undefined, message = "Couldn't sh
 // Open in file viewer: inside a task, its own file panel at that version; anywhere else the file viewer.
 function visualOpen(card: HTMLElement, version = Number(card.dataset.version)) {
   const d = card.closest<TfDialog>('dialog');
-  if (d?.tfEl && tfOpen(d, card.dataset.file, version, {scroll: true})) return;
+  if (d?.tfEl && d.tfOpenFile?.(card.dataset.file, version, {scroll: true})) return;
   VIEW = {items: [{fileId: card.dataset.file, version, name: card.dataset.name ?? '', kind: viewKindOf(card.dataset.name)}], index: 0};
   void viewerShow();
 }

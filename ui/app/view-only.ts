@@ -54,6 +54,10 @@ function viewComposer(form: Element) {
 }
 
 function viewSweep(root: ParentNode) {
+  if (root instanceof Element) {
+    if (root.matches(VIEW_COMPOSERS)) viewComposer(root);
+    if (root.matches(VIEW_CONTROLS)) viewOff(root);
+  }
   for (const form of root.querySelectorAll(VIEW_COMPOSERS)) viewComposer(form);
   for (const el of root.querySelectorAll(VIEW_CONTROLS)) viewOff(el);
 }
@@ -63,12 +67,10 @@ function viewOnlyStart() {
   if (!S.me?.read_only_view || document.documentElement.classList.contains('view-only')) return;
   document.documentElement.classList.add('view-only');
   viewSweep(document);
-  // Each page and window draws itself again often; a frame's sweep covers whatever a redraw put in.
-  let queued = false;
-  new MutationObserver(() => {
-    if (queued) return;
-    queued = true;
-    requestAnimationFrame(() => { queued = false; viewSweep(document); });
+  // Each page and window draws itself again often. What a redraw put in is swept in the same turn it was drawn (a
+  // mutation observer runs before the next task), so no screenshot or click ever finds a write still enabled.
+  new MutationObserver(records => {
+    for (const r of records) for (const node of r.addedNodes) if (node instanceof Element && node.isConnected) viewSweep(node);
   }).observe(document.body, {childList: true, subtree: true});
   // A control drawn and clicked inside one frame is still refused before its own handler runs.
   const refuse = (ev: Event) => {

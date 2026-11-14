@@ -219,7 +219,7 @@ async function askLoad(chat: AskChat) {
     else {
       stickScroll(thread).update(() => {
         thread.innerHTML = html;
-        if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot, assistantName: askName()});
+        if (thread.querySelector('[data-action-host]')) void assistantCards(thread, {get, post, esc, toast, reload: snapshot, assistantName: askName()});
       }, {fresh: !!rendered});
       askRowsIn(thread, seenRows, !!rendered);
       rendered = agoStill(html);
@@ -279,7 +279,7 @@ async function askLoad(chat: AskChat) {
   thread.setAttribute('aria-label', askName() + ' conversation');
   if (!info.available) {
     if (!info.can_turn_on) { thread.innerHTML = `<p class="muted">${esc(askName())} is off. Ask the team owner to turn it on.</p>`; return; }
-    window.assistantChat?.off(thread, info, {post, esc, after: () => { if (current()) void askLoad(chat); }});
+    assistantOff(thread, info, {post, esc, after: () => { if (current()) void askLoad(chat); }});
     return;
   }
   messages = info.messages || []; execution = info.execution || null; pending = info.pending || [];
