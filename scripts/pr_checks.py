@@ -95,6 +95,8 @@ def moves_ui_shell(name):
     if not name.startswith("ui/") or name.startswith(SHOT_IGNORED) or name.endswith(".md"):
         return False
     return name.endswith((".ts", ".js", ".mjs", ".html", ".json"))
+
+
 SCHEMA_LINE = re.compile(
     r"\b(?:CREATE|ALTER|DROP)\s+TABLE\b|\b(?:ADD|DROP|RENAME)\s+COLUMN\b|\b(?:TEXT|INTEGER|REAL|BLOB|NUMERIC)\b"
 )
