@@ -17,7 +17,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico page: error: argument sub: invalid choice: 'nope' (choose from publish, list, show, access, archive) Did you mean: tico page show, tico page access?",
+  "stderr": "tico page: error: argument sub: invalid choice: 'nope' (choose from publish, card, list, show, access, archive) Did you mean: tico page show, tico page access?",
   "exit": 64
  },
  {
@@ -645,5 +645,67 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "card",
+   "--page",
+   "goals",
+   "--for",
+   "human:ana",
+   "--rows",
+   "[{\"title\": \"NPS above 40\"}, {\"title\": \"Churn under 3% a month\"}]"
+  ],
+  "tools": [
+   [
+    "tico_page_card",
+    {
+     "for_person": "human:ana",
+     "operation_id": null,
+     "page": "goals",
+     "rows": [
+      {
+       "title": "NPS above 40"
+      },
+      {
+       "title": "Churn under 3% a month"
+      }
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "page-chat/cards",
+    {
+     "page": "goals",
+     "for_person": "human:ana",
+     "rows": [
+      {
+       "title": "NPS above 40"
+      },
+      {
+       "title": "Churn under 3% a month"
+      }
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "card"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico page card\ntico page card: error: the following arguments are required: --page, --for, --rows",
+  "exit": 64
  }
 ]

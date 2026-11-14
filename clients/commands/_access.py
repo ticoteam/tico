@@ -295,6 +295,7 @@ AUDIENCE = {
     "tico_page_publish": BOTS + ("assistant",),  # the route authenticates the initiating Make page request
     # A hard delete is the owner's alone; BotOps asks the owner who asked for it to confirm (backend/botops_act.py).
     "tico_file_delete": ("owner", "botops"),
+    "tico_page_card": BOTS,  # only the page's owner bot, for a person who just wrote to it there (the route checks)
     "tico_page_archive": PEOPLE + BOTS,
     "tico_page_access": PEOPLE + BOTS,
     # A bot's read-only view of the app (backend/app_view.py): an owner or admin turns it on, as themselves; the bot

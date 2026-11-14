@@ -1251,9 +1251,14 @@ def pending_on_task(c, task_id):
     return False
 
 
-def batch_steps(body):
-    """The steps of a bulk card, checked, or a 422."""
+def batch_steps(body, proposer="assistant"):
+    """The steps of a bulk card, checked, or a 422. A page chat's card (`page:<page>`) holds only its page's one route
+    (backend/page_chat_cards.py)."""
     steps = body.get("actions") if isinstance(body, dict) and set(body) == {"actions"} else None
+    from . import page_chat_cards
+
+    if page_chat_cards.proposer_page(proposer):
+        return page_chat_cards.steps_of(page_chat_cards.proposer_page(proposer), steps)
     if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_BATCH:
         raise Problem(
             "operation", f"A bulk card carries only `actions`: 1 to {MAX_BATCH} task changes, comments or links", 422
@@ -1277,6 +1282,30 @@ def batch_steps(body):
             )
         out.append({"method": method, "path": path, "body": {k: v for k, v in sent.items() if k != "on_behalf_of"}})
     return out
+
+
+def keep_rows(c, row, drop):
+    """The person dropped rows from a page card (`drop`, their indexes) before Confirm: the card keeps only the rest, in
+        its steps, its lines and its words ("Add 3 goals"), so a dropped row can never run and the card and its record name only
+    what ran. Only a page card's rows are dropped; at least one is kept."""
+    from . import page_chat_cards
+
+    steps = (json.loads(row["body"] or "{}") or {}).get("actions") if row["path"] == BATCH_PATH else None
+    if not page_chat_cards.proposer_page(row.get("proposer")) or not isinstance(steps, list):
+        raise Problem("drop", "Only a page card's rows can be dropped", 422)
+    if any(i >= len(steps) for i in drop):
+        raise Problem("drop", f"This card has {len(steps)} rows", 422)
+    if len(drop) >= len(steps):
+        raise Problem("drop", "Keep at least one row, or Cancel the card", 422)
+    lines = json.loads(row.get("diff") or "[]")
+    kept = [s for i, s in enumerate(steps) if i not in drop]
+    row["body"] = json.dumps({"actions": kept})
+    row["diff"] = json.dumps([d for i, d in enumerate(lines) if i not in drop] if len(lines) == len(steps) else lines)
+    row["summary"], row["description"] = page_chat_cards.words(kept, row["owner"], decided=True)
+    c.execute(
+        "UPDATE assistant_actions SET body=?, diff=?, summary=?, description=? WHERE id=?",
+        (row["body"], row["diff"], row["summary"], row["description"], row["id"]),
+    )
 
 
 def teammate(who):
@@ -1421,7 +1450,7 @@ def create_proposal(
         raise Problem("too_many", "Too many proposals are waiting; confirm or cancel some first", 409)
     body = {k: v for k, v in (body or {}).items() if k != "on_behalf_of"}
     if path == BATCH_PATH:
-        body = {"actions": [runnable_step(c, s) for s in batch_steps(body)]}
+        body = {"actions": [runnable_step(c, s) for s in batch_steps(body, proposer)]}
     else:
         path, body = runnable(c, method, path, body)
     if routes is not None:
@@ -1514,7 +1543,7 @@ def create_proposal(
         ":method,:path,:body,:status,:proposed_via,:created_at,:description,:diff,:proposer)",
         row,
     )
-    bot = room_bot(settings, room) if proposer == "assistant" else proposer
+    bot = speaker(c, settings, room, proposer)
     card = H._write_message(
         c,
         "bot:" + bot,
@@ -1538,6 +1567,18 @@ def create_proposal(
 
 
 # ------------------------------------------------------------------ the room
+def speaker(c, settings, room, proposer):
+    """The bot that says a card and its result in `room`: the room's bot for the Assistant, the page's owner in the
+    person's chat with it for a page card (`page:<page>`), else the proposer itself (BotOps)."""
+    from . import page_chat_cards
+
+    if not proposer or proposer == "assistant":
+        return room_bot(settings, room)
+    if page_chat_cards.proposer_page(proposer):
+        return page_chat_cards.writer(c, room) or room_bot(settings, room)
+    return proposer
+
+
 def room_bot(settings, room):
     """The bot that talks in this person's own room: the Assistant, and the Strategy Owner in the owner's earlier
     Strategy Owner chat (its old cards and their results)."""
@@ -1743,6 +1784,13 @@ def action_view(row, c=None):
         # A card the Strategy Owner put in the owner's earlier chat with it says it is the Strategy Owner's, by its name.
         if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.STRATEGY_ROOM:
             view["by_name"] = strategy_bot.name(c)
+    if c is not None and str(view["proposer"] or "").startswith("page:") and view["conversation_id"]:
+        # A page card is said by the page's owner in the person's chat with it, by its name.
+        from . import page_chat_cards
+
+        bot = page_chat_cards.writer(c, H.conversation(c, view["conversation_id"]))
+        if bot:
+            view["by_name"] = H.actor_name(c, "bot:" + bot)
     m = re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", view["path"] or "")
     if m and c is not None:
         # Read again from what the stored request sends (never a guess at what it would do today), and its old line,
@@ -2334,10 +2382,9 @@ def install(app, store, auth, mutate, onboarding):
             row = load(c, who, aid)
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and note:
-                by = row.get("proposer") or "assistant"
                 H._write_message(
                     c,
-                    "bot:" + (room_bot(settings, room) if by == "assistant" else by),
+                    "bot:" + speaker(c, settings, room, row.get("proposer") or "assistant"),
                     who.actor,
                     note,
                     room,
@@ -2395,11 +2442,10 @@ def install(app, store, auth, mutate, onboarding):
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and not room.get("closed_at"):
                 # Said by the proposing bot (the Assistant in its own room), to the card's owner.
-                by = row["proposer"] or "assistant"
                 said = who_name + " withdrew that card, so nothing will run." + (" " + reason if reason else "")
                 H._write_message(
                     c,
-                    "bot:" + (room_bot(settings, room) if by == "assistant" else by),
+                    "bot:" + speaker(c, settings, room, row["proposer"] or "assistant"),
                     row["owner"],
                     said,
                     room,
@@ -2453,11 +2499,12 @@ def install(app, store, auth, mutate, onboarding):
             }
 
     @app.post("/api/v2/assistant/actions/{aid}/confirm")
-    async def action_confirm(request: Request, aid: str):
+    async def action_confirm(request: Request, aid: str, body: M.AssistantConfirm | None = None):
         who = own(request)
         if who.via_token:
             raise Problem("forbidden", "Confirm in " + settings.app_name + " itself, with your own click", 403)
         secret = secrets.token_urlsafe(24)
+        drop = sorted(set(body.drop)) if body else []
 
         def claim():
             with store.transaction() as c:
@@ -2469,6 +2516,9 @@ def install(app, store, auth, mutate, onboarding):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
                     return None
+                if drop or str(row.get("proposer") or "").startswith("page:"):
+                    # A page card names only the rows it runs, dropped or not, and stops offering drops.
+                    keep_rows(c, row, drop)
                 # Only the run that holds this secret (the in-process call below) is "confirmed".
                 c.execute(
                     "UPDATE assistant_actions SET status='running', decided_at=?, running_since=?, "
@@ -2510,7 +2560,7 @@ def install(app, store, auth, mutate, onboarding):
             if path == BATCH_PATH:
                 # Each step through its own route, as the person; one that fails is reported and the rest still run.
                 items = []
-                for i, step in enumerate(batch_steps(sent)):
+                for i, step in enumerate(batch_steps(sent, row.get("proposer") or "assistant")):
                     try:
                         response = await api.call(
                             step["method"], step["path"], body=step["body"], key=f"assistant-{aid}-{i}"
