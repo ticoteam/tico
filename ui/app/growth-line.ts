@@ -177,20 +177,24 @@ function grlLinks() {
     const y = side === 'top' ? r.top : side === 'bottom' ? r.bottom : r.top + r.height / 2;
     return [x - box.left, y - box.top];
   };
-  const path = (a: number[], b: number[], dashed: boolean) => {
-    const [x1 = 0, y1 = 0] = a, [x2 = 0, y2 = 0] = b, my = (y1 + y2) / 2;
-    return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)}C${x1.toFixed(1)} ${my.toFixed(1)} ${x2.toFixed(1)} ${my.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}"${dashed ? ' class="grl-dash"' : ''}/>`;
-  };
+  // Links run along a gutter at each edge of the frame, never across the rows: a source's from its chip in the strip
+  // down the left gutter into the row's chip; a KPI's from the row's chip out to the right gutter and down to the strip.
+  const d = (pts: number[][], dashed: boolean) => `<path d="${pts.map(([x = 0, y = 0], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join('')}"${dashed ? ' class="grl-dash"' : ''}/>`;
+  const left = 5, right = box.width - 5;
   const bad = new Set(st.line.sources.filter(s => grlBad(s.health)).map(s => s.id));
   let out = '';
   frame.querySelectorAll<HTMLElement>('.grl-row.grl-on').forEach(row => {
     for (const id of (row.dataset.grlSrcs || '').split(' ').filter(Boolean)) {
       const from = frame.querySelector(`[data-grl-strip][data-grl-src="${CSS.escape(id)}"]`), to = row.querySelector(`.grl-c-src [data-grl-src="${CSS.escape(id)}"]`);
-      if (from && to) out += path(at(from, 'bottom'), at(to, 'top'), bad.has(id));
+      if (!from || !to) continue;
+      const [x1 = 0, y1 = 0] = at(from, 'bottom'), [x2 = 0, y2 = 0] = at(to, 'left');
+      out += d([[x1, y1], [x1, y1 + 6], [left, y1 + 6], [left, y2], [x2, y2]], bad.has(id));
     }
     for (const id of (row.dataset.grlKpis || '').split(' ').filter(Boolean)) {
       const from = row.querySelector(`.grl-c-kpi [data-grl-kpi="${CSS.escape(id)}"]`), to = frame.querySelector(`[data-grl-strip][data-grl-kpi="${CSS.escape(id)}"]`);
-      if (from && to) out += path(at(from, 'bottom'), at(to, 'top'), false);
+      if (!from || !to) continue;
+      const [x1 = 0, y1 = 0] = at(from, 'right'), [x2 = 0, y2 = 0] = at(to, 'top');
+      out += d([[x1, y1], [right, y1], [right, y2 - 6], [x2, y2 - 6], [x2, y2]], false);
     }
   });
   svg.innerHTML = out;

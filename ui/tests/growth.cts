@@ -203,21 +203,9 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await newOne.click();
   assert.equal(await newOne.getAttribute('aria-expanded'), 'true', `${tag}: the trace says it is open`);
   assert.match(await line.locator('[data-grl-trace-for="flyers"]').innerText(), /9 new customers from Typed by hand/, `${tag}: the trace names where the number comes from`);
-  if (!phone) {
-    await line.locator('[data-grl-strip][data-grl-pick="source:typed"]').click();
-    assert.equal(await line.locator('[data-grl-row="flyers"].grl-on').count(), 1, `${tag}: a source picks the rows it fills`);
-    assert.ok(await line.locator('svg.grl-links path').count() > 0, `${tag}: and links them`);
-  }
   // Nothing past the line's right edge at this width, the chat pane open or not (the columns stack to fit).
   const edge = await line.evaluate(el => { const box = el.getBoundingClientRect(); return Math.max(...[...el.querySelectorAll('.grl-c-kpi, .grl-c-eco, .grl-headline')].map(c => c.getBoundingClientRect().right)) - box.right; });
   assert.ok(edge <= 1, `${tag}: the line's columns end inside it (${edge}px past)`);
-  if (!phone) {
-    const was = page.viewportSize()!;
-    await page.setViewportSize({width: 1100, height: was.height});
-    const narrow = await line.evaluate(el => { const box = el.getBoundingClientRect(); return Math.max(...[...el.querySelectorAll('.grl-c-kpi')].map(c => c.getBoundingClientRect().right)) - box.right; });
-    assert.ok(narrow <= 1, `${tag}: at 1100 px the KPIs stay inside the line (${narrow}px past)`);
-    await page.setViewportSize(was);
-  }
   await themed(page, `growth-${width}-line`);
   noErrors('the Growth line');
   // Settings: the channel's Edit retires it after asking once more on the same button.
@@ -239,6 +227,28 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   // not beside the title: the header is one line (style guide "Top bars: one line").
   await reload();
   await page.locator('#dash-grid .grc-funnel').waitFor({timeout: t(15000)});
+  // The Growth line at desktop widths (this script runs on a phone, so the window is widened for it): eight channels and
+  // Unknown fit inside the line at 1280 and 1100 px; a source picks its rows and links them; CAC opens its trace.
+  {
+    const line = page.locator('[data-gr-line]'), was = page.viewportSize()!;
+    for (const w of [1280, 1100]) {
+      await page.setViewportSize({width: w, height: 900});
+      await line.locator('[data-grl-row="google-ads"]').waitFor({timeout: t(10000)});
+      const past = await line.evaluate(el => { const box = el.getBoundingClientRect(); return Math.max(...[...el.querySelectorAll('.grl-c-kpi, .grl-c-eco, .grl-headline')].map(c => c.getBoundingClientRect().right)) - box.right; });
+      assert.ok(past <= 1, `${tag}: at ${w} px the line's columns end inside it (${past}px past)`);
+      const used = ((await line.locator('[data-grl-row="google-ads"]').getAttribute('data-grl-srcs')) || '').split(' ')[0];
+      const pick = line.locator(`[data-grl-strip][data-grl-pick="source:${used}"]`);
+      await pick.click();
+      assert.ok(await line.locator('.grl-row.grl-on').count() > 0, `${tag}: at ${w} px a source picks the rows it fills`);
+      assert.ok(await line.locator('svg.grl-links path').count() > 0, `${tag}: at ${w} px and links them`);
+      const cac = line.locator('[data-grl-trace="google-ads:cac"]');
+      await cac.click();
+      assert.match(await line.locator('[data-grl-trace-for="google-ads"]').innerText(), /= \$[\d,]+ CAC/, `${tag}: at ${w} px CAC's trace writes the sum`);
+      await themed(page, `growth-${w}-line`);
+      await cac.click(); await pick.click();   // closed again: the rest of the script reads the page at rest
+    }
+    await page.setViewportSize(was);
+  }
   assert.deepEqual(await headings(), CARDS, `${tag}: the order`);
   const ns = page.locator('#dash-grid [data-gr-ns]');
   assert.match(await ns.innerText(), /North Star[\s\S]*Active homes[\s\S]*648[\s\S]*Target 1,000/, `${tag}: the North Star line, with its target`);
