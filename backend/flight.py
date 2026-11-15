@@ -18,7 +18,7 @@ short transaction. Nothing leaves the server: no query text with values (SQL is 
 with ids (route templates only), no bodies, no setting values. Owners, admins and the team's bots read it at
 `GET /api/v2/system/metrics` (bots without the slow requests' actors), and owners and admins on the Health page.
 People's browsers add their own first-load and interaction times (LCP, INP) per screen through
-`POST /api/v2/web-timings`, kept as histogram buckets only (`flight_web`).
+`POST /api/v2/web-timings`, kept as histogram buckets only (`flight_web`, made by its migration).
 Retention: minutes for two days, then hours; requests, browser timings, slow requests and process rows 14 days, SQL,
 database and events 90 days (`sweep`, run by the scheduler's hourly sweep).
 """
@@ -58,8 +58,6 @@ CREATE TABLE IF NOT EXISTS flight_db(created_at INTEGER PRIMARY KEY, bytes INTEG
 CREATE TABLE IF NOT EXISTS flight_events(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, kind TEXT NOT NULL,
   detail TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS flight_events_kind ON flight_events(kind, created_at);
-CREATE TABLE IF NOT EXISTS flight_web(created_at INTEGER NOT NULL, span INTEGER NOT NULL, metric TEXT NOT NULL,
-  route TEXT NOT NULL, n INTEGER NOT NULL, hist TEXT NOT NULL, PRIMARY KEY(created_at, span, metric, route)) WITHOUT ROWID;
 """
 
 SLOW_MS = 1000  # a request this slow is logged on its own
