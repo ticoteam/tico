@@ -1200,11 +1200,14 @@ def ask_version(conn: "sqlite3.Connection", row: Row, wait: "Wait", requirement:
             (s.requirement for s in R.standings(conn, row) if str(s.requirement["id"]) == str(wait.requirement_id)),
             None,
         )
-    if requirement is None or not _visit_id(row):
+    visit_id = _visit_id(row)
+    if requirement is None or not visit_id:
         return ""
     asked = task_calls.ask_shown(conn, row, requirement)
-    refs = flow_opinions.pinned(conn, asked)
-    return flow_opinions.ask_version({"ask": asked, "line": wait.line}, list(asked["shows"]) if refs is None else refs)
+    item: Row = {"id": f"{visit_id}:{requirement['id']}", "task_id": row["id"], "requirement_id": requirement["id"]}
+    item.update(ask=asked, line=wait.line)
+    refs = flow_opinions.ask_refs(conn, item)
+    return flow_opinions.ask_version(item, list(asked["shows"]) if refs is None else refs)
 
 
 def snoozed_until(
