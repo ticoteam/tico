@@ -258,11 +258,14 @@ const titleLeft = (page: Page) => page.evaluate(() =>
       const page = await pageAs(browser, hub, 'dana');
       try {
         await ready(page);
-        for (const width of [1280, 1100, 900, 800]) {
-          await page.setViewportSize({width, height: 800});
-          for (const s of SCREENS) {
-            try { await open(page, s); } catch { say(s, String(width), ['no header']); continue; }
-            await page.waitForTimeout(t(100));   // the fit runs on the next frame
+        // Each screen is opened once, at the widest, and the window narrowed under it: the header fits itself again on
+        // a resize, as it does for a person dragging the window's edge (and the script stays well inside its time).
+        for (const s of SCREENS) {
+          await page.setViewportSize({width: 1280, height: 800});
+          try { await open(page, s); } catch { say(s, '1280', ['no header']); continue; }
+          for (const width of [1280, 1100, 900, 800]) {
+            await page.setViewportSize({width, height: 800});
+            await page.waitForTimeout(t(150));   // the fit runs on the next frame
             say(s, String(width), await page.evaluate((row: number | null) => {
               const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!, r = head.getBoundingClientRect();
               const vw = document.documentElement.clientWidth;
