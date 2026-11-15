@@ -892,6 +892,9 @@ before it does not (a task skipped Build on one).
 - **Build, Review 1, Fixes 1, Review 2, Fixes 2, QA, Merge:** as on Engineering below, with the assignee in the
   Builder's place and the QA Owner holding QA. QA's page is OK'd by its named person, as on Engineering.
 - **OK release.** Owner: the assignee. To leave: **a person OKs the release**: any person, never a bot. Then it merges.
+  The OK names nothing to show, so it shows the task's page from the stage before (QA's), with that stage on its meta
+  line, to a person who may open it; Tico's opinion reads the same page when it has no audience of its own. Any stage
+  OK that names nothing does this; with no earlier page it shows the task's title and text (#3784).
   A task Merge sends back to QA keeps the person's QA OK as on Engineering (C22), and the release is asked again.
 - **Validate.** Owner: the assignee. To leave: a "Checked in production" page that names the version production runs,
   checked against the release that holds the task's own PRs. No person. Not validated sends the task back to Build,

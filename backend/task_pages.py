@@ -62,6 +62,19 @@ def newest_for_task(conn: "sqlite3.Connection", task_id: str, stage_id: str) -> 
     )
 
 
+def earlier(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> Row | None:
+    """The page that counted last on an earlier visit of the task, any stage: the newest current page of a visit
+    other than `visit_id`, with that visit's `stage_id`. What an OK that names nothing to show shows (the QA page at
+    OK release, #3784). None when no earlier visit had one."""
+    return _one(
+        conn,
+        "SELECT p.file_id, p.version, p.requirement_id, v.stage_id FROM requirement_pages p "
+        "JOIN visits v ON v.id = p.visit_id WHERE v.task_id=? AND v.id<>? AND p.replaced_at IS NULL "
+        "ORDER BY v.entered_at DESC, p.created_at DESC, p.id DESC LIMIT 1",
+        (task_id, visit_id),
+    )
+
+
 def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
     from . import hubdb
 

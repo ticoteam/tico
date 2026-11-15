@@ -42,6 +42,8 @@ from . import judge as judge_
 from . import needs_lane as needs_lane_
 from . import pipeline_judges as PJ_
 from . import task_asks as task_asks_
+from . import task_calls as task_calls_
+from . import task_requirements as R_
 from . import updates as updates_
 from . import views as views_
 from .call_slots import NEUTRAL, Calls
@@ -56,6 +58,8 @@ judge: Any = judge_
 needs_lane: Any = needs_lane_
 PJ: Any = PJ_
 task_asks: Any = task_asks_
+task_calls: Any = task_calls_
+R: Any = R_
 updates: Any = updates_
 views: Any = views_
 
@@ -116,6 +120,23 @@ def pinned(c: Any, ask: Row) -> list[str] | None:
     return out
 
 
+def earlier(c: Any, item: Row) -> Row | None:
+    """The page a stage's OK that names nothing to show shows from an earlier stage (task_calls.earlier_page), when it
+    goes into the shared opinion: only a page with no audience of its own, which reads as its task does, so every
+    reader of the ask may read it. Worked out from the task, never from the reader's entry (which leaves the page out
+    for someone who may not open it), so the opinion's `ask_version` is one for everyone; `_reads` still checks the
+    reader. A page with its own audience stays out of the opinion, which is then read from the task's text."""
+    ask: Row = item.get("ask") or {}
+    if ask.get("kind") != "ok" or ask.get("shows") or ask.get("page"):
+        return None
+    requirement = R.get(c, str(item["requirement_id"]))
+    visit_id, _, _ = str(item["id"]).partition(":")
+    found: Row | None = task_calls.earlier_page(c, str(item["task_id"]), visit_id, requirement) if requirement else None
+    if not found or files.restricted_page_rows(c, [found["file_id"]]):
+        return None
+    return found
+
+
 def ask_version(item: Row, refs: list[str]) -> str:
     """The ask as its parties read it, as a short hash: its sentence, what it shows (`refs`, each page at its pinned
     version), its choices, brief, title and typed question. A comment on the task, or anything else about the task, is
@@ -161,7 +182,12 @@ def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
     if item.get("kind") != "ask" or not ask or ask.get("line") == task_asks.PRIVATE_LINE:
         return None
     refs = pinned(c, ask)
-    if refs is None or not _reads(c, auth, who, refs):
+    if refs is None:
+        return None
+    shown_before = earlier(c, item)
+    if shown_before:
+        refs.append(str(shown_before["ref"]))
+    if not _reads(c, auth, who, refs):
         return None
     rid = item["requirement_id"]
     if task_asks.grant(c, rid) and not task_asks.may_see(c, auth, who, rid):
@@ -179,6 +205,7 @@ def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
         "said": item.get("line") or "",
         "since": item.get("since") or "",
         "stage_id": task.get("stage_id"),
+        "earlier": shown_before["stage"] if shown_before else None,
     }
 
 
@@ -256,6 +283,7 @@ def prompt(c: Any, job: Row) -> str:
         f"The asker recommends: {brief['recommend']}" if brief.get("recommend") else "",
         f"It asks for: {typed.get('question') or typed.get('name')} ({typed.get('type')})" if typed else "",
         f"Task description:\n{(task['body'] or '')[:BODY_MAX]}" if task and task["body"] else "",
+        f"It shows the task's page from an earlier stage, {job['earlier']}" if job.get("earlier") else "",
         f"What the ask shows:\n{shown(c, job)}",
     ]
     return "\n".join(line for line in lines if line)

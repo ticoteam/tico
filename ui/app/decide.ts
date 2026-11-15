@@ -149,7 +149,16 @@ const decideTaskId = (it: NeedsEntry) => it.task_id || it.task?.id || '';
 /** One ask: its task and its requirement. A stage's requirement ("OK Chris") is the same on every task in the stage, so
     the requirement alone would show one task's page on another's ask. */
 const decideOkKey = (it: NeedsEntry) => `${decideTaskId(it)}\n${decideRid(it)}`;
-const decideShows = (it: NeedsEntry) => (it.ask?.shows || []).join('\n');
+/** A stage's OK that names nothing to show: the task's page from an earlier stage (the QA page at OK release, #3784),
+    when the server gave it (only to a reader who may open it). */
+const decideEarlier = (it: NeedsEntry) => {
+  const e = it.ask?.earlier;
+  return e?.ref && e.file_id && e.version && !e.removed && !it.ask?.page && !(it.ask?.shows || []).length
+    ? {ref: e.ref, file_id: e.file_id, version: e.version, stage: e.stage || ''} : null;
+};
+/** What an OK shows: its own refs, else the earlier stage's page. */
+const decideShowRefs = (it: NeedsEntry): string[] => { const e = decideEarlier(it); return e ? [e.ref] : it.ask?.shows || []; };
+const decideShows = (it: NeedsEntry) => decideShowRefs(it).join('\n');
 /** What is held for an ask was read from other refs than it has now (a new page version, another page). */
 const decideOkStale = (v: AskOkView, it: NeedsEntry) => v.page !== decidePage(it) || v.shows !== decideShows(it);
 const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.items.has(k));
@@ -759,7 +768,7 @@ function decideOpinionsEnd() {
 /** What an opinion is about: the ask's sentence, choices, what it shows and its page's version. A bot that edits the
     ask or puts up a new page under the same id changes it. */
 const decideOpPrint = (it: NeedsEntry): string =>
-  JSON.stringify([it.line, it.ask?.line ?? '', it.ask?.choices ?? null, it.ask?.shows ?? [], decidePage(it)]);
+  JSON.stringify([it.line, it.ask?.line ?? '', it.ask?.choices ?? null, decideShowRefs(it), decidePage(it)]);
 /** An ask still waiting on its opinion: asked (or about to be) with none back yet. Its answers have no main button
     meanwhile, so the main one never changes under the person. Not while the route is off. */
 const decideOpWaits = (it: NeedsEntry | null | undefined): boolean => !!it && it.kind === 'ask' && !DEC_OP.off
@@ -970,12 +979,18 @@ function decidePaintSide(st: DecState) {
   // Who asked opens it, as beside an ask's heading: the asker, else the task's requester.
   const by = it.ask?.asked_by || it.task?.requester_id || asker;
   const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version, okView.notices, tag, okView.since, by) : null;
+  // An OK that shows the page of an earlier stage (#3784): the ask heads it, then one meta line, who asked, that
+  // stage, the page's version and the task, as a page's OK has.
+  const earlier = kind === 'ok' && !parts ? decideEarlier(it) : null, dot = '<span class="dc-dot" aria-hidden="true">·</span>';
+  const earlierMeta = earlier ? `<div class="dc-meta">${[by ? `<span class="dc-meta-who">${esc(actorLabel(by))}</span>` : '',
+    earlier.stage ? `<span>${esc(earlier.stage)}</span>` : '', `<span>v${earlier.version}</span>`, tag].filter(Boolean).join(dot)}</div>` : '';
   // A person's own task and a question: a short heading in the task's own words, the full question once under it.
   const short = parts ? null : decideHeadOf(it, kind), go = short ? decideGoOf(decideAboutText(decideAboutOf(it)?.task)) : null;
   const goBtn = go ? `<button type="button" class="ghost dc-go" data-dc="go" data-dc-href="${esc(go[1])}">${esc(go[0])}</button>` : '';
   const links = goBtn || open ? `<div class="dc-links">${goBtn}${open}</div>` : '';
   // The task's title heads a page's OK on a wide screen; a phone drops it, the page has its own heading (decide.css).
   const head = parts ? `<h3 class="dc-q dc-q-page">${esc(title)}</h3>${parts.sub}${parts.body}`
+    : earlier ? `<h3 class="dc-q">${esc(it.line)}</h3>${earlierMeta}`
     : short ? q('dc-q dc-q-short', short.head) + links
       + (short.full ? `<p class="dc-full">${esc(short.full)}</p>` : '')
     : q('dc-q', title || typed?.question || it.line) + open
@@ -1346,7 +1361,7 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
     const [kind, ...rest] = (shown?.subject ?? '').split(':'), ref = rest.join(':');
     if (!shown) {
       const before = it.ask?.page ? await decideRoundsRead(v, it) : null;
-      await decideShowsRead(v, it.ask?.shows || [], before);
+      await decideShowsRead(v, decideShowRefs(it), before);
     } else if (kind === 'email_send') {
       // The email's own preview is the one to show; its hash is the hash of that email, as frozen.
       const mail = await get<EmailSendPreview & {shown_hash?: string | null}>(`/v2/email/sends/${encodeURIComponent(ref)}`, {fresh: true});
