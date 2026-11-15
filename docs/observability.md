@@ -257,7 +257,8 @@ last hour under **Performance** on the Health page. `since` and `until` (epoch s
 instead of the last `minutes`, and `routes` lists up to 500 routes instead of 25: the load gate (`bench/load_gate`) reads
 each steady window this way. Each route row and the totals give `p99` beside `p50` and `p95`. `caller` (`human`, `bot`,
 `runner`, `service` or `anonymous`; `tico health metrics --caller human`) counts only that kind of caller's requests and
-ranks the routes by its count, so people's routes are not hidden behind bots' and runners'.
+ranks the routes by its count, so people's routes are not hidden behind bots' and runners'; the browsers' own timing
+sends (`POST /api/v2/web-timings`) count in the totals and are listed apart as `web_timings`.
 `GET /api/v2/ops/timing` still answers with the last 300 requests per route since the start.
 
 ### People's browser timings
@@ -267,10 +268,13 @@ Sentry settings, and to no other host (`ui/observability.ts`, `vitals`): `lcp`, 
 (Largest Contentful Paint; once per page load, for the screen it landed on, and only when the page was visible from the
 start), and `inp`, the slowest click or key press of each screen visit (Interaction to Next Paint, read from the
 browser's event timings). A visit ends when the person moves to another screen or hides the page; the readings go in
-one `sendBeacon` to `POST /api/v2/web-timings`. Browsers without these APIs send nothing.
+one `sendBeacon` to `POST /api/v2/web-timings`; a visit a screen change ended waits up to a second for the click
+that changed the screen, which the browser reports after the next paint. Before any click or key press, a screen
+change is the app moving an old link on at load: the load's LCP goes with the screen the person lands on. Browsers without these APIs send nothing.
 
-Only a person's session may send (bots and runners get 403). Each reading is a metric, a screen template (`/tasks`,
-`/bot/:bot`, never a full address or an id) and a value from 0 to 60,000 ms; anything else refuses the whole request.
+Only a person's session may send (bots and runners get 403). Each reading is a metric, a screen template (`/home`,
+`/task/:task`, `/thread/:thread`: the app's screen and a placeholder for its page, never a full address or an id; the
+list is `WEB_SCREENS` in `backend/flight.py`, kept the same as `SCREENS` in `ui/observability.ts`) and a value from 0 to 60,000 ms; anything else refuses the whole request.
 The server keeps only the value's histogram bucket per minute, metric and screen (`flight_web`): never who sent it,
 the device, the address, the element or the browser. One person sends at most 120 readings a minute; the rest are
 dropped and counted (`web.dropped`). Minutes become hours after two days and go after 14, as request rows do. The

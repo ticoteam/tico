@@ -18,11 +18,14 @@ declare const window: Window & typeof globalThis;
 const SCRIPT = fs.readFileSync(path.join(__dirname, '..', '..', 'build', 'ui', 'observability.js'), 'utf8');
 // A fictional page: a large heading to paint, and a button whose handler is busy for 120 ms (a slow interaction).
 const PAGE = `<!doctype html><html><body><h1 style="font-size:64px">Acme tasks</h1>
-<button id="slow" style="font-size:32px">Slow</button>
-<script>document.getElementById('slow').addEventListener('click', () => { const end = performance.now() + 120; while (performance.now() < end); });</script>
-<script src="/observability.ts"></script></body></html>`;
+<button id="slow" style="font-size:32px">Slow</button><button id="go">Go</button>
+<script>const busy = () => { const end = performance.now() + 120; while (performance.now() < end); };
+document.getElementById('slow').addEventListener('click', busy);
+document.getElementById('go').addEventListener('click', () => { busy(); location.hash = '#/thread/t9'; });</script>
+<script src="/observability.ts"></script>
+<script>if (location.hash === '#/chat') location.replace('#/tasks'); // the app's router moves old links on after load</script></body></html>`;
 
-async function open(browser: import('playwright').Browser, init?: () => void) {
+async function open(browser: import('playwright').Browser, init?: () => void, landing = '#/tasks') {
   const page = await browser.newPage();
   if (init) await page.addInitScript(init);
   const sent: Reading[][] = [], hosts = new Set<string>(), errors: string[] = [];
@@ -39,7 +42,7 @@ async function open(browser: import('playwright').Browser, init?: () => void) {
     if (url.pathname.startsWith('/api/')) return route.fulfill({status: 401, contentType: 'application/json', body: '{}'});
     return route.fulfill({contentType: 'text/html', body: PAGE});
   });
-  await page.goto('http://acme.test/#/tasks');
+  await page.goto('http://acme.test/' + landing);
   await page.waitForTimeout(300); // the heading's paint is the page's LCP
   return {page, sent, hosts, errors};
 }
@@ -64,7 +67,7 @@ async function until(test: () => boolean, what: string) {
       const {page, sent, hosts, errors} = await open(browser);
       await page.click('#slow');
       await page.waitForTimeout(200);
-      await page.evaluate(() => { window.location.hash = '#/chat/t1'; });
+      await page.evaluate(() => { window.location.hash = '#/thread/t1'; });
       await until(() => sent.length === 1, 'the /tasks visit');
       const first = sent[0]!;
       const lcp = first.filter(r => r.metric === 'lcp'), inp = first.filter(r => r.metric === 'inp');
@@ -79,8 +82,8 @@ async function until(test: () => boolean, what: string) {
       await page.click('#slow');
       await page.waitForTimeout(200);
       await hide(page);
-      await until(() => sent.length === 2, 'the /chat visit');
-      assert.deepEqual(sent[1]!.map(r => [r.metric, r.route]), [['inp', '/chat']]);
+      await until(() => sent.length === 2, 'the thread visit');
+      assert.deepEqual(sent[1]!.map(r => [r.metric, r.route]), [['inp', '/thread/:thread']]);
       // A visit with no interaction sends nothing.
       await page.evaluate(() => { window.location.hash = '#/goals'; });
       await page.evaluate(() => { window.location.hash = '#/runs'; });
@@ -92,6 +95,19 @@ async function until(test: () => boolean, what: string) {
       await page.close();
       console.log('web timings: LCP once and INP per screen visit, to this server only: ok');
     }
+    for (const [landing, screen] of [['#/task/abc-123', '/task/:task'], ['#/home', '/home'], ['#/chat', '/tasks']] as const) {
+      // The busiest screens, by their templates; an old link the app moves on at load (#/chat to Tasks) is named by
+      // where the person lands. A click whose handler changes the screen counts in the visit it ended.
+      const {page, sent, errors} = await open(browser, undefined, landing);
+      await page.click('#go');
+      await until(() => sent.length === 1, 'the first visit of ' + landing);
+      assert.deepEqual(sent[0]!.map(r => [r.metric, r.route]), [['lcp', screen], ['inp', screen]], landing);
+      assert.ok(sent[0]![1]!.ms >= 100, `the click that changed the screen is the visit's INP, got ${sent[0]![1]!.ms}`);
+      assert.ok(!JSON.stringify(sent).includes('abc-123'), 'no id leaves');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    console.log('web timings: task view, Home and a redirected old link send under their templates: ok');
     {
       // Loaded in a background tab: hidden from the start, so its LCP would be wrong and none is sent.
       const {page, sent, errors} = await open(browser, () => {

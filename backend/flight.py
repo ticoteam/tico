@@ -102,13 +102,19 @@ EDGES = [0.05 * 1.25**i for i in range(64)]
 # screen visit, per screen template. A reading is only its metric, screen and histogram bucket in the minute it came;
 # never who, which device, the URL or the element. `dropped` counts readings over a person's per-minute allowance.
 WEB_METRICS = ("lcp", "inp")
+# The app's screens (ui/observability.ts SCREENS, from ui/app/router.ts): `/<screen>`, or `/<screen>/<placeholder>` for
+# its pages, never with an id.
+WEB_SCREENS = (
+    "assistant automations bot calendar changelog chat company-page credentials decide docs file finance getting-started "
+    "goals growth health help home inbox integrations learnings library listening mail market meetings messaging notes "
+    "overview page person recordings replay repositories roadmap rules runs seat settings skills sql strategy style-guide "
+    "subscriptions tag tags task tasks team thread threads tools triggers updates usage webhooks welcome"
+).split()
+_PLACEHOLDERS = {"bot": ":bot", "person": ":person", "task": ":task", "thread": ":thread"}
 WEB_ROUTES = frozenset(
-    "/" + r
-    for r in (
-        "overview chat notes meetings recordings tasks board issues recurring settings credentials inbox changelog docs "
-        "runs goals"
-    ).split()
-) | {"/bot/:bot"}
+    route for screen in WEB_SCREENS for route in ("/" + screen, f"/{screen}/{_PLACEHOLDERS.get(screen, ':sub')}")
+)
+WEB_TIMINGS_ROUTE = "POST /api/v2/web-timings"  # the browsers' own sends: listed apart from people's routes
 WEB_MAX_MS = 60_000
 WEB_PER_MINUTE = 120  # readings one person sends in a minute, at most; the rest are dropped and counted
 WEB_BATCH = 20  # readings in one request, at most
@@ -1391,7 +1397,7 @@ CALLERS = ("human", "bot", "runner", "service", "anonymous")
 
 def _requests(c, since, until=None, top=25, caller=None):
     """Per route: n, errors, bytes, total time and p50/p95/p99 over the window. With `caller` (a CALLERS kind), only
-    that kind's calls count, and the routes are ranked by its requests rather than by total time."""
+    that kind's calls count, and the routes are ranked by its requests rather than by total time, with the browsers' timing sends apart (`web_timings`)."""
     merged = {}
     for r in c.execute(
         "SELECT route,caller,n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at>=? AND created_at<?"
@@ -1423,6 +1429,10 @@ def _requests(c, since, until=None, top=25, caller=None):
             }
         )
     rows.sort(key=(lambda r: (-r["n"], -r["total_ms"])) if caller else (lambda r: -r["total_ms"]))
+    # Ranked by one kind of caller, the browsers' own timing sends (one per screen visit) would take a place among the
+    # routes people wait on; they are counted in the totals and listed apart.
+    beacon = [r for r in rows if r["route"] == WEB_TIMINGS_ROUTE] if caller else []
+    ranked = [r for r in rows if r["route"] != WEB_TIMINGS_ROUTE] if caller else rows
     return {
         **({"caller": caller} if caller else {}),
         "n": sum(r["n"] for r in rows),
@@ -1430,7 +1440,8 @@ def _requests(c, since, until=None, top=25, caller=None):
         "p50": quantile(every, 0.5),
         "p95": quantile(every, 0.95),
         "p99": quantile(every, 0.99),
-        "routes": rows[:top],
+        "routes": ranked[:top],
+        **({"web_timings": beacon[0]} if caller and beacon else {}),
     }
 
 

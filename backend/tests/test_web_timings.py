@@ -213,3 +213,42 @@ def test_browser_minutes_become_hours_and_go_after_14_days(tmp_path):
 def test_only_a_person_passes_the_senders_check():
     assert flight.caller_kind(PEOPLE["ben-test"]) == flight.caller_kind(PEOPLE["ana-test"]) == "human"
     assert {flight.caller_kind(PEOPLE[t]) for t in ("qa-test", "runner-test")} == {"bot", "runner"}
+
+
+def test_the_browser_and_the_server_name_the_same_screens():
+    """A screen the page names but the server does not know would refuse the whole batch, silently losing it."""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "ui" / "observability.ts").read_text()
+    listed = re.search(r"const SCREENS = new Set<string \| undefined>\(\((.*?)\)\.split\(' '\)\);", source, re.S)
+    assert listed, "ui/observability.ts SCREENS moved: update this test"
+    screens = "".join(re.findall(r"'([^']*)'", listed.group(1))).split(" ")
+    assert sorted(screens) == sorted(flight.WEB_SCREENS)
+    assert {"/home", "/task/:task", "/thread/:thread", "/threads", "/bot/:bot", "/settings/:sub"} <= flight.WEB_ROUTES
+
+
+def test_task_view_and_home_are_kept_and_an_id_is_not(hub):
+    app, client = hub
+    good = [{"metric": "lcp", "route": "/task/:task", "ms": 900}, {"metric": "inp", "route": "/home", "ms": 60}]
+    assert post(client, "ben-test", good).status_code == 202
+    assert post(client, "ben-test", [{"metric": "lcp", "route": "/task/abc-123", "ms": 900}]).status_code == 422
+    assert [(r["metric"], r["route"]) for r in stored(app)] == [("inp", "/home"), ("lcp", "/task/:task")]
+
+
+def test_people_only_lists_the_browsers_timing_sends_apart(tmp_path):
+    store = Store(Settings(db_path=tmp_path / "hub.db", registry_dir=tmp_path), flight.Recorder())
+    store.initialize(seed_market=False)
+    now = 1_800_000_000
+    with store.transaction() as c:
+        for route, n in ((flight.WEB_TIMINGS_ROUTE, 500), ("GET /api/v2/tasks/{tid}", 100)):
+            c.execute(
+                "INSERT INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (now - 600, 60, route, "human", n, 0, 0, n, 1, 1, 1, json.dumps(_hist(*([1] * n)))),
+            )
+    with store.read() as c:
+        people = flight.view(c, minutes=60, sections=("requests",), now=now, caller="human")["requests"]
+        everyone = flight.view(c, minutes=60, sections=("requests",), now=now)["requests"]
+    assert [r["route"] for r in people["routes"]] == ["GET /api/v2/tasks/{tid}"]
+    assert people["web_timings"]["n"] == 500 and people["n"] == 600
+    assert "web_timings" not in everyone and len(everyone["routes"]) == 2
