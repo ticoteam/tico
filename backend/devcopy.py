@@ -595,6 +595,9 @@ KEEP = (
             "related_inputs",
             # Flow's opinion on each ask (backend/flow_opinions.py): kept with its tasks.
             "ask_opinions",
+            # Flow's suggested rules on each page check (backend/flow_suggestions.py): kept with their pipelines.
+            "flow_suggestions",
+            "flow_suggestion_runs",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
             "run_starts",
             "turns",

@@ -1246,6 +1246,55 @@ STABLE = [
         "FlowOpinions",
     ),
     (
+        "/api/v2/flow/suggestions",
+        "post",
+        "Needs you",
+        "getFlowSuggestions",
+        "Suggested rules for the stage page checks on every pipeline the caller may change (people only, no body): "
+        "short sentences drawn from people's send-back notes, each with how many of the send backs it rests on "
+        "(`notes_used` of `notes_of`). Open ones, and those added in the last 24 hours (for Undo). `pending` while one "
+        "is worked out or rewritten (ask again), else `ready`. A check with five send backs newer than its last "
+        "working-out is worked out off the request, with one metered call; nothing waits on a model",
+        "FlowSuggestions",
+    ),
+    (
+        "/api/v2/flow/suggestions/{suggestion_id}/add",
+        "post",
+        "Needs you",
+        "addFlowSuggestion",
+        "Add a suggested rule: Jev asks it of the next page attached at its check, as one more yes/no part beside the "
+        "check's own. 403 when the caller may not change the pipeline, 409 unless it is open and not being rewritten, "
+        "or when its check already has 20 added rules",
+        "FlowSuggestion",
+    ),
+    (
+        "/api/v2/flow/suggestions/{suggestion_id}/undo",
+        "post",
+        "Needs you",
+        "undoFlowSuggestion",
+        "Undo adding a suggested rule: the next page attached at its check is no longer asked it; a page already "
+        "judged keeps its verdict. 409 unless it is added",
+        "FlowSuggestion",
+    ),
+    (
+        "/api/v2/flow/suggestions/{suggestion_id}/dismiss",
+        "post",
+        "Needs you",
+        "dismissFlowSuggestion",
+        "Dismiss a suggested rule: it leaves the list for everyone who may change the pipeline. 409 unless it is open",
+        "FlowSuggestion",
+    ),
+    (
+        "/api/v2/flow/suggestions/{suggestion_id}/feedback",
+        "post",
+        "Needs you",
+        "feedbackFlowSuggestion",
+        "Tell Tico what to change in an open suggested rule (`text`, 1 to 500 characters): it is rewritten in place "
+        "off the request, with one metered call, and is `pending` until then; it keeps its text when that fails or no "
+        "model is to be had. 409 while it is already being rewritten or is not open",
+        "FlowSuggestion",
+    ),
+    (
         "/api/v2/meetings",
         "get",
         "Meetings",
@@ -3769,6 +3818,28 @@ SCHEMAS = {
                     }
                 )
             )
+        }
+    ),
+    "FlowSuggestions": obj(
+        {
+            "state": {"type": "string", "enum": ["ready", "pending"]},
+            "suggestions": items(ref("FlowSuggestionRow")),
+        }
+    ),
+    "FlowSuggestion": obj({"suggestion": ref("FlowSuggestionRow")}),
+    "FlowSuggestionRow": obj(
+        {
+            "id": "s",
+            "text": "s",
+            "state": {"type": "string", "enum": ["open", "added", "dismissed"]},
+            "pending": "b",
+            "notes_used": "i",
+            "notes_of": "i",
+            "pipeline_id": "s",
+            "pipeline": "s",
+            "stage_id": "s",
+            "stage": "s",
+            "requirement_id": "s",
         }
     ),
     "TaskBrief": obj(

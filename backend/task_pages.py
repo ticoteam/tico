@@ -132,14 +132,16 @@ def release_tags(conn: "sqlite3.Connection", task_id: str) -> list[str]:
     return sorted({str(found[0]) for found in cursor.fetchall()})
 
 
-def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tuple[str, Row]:
+def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tuple[str, Row, list[str]]:
     """What a page attached now is judged against: the rubric (the requirement's `rubric`, else its line, else its
-    kind's name) and the context Jev is shown beside it: `task` (Jev is shown this task's own title and spec, so the
+    kind's name), the context Jev is shown beside it: `task` (Jev is shown this task's own title and spec, so the
     same page on another task is another verdict), `heads` (the newest commit of each PR the task links, so a page that
     says the checks pass at the newest commit can be checked; at_head keeps every linked PR, one not read yet as None,
     and `attach` waits for it; any other page gets only the commits Tico has read, so a PR not read yet never holds a
-    page up), `release` (with_release)."""
+    page up), `release` (with_release); and the rules people added to the check from Flow's suggested rules
+    (flow_suggestions.added), each asked as one more part beside the rubric's own."""
     from .item_sources import github as F
+    from . import flow_suggestions as FS
     from . import task_requirements as R
 
     settings: Row = requirement.get("settings") or {}
@@ -152,7 +154,8 @@ def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tu
         context["heads"] = heads
     if settings.get("with_release"):
         context["release"] = release_tags(conn, row["id"])
-    return rubric, context
+    rules: list[str] = FS.added(conn, str(requirement["id"]))
+    return rubric, context, rules
 
 
 def attach(
@@ -217,14 +220,14 @@ def attach(
         _refuse(conn, by, "lint", wrong, task_id)
     if R.quoted_back(R.last_sent_back(conn, task_id, found["id"]), R.parts_of(saying)):
         _refuse(conn, by, "lint", R.QUOTED, task_id)
-    rubric, context = judged_against(conn, row, found)
+    rubric, context, rules = judged_against(conn, row, found)
     heads: dict[str, str | None] = context.get("heads") or {}
     unread = sorted(ref_ for ref_, sha in heads.items() if not sha)
     if unread:
         _refuse(
             conn, by, "task_requirement", f"Tico is still reading {unread[0]} from GitHub. Try again soon.", task_id
         )
-    key = V.rubric_hash(rubric, context)
+    key = V.rubric_hash(rubric, context, rules)
     visit_id = row["visit"]["id"]
     was = current(conn, visit_id, found["id"])
     if was and (was["file_id"], int(was["version"]), was.get("rubric_hash")) == (file_id, version, key):
@@ -245,7 +248,7 @@ def attach(
             json.dumps(context.get("heads") or {}),
             by,
             key,
-            json.dumps({"rubric": rubric, "context": context}),
+            json.dumps({"rubric": rubric, "context": context, **({"rules": rules} if rules else {})}),
             now,
         ),
     )
