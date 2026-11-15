@@ -3,16 +3,18 @@ bot Homes: each reply names the run that wrote it, and the per-message check rea
 messages they reply to together, never one reply at a time. Priming changes no row or count. Fictional people only:
 ana (owner), ben (bot admin) and cara."""
 
-from backend import read_cache, threads
+from backend import read_cache, thread_rail, threads
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.helpers.api import get, headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.pages import page
 from backend.tests.helpers.task_privacy_reads import traced_get
 from backend.tests.helpers.thread_rail_batches import home as _home, runner, seed_replies  # noqa: F401  (fixture)
 
 
-def _first_page(api, token="ben-test"):
-    page, statements = traced_get(api, "threads/rail", token)
+def _first_page(api, token="ben-test", path="threads/rail"):
+    page, statements = traced_get(api, path, token)
     page.pop("seq", None)
     return page, statements
 
@@ -33,6 +35,38 @@ def test_the_rails_first_page_stays_flat_as_bot_replies_grow(api):
         assert row["id"] == home["id"] and row["new_count"] == size, row
     print(f"rail first page: cold {cold[5]} -> {cold[50]}, warm {warm[5]} -> {warm[50]} statements")
     assert cold[50] - cold[5] <= 15 and warm[50] - warm[5] <= 15, (cold, warm)
+
+
+def test_catch_up_stays_flat_as_bot_replies_grow(api):
+    """Catch up shares the rail's walk and shows each card's new messages, at most CATCH_UP_MESSAGES a card: once a card
+    is full (50 replies), 150 add at most 15 statements."""
+    home = _home(api, "bot:ops")
+    counts = {}
+    done = 0
+    for size in (50, 150):
+        seed_replies(api, home["id"], size - done, f"c{size}")
+        done = size
+        page, counts[size] = _first_page(api, path="threads/catch-up")
+        assert [i["new_count"] for i in page["items"]] == [size], page["items"]
+    assert counts[150] - counts[50] <= 15, counts
+
+
+def test_a_bots_home_replies_are_checked_once_a_load(api, monkeypatch):
+    """The walk counts a bot's Home by `_home_replies` alone, so it does not check the same replies again (and spend
+    CATCH_UP_HIDDEN on them) for a count it would throw away."""
+    home = _home(api, "bot:ops")
+    seed_replies(api, home["id"], 30, "once")
+    checked = []
+    real = threads.message_readable
+
+    def spy(c, v, message, **kw):
+        checked.append(dict(message)["id"])
+        return real(c, v, message, **kw)
+
+    monkeypatch.setattr(threads, "message_readable", spy)
+    assert _home_count(api, home["id"]) == 30
+    repeats = [mid for mid in set(checked) if checked.count(mid) > 1]
+    assert not repeats, f"{len(repeats)} messages checked more than once"
 
 
 def test_batched_checks_return_the_same_rail_catch_up_and_badge(api, monkeypatch):
@@ -67,3 +101,42 @@ def test_batched_checks_return_the_same_rail_catch_up_and_badge(api, monkeypatch
     # Ben may not read the private task, so the reply whose run read its comment stays hidden from him.
     [row] = [r for r in batched["threads/rail", "ben-test"]["unread"] if r["id"] == home["id"]]
     assert row["new_count"] == 3, row
+
+
+def _home_count(api, home_id, token="ben-test"):
+    rows = [r for r in get(api, "threads/rail", token)["unread"] if r["id"] == home_id]
+    return rows[0]["new_count"] if rows else 0
+
+
+def test_a_reply_whose_run_read_a_refused_page_stays_hidden_on_every_load(api, monkeypatch):
+    """AC-2 (spec P09): a reply inherits the file refusal of what its run read (task_privacy.attempt_pages_readable).
+    With the page deleted after the run, that reply is hidden on the first load after a provenance change (runs primed
+    whole) and on the loads after it (only the runs' messages primed), the same as with no priming at all; and again
+    once the Home holds shared-room history, where every message takes the whole check."""
+    _, attempt = turn(api)
+    fid = page(api, attempt).json()["page"]["file_id"]
+    home = _home(api, "bot:ops")
+    seed_replies(api, home["id"], 3, "pg")
+    with api.app.state.store.transaction() as c:
+        named = threads.post(c, "human:ben", home["id"], "See the page", refs={"target": {"file": fid}})
+        c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES('run-pg-0',?)", (named["id"],))
+        c.execute("UPDATE bot_files SET state='deleted' WHERE id=?", (fid,))
+    primed = thread_rail._prime
+
+    def loads():
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE provenance_clock SET value=value+1 WHERE id=1")
+        return [_home_count(api, home["id"]) for _ in range(3)]
+
+    for legacy in (False, True):
+        if legacy:
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE messages SET legacy_audience='shared:ops', restricted=1 WHERE id=?", (named["id"],))
+        monkeypatch.setattr(thread_rail, "_prime", primed)
+        batched = loads()
+        monkeypatch.setattr(thread_rail, "_prime", lambda c, rows: None)
+        alone = loads()
+        assert batched == alone, (legacy, batched, alone)
+        assert batched[0] in (2, 3) and len(set(batched)) == 1, (legacy, batched)
+        if not legacy:
+            assert batched == [2, 2, 2], batched  # the reply whose run read the deleted page is hidden

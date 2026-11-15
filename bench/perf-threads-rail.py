@@ -43,7 +43,7 @@ def median_ms(api, cold):
 def test_rail_statements_and_time_by_bot_replies(api, monkeypatch):
     home = api.get("/api/v2/threads/home/bot:ops", headers=headers("ben-test")).json()
     primed = thread_rail._prime
-    done = 0
+    done, primed_sql = 0, {}
     for size in SIZES:
         seed_replies(api, home["id"], size - done, f"b{size}")
         done = size
@@ -59,9 +59,12 @@ def test_rail_statements_and_time_by_bot_replies(api, monkeypatch):
                 top = collections.Counter(re.sub(r"'[^']*'|\\b\\d+\\b", "?", q)[:70] for q in statements)
                 row[label + "_top"] = top.most_common(1)
             (bs, bms), (as_, ams) = row["before"], row["after"]
+            primed_sql[size, cold] = as_
             print(
                 f"replies={size:<4} {'cold' if cold else 'warm'}  unprimed: {bs:>5} statements {bms:8.1f} ms   "
                 f"primed: {as_:>5} statements {ams:8.1f} ms   x{bms / ams:.1f}   most repeated primed: "
                 f"{row['after_top']}",
                 flush=True,
             )
+    for cold in (True, False):  # AC-1: 500 replies within the 5-reply count plus 15
+        assert primed_sql[500, cold] - primed_sql[5, cold] <= 15, primed_sql

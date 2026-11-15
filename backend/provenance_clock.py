@@ -97,7 +97,8 @@ def cached(c, key, build):
 
 
 def known(c, key):
-    """Whether `cached(c, key, ...)` would answer from the shared cache now, so a page can prime only the rest."""
+    """Whether `cached(c, key, ...)` would answer from the shared cache now, so a page can prime only the rest. Inside a
+    writer transaction `cached` rebuilds instead; there a True here only skips priming (slower, never wrong)."""
     cache = getattr(c, 'provenance_cache', None)
     if cache is None:
         return False
