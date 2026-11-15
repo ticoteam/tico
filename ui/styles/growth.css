@@ -434,7 +434,7 @@ tr.grs-flash>*{animation:grs-row 1.6s var(--ease-out)}
 .grl-headline{margin:6px 0 10px;font-size:14px;line-height:1.45;color:var(--ink)}
 .grl-frame{position:relative}
 .grl-label,.grl-cols span,.grl-k{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted)}
-.grl-strip{padding-left:14px;padding-right:14px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 0}
+.grl-strip{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 14px}
 .grl-cols,.grl-cells{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr) minmax(0,2fr) minmax(0,1.6fr) minmax(0,1.2fr);grid-template-areas:"src ch num eco kpi";gap:10px;align-items:start}
 .grl-c-src{grid-area:src;padding-left:14px}.grl-c-ch{grid-area:ch}.grl-c-num{grid-area:num}.grl-c-eco{grid-area:eco}.grl-c-kpi{grid-area:kpi;padding-right:14px}
 /* Narrower than the five columns need (the chat pane open, a small laptop): the channel over its sources, the unit
