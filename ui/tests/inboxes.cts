@@ -75,7 +75,8 @@ const scenarios = {
       await page.waitForFunction((want: string) => location.hash === want, to).catch(() => assert.fail(`${from} leads to ${to}`));
     }
     await page.locator('#tools-inbox [data-ib-section=texts]').waitFor();
-    assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, 'Tools is current');
+    // The sidebar marks the page once it has drawn: wait for the mark rather than read it in the same instant.
+    await page.locator('#side a[data-nav="tools"].cur').waitFor({state: 'attached'}).catch(() => assert.fail('Tools is current'));
     // A reload keeps the page it was on.
     await page.evaluate(() => { location.hash = '#/tools/mailbox/mb-support'; });
     await page.locator('#inbox-head h1', {hasText: 'support@acme.example'}).waitFor();
