@@ -81,8 +81,14 @@ interface DecState {
       all of it). */
   stage: string;
   pipeline: string;
-  /** Snoozed here this visit, for "All done · 2 snoozed". */
+  /** Own tasks snoozed here this visit, for "All done · 2 snoozed" (with the asks snoozed: `snoozedAsks`). */
   snoozed: number;
+  /** The asks the person snoozed for themselves (GET /v2/needs-you/snoozed), read on the end screen; null until then.
+      `snoozedOpen`: their list is open under "N snoozed". */
+  snoozedAsks: NeedsEntry[] | null;
+  snoozedOpen: boolean;
+  /** Snooze's menu is on Other: the time box shows. */
+  snzOther: boolean;
   /** The items shown this visit: they keep their place when Tico's scores reorder the rest (decideScoreOrder). */
   seen: Set<string>;
   /** Screenshots and files added to the note of the item on screen (pasted, dropped or picked with 📎). */
@@ -118,7 +124,10 @@ let DEC_VOICE = false;                      // the mic is on: voice is not built
 const DEC_START_MS = 600;                   // "Getting ready to flow" over the first item, which is usable under it
 /** Tico's line on an item and the answer it would press (decideLineSet), by item id. */
 const DEC_LINES = new Map<string, {line: string; pick: string}>();
-const DEC_SNOOZE: [string, string][] = [['hour', '1 hour'], ['day', 'Tomorrow'], ['week', 'Next week']];
+/** Snooze's choices, one menu for an ask and for your own task: exact spans from now, then Other (a time of your own). */
+const DEC_SNOOZE: [string, string][] = [['hour', '1 hour'], ['day', '1 day'], ['week', '1 week'], ['month', '1 month']];
+/** Snooze, drawn as the mic and the clip are: an alarm clock. */
+const DEC_SNOOZE_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="13" r="7.5"/><path d="M12 9.5V13l2.5 1.5M4.5 4.5 2.8 6.2M19.5 4.5l1.7 1.7"/></svg>';
 /** ↩ for the undo in the top bar, drawn as the mic and the clip are. */
 const DEC_UNDO_ICON = '<svg class="dc-bar-i" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
 const DEC_MIC = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
@@ -252,6 +261,7 @@ function decideDialog(): HTMLDialogElement {
     // The person's own typing in Notes: Tico's note never fills it after that (decidePaintSide).
     if (ev.isTrusted && box.id === 'dc-notes' && DEC.at) DEC_OP.typed.add(DEC.at);
     if (box.id === 'dc-sug-say') DEC_SUG.draft = box.value;
+    if (box instanceof HTMLInputElement && box.id === 'dc-snz-at') box.setCustomValidity('');
     decideNeedsText(root);
   });
   // A screenshot pasted into the note, or a file dropped on the answer side, joins the note (copied text pastes as text).
@@ -272,6 +282,17 @@ function decideDialog(): HTMLDialogElement {
     if (DEC && ev.key === 'Enter' && eventElement(ev)?.matches('input#dc-sug-say')) {
       ev.preventDefault(); (d.querySelector<HTMLButtonElement>('[data-dc="sug-send"]'))?.click(); return;
     }
+    // Snooze's menu: Enter in Other's time box snoozes until it; ↑ ↓ move between its choices.
+    const snz = DEC?.more === 'snooze' ? eventElement(ev)?.closest('.dc-snzw') : null;
+    if (snz && ev.key === 'Enter' && eventElement(ev)?.matches('input#dc-snz-at')) {
+      ev.preventDefault(); snz.querySelector<HTMLButtonElement>('[data-dc="snooze-at"]')?.click(); return;
+    }
+    if (snz && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && eventElement(ev)?.matches('[role="menuitem"], [data-dc="snooze"]')) {
+      ev.preventDefault();
+      const all = [...snz.querySelectorAll<HTMLElement>('.dc-snz [role="menuitem"], #dc-snz-at')], i = all.indexOf(document.activeElement as HTMLElement);
+      all[(i + (ev.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus();
+      return;
+    }
     if (!DEC || ev.metaKey || ev.ctrlKey || ev.altKey || eventElement(ev)?.closest('input, textarea, select')) return;
     if (ev.key === 'ArrowLeft') { ev.preventDefault(); decideStep(DEC, -1); }
     if (ev.key === 'ArrowRight') { ev.preventDefault(); decideStep(DEC, 1); }
@@ -279,7 +300,7 @@ function decideDialog(): HTMLDialogElement {
   // The pinned row's height changes with the width (a row that wraps) and the safe area.
   window.addEventListener('resize', () => { if (d?.open) decideBarRoom(); });
   // Esc with the menu open closes the menu only.
-  d.addEventListener('cancel', ev => { ev.preventDefault(); if (!decideMenu(false)) decideStop(); });
+  d.addEventListener('cancel', ev => { ev.preventDefault(); if (!decideMenu(false) && !(DEC && decideSnoozeClose(DEC))) decideStop(); });
   d.addEventListener('close', () => { if (!d.open) decideStop(); });
   document.body.appendChild(d);
   return d;
@@ -298,7 +319,7 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   if (decideNoFlow()) return false;
   const fresh = !DEC;
   const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), more: '', busy: false, error: '',
-    barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, pipeline, snoozed: 0, files: [], open: new Set(),
+    barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, pipeline, snoozed: 0, snoozedAsks: null, snoozedOpen: false, snzOther: false, files: [], open: new Set(),
     seen: new Set()};
   const to0 = (s: string, p: string) => { st.stage = s; st.pipeline = p; st.order = []; st.gone.clear(); st.at = null; };
   // Opening one item from a list walks the list it is in; Flow on a stage or a pipeline walks it, from its first item.
@@ -435,7 +456,7 @@ function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefin
 
 // ---- moving through
 function decideGo(st: DecState, id: string | null) {
-  st.at = id; st.more = ''; st.error = ''; st.busy = false; st.files = []; DEC_SENT = ''; DEC_ASK_NOTE = '';
+  st.at = id; st.more = ''; st.snzOther = false; st.error = ''; st.busy = false; st.files = []; DEC_SENT = ''; DEC_ASK_NOTE = '';
   if (id) st.seen.add(id);
   decideRender(st);
 }
@@ -511,12 +532,29 @@ async function decideWalkTo(stage: string, pipeline: string) {
   if (!DEC) return;
   if (!decideOpen('', decideSource(), stage, pipeline)) decideOpen('', decideSource());
 }
-/** Nothing left: All done, how many were snoozed on this visit, and the suggested rules for the person's stages. */
+/** Nothing left: All done, how many are snoozed (your own tasks snoozed on this visit, and every ask you snoozed for
+    yourself that is still snoozed), and the suggested rules for the person's stages. With asks snoozed, "N snoozed"
+    opens their list: each by its task's title, with ↩ to bring it back now. */
 function decideDoneHTML(st: DecState): string {
-  const sug = decideSugHTML();
+  const sug = decideSugHTML(), asks = st.snoozedAsks, n = st.snoozed + (asks?.length || 0);
+  const list = st.snoozedOpen && asks?.length ? `<ul class="dc-snzl" aria-label="Snoozed">${asks.map(a => {
+    const title = a.task?.title || a.line, back = `Unsnooze${a.snoozed_until ? ` · snoozed until ${timeSaid(a.snoozed_until)}` : ''}`;
+    return `<li><span class="dc-snzl-t" title="${esc(a.line)}">${esc(title)}</span><button type="button" class="dc-icon" data-dc="unsnooze" data-dc-ask="${esc(a.id)}" aria-label="${esc(`Unsnooze: ${title}`)}" title="${esc(back)}">${DEC_UNDO_ICON}</button></li>`;
+  }).join('')}</ul>` : '';
+  const said = !n ? '' : asks?.length
+    ? `<button type="button" class="linkish dc-sub dc-snzd" data-dc="snoozed" aria-expanded="${st.snoozedOpen}">${n} snoozed</button>`
+    : `<p class="dc-sub">${n} snoozed</p>`;
   return `<div class="dc-done${sug ? ' has' : ''}">${flowMarkHTML(48)}<h2>All done</h2>`
-    + (st.snoozed ? `<p class="dc-sub">${st.snoozed} snoozed</p>` : '') + '<button type="button" class="ghost" data-dc="close">Close</button>'
-    + sug + '</div>';
+    + said + list + '<button type="button" class="ghost" data-dc="close">Close</button>' + sug + '</div>';
+}
+let DEC_SNZ_READ = false;                    // the snoozed asks are being read
+/** The asks the person snoozed for themselves, read for the end screen (decideDoneHTML). */
+async function decideSnoozedRead(st: DecState) {
+  const r = await v2Get<{items?: NeedsEntry[]; next?: string | null}>('/v2/needs-you/snoozed', {fresh: true});
+  if (DEC !== st || !r) return;
+  st.snoozedAsks = r.items || [];
+  needsWakeAt(r.next || null);
+  if (!st.at) decideRender(st);
 }
 
 // ---- suggested rules (backend/flow_suggestions.py)
@@ -874,6 +912,7 @@ function decideRender(st: DecState) {
     $('.dc-side', root)!.innerHTML = decideDoneHTML(st);
     decideBarRoom();
     decideSugStart(st);
+    if (st.snoozedAsks === null && !DEC_SNZ_READ) { DEC_SNZ_READ = true; void decideSnoozedRead(st).finally(() => { DEC_SNZ_READ = false; }); }
     return;
   }
   // Coming to an ask: what it shows is read once; held content from other refs (a new version came while it was off
@@ -1009,7 +1048,7 @@ function decidePaintSide(st: DecState) {
         // Ask back only to someone it reaches: a question no bot or person asked (a stage's) has no one to ask.
         decideReplyTo(it) ? decideBtn('askback', 'Ask back', false, ' data-dc-needs="#dc-other" disabled title="Ask what they mean; the question stays open"') : ''}</div>${decideHeldHTML(it, '#dc-other')}`;
   } else if (kind === 'yours') {
-    body = `${decideReplyHTML(st, it)}<div class="dc-acts dc-acts-row">${decideBtn('done', 'Done', true, busy)}${decideBtn('snooze', 'Snooze', false, busy)}${decideBtn('give', 'Give to…', false, busy)}</div>${decideMoreHTML(st, it)}`;
+    body = `${decideReplyHTML(st, it)}<div class="dc-acts dc-acts-row">${decideBtn('done', 'Done', true, busy)}${decideSnoozeHTML(st, 'Snooze')}${decideBtn('give', 'Give to…', false, busy)}</div>${decideMoreHTML(st, it)}`;
   } else if (kind === 'stuck') {
     // Stuck because someone can't see the private task: one button lets exactly them see it and moves it on, and says
     // what they get before the press (task #392). Else Try again.
@@ -1032,11 +1071,13 @@ function decidePaintSide(st: DecState) {
   const caret = same && typing instanceof HTMLTextAreaElement && host.contains(typing) && typing.id
     ? {id: typing.id, from: typing.selectionStart, to: typing.selectionEnd, dir: typing.selectionDirection ?? undefined} : null;
   host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
-  // Skip sits in the answer row, on every width; an item with no row of its own (a typed choice) gets one.
-  if (decideLive(st).length > 1) {
+  // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there. An
+  // item with no row of its own (a typed choice) gets one.
+  const ask = it.kind === 'ask';
+  if (ask || decideLive(st).length > 1) {
     const card = host.firstElementChild!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
-    const skip = `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
-    if (row) row.insertAdjacentHTML('beforeend', skip); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${skip}</div>`);
+    const end = ask ? decideSnoozeHTML(st) : `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
+    if (row) row.insertAdjacentHTML('beforeend', end); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${end}</div>`);
   }
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
@@ -1056,6 +1097,7 @@ function decidePaintSide(st: DecState) {
   const back = caret ? host.querySelector<HTMLTextAreaElement>(`#${caret.id}`) : null;
   if (caret && back && !back.disabled) { back.focus({preventScroll: true}); back.setSelectionRange(caret.from, caret.to, caret.dir); }
   decideHeldWire(st, host);
+  decideSnoozePlace(host);
   decideLinePick(it, host);
   decideNeedsText($('.decide')!);
   decideBarRoom();
@@ -1288,11 +1330,79 @@ function decidePaintSideKeepGive(st: DecState, it: NeedsEntry) {
   const now = decideGiveBtn(), e = to ? giveToEntries(to).find(x => giveToIs(x, to)) : undefined;
   if (now && e) giveToFieldSet(now, e);
 }
-/** Snooze, Give to… and Move back open their choices under the buttons. */
+/** Snooze and its menu, at the end of an ask's answer row (an icon, no word) or in your own task's row (`word`): 1 hour,
+    1 day, 1 week, 1 month, then Other, a time of your own in the same menu. One menu for both. It opens upward from a
+    row at the bottom and downward from one near the top (decideSnoozePlace), at the row's end, off the other buttons. */
+function decideSnoozeHTML(st: DecState, word = ''): string {
+  const busy = st.busy ? ' disabled' : '', open = st.more === 'snooze';
+  const btn = word
+    ? `<button type="button" class="ghost" data-dc="snooze" aria-haspopup="menu" aria-expanded="${open}"${busy}>${esc(word)}</button>`
+    : `<button type="button" class="dc-icon dc-snz-b" data-dc="snooze" aria-label="Snooze" title="Snooze" aria-haspopup="menu" aria-expanded="${open}"${busy}>${DEC_SNOOZE_ICON}</button>`;
+  if (!open) return `<span class="dc-snzw">${btn}</span>`;
+  const item = (k: string, label: string) => `<button type="button" role="menuitem" class="dc-mi" data-dc="snooze-${k}"${busy}>${esc(label)}</button>`;
+  // The time box starts an hour on, to the minute, in the person's own clock (datetime-local has no zone).
+  const local = (at: Date) => new Date(at.getTime() - at.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+  const soon = new Date(Date.now() + 3600_000), now = new Date(Date.now() + 60_000), year = new Date(Date.now() + 365 * 86_400_000);
+  const other = st.snzOther
+    ? `<span class="dc-snz-at"><input type="datetime-local" id="dc-snz-at" aria-label="Snooze until" value="${local(soon)}" min="${local(now)}" max="${local(year)}"${busy}>`
+      + `<button type="button" class="dc-icon" data-dc="snooze-at" aria-label="Snooze until this time" title="Snooze"${busy}>✓</button></span>`
+    : item('other', 'Other');
+  return `<span class="dc-snzw">${btn}<span class="dc-snz" role="menu" aria-label="Snooze">${DEC_SNOOZE.map(([k, l]) => item(k, l)).join('')}${other}</span></span>`;
+}
+/** The open Snooze menu goes up from its button, unless there is no room above it (a row near the top): then down. */
+function decideSnoozePlace(host: HTMLElement) {
+  const menu = host.querySelector<HTMLElement>('.dc-snz'), btn = menu?.parentElement?.querySelector<HTMLElement>('[data-dc="snooze"]');
+  if (!menu || !btn) return;
+  const top = btn.getBoundingClientRect().top, room = (host.closest('.decide')?.querySelector('.dc-head')?.getBoundingClientRect().bottom || 0);
+  menu.classList.toggle('dc-snz-down', top - room < menu.offsetHeight + 8);
+}
+/** Closes Snooze's menu, focus back on its button; true when it was open. */
+function decideSnoozeClose(st: DecState): boolean {
+  if (st.more !== 'snooze') return false;
+  st.more = ''; st.snzOther = false;
+  decidePaintSide(st);
+  ($('.decide [data-dc="snooze"]') as HTMLElement | null)?.focus({preventScroll: true});
+  return true;
+}
+/** Other's time box in Snooze's menu, when it shows. */
+const decideSnzBox = () => document.querySelector<HTMLInputElement>('.decide #dc-snz-at');
+/** When a choice of Snooze's menu ends: an exact span from now (a month: the same day and time next month), or the
+    time typed in Other, which must be to come. Null when it is not. */
+function decideSnoozeUntil(what: string): string | null {
+  const now = new Date(), span = {hour: 3600_000, day: 86_400_000, week: 7 * 86_400_000}[what];
+  if (span) return new Date(now.getTime() + span).toISOString();
+  if (what === 'month') { const at = new Date(now); at.setMonth(at.getMonth() + 1); return at.toISOString(); }
+  const typed = decideSnzBox()?.value || '', at = typed ? new Date(typed) : null;
+  return at && !Number.isNaN(at.getTime()) && at.getTime() > now.getTime() ? at.toISOString() : null;
+}
+/** Snoozes the item on screen until `until`: an ask for you alone (POST /v2/needs-you/snooze: it stays in everyone
+    else's list, and its bot is not told), your own task as a whole (POST /v2/tasks/{id}/snooze). Undo brings it back. */
+async function decideSnooze(st: DecState, it: NeedsEntry, until: string) {
+  st.more = ''; st.snzOther = false;
+  if (it.kind === 'ask') {
+    // Counted on the end screen from the snoozed asks as the server has them (decideSnoozedRead), read again after this.
+    await decideDo(st, it, 'Snoozed', async () => { const r = await askSnooze(it.id, until); st.snoozedAsks = null; needsWakeAt(until); return r; },
+      () => async () => { await askUnsnooze(it.id); st.snoozedAsks = null; });
+    return;
+  }
+  const taskId = decideTaskId(it), ver = it.task?.version ?? null;
+  await decideDo(st, it, 'Snoozed', async () => { const r = await taskSnooze(taskId, until, ver); st.snoozed++; return r; },
+    () => async () => { await taskUnsnooze(taskId); st.snoozed = Math.max(0, st.snoozed - 1); });
+}
+/** ↩ on a snoozed ask in the end screen's list: it is back in your Needs you now, and on screen. */
+async function decideUnsnooze(st: DecState, b: HTMLElement, id: string) {
+  b.toggleAttribute('disabled', true);
+  try { await askUnsnooze(id); } catch (e) { b.toggleAttribute('disabled', false); toast(errorMessage(e, 'Not unsnoozed.'), true); return; }
+  if (DEC !== st) return;
+  st.snoozedAsks = (st.snoozedAsks || []).filter(a => a.id !== id);
+  await v2Refresh();
+  if (DEC !== st) return;
+  decideSync(st, decideSource());
+  if (st.items.has(id)) decideGo(st, id); else decideRender(st);
+}
+/** Give to… and Move back open their choices under the buttons (Snooze opens its menu at its button: decideSnoozeHTML). */
 function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   const busy = st.busy ? ' disabled' : '';
-  if (st.more === 'snooze')
-    return `<div class="dc-more">${DEC_SNOOZE.map(([k, label]) => decideBtn(`snooze-${k}`, label, false, busy)).join('')}</div>`;
   if (st.more === 'give')
     return `<div class="dc-more">${giveToFieldHTML({id: 'dc-to', label: 'Give to', task: decideGiveTask(it), current: it.task?.owner_id})}${decideBtn('give-to', 'Give', true, ' data-dc-needs="#dc-to" disabled')}</div>`;
   if (st.more === 'back') {
@@ -1595,6 +1705,8 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   const link = el?.closest<HTMLAnchorElement>('.dc-thing a[href]'), there = link ? decideAppHref(link.getAttribute('href') || '') : '';
   if (there && !ev.defaultPrevented && ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey) { ev.preventDefault(); decideGoThere(st, there); return; }
   if (!el?.closest('.dc-where')) decideMenu(false);
+  // A click off Snooze's open menu only closes it: never an answer under it by a tap that meant to dismiss.
+  if (st.more === 'snooze' && !el?.closest('.dc-snzw')) { decideSnoozeClose(st); return; }
   const at = decideCurrent(st);
   // The version menu closes on any click but its control's own.
   const vmenu = at ? `${at.id}:vmenu` : '';
@@ -1640,6 +1752,8 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   if (what === 'skip') { decideSkip(st); return; }
   if (what === 'go' && b.dataset.dcHref) { decideGoThere(st, b.dataset.dcHref); return; }
   if (what === 'undo') return;            // the bar's own handler
+  if (what === 'snoozed') { st.snoozedOpen = !st.snoozedOpen; decideRender(st); ($('.decide [data-dc="snoozed"]') as HTMLElement | null)?.focus(); return; }
+  if (what === 'unsnooze' && b.dataset.dcAsk) { await decideUnsnooze(st, b, b.dataset.dcAsk); return; }
   if (what === 'file-drop' || what === 'file-retry') {
     const f = st.files.find(x => String(x.key) === b.dataset.dcKey), at = decideCurrent(st);
     if (!f || !at) return;
@@ -1693,18 +1807,22 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;
     case 'let-see': { const whom = it.task?.turn?.share || []; if (whom.length) await decideLetSee(st, it, whom); return; }
     case 'close-task': await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver), decideUndoReopen(taskId)); return;
-    case 'snooze': case 'give': case 'back':
+    case 'snooze':
+      if (decideSnoozeClose(st)) return;
+      st.more = 'snooze'; st.snzOther = false; decidePaintSide(st);
+      ($('.decide .dc-snz [role="menuitem"]') as HTMLElement | null)?.focus({preventScroll: true});
+      return;
+    case 'give': case 'back':
       st.more = st.more === what ? '' : what; decidePaintSide(st); return;
-    case 'snooze-hour': case 'snooze-day': case 'snooze-week': {
-      // Every choice is a moment (the server keeps a date-time to the minute): an hour on, or 8:00 tomorrow or seven
-      // days on by this person's clock. Not a bare date, which the server reads as midnight in the team's zone: late in
-      // the evening west of that zone, that midnight has already passed.
-      const day = new Date();
-      day.setDate(day.getDate() + (what === 'snooze-day' ? 1 : 7));
-      day.setHours(8, 0, 0, 0);
-      const until = what === 'snooze-hour' ? new Date(Date.now() + 3600_000).toISOString() : day.toISOString();
-      await decideDo(st, it, 'Snoozed', async () => { const r = await taskSnooze(taskId, until, ver); st.snoozed++; return r; },
-        () => async () => { await taskUnsnooze(taskId); st.snoozed = Math.max(0, st.snoozed - 1); });
+    case 'snooze-other':
+      st.snzOther = true; decidePaintSide(st);
+      decideSnzBox()?.focus({preventScroll: true});
+      return;
+    case 'snooze-hour': case 'snooze-day': case 'snooze-week': case 'snooze-month': case 'snooze-at': {
+      // Every choice is a moment, never a bare date (which the server reads as midnight in the team's zone).
+      const until = decideSnoozeUntil(what.slice('snooze-'.length));
+      if (!until) { const box = decideSnzBox(); box?.setCustomValidity('A time to come'); box?.reportValidity(); box?.focus(); return; }
+      await decideSnooze(st, it, until);
       return;
     }
     case 'give-to': { const to = decideTo(); if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => taskReassign(taskId, to, ver)); return; }

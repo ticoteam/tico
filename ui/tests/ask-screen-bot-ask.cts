@@ -2,7 +2,7 @@ import type {Route} from 'playwright';
 // Offline browser check of a bot's question on the ask screen (Tasks spec "Bots ask people a question with choices",
 // picture 2, task #373), against a fake of the new routes, on a 390 px phone and on a desktop:
 // - AC-3: the question, "Why it matters: …", each choice with its line, "Recommended" on the one the bot recommends,
-//   then "I don't know, explain" and "Give it back" on one row with Skip;
+//   then "I don't know, explain" and "Give it back" on one row with Snooze;
 // - AC-13: "Write to <bot>" and Send on every bot question, with or without choices; Send lines up with the box's right
 //   edge; a sent text is a comment on the task naming the ask, and the question stays on screen, open;
 // - Send goes the way the reply box's does: a text a team rule stops says so and keeps the words, never "Sent"; and
@@ -95,17 +95,17 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
       assert.deepEqual(await dialog.locator('.dc-rec-tag').allInnerTexts(), ['Recommended'], `${label}: one Recommended`);
       assert.equal(await dialog.locator('.dc-choice.dc-rec .dc-choice-name').innerText(), CHOICES[0], label);
 
-      // AC-13 and the row: Write to <bot>, Send at the box's right edge, then the fixed answers on one row with Skip.
+      // AC-13 and the row: Write to <bot>, Send at the box's right edge, then the fixed answers on one row with Snooze.
       const layout = async (what: string) => {
         assert.equal(await dialog.locator('.dc-notes > span').innerText(), what, label);
         const box = (await dialog.locator('#dc-other').boundingBox())!, send = (await dialog.locator('[data-dc="write"]').boundingBox())!;
         assert.ok(Math.abs(box.x + box.width - (send.x + send.width)) <= 1, `${label}: Send ends at the box's right edge (${box.x + box.width} vs ${send.x + send.width})`);
         assert.ok(send.y >= box.y + box.height, `${label}: Send is under the box`);
-        const row = await Promise.all(['dont-know', 'give-back', 'skip'].map(async k => (await dialog.locator(`[data-dc="${k}"]`).boundingBox())!));
+        const row = await Promise.all(['dont-know', 'give-back', 'snooze'].map(async k => (await dialog.locator(`[data-dc="${k}"]`).boundingBox())!));
         assert.deepEqual(await Promise.all(['dont-know', 'give-back'].map(k => dialog.locator(`[data-dc="${k}"]`).innerText())),
           ["I don't know, explain", 'Give it back'], label);
         for (const b of row) {
-          // Skip is a quiet 40 px link beside 44 px buttons: one row means their middles line up
+          // Snooze is a quiet 40 px icon beside 44 px buttons: one row means their middles line up
           assert.ok(Math.abs(b.y + b.height / 2 - (row[0]!.y + row[0]!.height / 2)) <= 1 && b.height >= 40, `${label}: one row of tappable answers (${JSON.stringify(row)})`);
           assert.ok(b.x >= 0 && b.x + b.width <= viewport.width && b.y + b.height <= viewport.height, `${label}: in view`);
         }
@@ -194,6 +194,6 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
       assert.deepEqual(errors, [], label);
       await page.close();
     }
-    console.log("PASS: a bot's question shows why, each choice's line and Recommended; Write to <bot> sends and keeps it open; I don't know and Give it back answer it, on one row with Skip.");
+    console.log("PASS: a bot's question shows why, each choice's line and Recommended; Write to <bot> sends and keeps it open; I don't know and Give it back answer it, on one row with Snooze.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

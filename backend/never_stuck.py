@@ -906,6 +906,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     seen: dict[str, str | None] = {}
     needs: dict[str, dict[str, list[Row]]] | None = None  # everyone's Needs you, read once and indexed by task
     someone: bool | None = None  # whether anyone can sign in: read once, when a turn names nobody
+    snoozes: dict[tuple[str, str], tuple[str, str]] | None = None  # asks people snoozed for themselves, read once
     now: str = H.now()
     live = task_wakes.live_bots(conn, now)
     open_ids = [
@@ -968,6 +969,11 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                         needs.setdefault(who, {}).setdefault(str(item.get("task_id")), []).append(item)
             listed = needs.get(person, {}).get(task_id, [])
             mine = [wait for wait in waits if wait.state == W.PERSON and wait.who == person]
+            if snoozes is None:
+                snoozes = W.ask_snoozes(conn)
+            # An ask the person snoozed for themselves is out of their list until its time (backend/ask_snoozes.py).
+            visit_id = W._visit_id(row)  # pyright: ignore[reportPrivateUsage]
+            mine = [wait for wait in mine if not W.snoozed_until(snoozes, person, visit_id, wait)]
             asks = [wait.requirement_id for wait in mine if wait.ask]
             want = len(asks) + (1 if any(not wait.ask for wait in mine) else 0)
             got_asks = sorted(str(item["requirement_id"]) for item in listed if item["kind"] == "ask")

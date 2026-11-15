@@ -212,7 +212,7 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
         await paste(page, [{name: 'image.png', type: 'image/png'}]);
         // Measured once the upload has settled, so no redraw runs under the measurement.
         await page.locator('.dc-file:not([data-state="up"])').waitFor({timeout: 5000});
-        for (const what of ['approve', 'sendback', 'skip']) {
+        for (const what of ['approve', 'sendback', 'snooze']) {
           const box = await card(page).locator(`[data-dc="${what}"]`).boundingBox();
           assert.ok(box && box.y >= 0 && box.y + box.height <= 844, `${what} is on screen`);
         }

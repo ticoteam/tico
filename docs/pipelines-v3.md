@@ -500,6 +500,9 @@ change), but the note is handed on, so the next stage and the person who OKs QA 
 - While snoozed: no wakes, no Late, no slot held, and it leaves Needs you.
 - A bot's snooze never hides a person's open ask: that ask stays in the person's Needs you, and their answer ends the
   snooze. Only the person's own snooze takes it out of their list.
+- A person can also snooze one ask for themselves (Flow's Snooze on an ask, backend/ask_snoozes.py): it leaves their
+  own Needs you and count until the time they pick (1 hour, 1 day, 1 week, 1 month or a time of their own, at most a
+  year), or until the ask is asked again. Everyone else's list, the task and its bot are unchanged; the bot is not told.
 - Finishing or closing a task ends its snooze.
 - A bot's snooze on a task that waits on tasks it filed ends when the last of them ends, and the owner is woken with how
   each ended. A person's snooze stays. *Changed Nov 11: Initech's SEO Owner slept a week after the person said the
@@ -1483,9 +1486,13 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 - **A stuck task:** heading "Export retries is stuck". Line "Checks fail: lint, unit. Builder and Eng Manager each tried 3
   times." Buttons "Try again" (main), "Reassign", "Move back", "Close".
 - **After an answer:** a bar "Approved" with an "Undo" button at the right.
-- **Your own task:** Snooze offers 1 hour, Tomorrow (8:00 tomorrow, your time) and Next week (8:00 seven days on); the
-  task leaves Flow until then, with Undo, which unsnoozes it. Asks, mentions and the other kinds keep Skip.
-- **The end:** "All done", and "2 snoozed" when any were snoozed on this visit.
+- **Snooze:** one menu, 1 hour, 1 day, 1 week, 1 month (each exactly that long from now) and Other (a date and time of
+  your own, in the same menu). On an ask it is a quiet clock icon at the end of the answer row, in Skip's place, and
+  snoozes the ask for you alone (#3769): it stays in everyone else's Needs you and its bot is not told. On your own
+  task it is the Snooze button and snoozes the task. Either leaves Flow until then, with ↩ "Snoozed" in the top bar,
+  which brings it back. Mentions, stuck tasks, fixes and your own tasks keep Skip.
+- **The end:** "All done", and "2 snoozed" counting your own tasks snoozed on this visit and every ask you have
+  snoozed; with asks it opens their list, each with ↩ to bring it back now.
 
 Flow has no 👍 or 👎; the rules are in [Thumbs down, and rules](#thumbs-down-and-rules).
 
@@ -1809,7 +1816,7 @@ Rules:
 
 - A long sentence wraps on a phone.
 - On an ask the screen scrolls as one: the thing asked about, then the question, Notes and Attach. Approve, Send back
-  and Skip (or the ask's own buttons) sit in a bar pinned to the bottom, solid, above the keyboard when it is up.
+  and Snooze (or the ask's own buttons) sit in a bar pinned to the bottom, solid, above the keyboard when it is up.
   "Approved · Undo" shows above that bar, never over it. An ask with nothing to show opens on its question.
 - On a phone Send back is always on; with Notes empty it sends nothing and puts the cursor in Notes, "Say what to change".
 - After an answer or Skip, the next item's buttons take no taps for 400 ms, so a second tap does not answer it unread.

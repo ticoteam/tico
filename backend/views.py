@@ -2082,13 +2082,15 @@ def _briefs(c, ids, visible):
     return {row["id"]: {k: row.get(k) for k in BRIEF_FIELDS} for row in rows}
 
 
-def needs_items(c, auth, who, task_view=None, count_only=False):
+def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     """Needs you, one list for a person (docs/dev/pipelines-v3-cutover.md, "Needs you"), oldest first:
     `waiting_on.needs(person)` (every requirement with their name, every task whose work is theirs, every Paused cause
     they can fix) and every @ of them by a person, on a task or in a channel, until they reply (C28). Only what the
     person may read is listed. Each item has `kind` (task, ask, paused, mention), `id`, `line`, `since` and the brief
     `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
-    task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here."""
+    task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here. An ask the person
+    snoozed for themselves (backend/ask_snoozes.py) is out until its time; `snoozed` "only" lists just those, each with
+    its `snoozed_until`."""
     from . import strategy_merge, teammate_access, waiting_on
 
     if not H.is_human(who.actor):
@@ -2097,8 +2099,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     # The asks the Strategy Owner merged into one item stay out while that item is open; the item names them (`merged`).
     merged = strategy_merge.hidden_by_item(c, who.actor)
     hidden = {rid for ids in merged.values() for rid in ids}
-    raw = [i for i in waiting_on.needs(c, who.actor) if i.get("requirement_id") not in hidden]
-    mentions = _mentions(c, who)
+    raw = [i for i in waiting_on.needs(c, who.actor, snoozed) if i.get("requirement_id") not in hidden]
+    mentions = _mentions(c, who) if snoozed != "only" else []  # an @ is not snoozed: only asks are
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
     readable = _readable_task_ids(c, visible, wanted)
@@ -2135,6 +2137,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                 "since": it["since"],
                 "task": briefs.get(it["task_id"]),
                 **({"merged": merged[it["task_id"]]} if it["task_id"] in merged else {}),
+                **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )
     # A person the reader may not see is named only to someone in the same conversation (teammate_access.Known).
@@ -3589,8 +3592,12 @@ def install_views(app, store, auth, mutate, task_view):
                 return {"actor": who.actor, "count": len(items)}
             items = needs_items(c, auth, who)
             current = needs_marks(items)[1]
+            # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
+            from . import ask_snoozes
+
+            woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
             if version and version == current and not cursor:
-                return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True}
+                return {"actor": who.actor, "count": len(items), "version": current, "unchanged": True, **woken}
             if ids is not None:
                 wanted = {part.strip() for part in ids.split(",") if part.strip()}
                 if len(wanted) > NEEDS_IDS_MAX:
@@ -3610,6 +3617,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "items": items,
                 "version": current,
                 "next": None,
+                **woken,
             }
             if limit is not None or cursor:
                 out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)

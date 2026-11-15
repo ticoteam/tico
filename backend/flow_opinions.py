@@ -71,7 +71,7 @@ NOTE_MAX = 400
 SHOWN_MAX = 6000  # what the ask shows, all of it together
 BODY_MAX = 1500  # the task's description
 READY, PENDING, NONE = "ready", "pending", "none"
-OK_PICKS = ("approve", "send_back")  # an ask has no Snooze until a person can snooze their own ask (#3769)
+OK_PICKS = ("approve", "send_back")  # never a snooze: snoozing an ask is the person's own call (#3769)
 LABEL = "flow-opinion"  # the spend row's label: an opinion's model call under the decisions cap (`judge.spend`)
 
 SYSTEM = (

@@ -1129,7 +1129,7 @@ def _private_ladder_tasks(conn: "sqlite3.Connection", person: str, stage_asks: l
     return {str(row["id"]) for row in rows if _falls(conn, row, asks, visit_asks)}
 
 
-def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
+def needs(conn: "sqlite3.Connection", person: str, snoozed: str = "hide") -> list[Row]:
     """Needs you, for one person, oldest first. A task whose work is theirs is listed once (`kind` "task"), however many
     requirements are missing. Each OK or answer that names them is its own entry (`kind` "ask"). A bot that cannot run
     is one entry per cause (`kind` "paused") for the person who can fix it, with the tasks it holds up, not one per
@@ -1143,10 +1143,13 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     a plain task someone owns is not in Needs you, so its owner reads "Blocks" on the task itself.
 
     Read from the tasks that can put something in this person's list (`candidates`), each worked out as
-    `needs_by_person` works out every task, so the list is the one it gives this person, item for item."""
+    `needs_by_person` works out every task, so the list is the one it gives this person, item for item.
+
+    An ask the person snoozed for themselves (`ask_snoozes`) is left out until its time, or until it is asked again;
+    `snoozed` "keep" lists it too, with its `snoozed_until`, and "only" lists only those."""
     if not is_human(person):
         return []
-    return _lists(conn, candidates(conn, person), person).get(person, [])
+    return _lists(conn, candidates(conn, person), person, snoozed=snoozed).get(person, [])
 
 
 def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
@@ -1163,10 +1166,51 @@ class _Everyone:
         return True
 
 
-def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -> dict[str, list[Row]]:
+# An ask a person snoozed for themselves (backend/ask_snoozes.py), while its time is to come: who, the ask's visit and
+# requirement, when it was asked as the snooze saw it, and until when.
+_ASK_SNOOZES = (
+    "SELECT person_id, visit_id, requirement_id, asked_at, snoozed_until FROM ask_snoozes WHERE snoozed_until > ?"
+)
+
+
+def ask_snoozes(conn: "sqlite3.Connection", *people: str) -> dict[tuple[str, str], tuple[str, str]]:
+    """The asks people snoozed for themselves that are still snoozed, {(person, ask id): (asked_at, snoozed_until)}, of
+    `people` (everyone's with none). A snooze whose time has come is not read: the ask is back with nothing to clear."""
+    import sqlite3
+
+    from . import hubdb
+
+    sql, args = _ASK_SNOOZES, [hubdb.now()]
+    if people:
+        sql += " AND person_id IN (%s)" % ",".join("?" * len(people))
+        args += list(people)
+    try:
+        rows = conn.execute(sql, args).fetchall()
+    except sqlite3.OperationalError:  # a database made before the table
+        return {}
+    return {(str(r[0]), f"{r[1]}:{r[2]}"): (str(r[3]), str(r[4])) for r in rows}
+
+
+def snoozed_until(
+    snoozes: Mapping[tuple[str, str], tuple[str, str]], person: str, visit_id: object, wait: "Wait"
+) -> str | None:
+    """When the person's snooze of this ask ends, or None when it is not snoozed for them: a snooze holds only while
+    the ask is the one they snoozed (asked at the same moment), so a new version from its bot is never hidden."""
+    if not wait.ask or not visit_id:
+        return None
+    found = snoozes.get((person, f"{visit_id}:{wait.requirement_id}"))
+    return found[1] if found and found[0] == str(wait.since or "") else None
+
+
+def _lists(
+    conn: "sqlite3.Connection", task_ids: list[str], *only_people: str, snoozed: str = "hide"
+) -> dict[str, list[Row]]:
     """Needs you from these open tasks (in id order), for every person, or only for `only_people`: each task's waits
-    are worked out whoever they are for, and only the chosen people's entries are kept."""
+    are worked out whoever they are for, and only the chosen people's entries are kept. An ask a person snoozed for
+    themselves is left out of their list (`snoozed` "hide"), listed with its `snoozed_until` ("keep"), or the only kind
+    listed ("only")."""
     only: Any = set(only_people) if only_people else _Everyone()
+    snoozes = ask_snoozes(conn, *only_people)
     out: dict[str, list[Row]] = {}
     paused: dict[str, dict[str, Row]] = {}
     seen = _seen(conn)
@@ -1189,6 +1233,9 @@ def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -
                 mine = [unnamed(wait, shown) for wait in mine]
             work = [wait for wait in mine if not wait.ask]
             for wait in [wait for wait in mine if wait.ask] + work[:1]:
+                until = snoozed_until(snoozes, person, _visit_id(row), wait) if snoozes else None
+                if (snoozed == "hide" and until) or (snoozed == "only" and not until):
+                    continue
                 line = wait.line
                 if held and wait.ask:
                     line = R.sentences(line, pr_conflicts.ask_line(conn, held, kinds.get(str(wait.requirement_id), "")))
@@ -1205,8 +1252,11 @@ def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -
                         "line": line,
                         "missing": [each.line for each in (work if not wait.ask else [wait])],
                         "since": min((each.since or "" for each in work), default="") if not wait.ask else wait.since,
+                        **({"snoozed_until": until} if until else {}),
                     }
                 )
+        if snoozed == "only":
+            continue  # only the asks a person snoozed: no task's blocks, no Paused cause
         owner = str(row.get("owner_id") or "")
         if holding.get(str(task_id)) and owner in only and is_human(owner) and _holds_up(conn, row):
             _blocks(conn, out.setdefault(owner, []), row, owner, holding[str(task_id)])
