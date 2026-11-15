@@ -31,8 +31,10 @@ type FinActResult = import('../types/api').FinanceAction & {approver?: string | 
 // What a committed action made or did (the ids its callers read).
 interface FinActDone { bill_id?: string; invoice_id?: string; contact_id?: string; account_id?: string; months?: string[]; new?: number }
 
-const FIN_TABS: [string, string][] = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['attribution', 'Attribution'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],
-  ['cards', 'Cards'], ['transactions', 'Transactions'], ['tax', 'Tax'], ['sources', 'Sources'], ['access', 'Access']];
+// The tabs in the header's order: the shared header (page-head.ts) keeps the first five on the row and lists the rest in
+// its ⋯ (style guide "Views of one thing are tabs: one row, five at most"), so the daily views come first.
+const FIN_TABS: [string, string][] = [['mine', 'My budget'], ['pnl', 'P&L'], ['budgets', 'Budgets'], ['transactions', 'Transactions'], ['payables', 'Payables'], ['receivables', 'Receivables'],
+  ['balance', 'Balance sheet'], ['tax', 'Tax'], ['attribution', 'Attribution'], ['cards', 'Cards'], ['sources', 'Sources'], ['access', 'Access']];
 let FIN: FinPage | null = null;           // the open page: {load, tab, arg, q, acc, caps}
 let FIN_ACCESS: FinAccData | null = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
 let FIN_PROBE: Promise<FinAccData | null> | null = null;     // the sidebar's one read per visit
@@ -216,8 +218,74 @@ const finSeg = (name: string, label: string, options: readonly (readonly string[
 const finSplit = (main: string, rail: string, label: string) => `<div class="fin-split"><div class="fin-main">${main}</div><aside class="fin-rail" id="fin-rail" aria-label="${esc(label)}">${rail}</aside></div>`;
 const finKv = (k: string | undefined, v: string, cls = '') => `<div class="fin-kv"><span>${esc(k)}</span><span class="${cls}">${v}</span></div>`;
 const finNote = (text: string) => `<p class="muted fin-note">${esc(text)}</p>`;
-const finFail = (e: unknown) => finNote(errorStatus(e) === 403 ? 'Not in your view.' : errorMessage(e, 'Did not load.'));
+// A read that failed says what happened and carries the fix (style guide "A great page"): Try again draws the tab again.
+// A refusal (403) is not fixed by trying again, so it has none.
+const finFail = (e: unknown) => errorStatus(e) === 403 ? finNote('Not in your view.')
+  : `<p class="muted fin-note" role="alert">${esc(errorMessage(e, 'Did not load.'))} <button type="button" class="linkish tap-mark" data-fin-retry>Try again</button></p>`;
+document.addEventListener('click', ev => { if (eventElement(ev)?.closest('#main [data-fin-retry]')) route(); });
 function finRail(html: string) { const rail = $('#fin-rail'); if (rail) rail.innerHTML = html; }
+
+// ----------------------------------------------------------------- tables
+// A column is drawn only when some row has a value (style guide, "A table of things you manage": no column that says
+// the same nothing on every row; an empty cell shows nothing). Decided per table for the visit, from every row drawn
+// since the tab opened: a column once shown stays, so a search or filter that narrows the rows never makes the columns
+// jump. A head marked data-fin-keep always stays. Cells, rows that span several columns included, are kept in step.
+const FIN_COLS_SEEN = new Map<string, Set<number>>();
+const finCellHas = (cell: Element | undefined) => !!cell && (cell.textContent.trim() !== '' || !!cell.querySelector('input, select, button, [role=img]'));
+function finTrim(table: HTMLTableElement | null | undefined, key: string) {
+  const head = table?.tHead?.rows[0];
+  if (!table || !head) return;
+  const n = [...head.cells].reduce((t, c) => t + c.colSpan, 0);
+  const seen = FIN_COLS_SEEN.get(key) || new Set<number>();
+  FIN_COLS_SEEN.set(key, seen);
+  const rows = [...table.rows];
+  // Each row's cells by the column they start at, for rows that have one cell per column.
+  const plain = rows.filter(r => r.cells.length === n && r !== head && !r.closest('thead'));
+  for (let i = 0; i < n; i++) if (plain.some(r => finCellHas(r.cells[i]))) seen.add(i);
+  head.querySelectorAll('[data-fin-keep]').forEach(th => { seen.add((th as HTMLTableCellElement).cellIndex); });
+  for (let i = n - 1; i >= 0; i--) {
+    if (seen.has(i)) continue;
+    for (const r of rows) {
+      let at = 0;
+      for (const c of [...r.cells]) {
+        if (i >= at && i < at + c.colSpan) { if (c.colSpan > 1) c.colSpan--; else c.remove(); break; }
+        at += c.colSpan;
+      }
+    }
+  }
+}
+// A list table becomes rows on a phone (finance.css .fin-rows): its CSS display changes, which drops a table's semantics
+// in WebKit, so each one carries them as roles (table, row, columnheader, cell) and its head stays for screen readers
+// (clipped, not hidden). Set as the tables reach the page, whichever tab or dialog draws them.
+function finRowsRoles(table: HTMLTableElement) {
+  if (table.getAttribute('role') === 'table') return;
+  table.setAttribute('role', 'table');
+  for (const part of table.querySelectorAll(':scope > thead, :scope > tbody')) part.setAttribute('role', 'rowgroup');
+  for (const tr of table.rows) {
+    tr.setAttribute('role', 'row');
+    for (const c of tr.cells) c.setAttribute('role', c.tagName === 'TH' ? (c.closest('thead') ? 'columnheader' : 'rowheader') : 'cell');
+  }
+}
+new MutationObserver(records => {
+  for (const r of records) for (const n of r.addedNodes) {
+    if (!(n instanceof Element)) continue;
+    if (n.matches('table.fin-rows')) finRowsRoles(n as HTMLTableElement);
+    n.querySelectorAll<HTMLTableElement>('table.fin-rows').forEach(finRowsRoles);
+  }
+}).observe(document.documentElement, {childList: true, subtree: true});
+// On a phone a row's record (the rail) stacks under the list: picking a row brings it into view. Only a pick: a row
+// that folds a group, or a control in a row, leaves the page where it is.
+document.addEventListener('click', ev => {
+  const at = eventElement(ev), tr = at?.closest<HTMLTableRowElement>('#fin-body .fin-main tbody tr');
+  if (!tr || !matchMedia('(max-width:760px)').matches || at?.closest('input, select, a, [data-fin-budget], [data-fin-bud-amt]')) return;
+  const attr = tr.getAttributeNames().find(n => n.startsWith('data-fin-'));
+  if (!attr) return;
+  const sel = `#fin-body tr.fin-on[${attr}="${CSS.escape(tr.getAttribute(attr) || '')}"]`;
+  setTimeout(() => {
+    const rail = $('#fin-rail') as HTMLElement | null;
+    if (rail?.firstElementChild && document.querySelector(sel)) rail.scrollIntoView({block: 'start', behavior: 'smooth'});
+  }, 0);
+});
 
 // An action with a fresh Idempotency-Key, or `operationId` when the caller keeps one so a retry after a lost answer is the
 // same action: committed, or sent to someone for approval; anything else is an error.
@@ -285,9 +353,10 @@ function pageFinance() {
   FIN = {load: (FIN?.load || 0) + 1, tab: parts[0] || '', arg: decodeURIComponent(parts[1] || ''),
     q: new URLSearchParams(query || ''), acc: FIN_ACCESS};
   FIN_VIEW_AS = FIN.q.get('view_as') || '';
+  FIN_COLS_SEEN.clear();
   const main = $('#main');
   main.classList.add('strategy-layout', 'finance-layout');
-  main.innerHTML = finHeadHtml() + '<div id="fin-brief"></div>' + `<div id="fin-body" class="fin-body">${skelRows(6, {dot: false})}</div>`;
+  main.innerHTML = finHeadHtml() + '<div id="fin-as"></div><div id="fin-brief"></div>' + `<div id="fin-body" class="fin-body">${skelRows(6, {dot: false})}</div>`;
   const state = FIN;
   void (async () => {
     let acc: FinAccData | null = null, error: unknown = null;
@@ -308,7 +377,8 @@ function finShow(state: FinPage) {
     return;
   }
   finHeadDraw();
-  void finBriefLoad(state);
+  // What changed is the P&L's: on every tab it pushed the tab's own table down (style guide "A great page").
+  if (state.tab === 'pnl') void finBriefLoad(state);
   if (state.tab === 'line') finLinePage(state.arg);
   else if (tab === 'pnl') finPnlPage();
   else if (tab === 'budgets') finBudgetsPage();
@@ -323,23 +393,44 @@ function finShow(state: FinPage) {
   else if (tab === 'sources') finSourcesPage();
   else if (tab === 'access') finAccessPage();
 }
+// The one page header (page-head.ts): Finance, its tabs (five on the row, the rest in ⋯), then the open tab's quiet +
+// (finHeadAct) and its rarer actions in ⋯ (finHeadMore). Each tab fills those two after the header is drawn.
 function finHeadHtml() {
   const caps = FIN?.acc ? finCaps() : null, acc = FIN?.acc, on = FIN?.tab === 'line' ? 'pnl' : FIN?.tab;
   const tabs = caps ? FIN_TABS.filter(([id]) => finTabShown(id, caps, acc)) : [];
   // The P&L tab keeps the view it was left on (Company or Expenses); on the P&L itself, the one in the address.
   const pnlView = FIN?.tab === 'pnl' ? FIN.q?.get('view') : FIN_PNL.view;
-  const viewing = caps?.viewing ? `<span class="fin-as">Viewing as ${esc(finWho(caps.who))}<button type="button" class="ghost" data-fin-as-end aria-label="Stop viewing as ${esc(finWho(caps.who))}">✕</button></span>` : '';
-  return `<div class="strat-head rd-strat-head fin-head" id="fin-head"><h1>Finance</h1>
-    <nav class="tabs slim strat-tabs" aria-label="Finance">${tabs.map(([id, label]) =>
-      `<a href="${finHref('/' + id, id === 'pnl' && pnlView === 'expenses' ? {view: 'expenses'} : {})}" data-fin-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>
-    <span class="spacer"></span>${viewing}</div>`;
+  return pageHead({title: 'Finance', id: 'fin-head', hook: 'fin-head', tabsAttrs: 'aria-label="Finance"',
+    tabs: tabs.map(([id, label]): PageTab => ({label, href: finHref('/' + id, id === 'pnl' && pnlView === 'expenses' ? {view: 'expenses'} : {}), cur: on === id, attrs: `data-fin-tab="${id}"`})),
+    more: PAGE_HEAD_COPY});
+}
+// "Viewing as" is a state of the whole page, so it is a line under the header, not a tool that folds into ⋯ on a phone.
+function finAsHtml() {
+  const caps = FIN?.acc ? finCaps() : null;
+  return caps?.viewing ? `<div class="fin-as" role="status"><span>Viewing as ${esc(finWho(caps.who))}</span><button type="button" class="ghost tap-mark" data-fin-as-end aria-label="Stop viewing as ${esc(finWho(caps.who))}" title="Stop viewing as ${esc(finWho(caps.who))}">✕</button></div>` : '';
 }
 function finHeadDraw() {
   const head = $('#fin-head'); if (!head) return;
   head.outerHTML = finHeadHtml();
-  const end = $('#fin-head [data-fin-as-end]');
+  const as = $('#fin-as'); if (as) as.innerHTML = finAsHtml();
+  const end = $('#fin-as [data-fin-as-end]');
   if (end) end.onclick = () => { FIN_VIEW_AS = ''; location.hash = finHref('/' + (FIN?.tab === 'line' ? 'pnl' : FIN?.tab || 'pnl')); };
+  // The header's quiet + and ⋯ items act through the open tab's own click handler on #fin-body, as they did when
+  // they sat in its bar (a tab's handler reads only the clicked element).
+  ($('#fin-head') as HTMLElement | null)?.addEventListener('click', ev => {
+    const t = eventElement(ev);
+    if (!t?.closest('.ph-act, .ph-menu') || t.closest('.ph-mtabs, .ph-copy')) return;
+    const body = $('#fin-body') as HTMLElement | null;
+    body?.onclick?.call(body, ev);
+  });
 }
+// The open tab's quiet + (or its add menu) in the header's filled-button place; '' for none.
+function finHeadAct(html: string) { const head = $('#fin-head'); if (head) pageHeadSet(head, 'primary', html); }
+// The open tab's rarer actions (Export, Expand all…) as ⋯ items: plain buttons, before Copy link.
+function finHeadMore(html: string) { const head = $('#fin-head'); if (head) pageHeadSet(head, 'more', html + PAGE_HEAD_COPY); }
+// A quiet + that opens a small menu of adds (the Balance sheet's Add, Sources' Connect): the shared + with its menu under it.
+const finAddMenu = (label: string, attrs: string, id: string, items: string) => `<span class="fin-pop-at fin-head-pop">${pageHeadAdd(label, `${attrs} aria-haspopup="menu" aria-expanded="false" aria-controls="${id}"`)}
+  <div class="fin-pop fin-menu" id="${id}" role="menu" aria-label="${esc(label)}" hidden>${items}</div></span>`;
 // The owner views Finance as a teammate sees it: every tab reads as them, and nothing can be changed meanwhile.
 function finViewAs(who: string | null | undefined) {
   FIN_VIEW_AS = who || '';

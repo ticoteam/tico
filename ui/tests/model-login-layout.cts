@@ -106,7 +106,7 @@ async function check(engine: import('playwright').BrowserType) {
         await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
         await dialog.locator('[data-status][data-state=canceled]').waitFor();
         assert.match(await dialog.locator('[data-status]').innerText(), /account signed in before still works/);
-        await dialog.getByRole('button', {name: 'Close', exact: true}).last().click();
+        await dialog.getByRole('button', {name: 'Cancel', exact: true}).click();
         await dialog.waitFor({state: 'detached'});
       }
       assert.deepEqual(errors, []);

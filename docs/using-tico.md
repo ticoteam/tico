@@ -136,7 +136,7 @@ a red dot when it can't run. *Needs you*, or *Needs <Name>* for someone else: a 
 **How do I answer a bot's question?**
 Open **Tasks › You**. Each ask is one sentence with its buttons: the choices for a question, **Approve** or **Send
 back**
-for an OK. The play button (Catch up) steps through them. See [Asks and OKs](tasks.md#asks-and-oks).
+for an OK. Flow (its mark, two play shapes) steps through them. See [Asks and OKs](tasks.md#asks-and-oks).
 
 **Marked a task Done by mistake?**
 Choose **Undo** in the toast, or open the finished task under **Done** (the archive button) and choose **Reopen**.

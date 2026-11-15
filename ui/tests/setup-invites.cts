@@ -137,9 +137,9 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     const when = row('ben').locator('[data-invited] [data-ago]');
     assert.ok((await when.getAttribute('title'))!.length > 5);
     await when.evaluate(n => { n.dataset.ago = new Date(Date.now() - 3 * 3600e3).toISOString(); agoTick(); });
-    assert.equal(await when.innerText(), '3h ago');
+    assert.equal(await when.innerText(), '3h');
     await when.evaluate(n => { n.dataset.ago = new Date(Date.now() - 5e3).toISOString(); agoTick(); });
-    assert.equal(await when.innerText(), 'just now', 'under a minute is not counted in seconds');
+    assert.equal(await when.innerText(), 'now', 'under a minute is not counted in seconds');
     // Add and send invite: one click adds the person and sends their invite.
     await page.locator('#people-add [name=email]').fill('eli@acme.example');
     await page.locator('#people-add [name=name]').fill('Eli Park');

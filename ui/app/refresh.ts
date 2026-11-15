@@ -45,7 +45,7 @@ async function refresh(force = false): Promise<void> {
   await Promise.all([v2, computers]);
   overviewRefresh();
   if (S.me?.cloud) void updUnreadRefresh();
-  renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
+  renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster(); pageChatFollowRoster(); document.dispatchEvent(new CustomEvent('tico:roster'));
   tipRefresh();
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
@@ -117,7 +117,7 @@ function liveWire(): void {
     if (d.status) S.v2.status[d.bot] = d.status; else delete S.v2.status[d.bot];
     tipRefresh(d.bot);
     liveSoon('bots', () => {
-      renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
+      renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster(); pageChatFollowRoster(); document.dispatchEvent(new CustomEvent('tico:roster'));
       tipRefresh();
       botAlertDraw();
       overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)

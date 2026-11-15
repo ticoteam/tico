@@ -1,14 +1,16 @@
-/* ui/app/pipeline-ask.ts — The board's bots, on a phone (spec #337, "a floating face instead of the Ask block"). The
-   pipeline manager's face, round, 44px, floats 12px above the bottom bar at the right. Tapped, a small menu lists the
-   board's bots (the manager, then each stage's holder, face, name and role); with one bot the chat opens at once. The
+/* ui/app/pipeline-ask.ts — The board's bots, on a phone (spec #337). The page's chat mark is the header's face
+   (tasks-page.ts #task-manager, style guide "Where chat lives": a phone opens the chat full screen from the page's chat
+   mark), the pipeline manager's, 22 px in a 44 px button; nothing floats over the board, so no row or age is covered.
+   Tapped, a small menu under it lists the board's bots (the manager, then each stage's holder, face, name and role);
+   with one bot the chat opens at once. The
    chat opens as a sheet over the board, the chat alone (no Log, no Tasks), its box focused, with what goes with each
    message as a chip above the box ("Product › Spec · 7 tasks"), which ✕ removes. A message carries `refs.board`: the
    pipeline, the open stage and the ids of the tasks the tab shows, search and filter applied, at most PA_MAX_IDS of
    them (`more` counts the rest); the chat shows it as one card under the message (thread-view.ts thvBoardHTML). ✕,
    Escape or a swipe down closes the sheet, and the board is where it was.
-   The page (tasks-page.ts) gives the host through the pipeline view's `ask` hook (task-pipelines.ts); the view paints
-   it again when its tab changes (pvDraw). Desktop keeps the manager's rail (pipeline-rail.ts), opened by the manager's
-   face in the header.
+   The page (tasks-page.ts) gives the menu's host through the pipeline view's `ask` hook (task-pipelines.ts) and sends the
+   face's taps here (pipelineAskOpen); the view paints the face again when its tab changes (pvDraw). On a computer the
+   manager answers the page's chat column instead (pipeline-rail.ts, page-chat.ts), with the same board.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -60,40 +62,65 @@ function paBoardWords(state: PaState): string {
 }
 
 const paPop = (state: PaState) => state.host.querySelector<HTMLElement>('.pa-pop');
+/** The face in the page's header that opens the board's bots. */
+const paFace = (): HTMLElement | null => document.getElementById('task-manager');
 
-/** Draws the face and its menu again (another pipeline, another manager). */
+/** Draws the face and its menu again (another pipeline, another manager, another stage's holder). The page's header
+ * shows the face on a pipeline (tasks-page.ts tasksHeadPaint); with no bot on the board it is hidden here. */
 function pipelineAskPaint(): void {
   const state = PA;
   if (!state || !state.host.isConnected) return;
   const {stage} = paOnScreen(state);
   if (stage?.id && stage.id !== state.stage) state.stage = stage.id;
-  const bots = paBots(state.rec, state.stage), first = bots[0]?.actor || '';
-  state.host.hidden = !first;
-  state.host.closest('.tasks-page')?.classList.toggle('has-ask', !!first);
-  if (!first) return;
-  const one = bots.length === 1;
-  const words = one ? `Chat with ${actorLabel(first)}` : 'Chat with…';
-  const html = `<button type="button" class="pa-fab" aria-label="${esc(words)}" title="${esc(words)}"${one ? '' : ' aria-haspopup="menu" aria-expanded="false"'}>${actorFace(first, 44)}<span class="pa-fab-mark" aria-hidden="true">${TL_ICON.chat}</span></button>`
-    + (one ? '' : `<div class="pa-pop" role="menu" aria-label="Chat with" hidden>${bots.map(b =>
+  const bots = paBots(state.rec, state.stage), first = bots[0]?.actor || '', one = bots.length === 1;
+  const btn = paFace();
+  if (btn) {
+    const shown = !!first && !pageChatNone();
+    btn.hidden = !shown;
+    if (shown) {
+      const words = one ? `Chat with ${actorLabel(first)}` : 'Chat with…', face = actorFace(first, 22);
+      if (btn.dataset['face'] !== face) { btn.dataset['face'] = face; btn.innerHTML = face; }
+      btn.setAttribute('aria-label', words); btn.title = words;
+      btn.removeAttribute('aria-pressed');            // a phone has no rail to show pressed
+      btn.setAttribute('aria-haspopup', one ? 'dialog' : 'menu');
+      if (one) btn.removeAttribute('aria-expanded');
+      else if (!btn.hasAttribute('aria-expanded')) btn.setAttribute('aria-expanded', 'false');
+    }
+  }
+  // The host holds only the menu, placed under the face when it opens (paMenu).
+  const html = first && !one ? `<div class="pa-pop" role="menu" aria-label="Chat with" hidden>${bots.map(b =>
       `<button type="button" role="menuitem" class="pa-pick" data-pa-who="${esc(b.actor)}"><span class="pa-face">${actorFace(b.actor, 28)}</span>`
-      + `<span class="pa-pick-t"><span class="pa-pick-n">${esc(actorLabel(b.actor))}</span><span class="pa-pick-r">${esc(b.role)}</span></span></button>`).join('')}</div>`);
-  if (state.host.dataset['html'] !== html) { state.host.dataset['html'] = html; state.host.innerHTML = html; }
+      + `<span class="pa-pick-t"><span class="pa-pick-n">${esc(actorLabel(b.actor))}</span><span class="pa-pick-r">${esc(b.role)}</span></span></button>`).join('')}</div>` : '';
+  if (state.host.dataset['html'] !== html) { state.host.dataset['html'] = html; state.host.innerHTML = html; btn?.setAttribute('aria-expanded', 'false'); }
+  state.host.hidden = !html;
 }
 
 function paMenu(state: PaState, open: boolean): void {
-  const pop = paPop(state), fab = state.host.querySelector<HTMLElement>('.pa-fab');
+  const pop = paPop(state), fab = paFace();
   if (!pop || !fab) return;
+  if (open) {
+    // Under the face, its right edge on the face's: the menu is fixed, so it stays put however the board scrolls.
+    const r = fab.getBoundingClientRect();
+    state.host.style.top = `${Math.round(r.bottom + 4)}px`;
+    state.host.style.right = `${Math.max(8, Math.round(document.documentElement.clientWidth - r.right))}px`;
+  }
   pop.hidden = !open;
   fab.setAttribute('aria-expanded', String(open));
   if (open) pop.querySelector<HTMLElement>('.pa-pick')?.focus();
 }
 
+/** A pick in the menu opens that bot's chat. */
 function paClick(ev: MouseEvent): void {
-  const state = PA, el = eventElement(ev);
-  if (!state || !el) return;
-  const pick = el.closest<HTMLElement>('[data-pa-who]');
-  if (pick) { paMenu(state, false); paSheetOpen(state, pick.dataset['paWho'] || ''); return; }
-  if (!el.closest('.pa-fab')) return;
+  const state = PA, pick = eventElement(ev)?.closest<HTMLElement>('[data-pa-who]');
+  if (!state || !pick) return;
+  paMenu(state, false);
+  paSheetOpen(state, pick.dataset['paWho'] || '');
+}
+
+/** The header's face, tapped on a phone: one bot's chat at once, else the menu of the board's bots (or closes it). */
+function pipelineAskOpen(): void {
+  const state = PA;
+  if (!state) return;
   const pop = paPop(state);
   if (!pop) { const b = paBots(state.rec, state.stage)[0]; if (b) paSheetOpen(state, b.actor); return; }
   paMenu(state, pop.hidden);
@@ -106,7 +133,7 @@ function paOutside(ev: Event): void {
   if (ev instanceof KeyboardEvent) {
     const items = [...pop.querySelectorAll<HTMLElement>('.pa-pick')], at = items.indexOf(document.activeElement as HTMLElement);
     const go = (i: number) => { ev.preventDefault(); items[Math.max(0, Math.min(items.length - 1, i))]?.focus(); };
-    if (ev.key === 'Escape') { ev.preventDefault(); paMenu(state, false); state.host.querySelector<HTMLElement>('.pa-fab')?.focus(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); paMenu(state, false); paFace()?.focus(); }
     else if (ev.key === 'ArrowDown') go(at + 1);
     else if (ev.key === 'ArrowUp') go(at - 1);
     else if (ev.key === 'Home') go(0);
@@ -114,7 +141,9 @@ function paOutside(ev: Event): void {
     else if (ev.key === 'Tab') paMenu(state, false);
     return;
   }
-  if (state.host.contains(eventElement(ev))) return;
+  // A press on the menu, or on the face (its click closes the menu itself), is not outside.
+  const at = eventElement(ev);
+  if (state.host.contains(at) || (at && paFace()?.contains(at))) return;
   // The tap that closes the menu does nothing else: the card under it does not open.
   ev.preventDefault();
   const swallow = (e: Event) => { e.preventDefault(); e.stopPropagation(); };
@@ -168,10 +197,11 @@ function paSheetClose(): void {
   threadUnmount(sheet.chat);
   if (sheet.dialog.open) sheet.dialog.close();
   sheet.dialog.remove();
-  if (sheet.byKey) PA?.host.querySelector<HTMLElement>('.pa-fab')?.focus({preventScroll: true});
+  if (sheet.byKey) paFace()?.focus({preventScroll: true});
 }
 
-/** The face on a pipeline's board on a phone; elsewhere (a computer, the archive, another page) there is none. */
+/** The board's bots on a pipeline on a phone; elsewhere (a computer, the archive, another page) the face is the rail's
+ * (tasks-page.ts) or there is none. */
 function pipelineAskSync(host: HTMLElement, rec: PipelineRec, phone: boolean): void {
   if (!phone) { if (PA?.host === host) pipelineAskLeave(); host.hidden = true; return; }
   if (!PA || PA.host !== host || PA.rec.id !== rec.id || !host.isConnected) {
@@ -199,5 +229,4 @@ function pipelineAskLeave(): void {
   state.host.hidden = true;
   state.host.replaceChildren();
   delete state.host.dataset['html'];
-  state.host.closest('.tasks-page')?.classList.remove('has-ask');
 }

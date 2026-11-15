@@ -149,7 +149,9 @@ function threadSettingsHTML(view: ThvView): string {
     `<div class="ths-row ths-acts"><button type="button" class="ghost small" data-ths="catchup">Summarize</button>
       <button type="button" class="ghost small" data-ths="read">Mark all read</button>${
       t.earlier ? '<button type="button" class="ghost small" data-ths="earlier">Open earlier messages to Read</button>' : ''}${
-      manage && !home ? `<span class="spacer"></span><button type="button" class="ghost small" data-ths="archive">${t.archived_at ? 'Unarchive' : 'Archive'}</button>` : ''}</div>`,
+      (manage && !home) || thvDeletable(t) ? '<span class="spacer"></span>' : ''}${
+      manage && !home ? `<button type="button" class="ghost small" data-ths="archive">${t.archived_at ? 'Unarchive' : 'Archive'}</button>` : ''}${
+      thvDeletable(t) ? '<button type="button" class="ghost small danger" data-ths="delete">Delete</button>' : ''}</div>`,
   ].filter(Boolean).join('');
 }
 function threadSettingsOpen(view: ThvView): void {
@@ -237,6 +239,8 @@ function threadSettingsOpen(view: ThvView): void {
       if (key === 'earlier') { dlg.close(); await threadEarlierOpen(view, view.id); return; }
       if (key === 'read') { await post(thvPath(t.id) + '/read-all', {}); threadsMarkedRead(t.id, Number(t.last_seq) || 0); dlg.close(); return; }
       if (key === 'archive' && await save(async path => patch(path, {archived: !thdLoaded(view).archived_at}))) dlg.close();
+      // Delete asks first; a deleted thread leaves the page, and its panel with it.
+      if (key === 'delete') { const here = location.hash; await thvDelete(view, b); if (location.hash !== here) dlg.close(); }
     } catch (e) { if (dlg.open) status.textContent = errorMessage(e, ''); else toast(errorMessage(e, ''), true); }
     finally { b.disabled = false; }
   };

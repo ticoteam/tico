@@ -60,8 +60,9 @@ function controls() {
   const company = $('#campus-company'), summary = $('#campus-summary'), status = $('#connection-status'), toggle = $('#replay-toggle');
   if (!model || !company || !summary || !status || !toggle) return;
   company.textContent = model.company;
-  const count = model.groups.filter(g => g.kind === 'computer').length;
-  summary.textContent = count + (count === 1 ? ' computer' : ' computers') + (replaying ? ' · Replaying the last 24 hours' : preferences.layout === 'tower' ? ' · One tower' : ' · One connected campus');
+  // No line describes the scene (style guide: no sentence explains the page); one shows only while it is a replay.
+  summary.textContent = replaying ? 'Replaying the last 24 hours' : '';
+  summary.hidden = !replaying;
   status.hidden = model.fresh || replaying;
   toggle.setAttribute('aria-pressed', String(replaying));
   document.body.classList.toggle('replaying', replaying);

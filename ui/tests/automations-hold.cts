@@ -26,8 +26,8 @@ const heldRuns = (db: AutomationsFakeSupport.AutomationsDb) => {
     for (const viewport of [DESKTOP, PHONE]) {
       const {page, errors, writes, db} = await openAutomations(browser, {viewport, tweak: held});
       heldRuns(db);
-      await page.waitForSelector('tr.au-row[data-row="au_deploy"]');
-      assert.match(await page.locator('tr.au-row[data-row="au_deploy"]').innerText(), /On hold/);
+      await page.waitForSelector('.au-row[data-row="au_deploy"]');
+      assert.match(await page.locator('.au-row[data-row="au_deploy"]').innerText(), /On hold/);
       await page.evaluate(() => { location.hash = '#/automations/au_deploy/runs'; });
       await page.waitForSelector('.au-hd .au-hold');
       assert.match(await page.locator('.au-hd .au-hold').innerText(), /On hold\s*3 held/);

@@ -211,7 +211,7 @@ const shot = async (page: Page, name: string) => { if (shots) await page.screens
       assert.equal(count(w, 'sync'), 1, 'one sync when the page opens');
       assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Pricing review', 'Renewal call with Dana']);
       await page.waitForFunction((G: string) => /42 notes/.test(document.querySelector(G + ' .msrc-line')?.textContent || ''), G);
-      assert.equal(await lineText(page), 'Granola · Connected · ana@acme.example · Synced 3m ago · 42 notes · 2 skipped');
+      assert.equal(await lineText(page), 'Granola · Connected · ana@acme.example · Synced 3m · 42 notes · 2 skipped');
       assert.equal(await page.locator(G + ' .mg-skip').getAttribute('title'), '2 notes from Granola could not be imported');
       const polled = count(w, 'status');
       await page.clock.fastForward(15000);

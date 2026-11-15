@@ -78,7 +78,7 @@ window.openMeetingImporter = function (source, name, onChange) {
   dialog.setAttribute('aria-label', 'Connect ' + name);
   const title = document.createElement('h2'), close = document.createElement('button'), host = document.createElement('div');
   title.textContent = name; title.style.margin = '0';
-  close.type = 'button'; close.className = 'ghost'; close.textContent = '✕'; close.setAttribute('aria-label', 'Close');
+  close.type = 'button'; close.className = 'ghost'; close.innerHTML = '<span class="nav-icon" aria-hidden="true">close</span>'; close.setAttribute('aria-label', 'Close');
   host.innerHTML = '<div class="empty">Loading…</div>';
   const head = document.createElement('header');
   head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:16px 18px 0';

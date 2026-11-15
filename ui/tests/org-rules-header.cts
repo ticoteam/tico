@@ -1,10 +1,10 @@
 // The Rules page header (ui/app/org-rules.ts, ui/styles/org-rules.css) at desktop 1440, 1280, 1100 and 1024 and phone 390: on each tab
 // (all eight: Company, Outside, Pipelines and stages, Due, Wakes, Automations on tasks, Built in, Suggested) every tab link is the topmost element at its centre, no tab overlaps the header's
 // actions (Internal's search, External's Add rule and Add document, Due's Add due date), the actions are in view,
-// and a real click on each tab opens it, with the header's rule-checks line at its longest. The search box once covered all four tabs at 1280, and + Add rule covered Suggested.
+// and a real click on each tab opens it, with the rule-checks line (in ⋯) at its longest. The search box once covered all four tabs at 1280, and + Add rule covered Suggested.
 // On a computer the header also keeps its shape from tab to tab (task #450, Validate): no button's words wrap, the title
-// stays at the same height on every tab, and the header is one row at 1440 and 1280 (where the tabs and a filled
-// button fit) and at most two at 1100 and 1024.
+// stays at the same height on every tab, and the header is one row at every width (style guide "Top bars: one line":
+// five tabs show and the last three wait in ⋯; when the row is tight the tools, then the last shown tabs, go there too).
 // Outside's Add rule once wrapped to two lines at 1440, dropping the title 10px; at 1280 the tabs and search took three rows.
 import type * as RealHubSupport from './support/real-hub.cts';
 import type {Browser, Page} from 'playwright';
@@ -26,6 +26,14 @@ const ready = (page: Page) => page.waitForFunction(() => {
   return who !== '' && who !== 'Signing in…' && (document.querySelector('#main')?.children.length as number) > 0;
 }, null, {timeout: t(20000)});
 const go = async (page: Page, hash: string) => { await page.evaluate(h => { location.hash = h; }, hash); };
+// A tab waiting in ⋯ (page-head.ts pageHeadTabsShow) is opened from there: ⋯, then its item.
+async function clickTab(page: Page, tab: string) {
+  const link = page.locator(`.ru-tabs a[data-ru-tab="${tab}"]`);
+  if (await link.isVisible()) { await link.click({timeout: t(3000)}); return; }
+  const i = await link.evaluate(a => [...a.parentElement!.querySelectorAll('.ph-tab')].indexOf(a));
+  await page.locator('.ru-ph > .ph-more').click({timeout: t(3000)});
+  await page.locator(`.ru-ph > .ph-menu:popover-open .ph-mtab[data-ph-tab="${i}"]`).click({timeout: t(3000)});
+}
 const onTab = (page: Page, tab: string) => page.waitForFunction(k => document.querySelector(`.ru-tabs a[data-ru-tab="${k}"]`)?.classList.contains('cur'),
   tab, {timeout: t(15000)});
 
@@ -46,8 +54,15 @@ function headerProblems(page: Page, acts: string[]) {
       if (!inView(r)) bad.push(`${sel} is out of view (${Math.round(r.left)}..${Math.round(r.right)} of ${vw})`);
       return [sel, r] as const;
     }).filter(x => x !== null);
-    for (const a of document.querySelectorAll<HTMLElement>('.ru-tabs a[data-ru-tab]')) {
-      a.scrollIntoView({block: 'nearest', inline: 'nearest'});   // a phone scrolls the tab row sideways
+    const tabs = [...document.querySelectorAll<HTMLElement>('.ru-tabs a[data-ru-tab]')];
+    if (tabs.filter(a => a.getClientRects().length).length > 5) bad.push('more than five tabs show');
+    for (const a of tabs) {
+      if (!a.getClientRects().length) {
+        // waiting in ⋯: the menu lists it
+        const item = document.querySelector(`.ru-ph > .ph-menu .ph-mtab[data-ph-tab="${tabs.indexOf(a)}"]`);
+        if (!item || item.textContent !== a.textContent) bad.push(`tab ${a.dataset['ruTab']} is neither on the row nor in ⋯`);
+        continue;
+      }
       const r = a.getBoundingClientRect(), k = a.dataset['ruTab'];
       if (!inView(r)) { bad.push(`tab ${k} is out of view`); continue; }
       const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -74,9 +89,9 @@ async function foldedProblems(page: Page, acts: string[]) {
   return bad;
 }
 
-// Internal's search folded into ⋯ at 1280: typing keeps ⋯ open and the box focused (the header refits as the results
+// Internal's search folded into ⋯ (at the widest width where it is: five tabs leave it room at 1280 now): typing keeps ⋯ open and the box focused (the header refits as the results
 // draw), and once ⋯ closes with text still in the box, ⋯ shows a dot, since that text still filters the map.
-async function foldedSearchProblems(page: Page) {
+async function foldedSearchProblems(page: Page, width: number) {
   const bad: string[] = [];
   const box = page.locator('.ru-ph .ph-menu .rr-q'), more = page.locator('.ru-ph > .ph-more');
   if (!await box.count()) return ['the search is not folded into ⋯'];
@@ -114,7 +129,7 @@ async function foldedSearchProblems(page: Page) {
   try {
     await page.waitForFunction(() => !!document.querySelector('.ru-ph > .ph-tools .rr-q'), null, {timeout: t(3000)});
   } catch { bad.push('the search stays in ⋯ after ⋯ closes at 1440'); }
-  await page.setViewportSize({width: 1280, height: 800});
+  await page.setViewportSize({width, height: 800});
   await page.waitForFunction(() => !!document.querySelector('.ru-ph .ph-menu .rr-q'), null, {timeout: t(3000)});
   return bad;
 }
@@ -145,13 +160,35 @@ function headerShape(page: Page) {
   });
 }
 
+// Each tab's list against the style guide ("A great page", "Rows, pills and counts"): no empty filter rail beside the
+// list, no caption or source path, no pill where nothing is wrong (no "Free", no "Upcoming"), and ⋯ on every tab.
+function tabProblems(page: Page, tab: string) {
+  return page.evaluate((tab: string) => {
+    const bad: string[] = [];
+    const root = document.querySelector<HTMLElement>('#ru-root')!, list = root.querySelector<HTMLElement>('.ru-list')!, rail = root.querySelector<HTMLElement>('.ru-filters')!;
+    if (!root.querySelector('.ru-ph > .ph-more')) bad.push('no ⋯');
+    if (!rail.firstElementChild && rail.getBoundingClientRect().width > 0) bad.push('an empty filter rail shows');
+    const text = list.innerText;
+    if (/backend\/|\.py\b/.test(text)) bad.push('a source path shows');
+    if (/In code, read-only|Listed here; edited/.test(text)) bad.push('a caption explains the tab');
+    if (/No What wakes/.test(text)) bad.push('the empty line reads "No What wakes"');
+    for (const pill of list.querySelectorAll<HTMLElement>('.pill, .sr-cost')) {
+      const w = pill.innerText.trim();
+      if (['Free', 'Upcoming', 'Satisfied', 'On'].includes(w)) bad.push(`a "${w}" pill on ${tab}`);
+    }
+    return bad;
+  }, tab);
+}
+
 (async () => {
   const hub = await startHub({seeds: ['org', 'toured']});
   let browser: Browser | undefined;
   try {
     browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
     const problems: string[] = [];
-    for (const [width, phone] of [[1440, false], [1280, false], [1100, false], [1024, false], [390, true]] as const) {
+    let searchChecked = false;
+    // 900: with the rule-checks line in ⋯ (org-rule-holds.ts) the search fits at 1024, so a narrower computer checks its fold.
+    for (const [width, phone] of [[1440, false], [1280, false], [1100, false], [1024, false], [900, false], [390, true]] as const) {
       const page = await pageAs(browser, hub, 'dana', {phone});
       try {
         if (!phone) await page.setViewportSize({width, height: 800});
@@ -172,20 +209,26 @@ function headerShape(page: Page) {
             return !!r && document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) !== document.documentElement;
           }, null, {timeout: t(15000)});
           for (const p of await headerProblems(page, ACTS[from]!)) problems.push(`${width}px on ${from}: ${p}`);
+          if (width === 1440) {
+            await page.locator('.ru-list .skel').first().waitFor({state: 'detached', timeout: t(15000)}).catch(() => {});
+            for (const p of await tabProblems(page, from)) problems.push(`${width}px on ${from}: ${p}`);
+          }
           for (const p of await foldedProblems(page, ACTS[from]!)) problems.push(`${width}px on ${from}: ${p}`);
-          if (width === 1280 && from === 'internal') for (const p of await foldedSearchProblems(page)) problems.push(`1280px on internal: ${p}`);
+          if (!phone && from === 'internal' && !searchChecked && await page.locator('.ru-ph .ph-menu .rr-q').count()) {
+            searchChecked = true;
+            for (const p of await foldedSearchProblems(page, width)) problems.push(`${width}px on internal: ${p}`);
+          }
           if (!phone) {
-            // At 1280 the eight tabs (about 810px) and a filled button (Outside's Add document, Due's Add due date) are wider
-            // than the 988px row even with the tools in ⋯, so those two tabs take a second row there.
-            const shape = await headerShape(page), most = width >= 1440 || (width >= 1280 && !['external', 'due'].includes(from)) ? 1 : 2;
-            if (shape.rows > most) problems.push(`${width}px on ${from}: the header takes ${shape.rows} rows (at most ${most})`);
+            // One row at every width: what does not fit waits in ⋯.
+            const shape = await headerShape(page);
+            if (shape.rows > 1) problems.push(`${width}px on ${from}: the header takes ${shape.rows} rows`);
             for (const w of shape.wrapped) problems.push(`${width}px on ${from}: ${w}`);
             titleTops.set(from, shape.titleTop);
           }
           // A real click on the next tab opens it (Playwright refuses to click a link something else covers).
           const to = TABS[(TABS.indexOf(from) + 1) % TABS.length]!;
           try {
-            await page.locator(`.ru-tabs a[data-ru-tab="${to}"]`).click({timeout: t(3000)});
+            await clickTab(page, to);
             await onTab(page, to);
           } catch (e) {
             problems.push(`${width}px on ${from}: clicking ${to} failed: ${(e as Error).message.split('\n')[0]}`);
@@ -196,9 +239,9 @@ function headerShape(page: Page) {
         await page.context().close();
       }
     }
-    // With reduced motion a tab change draws the page at once, without the route's fade (ui/app/router.ts). After Outside
-    // took two rows at 1280, the header kept them on every later tab, a resize included, until a reload (task #457,
-    // Validate). Each tab that fits one row must go back to one row, and a resize must not leave a second row either.
+    // With reduced motion a tab change draws the page at once, without the route's fade (ui/app/router.ts). Once, after
+    // Outside took two rows at 1280, the header kept them on every later tab, a resize included, until a reload (task
+    // #457, Validate). The header is one row on every tab, and a resize leaves it one row.
     {
       const page = await pageAs(browser, hub, 'dana');
       try {
@@ -215,9 +258,9 @@ function headerShape(page: Page) {
         const wrapped = () => page.evaluate(() => document.querySelector('.ru-ph')!.classList.contains('ph-wrap'));
         await go(page, HASH['external']!);
         await settle('external');
-        if (!await wrapped()) problems.push('reduced motion, 1280px: Outside does not take its second row (the case below needs it)');
+        if (await wrapped() || (await headerShape(page)).rows > 1) problems.push('reduced motion, 1280px: Outside takes two rows');
         for (const to of ['stages', 'wakes', 'internal', 'automations', 'builtin', 'suggested'] as const) {
-          await page.locator(`.ru-tabs a[data-ru-tab="${to}"]`).click({timeout: t(3000)});
+          await clickTab(page, to);
           await settle(to);
           const shape = await headerShape(page);
           if (await wrapped() || shape.rows > 1) problems.push(`reduced motion, 1280px, after Outside, on ${to}: the header takes ${shape.rows} rows (ph-wrap ${await wrapped()})`);
@@ -231,8 +274,9 @@ function headerShape(page: Page) {
         await page.context().close();
       }
     }
+    if (!searchChecked) problems.push('Internal\'s search never folded into ⋯ at 1100, 1024 or 900');
     assert.deepEqual(problems, [], 'Rules header problems:\n' + problems.join('\n'));
-    console.log('org-rules-header: every tab clickable with its actions in view at 1440, 1280, 1100, 1024 and 390; one row at 1440 and 1280, two at most at 1100, the title still');
+    console.log('org-rules-header: every tab clickable (five on the row, the rest from ⋯) with its actions in view at 1440, 1280, 1100, 1024 and 390; one row at every width, the title still');
   } finally {
     await browser?.close();
     await hub.stop();

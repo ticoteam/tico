@@ -4,7 +4,7 @@
 //    button beside the switcher opens the side menu.
 //  - live reply: a bot's separate messages stay apart (the server joins them with a blank line,
 //    execution.text and execution.parts) and show as separate paragraphs, not one run-on line
-//    ("keep the bot planned.I've filed the build"); a message held for the next turn can replace the turn.
+//    ("keep the bot planned.I've filed the build"); a message held for the next turn is a mark beside its time.
 //  - outline: a prompt on a page not loaded yet is paged in and brought into view; the draft stays put.
 //  - activity fold: task and note cards in a row fold into one "N updates" row; older history loads only at the top.
 //  - side threads: the chat is the person and the bot; bot-to-bot talk, relays, notices and notes fold into one line
@@ -145,12 +145,13 @@ async function liveReply(browser: Browser) {
   });
   await page.goto('https://tico-ui.test/#/assistant');
   await page.locator('#v2-live').waitFor();
-  // A message this host holds for the next turn says so, and its sender can have it replace the turn.
-  const held=page.locator('[data-message="m2"] .chat-delivery');
-  assert.match(await held.innerText(),/Queued for the next turn/);
-  await held.getByRole('button',{name:'Stop and redirect'}).click();
-  await page.waitForFunction(()=>document.querySelector('[data-message="m2"] .chat-delivery')?.textContent.startsWith('Stopping'));
-  assert.deepEqual(stops,[{run_id:'a1',redirect:'m2'}],'stops that run and names the message to start with');
+  // A message this host holds for the next turn says so with a small mark beside its time, never a row of its own
+  // (the style guide's chat window); Stop is on the working line, so nothing here stops the run.
+  const held=page.locator('[data-message="m2"] .th-head .chat-way');
+  assert.equal(await held.getAttribute('aria-label'),'Queued for the next turn');
+  assert.equal(await page.locator('[data-message="m2"] .chat-delivery').count(),0,'no extra row');
+  assert.equal(await page.locator('[data-message="m2"] .th-head time').count(),1,'the mark sits beside the time');
+  assert.deepEqual(stops,[]);
   const paragraphs=await page.locator('#v2-live p').allInnerTexts();
   assert.deepEqual(paragraphs,['Keep the bot planned.','I filed the build.'],'each message is its own paragraph');
   // Avatars: a bot is an SVG blob that breathes while it answers; a person stays a circle; motion stops under reduced motion.
@@ -213,11 +214,13 @@ async function liveReply(browser: Browser) {
   await liveCopy.click();
   assert.equal(await page.evaluate(()=>(window as unknown as PageWin).copiedMessage),raw,'copies updated Markdown and literal markup exactly');
   assert.equal(await page.locator('.chat-message-actions img').count(),0,'copy data cannot inject markup');
+  // The toolbar sits at the row's top right, as a thread's does (the style guide's chat window), over no words.
   const position=await liveCopy.evaluate(button=>{
-    const b=button.getBoundingClientRect(), bubble=button.closest('.bubble')!.getBoundingClientRect();
-    return {beside:b.left>=bubble.right-1,bottom:Math.abs(b.bottom-bubble.bottom)<2,near:b.left-bubble.right<10};
+    const b=button.closest('.chat-message-actions')!.getBoundingClientRect(), row=button.closest('.cw-msg')!.getBoundingClientRect();
+    const words=[...(document.querySelector('#v2-live')!.getClientRects() as unknown as DOMRect[])];
+    return {top:b.top<row.top+4,right:row.right-b.right>=0&&row.right-b.right<16,clear:words.every(r=>r.top>=b.bottom-1||r.right<=b.left+1)};
   });
-  assert.deepEqual(position,{beside:true,bottom:true,near:true},'copy sits just past the bubble\'s bottom right, off the words');
+  assert.deepEqual(position,{top:true,right:true,clear:true},'copy sits at the row\'s top right, off the words');
   await page.evaluate(()=>{navigator.clipboard.writeText=async()=>{throw new Error('Denied');};});
   await liveCopy.click();
   await page.getByText('Could not copy the message',{exact:true}).waitFor();
@@ -270,13 +273,16 @@ async function outlineJump(browser: Browser) {
   await page.goto('https://tico-ui.test/#/assistant');
   await page.waitForFunction(()=>V2C?.rendered&&V2C.loaded);
   await page.locator('#chat-composer textarea').fill('half-written thought');
-  await page.getByRole('button',{name:'Outline',exact:true}).click();
-  const rows=page.locator('#chat-outline .co-row');
-  await rows.first().waitFor();
-  assert.equal(await rows.count(),9,'every prompt, loaded or not');
-  assert.equal(await page.evaluate(()=>(document.activeElement as HTMLElement | null)?.dataset.id),'h8','focus starts on the newest');
+  // On a computer your messages are the ticks on the thread's edge (ui/app/chat-index.ts), not a second Outline pill:
+  // the outline names the prompts not loaded yet, and a tick for one pages back to it.
+  assert.equal(await page.getByRole('button',{name:'Outline',exact:true}).isVisible(),false,'one way to your prompts');
+  const ticks=page.getByRole('navigation',{name:'Your messages'}).getByRole('button');
+  await page.waitForFunction(()=>document.querySelectorAll('nav.pidx:not([hidden]) .pidx-t').length===9);
+  assert.equal(await ticks.count(),9,'every prompt, loaded or not');
+  assert.match(String(await ticks.first().getAttribute('aria-label')),/^Check the release notes, /);
+  await ticks.last().focus();
   for(let i=0;i<8;i++)await page.keyboard.press('ArrowUp');
-  assert.equal(await page.evaluate(()=>(document.activeElement as HTMLElement | null)?.dataset.id),'h0');
+  assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')?.split(',')[0]),'Check the release notes');
   if(process.env.TICO_SHOTS)await page.screenshot({path:process.env.TICO_SHOTS+'/outline-desktop.png'});
   await page.keyboard.press('Enter');
   const target=page.locator('#conv-thread [data-message="h0"]');
@@ -286,11 +292,16 @@ async function outlineJump(browser: Browser) {
     return r.top>=b.top-1&&r.bottom<=b.bottom+1;});
   assert.equal(await page.evaluate(()=>V2C.stick.atBottom),false,'a jump stops following the end');
   assert.equal(await page.locator('#chat-composer textarea').inputValue(),'half-written thought','the draft stays');
-  assert.equal(await page.locator('#chat-outline').evaluate(d=>(d as HTMLDetailsElement).open),false);
-  // Phone: the same list is a bottom sheet with thumb-sized rows.
+  // Phone: no ticks; the Outline is a bottom sheet with thumb-sized rows, newest focused, arrows move through it.
   await page.setViewportSize({width:390,height:844});
+  await page.waitForFunction(()=>!document.querySelector('nav.pidx:not([hidden])'));
   await page.getByRole('button',{name:'Outline',exact:true}).click();
+  const rows=page.locator('#chat-outline .co-row');
   await rows.first().waitFor();
+  assert.equal(await rows.count(),9,'every prompt, loaded or not');
+  assert.equal(await page.evaluate(()=>(document.activeElement as HTMLElement | null)?.dataset.id),'h8','focus starts on the newest');
+  await page.keyboard.press('ArrowUp');
+  assert.equal(await page.evaluate(()=>(document.activeElement as HTMLElement | null)?.dataset.id),'h7');
   const sheet=await page.evaluate(()=>{const d=document.querySelector<HTMLElement>('#chat-outline')!.getBoundingClientRect(),r=document.querySelector<HTMLElement>('#chat-outline .co-row')!.getBoundingClientRect();
     return {bottom:Math.round(d.bottom)===innerHeight,full:Math.round(d.width)===innerWidth,tall:r.height>=44,overflow:document.documentElement.scrollWidth>innerWidth};});
   assert.deepEqual(sheet,{bottom:true,full:true,tall:true,overflow:false});
@@ -493,7 +504,8 @@ async function sideThreads(browser: Browser) {
   assert.ok(box.height < 34, `one compact line (${box.height}px)`);
   assert.equal(await thread.locator('.bubble').count(), 4, 'four messages between Ana and the Assistant');
   assert.equal(await thread.locator('> .chat-system', {hasText: 'Approve this send'}).count(), 1, 'the approval stays in the conversation');
-  const order = await thread.evaluate((el: Element) => [...el.children].map(x => (x as HTMLElement).dataset.message || (x.matches('.chat-side') ? 'side' : x.className)));
+  // The day lines between them are not rows of the conversation.
+  const order = await thread.evaluate((el: Element) => [...el.children].filter(x => !x.matches('.chat-day')).map(x => (x as HTMLElement).dataset.message || (x.matches('.chat-side') ? 'side' : x.className)));
   assert.deepEqual(order, ['ask-1', 'reply-1', 'side', 'approval', 'ask-2', 'side', 'quote'],
     'side items after the last reply join the line above it, so the conversation ends the thread');
 
@@ -664,7 +676,10 @@ async function settingsLinks(browser: Browser) {
     reason=why;
     // Settings was last left on another tab, which a plain link to #/settings would reopen.
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-tabs [data-settings-tab=tasks]').click();
+    // Tasks is past the header's fifth tab: it is chosen from ⋯ (the shared page header's overflow).
+    await page.locator('#settings-tabs').waitFor();
+    await page.locator('header.ph > .ph-more').click();
+    await page.locator('header.ph > .ph-menu .ph-mtab', {hasText: 'Tasks'}).click();
     await page.locator('#settings-tabs [data-settings-tab=tasks][aria-selected=true]').waitFor();
     await page.goto('https://tico-ui.test/#/assistant');
     await page.locator('.conv-run.chat .thinking').getByRole('link',{name,exact:true}).click();

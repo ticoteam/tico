@@ -25,12 +25,17 @@ const isLensesRoute = (r: string): boolean => r === LENSES_ROUTE || r.startsWith
 
 // getting-started.ts
 // Setup's last step (ui/app/welcome.ts) still has a row open: the computer (a hosted company's Tico Cloud computers
-// count, as the step shows them ticked) or the subscription line, not done or skipped. Finish setup stays in the
-// sidebar for the owner until both are, or until they hide it for good from that step (the checklist's own `dismissed`).
+// count, as the step shows them ticked), GitHub, or the subscription line, not done or skipped. Finish setup stays in
+// the sidebar for the owner until they are. Hiding it for good from that step (the checklist's own `dismissed`) hides
+// only optional rows (the subscription, except on Tico Cloud): a required row brings it back until it is done.
 function gsSetupOpen(): boolean {
-  if (!GS || GS.dismissed || S.me?.role !== 'owner') return false;
-  const computer = GS.items.find(item => item.id === 'computer'), sub = GS.items.find(item => item.id === 'subscription');
-  return (!!computer && !computer.done && !S.config?.hosted) || (!!sub && !sub.done && !sub.skipped);
+  const gs = GS;
+  if (!gs || S.me?.role !== 'owner') return false;
+  const open = (id: string): boolean => {
+    const item = gs.items.find(row => row.id === id);
+    return !!item && !item.done && !item.skipped && (!gs.dismissed || item.optional === false);
+  };
+  return (open('computer') && !S.config?.hosted) || open('github') || open('subscription');
 }
 
 // first-run.ts
@@ -253,14 +258,14 @@ function toolsRoute(r: string): boolean {
   for (const old of ['#/library/tools', INTEGRATIONS]) {
     if (!rdUnder(path, old)) continue;
     const rest = path.slice(old.length).replace(/^\/+/, '');
-    if (!rest) return go(new URLSearchParams(query).has('who') ? TOOLS_KEYS + q : TOOLS_ROUTE);
-    return go((rest.startsWith('credentials/') ? TOOLS_KEYS + '/' : TOOLS_ROUTE + '/') + rest + q);
+    if (!rest) return go(TOOLS_ROUTE + toolsKeysQuery(query));
+    return go(rest.startsWith('credentials/') ? TOOLS_ROUTE + '/key/' + rest.slice(12) : TOOLS_ROUTE + '/' + rest + q);
   }
   if (rdUnder(path, '#/library/connections')) {
     const rest = path.slice('#/library/connections'.length).replace(/^\/+/, '');
     return go(rest ? TOOLS_ROUTE + '/' + rest : TOOLS_ROUTE);
   }
-  if (rdUnder(path, CREDENTIALS)) return go(TOOLS_KEYS + '?show=credentials');
+  if (rdUnder(path, CREDENTIALS)) return go(TOOLS_ROUTE + '?show=keys');
   // The kinds and views of inbox register themselves as Tools' inbox code runs (ui/app/inboxes*.ts, the connect page
   // part), and Tools' pages and its Add tool menu read them: an address there waits for it, then routes again (or shows
   // Retry where the page would be).
@@ -280,7 +285,12 @@ function toolsRoute(r: string): boolean {
   if (!parts.length) { pageTools(); return true; }
   if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   if (parts[0] === 'website' && parts[1]) { void pageToolWebsite(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
-  if (parts[0] === 'keys') { pageRdTools(); return true; }
+  // Keys was its own page; a tool's keys are on the tool's page now: the list with Keys' filters, a tool, or a key.
+  if (parts[0] === 'keys') {
+    const [, a, b] = parts.map(encodeURIComponent);
+    return go(a === 'credentials' && b ? TOOLS_ROUTE + '/key/' + b : a ? TOOLS_ROUTE + '/' + a : TOOLS_ROUTE + toolsKeysQuery(query));
+  }
+  if (parts[0] === 'key' && parts[1]) { void pageToolKey(parts[1]); return true; }
   if (parts[0] === 'webhooks') { pageToolWebhooks(parts[1] || ''); return true; }
   const view = inboxesRoute(parts);
   if (view !== null) { toolsInboxPage(view); return true; }
@@ -507,7 +517,15 @@ function inboxesRoute(parts: string[]): string | null {
 }
 
 // app/tools.ts
-const TOOLS_KEYS = '#/tools/keys';
+// The old Keys list's filters (who, issues=1, q, show=credentials) as the Tools list's (ui/app/tools.ts toolsParams).
+function toolsKeysQuery(query: string): string {
+  const old = new URLSearchParams(query), q = new URLSearchParams();
+  if (old.get('show') === 'credentials') q.set('show', 'keys');
+  if (old.get('issues') === '1') q.set('needs', '1');
+  for (const k of ['who', 'q']) { const v = old.get(k); if (v) q.set(k, v); }
+  const text = q.toString();
+  return text ? '?' + text : '';
+}
 // An old Settings › Inboxes address (what follows #/settings/inboxes/) at its home under Tools.
 function toolsFromInboxes(rest: string): string {
   const [head = '', id = ''] = rest.split('/');
@@ -900,13 +918,53 @@ function useMoney(n: number | null | undefined): string {
   return '$' + n.toLocaleString(undefined, n >= 100 ? {maximumFractionDigits: 0} : {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
 const useSpend = (r: UseFigures): number => (r.est_cost_usd || 0) + (r.subscription_equiv_usd || 0);
-// The cell on a Usage row and in Settings > Bots: the limit, a chip when it is near or met, and a click to change it.
+// The cell on a Usage row and in Settings > Bots (style guide, Usage: "Near the limit"): the limit as one line of text
+// and the bot's meter under it, amber from 80% and red when paused, with the words beside the limit ("86% · $20/day",
+// "Paused · $5/day"); nothing inside it is a pill. A click changes it. Its name is what it shows, after whose limit it is
+// (hidden words, so "Limit for Sam: 86% · $20/day" is read); the meter repeats the words, so it is hidden from readers.
+// With no limit the cell shows nothing at rest where there is a pointer: it is still the button that sets one, named by
+// its own words ("Set limit for Sales"), which show on hover or focus (ui/styles/usage.css).
 function useLimitButton(slug: string, name: string | undefined, limit: UseLimit | null | undefined): string {
   if (!limit?.may_edit) return '<span class="use-limit"></span>';
-  const text = useLimitText(limit);
-  const chip = limit.blocked ? '<span class="pill fail">Paused</span>' : limit.percent >= 80 ? `<span class="pill waiting">${limit.percent}%</span>` : '';
-  return `<button type="button" class="use-limit${text ? '' : ' none'}" data-use-limit="${esc(slug)}" aria-label="Limit for ${esc(name || slug)}"
-    title="${limit.blocked ? esc(`${useHeldBy(limit)}: no new work until it resets or the limit is raised`) : 'Change limit'}">${chip}<span>${text ? esc(text) : 'Set limit'}</span></button>`;
+  const text = useLimitText(limit), who = esc(name || slug);
+  if (!text && !limit.blocked) return `<button type="button" class="use-limit none" data-use-limit="${esc(slug)}" title="Set limit"><span>Set limit</span><span class="sr-only"> for ${who}</span></button>`;
+  const pct = Math.max(0, Math.min(100, Math.round(Number(limit.percent) || 0)));
+  const state = limit.blocked ? 'bad' : pct >= 80 ? 'warn' : '';
+  // A bot held by its team's or a group's limit may have none of its own: then "Paused" alone.
+  const word = (limit.blocked ? '<span class="use-limit-w bad">Paused</span>' : state ? `<span class="use-limit-w warn">${pct}%</span>` : '') + (state && text ? ' · ' : '');
+  return `<button type="button" class="use-limit${state ? ' ' + state : ''}" data-use-limit="${esc(slug)}"
+    title="${limit.blocked ? esc(`${useHeldBy(limit)}: no new work until it resets or the limit is raised`) : 'Change limit'}"><span class="sr-only">Limit for ${who}: </span><span class="use-limit-t tnum">${word}${esc(text)}</span><i class="use-meter${state ? ' ' + state : ''}" aria-hidden="true"><b style="width:${limit.blocked ? 100 : pct}%"></b></i></button>`;
+}
+
+// A page header's shared filter icon (core.ts filterIcon) and its menu, the shared popover (task-list-menus.ts tasksMenu):
+// Usage, Replay and Changelog draw them the same way. `open` draws the menu; it gets the anchor to place it under, which
+// is the header's ⋯ while a phone has folded the icon into ⋯ (opening the menu closes ⋯, and the hidden icon would place
+// it at the window's corner). A second press on the icon closes the menu: the popover closes itself on the press
+// (light dismiss), so the click that follows must not open it again. Closed, the menu hands the focus back to the icon,
+// or to ⋯ when the icon is folded away. `keys`: the shared ↑/↓ keys between the menu's items; off for a menu of
+// drop-downs, whose own arrow keys change their value.
+const phFilterAnchor = (btn: HTMLElement): HTMLElement =>
+  btn.closest('.ph-menu') ? btn.closest('header.ph')?.querySelector<HTMLElement>(':scope > .ph-more') || btn : btn;
+function phFilterWire(host: TasksMenuHost, btn: HTMLElement, pop: HTMLElement, open: (anchor: HTMLElement) => void, keys = true): void {
+  let wasOpen = false;
+  btn.addEventListener('pointerdown', () => { wasOpen = pop.matches(':popover-open') && host.menuAnchor === phFilterAnchor(btn); });
+  btn.addEventListener('click', () => {
+    const skip = wasOpen; wasOpen = false;
+    if (skip) { if (pop.matches(':popover-open')) pop.hidePopover(); btn.setAttribute('aria-expanded', 'false'); return; }
+    open(phFilterAnchor(btn));
+    btn.setAttribute('aria-expanded', String(pop.matches(':popover-open')));   // said at once; the toggle event comes later
+  });
+  if (keys) pop.addEventListener('keydown', tasksMenuKeys);
+  pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
+    btn.setAttribute('aria-expanded', String(ev.newState === 'open'));
+    if (ev.newState !== 'closed' || !btn.isConnected || !(pop.contains(document.activeElement) || document.activeElement === document.body)) return;
+    phFocusHome(btn);
+  });
+}
+// The focus back on a control of a page header: itself, or the header's ⋯ while it is folded into ⋯'s closed list.
+function phFocusHome(el: HTMLElement): void {
+  const target = el.closest('.ph-menu:not(:popover-open)') ? el.closest('header.ph')?.querySelector<HTMLElement>(':scope > .ph-more') : el;
+  target?.focus();
 }
 
 // app/replay.ts

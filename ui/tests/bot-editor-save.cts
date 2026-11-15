@@ -275,6 +275,11 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
       SETTINGS_DATA.harnesses!.push({id: 'own-compactor', capabilities: {compaction: true, own_compaction: true}});
       return settingsCompacts('own-compactor');
     }), false, 'no Compact for a harness that compacts on its own');
+    // Archive is the last item of the editor's ⋯, red; the foot is Cancel then Save bot, last.
+    assert.deepEqual(await editor.locator('.bot-editor-foot > button').allInnerTexts(), ['Cancel', 'Save bot'], 'the foot: Cancel left, Save bot last');
+    assert.equal(await editor.locator('.bot-editor-foot [data-bot-remove]').count(), 0, 'no Archive in the foot');
+    await editor.locator('[data-bot-more]').click();
+    assert.equal(await editor.locator('[role=menu] [role=menuitem]').last().getAttribute('data-bot-remove'), '', 'Archive bot is last in ⋯');
     await editor.locator('[data-bot-remove]').click();
     const ask = page.locator('dialog.settings-confirm');
     await ask.waitFor();
@@ -284,6 +289,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     await page.waitForTimeout(200);
     assert.deepEqual(calls as unknown[], [], 'Cancel archives nothing');
     assert.equal(await editor.isVisible(), true);
+    await editor.locator('[data-bot-more]').click();
     await editor.locator('[data-bot-remove]').click();
     await ask.locator('[data-confirm-ok]').click();
     // The archive reload must finish before the next editor opens.

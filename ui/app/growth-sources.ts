@@ -2,7 +2,8 @@
    of number (GET /api/v2/growth/sources), one row each: what it is the truth for, the system, how bots reach it, what
    they may do and who owns it. A synced source (backend/growth_sync.py) also says what it fills and its health: Fresh,
    Stale or Failing, and since when. Two sources for one truth are flagged, and "Use X" keeps X and retires the others.
-   The owner or an admin adds, edits and retires one, and connects a synced one: Connect a source maps a file's columns
+   The owner or an admin adds (⋯, Add by hand), edits and retires one, and connects a synced one (the header's quiet +):
+   Connect a source maps a file's columns
    to Growth's numbers once, and its first file fills up to 12 months. They change without a publish.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -30,24 +31,49 @@ function gsrcDraw(state: GrState) {
   const body = $('#gr-body'), d = state.data;
   if (!body || !d) return;
   const may = d.may, list = d.src.filter(s => !s.retired_at).sort((a, b) => String(a.truth_for).localeCompare(String(b.truth_for)));
-  patchHTML($('#strat-actions'), may ? '<button class="ghost" type="button" data-src-add>+ Source</button><button class="primary" type="button" data-src-connect>Connect a source</button>' : '');
+  // One way to add in the bar (style guide "Top bars: one line"): connecting a synced source is the quiet +; describing
+  // one typed by hand is rarer, a ⋯ item. Each is set only when it changes, so a redraw never closes an open ⋯.
+  const head = $('#gr-head') as HTMLElement | null;
+  const act = may ? pageHeadAdd('Connect a source', 'data-src-connect') : '', more = (may ? '<button type="button" data-src-add>Add by hand</button>' : '') + PAGE_HEAD_COPY;
+  if (head && head.dataset.grAct !== act) { head.dataset.grAct = act; pageHeadSet(head, 'primary', act); }
+  if (head && head.dataset.grMore !== more) { head.dataset.grMore = more; pageHeadSet(head, 'more', more); }
   const banners = d.conflicts.map(t => {
     const rows = list.filter(s => String(s.truth_for).toLowerCase() === String(t).toLowerCase());
     return `<div class="gr-banner gr-amber" data-clash="${esc(t)}"><span><b>${esc(t)}</b> · ${esc(rows.map(s => s.system).join(', '))}</span><span class="spacer"></span>
       ${may ? rows.map(s => `<button class="ghost small" type="button" data-use="${esc(s.id)}">Use ${esc(s.system)}</button>`).join('') : ''}</div>`;
   }).join('');
-  const reach = (s: GrSource) => `${esc(GT_REACH.find(r => r[0] === s.reach_kind)?.[1] || s.reach_kind || '')}${s.reach_ref ? ` <code>${esc(s.reach_ref)}</code>` : ''}`;
+  // How bots reach it: the kind, then which one. An address is shown as its site, in the row's own type (a full address
+  // in code type broke mid-word); the whole address is its title.
+  const reach = (s: GrSource) => {
+    const kind = esc(GT_REACH.find(r => r[0] === s.reach_kind)?.[1] || s.reach_kind || ''), ref = String(s.reach_ref || '');
+    if (!ref) return kind;
+    // A person is named, with their face, as every other list names people (not their id).
+    if (s.reach_kind === 'person') return gsrcWho(ref.includes(':') ? ref : 'human:' + ref);
+    let site = ref;
+    if (s.reach_kind === 'url') { try { site = new URL(ref).hostname.replace(/^www\./, ''); } catch { site = ref; } }
+    return `${kind} <span class="gsrc-ref" title="${esc(ref)}">${esc(site)}</span>`;
+  };
   const row = (s: GrSource) => {
-    const inner = `<span class="gsrc-t">${esc(s.truth_for)}</span><span class="gsrc-s">${esc(s.system)}</span><span class="muted gsrc-r">${reach(s)}</span>
-      <span class="muted gsrc-m">${esc(gtMayText(s.may))}</span><span class="muted gsrc-o">${esc(grWho(s.owner_ref))}</span>${gsrcSync(s)}`;
+    // data-k names each fact on a phone, where the row stacks and the heads are gone (growth.css).
+    const inner = `<span class="gsrc-t">${esc(s.truth_for)}</span><span class="gsrc-s" data-k="Source">${esc(s.system)}</span><span class="muted gsrc-r" data-k="Reached by">${reach(s)}</span>
+      <span class="muted gsrc-m" data-k="Bots may">${esc(gtMayText(s.may))}</span><span class="muted gsrc-o" data-k="Owner">${s.owner_ref ? gsrcWho(String(s.owner_ref)) : ''}</span>${gsrcSync(s)}`;
     return `<li data-src="${esc(s.id)}" data-health="${esc(s.health || 'not_synced')}">${may
       ? `<button type="button" class="gsrc-row" data-src-edit="${esc(s.id)}">${inner}</button>` : `<div class="gsrc-row">${inner}</div>`}</li>`;
   };
-  body.innerHTML = banners + (list.length ? `<section class="card gsrc-list" aria-label="Sources"><ul class="gsrc-ul">${list.map(row).join('')}</ul></section>` : '');
-  const add = $('#strat-actions [data-src-add]');
-  if (add) add.onclick = () => void gsrcDialog(state);
-  const connect = $('#strat-actions [data-src-connect]');
-  if (connect) connect.onclick = () => gsrcConnect(state);
+  // The columns' heads, in the table heads' small uppercase (style guide "Tables"); a phone stacks each row instead.
+  const heads = '<li class="gsrc-head" aria-hidden="true"><span>Truth for</span><span>Source</span><span>Reached by</span><span>Bots may</span><span>Owner</span></li>';
+  body.innerHTML = banners + (list.length ? `<section class="card gsrc-list" aria-label="Sources"><ul class="gsrc-ul">${heads}${list.map(row).join('')}</ul></section>`
+    : `<p class="muted gr-note">No sources yet.</p>`);
+  // The header's quiet + and ⋯ item are drawn with it: one listener on the header catches them.
+  if (head && !head.dataset.grWired) {
+    head.dataset.grWired = '1';
+    head.addEventListener('click', ev => {
+      const t = eventElement(ev);
+      if (GR !== state) return;
+      if (t?.closest('[data-src-connect]')) gsrcConnect(state);
+      else if (t?.closest('[data-src-add]')) void gsrcDialog(state);
+    });
+  }
   body.querySelectorAll('[data-src-edit]').forEach((b: HTMLElement) => {
     b.onclick = () => { const s = d.src.find(x => x.id === b.dataset.srcEdit); if (s?.kind) gsrcConnect(state, s); else void gsrcDialog(state, s); };
   });
@@ -64,6 +90,13 @@ function gsrcDraw(state: GrState) {
       void gsrcRead(state);
     };
   });
+}
+// A teammate as lists show one: the face (16px) and the name; a bot by its slug or bot:<id>, a person by human:<id>.
+function gsrcWho(ref: string) {
+  const pid = ref.startsWith('human:') ? ref.slice(6) : '', bot = pid ? null : botByRef(ref.startsWith('bot:') ? ref.slice(4) : ref);
+  const person = pid ? (S.people || []).find(p => p.id === pid) : null;
+  const face = bot ? avatar(bot.id, 16) : person ? personAvatar(person, 16) : '';
+  return `<span class="gsrc-who">${face}<span>${esc(grWho(ref))}</span></span>`;
 }
 async function gsrcDialog(state: GrState, s: GrSource | null | undefined = null) {
   // What reach_ref can name: connected MCP tools and stored credentials, else free text.
@@ -96,13 +129,16 @@ async function gsrcDialog(state: GrState, s: GrSource | null | undefined = null)
 // ----------------------------------------------------------------- synced sources (backend/growth_sync.py)
 // What a source's row says about syncing: what it fills and its health, or that it is typed by hand.
 const GSRC_HEALTH: Record<string, string> = {fresh: 'Fresh', stale: 'Stale', failing: 'Failing', waiting: 'Waiting'};
+// Fresh is the normal state of a synced source: no pill, just when it synced. Stale, Failing and Waiting are pills. A
+// source typed by hand says nothing here (it is the plain case, not news).
 function gsrcSync(s: GrSource) {
-  if (!s.kind) return '<span class="muted gsrc-sync">Typed by hand · not synced</span>';
+  if (!s.kind) return '<span class="muted gsrc-sync"></span>';
   const h = s.health || 'waiting', fills = grList((s.fills || []).map(grFieldWord));
-  const when = h === 'failing' ? `since ${fmt(s.health_since)}${s.last_error ? ` · ${s.last_error}` : ''}`
+  const when = h === 'failing' ? `since ${timeSaid(s.health_since)}${s.last_error ? ` · ${s.last_error}` : ''}`
     : h === 'stale' ? (s.last_good_run ? `last good run ${grDay(s.last_good_run)}` : '')
-    : h === 'fresh' ? `synced ${ago(s.last_good_run)}` : (s.has_file ? 'its file did not run yet' : 'waiting for its first file');
-  return `<span class="gsrc-sync"><span class="muted">${esc(fills)}</span> <span class="pill ${h === 'fresh' ? 'ok' : h === 'failing' ? 'fail' : 'waiting'}">${esc(GSRC_HEALTH[h] || h)}</span> <span class="muted">${esc(when)}</span></span>`;
+    : h === 'fresh' ? `synced ${agoSaid(s.last_good_run)}` : (s.has_file ? 'its file did not run yet' : 'waiting for its first file');
+  const pill = h === 'fresh' ? '' : ` <span class="pill ${h === 'failing' ? 'fail' : 'waiting'}">${esc(GSRC_HEALTH[h] || h)}</span>`;
+  return `<span class="gsrc-sync"><span class="muted">${esc(fills)}</span>${pill} <span class="muted">${esc(when)}</span></span>`;
 }
 // The numbers a synced source can fill, in the order Growth shows them.
 const GSRC_FIELDS = ['spend', 'bot_cost', 'new_customers', 'revenue_month', 'margin_pct', 'kept_d30', 'kept_d90', 'kept_d180'];

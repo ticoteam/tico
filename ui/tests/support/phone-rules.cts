@@ -206,6 +206,9 @@ function audit(where: string): {rule: number; element: string; why: string}[] {
     if (off(el) || !el.matches('.primary, button[type="submit"], input[type="submit"]')) continue;
     const r = el.getBoundingClientRect();
     if (r.bottom <= 0 || r.top >= H) continue;   // below the fold: a scroll brings it up, checked at the end too
+    // Scrolled to the end, an action at the top of the page is partly past the top edge, under whatever is pinned there:
+    // that is the scroll, not a cover. It was checked whole as the screen opened.
+    if (where === 'scrolled to the end' && r.top + r.height / 2 < 0) continue;
     const x = r.left + r.width / 2, y = Math.min(H - 1, Math.max(0, r.top + r.height / 2));
     const hit = document.elementFromPoint(x, y);
     if (!hit || hit === el || el.contains(hit) || hit.contains(el)) continue;

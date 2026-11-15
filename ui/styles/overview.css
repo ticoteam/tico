@@ -1,32 +1,37 @@
 #main.overview-layout{padding:0;max-width:none;overflow:hidden;min-height:0}
-/* The campus keeps the empty top strip's room as the Dashboard tab does (ui/styles/layout.css), and its tab row sits
-   where .dash-head puts it there (ui/styles/dashboard.css): switching tabs moves neither the heading nor the tabs. */
+/* Company › Campus (ui/app/overview.ts): the shared page header (ui/app/page-head.ts) over the Needs you, stuck and bot
+   hours strips, then the 3D campus frame filling the rest; and the bot hours card (ui/app/overview-hours.ts). */
 /* A campus left a moment ago waits here, paused and out of sight, until the Overview shows again (ui/app/overview.ts). */
 #overview-hold{position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;overflow:hidden;contain:strict;z-index:-1}
 #overview-hold>iframe{width:100%;height:100%;border:0;display:block}
 .overview-page{height:100%;min-height:0;display:flex;flex-direction:column}
-.overview-needs{flex:none;display:flex;gap:var(--s3);align-items:baseline;flex-wrap:wrap;padding:var(--s2) var(--s4);border-bottom:1px solid var(--line);background:var(--surface);font-size:var(--t-base);color:inherit;text-decoration:none}
+/* The strips over the campus share the page header's gutter (28px; 12px on a phone), so their words line up with its title. */
+.overview-needs{flex:none;display:flex;gap:var(--s3);align-items:baseline;flex-wrap:wrap;padding:var(--s2) 28px;border-bottom:1px solid var(--line);background:var(--surface);font-size:var(--t-base);color:inherit;text-decoration:none}
 .overview-needs:hover strong{text-decoration:underline}
-.overview-stuck{flex:none;padding:var(--s2) var(--s4);border-bottom:1px solid var(--line);background:var(--surface);font-size:var(--t-base);max-height:40%;overflow:auto}
+.overview-stuck{flex:none;padding:var(--s2) 28px;border-bottom:1px solid var(--line);background:var(--surface);font-size:var(--t-base);max-height:40%;overflow:auto}
 .overview-stuck>strong{color:var(--fail)}
 .overview-stuck .hl-bots li{padding:2px 0}
 .overview-frame{border:0;width:100%;flex:1;min-height:0;display:block;background:var(--bg)}
 @media(max-width:760px){
   #main.overview-layout{height:calc(100dvh - var(--demo-h,0px) - var(--mobile-nav-height) - env(safe-area-inset-bottom));padding:0}
+  .overview-needs,.overview-stuck{padding-left:12px;padding-right:12px}
+  /* the Needs you strip is a link: a 44px target */
+  .overview-needs{align-items:center;min-height:44px;box-sizing:border-box}
 }
 .overview-stuck .overview-fallback{margin:0;padding:2px 0}
 /* Bot hours vs human hours (ui/app/overview-hours.ts): words on the left, the weekly line on the right; stacked on a phone. */
-.overview-hours{flex:none;display:flex;flex-direction:column;gap:2px;padding:var(--s2) var(--s4);border-bottom:1px solid var(--line);background:var(--surface);font-size:var(--t-base);cursor:pointer}
+.overview-hours{flex:none;display:flex;flex-direction:column;gap:2px;padding:var(--s2) 28px;border-bottom:1px solid var(--line);background:var(--surface);font-size:var(--t-base);cursor:pointer}
 .overview-hours.has-plot{display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,340px);grid-template-areas:"title plot" "head plot" "note plot";column-gap:var(--s4);row-gap:2px;align-items:center}
 .overview-hours[hidden]{display:none}
 .overview-hours:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .overview-hours:hover .ovh-head{text-decoration:underline}
 .overview-hours p{margin:0}
-.ovh-title{grid-area:title;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label);font-weight:600}
+.ovh-title{grid-area:title;color:var(--muted);font-size:var(--t-sm);font-weight:500}
 .ovh-head{grid-area:head}
 .ovh-head strong{font-size:var(--t-lg)}
 .overview-hours>.ovh-note{grid-area:note;font-size:var(--t-sm);color:var(--muted)}
-.ovh-plot{grid-area:plot;position:relative;height:72px;cursor:crosshair;touch-action:pan-y}
+/* the right margin holds the parity line's label, beside the line's end, where the weekly line never runs */
+.ovh-plot{grid-area:plot;position:relative;height:72px;margin-right:64px;cursor:crosshair;touch-action:pan-y}
 .ovh-chart{display:block;width:100%;height:100%;overflow:visible}
 .ovh-parity{stroke:var(--muted);stroke-width:1;stroke-dasharray:4 3}
 .ovh-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
@@ -36,7 +41,7 @@
 .ovh-dot{position:absolute;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--surface);pointer-events:none}
 .ovh-dot-so-far{background:var(--surface);border:2px solid var(--accent);box-sizing:border-box}
 .ovh-dot.on{transform:scale(1.4)}
-.ovh-parity-label{position:absolute;left:0;transform:translateY(-120%);font-size:var(--t-xs);color:var(--muted);pointer-events:none}
+.ovh-parity-label{position:absolute;left:calc(100% + 8px);transform:translateY(-50%);font-size:var(--t-xs);line-height:var(--lh-tight);color:var(--muted);white-space:nowrap;pointer-events:none}
 .ovh-tip{position:absolute;top:calc(100% + 4px);z-index:2;width:max-content;max-width:100%;box-sizing:border-box;padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:var(--t-sm);box-shadow:0 2px 10px rgba(0,0,0,.18);pointer-events:none}
 .ovh-tip[hidden]{display:none}
 .ovh-table{width:100%;border-collapse:collapse;font-size:var(--t-base)}
@@ -45,6 +50,7 @@
 .ovh-table tbody th{text-transform:none;letter-spacing:normal;font-size:var(--t-base);font-weight:500;color:var(--ink)}
 .ovh-dialog .ovh-note{margin:var(--s3) 0 0;font-size:var(--t-sm)}
 @media(max-width:760px){
+  .overview-hours{padding-left:12px;padding-right:12px}
   .overview-hours.has-plot{grid-template-columns:minmax(0,1fr);grid-template-areas:"title" "head" "plot" "note"}
-  .ovh-plot{height:56px;margin:var(--s3) 0 2px}
+  .ovh-plot{height:56px;margin:var(--s3) 64px 2px 0}
 }

@@ -46,7 +46,7 @@ Object.assign(ctx, {
   liveTasksSync: noop, taskLiveStop: noop, taskLiveFocusKeep: noop, taskLiveFocusRestore: noop, taskFormAdopt: noop,
   taskFormRestore: noop, taskFormCapture: () => ({fields: [], folds: []}), taskModalBind: noop, taskPropFocus: noop,
   taskMenuSettled: () => Promise.resolve(),
-  taskLiveEdited: noop, taskLiveStart: noop, taskRailLoad: () => Promise.resolve(), taskChatLoad: () => Promise.resolve(),
+  taskTabFirst: noop, taskLiveStart: noop, taskRailLoad: () => Promise.resolve(), taskChatLoad: () => Promise.resolve(),
   tfLoad: () => Promise.resolve(), taskRunsLoad: () => Promise.resolve(), githubNudgeTask: () => Promise.resolve(),
   decideTaskOpen: () => Promise.resolve(false),     // decide.ts: these tasks do not wait on the person, so the page opens
 });

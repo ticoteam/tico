@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
-// Company › Factories at a phone width (390 × 844): the header row keeps the h1, the Day/Week/Month control and
-// + Factory on screen, the Company tabs get their own full-width row of tabs (not a squeezed column, all six an owner
-// sees on screen), and #main does not scroll sideways. At a desktop width the header stays one row. Fixtures only.
+// Company › Factories in the shared page header, at a phone width (390 × 844) and a desktop one: the title line keeps
+// Company, the Day/Week/Month segment, the quiet + and ⋯ on screen; the Company tabs get their own full-width row (five,
+// Share in ⋯); #main does not scroll sideways. At a desktop width the header stays one row. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -42,42 +42,61 @@ const FACTORIES = {factories: [{id: 'f-growth', name: 'Growth', goal: null, mana
       return {page, errors};
     };
     const geometry = (page: import('playwright').Page) => page.evaluate(() => {
-      const box = (sel: string) => { const r = document.querySelector(sel)!.getBoundingClientRect(); return {left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height}; };
-      const main = document.querySelector('#main')!;
-      const tabs = [...document.querySelectorAll('.of-page .overview-tabs .dash-tabs a, .of-page .overview-tabs .dash-tabs button')]
-        .map(t => Math.round(t.getBoundingClientRect().top));
-      return {vw: innerWidth, scroll: main.scrollWidth, client: main.clientWidth, add: box('#of-new-b'), period: box('#of-period'),
-        h1: box('.of-page .overview-tabs h1'), navScroll: document.querySelector('.of-page .dash-tabs')!.scrollWidth, navClient: document.querySelector('.of-page .dash-tabs')!.clientWidth,
-        lastTab: document.querySelector('.of-page .dash-tabs')!.lastElementChild!.getBoundingClientRect().right, nav: box('.of-page .overview-tabs .dash-tabs'), tabTops: [...new Set(tabs)], count: tabs.length};
+      const box = (el: Element) => { const r = el.getBoundingClientRect(); return {left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height}; };
+      const main = document.querySelector('#main')!, head = document.querySelector('.of-page > header.ph')!;
+      const shown = [...head.querySelectorAll<HTMLElement>(':scope > .ph-tabs > .ph-tab')].filter(t => t.checkVisibility());
+      const nav = head.querySelector(':scope > .ph-tabs')!;
+      return {vw: innerWidth, scroll: main.scrollWidth, client: main.clientWidth, add: box(document.querySelector('#of-new-b')!), period: box(document.querySelector('#of-period')!),
+        h1: box(head.querySelector('h1')!), more: box(head.querySelector(':scope > .ph-more')!), nav: box(nav), navScroll: nav.scrollWidth, navClient: nav.clientWidth,
+        tabTops: [...new Set(shown.map(t => Math.round(t.getBoundingClientRect().top)))], tabs: shown.map(t => t.textContent),
+        held: [...head.querySelectorAll('.ph-menu .ph-mtab')].map(t => t.textContent),
+        last: head.querySelector(':scope > .ph-menu')!.previousElementSibling!.className,
+        small: [...head.querySelectorAll<HTMLElement>('button, a')].filter(el => el.checkVisibility() && el.getBoundingClientRect().height < 44).map(el => el.textContent || el.getAttribute('aria-label'))};
     });
 
-    // Phone: nothing past the right edge, + Factory and the period control fully on screen, the tabs one row.
+    // Phone: the shared header (ui/app/page-head.ts). The title line holds Company, Day/Week/Month, the quiet + and ⋯;
+    // the Company tabs take one full-width row under it, five of them, Share waiting in ⋯. Nothing past the right edge,
+    // and every control a 44px target.
     {
       const {page, errors} = await open(390, 844);
       const g = await geometry(page);
       assert.ok(g.scroll <= g.client, `#main scrolls sideways at 390 px: scrollWidth ${g.scroll} > clientWidth ${g.client}`);
-      assert.ok(g.add.left >= 0 && g.add.right <= g.vw, `+ Factory off screen: ${g.add.left}–${g.add.right} of ${g.vw}`);
+      assert.ok(g.add.left >= 0 && g.add.right <= g.vw, `+ off screen: ${g.add.left}–${g.add.right} of ${g.vw}`);
       assert.ok(g.period.left >= 0 && g.period.right <= g.vw, `Day/Week/Month off screen: ${g.period.left}–${g.period.right} of ${g.vw}`);
-      assert.ok(g.count > 1, 'the Company tabs are drawn');
+      const mid = (b: {top: number; bottom: number}) => (b.top + b.bottom) / 2;
+      for (const b of [g.period, g.add, g.more]) assert.ok(Math.abs(mid(b) - mid(g.h1)) < 4, 'the title line holds the period, + and ⋯');
       assert.equal(g.tabTops.length, 1, `the Company tabs stack instead of one row: tops ${g.tabTops.join(', ')}`);
       assert.ok(g.nav.top >= g.add.bottom - 1, 'the tabs sit on their own row below the header controls');
-      assert.ok(g.nav.right <= g.vw, 'the tab row fits the screen');
-      // An owner sees six tabs, Share last: every one on screen, none hidden past the row's own scroll.
-      assert.equal(g.count, 6, 'an owner sees six Company tabs');
-      assert.ok(g.navScroll <= g.navClient, `tabs past the row's edge: scrollWidth ${g.navScroll} > clientWidth ${g.navClient}`);
-      assert.ok(g.lastTab <= g.vw, `the last tab ends at ${g.lastTab}, past ${g.vw}`);
+      assert.ok(g.nav.right <= g.vw && g.navScroll <= g.navClient, 'the tab row fits the screen');
+      assert.deepEqual(g.tabs, ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories'], 'five tabs on the row');
+      assert.deepEqual(g.held, ['Share'], 'Share, the sixth, is in ⋯');
+      assert.equal(g.last, 'ph-more', '⋯ is the last control');
+      assert.deepEqual(g.small, [], 'every header control is 44px on a phone');
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Desktop: one header row, as before.
+    // Desktop: one header row, in the guide's order: Company, tabs, the period, the quiet +, then ⋯.
     {
       const {page, errors} = await open(1280, 860);
       const g = await geometry(page);
       assert.ok(g.scroll <= g.client, 'no sideways scroll on desktop');
       assert.equal(g.tabTops.length, 1, 'tabs one row on desktop');
       const mid = (b: {top: number; bottom: number}) => (b.top + b.bottom) / 2;
-      for (const b of [g.nav, g.period, g.add]) assert.ok(Math.abs(mid(b) - mid(g.h1)) < 4, 'desktop header is a single row');
-      assert.ok(g.h1.right <= g.nav.left && g.nav.right <= g.period.left && g.period.right <= g.add.left, 'desktop order: h1, tabs, period, + Factory');
+      for (const b of [g.nav, g.period, g.add, g.more]) assert.ok(Math.abs(mid(b) - mid(g.h1)) < 4, 'desktop header is a single row');
+      assert.ok(g.h1.right <= g.nav.left && g.nav.right <= g.period.left && g.period.right <= g.add.left && g.add.right <= g.more.left, 'desktop order: h1, tabs, period, +, ⋯');
+      // Making a factory is rare: a quiet + named for screen readers, not a word button; it opens the form.
+      const add = page.locator('#of-new-b');
+      assert.equal(await add.getAttribute('aria-label'), 'New factory');
+      assert.equal((await add.innerText()).trim(), 'add', 'an icon, no words');
+      await add.click();
+      assert.equal(await add.getAttribute('aria-expanded'), 'true');
+      await page.locator('#of-new [name=name]').waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('name')), 'name');
+      await page.locator('[data-of-new-cancel]').click();
+      assert.equal(await page.locator('#of-new').isHidden(), true);
+      // The period is a segment: Day picks the day.
+      await page.locator('[data-of-period="1d"]').click();
+      assert.equal(await page.locator('[data-of-period="1d"]').getAttribute('aria-pressed'), 'true');
       assert.deepEqual(errors, []);
       await page.close();
     }

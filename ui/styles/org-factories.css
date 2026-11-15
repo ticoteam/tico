@@ -4,7 +4,8 @@
 
 .org-fac{margin-top:28px;padding-top:18px;border-top:1px solid var(--line)}
 .org-fac-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
-.org-fac-head h2{margin:0;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+/* a section of the page: the guide's section title (--t-card), not an uppercase eyebrow */
+.org-fac-head h2{margin:0;font-size:var(--t-card);font-weight:600;color:var(--ink)}
 .org-fac-key{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-xs);color:var(--muted)}
 .org-fac-ring{display:inline-block;width:9px;height:9px;border-radius:5px;border:1.5px solid var(--accent);box-sizing:border-box}
 .org-fac-ring.pm{margin-left:6px;border-color:color-mix(in srgb,var(--accent) 60%,var(--line))}
@@ -45,6 +46,16 @@
   .org-fac .rdo-br>.rdo-row{flex-direction:column;align-items:center;justify-content:flex-start;gap:8px}
   .org-fac .rdo-br>.rdo-row>li{padding:0}
   .org-fac .rdo-br>.rdo-row>li::before,.org-fac .rdo-br>.rdo-row>li::after{display:none}
+  /* a phone has the room for one card a row at the box's width, so a manager's name is read whole, not cut at 96px */
+  .org-fac .org-fac-row,.org-fac .rdo-br>.rdo-row{align-items:stretch}
+  .org-fac .org-fac-row{flex-direction:column}
+  .org-fac :is(.org-fac-row,.rdo-br>.rdo-row)>li{display:flex;flex-direction:column;align-items:stretch;width:100%}
+  .org-fac .org-fac-card{width:auto;align-self:stretch}
+  /* the pipeline chip is a 44px target: the link is 44px tall over the same room (negative margins), and its 20px pill
+     is drawn behind its words (::before), so the name still ends in an ellipsis */
+  .org-fac-chip,.org-fac-chip:hover{height:44px;margin:-12px 0;background:none}
+  .org-fac-chip::before{content:"";position:absolute;inset:12px 0;z-index:-1;border-radius:10px;background:color-mix(in srgb,var(--accent) 16%,transparent)}
+  .org-fac-chip:hover::before{background:color-mix(in srgb,var(--accent) 26%,transparent)}
 }
 /* A pipeline with no manager: an empty avatar slot where the manager's would be. */
 .org-fac-empty{display:inline-block;width:16px;height:16px;border-radius:50%;border:1px dashed var(--muted);box-sizing:border-box;vertical-align:middle}

@@ -14,10 +14,10 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
     // A computer: the proposal in Versions, its diff, Discard.
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, hash: '#/automations', proposal: true});
-      await page.waitForSelector('tr.au-row[data-row="au_inbox"] .pill:text-is("Pending")');
+      await page.waitForSelector('.au-row[data-row="au_inbox"] .pill:text-is("Pending")');
       assert.equal(await page.locator('.au-side').isVisible(), false, 'no side panel on the list');
       assert.equal(await page.locator('.au-ph [data-ask-open]').count(), 0, 'no Ask on Automations');
-      await page.locator('tr.au-row[data-row="au_inbox"] a').click();
+      await page.locator('.au-row[data-row="au_inbox"] a').click();
       await page.waitForSelector('.au-card[data-open="f1"]');
       assert.equal(await page.locator('.au-ver').innerText(), 'v7 · Proposed');
       await page.locator('.au-ver').click();
@@ -42,7 +42,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
     // A draft (a bot's: off, version 1 pending): Pending and Off in the list; Turn on enables it and clears Pending.
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, draft: true});
-      const row = page.locator('tr.au-row[data-row="au_draft"]');
+      const row = page.locator('.au-row[data-row="au_draft"]');
       await row.waitFor();
       assert.equal(await row.locator('.pill:text-is("Pending")').count(), 1);
       assert.equal(await row.locator('.pill:text-is("Off")').count(), 1, 'a draft is off');
@@ -56,7 +56,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
       assert.deepEqual(writes.at(-1)!, {method: 'POST', path: '/api/v2/automations/au_draft/versions/1/restore', body: {}});
       assert.equal(await page.locator('.au-hd [data-on-cur]').isChecked(), true);
       await page.locator('.au-crumb .au-up').click();
-      await page.waitForSelector('tr.au-row[data-row="au_draft"]');
+      await page.waitForSelector('.au-row[data-row="au_draft"]');
       assert.equal(await row.locator('.pill').count(), 0, 'no Pending, no Off');
       assert.deepEqual(errors, []);
       await page.close();
@@ -64,7 +64,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
     // A phone: an old #/automations/bot link opens the list; + New, On a schedule makes an empty one, off, and its header turns it on.
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE, hash: '#/automations/bot'});
-      await page.waitForSelector('tr.au-row[data-row="au_inbox"]');
+      await page.waitForSelector('.au-row[data-row="au_inbox"]');
       assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'list');
       await page.getByRole('button', {name: 'New automation'}).click();
       await page.locator('.au-newm [data-new="schedule"]').click();

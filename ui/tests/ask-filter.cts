@@ -78,6 +78,13 @@ async function shot(target: {screenshot(options: {path: string}): Promise<unknow
       return route.fulfill({contentType: 'application/json', body: JSON.stringify(pages[body.offset ? 1 : 0])});
     });
     await page.waitForFunction(sel => { const day = document.querySelector<HTMLElement>(sel); return day && !day.dataset.beforeSave; }, DAY);
+    // The day starts as today in the viewer's own time zone (format.ts dfIso), not UTC's, and that day is what is sent.
+    const today = await page.evaluate(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; });
+    assert.equal(await page.locator(DAY).evaluate(e => (e as HTMLInputElement).value), today, 'the replay day is the local today');
+    await page.locator('#set-ask-filter .ask-filter-replay button[type="submit"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('#set-ask-filter .ask-filter-replay-rows .ask-replay-row').length === 2);
+    assert.deepEqual(replays.map(r => r.date), [today, today], 'the local day is sent');
+    replays.length = 0;
     await page.locator(DAY).fill('2026-10-27');
     await page.locator('#set-ask-filter .ask-filter-replay button[type="submit"]').click();
     await page.waitForFunction(() => document.querySelectorAll('#set-ask-filter .ask-filter-replay-rows .ask-replay-row').length === 2);

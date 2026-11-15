@@ -95,10 +95,10 @@ const measure = (name: string, over?: Record<string, unknown>) => ({name, defini
 
     // No goal suggestion card reads Confirm or Reject; each yes says what it does, each no is "No, leave it".
     assert.doesNotMatch(await page.locator('#goal-needs').innerText(), /\b(Confirm|Reject)\b/);
-    assert.deepEqual(await buttons('p-new'), ['Add measure', 'No, leave it']);
-    assert.deepEqual(await buttons('p-tgt'), ['Use this target', 'No, leave it']);
-    assert.deepEqual(await buttons('p-def'), ['Use new definition', 'No, leave it']);
-    assert.deepEqual(await buttons('p-word'), ['Use new wording', 'No, leave it']);
+    assert.deepEqual(await buttons('p-new'), ['No, leave it', 'Add measure']);
+    assert.deepEqual(await buttons('p-tgt'), ['No, leave it', 'Use this target']);
+    assert.deepEqual(await buttons('p-def'), ['No, leave it', 'Use new definition']);
+    assert.deepEqual(await buttons('p-word'), ['No, leave it', 'Use new wording']);
     assert.deepEqual(await buttons('p-flag'), ['Got it']);
 
     // Add a KPI: the measure and the goal named, what it counts on one line, then "No target yet", and no data source.
@@ -200,7 +200,7 @@ const measure = (name: string, over?: Record<string, unknown>) => ({name, defini
     assert.match(await inPanel.innerText(), /Add the measure Signups to Double organic signups\s+New accounts\s+Target range 40\+/);
     assert.doesNotMatch(await inPanel.innerText(), /No data source|No target yet/);
     assert.equal(await inPanel.locator('details.kpi-prop-set summary').innerText(), 'Change the target');
-    assert.deepEqual(await page.locator('#goal-panel[open] [data-proposal="p-rec"] .kpi-prop-do button').allInnerTexts(), ['Approve', 'Reject']);
+    assert.deepEqual(await page.locator('#goal-panel[open] [data-proposal="p-rec"] .kpi-prop-do button').allInnerTexts(), ['Reject', 'Approve']);
     assert.equal(await page.locator('#goal-panel[open] [data-proposal="p-rec"] [data-prop-reason]').count(), 0, 'a recovery keeps its own Reject');
     await inPanel.locator('[data-prop-yes]').click();
     assert.deepEqual(await decided('p-panel'), {decision: 'confirm'});

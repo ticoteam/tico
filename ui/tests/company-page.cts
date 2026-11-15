@@ -293,7 +293,7 @@ async function shotPart(page: Page, id: string, name: string) {
     await page.locator('#cp-tab-body .empty-state').waitFor();
     assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
     assert.equal(await page.locator('.cp-frame').count(), 0, 'no frame');
-    assert.equal(await page.locator('.cp-tab-acts').isVisible(), false, 'no controls');
+    assert.equal(await page.locator('[data-cp-tab-pick], [data-cp-share], [data-cp-manage]').count(), 0, 'no controls');
     assert.deepEqual(hub.previews, []);
     await close();
   }
@@ -306,6 +306,17 @@ async function shotPart(page: Page, id: string, name: string) {
     assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate((a: HTMLElement) => a.classList.contains('cur')), 'Company stays lit');
     const parts = await page.locator('#cp-page > section').evaluateAll((s: HTMLElement[]) => s.map(x => x.id));
     assert.deepEqual(parts, ['cp-transparency', 'cp-editions', 'cp-audiences', 'cp-disclosure', 'cp-stats', 'cp-readers', 'cp-preview'], 'the parts, in order');
+    // The header stands over the cards' column: ⋯ ends where the cards do.
+    const [headRight, pageRight] = await page.evaluate(() => [document.querySelector('.cp-head > .ph-more')!.getBoundingClientRect().right, document.querySelector('#cp-page')!.getBoundingClientRect().right]);
+    assert.ok(Math.abs(headRight - pageRight) <= 1, `⋯ lines up with the cards (${headRight} vs ${pageRight})`);
+    // Audiences: no pills. A built-in one carries a quiet lock (named "Built in"); one turned off says Off in muted words.
+    const aud = (id: string) => page.locator(`[data-cp-aud="${id}"]`);
+    assert.equal(await page.locator('#cp-audiences .cp-aud-t .pill').count(), 0, 'no pill on an audience');
+    assert.deepEqual(await aud('a-board').locator('.cp-builtin').evaluate(m => [m.getAttribute('role'), m.getAttribute('aria-label'), m.getAttribute('title'), m.textContent]), ['img', 'Built in', 'Built in', 'lock']);
+    assert.equal(await aud('a-pub').locator('.cp-off').innerText(), 'Off');
+    assert.equal(await aud('a-board').locator('.cp-off').count(), 0, 'an audience that is on says nothing');
+    // A key and its value: the key in sentence case (style guide, key-value table), not uppercase.
+    assert.equal(await aud('a-board').locator('.cp-facts dt').first().evaluate(d => getComputedStyle(d).textTransform), 'none');
 
     // Transparency: Closed has no address; Open warns once and Cancel sends nothing.
     const level = (v: string) => page.locator(`[data-cp-level] [data-v="${v}"]`);
@@ -709,14 +720,24 @@ async function shotPart(page: Page, id: string, name: string) {
     const {page, hub, errors, natives, close} = await open(browser, {hash: '#/overview', theme: 'dark', ready: false});
     assert.deepEqual(await tabLabels(page), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Factories', 'Share']);
     assert.equal(await page.evaluate(() => searchEntries().find(x => x.label === 'Share')?.href), '#/overview/company-page', 'search finds it');
-    await page.locator('.dash-tabs a', {hasText: 'Share'}).click();
+    // Share is the sixth tab: it waits in ⋯ until it is the one open.
+    await page.locator('#main header.ph > .ph-more').click();
+    await page.locator('#main header.ph .ph-menu .ph-mtab', {hasText: 'Share'}).click();
     const frame = page.locator('iframe.cp-frame');
     await frame.waitFor();
     assert.equal(await frame.getAttribute('sandbox'), 'allow-scripts', 'the frame gets no origin');
     assert.match((await frame.getAttribute('src'))!, /\/api\/v2\/company-page\/preview\?audience=a-board&theme=dark$/, 'the first audience on, in the app\'s theme');
     assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate((a: HTMLElement) => a.classList.contains('cur')), 'Company stays lit');
     assert.equal(await page.locator('.dash-tabs a.cur').innerText(), 'Share');
-    const pick = page.locator('.cp-tab-acts select');
+    // The shared header: Share takes the fifth place on the row while it is open, Factories waits in ⋯; the tools are
+    // the audience picker (named as a preview, no caption beside it) and Share; Manage is in ⋯; ⋯ is last.
+    const head = page.locator('#main header.ph');
+    assert.deepEqual(await head.locator('.ph-tabs > .ph-tab:visible').allInnerTexts(), ['Mine', 'Dashboard', 'Campus', 'Graph', 'Share']);
+    assert.deepEqual(await head.locator('.ph-menu .ph-mtab').allTextContents(), ['Factories']);
+    assert.equal(await head.locator('.ph-menu [data-cp-manage]').count(), 1, 'Manage is in ⋯');
+    assert.equal(await page.locator('.cp-tab-preview').count(), 0, 'no Preview caption');
+    const pick = page.locator('[data-cp-tab-pick] select');
+    assert.equal(await pick.getAttribute('aria-label'), 'Preview for');
     await pick.selectOption('a-pub');
     await page.waitForFunction(() => document.querySelector<HTMLIFrameElement>('iframe.cp-frame')?.src.includes('audience=a-pub'));
 
@@ -766,13 +787,16 @@ async function shotPart(page: Page, id: string, name: string) {
     await panel.locator('[data-close]').click();
     await panel.waitFor({state: 'detached'});
 
-    // Manage opens the section, and it leads back.
+    // Manage, in ⋯, opens the section, and "Company ›" leads back.
+    await page.locator('#main header.ph > .ph-more').click();
     await page.locator('[data-cp-manage]').click();
     await page.locator('#cp-page').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/company-page');
     await page.locator('#cp-readers [data-cp-reader="r1"]').waitFor();
     assert.ok(await page.locator('#side a[data-nav="overview"]').evaluate((a: HTMLElement) => a.classList.contains('cur')), 'Company stays lit');
-    await page.locator('[data-cp-view]').click();
+    assert.equal(await page.locator('.cp-head .ph-t').innerText(), 'Share');
+    assert.equal(await page.locator('.cp-head .ph-back').getAttribute('href'), '#/overview/company-page');
+    await page.locator('.cp-head .ph-back').click();
     await frame.waitFor();
     assert.match((await frame.getAttribute('src'))!, /audience=a-pub/, 'the audience chosen holds');
 
@@ -803,19 +827,16 @@ async function shotPart(page: Page, id: string, name: string) {
     await bare.close();
     const none = await open(browser, {hash: '#/overview/company-page', hubOpts: {noAudiences: true}, ready: false});
     await none.page.locator('#cp-tab-body .empty-state').waitFor();
-    assert.equal(await none.page.locator('.cp-frame, .cp-tab-acts select').count(), 0);
+    assert.equal(await none.page.locator('.cp-frame, [data-cp-tab-pick] select').count(), 0);
     assert.ok(await none.page.locator('[data-cp-share]').isVisible());
-    assert.equal(await none.page.locator('[data-cp-preview]').isVisible(), false, 'no frame, nothing to label');
     assert.deepEqual(none.errors, []);
     await none.close();
     const broken = await open(browser, {hash: '#/overview/company-page', hubOpts: {fail: ['/api/v2/company-page/preview']}, ready: false});
     await broken.page.locator('#cp-tab-body [data-cp-retry]').waitFor();
     assert.equal(await broken.page.locator('.cp-frame').count(), 0, 'no frame');
-    assert.equal(await broken.page.locator('[data-cp-preview]').isVisible(), false, 'no frame, nothing to label');
     broken.hub.fail.clear();
     await broken.page.locator('#cp-tab-body [data-cp-retry]').click();
     await broken.page.locator('iframe.cp-frame').waitFor();
-    assert.ok(await broken.page.locator('[data-cp-preview]').isVisible(), 'the frame is back, and so is the label');
     assert.deepEqual(broken.errors, []);
     await broken.close();
   }
@@ -832,22 +853,38 @@ async function shotPart(page: Page, id: string, name: string) {
       });
       assert.ok(fit.extra <= 1, `one scrollbar at ${w} ${JSON.stringify(fit)}`);
       assert.ok(Math.abs(fit.gapBelow) <= 1 && Math.abs(fit.gapRight) <= 1 && Math.abs(fit.gapLeft) <= 1, `the frame fills at ${w} ${JSON.stringify(fit)}`);
-      // The label sits beside the picker on one row, and stays on the app's side of the frame.
-      const besidePicker = () => page.evaluate(() => {
-        const box = (el: Element) => el.getBoundingClientRect(), label = box(document.querySelector('[data-cp-preview]')!), pick = box(document.querySelector('.cp-tab-acts select')!), last = box(document.querySelector('[data-cp-manage]')!);
-        return {besides: label.right <= pick.left, sameRow: Math.abs((label.top + label.bottom) / 2 - (pick.top + pick.bottom) / 2) <= 2, left: label.left, right: last.right, clear: document.documentElement.clientWidth};
+      // The picker, Share and ⋯ sit on the title line, picker before Share, ⋯ last, inside the window; on a phone each is a
+      // 44px target.
+      const toolsRow = () => page.evaluate(() => {
+        const box = (el: Element) => el.getBoundingClientRect(), head = document.querySelector('#main header.ph')!;
+        const title = box(head.querySelector('.ph-t')!), pick = box(document.querySelector('[data-cp-tab-pick] select')!), share = box(document.querySelector('[data-cp-share]')!), more = box(head.querySelector(':scope > .ph-more')!);
+        const mid = (r: DOMRect) => (r.top + r.bottom) / 2;
+        return {order: pick.right <= share.left && share.right <= more.left, sameRow: [pick, share, more].every(r => Math.abs(mid(r) - mid(title)) <= 2),
+          left: pick.left, right: more.right, clear: document.documentElement.clientWidth, heights: [pick.height, share.height, more.height].map(Math.round)};
       });
-      const row = await besidePicker();
-      assert.ok(row.besides && row.sameRow && row.left >= 0 && row.right <= row.clear, `the label fits at ${w} ${JSON.stringify(row)}`);
-      assert.equal(await page.frameLocator('iframe.cp-frame').locator('[data-cp-preview]').count(), 0);
+      const row = await toolsRow();
+      assert.ok(row.order && row.sameRow && row.left >= 0 && row.right <= row.clear, `the tools fit at ${w} ${JSON.stringify(row)}`);
+      if (viewport === PHONE) assert.ok(row.heights.every(h => h >= 44), `44px targets at ${w} ${row.heights}`);
       if (viewport === PHONE && theme === 'light') {
-        // A narrower phone and a long audience name: the picker gives way, the label and the controls stay.
+        // A narrower phone and a long audience name: the header gives way as every page's does (ui/app/page-head.ts): the
+        // title stays whole and the tools fold into ⋯, where the picker and Share are still in reach. Nothing scrolls.
         await page.setViewportSize({width: 360, height: viewport.height});
-        await page.evaluate(() => { document.querySelector<HTMLSelectElement>('.cp-tab-acts select')!.selectedOptions[0]!.textContent = 'Series B lead investors and observers'; });
-        const tight = await besidePicker();
-        assert.ok(tight.besides && tight.sameRow && tight.left >= 0 && tight.right <= tight.clear, `the label fits a long name at 360 ${JSON.stringify(tight)}`);
+        const name = await page.evaluate(() => { const o = document.querySelector<HTMLSelectElement>('[data-cp-tab-pick] select')!.selectedOptions[0]!, was = o.textContent; o.textContent = 'Series B lead investors and observers'; return was; });
+        await page.waitForTimeout(150);
         await flat(page, 'a long audience name at 360');
+        const head = page.locator('#main header.ph');
+        assert.equal(await head.locator('.ph-t').evaluate(t => t.scrollWidth <= t.clientWidth), true, 'the title is whole');
+        if (await head.evaluate(h => h.classList.contains('ph-fold'))) {
+          await head.locator(':scope > .ph-more').click();
+          assert.ok(await head.locator('.ph-menu [data-cp-tab-pick] select').isVisible() && await head.locator('.ph-menu [data-cp-share]').isVisible(), 'the folded tools are in ⋯');
+          await page.keyboard.press('Escape');
+        } else {
+          const tight = await toolsRow();
+          assert.ok(tight.order && tight.sameRow && tight.left >= 0 && tight.right <= tight.clear, `the tools fit a long name at 360 ${JSON.stringify(tight)}`);
+        }
+        await page.evaluate((was: string | null) => { document.querySelector<HTMLSelectElement>('[data-cp-tab-pick] select')!.selectedOptions[0]!.textContent = was; }, name);
         await page.setViewportSize(viewport);
+        await page.waitForTimeout(150);
       }
       await shot(page, `tab-${w}-${theme}`);
       await page.locator('[data-cp-share]').click();

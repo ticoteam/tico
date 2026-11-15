@@ -1,6 +1,7 @@
 // No billboard numbers (#355): on a real hub seeded with the scenario org and its finance, Home, Growth, Usage and
 // Finance show no visible text in the main area above 16px, at 1440px and on a 390px phone. The sidebar and tab bar
-// are outside #main; icon-font glyphs (Material Symbols) are excepted.
+// are outside #main; icon-font glyphs (Material Symbols) and the shared page header's title (--t-page, 17px, style guide
+// Type: "Page titles 17") are excepted.
 import type {Page} from 'playwright';
 import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -10,7 +11,7 @@ const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
 // Each visible element in #main with text of its own above 16px: "<size> <tag.class>: <text>".
 const bigText = (page: Page) => page.evaluate(() => [...document.querySelectorAll('#main *')].flatMap(el => {
-  if (!(el instanceof HTMLElement) || !el.checkVisibility()) return [];
+  if (!(el instanceof HTMLElement) || !el.checkVisibility() || el.matches('header.ph > .ph-t')) return [];
   const own = [...el.childNodes].filter(n => n.nodeType === 3 && n.textContent!.trim()).map(n => n.textContent!.trim()).join(' ');
   const cs = getComputedStyle(el);
   if (!own || parseFloat(cs.fontSize) <= 16 || /Material Symbols/i.test(cs.fontFamily)) return [];

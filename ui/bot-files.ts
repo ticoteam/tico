@@ -1,6 +1,6 @@
 /* The Files section of a bot's right rail (docs/files.md): what the bot created, revised or delivered,
-   newest activity first, one row each: a small mark (its kind's icon, or an image's thumbnail) and its name without
-   the extension. Three rows; "N more" opens the rest inline, a page at a time. A bot with more than three files has a
+   newest activity first, one row each: a small mark (its kind's icon, or an image's thumbnail) and its name with its
+   ending. Three rows; "N more" opens the rest inline, a page at a time. A bot with more than three files has a
    search mark and the filter mark (Library kinds) on the Files heading: the search mark opens a field in its place,
    and typing or a kind asks the server, which answers the whole list narrowed, still newest first, still paged. Esc,
    or an empty field with no kind, is the three newest again; "Less" folds it back and forgets both. No files, no
@@ -76,15 +76,14 @@ interface Window {
   .bot-files .bf-tools .lf-search{height:44px}.bot-files .bf-tools .lf-search input{height:42px;font-size:16px}}`;
 
   // The name a row shows: a link's title as written; a stored file's title without its folder when the title is the
-  // stored file's path, and without its extension when that is the stored file's own (reports/ticket-topics.csv named
-  // ticket-topics.csv reads "ticket-topics"). A title a bot gave ("Q3 plan / draft") is never split at its slash.
+  // stored file's path (reports/ticket-topics.csv named ticket-topics.csv reads "ticket-topics.csv"). The name keeps its
+  // ending (style guide, Files: "the name carries its ending"). A title a bot gave ("Q3 plan / draft") is never split at
+  // its slash.
   const shownName = (f: import('./types/api').BotFile): string => {
     const title = String(f.title || f.name || '');
     if (f.locator === 'remote_link') return title;
-    const name = String(f.name || ''), dot = name.lastIndexOf('.');
-    const base = name && title.endsWith('/' + name) ? name : title;
-    const ext = dot > 0 ? name.slice(dot).toLowerCase() : '';
-    return ext && base.toLowerCase().endsWith(ext) && base.length > ext.length ? base.slice(0, -ext.length) : base;
+    const name = String(f.name || '');
+    return name && title.endsWith('/' + name) ? name : title;
   };
   const markKey = (f: import('./types/api').BotFile): string => f.locator === 'remote_link' ? 'remote_link'
     : (f.mime || '').split(';')[0]!.trim().toLowerCase() === 'text/html' || /\.html?$/i.test(f.name || '') ? 'html' : f.kind;

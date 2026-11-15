@@ -47,7 +47,7 @@ const rail = (page: import('playwright').Page) => page.evaluate((): Rail => {
   return {
     rows: [...(side.querySelectorAll('a.nav-link, .rd-lib-toggle, .section-toggle') as NodeListOf<HTMLElement> & Iterable<HTMLElement>)].filter(el => !el.closest('#pin-list')).map(row),
     chevrons: [...(side.querySelectorAll('.rd-lib-toggle, .section-toggle') as NodeListOf<HTMLElement> & Iterable<HTMLElement>)].map(el => key(el) + ':' + getComputedStyle(el.querySelector('.section-chev')!).transform),
-    foot: ['#ask-row', '#search-open .search-label', '#support-open'].map(s => s + ':' + document.querySelector(s)!.checkVisibility()),
+    foot: ['#ask-row', '#search-open .search-label', '#support-open', '#account'].map(s => s + ':' + document.querySelector(s)!.checkVisibility()),
     bar: [...(document.querySelectorAll('#mobile-nav .mobile-nav-item') as NodeListOf<HTMLElement> & Iterable<HTMLElement>)].filter(el => el.checkVisibility()).map(key),
   };
 });
@@ -156,8 +156,10 @@ const newContext = async (browser: import('playwright').Browser, phone: boolean,
         assert.equal(await v.page.locator('#side a[data-nav="overview"]').evaluate(a => a.textContent!.trim()), 'Company', tag + ': Overview is Company');
         assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
         assert.ok(keys.includes('threads') && keys.includes('organisation'), tag + ': Threads and the Team section too');
-        if (phone) assert.deepEqual(v.painted.bar, ['org', 'threads', 'mobile-ask', 'tasks', 'updates', 'more'], tag + ': the bottom bar');
-        else assert.ok(v.painted.foot.includes('#ask-row:true'), tag + ': Tico Assistant at the foot from the first paint');
+        // Five slots on a phone: Updates is in More. On a computer the foot is one row from the first paint: the
+        // Assistant, Search's icon, Help and your picture.
+        if (phone) assert.deepEqual(v.painted.bar, ['org', 'threads', 'mobile-ask', 'tasks', 'more'], tag + ': the bottom bar');
+        else assert.deepEqual(v.painted.foot, ['#ask-row:true', '#search-open .search-label:false', '#support-open:true', '#account:true'], tag + ': the foot from the first paint');
         assert.equal(await v.page.locator('#nav-finance').getAttribute('hidden'), '', tag + ': Finance hidden once the scripts run, too');
         assert.equal((await kept(v.page)).finance, false, tag + ': the answer is kept');
         assert.deepEqual(v.errors, []);

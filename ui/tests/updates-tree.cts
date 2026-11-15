@@ -108,9 +108,11 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     assert.equal(await page.locator('#upd-feed [data-upd="u-seo"]').count(), 0, 'deeper cards start closed');
     const kids = page.locator('#upd-feed [data-upd-kids="b:cmo"]');
     assert.equal(await kids.getAttribute('aria-label'), 'Show 1 report');
-    // The toggle sits right of ⋯ on the name's line (no row under the update for it), and never fades.
-    assert.equal(await cmo.locator('.upd-meta > .upd-corner + [data-upd-kids]').count(), 1, 'the toggle follows the corner on the name line');
-    assert.equal(await cmo.locator('.upd-actions').count(), 0, 'no row under the update for the toggle');
+    // The toggle has a line of its own under the update (style guide, "Updates card with its reports"), so ⋯ is the last
+    // control on the name's line; it never fades.
+    assert.equal(await cmo.locator('.upd-main > .upd-kids-row > [data-upd-kids]').count(), 1, 'the toggle is on its own line under the update');
+    assert.equal(await cmo.locator('.upd-meta:first-child > :last-child').evaluate(c => c.matches('.upd-corner') && c.lastElementChild?.matches('[data-upd-menu]')), true, '⋯ ends the name line');
+    assert.equal(await cmo.locator('.upd-actions').count(), 0, 'no action row under the update');
     assert.equal(await kids.evaluate(b => { let o = 1; for (let e: Element | null = b; e; e = e.parentElement) o *= Number(getComputedStyle(e).opacity); return o; }), 1, 'the toggle is fully visible');
     await kids.click();
     const seo = page.locator('#upd-feed [data-upd="u-seo"]');
@@ -162,13 +164,18 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     await week.page.clock.setFixedTime(noon(THURSDAY));
     await week.page.goto('http://tico-ui.test/#/updates');
     await week.page.locator('#upd-feed [data-upd="u-cmo"]').waitFor();
-    assert.equal(await week.page.locator('#upd-feed [data-upd-write]').count(), 1, 'the daily any day');
-    assert.deepEqual(await week.page.locator('#upd-feed [data-upd="u-ana"] [data-upd-write]').evaluate(b => [b.getAttribute('aria-label'), b.textContent!.trim()]),
-      ['Write today\'s update', 'New update'], 'an older update of yours offers New update');
+    // Writing a new one is the header's quiet + (the daily any day); an older update of yours carries no word for it.
+    const add = week.page.locator('header.upd-head .ph-add[data-upd-new]');
+    assert.equal(await add.getAttribute('aria-label'), 'Write your update', 'the daily any day');
+    assert.equal(await week.page.locator('#upd-feed [data-upd="u-ana"] [data-upd-write]').count(), 0, 'no New update word on an older card');
+    await add.click();
+    await week.page.locator('#upd-feed [data-upd-editor] textarea').waitFor();
+    assert.equal(await week.page.evaluate(() => document.activeElement?.matches('#upd-feed [data-upd-editor] textarea')), true, 'the + opens your card as the editor');
+    await week.page.locator('#upd-feed [data-upd-cancel]').click();
     await week.page.locator('[data-upd-kind="weekly"]').click();
     const ownNone = week.page.locator('#upd-feed .upd-none', {hasText: 'Ana'});
     await ownNone.waitFor();
-    assert.equal(await week.page.locator('#upd-feed [data-upd-write]').count(), 0, 'no week in review before Friday');
+    assert.equal(await week.page.locator('#upd-feed [data-upd-write], header.upd-head [data-upd-new]').count(), 0, 'no week in review before Friday');
     await week.page.clock.setFixedTime(noon(FRIDAY));
     await week.page.locator('[data-upd-kind="daily"]').click();
     await week.page.locator('#upd-feed [data-upd="u-cmo"]').waitFor();
@@ -256,13 +263,14 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       assert.equal(await boss.locator('.upd-actions').count(), 0, `${label}: no row under the update`);
       assert.deepEqual(await boss.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
         ['Reply', 'More'], `${label}: Reply and ⋯ at the top right`);
-      // "8 reports" and a chevron; a phone keeps only "8" so the name and time keep their room.
-      assert.equal(await toggle.locator('.upd-n').innerText(), viewport.width > 760 ? '8 reports' : '8');
+      // "8 reports" and a chevron, on a line of its own under the update (a phone too: the line has the room); ⋯ ends
+      // the name line.
+      assert.equal(await toggle.locator('.upd-n').innerText(), '8 reports');
       assert.equal(await toggle.locator('.nav-icon').textContent(), 'chevron_right');
-      const [more, main, meta] = [(await boss.locator('[data-upd-menu]').boundingBox())!, (await toggle.boundingBox())!, (await boss.locator('.upd-meta').boundingBox())!];
-      assert.ok(main.x >= more.x + more.width - 0.5 && Math.abs(main.y + main.height / 2 - (more.y + more.height / 2)) <= 1,
-        `${label}: the count sits right of ⋯, on its line`);
-      assert.ok(Math.abs(main.x + main.width - (meta.x + meta.width + 8)) <= 1, `${label}: the count ends the top line`);
+      const [more, main, meta, body] = [(await boss.locator('[data-upd-menu]').boundingBox())!, (await toggle.boundingBox())!, (await boss.locator('.upd-meta').first().boundingBox())!,
+        (await boss.locator('.upd-body').boundingBox())!];
+      assert.ok(main.y >= body.y + body.height - 6, `${label}: the count sits under the update`);
+      assert.ok(Math.abs(more.x + more.width - (meta.x + meta.width + 8)) <= 1, `${label}: ⋯ ends the top line`);
       const words = async () => p.locator('#upd-feed').evaluate(f => [...(f.querySelectorAll('*') as NodeListOf<Element> & Iterable<Element>)].filter(e => !e.closest('.nav-icon, [data-upd-kids]') && e.childNodes.length)
         .flatMap(e => [...(e.childNodes as NodeListOf<ChildNode> & Iterable<ChildNode>)].filter(n => n.nodeType === 3).map(n => n.textContent)).join(' '));
       assert.doesNotMatch(await words(), /\breports?\b/, `${label}: no "8 reports" row (only the toggle names them)`);

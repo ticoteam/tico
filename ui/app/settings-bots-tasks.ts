@@ -62,23 +62,28 @@ function settingsTaskParts(e: SettingsBot, row = false) {
   return row ? `<label class="sb-task-part">Task effort${effortSelect}</label>`
     : `<div class="sb-row"><span>Task effort</span>${effortSelect}<span></span></div>`;
 }
-// The bots table's task indicator, beside the model: faint while tasks run as the bot does, marked when any task
-// setting differs ("Tasks · 600k" with a task context length). It opens the bot's task row under it
-// (SETTINGS_BOTS_VIEW.taskOpen).
+// The bots table's task line, beside the model: faint "Tasks: same" while tasks run as the bot does; the task model in
+// plain words ("Tasks: Opus 5.5 MED") when it differs, or "Tasks · 600k" when only the context length does. It opens
+// the bot's task row under it (SETTINGS_BOTS_VIEW.taskOpen).
 function settingsTaskIndicator(e: SettingsBot) {
   const task = e.task_model, set = settingsTaskSet(task), open = SETTINGS_BOTS_VIEW.taskOpen.has(e.id);
   const label = set ? `Tasks run on ${settingsTaskWords(task)}` : 'Tasks run on the same model as the bot';
   const context = settingsContextName(task?.compact_at);
   if (!settingsCanManageBot(e) && !set) return '';
+  const spec = settingsChoiceSpecOf(e, 'task');
+  const words = task?.model ? `Tasks: ${settingsPickWords(spec, spec.current, spec.compact).short}` : `Tasks${set ? '' : ': same'}${context ? ` · ${context}` : ''}`;
   return `<button type="button" class="sb-task-mark${set ? ' on' : ''}" data-task-open="${esc(e.id)}" aria-expanded="${open}"
-    aria-label="${esc(`${label}. Task settings for ${e.display_name || e.slug}`)}" title="${esc(label)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>Tasks${context ? ` · ${esc(context)}` : ''}</button>`;
+    aria-label="${esc(`${label}. Task settings for ${e.display_name || e.slug}`)}" title="${esc(label)}" ${settingsCanManageBot(e) ? '' : 'disabled'}>${esc(words)}</button>`;
 }
-// The row a task indicator opens under its bot: the Task model picker (model and window, saved on Apply), Task effort
-// (saved when changed), and Close. The bot's own model never changes here.
+// The row a task line opens under its bot: Task model (model and window, saved on Apply), Task effort (saved when
+// changed) and Fallback, each under its own small label, then the mark that folds the row away. The bot's own model
+// never changes here.
 function settingsTaskRow(e: SettingsBot, columns: number) {
   return `<tr class="sb-task-row" data-task-row="${esc(e.id)}"><td colspan="${columns}"><div class="sb-task-under">
-    <span class="sb-task-head">Tasks · ${esc(e.display_name || e.slug)}</span>${settingsChoiceCombo(e, 'task')}${settingsTaskParts(e, true)}
-    <button type="button" class="ghost" data-task-close="${esc(e.id)}">Close</button></div>
+    <div class="sb-task-part sb-task-model"><span class="sb-task-l">Task model</span>${settingsChoiceCombo(e, 'task')}</div>
+    ${settingsTaskParts(e, true)}
+    <div class="sb-task-part sb-cell-fallback"><span class="sb-task-l">Fallback</span>${settingsChoiceCell(e, 'fallback')}</div>
+    <button type="button" class="ghost peek-btn sb-task-x" data-task-close="${esc(e.id)}" aria-label="Fold task settings" title="Fold"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     ${settingsTaskWarning(e)}</td></tr>`;
 }
 // A Task effort changed in the bots table's task row: saved at once, the rest kept.

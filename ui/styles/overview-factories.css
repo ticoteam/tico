@@ -3,8 +3,9 @@
 .of-page{display:flex;flex-direction:column;min-height:0}
 .of-body{flex:1;min-width:0;overflow:auto;padding:var(--s4) 28px;display:flex;flex-direction:column;gap:var(--s4)}
 .of-empty{margin:var(--s4) 0}
-.of-new{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:0 28px 12px}
-.of-new label{display:flex;flex-direction:column;gap:4px;font-size:12px}
+.of-new{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:var(--s3) 28px 0}
+.of-new[hidden]{display:none}
+.of-new label{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
 .of-new-acts{display:flex;gap:8px}
 .of-factory{border:1px solid var(--line);border-radius:var(--r-card, 8px);background:var(--surface);padding:var(--s3)}
 .of-factory header{display:flex;align-items:baseline;gap:var(--s3);margin:0 0 var(--s3)}
@@ -17,8 +18,12 @@
 .of-box-name{font-weight:600}
 .of-box-n{color:var(--muted)}
 .of-arrow{color:var(--muted)}
-@media (max-width:720px){
+@media (max-width:760px){
   .of-body{padding-left:12px;padding-right:12px}
   .of-new{margin-left:12px;margin-right:12px}
+  /* the form's fields take the row, Cancel and Save under them at the right */
+  .of-new label{flex:1 1 100%}
+  .of-new input{width:100%;box-sizing:border-box}
+  .of-new-acts{margin-left:auto}
   .of-box{min-height:44px}
 }

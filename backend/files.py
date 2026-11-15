@@ -551,6 +551,39 @@ def page_blob_visible(c, auth, who, bid):
     return all(file_visible(c, auth, who, row, {}) for row in page_blobs(c, bid))
 
 
+def stored_version(c, fid, number):
+    """One stored version of a file, with its blob's digest and content type, or None."""
+    return c.execute(
+        "SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v "
+        "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?",
+        (fid, number),
+    ).fetchone()
+
+
+def version_refusal(c, auth, who, row, number, v):
+    """The check that refuses `who` version `number` of the file `row` (`v`, its `stored_version`, None when there is
+    none), or None when they may read its bytes: the one read check Files.serve makes, for every caller that hands
+    those bytes on. Checks run in serve's order and the first refusal is named."""
+    if not page_audience_visible(c, auth, who, row, {}):
+        return "audience"
+    if v and not page_blob_visible(c, auth, who, v["blob_id"]):
+        return "blob_fence"
+    from . import postal_mail
+
+    scan = postal_mail.scan_access(c, auth, who, v["blob_id"]) if v else None
+    if scan is not None:
+        if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
+            return "scan"
+    else:
+        if not file_visible(c, auth, who, row, {}):
+            return "file_fence"
+        if asked_to_read(c, who, row["id"]) and not asked_to_read(c, who, row["id"], number):
+            return "rules_read"  # the Rules Owner's read names one version of it
+    if not v or row["locator"] != "tico_blob":
+        return "no_version"
+    return None
+
+
 def page_event_readable(c, auth, who, target, detail):
     data = H._json(detail, {}) if isinstance(detail, str) else detail
     if page_ref_denials(c, auth, who, [target, data]):
@@ -2401,37 +2434,17 @@ class Files:
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             if not row:
                 refuse_serve(c, who, fid, version, "no_row")
-            if not page_audience_visible(c, self.auth, who, row, {}):
-                refuse_serve(c, who, fid, version, "audience")
             # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
-            v = c.execute(
-                "SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v "
-                "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?",
-                (fid, number),
-            ).fetchone()
-            if v and not page_blob_visible(c, self.auth, who, v["blob_id"]):
-                refuse_serve(c, who, fid, number, "blob_fence", v)
-            from . import postal_mail
-
-            scan = postal_mail.scan_access(c, self.auth, who, v["blob_id"]) if v else None
-            if scan is not None:
-                if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
-                    refuse_serve(c, who, fid, number, "scan")
-            else:
-                if not self.visible(c, who, row, {}):
-                    refuse_serve(c, who, fid, number, "file_fence", v)
-                if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
-                    refuse_serve(c, who, fid, number, "rules_read")  # the Rules Owner's read names one version of it
-            if not v or row["locator"] != "tico_blob":
-                refuse_serve(
-                    c,
-                    who,
-                    fid,
-                    number,
-                    "no_version",
-                    message="This file has no stored copy to open" if not v else "File not found",
-                )
+            v = stored_version(c, fid, number)
+            refused = version_refusal(c, self.auth, who, row, number, v)
+            if refused == "audience":
+                refuse_serve(c, who, fid, version, refused)
+            elif refused == "no_version":
+                message = "This file has no stored copy to open" if not v else "File not found"
+                refuse_serve(c, who, fid, number, refused, message=message)
+            elif refused:
+                refuse_serve(c, who, fid, number, refused, v if refused in ("blob_fence", "file_fence") else None)
             if meta:
                 return {
                     "id": fid,

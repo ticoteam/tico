@@ -99,8 +99,10 @@ interface UsePurged { cancelled: number; kept_people: number; still_running: num
 // at list price. Billed spend alone is in the hover, since a bot's limits count only that.
 const USE_RANGES: [string, string][] = [['today', 'Today'], ['7d', '7 days'], ['30d', '30 days'], ['month', 'This month'], ['custom', 'Custom']];
 const USE_DIMENSIONS: [string, string][] = [['harness', 'Harness'], ['model', 'Model'], ['effort', 'Effort'], ['subscription', 'Subscription']];
-// The Filter panel's click-outside listener: one at a time, replaced each time the page is drawn (useFilterWire).
-let USE_OUTSIDE: ((ev: MouseEvent) => void) | null = null;
+// The page's main column (the page draws into it; it is always there while Usage is open).
+const useMain = (): HTMLElement | null => document.querySelector<HTMLElement>('#main');
+// The shared popover's host for the filter (task-list-menus.ts tasksMenu keeps its anchor here).
+const USE_MENU: TasksMenuHost = {};
 // The value of the select an event came from (its own control, so a plain read of the value).
 const eventValue = (ev: Event): string => { const el = eventElement(ev); return el && 'value' in el ? String(el.value) : ''; };
 function useCount(n: number | null | undefined): string {
@@ -137,7 +139,8 @@ const usePct = (n: number | null): string => n == null ? '—' : n > 0 && n < 0.
 // The token parts in their fixed order: what each run sent and got back.
 const USE_PARTS: [string, string, keyof UseFigures][] = [['read', 'Cache reads', 'cached_tokens'], ['write', 'Cache writes', 'cache_write_tokens'],
                                                          ['new', 'New input', 'input_tokens'], ['output', 'Output', 'output_tokens']];
-const useShortDay = (day: string): string => new Date(day + 'T00:00:00Z').toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'});
+// A UTC day (YYYY-MM-DD) in the guide's words, "Tue, Nov 11" (format.ts reads a bare day as that day, whatever the zone).
+const useShortDay = (day: string): string => dayWords(day, {weekday: true});
 function useSaved(): { range?: string; department?: string } {
   try { return JSON.parse(localStorage.getItem('tico.usage') || '{}') || {}; } catch { return {}; }
 }
@@ -151,42 +154,26 @@ function pageUsage(): void {
   const state: UseState = USE = {range: USE_RANGES.some(r => r[0] === saved.range) && saved.range !== 'custom' ? String(saved.range) : '7d',
                        department: saved.department || '', group: 'bot', sort: 'cost', filters: {}, custom: {from: span.from, to: span.to}, open: '', data: null, load: 0,
                        view: 'spend', edit: null};
+  // The one page header (ui/app/page-head.ts): Spend and Limits as tabs (Limits only for who may change one), the period
+  // as a segment and the shared filter icon as tools (Spend's own: hidden on Limits), and ⋯ last, which holds Clear
+  // automatic queue for the owner and administrators. A custom period's two date fields sit under the header.
   $('#main').innerHTML = `<div class="use-page">
     ${pageHead({title: 'Usage', hook: 'use-head',
       tabs: [{label: 'Spend', cur: true, attrs: 'data-use-view="spend"'}, {label: 'Limits', attrs: 'data-use-view="limits"'}],
-      tabsHook: 'use-tabs', tabsAttrs: 'aria-label="View" hidden'})}
+      tabsHook: 'use-tabs', tabsAttrs: 'aria-label="View" hidden',
+      tools: `<div class="use-seg ph-seg" role="tablist" aria-label="Range">${USE_RANGES.map(([k, label]) =>
+          `<button type="button" role="tab" data-use-range="${k}" aria-selected="${k === state.range}">${label}</button>`).join('')}</div>`
+        + `<button type="button" class="tl-ib use-filter" aria-haspopup="true" aria-expanded="false" aria-label="Filter" title="Filter">${filterIcon(13)}<span class="ph-fold-word" aria-hidden="true">Filter</span><span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`})}
     <div id="use-limits" hidden></div>
-    <div id="use-spend"><div class="use-bar-row">
-      <div class="use-seg ph-seg" role="tablist" aria-label="Range">${USE_RANGES.map(([k, label]) =>
-        `<button type="button" role="tab" data-use-range="${k}" aria-selected="${k === state.range}">${label}</button>`).join('')}</div>
-      <span class="use-custom" hidden><input type="date" id="use-from" aria-label="From"><input type="date" id="use-to" aria-label="To"></span>
-      <span class="use-filter-at">
-        <button type="button" class="ghost use-filter" aria-haspopup="dialog" aria-expanded="false" aria-controls="use-filter-panel"><span class="nav-icon" aria-hidden="true">filter_list</span><span class="use-filter-t">Filter</span></button>
-        <div id="use-filter-panel" class="use-filter-panel" role="dialog" aria-label="Filter usage" hidden>
-          <label class="use-frow" hidden><span>Group</span><select id="use-dept"></select></label>
-          ${USE_DIMENSIONS.map(([key, label]) => `<label class="use-frow" hidden><span>${label}</span><select data-use-filter="${key}" aria-label="Filter ${label}"><option value="">All</option></select></label>`).join('')}
-          <hr class="use-fsep">
-          <label class="use-frow"><span>Group by</span><select id="use-group">${[['bot', 'Bot'], ...USE_DIMENSIONS].map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label>
-          <label class="use-frow"><span>Sort by</span><select id="use-sort"><option value="cost">Cost</option><option value="tokens">Tokens</option><option value="runs">Runs</option><option value="name">Name</option></select></label>
-          <div class="use-ffoot"><button type="button" class="linkish" data-use-reset>Reset</button></div>
-        </div>
-      </span>
-      <button type="button" class="ghost use-default" id="use-purge" hidden>Clear automatic queue</button>
-    </div>
-    <div id="use-body" aria-live="polite"></div></div>
-  </div>`;
-  const main = $('#main');
+    <div id="use-spend"><div class="use-bar-row use-custom" hidden><input type="date" data-date-field id="use-from" aria-label="From"><input type="date" data-date-field id="use-to" aria-label="To"></div>
+    <div id="use-body" aria-live="polite">${skelRows(5, {card: true})}</div></div>
+  </div><div id="task-filter-pop" class="tl-pop" popover></div>`;
+  const main = $('#main'), head = (main as HTMLElement).querySelector<HTMLElement>('header.use-head');
   main.querySelector('.use-seg').onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-use-range]'); if (!b || b.dataset.useRange === state.range) return;
     state.range = String(b.dataset.useRange); state.open = ''; useSave(); useLoad();
   };
-  $('#use-group').onchange = (ev: Event) => { state.group = eventValue(ev); state.open = ''; useLoad(); };
-  $('#use-sort').onchange = (ev: Event) => { state.sort = eventValue(ev); usePaint(); };
-  main.querySelectorAll('[data-use-filter]').forEach((select: HTMLSelectElement) => select.onchange = () => {
-    state.filters[String(select.dataset.useFilter)] = select.value; state.open = ''; useFilterCount(); useLoad();
-  });
-  $('#use-dept').onchange = (ev: Event) => { state.department = eventValue(ev); state.open = ''; useSave(); useFilterCount(); useLoad(); };
-  useFilterWire(state);
+  useFilterWire();
   $('#use-from').onchange = $('#use-to').onchange = () => {
     state.custom = {from: $('#use-from').value, to: $('#use-to').value};
     if (state.custom.from && state.custom.to && state.custom.from <= state.custom.to) { state.open = ''; useLoad(); }
@@ -208,55 +195,87 @@ function pageUsage(): void {
     }
   };
   main.querySelector('.use-tabs').onclick = (ev: MouseEvent) => { const b = eventElement(ev)?.closest<HTMLElement>('[data-use-view]'); if (b) useView(String(b.dataset.useView)); };
-  $('#use-purge').onclick = () => usePurgeDialog(state.limits, (result: UsePurged) => {
-    if (USE === state && $('#use-purge')) toast(`Cleared ${result.cancelled} queued · ${result.kept_people} kept · ${result.still_running} running`);
+  // ⋯'s Clear automatic queue (drawn once the limits say this person may): one listener for the header, whose list is
+  // drawn again as the header fits.
+  head?.addEventListener('click', (ev: MouseEvent) => {
+    if (!eventElement(ev)?.closest('#use-purge')) return;
+    const purge = eventElement(ev)?.closest<HTMLElement>('#use-purge');
+    usePurgeDialog(state.limits, (result: UsePurged) => {
+      if (USE === state) toast(`Cleared ${result.cancelled} queued · ${result.kept_people} kept · ${result.still_running} running`);
+    }, () => { if (purge?.isConnected) phFocusHome(purge); });
   });
   void useLimits();
   useFilterCount();
   useLoad();
 }
 
-// The Filter button reads "Filter · N" for the filters set (Group and the four dimensions; Group by and Sort by are how
-// the list is shown, not what it holds). A Group kept from an earlier visit counts from the start.
+// The filter icon's badge counts the filters set (Group and the four dimensions; Group by and Sort by are how the list
+// is shown, not what it holds). A Group kept from an earlier visit counts from the start.
 function useFilterCount(): void {
-  const state = USE, b = $('#main')?.querySelector('.use-filter'); if (!state || !b) return;
+  const state = USE, b = useMain()?.querySelector<HTMLElement>('.use-filter'); if (!state || !b) return;
   const n = +!!state.department + USE_DIMENSIONS.filter(([key]) => state.filters[key]).length;
-  b.querySelector('.use-filter-t').textContent = n ? `Filter · ${n}` : 'Filter';
-  if (n) b.setAttribute('aria-label', `Filter, ${n} on`); else b.removeAttribute('aria-label');
+  const badge = b.querySelector<HTMLElement>('.tl-fbadge');
+  if (badge) { badge.hidden = !n; badge.textContent = String(n); }
+  b.classList.toggle('active', n > 0);
+  b.setAttribute('aria-label', n ? `Filter, ${n} on` : 'Filter');
 }
-// The panel stays in the page while closed (useLoad fills its selects by id). Opening puts the cursor in its first select;
-// Escape, a click outside it or the button again closes it and gives the button the focus back.
-function useFilterWire(state: UseState): void {
-  const main = $('#main'), b = main.querySelector('.use-filter'), panel = $('#use-filter-panel');
-  const close = (refocus: boolean): void => {
-    if (panel.hidden) return;
-    panel.hidden = true; b.setAttribute('aria-expanded', 'false');
-    if (refocus) b.focus();
-  };
-  const open = (): void => {
-    panel.hidden = false; b.setAttribute('aria-expanded', 'true');
-    // Under the button, left edges aligned, moved left as far as it takes to stay in the window.
-    panel.style.left = '0px';
-    const over = panel.getBoundingClientRect().right - (document.documentElement.clientWidth - 12);
-    if (over > 0) panel.style.left = -over + 'px';
-    [...panel.querySelectorAll('select')].find((s: HTMLSelectElement) => !s.closest('[hidden]'))?.focus();
-  };
-  b.onclick = () => panel.hidden ? open() : close(true);
-  panel.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Escape') { ev.preventDefault(); close(true); } };
-  panel.querySelector('[data-use-reset]').onclick = () => {
-    state.department = ''; state.filters = {}; state.open = '';
-    useSave(); useFilterCount(); useLoad();
-  };
-  const outside = (ev: MouseEvent): void => {
-    if (!panel.isConnected) { document.removeEventListener('click', outside, true); if (USE_OUTSIDE === outside) USE_OUTSIDE = null; return; }
-    const el = eventElement(ev);
-    if (panel.hidden || el?.closest('.use-filter-at')) return;
-    const inside = panel.contains(document.activeElement) || document.activeElement === document.body;
-    close(inside);
-  };
-  if (USE_OUTSIDE) document.removeEventListener('click', USE_OUTSIDE, true);
-  USE_OUTSIDE = outside;
-  document.addEventListener('click', outside, true);
+// The filter's menu, the shared popover (task-list-menus.ts tasksMenu): what narrows the list (Group, then each
+// dimension with a choice to make in it, or one made), a line, how it is grouped and sorted, and Reset. Drawn from the
+// state when it opens and again after each load while it is open (`redraw`: the lists follow the new answer, the focus
+// stays on its drop-down); a choice applies at once and the menu stays open. The icon's wiring is phFilterWire's.
+function useFilterMenu(anchor: HTMLElement | null, redraw = false): void {
+  const state = USE;
+  if (!state || !anchor) return;
+  const data = state.data;
+  const opt = (value: string, label: string, on: string) => `<option value="${esc(value)}"${value === on ? ' selected' : ''}>${esc(label)}</option>`;
+  const depts = data?.departments || [];
+  const group = depts.length || state.department ? `<label class="use-frow"><span>Group</span><select id="use-dept">${opt('', 'All groups', state.department)}${
+    [...new Set([...depts, ...(state.department ? [state.department] : [])])].map(d => opt(d, d, state.department)).join('')}</select></label>` : '';
+  // A dimension shows when there is a choice to make in it, or one is made.
+  const dims = USE_DIMENSIONS.map(([key, label]) => {
+    const selected = state.filters[key] || '';
+    if (!selected && (data?.dimensions?.[key] || []).length < 2) return '';
+    const values = [...new Set([...(data?.dimensions?.[key] || []), ...(selected ? [selected] : [])])].sort();
+    return `<label class="use-frow"><span>${label}</span><select data-use-filter="${key}" aria-label="Filter ${label}">${opt('', 'All', selected)}${values.map(v =>
+      opt(v, data?.dimension_labels?.[key]?.[v] || (v === '__unknown__' ? 'Not recorded / not applicable' : v), selected)).join('')}</select></label>`;
+  }).join('');
+  const pop = document.querySelector<HTMLElement>('#task-filter-pop');
+  const had = redraw ? pop?.querySelector<HTMLElement>('select:focus, button:focus') : null;
+  const hadKey = had ? (had.id ? '#' + had.id : had.dataset.useFilter ? `[data-use-filter="${had.dataset.useFilter}"]` : '[data-use-reset]') : '';
+  tasksMenu(USE_MENU, anchor, `<div class="tl-menu use-filter-menu" role="group" aria-label="Filter usage">${group}${dims}${group || dims ? '<div class="tl-menu-sep" role="separator"></div>' : ''}
+    <label class="use-frow"><span>Group by</span><select id="use-group">${([['bot', 'Bot'], ...USE_DIMENSIONS] as [string, string][]).map(([key, label]) => opt(key, label, state.group)).join('')}</select></label>
+    <label class="use-frow"><span>Sort by</span><select id="use-sort">${([['cost', 'Cost'], ['tokens', 'Tokens'], ['runs', 'Runs'], ['name', 'Name']] as [string, string][]).map(([key, label]) => opt(key, label, state.sort)).join('')}</select></label>
+    <div class="use-ffoot"><button type="button" class="ghost" data-use-reset>Reset</button></div></div>`, p => {
+    p.onchange = (ev: Event) => {
+      const el = eventElement(ev);
+      if (!(el instanceof HTMLSelectElement)) return;
+      if (el.id === 'use-sort') { state.sort = el.value; usePaint(); return; }
+      if (el.id === 'use-group') { state.group = el.value; state.open = ''; useLoad(); return; }
+      if (el.id === 'use-dept') { state.department = el.value; useSave(); }
+      else state.filters[String(el.dataset.useFilter)] = el.value;
+      state.open = ''; useFilterCount(); useLoad();
+    };
+    p.onclick = (ev: MouseEvent) => {
+      if (!eventElement(ev)?.closest('[data-use-reset]')) return;
+      state.department = ''; state.filters = {}; state.open = '';
+      p.querySelectorAll<HTMLSelectElement>('#use-dept, [data-use-filter]').forEach(sel => { sel.value = ''; });
+      useSave(); useFilterCount(); useLoad();
+    };
+  }, !redraw);
+  // Open: the cursor in its first select (tasksMenu focuses the list itself, which has no item of its own here), or,
+  // drawn again, back where it was.
+  const open = document.querySelector<HTMLElement>('#task-filter-pop:popover-open');
+  ((hadKey && open?.querySelector<HTMLElement>(hadKey)) || (redraw ? null : open?.querySelector<HTMLElement>('select')))?.focus();
+}
+// The icon opens and closes the menu (the shell's phFilterWire). The menu's drop-downs keep their own arrow keys.
+function useFilterWire(): void {
+  const btn = useMain()?.querySelector<HTMLElement>('.use-filter'), pop = document.querySelector<HTMLElement>('#task-filter-pop');
+  if (btn && pop) phFilterWire(USE_MENU, btn, pop, anchor => useFilterMenu(anchor), false);
+}
+// After a load, an open filter menu is drawn again from the new answer.
+function useFilterRedraw(): void {
+  const pop = document.querySelector<HTMLElement>('#task-filter-pop');
+  if (pop?.matches(':popover-open') && pop.querySelector('.use-filter-menu')) useFilterMenu(USE_MENU.menuAnchor || null, true);
 }
 
 // The team default limit, the team's and groups' limits, and each bot's: the Limits tab shows when any is ours to change.
@@ -265,7 +284,10 @@ async function useLimits(): Promise<void> {
   if (!state) return;
   try { state.limits = await get<UseLimits>('/v2/usage/limits', {fresh: true}); } catch { state.limits = null; }
   if (USE !== state || !$('#use-limits')) return;
-  $('#use-purge').hidden = !state.limits?.may_edit_default;
+  // ⋯ holds Clear automatic queue for the owner and administrators; for anyone else ⋯ keeps its own Copy link.
+  const head = $('#main header.use-head') as HTMLElement | null, purge = !!state.limits?.may_edit_default;
+  if (head && purge !== !!head.querySelector('#use-purge'))
+    pageHeadSet(head, 'more', purge ? PAGE_HEAD_COPY + '<div class="tl-menu-sep" role="separator"></div><button type="button" class="use-purge" id="use-purge">Clear automatic queue</button>' : PAGE_HEAD_COPY);
   const may = useLimitRows(state.limits, []).length > 0 || useLimitAddable(state.limits, []).length > 0;
   $('#main').querySelector('.use-tabs').hidden = !may;
   if (!may && state.view === 'limits') useView('spend');
@@ -276,6 +298,8 @@ function useView(view: string, focus?: string): void {
   const state = USE; if (!state) return;
   state.view = view;
   for (const b of $('#main').querySelectorAll('[data-use-view]')) { b.setAttribute('aria-selected', String(b.dataset.useView === view)); b.classList.toggle('cur', b.dataset.useView === view); }
+  // The period and the filter are Spend's: Limits has neither.
+  for (const tool of useMain()?.querySelectorAll<HTMLElement>('header.use-head .use-seg, header.use-head .use-filter') ?? []) tool.hidden = view !== 'spend';
   $('#use-spend').hidden = view !== 'spend';
   $('#use-limits').hidden = view !== 'limits';
   if (view !== 'limits') return;
@@ -297,26 +321,22 @@ async function useLoad(): Promise<void> {
   $('#use-body').setAttribute('aria-busy', 'true');
   // Controls first, so a switch shows at once while the numbers load.
   for (const b of $('#main').querySelectorAll('[data-use-range]')) b.setAttribute('aria-selected', String(b.dataset.useRange === state.range));
-  $('#main').querySelector('.use-custom').hidden = state.range !== 'custom';
+  $('#main').querySelector('.use-custom').hidden = state.range !== 'custom' || state.view !== 'spend';
   $('#use-from').value = range.from; $('#use-to').value = range.to;
   let data: UseData;
   try { data = await get<UseData>('/v2/usage?' + range.query); }
-  catch (e) { if (USE === state && mine === state.load) $('#use-body').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
+  catch (e) {
+    if (USE !== state || mine !== state.load) return;
+    // An error says what went wrong and carries its fix.
+    $('#use-body').removeAttribute('aria-busy');
+    $('#use-body').innerHTML = `<div class="empty-state" role="alert"><p>${esc(errorMessage(e, ''))}</p><button type="button" class="ghost" data-use-retry>Retry</button></div>`;
+    $('[data-use-retry]').onclick = () => useLoad();
+    return;
+  }
   if (USE !== state || mine !== state.load) return;      // a newer switch is already loading
   state.data = data;
-  const select = $('#use-dept');
-  select.innerHTML = `<option value="">All groups</option>` + (data.departments || []).map(d =>
-    `<option value="${esc(d)}"${d === state.department ? ' selected' : ''}>${esc(d)}</option>`).join('');
-  select.closest('.use-frow').hidden = !(data.departments || []).length;
-  // A dimension shows in Filter when there is a choice to make in it, or one is made.
-  for (const [key] of USE_DIMENSIONS) {
-    const filter = $(`[data-use-filter="${key}"]`), selected = state.filters[key] || '';
-    filter.closest('.use-frow').hidden = !selected && (data.dimensions?.[key] || []).length < 2;
-    const values = [...new Set([...(data.dimensions?.[key] || []), ...(selected ? [selected] : [])])].sort();
-    filter.innerHTML = '<option value="">All</option>' + values.map(value => `<option value="${esc(value)}">${esc(data.dimension_labels?.[key]?.[value] || (value === '__unknown__' ? 'Not recorded / not applicable' : value))}</option>`).join('');
-    filter.value = selected;
-  }
   usePaint();
+  useFilterRedraw();
 }
 
 function usePaint(): void {
@@ -330,11 +350,10 @@ function usePaint(): void {
   if (!rows.length) { body.innerHTML = '<div class="empty">No usage yet.</div>'; return; }
   const t = data.totals;
   const top = Math.max(...rows.map(useSpend), 0);
-  // The total, then the list; how it is counted waits behind the help button.
+  // The total, then the list; how it is counted waits behind its own words: "API-equivalent" opens it (no info icon).
   const low = t.low_estimate_runs > 0 ? useLowWhy(t.low_estimate_runs) : '';
-  body.innerHTML = `<div class="use-total"><strong id="use-total" title="${esc(useBilled(t))}">${useMoney(useEquiv(t))}</strong> <span class="use-note">API-equivalent · ${useRuns(t.runs)}</span>${
+  body.innerHTML = `<div class="use-total"><strong id="use-total" title="${esc(useBilled(t))}">${useMoney(useEquiv(t))}</strong> <span class="use-note"><button type="button" class="use-why" aria-expanded="${!!state.why}" aria-controls="use-why-text" title="How this is counted">API-equivalent</button> · ${useRuns(t.runs)}</span>${
       low ? `<span class="use-low" title="${esc(low)}"> · may be low</span>` : ''}
-      <button type="button" class="use-why" aria-expanded="${!!state.why}" aria-controls="use-why-text" aria-label="How this is counted"><span class="nav-icon" aria-hidden="true">help</span></button>
       <p id="use-why-text" class="muted"${state.why ? '' : ' hidden'}>${esc(USE_WHY)}${low ? ' ' + esc(low) + '.' : ''}</p></div>
     <ul class="use-list">${rows.map(r => `<li class="use-row" data-bot="${esc(r.bot)}">
       ${state.group === 'bot' ? useLimitButton(r.bot, r.name, r.limit) : '<span class="use-limit"></span>'}
@@ -534,8 +553,9 @@ function useLimitRowHtml(r: UseLimitRow, periods: [string, string, string, strin
   const icon = r.kind === 'bot' ? botAvatar(String(r.slug), 20)
     : `<span class="nav-icon use-lim-icon" aria-hidden="true">${r.kind === 'group' ? 'groups' : r.kind === 'company' ? 'account_balance' : 'smart_toy'}</span>`;
   const st = r.state;
-  const chip = !st ? '' : st.blocked ? `<span class="pill fail" title="${esc(useHeldBy(st))}">Paused</span>`
-    : st.percent >= 80 ? `<span class="pill waiting">${st.percent}%</span>` : '';
+  // Near or at a limit: the words in the meter's colour beside the name, never a pill (style guide, Usage).
+  const chip = !st ? '' : st.blocked ? `<span class="use-limit-w bad" title="${esc(useHeldBy(st))}">Paused</span>`
+    : st.percent >= 80 ? `<span class="use-limit-w warn">${st.percent}%</span>` : '';
   const cells = periods.map(([k, label, , w]) => {
     const v = r.value(k), head = `<span class="use-lim-h" aria-hidden="true">${label}</span>`;
     if (k === 'hourly_usd' && v == null) return `<span class="use-lim-cell" role="cell"></span>`;
@@ -648,12 +668,14 @@ function useLimitDialog(slug: string, name: string | undefined, limit: UseLimit 
   useDialog(name || slug, held + `<div class="use-fields">${fields}</div>`,
     form => put('/v2/usage/limits/' + encodeURIComponent(slug), useAmounts(form)), done);
 }
-// Drop queued automatic wakes and waits. Tasks, people's messages and live runs stay.
-function usePurgeDialog(limits: UseLimits | null | undefined, done: (result: UsePurged) => void): void {
+// Drop queued automatic wakes and waits. Tasks, people's messages and live runs stay. `closed` runs once the dialog
+// is gone (Usage puts the focus back on the header's ⋯, which held the item that opened it).
+function usePurgeDialog(limits: UseLimits | null | undefined, done: (result: UsePurged) => void, closed?: () => void): void {
   const scopes: [string, string][] = [['company', 'Whole team'], ...useGroupOrder(limits?.pools?.groups || {})
     .map(([id, g, chain]): [string, string] => ['group:' + id, '  '.repeat(chain.length) + (g.name || id)])];
-  useDialog('Clear automatic queue',
+  const dialog = useDialog('Clear automatic queue',
     `<label>Applies to<select name="scope">${scopes.map(([key, label]) => `<option value="${esc(key)}">${esc(label)}</option>`).join('')}</select></label>
      <p>Cancels queued automatic wakes and waits. Keeps tasks, people's messages and running work.</p>`,
     form => post('/v2/usage/queues/purge', {scope: form.scope.value}), done, 'Clear queue');
+  if (closed) dialog.addEventListener('close', closed);
 }

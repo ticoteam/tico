@@ -195,17 +195,24 @@ function redesignAfterRoute() {
 }
 
 // The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand opens
-// from the Strategy tab and keeps it lit.
+// from the Strategy tab and keeps it lit, so the Strategy tab is the way back from either.
+// Every tab has ⋯, last at the far right (style guide, "Top bars: one line"): what is used less than daily lives there
+// (Lenses and Versions on Strategy, Open map on Market; each tab fills its own with pageHeadSet). A tab with nothing of
+// its own keeps the header's Copy link.
 function redesignStrategyHead(tab: string): string {
   const on = ['lenses', 'brand'].includes(tab) ? 'strategy' : tab;
   const tabs = [['market', MARKET_ROUTE, 'Market'], ['strategy', '#/strategy', 'Strategy'], ['org', RD_ORG, 'Org'],
     ['goals', RD_GOALS, 'Goals'], ['budget', RD_BUDGET, 'Budget']];
-  const sub = tab === 'strategy' || tab === 'lenses'
-    ? `<a class="strat-sub" href="${tab === 'lenses' ? '#/strategy' : LENSES_ROUTE}">${tab === 'lenses' ? 'Strategy' : 'Lenses'}</a>` : '';
+  const more = tab === 'strategy' ? `<a href="${LENSES_ROUTE}" data-strat-lenses>Lenses</a>`
+    : tab === 'market' ? `<a href="${MARKET_ROUTE}/map" data-market-map>Open map</a>` : PAGE_HEAD_COPY;
+  // Lenses and Brand are pages under the Strategy tab: their header says so on its one line, "Strategy › Lenses", the
+  // parent a link back (page-head.ts `back`).
+  const sub = tab === 'lenses' ? 'Lenses' : tab === 'brand' ? 'Brand' : '';
   // The one page header (page-head.ts); #strat-actions is its button holder, which each tab fills.
-  return pageHead({title: 'Strategy', hook: 'strat-head rd-strat-head', tabsHook: 'strat-tabs', tabsAttrs: 'aria-label="Strategy"',
+  return pageHead({title: sub || 'Strategy', back: sub ? {href: '#/strategy', label: 'Strategy'} : undefined,
+    hook: 'strat-head rd-strat-head', tabsHook: 'strat-tabs', tabsAttrs: 'aria-label="Strategy"',
     tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`})),
-    tools: sub, actId: 'strat-actions'});
+    more, actId: 'strat-actions'});
 }
 
 // Org (ui/app/redesign-org.ts) and the Market page (ui/app/redesign-market.ts) are their own files.

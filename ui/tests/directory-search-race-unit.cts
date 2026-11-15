@@ -66,7 +66,7 @@ const rows = () => [...body.innerHTML.matchAll(/data-dir-row="([^"]+)"/g)].map(m
 const shows = (ids: string[], tag: string) => {
   assert.deepEqual(rows(), ids, tag + ': rows');
   assert.ok(!body.innerHTML.includes('data-dir-error'), tag + ': no error');
-  assert.match(body.innerHTML, new RegExp(`data-dir-count>${ids.length} people<`), tag + ': count');
+  assert.ok(!body.innerHTML.includes('data-dir-count'), tag + ': no count caption (the tab counts them)');
 };
 
 async function main(): Promise<void> {
@@ -139,6 +139,19 @@ async function main(): Promise<void> {
   await failed;
   assert.match(body.innerHTML, /data-dir-error/, 'a failed Load more shows its error');
   await flush();
+
+  // The list draws only the columns some row has a value for, and a relationship as plain words, never a pill.
+  const heads = (html: string) => [...html.matchAll(/<th>([^<]+)<\/th>/g)].map(m => m[1]);
+  assert.deepEqual(heads(ctx.dirTable('person', [RAJ, ANA])), ['Name'], 'no column without a value');
+  const owned = {...RAJ, owner: 'human:ana', links_to_us: ['customer_of']};
+  const html: string = ctx.dirTable('person', [owned, ANA]);
+  assert.deepEqual(heads(html), ['Name', 'Relationship', 'Owner'], 'a column one row fills is drawn');
+  assert.ok(!html.includes('class="pill'), 'a relationship is not a pill');
+  assert.match(html, /<span class="muted dir-rel"[^>]*>Customer<\/span>/, 'a relationship is muted words');
+  // A search that leaves only rows without those values keeps the columns (no jumping while typing); a new type starts again.
+  assert.deepEqual(heads(ctx.dirTable('person', [RAJ])), ['Name', 'Relationship', 'Owner'], 'a narrowed list keeps the columns seen');
+  assert.deepEqual(heads(ctx.dirTable('organization', [{...RAJ, type: 'organization'}])), ['Name'], 'another type starts afresh');
+  assert.deepEqual(heads(ctx.dirTable('person', [RAJ])), ['Name'], 'and so does coming back to it');
   console.log('directory-search-race-unit: ok');
 }
 main().catch(e => { console.error(e); process.exit(1); });

@@ -2,12 +2,14 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* sidebar */
 /* Fixed, not sticky: a page whose document scrolls (the org builder) would carry a sticky sidebar off with it, leaving empty space
-   below its bottom bar. The grid's first column keeps the room it takes. */
-#side{grid-column:1;grid-row:1/-1;position:fixed;top:0;left:0;bottom:0;width:var(--rail-left);min-height:0;border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column;overflow:hidden;padding:0 8px;z-index:20}
-.side-head{display:none;align-items:center;padding:8px 10px;flex:none}
+   below its bottom bar. The grid's first column keeps the room it takes. Three rows: the phone drawer's head, the list,
+   the foot. On a computer the Assistant (ask.css) shares the list's row, drawn over it, so the list keeps its place and
+   scroll while the Assistant is open. */
+#side{grid-column:1;grid-row:1/-1;position:fixed;top:0;left:0;bottom:0;width:var(--rail-left);min-height:0;border-right:1px solid var(--line);background:var(--surface);display:grid;grid-template-rows:auto minmax(0,1fr) auto;grid-template-columns:minmax(0,1fr);overflow:hidden;padding:0 8px;z-index:20}
+.side-head{grid-row:1;display:none;align-items:center;padding:8px 10px;flex:none}
 .side-close{display:none;margin-left:auto;background:none;border:0;border-radius:6px;color:var(--muted);font-size:20px;line-height:var(--lh-none);padding:4px 6px;cursor:pointer}
 .side-close:hover{color:var(--ink);background:var(--surface2)}
-.side-scroll{min-height:0;flex:1;overflow-y:auto;padding:8px 0}
+.side-scroll{grid-row:2;grid-column:1;min-height:0;overflow-y:auto;padding:8px 0}
 /* A thin scrollbar that shows while the pointer is on the rail and never covers the row counts. */
 .side-scroll{scrollbar-width:thin;scrollbar-color:transparent transparent;scrollbar-gutter:stable}
 .side-scroll:hover,.side-scroll:focus-within{scrollbar-color:var(--line) transparent}
@@ -75,9 +77,8 @@ a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:
 .tree ul.node-sources{margin:0 0 2px;padding:0 0 0 calc(var(--tree-av) / 2 + var(--tree-elbow) + var(--tree-gap) + var(--tree-lead) - 8px);--tree-from:0px;--tree-down:2px}
 .tree ul.node-sources a{padding:4px 8px;font-size:var(--t-sm);color:var(--muted)}
 .tree ul.node-sources a:hover,.tree ul.node-sources a.cur{color:var(--ink)}
-.side-footer{flex:none;border-top:1px solid var(--line);padding:3px 0 max(3px,env(safe-area-inset-bottom))}
-.side-utility{display:flex;align-items:center;gap:var(--s2);padding:6px 10px;min-width:0}
-/* The account button's one status dot, left of the name, and the lines that say why (ui/app/heartbeat.ts) */
+.side-footer{grid-row:3;grid-column:1;border-top:1px solid var(--line);padding:3px 0 max(3px,env(safe-area-inset-bottom))}
+/* The account button's one status dot, on its picture's corner, and the lines that say why (ui/app/heartbeat.ts) */
 .account-dot{width:8px;height:8px;flex:none;border-radius:50%}.account-dot[hidden]{display:none}
 .account-dot[data-level="bad"]{background:var(--fail)}.account-dot[data-level="warn"]{background:var(--wait)}
 .account-status[hidden]{display:none}
@@ -90,12 +91,10 @@ a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:
 .account-status-text{flex:1;min-width:0;white-space:normal;overflow-wrap:anywhere}
 .account-status-line :is(a,button){flex:none;align-self:center;padding:2px 8px;font-size:var(--t-sm);color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:6px;background:none}
 #account-menu .account-status{width:0;min-width:100%;white-space:normal;padding-bottom:var(--s1);margin-bottom:var(--s1);border-bottom:1px solid var(--line)}
-/* With lines to show, the menu takes the sidebar's width (it cannot overflow it: #side clips) so each line reads whole. */
-#account-menu:has(#account-status:not([hidden])){min-width:calc(var(--rail-left) - 36px)}
 #account-menu:not([hidden]){display:flex;flex-direction:column;max-height:calc(100dvh - 80px);overflow-y:auto}
 #account-menu .account-status{flex:0 1 auto;min-height:0}
 #account-menu .nav-link{flex-shrink:0}
-#account-status-pop{position:absolute;bottom:calc(100% + 8px);left:0;width:calc(var(--rail-left) - 36px);box-sizing:border-box;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16);z-index:22}
+#account-status-pop{position:absolute;bottom:calc(100% + 6px);left:0;right:0;box-sizing:border-box;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16);z-index:22}
 .new-version{position:relative;padding:0 10px}
 #changelog-notice{display:flex;align-items:center;gap:8px;margin:0 10px;padding:6px 8px;border-radius:6px;color:var(--muted);font-size:var(--t-sm);text-decoration:none}
 #changelog-notice:hover{background:var(--surface2);color:var(--ink)}
@@ -116,16 +115,26 @@ html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs
 #new-version-pop .nv-dismiss{margin-top:8px;padding:0;border:0;background:none;color:var(--muted);font-size:var(--t-sm);cursor:pointer;text-decoration:underline}
 .help-link{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border:1px solid var(--line);border-radius:50%;color:var(--muted);font:600 var(--t-base)/var(--lh-none) var(--sans);text-decoration:none}
 .help-link:hover,.help-link.cur{background:var(--surface2);color:var(--ink);text-decoration:none}
-.account-wrap{position:relative;min-width:0;flex:1;display:flex;align-items:center;gap:2px}
-#account{display:flex;align-items:center;gap:6px;flex:1;min-width:0;max-width:100%;overflow:hidden;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;border:0;background:none;text-align:left;padding:6px 0;cursor:pointer;border-radius:6px}
+/* Your picture and an up arrow, last in the foot's row; the menu (and the status lines' pop-up) opens upward over the
+   whole row, as wide as it (.side-ask, ask.css, is their box: the sidebar clips anything wider). */
+.account-wrap{flex:none;display:flex;align-self:stretch}
+#account{position:relative;flex:none;display:inline-flex;align-items:center;min-height:34px;padding:0 2px 0 6px;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 #account:hover,#account[aria-expanded="true"]{color:var(--ink);background:var(--surface2)}#account.cur{color:var(--ink)}
-@media (max-width:760px){#account{min-height:40px;box-sizing:border-box}}
-#account::after{content:'⌃';margin-left:auto;padding:0 4px}
-#account-menu{position:absolute;bottom:calc(100% + 8px);left:0;right:0;min-width:150px;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16);z-index:21}
-#account .account-email{overflow:hidden;text-overflow:ellipsis}
-/* At least as wide as the account button, wider when an item needs it (Take the tour is a button in it). */
-#account-menu{width:max-content;min-width:100%;box-sizing:border-box}#account-menu .nav-link{white-space:nowrap}
-#account-menu button.nav-link{width:100%;border:0;background:none;text-align:left;cursor:pointer}#account-menu button.nav-link:hover{background:var(--surface2)}
+@media (max-width:760px){#account{min-height:44px;box-sizing:border-box}}
+#account .account-face{display:inline-flex;width:22px;height:22px;flex:none;border-radius:50%}
+#account .account-face .av{flex:none}
+#account.cur .account-face{box-shadow:0 0 0 1.5px var(--surface),0 0 0 3px var(--ink)}   /* the page you are on is in its menu */
+#account .account-dot{position:absolute;top:5px;left:22px;box-shadow:0 0 0 2px var(--surface)}
+/* The icon font has no expand_less: the down arrow, turned. */
+#account .account-up{width:16px;height:16px;font-size:16px;color:inherit;transform:rotate(180deg)}
+#account-menu{position:absolute;bottom:calc(100% + 6px);left:0;right:0;box-sizing:border-box;padding:var(--s1);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);box-shadow:0 6px 24px rgba(0,0,0,.16);z-index:21}
+#account-menu .nav-link{white-space:nowrap}
+#account-menu .nav-link:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+#account-menu button.nav-link{width:100%;border:0;background:none;text-align:left;cursor:pointer;font-family:inherit}#account-menu button.nav-link:hover{background:var(--surface2)}
+/* #side clips its overflow, which cut the end of the download row and its Beta pill (#405). While the menu is open,
+   let it draw past the sidebar's edge, above the sidebar's resize handle (.rail-edge, z-index 21), which would otherwise
+   cover the menu's last 8 px and take its clicks; closed, the sidebar clips and stacks as before. */
+#side:has(#account-menu:not([hidden])){overflow:visible;z-index:22}
 .tree,.tree ul{list-style:none;margin:0;padding:0}
 /* The lines (tree-lines.css): a rail from each manager's avatar, an elbow into each report's. A row's avatar sits
    --tree-lead in from its left (a.node's padding) and is --tree-av across (16px, 20px on the top level when nobody is on

@@ -201,7 +201,7 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       assert.equal(await page.locator('#main >> text=Latest update').count(), 0, 'no Latest update banner');
       assert.equal(await page.locator('#bot-history-btn').count(), 0, 'all updates is in the rail now');
       // Updates: its age, and a quiet way to all of them; showing it there reads it.
-      assert.match(await page.locator('#bot-latest .rail-age').innerText(), /10h ago/);
+      assert.match(await page.locator('#bot-latest .rail-age').innerText(), /^10h$/);
       // No icon in the header, which is not a link; "All updates" sits under the text, beside More.
       assert.equal(await page.locator('#bot-latest .rail-head :is(a, .nav-icon, .rail-ico)').count(), 0, 'Updates: a plain header');
       assert.equal(await page.locator('#bot-latest .rail-foot [data-latest-all]').innerText(), 'All updates');
@@ -244,6 +244,11 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       // Opened, every detail reads as before.
       await list.locator('details').evaluateAll(els => (els as HTMLDetailsElement[]).forEach(el => { el.open = true; }));
       assert.equal(await repos.locator('.bt-repo').count(), 4);
+      // A line carries a pill only when something is wrong or under way; the opened tool's Status row still names Ready.
+      assert.equal(await list.locator('summary .bt-line-status .pill.ok').count(), 0, scheme + ': Ready says nothing on its line');
+      assert.equal(await list.locator('summary .bt-line-status .pill:not(.fail)').evaluateAll(els => els.filter(el => el.textContent !== 'Pending').length), 0, scheme + ': only Needs attention or Pending on a line');
+      assert.ok(await list.locator('summary .bt-line-status .pill.fail').count() > 0, scheme + ': a problem keeps its pill');
+      assert.ok(await list.locator('.bt-body .pill.ok', {hasText: 'Ready'}).count() > 0, scheme + ': Status: Ready inside the tool');
       const text = await list.innerText();
       for (const expected of ['GPT 6 Luna', 'acme-co/emp-cmo', 'acme-co/website', 'GH_TOKEN', 'acme-co/pricing-api', 'PostHog project 12345 (US), personal key', '12345', 'POSTHOG_KEY',
         'funnels only', 'Credential missing on Test Mac', '#ops, #launch', 'SLACK_TOKEN', 'nothing to check', 'account 3'])
@@ -304,7 +309,8 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       await page.locator('#bot-tools [data-tool=posthog] > summary').click();
       await page.locator('#bot-tools [data-tool=posthog][open] dl').waitFor();
       const heights = await page.locator('#bot-tools summary:visible').evaluateAll(els => els.map(el => el.getBoundingClientRect().height));
-      assert(heights.length > 4 && heights.every(h => h < 40), 'one line a tool: ' + heights);
+      // A line is the phone's 44px target (bot-page.css) and never taller: a second line of words would make it so.
+      assert(heights.length > 4 && heights.every(h => h >= 43.5 && h <= 44.5), 'one line a tool, a 44px target: ' + heights);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'More: no sideways scroll');
       if (shots) await page.screenshot({path: path.join(shots, `bot-page-phone-tools-${scheme}.png`), fullPage: true});
       assert.deepEqual(errors, [], scheme + ': phone page errors');

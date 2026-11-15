@@ -166,10 +166,12 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
     {
       const {page, errors} = await open(browser, {runs: PAST});
       await page.locator('[data-lens="blue-ocean"]').waitFor();
-      assert.equal(await page.locator('#main h1').innerText(), 'Strategy');
+      assert.equal(await page.locator('#main h1').innerText(), 'Lenses', 'a page under the Strategy tab, named');
       assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Market', 'Strategy', 'Org', 'Goals', 'Budget']);
       assert.equal(await page.locator('.strat-tabs a.cur').innerText(), 'Strategy', 'Lenses are a view of the Strategy tab');
-      assert.equal(await page.locator('.strat-sub').innerText(), 'Strategy', 'the way back to the strategy');
+      // The way back: "Strategy ›" before the title, on the header's one line.
+      assert.equal(await page.locator('.rd-strat-head > .ph-back').getAttribute('href'), '#/strategy', 'the way back to the strategy');
+      assert.equal(await page.locator('.rd-strat-head > .ph-back').innerText(), 'Strategy ›');
       assert.equal(await page.locator('#side [data-nav="strategy"]').getAttribute('aria-current'), 'page');
       assert.deepEqual(await page.locator('[data-lens-group="strategy"] .lens-name').allInnerTexts(), ['Playing to Win', 'Blue Ocean', 'Scenarios']);
       assert.deepEqual(await page.locator('[data-lens-group="market"] .lens-name').allInnerTexts(), ['Where to play']);

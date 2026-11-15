@@ -67,6 +67,7 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
         if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
+        if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
         if (r.method() !== 'GET' && p.startsWith('/api/')) {
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
           const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);
@@ -146,7 +147,6 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
       assert.deepEqual(writes.slice(1), [{p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}], label);
       writes.splice(0, 1);
       assert.equal(await dialog.locator('.dc-q').innerText(), Q[0], `${label}: the question stays`);
-      assert.equal(await dialog.locator('.dc-count').innerText(), '1 of 3', label);
       assert.equal(await dialog.locator('#dc-other').inputValue(), '', `${label}: the box is emptied`);
 
       // AC-4: I don't know, explain answers it with those words, and the next one comes.

@@ -276,7 +276,7 @@ function kdDraw(view: ThvView): void {
   tray.classList.toggle('kd-wide', wide);
   tray.innerHTML = items.length ? (wide ? `<div class="kd-head">${items.length} keys from your paste</div>` : '')
     + items.map(i => kdItemHTML(state, i, wide)).join('')
-    + (state.admin === false ? `<p class="kd-denied">${esc(state.denied)} <a href="#/tools/keys">Request a key</a></p>` : '') : '';
+    + (state.admin === false ? `<p class="kd-denied">${esc(state.denied)} <a href="#/tools?show=keys">Request a key</a></p>` : '') : '';
   const n = items.length;
   proof.textContent = state.sent || (n ? `${n} ${n === 1 ? 'key' : 'keys'} locked. They go to Credentials, encrypted. The bot only sees their names.` : '');
   const send = el?.querySelector<HTMLButtonElement>('.p-send');

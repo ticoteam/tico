@@ -223,7 +223,7 @@ function granolaDialog(state: GranolaState, focus?: string) {
   const open = flow.uri ? `<a class="primary small mg-open" href="${esc(flow.uri)}" target="_blank" rel="noopener" data-g="open">Open Granola</a>`
     : flow.host ? `<span class="mg-host">${esc(flow.host)}</span>` : '';
   const key = S.me?.role === 'owner' ? '<button type="button" class="linkish mg-key" data-g="key">Use an API key</button>' : '';
-  dialog.innerHTML = `<header class="mg-dhead"><h2>Connect Granola</h2><button type="button" class="ghost" data-g="cancel" aria-label="Close">✕</button></header>
+  dialog.innerHTML = `<header class="mg-dhead"><h2>Connect Granola</h2><button type="button" class="ghost" data-g="cancel" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     ${code ? `<ol class="mg-steps">
       <li><span>Open Granola and sign in</span>${open}</li>
       <li><span>Enter this code if asked</span><span class="mg-code-row"><output class="mg-code" id="mg-code" aria-label="Granola code">${esc(flow.code)}</output><button type="button" class="ghost small" data-g="copy" aria-label="Copy code">Copy</button></span></li>

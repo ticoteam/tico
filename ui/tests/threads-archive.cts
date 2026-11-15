@@ -169,7 +169,8 @@ let browser: Browser = null!;
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('Morning.').waitFor();
     const headArchive = page.locator('.thv-head [data-thv-archive]');
-    assert.equal(await headArchive.textContent(), 'Archive', 'a word, not an icon');
+    assert.equal(await headArchive.getAttribute('aria-label'), 'Archive', 'the archive icon, named for a screen reader');
+    assert.equal((await headArchive.textContent())!.trim(), 'archive');
     const size = (await headArchive.boundingBox())!;
     assert.ok(size.width >= 44 && size.height >= 44, `a 44px header target: ${JSON.stringify(size)}`);
     await shot(page, 'threads-archive-phone-thread');
@@ -183,9 +184,9 @@ let browser: Browser = null!;
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('Morning.').waitFor();
     const back = page.locator('.thv-head [data-thv-archive]');
-    assert.equal(await back.textContent(), 'Unarchive');
+    assert.equal(await back.getAttribute('aria-label'), 'Unarchive');
     await back.tap();
-    await until(async () => (await page.locator('.thv-head [data-thv-archive]').textContent()) === 'Archive', 'Unarchive brings it back in place');
+    await until(async () => (await page.locator('.thv-head [data-thv-archive]').getAttribute('aria-label')) === 'Archive', 'Unarchive brings it back in place');
     assert.deepEqual(seen.patches[1], {id: 't-plan', archived: false});
     assert.deepEqual(seen.errors, []);
     await page.close();
@@ -233,15 +234,20 @@ let browser: Browser = null!;
     await page.close();
   }
 
-  // Delete is offered in the thread header only when the server says the thread is deletable; it asks first, sends one
-  // DELETE, and the thread leaves Threads.
+  // Delete is offered only when the server says the thread is deletable: last and red in Thread settings (the header's
+  // ⋯), never a word in the header. It asks first, sends one DELETE, and the thread leaves Threads.
   if (!only || only === 'header-delete') {
     const threads = world();
     threads['t-plan']!.deletable = true;
     const {page, seen} = await open(browser, {viewport: {width: 1280, height: 800}, phone: false, threads});
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('Morning.').waitFor();
-    await page.locator('.thv-head [data-thv-delete]').click();
+    assert.equal(await page.locator('.thv-head [data-thv-delete], .thv-head .thv-del').count(), 0, 'no Delete word in the header');
+    await page.locator('.thv-head [data-thv-menu]').click();
+    const acts = page.locator('#thread-settings .ths-acts > button');
+    assert.equal(await acts.last().innerText(), 'Delete', 'Delete is the last action');
+    assert.ok(await acts.last().evaluate(b => b.classList.contains('danger')), 'and red');
+    await acts.last().click();
     await until(async () => seen.deletes.length === 1, 'Delete sends one DELETE');
     assert.deepEqual(seen.deletes, ['t-plan']);
     await until(async () => (await page.locator('.tr-row[data-thread="t-plan"]').count()) === 0, 'a deleted thread leaves Threads');

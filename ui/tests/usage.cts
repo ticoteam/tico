@@ -87,7 +87,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
         }
         const rows = empty ? [] : ROWS.filter(r => !q.department || r.department === q.department);
         return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', group: 'bot', department: q.department || null, totals: total(rows), rows, departments: ['Ops', 'Revenue'],
-                     dimensions: {harness: ['claude', 'codex'], model: ['claude-opus-5-5', 'claude-sonnet-5'], effort: [], subscription: []}});
+                     dimensions: {harness: q.department === 'Ops' ? ['claude'] : ['claude', 'codex'], model: ['claude-opus-5-5', 'claude-sonnet-5'], effort: [], subscription: []}});
       }
       if (p === '/api/employees') return json([{name: 'support', display_name: 'Support', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
@@ -120,14 +120,23 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     await page.locator('#account-menu a[data-nav=usage]').click();
     await page.locator('.use-row').first().waitFor();
 
-    // Clearing is a confirmed write, scoped separately from the spend filter. Cancel sends nothing; failures stay open.
+    // Clearing is a confirmed write in the header's ⋯, scoped separately from the spend filter. Cancel sends nothing;
+    // failures stay open.
     const purge = page.locator('#use-purge'), dialog = page.getByRole('dialog', {name: 'Clear automatic queue'});
-    await purge.waitFor();
+    const more = page.locator('header.use-head > .ph-more');
+    await purge.waitFor({state: 'attached'});
+    // It cannot be undone: last in ⋯, in red, after a line; Copy link stays first.
+    assert.deepEqual(await page.locator('header.use-head > .ph-menu > *').evaluateAll(els => els.map(e => e.className)), ['ph-copy', 'tl-menu-sep', 'use-purge']);
+    assert.deepEqual(await page.locator('header.use-head > .ph-menu').evaluate(m => { const red = document.createElement('i'); red.style.color = 'var(--fail)'; m.append(red);
+      const out = [getComputedStyle(m.querySelector('#use-purge')!).color, getComputedStyle(red).color]; red.remove(); return out[0] === out[1]; }), true, 'in red');
+    await more.click();
     await purge.click();
     assert.equal(await dialog.locator('[name=scope]').inputValue(), 'company');
     await dialog.getByRole('button', {name: 'Cancel', exact: true}).click();
     assert.deepEqual(purges, []);
+    await page.waitForFunction(() => document.activeElement?.matches('header.use-head > .ph-more'));   // the focus back on ⋯, not lost in its closed list
     await page.setViewportSize({width: 390, height: 844});
+    await more.click();
     await purge.click();
     await dialog.locator('[name=scope]').selectOption('group:ops');
     purgeFails = true;
@@ -147,10 +156,16 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     // Group leads may edit their limits, but only owners and administrators see the purge control.
     mayPurge = false;
     await page.evaluate(() => useLimits());
-    assert.equal(await purge.isHidden(), true);
+    assert.equal(await purge.count(), 0, 'no Clear automatic queue in ⋯');
+    assert.equal(await page.locator('header.use-head .ph-menu .ph-copy').count(), 1, '⋯ keeps its own Copy link');
     mayPurge = true;
     await page.evaluate(() => useLimits());
-    await purge.waitFor();
+    await purge.waitFor({state: 'attached'});
+    // The period is a segment and the filter the shared icon, both in the one header; no Filter word, no bar under it.
+    assert.equal(await page.locator('header.use-head .ph-tools .use-seg[role=tablist]').count(), 1, 'the period sits in the header');
+    assert.equal(await page.locator('header.use-head .ph-tools button.use-filter.tl-ib svg').count(), 1, 'the filter is the shared icon');
+    assert.equal((await page.locator('button.use-filter').innerText()).trim(), '', 'the filter shows no word');
+    assert.equal(await page.locator('.use-bar-row:not([hidden])').count(), 0, 'nothing between the header and the total');
 
     // Seven days by default, sorted by API-equivalent (billed plus subscriptions), one figure each, billed in the hover.
     assert.deepEqual([asked[0]!.from, asked[0]!.to], [day(6), day(0)]);
@@ -179,7 +194,9 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     // the help button beside it.
     const titleTop = (await page.locator('.use-head h1').boundingBox())!.y, rowTop = (await page.locator('.use-row').first().boundingBox())!.y;
     assert.ok(rowTop - titleTop < 200, `the list starts ${rowTop - titleTop}px below the title`);
-    const why = page.locator('#use-why-text'), help = page.getByRole('button', {name: 'How this is counted'});
+    // No info icon: the words "API-equivalent" open it.
+    assert.equal(await page.locator('.use-total .nav-icon').count(), 0, 'no info icon beside the total');
+    const why = page.locator('#use-why-text'), help = page.getByRole('button', {name: 'API-equivalent', exact: true});
     assert.equal(await why.isHidden(), true, 'the caveats wait');
     await help.click();
     assert.match(await why.innerText(), /^API list price, including runs on subscriptions\..*2 runs on a model that charges more/s);
@@ -187,62 +204,93 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     await help.click();
     assert.equal(await why.isHidden(), true, 'a second click hides them');
 
-    // "Set limit" waits for the row's hover or focus; a limit or a chip always shows.
-    const setLimit = page.locator('.use-row[data-bot=sales] button.use-limit');
+    // No limit: nothing in the cell at rest; it is still the button that sets one, named for screen readers, its words
+    // on the row's hover or its focus. A limit always shows.
+    const setLimit = page.locator('.use-row[data-bot=sales] button.use-limit'), setWords = setLimit.locator('> span:first-child');
     const opacity = (l: import('playwright').Locator) => l.evaluate(e => getComputedStyle(e).opacity);
     await page.mouse.move(1, 1);
-    assert.equal(await opacity(setLimit), '0', 'Set limit is not shown at rest');
-    assert.equal(await opacity(page.locator('.use-row[data-bot=support] button.use-limit')), '1', 'a limit shows');
+    assert.equal(await opacity(setWords), '0', 'Set limit is not shown at rest');
+    assert.equal(await page.getByRole('button', {name: 'Set limit for Sales', exact: true}).count(), 1, 'named by its own words, then whose');
+    assert.equal(await opacity(page.locator('.use-row[data-bot=support] .use-limit-t')), '1', 'a limit shows');
     await page.locator('.use-row[data-bot=sales] .use-line').hover();
-    assert.equal(await opacity(setLimit), '1', 'on hover');
+    assert.equal(await opacity(setWords), '1', 'on hover');
     await page.mouse.move(1, 1);
     await setLimit.focus();
-    assert.equal(await opacity(setLimit), '1', 'on focus');
+    assert.equal(await opacity(setWords), '1', 'on focus');
     await setLimit.blur();
 
-    // Filter: one button in the bar. Its panel puts the cursor in its first select and shows only selects with a choice
-    // (Group, Harness; not Model with one value); a filter set counts on the button; Group by and Sort by do not.
-    // Escape closes it and gives the button the focus; Reset clears the filters and keeps the sort.
-    const filter = page.locator('button.use-filter'), panel = page.locator('#use-filter-panel');
-    assert.equal(await filter.locator('.use-filter-t').innerText(), 'Filter');
+    // Filter: the shared filter icon in the header, its menu the shared popover. The menu puts the cursor in its first
+    // select and shows only selects with a choice (Group, Harness; not Model with one value); a filter set counts on the
+    // icon's badge; Group by and Sort by do not. Escape closes it and gives the icon the focus; Reset clears the filters
+    // and keeps the sort.
+    const filter = page.locator('button.use-filter'), panel = page.locator('#task-filter-pop'), badge = filter.locator('.tl-fbadge');
+    assert.equal(await filter.getAttribute('aria-label'), 'Filter');
+    assert.equal(await badge.isHidden(), true);
     assert.equal(await panel.isHidden(), true);
     await filter.click();
+    await panel.locator('.use-filter-menu').waitFor();
     assert.equal(await filter.getAttribute('aria-expanded'), 'true');
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'use-dept', 'the first select has the focus');
-    assert.deepEqual(await panel.locator('.use-frow:not([hidden]) > span').allInnerTexts(), ['Group', 'Harness', 'Model', 'Group by', 'Sort by']);
+    assert.deepEqual(await panel.locator('.use-frow > span').allInnerTexts(), ['Group', 'Harness', 'Model', 'Group by', 'Sort by']);
     await panel.locator('[data-use-filter=harness]').selectOption('codex');
-    await page.waitForFunction(() => document.querySelector('.use-filter')?.textContent?.includes('Filter · 1'));
+    await page.waitForFunction(() => document.querySelector('.use-filter .tl-fbadge')?.textContent === '1');
     assert.equal(asked.at(-1)!.harness, 'codex');
+    assert.equal(await panel.isVisible(), true, 'a choice keeps the menu open');
     await panel.locator('#use-dept').selectOption('Revenue');
     await panel.locator('#use-sort').selectOption('runs');
-    await page.waitForFunction(() => document.querySelector('.use-filter')?.textContent?.includes('Filter · 2'));
+    await page.waitForFunction(() => document.querySelector('.use-filter .tl-fbadge')?.textContent === '2');
     assert.equal(await filter.getAttribute('aria-label'), 'Filter, 2 on', 'Group by and Sort by do not count');
     await page.keyboard.press('Escape');
-    assert.equal(await panel.isHidden(), true);
-    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('use-filter')), true, 'focus back on Filter');
+    await panel.waitFor({state: 'hidden'});
+    await page.waitForFunction(() => document.activeElement?.classList.contains('use-filter'));
     await filter.click();
     await panel.getByRole('button', {name: 'Reset'}).click();
     await page.waitForFunction(() => document.querySelectorAll('.use-row').length === 4);
-    assert.equal(await filter.locator('.use-filter-t').innerText(), 'Filter', 'Reset clears the filters');
-    assert.equal(await filter.getAttribute('aria-label'), null);
+    assert.equal(await badge.isHidden(), true, 'Reset clears the filters');
+    assert.equal(await filter.getAttribute('aria-label'), 'Filter');
     assert.equal(await panel.locator('#use-sort').inputValue(), 'runs', 'Reset keeps Sort by');
     assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['Support', 'Inbox', 'COO', 'Sales'], 'the list stays sorted by runs after Reset');
     await panel.locator('#use-sort').selectOption('cost');
     await page.locator('.use-head h1').click();
-    assert.equal(await panel.isHidden(), true, 'a click outside closes it');
-    // At 400px the panel stays in the window.
+    await panel.waitFor({state: 'hidden'});
+    // The icon closes its own menu (the popover closes itself on the press; the click must not open it again).
+    await filter.click();
+    await panel.locator('.use-filter-menu').waitFor();
+    await filter.click();
+    await panel.waitFor({state: 'hidden'});
+    assert.equal(await filter.getAttribute('aria-expanded'), 'false', 'the button closes it');
+    // Its drop-downs keep their own arrow keys: the menu's ↑/↓ between items does not take them.
+    await filter.click();
+    await panel.locator('#use-sort').focus();
+    assert.equal(await panel.locator('#use-sort').evaluate(sel => { const e = new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true}); sel.dispatchEvent(e); return e.defaultPrevented; }), false,
+      'ArrowDown in a drop-down is left to it');
+    await page.keyboard.press('Escape');
+    await panel.waitFor({state: 'hidden'});
+    // On a phone the header's tools fold into ⋯: the icon is there, and its menu is a sheet that stays in the window.
     await page.setViewportSize({width: 400, height: 844});
+    await more.click();
     await filter.click();
+    await panel.locator('.use-filter-menu').waitFor();
     const pb = (await panel.boundingBox())!;
-    assert.ok(pb.x >= 0 && pb.x + pb.width <= 400, `the panel fits: ${JSON.stringify(pb)}`);
-    await filter.click();
-    assert.equal(await panel.isHidden(), true, 'the button closes it');
+    assert.ok(pb.x >= 0 && pb.x + pb.width <= 400, `the menu fits: ${JSON.stringify(pb)}`);
+    await page.keyboard.press('Escape');
+    await panel.waitFor({state: 'hidden'});
+    await page.waitForFunction(() => document.activeElement?.matches('header.use-head > .ph-more'), undefined, {timeout: t(5000)});   // folded: the focus goes to ⋯
     await page.setViewportSize({width: 1440, height: 900});
 
-    // The limit cell: the caps, a warning chip near one and a Paused chip at one; a click opens it in Limits.
-    assert.equal((await page.locator('.use-row[data-bot=support] .use-limit').innerText()).replace(/\s+/g, ' ').trim(), 'Paused $5/day · $50/mo');
-    assert.equal((await page.locator('.use-row[data-bot=inbox] .use-limit').innerText()).replace(/\s+/g, ' ').trim(), '85% $20/mo');
-    assert.equal((await page.locator('.use-row[data-bot=sales] .use-limit').innerText()).trim(), 'Set limit');
+    // The limit cell (style guide, Usage: "Near the limit"): the caps as one line, the words "85%" or "Paused" beside
+    // them, a meter under them (amber from 80%, red when paused), and no pill; a click opens it in Limits.
+    assert.equal((await page.locator('.use-row[data-bot=support] .use-limit-t').innerText()).replace(/\s+/g, ' ').trim(), 'Paused · $5/day · $50/mo');
+    assert.equal((await page.locator('.use-row[data-bot=inbox] .use-limit-t').innerText()).replace(/\s+/g, ' ').trim(), '85% · $20/mo');
+    // Its name is what it shows, after whose it is; the meter repeats it, so a reader skips the meter.
+    assert.equal(await page.getByRole('button', {name: 'Limit for Inbox: 85% · $20/mo', exact: true}).count(), 1);
+    assert.equal(await page.locator('#use-body .use-limit .use-meter[aria-hidden=true]').count(), await page.locator('#use-body .use-limit .use-meter').count());
+    assert.equal(await page.locator('#use-body .use-limit .pill').count(), 0, 'no pill in a limit cell');
+    assert.equal(await page.locator('.use-row[data-bot=support] .use-limit .use-meter.bad b').evaluate(e => (e as HTMLElement).style.width), '100%');
+    assert.equal(await page.locator('.use-row[data-bot=inbox] .use-limit .use-meter.warn b').evaluate(e => (e as HTMLElement).style.width), '85%');
+    const under = await page.locator('.use-row[data-bot=inbox] .use-limit').evaluate(b => b.querySelector('.use-meter')!.getBoundingClientRect().top >= b.querySelector('.use-limit-t')!.getBoundingClientRect().bottom - 0.5);
+    assert.ok(under, 'the meter sits under the limit');
+    assert.equal((await page.locator('.use-row[data-bot=sales] .use-limit > span:first-child').innerText()).trim(), 'Set limit');
     await page.locator('.use-row[data-bot=sales] .use-limit').click();
 
     // Limits: every limit in one table. The default and the team always, then each group and bot with one of its own,
@@ -258,8 +306,9 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     assert.equal(await cell('bot:sales', 'daily_usd').getAttribute('placeholder'), '$20', 'a bot shows the default it follows');
     assert.equal(await cell('company', 'hourly_usd').inputValue(), '10');
     assert.equal(await cell('bot:sales', 'hourly_usd').count(), 0, 'no new hour limits');
-    assert.match(await lim.locator('[data-lim-row=company] .pill').innerText(), /87%/);
-    assert.match(await lim.locator('[data-lim-row="bot:support"] .pill').innerText(), /Paused/);
+    assert.match(await lim.locator('[data-lim-row=company] .use-limit-w.warn').innerText(), /87%/);
+    assert.match(await lim.locator('[data-lim-row="bot:support"] .use-limit-w.bad').innerText(), /Paused/);
+    assert.equal(await lim.locator('.pill').count(), 0, 'no pills in the Limits table');
     assert.equal(await lim.locator('[data-lim-save]').isDisabled(), true, 'nothing to save yet');
 
     // Several at once: a bot, the default and its switch, a group added from the picker, a bot's limits removed.
@@ -297,8 +346,11 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     }
     await page.locator('.use-seg button', {hasText: 'Custom'}).click();
     await page.locator('#use-from').waitFor();
+    // The date fields (format.ts dateField) take a typed day on Enter.
     await page.locator('#use-from').fill('2026-09-01');
+    await page.locator('#use-from').press('Enter');
     await page.locator('#use-to').fill('2026-09-10');
+    await page.locator('#use-to').press('Enter');
     await page.waitForFunction(() => (document.querySelector('#use-from') as HTMLInputElement).value === '2026-09-01');
     const custom = () => asked.at(-1)?.from === '2026-09-01' && asked.at(-1)?.to === '2026-09-10';
     for (const end = Date.now() + t(10000); !custom() && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
@@ -310,6 +362,9 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     await page.locator('#use-dept').selectOption('Ops');
     await page.waitForFunction(() => document.querySelectorAll('.use-row').length === 1);
     assert.equal(asked.at(-1)!.department, 'Ops');
+    // The open menu follows the new answer: Ops has one harness, so Harness has no choice left; the focus stays put.
+    await page.waitForFunction(() => !document.querySelector('#task-filter-pop [data-use-filter=harness]'));
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'use-dept', 'the focus stays on Group');
     assert.deepEqual(await page.locator('.use-name').allInnerTexts(), ['COO']);
     await page.locator('#use-dept').selectOption('');
     await page.waitForFunction(() => document.querySelectorAll('.use-row').length === 4);
@@ -318,7 +373,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     // A bot opens to what explains its spend: a summary with its cache rate, where the tokens go, its top tasks and its
     // models, a labelled daily chart, its routines and a CSV; clicking again closes it.
     await page.locator('button.use-filter').click();
-    await page.locator('#use-filter-panel [data-use-filter=model]').selectOption('claude-opus-5-5');
+    await page.locator('#task-filter-pop [data-use-filter=model]').selectOption('claude-opus-5-5');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy]) .use-row'));
     await support.locator('.use-line').click();
@@ -352,7 +407,9 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     // Cost per day, on a range of several days: a column a day, the top value on an axis line, the first and last dates.
     assert.equal(await detail.locator('.use-col').count(), 7);
     assert.equal(await detail.locator('.use-top').innerText(), '$6.50');
-    const shortDay = (d: string) => page.evaluate(d => new Date(d + 'T00:00:00Z').toLocaleDateString(undefined, {weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'}), d);
+    // Days in the guide's words (format.ts dayWords), whatever the browser's locale.
+    const shortDay = (d: string) => page.evaluate(d => (window as unknown as {dayWords: (d: string, o: {weekday: boolean}) => string}).dayWords(d, {weekday: true}), d);
+    assert.doesNotMatch(await shortDay(day(6)), /^\d/, 'month first');
     assert.deepEqual(await detail.locator('.use-axis span').allInnerTexts(), [await shortDay(day(6)), await shortDay(day(0))]);
     assert.equal(await detail.locator('.use-col').nth(1).getAttribute('title'), `${await shortDay(day(5))} · $2.50 · 2 runs · 0% from cache`);
     assert.equal(await detail.locator('.use-col').nth(3).getAttribute('title'), `${await shortDay(day(3))} · — · 2 runs · 0% from cache`, 'a day of unpriced runs has no cost, not $0.00');
@@ -400,7 +457,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     assert.equal(await inbox.locator('.use-mix').count(), 0);
     await inbox.locator('.use-line').click();
     await page.locator('button.use-filter').click();
-    await page.locator('#use-filter-panel [data-use-filter=model]').selectOption('');
+    await page.locator('#task-filter-pop [data-use-filter=model]').selectOption('');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy]) .use-row'));
 
@@ -416,7 +473,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     await page.locator('.use-seg button', {hasText: '7 days'}).click();
     await page.waitForFunction(() => document.querySelector('#use-body:not([aria-busy])'));
 
-    // Drawing Usage again replaces the Filter panel's click-outside listener; listeners do not pile up per visit.
+    // Drawing Usage again adds no click listener to the document; listeners do not pile up per visit.
     const listening = await page.evaluate(() => {
       let n = 0;
       const add = document.addEventListener.bind(document), remove = document.removeEventListener.bind(document);
@@ -427,7 +484,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
       document.addEventListener = add; document.removeEventListener = remove;
       return n;
     });
-    assert.equal(listening, 0, 'three redraws leave one click-outside listener, not four');
+    assert.equal(listening, 0, 'three redraws add no document click listener');
     await page.locator('.use-row').first().waitFor();
 
     // Nothing in the range.

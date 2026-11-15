@@ -8,7 +8,7 @@
 .tb-dialog:focus,.tb-dialog:focus-visible{outline:none}
 .tb-head{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--line)}
 .tb-dot{flex:none;width:22px;height:22px}
-.tb-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.tb-head h2{margin:0;font-size:var(--t-card);font-weight:600}
 .tb-team{color:var(--muted);font-size:var(--t-sm);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tb-spacer{flex:1}
 .tb-body{flex:1;min-height:0;overflow:auto;padding:20px;display:flex;flex-direction:column;gap:16px}

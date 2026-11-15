@@ -30,11 +30,11 @@ declare function taskDueInfo(task: unknown): {words: string} | undefined;
 
 const HUB_NOW = new Date('2026-10-20T09:00:00Z');   // evals/factory/world.py START, where the hub's clock stays
 const BOT = 'builder-claude';
-// Due sits in the task window's Details, one line until opened (task #419). Wait for this task's own, not the last one's.
+// Due is one of the facts on the task window's Details tab. Wait for this task's own window, not the last one's.
 async function openDetails(page: Page, id: string): Promise<void> {
-  const details = page.locator(`#task-modal[open] details.task-details[data-task-details="${id}"]`);
-  await details.waitFor({state: 'attached', timeout: t(10000)});
-  if (!await details.evaluate(d => (d as HTMLDetailsElement).open)) await details.locator('> summary').click();
+  const tab = page.locator(`#task-modal[open][data-task="${id}"] [data-task-tab="details"]`);
+  await tab.waitFor({state: 'attached', timeout: t(10000)});
+  await tab.click();
 }
 
 // Screenshots in both themes, with animations stopped (a loading dot never finishes).
@@ -61,7 +61,7 @@ async function settled(page: Page, aid: string, run: RunRecord) {
 
 run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/automations', time: HUB_NOW});
-  await page.locator('tr.au-row').first().waitFor({timeout: t(10000)});
+  await page.locator('.au-row').first().waitFor({timeout: t(10000)});
 
   // + New offers New inbox and the triggers; Before a due date makes the routine and opens it.
   await page.locator('.au-new').click();
@@ -124,29 +124,29 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   await page.locator('.au-hd .au-sw').check();
   await page.waitForFunction(() => document.querySelector<HTMLInputElement>('.au-hd .au-sw')?.checked);
   await go(page, '#/automations');
-  const row = page.locator(`tr.au-row[data-row="${made.id}"]`);
+  const row = page.locator(`.au-row[data-row="${made.id}"]`);
   await row.waitFor();
-  assert.equal(await row.locator('td.au-tt').innerText(), 'Due Mar 1 · yearly · 21d before');
-  assert.deepEqual((await row.locator('.au-nx').innerText()).split('\n'), ['Due Mar 1', 'opens in 111d']);
+  assert.equal(await row.locator('.au-tt').innerText(), 'Due Mar 1 · yearly · 21d before');
+  // When it opens is a day more than a day out (style guide, "Dates and times": after a day, the date).
+  const [dueDay, opens] = (await row.locator('.au-nx').innerText()).split('\n');
+  assert.equal(dueDay, 'Due Mar 1');
+  assert.match(opens ?? '', /^opens (Jan|Feb) \d{1,2}(, \d{4})?$/, `${tag}: opens on a date (${opens})`);
+  // innerText reads a cut line too: the words fit their column whole, the year with them.
+  const cut = await row.locator('.au-nx > span').evaluateAll(e => e.filter(x => x.scrollWidth > x.clientWidth + 0.5).map(x => x.textContent));
+  assert.deepEqual(cut, [], `${tag}: Next is not cut`);
   const next = (await row.locator('td.au-cx').boundingBox())!;
   assert.ok(next.width >= 90, `${tag}: Next is shown, not folded (${next.width}px)`);
-  const groups = await page.locator('tr.au-grp').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.agrp));
+  const groups = await page.locator('.au-grp').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.agrp));
   assert.ok(groups.includes('due') && groups.indexOf('due') === groups.length - 1 - (groups.includes('system') ? 1 : 0),
     `${tag}: Due date after the other kinds, before system jobs (${groups})`);
   // The Due date chip narrows the list to it.
-  if (phone) { await page.locator('[data-filters]').click(); await page.locator('[data-fsec="trig"]').click(); }
   await page.locator('[data-ftrig="due"]').click();
-  assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row)), [made.id]);
+  assert.deepEqual(await page.locator('.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row)), [made.id]);
   await page.locator('[data-ftrig="due"]').click();
-  if (phone) await page.locator('[data-filters]').click();
   assert.equal(await sideways(page), false);
   await themed(page, `${tag}-due-list`);
-  if (phone) {   // a phone's table scrolls sideways to Trigger and Next
-    await page.locator('.au-tbl').evaluate((box: HTMLElement) => { box.scrollLeft = box.scrollWidth; });
-    await themed(page, `${tag}-due-list-scrolled`);
-  }
   // The editor open over the flow, for the screenshots.
-  await page.locator(`tr.au-row[data-row="${made.id}"] a`).click();
+  await page.locator(`.au-row[data-row="${made.id}"] a`).click();
   await page.locator('.au-card[data-open="trigger"]').click();
   await page.locator('.au-ed [data-b="trigger.first_due"]').waitFor();
   assert.equal(await sideways(page), false);

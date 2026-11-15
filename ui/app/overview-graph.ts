@@ -11,6 +11,9 @@
 // Node size, gaps and the stacked-column spacing, in chart pixels.
 const OG_W = 184, OG_H = 68, OG_GH = 30, OG_GX = 20, OG_GY = 40, OG_SY = 10, OG_PAD = 24;
 const OG_ZMIN = 0.2, OG_ZMAX = 2;
+// The chart opens at least this big, so a teammate's 13px name reads at about 10px; a chart too big for the frame at
+// that size opens at its top, on the head of the tree, and Fit still shows the whole of it.
+const OG_READ = 0.75;
 
 // A row of the team tree as the sidebar builds it (orgTreeByParent): a group, a person or a bot. The chart leaves seats off
 // (ogTree's keep).
@@ -96,6 +99,7 @@ interface OGState {
   edit: Record<string, boolean>;
   tf: {x: number; y: number; s: number};
   seq: number;
+  team?: string | undefined; // a phone shows one team at a time: its group's key, '' for everyone, unset until it opens
 }
 let OG: OGState | null = null;
 // The open chart's state. Its handlers run only while the chart is open, so a missing one is a bug and throws.
@@ -250,10 +254,11 @@ function ogMetaHtml(node: OGNode): string {
   const og = ogNow();
   if (og.view === 'rules') {
     if (!og.rules || typeof og.rules !== 'object') return '';
+    // The count alone: what a broken rule does (Stop, Ask first) is how a rule is set, not something wrong, and nearly
+    // every teammate carries a Stop rule, so a mark on each card would say nothing (style guide, Status). The panel
+    // says it beside each rule.
     const {all} = ogRulesOf(node.key);
-    const flag = all.some(r => r.if_broken === 'block') ? 'block' : all.some(r => r.if_broken === 'escalate') ? 'escalate' : '';
-    return `<span class="og-count${all.length ? '' : ' none'}"><b class="tnum">${all.length}</b> ${all.length === 1 ? 'rule' : 'rules'}</span>`
-      + (flag ? `<span class="og-flag ${flag}">${flag === 'block' ? 'Stop' : 'Ask first'}</span>` : '');
+    return `<span class="og-count${all.length ? '' : ' none'}"><b class="tnum">${all.length}</b> ${all.length === 1 ? 'rule' : 'rules'}</span>`;
   }
   if (!Array.isArray(og.goals)) return '';
   const goals = ogGoalsOf(node.key);
@@ -365,13 +370,73 @@ function ogZoomAt(factor: number, px: number, py: number, animate = false): void
 const ogEl = (sel: string): HTMLElement | null => $(sel) as HTMLElement | null;
 const ogFrame = (): HTMLElement | null => ogEl('#og-frame');
 function ogZoomMid(factor: number): void { const f = ogFrame(); if (f) ogZoomAt(factor, f.clientWidth / 2, f.clientHeight / 2, true); }
-function ogFit(animate = false): void {
+// Fit a part of the chart (in chart pixels) in the frame, no bigger than 1:1: centred, or from its top when it is taller.
+// `top` sets it from the top, under the Team list (a phone's team).
+function ogFitBox(box: {x: number; y: number; w: number; h: number}, animate = false, top = 0): void {
   const f = ogFrame(); if (!f || !OG) return;
-  const {w, h} = OG.tree, W = f.clientWidth, H = f.clientHeight;
-  if (!w || !h || !W || !H) return;
-  const s = Math.max(OG_ZMIN, Math.min(1, (W - 2 * OG_PAD) / w, (H - 2 * OG_PAD) / h));
-  OG.tf = {s, x: (W - w * s) / 2, y: h * s + 2 * OG_PAD <= H ? (H - h * s) / 2 : OG_PAD};
+  const W = f.clientWidth, H = f.clientHeight - top;
+  if (!box.w || !box.h || !W || !H) return;
+  const s = Math.max(OG_ZMIN, Math.min(1, (W - 2 * OG_PAD) / box.w, (H - 2 * OG_PAD) / box.h));
+  OG.tf = {s, x: (W - box.w * s) / 2 - box.x * s, y: top + (!top && box.h * s + 2 * OG_PAD <= H ? (H - box.h * s) / 2 : OG_PAD) - box.y * s};
   ogApply(animate);
+}
+// Fit: the whole chart, or on a phone the team it shows.
+function ogFit(animate = false): void {
+  if (!OG) return;
+  const team = ogPhone() && OG.team ? ogTeamBox(OG.team) : null, pick = ogTeamPick(), f = ogFrame();
+  const under = team && pick && f ? Math.max(0, pick.getBoundingClientRect().bottom - f.getBoundingClientRect().top) : 0;
+  ogFitBox(team || {x: 0, y: 0, w: OG.tree.w, h: OG.tree.h}, animate, under);
+}
+// The chart as it opens (and after a resize the reader has not moved it from). A computer: the whole chart when it reads
+// at OG_READ or bigger, else at OG_READ on the reader's own team. A phone: one team at a time (style
+// guide, Org chart: "the chart never shrinks to fit"), picked from the Team list over the chart.
+function ogOpen(): void {
+  const og = OG, f = ogFrame(); if (!og || !f) return;
+  const pick = ogTeamPick(), teams = ogTeams(), phone = ogPhone() && teams.length > 0;
+  if (pick) {
+    pick.hidden = !phone;
+    if (phone) {
+      if (og.team === undefined || (og.team && !og.tree.nodes.has(og.team))) og.team = teams[0]!.key;
+      pick.innerHTML = teams.map(t => `<option value="${esc(t.key)}">${esc(ogName(t.n))}</option>`).join('') + '<option value="">Everyone</option>';
+      pick.value = og.team;
+    }
+  }
+  if (phone) { ogFit(); return; }
+  const {w, h} = og.tree, W = f.clientWidth, H = f.clientHeight;
+  if (!w || !h || !W || !H) return;
+  if (Math.min((W - 2 * OG_PAD) / w, (H - 2 * OG_PAD) / h) >= OG_READ) { ogFitBox({x: 0, y: 0, w, h}); return; }
+  // The reader's own part of the company first: their team (the outermost group they are in), or their own card, else the
+  // head of the tree. Its top sits at the frame's top; it is centred, or set from its left when wider than the frame.
+  const s = OG_READ, me = S.me?.id ? 'p:' + S.me.id : '', mine = me && og.tree.nodes.get(me);
+  const head = og.tree.nodes.get((og.tree.kids[''] || [])[0] || '');
+  const team = mine ? ogTeamOf(mine.key) : '';
+  const focus = (team && ogTeamBox(team)) || mine || head || {x: 0, y: 0, w, h};
+  const x = focus.w * s > W - 2 * OG_PAD ? OG_PAD - focus.x * s : W / 2 - (focus.x + focus.w / 2) * s;
+  og.tf = {s, x: Math.min(OG_PAD, Math.max(W - OG_PAD - w * s, x)), y: Math.min(OG_PAD, OG_PAD - focus.y * s)};
+  ogApply();
+}
+// A phone's Team list over the chart.
+const ogTeamPick = (): HTMLSelectElement | null => ogEl('#og-team') as HTMLSelectElement | null;
+// The teams a phone picks from: the chart's groups that sit in no other group, in its order.
+function ogTeams(): OGNode[] {
+  const nodes = ogNow().tree.nodes;
+  const inGroup = (n: OGNode): boolean => { for (let p = nodes.get(n.parent); p; p = nodes.get(p.parent)) if (p.kind === 'group') return true; return false; };
+  return [...nodes.values()].filter(n => n.kind === 'group' && !inGroup(n));
+}
+// The team a teammate is in (the outermost group above it), or '' for one in none.
+function ogTeamOf(key: string): string {
+  const nodes = ogNow().tree.nodes;
+  let team = '';
+  for (let n = nodes.get(key); n; n = nodes.get(n.parent)) if (n.kind === 'group') team = n.key;
+  return team;
+}
+// The box around a group and everyone under it, in chart pixels.
+function ogTeamBox(key: string): {x: number; y: number; w: number; h: number} | null {
+  const nodes = ogNow().tree.nodes;
+  const under = [...nodes.values()].filter(n => { for (let p: OGNode | undefined = n; p; p = nodes.get(p.parent)) if (p.key === key) return true; return false; });
+  if (!under.length) return null;
+  const x = Math.min(...under.map(n => n.x)), y = Math.min(...under.map(n => n.y));
+  return {x, y, w: Math.max(...under.map(n => n.x + n.w)) - x, h: Math.max(...under.map(n => n.y + n.h)) - y};
 }
 // The part of the frame the panel leaves uncovered: the left of it on a desktop, the top on a phone (the sheet).
 function ogVisible(): {l: number; t: number; r: number; b: number} {
@@ -483,7 +548,7 @@ function ogRuleHtml(r: OGRule, key: string, side: 'who' | 'with'): string {
   const on = ogNow().rule === r.id;
   return `<li class="og-rule${on ? ' on' : ''}">
       <button type="button" class="og-rule-t" data-og-rule="${esc(r.id)}" aria-pressed="${on}">${ruTextHTML(r.text, 'plain')}</button>
-      <div class="og-rule-m">${r.if_broken === 'block' || r.if_broken === 'escalate' ? `<span class="og-flag ${r.if_broken}">${r.if_broken === 'block' ? 'Stop' : 'Ask first'}</span>` : ''}
+      <div class="og-rule-m">${r.if_broken ? `<span class="og-flag ru-outcome ${esc(r.if_broken)}">${ruleOutcomeIconHTML(r.if_broken, 'Stop')}</span>` : ''}
         ${others.length && ogGoList(others) ? `<span class="og-with-l">${side === 'who' ? 'With' : 'Who'}</span>${ogGoList(others)}` : ''}
         <span class="spacer"></span><a class="og-rule-a" href="${ruHref(r.kind, {rule: r.id})}">${edit ? 'Edit' : 'Open'}</a></div></li>`;
 }
@@ -555,6 +620,9 @@ function ogSelect(key: string, {focus = false} = {}): void {
   if (!OG?.tree.nodes.has(key) || ogNodeAt(OG.tree.nodes, key).kind === 'group') return;
   if (OG.sel !== key) OG.rule = null;
   OG.sel = key;
+  // On a phone the Team list follows a teammate picked from another team's panel (the chart pans to them).
+  const pick = ogTeamPick();
+  if (pick && !pick.hidden && OG.team) { OG.team = ogTeamOf(key) || OG.team; pick.value = OG.team; }
   ogPanelDraw(); ogMarks();
   requestAnimationFrame(() => ogShow(key));
   if (focus) ($('#og-panel [data-og-close]') as HTMLElement | null)?.focus({preventScroll: true});
@@ -613,11 +681,10 @@ function pageOverviewGraph(): void {
   graphStop();
   const view = ogViewOf(S.route);
   main.innerHTML = `<section class="overview-page og-page" aria-label="Team graph">
-    <div class="overview-tabs"><h1>Company</h1>${dashTabsHTML('graph')}</div>
-    <div class="og-bar"><div class="og-seg" role="group" aria-label="Show">${[['rules', 'Rules'], ['goals', 'Goals']].map(([v, l]) =>
-      `<button type="button" data-og-view="${v}" aria-pressed="${v === view}">${l}</button>`).join('')}</div>
-      <div class="og-status" id="og-status" hidden></div></div>
+    ${dashCompanyHead('graph', {tools: `<div class="ph-seg og-seg" role="group" aria-label="Show">${[['rules', 'Rules'], ['goals', 'Goals']].map(([v, l]) =>
+      `<button type="button" data-og-view="${v}" aria-pressed="${v === view}">${l}</button>`).join('')}</div>`})}
     <div class="og-wrap" id="og-wrap">
+      <div class="og-over"><select class="og-team" id="og-team" aria-label="Team" hidden></select><div class="og-status" id="og-status" hidden></div></div>
       <div class="og-frame" id="og-frame" tabindex="0" role="group" aria-label="Team chart">
         <div class="og-cv" id="og-cv"></div>
         <p class="og-empty muted" id="og-empty" hidden>No one on the chart yet.</p>
@@ -632,14 +699,14 @@ function pageOverviewGraph(): void {
   const abort = new AbortController();
   OG = {view, abort, tree: ogTree(), rules: null, goals: null, sel: null, rule: null, edit: {}, tf: {x: 0, y: 0, s: 1}, seq: 0};
   ogDraw();
-  ogFit();
+  ogOpen();
   const frame = $('#og-frame') as HTMLElement, signal = abort.signal;
   ogWire(frame, signal);
   // A new frame size (a window resize, a phone turned) fits again only until the person has moved the chart.
   let size = [frame.clientWidth, frame.clientHeight];
   const ro = new ResizeObserver(() => {
     const now = [frame.clientWidth, frame.clientHeight];
-    if (now[0] !== size[0] || now[1] !== size[1]) { size = now; if (OG?.sel) ogShow(OG.sel, false); else ogFit(); }
+    if (now[0] !== size[0] || now[1] !== size[1]) { size = now; if (OG?.sel) ogShow(OG.sel, false); else ogOpen(); }
   });
   ro.observe(frame); signal.addEventListener('abort', () => ro.disconnect());
   const page = main.querySelector('.og-page') as HTMLElement;
@@ -661,10 +728,16 @@ function pageOverviewGraph(): void {
     if (!node && t.closest('#og-frame') && ogNow().sel) ogClose();
   }, {signal});
   document.addEventListener('keydown', ev => {
-    if (ev.key !== 'Escape' || !OG?.sel || ev.defaultPrevented || document.querySelector('dialog[open]')) return;
+    // An open ⋯ in the header takes Escape first (it closes itself); the panel waits for the next one.
+    if (ev.key !== 'Escape' || !OG?.sel || ev.defaultPrevented || document.querySelector('dialog[open], .ph-menu:popover-open')) return;
     ev.preventDefault(); ogClose();
   }, {signal});
-  document.fonts?.ready.then(() => { if (OG?.abort === abort && !OG.sel) ogFit(); });
+  ogTeamPick()?.addEventListener('change', ev => {
+    if (!OG) return;
+    OG.team = (ev.target as HTMLSelectElement).value;
+    ogFit(true);
+  }, {signal});
+  document.fonts?.ready.then(() => { if (OG?.abort === abort && !OG.sel) ogOpen(); });
   void ogLoad();
 }
 function graphStop(): void { OG?.abort.abort(); OG = null; }

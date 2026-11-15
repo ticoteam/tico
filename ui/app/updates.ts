@@ -184,10 +184,12 @@ function pageUpdates(): void {
   const main = $('#main');
   main.innerHTML = '<div class="upd-col"></div>';
   const col = main.firstElementChild;
-  // The shared page header (page-head.ts): Daily and Weekly on the title line; Whole org, My bots and List stay chips in
-  // the tools; Archive is in ⋯, and the Archive is a sub-page whose "Updates ›" goes back to the inbox.
+  // The shared page header (page-head.ts): Daily and Weekly on the title line; Whole org, My bots and List are chips in
+  // the tools, which give way as every header's do (their icons, then ⋯); writing your own update is the quiet + (on the
+  // org view, where your card is, whenever this tab takes one today); Archive is in ⋯, and the Archive is a sub-page whose
+  // "Updates ›" goes back to the inbox.
   const inbox = UPDATES + (kind === 'weekly' ? '?kind=weekly' : '');
-  const tools = (day && updIsTree(state) ? `<button type="button" class="upd-chip" id="upd-day" title="Back to the latest day"><span class="upd-day">${esc(new Date(day + 'T12:00:00Z').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC'}))}</span><span class="upd-x" aria-hidden="true">×</span></button>` : '')
+  const tools = (day && updIsTree(state) ? `<button type="button" class="upd-chip" id="upd-day" title="Back to the latest day"><span class="upd-day">${esc(dayWords(day, {weekday: true}))}</span><span class="upd-x" aria-hidden="true">×</span></button>` : '')
     + `<button type="button" class="upd-chip" id="upd-scope" aria-pressed="${state.scope === 'all'}" aria-label="Whole org" title="Whole org: off shows only the cards below you"${updIsTree(state) ? '' : ' hidden'}><span class="nav-icon" aria-hidden="true">groups</span><span class="upd-lbl">Whole org</span></button>`
     + `<button type="button" class="upd-chip" id="upd-mine" aria-pressed="${state.mine}" aria-label="My bots" title="My bots"${updIsTree(state) ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">person</span><span class="upd-lbl">My bots</span></button>`
     + `<button type="button" class="upd-chip" id="upd-layout" aria-pressed="${state.layout === 'list'}" aria-label="List" title="List: every update, newest first"${view === 'archive' ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">view_agenda</span><span class="upd-lbl">List</span></button>`
@@ -200,10 +202,16 @@ function pageUpdates(): void {
       tabs: [{label: 'Daily', cur: kind === 'daily', attrs: 'data-upd-kind="daily"'}, {label: 'Weekly', cur: kind === 'weekly', attrs: 'data-upd-kind="weekly"'}],
       tabsHook: 'upd-seg', tabsAttrs: 'aria-label="Kind"',
       tools,
+      add: updIsTree(state) && updCanWrite(state) ? {label: 'Write your update', attrs: 'data-upd-new'} : undefined,
       more: view === 'archive' ? '' : '<button type="button" class="upd-view" id="upd-view">Archive</button>',
     })}
     <div id="upd-feed" class="upd-feed" aria-live="polite"></div>
   </div>`;
+  // The header's +: your card opens as the editor (today's update, or a new one), the cursor in it.
+  (col as HTMLElement).querySelector<HTMLElement>('header.upd-head [data-upd-new]')?.addEventListener('click', () => {
+    state.editing = true; updRender(state);
+    document.querySelector<HTMLElement>('#upd-feed [data-upd-editor] textarea, #upd-feed [data-upd-editor] input[type=text]')?.focus();
+  });
   if ($('#upd-day')) $('#upd-day').onclick = () => { location.hash = UPDATES + (state.kind === 'weekly' ? '?kind=weekly' : ''); };
   col.querySelector('.upd-seg').onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-upd-kind]'); if (!b || b.dataset.updKind === state.kind) return;
@@ -296,14 +304,14 @@ function updAuthor(key: string): UpdAuthor {
 // is written on the Daily tab any day and on the Weekly tab on Friday.
 const updToday = (): string => new Date().toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const updCanWrite = (state: UpdState): boolean => state.kind === 'daily' || new Date(updToday() + 'T12:00:00Z').getUTCDay() === 5;
-// One worded action on the name's line (Reply on a bot's card, Edit on your own today), then ⋯ with the rest.
+// One worded action on the name's line (Reply on a bot's card, Edit on your own today), then ⋯ with the rest. A new
+// update of your own is the header's + (pageUpdates), not a word on an older card.
 function updReplyBtn(u: UpdUpdate): string {
   const n = u.replies || 0, label = n ? `Reply, ${n} repl${n === 1 ? 'y' : 'ies'}` : 'Reply';
   return `<button type="button" class="upd-act upd-word" data-upd-reply aria-label="${label}">Reply${n ? ` <span class="upd-n">${n}</span>` : ''}</button>`;
 }
 function updWriteBtn(u: UpdUpdate): string {
-  const label = u.day === updToday() ? 'Edit your update' : 'Write today\'s update';
-  return `<button type="button" class="upd-act upd-word" data-upd-write aria-label="${label}">${u.day === updToday() ? 'Edit' : 'New update'}</button>`;
+  return u.day === updToday() ? '<button type="button" class="upd-act upd-word" data-upd-write aria-label="Edit your update">Edit</button>' : '';
 }
 // ⋯ holds the card's other actions, each a word: Mark read or Mark unread, then Archive or Restore to Inbox.
 const UPD_MORE_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
@@ -320,8 +328,8 @@ function updMenuOpen(state: UpdState, btn: HTMLElement, id: string): void {
 }
 // Bots often write Blocked: and Suggestion: lines with no bullet; markdown would fold each into the bullet above it.
 const updNormalizeBody = (body: string | null | undefined): string => String(body ?? '').replace(/^[ \t]*(Blocked|Suggestion):/gm, '- $1:');
-// `kids` is the tree's toggle for the cards of this card's reports, on the name's line right of Archive (outside the
-// corner, so it never fades). The row under the update holds Edit on your own card and is gone without it.
+// `kids` is the tree's toggle for the cards of this card's reports ("8 reports >"): on a line of its own under the update
+// (style guide, "Updates card with its reports"), so ⋯ stays the last control on the name's line.
 function updCard(u: UpdUpdate, i: number, state: UpdState, kids = ''): string {
   const who = updAuthor(u.bot);
   const open = state.open.has(u.id);
@@ -333,7 +341,7 @@ function updCard(u: UpdUpdate, i: number, state: UpdState, kids = ''): string {
       <div class="upd-meta"><span class="upd-av">${who.avatar}</span><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
         <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
-        <span class="upd-corner">${who.person ? (u.own && updCanWrite(state) ? updWriteBtn(u) : '') : updReplyBtn(u)}${updMoreBtn()}</span>${kids}</div>
+        <span class="upd-corner">${who.person ? (u.own && updCanWrite(state) ? updWriteBtn(u) : '') : updReplyBtn(u)}${updMoreBtn()}</span></div>
       ${u.slides ? updDeck(u, state) : body ? messageMd('upd-body md', updNormalizeBody(body), who.person ? '' : `bot:${u.bot}`, {shortLinks: true}) : ''}
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
           <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? messageMd('md', m.body || '', m.sender_id, {shortLinks: true}) : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
@@ -341,6 +349,7 @@ function updCard(u: UpdUpdate, i: number, state: UpdState, kids = ''): string {
         <form class="upd-reply" data-upd-form><textarea rows="1" placeholder="Reply to ${esc(who.label)}…" aria-label="Reply">${esc(UPD_DRAFTS.get(u.id) || '')}</textarea>
           <button class="primary" type="submit" aria-label="Send">Send</button></form>
         <div class="muted upd-hint">Goes to ${esc(who.label)}'s chat too.</div></div>` : ''}
+      ${kids ? `<div class="upd-meta upd-kids-row">${kids}</div>` : ''}
     </div></article>`;
 }
 // A week in review is five slides, swiped left to right (scroll-snap), with arrows and dots for a mouse
@@ -493,7 +502,7 @@ function updEditor(u: UpdUpdate | null, n: UpdTreeNode, state: UpdState, kids = 
   return `<form class="upd-card upd-edit" data-upd-editor data-upd-kind="${week ? 'weekly' : 'daily'}">
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}
-      <div class="upd-actions"><button class="primary" type="submit">Post</button><button type="button" class="ghost" data-upd-cancel>Cancel</button>${kids}</div>
+      <div class="upd-actions">${kids}<span class="spacer"></span><button type="button" class="ghost" data-upd-cancel>Cancel</button><button class="primary" type="submit">Post</button></div>
       <div class="err" role="status" data-upd-edit-err></div></div></form>`;
 }
 // The editor's slides: bullets one per line, and KPIs as "Name: value", keeping a KPI's chart and note when
@@ -929,7 +938,7 @@ async function botHistoryLoad(slug: string, before?: string): Promise<void> {
   if (!r) { if (!before) host.innerHTML = '<div class="empty">Could not load the updates.</div>'; return; }
   const items = r.updates || [];
   const html = items.map(u => `<article class="bot-history-item${u.read ? '' : ' unread'}">
-      <div class="upd-meta"><b>${esc(new Date(u.day + 'T12:00:00').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}))}</b>
+      <div class="upd-meta"><b>${esc(dayWords(u.day, {weekday: true}))}</b>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}${u.read ? '' : '<span class="upd-dot" aria-label="Unread"></span>'}</div>
       ${messageMd('upd-body md', updNormalizeBody(u.body), `bot:${slug}`, {shortLinks: true})}</article>`).join('');
   const more = r.next_before ? `<button type="button" class="ghost upd-more" data-bot-history-more="${esc(r.next_before)}">Load older</button>` : '';

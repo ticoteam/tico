@@ -125,7 +125,10 @@ interface StorageMove {
     // Stopped: the same move goes the other way.
     v = await visit({tico: {state: 'stopped', label: 'Tico file hosting', address: '', location: 'tico-files-us/c/acme', keep_until: '2026-11-22T00:00:00Z', error: ''}});
     await v.page.locator('[data-storage-tico]').waitFor();
-    assert.match(await v.page.locator('[data-storage-tico]').innerText(), /keeps the files it holds until November 2\d, 2026 .*download them or move them back first/);
+    // The day in the viewer's own time zone, month first (format.ts dayWords): Nov 21 west of UTC, Nov 22 from UTC east.
+    const until = await v.page.evaluate(() => { const d = new Date('2026-11-22T00:00:00Z');
+      return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric'}); });
+    assert.ok((await v.page.locator('[data-storage-tico]').innerText()).includes(`keeps the files it holds until ${until} and emails the owner before deleting them, so download them or move them back first`));
     await v.page.waitForFunction(() => document.querySelector('[data-move]')?.textContent === 'Move files back');
     await v.ctx.close();
 

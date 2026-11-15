@@ -36,7 +36,9 @@ declare function cloudAccessApply(cloud: {access: string; billing_url: string | 
         const rows = page.locator('#task-modal[open] .task-wait');
         const links = rows.getByRole('link', {name: 'Add credit', exact: true});
         await page.locator('#task-modal .task-comments .task-wait').waitFor();
-        assert.equal(await links.count(), 2, 'both the turn and the queued-run status offer Add credit');
+        // What is happening now is one row at the end of the chat: the queued run's wait, which says it and offers Add
+        // credit; the turn's own line would say the same again, so it is left out while the run waits.
+        assert.equal(await links.count(), 1, 'the queued-run status offers Add credit, once');
         for (const link of await links.all()) {
           assert.equal(await link.getAttribute('href'), await banner.getAttribute('href'), 'same destination as the top strip');
           assert.equal(await link.getAttribute('target'), '_blank');
@@ -65,7 +67,7 @@ declare function cloudAccessApply(cloud: {access: string; billing_url: string | 
           await page.reload();
           await page.locator('#task-modal[open] .tmodal-title').waitFor();
           if (line) await page.locator('#task-modal .task-comments .task-wait').waitFor();
-          assert.equal(await links.count(), line === 'Out of credit' ? 2 : 0);
+          assert.equal(await links.count(), line === 'Out of credit' ? 1 : 0);
         }
         assert.deepEqual(errors, []);
       } finally { await page.close(); }

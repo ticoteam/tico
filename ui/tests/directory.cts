@@ -31,13 +31,39 @@ async function flow(page: Page, tag: string) {
   assert.match(await page.locator('#main h1').first().innerText(), /^Contacts$/);
   assert.match(await jane.innerText(), /Bright Homes Retail/);
   assert.match(await jane.locator('[data-dir-rel]').innerText(), /Customer/);
-  assert.match(await page.locator('[data-dir-count]').innerText(), /^8 people$/);
+  // The relationship is plain muted words, not a pill; the count is the tab's, with no "8 people" line.
+  assert.equal(await page.locator('.dir-list .pill').count(), 0, tag + ': no pills in the list');
+  assert.equal(await page.locator('[data-dir-count]').count(), 0, tag + ': no count caption');
+  assert.equal((await page.locator('[data-dir-tab="person"] .ph-n').innerText()).trim(), '8', tag + ': the People tab counts them');
+  // A column no row has a value for is not drawn (the seeded people have no owner, last contact or source).
+  const heads = await page.locator('.dir-list thead th').allInnerTexts();
+  assert.deepEqual(heads.map(h => h.trim().toLowerCase()), ['name', 'organization', 'relationship'], tag + ': only the columns with values');
+  // The one page header: the tabs on it, the search and the relationship filter as its tools, ⋯ last.
+  assert.equal(await page.locator('#dir-root > header.ph [data-dir-tab]').count() > 0, true, tag + ': the tabs are in the header');
   // Prefix search narrows the rows; the relationship menu narrows by a link to us, through the person's organization.
-  await page.locator('[data-dir-search-toggle]').click();
+  // A phone may keep the tools in ⋯: open it first (as filterReach does in mail-messaging-pages).
+  if (!(await page.locator('[data-dir-q]').isVisible())) await page.locator('#dir-root > header.ph > .ph-more').click();
   await page.locator('[data-dir-q]').fill('Ra');
   await page.waitForFunction(() => document.querySelectorAll('[data-dir-row]').length === 1, null, {timeout: t(10000)});
   assert.equal(await page.locator('[data-dir-row]').getAttribute('data-dir-row'), 'person/raj-patel');
+  // The search reads "Search", as every header search does; its name starts with that word and says what it matches.
+  assert.equal(await page.locator('[data-dir-q]').getAttribute('placeholder'), 'Search', tag + ': the placeholder');
+  assert.equal(await page.locator('[data-dir-q]').getAttribute('aria-label'), 'Search by name', tag + ': label in name');
+  // A narrowed list keeps the columns the whole list had (no column jumps while typing).
+  assert.deepEqual((await page.locator('.dir-list thead th').allInnerTexts()).map(h => h.trim().toLowerCase()), ['name', 'organization', 'relationship'], tag + ': columns stay');
   assert.match(page.url(), /q=Ra/);
+  // The relationship filter: the shared filter icon opens the shared menu; a pick narrows the list and shows a chip.
+  await page.goto(page.url().split('#')[0] + '#/library/contacts');
+  await jane.waitFor({timeout: t(10000)});
+  if (!(await page.locator('[data-dir-filter]').isVisible())) await page.locator('#dir-root > header.ph > .ph-more').click();
+  await page.locator('[data-dir-filter]').click();
+  await page.locator('#task-filter-pop a[data-dir-link="vendor_to"]').click();
+  await page.waitForFunction(() => location.hash === '#/library/contacts?link=vendor_to', null, {timeout: t(10000)});
+  await page.locator('.dir-active .tl-chip').filter({hasText: 'Vendor'}).waitFor({timeout: t(10000)});
+  // The chip counts the matches (the tab keeps the whole type's count).
+  await page.waitForFunction(() => document.querySelector('[data-dir-chip-n]')?.textContent === String(document.querySelectorAll('[data-dir-row]').length), null, {timeout: t(10000)});
+  await page.locator('[data-dir-clear-link]').click();
+  await page.waitForFunction(() => location.hash === '#/library/contacts', null, {timeout: t(10000)});
   // The old address, from before it was Contacts, lands on the new page with its query.
   await page.goto(page.url().split('#')[0] + '#/library/directory?link=customer_of');
   await page.waitForFunction(() => location.hash === '#/library/contacts?link=customer_of', null, {timeout: t(10000)});
@@ -50,8 +76,22 @@ async function flow(page: Page, tag: string) {
 
   // The person: title at organization, the Customer chip, rules (none yet), a value's history, links, notes.
   await jane.locator('a').first().click();
-  await page.locator('[data-dir-name]').waitFor({timeout: t(10000)});
-  assert.equal(await page.locator('[data-dir-name]').innerText(), 'Jane Ortiz');
+  // The contact's page has the one page header: "Contacts ›" back to its list, the name as the title, ⋯ last; no breadcrumb.
+  const name = page.locator('#dir-root > header.ph > .ph-t');
+  await page.locator('[data-dir-sub]').waitFor({timeout: t(10000)});
+  assert.equal(await name.innerText(), 'Jane Ortiz');
+  assert.equal((await page.locator('#dir-root > header.ph > .ph-back').innerText()).replace(/\s+/g, ''), 'Contacts›');
+  assert.equal(await page.locator('#dir-root > header.ph > .ph-back').getAttribute('href'), '#/library/contacts');
+  assert.equal(await page.locator('.dir-crumb, #dir-root h1:not(.ph-t)').count(), 0, tag + ': no separate breadcrumb or second title');
+  // Where a value came from is muted words on its row ("You · Nov 11"), not a pill.
+  assert.equal(await page.locator('[data-dir-field="title"] .pill').count(), 0, tag + ': provenance is not a pill');
+  const meta = await page.locator('[data-dir-field="title"] .dir-meta').evaluate(m => {
+    const mid = (e: Element) => { const r = e.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
+    const v = mid(m.parentElement!.querySelector('.dir-val')!), src = mid(m.querySelector('[data-dir-src]')!), age = mid(m.querySelector('.dir-age')!);
+    return {text: (m.textContent || '').trim(), same: Math.abs(src - v) < 4 && Math.abs(age - v) < 4};
+  });
+  assert.match(meta.text, /^\S.* · \S/, tag + ': source · age');
+  assert.ok(meta.same, tag + `: provenance on the value's row, one line (${JSON.stringify(meta)})`);
   assert.match(await page.locator('[data-dir-sub]').innerText(), /CFO at Bright Homes Retail · Austin/);
   await page.locator('[data-dir-rules-empty]').waitFor({timeout: t(10000)});
   assert.match(await page.locator('[data-dir-field="title"]').innerText(), /CFO/);
@@ -69,7 +109,7 @@ async function flow(page: Page, tag: string) {
 
   // The organization: domain and place under the name, its people among the links.
   await page.locator('[data-dir-sub] a', {hasText: 'Bright Homes Retail'}).click();
-  await page.waitForFunction(() => document.querySelector('[data-dir-name]')?.textContent === 'Bright Homes Retail', null, {timeout: t(10000)});
+  await page.waitForFunction(() => document.querySelector('#dir-root > header.ph > .ph-t')?.textContent === 'Bright Homes Retail', null, {timeout: t(10000)});
   assert.match(await page.locator('[data-dir-sub]').innerText(), /brighthomes\.example · Company · Austin/);
   assert.match(await page.locator('[data-dir-rel]').innerText(), /Customer/);
   assert.match(await page.locator('[data-dir-link-group="People"]').innerText(), /Jane Ortiz.*Sam Brooks/);
@@ -78,10 +118,10 @@ async function flow(page: Page, tag: string) {
 
   // A place from the shared tree: Austin, inside Texas, which we operate in.
   await page.locator('[data-dir-sub] a', {hasText: 'Austin'}).click();
-  await page.waitForFunction(() => document.querySelector('[data-dir-name]')?.textContent === 'Austin', null, {timeout: t(10000)});
+  await page.waitForFunction(() => document.querySelector('#dir-root > header.ph > .ph-t')?.textContent === 'Austin', null, {timeout: t(10000)});
   await page.locator('[data-dir-shared]').waitFor({timeout: t(10000)});
-  await page.locator('.dir-crumb a', {hasText: 'Texas'}).click();
-  await page.waitForFunction(() => document.querySelector('[data-dir-name]')?.textContent === 'Texas', null, {timeout: t(10000)});
+  await page.locator('[data-dir-sub] a', {hasText: 'Texas'}).click();   // the place it is in, on its identity line
+  await page.waitForFunction(() => document.querySelector('#dir-root > header.ph > .ph-t')?.textContent === 'Texas', null, {timeout: t(10000)});
   await page.locator('[data-dir-operate]').waitFor({timeout: t(10000)});
   await page.locator('[data-dir-rules-empty]').waitFor({timeout: t(10000)});
   assert.match(await page.locator('[data-dir-inside]').innerText(), /Austin/);

@@ -33,6 +33,27 @@ const longPress = (page: Page, selector: string) => page.evaluate(async (sel: st
       const plus = (await page.locator('#goal-new').boundingBox())!, h1 = (await page.locator('.rd-strat-head h1').boundingBox())!;
       assert(Math.abs((plus.y + plus.height / 2) - (h1.y + h1.height / 2)) < 12, '+ Goal sits beside the title');
       assert.equal(await page.locator('#goal-tree .gt-row[data-owner="human:ben"] [data-goal-add]').isVisible(), true, '"+" shows on a phone');
+      // Each is a 44px target on a phone: the line's "+" stays a small mark with a finger's area around it (.tap-mark),
+      // and New goal is the header's quiet + at the 44px row height.
+      const plusHit = await page.locator('#goal-tree .gt-row[data-owner="human:ben"] [data-goal-add]').evaluate((el: Element) => {
+        const b = getComputedStyle(el, '::before');
+        return {before: b.content !== 'none' && b.position === 'absolute', h: el.getBoundingClientRect().height + 2 * Math.max(0, -parseFloat(b.top))};
+      });
+      assert.ok(plusHit.before && plusHit.h >= 43.5, `a line's "+" is a 44px target: ${JSON.stringify(plusHit)}`);
+      // ...drawn as a quiet mark, not a box on every line.
+      const plusLook = await page.locator('#goal-tree .gt-row[data-owner="human:ben"] [data-goal-add]').evaluate((el: Element) => {
+        const c = getComputedStyle(el);
+        return {border: c.borderTopColor, bg: c.backgroundColor};
+      });
+      assert.deepEqual(plusLook, {border: 'rgba(0, 0, 0, 0)', bg: 'rgba(0, 0, 0, 0)'}, 'a line\'s "+" has no box');
+      // Every "+" target stays inside its own line (a group's line too), so a tap on the line above is that line.
+      const spill = await page.locator('#goal-tree [data-goal-add], #goal-tree [data-goal-add-group]').evaluateAll(els => els.filter(el => {
+        const line = el.parentElement!.getBoundingClientRect(), r = el.getBoundingClientRect(), mid = r.top + r.height / 2;
+        return mid - 22 < line.top - 0.5 || mid + 22 > line.bottom + 0.5;
+      }).map(el => el.getAttribute('aria-label')));
+      assert.deepEqual(spill, [], 'no "+" target reaches into the next line');
+      assert.ok(plus.height >= 43.5 && plus.width >= 43.5, `New goal is 44px: ${JSON.stringify(plus)}`);
+      assert.equal(await page.locator('#goal-new.primary').count(), 0, 'New goal is not a filled button');
       assert.equal(await sideways(page), false, 'no sideways scroll');
       await shot(page, 'phone-goals');
 
@@ -108,6 +129,8 @@ const longPress = (page: Page, selector: string) => page.evaluate(async (sel: st
       // Remove it from its sheet.
       writes.length = 0;
       await page.locator('#goal-tree .gt-row[data-goal="g-3"] .gt-goal').click();
+      // A saved goal: Remove alone on the left, then Cancel and Save, Save last.
+      assert.deepEqual(await sheet.locator('.goal-actions button').allInnerTexts(), ['Remove', 'Cancel', 'Save'], 'Remove, Cancel, Save');
       await sheet.locator('[data-goal-remove]').click();
       await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#goal-sheet')?.open);
       assert.deepEqual(goalWrites(writes), [['/api/v2/goals/g-3/status', {status: 'dropped', note: ''}]]);
@@ -174,9 +197,14 @@ const longPress = (page: Page, selector: string) => page.evaluate(async (sel: st
       assert.equal(await sheet.locator('button[type="submit"], [data-goal-remove]').count(), 0, 'nothing to save');
       assert.equal(await sheet.locator('input[name="title"]').getAttribute('readonly'), '');
       assert.equal(await sheet.locator('select[name="owner"]').isDisabled(), true);
-      await sheet.locator('[data-goal-cancel]').click();
+      // Nothing to do but read: no button row at all, never a "Close" word; the sheet's ✕ closes it.
+      assert.equal(await sheet.locator('.goal-actions').count(), 0, 'no actions on a goal one may not edit');
+      assert.equal(await sheet.getByRole('button', {name: 'Close', exact: true}).filter({hasText: /^Close$/}).count(), 0, 'no Close word');
+      await sheet.locator('[data-gs-close]').click();
       await page.locator('#goal-new').click();
       assert.deepEqual(await sheet.locator('select[name="owner"] option').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value)), ['human:cara']);
+      // Cancel on the left, the forward action right and last (style guide, Button order).
+      assert.deepEqual(await sheet.locator('.goal-actions button').allInnerTexts(), ['Cancel', 'Save'], 'Cancel, then Save');
       if (viewport === PHONE) await shot(page, 'phone-goal-sheet-member');
       await sheet.locator('[data-goal-cancel]').click();
       assert.equal(await page.locator('#goal-tree .gt-row[data-owner="human:ben"] [data-goal-add]').count(), 0, "no + on someone else's line");

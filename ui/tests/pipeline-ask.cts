@@ -1,9 +1,10 @@
-// The board's bots on a phone: a floating face instead of the Ask block (ui/app/pipeline-ask.ts; spec "Pipeline board:
-// one-row header, one count per stage, a floating face", part C), offline on the fake server of tasks-page.cts. Checks:
-//  - at 390 px the manager's 44 px round face floats 12 px from the right and 12 px above the bottom bar; no context
-//    line, no bot picker and no box sit on the board;
-//  - a long stage scrolled to its end: the last row and More end at least 8 px above the face (AC-7);
-//  - tapped, a menu above the face lists the board's bots: the manager first, then the open stage's holder, each with
+// The board's bots on a phone (ui/app/pipeline-ask.ts; spec "Pipeline board: one-row header, one count per stage", part
+// C, and the style guide's "Where chat lives": a phone opens the chat from the page's chat mark), offline on the fake
+// server of tasks-page.cts. Checks:
+//  - at 390 px the manager's face is the header's chat mark: a 22 px avatar in a 44 px button on the header's one row,
+//    before ⋯; nothing floats over the board, and no context line, bot picker or box sits on it;
+//  - a long stage scrolled to its end: every card and its age, and More, take a tap at their centre (nothing covers them);
+//  - tapped, a menu under the face lists the board's bots: the manager first, then the open stage's holder, each with
 //    its role ("Manager", "Holds Spec"); Escape closes it and gives the face the focus back;
 //  - picked, the bot's direct chat opens over the board, the chat alone (no Log, no Tasks), its box focused, with the
 //    board as a chip above the box ("Product › Spec · 3 tasks"); a message carries refs.board (the pipeline, the stage,
@@ -53,7 +54,14 @@ function chats(sent: Sent[]) {
   });
 }
 
-const face = (page: Page) => page.locator('#task-ask .pa-fab');
+const face = (page: Page) => page.locator('#task-manager');
+/** Two frames: a scroll just asked for has been painted. */
+const frames = (page: Page) => page.evaluate(() => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r()))));
+/** The cards (and their ages) on screen whose centre a tap does not reach: something lies over them. */
+const coveredCards = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#task-body .pv-phone [data-task], #task-body .pv-phone [data-task] .tk-age, #task-more:not([hidden]) button')]
+  .filter(el => { const r = el.getBoundingClientRect(); return r.height && r.top >= 0 && r.bottom <= (document.querySelector('#mobile-nav')?.getBoundingClientRect().top ?? innerHeight); })
+  .filter(el => { const r = el.getBoundingClientRect(), at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !at || !el.contains(at) && !el.closest('[data-task]')?.contains(at); })
+  .map(el => el.closest<HTMLElement>('[data-task]')?.dataset['task'] || el.className));
 const picks = (page: Page) => page.locator('#task-ask .pa-pick').evaluateAll(els => els.map(e => ({
   name: (e.querySelector('.pa-pick-n')?.textContent || '').trim(), role: (e.querySelector('.pa-pick-r')?.textContent || '').trim()})));
 const chip = (page: Page) => page.locator('dialog.pa-sheet[open] .thv-ctx-l');
@@ -79,22 +87,19 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       await page.locator('#task-body .pv-tab[data-pv-tab="spec"]').click();
       await face(page).waitFor();
 
-      // The face: 44 px, round, 12 px from the right and above the bottom bar. Nothing else of the old Ask block.
-      const f = await rect(page, '#task-ask .pa-fab'), nav = await rect(page, '#mobile-nav');
+      // The face: the header's chat mark, a 44 px button on its one row just before ⋯, its avatar 22 px. Nothing of the
+      // old Ask block, and nothing floating over the board.
+      const f = await rect(page, '#task-manager'), more = await rect(page, '#task-menu'), title = await rect(page, '#task-scope');
       const width = await page.evaluate(() => window.innerWidth);
       assert.ok(Math.abs(f.w - 44) < 1 && Math.abs(f.h - 44) < 1, `a 44 px face: ${JSON.stringify(f)}`);
-      assert.ok(Math.abs(nav.top - f.bottom - 12) < 1.5, `12 px above the bottom bar: ${f.bottom} vs ${nav.top}`);
-      assert.ok(Math.abs(width - f.right - 12) < 1.5, `12 px from the right: ${f.right} of ${width}`);
-      assert.equal(await face(page).evaluate(el => getComputedStyle(el).borderRadius), '50%');
-      assert.equal(await page.locator('#task-ask textarea, #task-ask .pa-ctx, #task-ask .pa-to, #task-ask form').count(), 0, 'no context line, picker or box');
+      assert.ok(Math.abs((f.top + f.bottom) / 2 - (title.top + title.bottom) / 2) < 4 && f.right <= more.left + 0.5, `on the header's row, before ⋯: ${JSON.stringify({f, more, title})}`);
+      const av = await page.locator('#task-manager > *').first().evaluate(el => el.getBoundingClientRect().toJSON() as DOMRect);
+      assert.ok(Math.abs(av.width - 22) < 0.5 && Math.abs(av.height - 22) < 0.5, `a 22 px avatar: ${av.width}×${av.height}`);
+      assert.equal(await page.locator('#task-ask .pa-fab, #task-ask textarea, #task-ask .pa-ctx, #task-ask .pa-to, #task-ask form').count(), 0, 'no floating face, context line, picker or box');
       assert.equal(await face(page).getAttribute('aria-label'), 'Chat with…');
+      assert.equal(await face(page).getAttribute('aria-haspopup'), 'menu');
       assert.equal(await page.locator('#task-body .pv-phone [data-task]').count(), 3);
-
-      // A field on the board raises a keyboard (the Why of a refused move): the face hides while it has the focus.
-      await page.evaluate(() => { const i = document.createElement('input'); i.name = 'why'; i.id = 'why-probe'; document.querySelector('#task-body')!.prepend(i); i.focus(); });
-      assert.equal(await face(page).isVisible(), false, 'no face while a board field has the keyboard');
-      await page.evaluate(() => document.querySelector('#why-probe')!.remove());
-      assert.equal(await face(page).isVisible(), true, 'the face is back once it goes');
+      assert.deepEqual(await coveredCards(page), [], 'nothing lies over a card or its age');
 
       // Tap: the menu lists the manager, then the open stage's holder.
       await face(page).click();
@@ -102,10 +107,17 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       assert.deepEqual(await picks(page), [{name: 'PM', role: 'Manager'}, {name: 'Writer', role: 'Holds Spec'}]);
       assert.equal(await face(page).getAttribute('aria-expanded'), 'true');
       const pop = await rect(page, '#task-ask .pa-pop');
-      assert.ok(Math.abs(pop.w - 220) < 1 && pop.bottom <= f.top, `a 220 px menu above the face: ${JSON.stringify(pop)}`);
+      assert.ok(Math.abs(pop.w - 220) < 1 && pop.top >= f.bottom && Math.abs(pop.right - f.right) < 1.5 && pop.right <= width,
+        `a 220 px menu under the face, at its right edge: ${JSON.stringify({pop, f})}`);
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('#task-ask .pa-pop').isHidden(), true, 'Escape closes the menu');
-      assert.ok(await focused(page, '#task-ask .pa-fab'), 'and the face has the focus back');
+      assert.ok(await focused(page, '#task-manager'), 'and the face has the focus back');
+      assert.equal(await face(page).getAttribute('aria-expanded'), 'false');
+      // A second tap on the face closes the menu it opened.
+      await face(page).click();
+      await page.locator('#task-ask .pa-pop:not([hidden])').waitFor();
+      await face(page).click();
+      assert.equal(await page.locator('#task-ask .pa-pop').isHidden(), true, 'the face closes its menu');
 
       // Pick the stage's holder: its chat opens over the board, the box focused, the board as a chip.
       await page.evaluate(() => window.scrollTo(0, 40));
@@ -163,7 +175,7 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       assert.ok(sent.some(s => s.body.members?.[0] === 'bot:pm'), 'the manager this time');
       await page.keyboard.press('Escape');
       await page.locator('dialog.pa-sheet').waitFor({state: 'detached'});
-      assert.ok(await focused(page, '#task-ask .pa-fab'), 'after Escape the face has the focus');
+      assert.ok(await focused(page, '#task-manager'), 'after Escape the face has the focus');
       await page.evaluate(() => { const q = document.querySelector<HTMLInputElement>('#task-q')!; q.value = ''; q.dispatchEvent(new Event('input')); });
 
       // On Review (held by the manager) the holder of Spec still shows, after the manager.
@@ -185,19 +197,22 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       await page.close();
     }
     {
-      // A long stage (16 tasks, as Product › Validate), scrolled to its end: the last row and More clear the face by 8 px.
+      // A long stage (16 tasks, as Product › Validate): halfway and scrolled to its end, nothing covers a card, its age or
+      // More (the face is in the header, not over the board).
       const many = [...fixtures(), ...Array.from({length: 16}, (_, i) => task(`t-long-${i}`, `Long stage task ${i + 1}`, 'spec', {owner_id: 'bot:writer'}))];
       const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, tasks: many, needs: [], hash: '#/tasks?pipeline=product'});
       await page.locator('#task-body .pv-tab[data-pv-tab="spec"]').click();
       await face(page).waitFor();
       await page.evaluate(() => { const more = document.querySelector<HTMLElement>('#task-more'); if (more) more.hidden = false; });
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight / 2));
+      await frames(page);
+      assert.deepEqual(await coveredCards(page), [], 'halfway: nothing over a card or its age');
       await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-      await page.waitForTimeout(50);
-      const f = await rect(page, '#task-ask .pa-fab');
+      await frames(page);
+      assert.deepEqual(await coveredCards(page), [], 'at the end: nothing over a card, its age or More');
       const last = await page.locator('#task-body .pv-phone [data-task]').last().evaluate(el => el.getBoundingClientRect().toJSON() as DOMRect);
-      const more = await rect(page, '#task-more');
-      assert.ok(last.bottom <= f.top - 8, `the last row ends 8 px above the face: row ${last.bottom}, face ${f.top}`);
-      assert.ok(more.bottom <= f.top - 8, `More ends 8 px above the face: ${more.bottom}, face ${f.top}`);
+      const nav = await rect(page, '#mobile-nav');
+      assert.ok(last.bottom <= nav.top, `the last row ends above the bottom bar: row ${last.bottom}, bar ${nav.top}`);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -209,7 +224,7 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       await page.locator('#task-ask .pa-pop:not([hidden])').waitFor();
       const wide = await page.evaluate(() => document.documentElement.scrollWidth);
       assert.ok(wide <= 320, `nothing overflows sideways: ${wide}`);
-      const targets = await page.locator('#task-ask button').evaluateAll(els => els.map(e => {
+      const targets = await page.locator('#task-manager, #task-ask button').evaluateAll(els => els.map(e => {
         const r = e.getBoundingClientRect();
         return {what: e.className, w: r.width, h: r.height, left: r.left, right: r.right};
       }));
@@ -226,7 +241,8 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
           hash: '#/tasks?pipeline=product', beforeGoto: chats([])});
         await face(page).waitFor();
         assert.equal(await face(page).getAttribute('aria-label'), 'Chat with PM');
-        assert.equal(await face(page).getAttribute('aria-haspopup'), null, 'no menu');
+        assert.equal(await face(page).getAttribute('aria-haspopup'), 'dialog', 'no menu: it opens the chat');
+        assert.equal(await page.locator('#task-ask .pa-pop').count(), 0, 'no menu');
         await face(page).click();
         await page.locator('dialog.pa-sheet[open] .thv-composer .p-text').waitFor();
         assert.equal((await page.locator('dialog.pa-sheet[open] .pa-name').textContent())?.trim(), 'PM');
@@ -237,17 +253,18 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
     {
       const {page, errors} = await open(browser, {needs: [], hash: '#/tasks?pipeline=product'});
       await page.locator('#task-body .pv').waitFor();
-      assert.equal(await page.locator('#task-ask').isVisible(), false, 'a computer has the rail, no face');
+      assert.equal(await page.locator('#task-ask').isVisible(), false, 'a computer has the rail, no menu of bots');
       assert.deepEqual(errors, []);
       await page.close();
     }
     {
       const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, needs: [], hash: '#/tasks?pipeline=ops'});
       await page.locator('#task-body .pv').waitFor();
-      assert.equal(await page.locator('#task-ask').isVisible(), false, 'no manager and no holder: no face');
+      assert.equal(await page.locator('#task-ask').isVisible(), false, 'no manager and no holder: no menu');
+      assert.equal(await face(page).isVisible(), false, 'and no face');
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('a phone board has a floating face; its menu lists the board\'s bots; the chat opens alone over the board with the board as a chip: ok');
+    console.log('a phone board\'s face is the header\'s chat mark, nothing covers a card; its menu lists the board\'s bots; the chat opens alone over the board with the board as a chip: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

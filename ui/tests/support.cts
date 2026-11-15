@@ -205,7 +205,7 @@ declare function talkToUs(report: unknown): void;
     // ---- A computer, no conversation yet.
     let v = await visit({viewport: {width: 1280, height: 800}});
     let {page} = v;
-    // The ? sits right after Search's icon at the end of the Ask row, the same size.
+    // Help sits right after Search's icon in the foot's row, the same size, before your picture.
     const q = page.locator('#support-open');
     await q.waitFor();
     const row = await page.evaluate(() => {
@@ -213,8 +213,9 @@ declare function talkToUs(report: unknown): void;
       return {prev: document.getElementById('support-open')!.previousElementSibling?.id, gap: q.left - s.right, dy: Math.abs(q.top - s.top), w: q.width, h: q.height, sw: s.width, sh: s.height};
     });
     assert.equal(row.prev, 'search-open');
+    assert.equal(await q.evaluate(el => el.nextElementSibling?.className), 'account-wrap');
     assert.ok(row.gap >= 0 && row.gap < 8 && row.dy < 2 && row.w === row.sw && Math.abs(row.h - row.sh) < 1, `next to Search, the same size: ${JSON.stringify(row)}`);
-    assert.deepEqual([await q.getAttribute('aria-label'), await q.getAttribute('title'), await q.innerText()], ['Tico team', 'Tico team', 'help']);
+    assert.deepEqual([await q.getAttribute('aria-label'), await q.getAttribute('title'), await q.innerText()], ['Help', 'Help', 'help']);
     await q.click();
     const pop = page.getByRole('dialog', {name: 'Tico team'});
     await pop.locator('[name=message]').waitFor();
@@ -278,7 +279,7 @@ declare function talkToUs(report: unknown): void;
     await page.locator('#support-open.has-unread').waitFor();
     const {log, ...waiting} = await page.evaluate(() => ({unread: (window as unknown as PageWin).supportState().unread, active: document.activeElement?.id,
       open: (document.getElementById('support-pop') as HTMLDialogElement).open, label: document.getElementById('support-open')!.getAttribute('aria-label'), log: (window as unknown as PageWin).__focus.slice()}));
-    assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Tico team, 1 new'},
+    assert.deepEqual(waiting, {unread: 1, active: 't-elsewhere', open: false, label: 'Help, 1 new from the Tico team'},
       `the reply waits while the field has focus; focus: ${JSON.stringify(log)}; calls: ${v.calls.slice(-6).join(' | ')}`);
     assert.equal(await page.locator('#ask-row').evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on Ask');
     await page.evaluate(() => document.getElementById('t-elsewhere')!.blur());
@@ -434,7 +435,7 @@ declare function talkToUs(report: unknown): void;
     assert.equal(await v.page.locator('#support-access-banner [data-access-left]').innerText(), 'Tico team has access (App only), 3 h 12 min left');
     await strip.locator('.support-access-log li').waitFor();
     assert.equal(await strip.locator('.support-access-on').innerText(), 'Tico team has access (App only), 3 h 12 min left · Stop');
-    assert.match(await strip.locator('.support-access-log li').innerText(), /^just now Support Agent · GET \/api\/v2\/health<img src=x/);
+    assert.match(await strip.locator('.support-access-log li').innerText(), /^now Support Agent · GET \/api\/v2\/health<img src=x/);
     await v.page.keyboard.press('Escape');
     await v.page.locator('#support-access-banner [data-access-left]').click();
     await v.page.locator('#support-pop[open]').waitFor();
@@ -773,16 +774,27 @@ declare function talkToUs(report: unknown): void;
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 
-    // ---- Support turned off: no ?; a #/support link still opens the chat, which says so, with no box.
+    // ---- Support turned off: Help is still there, and opens the help Tico has without the team (the Assistant, the
+    // tour, the docs); a #/support link opens the same, with no box.
     v = await visit({enabled: false});
     await v.page.waitForFunction(() => (window as unknown as PageWin).supportOn(true) === false);
-    await v.page.locator('#support-open').waitFor({state: 'hidden'});
+    assert.equal(await v.page.locator('#support-open').isVisible(), true, 'Help stays');
+    assert.equal(await v.page.locator('#support-open').getAttribute('aria-label'), 'Help');
     await openSupport(v.page);
     const off = v.page.getByRole('dialog', {name: 'Tico team'});
-    assert.equal(await off.locator('[data-off]').innerText(), 'Messages to the Tico team are off on this Tico server.');
+    assert.equal(await off.locator('[data-off] p').innerText(), 'Messages to the Tico team are off on this Tico server.');
+    assert.deepEqual(await off.locator('[data-off] .support-help .nav-link').evaluateAll(els => els.map(el => el.lastChild?.textContent)),
+      ['Ask the Assistant', 'Take the tour', 'Read the docs'], 'what helps without the team');
+    assert.match((await off.locator('[data-off] a.nav-link').getAttribute('href'))!, /^https:\/\/github\.com\/ticoteam\/tico\/blob\/main\/docs\//);
     assert.equal(await off.locator('[name=message]').isVisible(), false);
     await v.page.keyboard.press('Escape');
     assert.equal((await active(v.page)).id, 't-support');
+    // Help opens it too; Ask the Assistant closes it and opens the Assistant.
+    await v.page.locator('#support-open').click();
+    await off.locator('[data-off] .support-help').waitFor();
+    await off.getByRole('button', {name: 'Ask the Assistant'}).click();
+    await v.page.waitForFunction(() => !(document.getElementById('support-pop') as HTMLDialogElement | null)?.open);
+    await v.page.waitForFunction(() => document.querySelector('#ask-panel')?.classList.contains('ask-shown'));
     await v.page.evaluate(() => toast('Could not save', true));
     assert.equal(await v.page.locator('.toast.err button').count(), 0, 'Report this is not offered');
     assert.ok(!v.calls.some(c => c.startsWith('POST')));

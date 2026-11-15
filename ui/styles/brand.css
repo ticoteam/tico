@@ -106,3 +106,11 @@ details.onb-line[open]>summary{margin-bottom:var(--s3)}
   .tmodal.onb-dlg,.tmodal.onb-dlg.onb-wide{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border-radius:0}
   .onb-dlg .tmodal-body{padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
   .onb-step-title{font-size:var(--t-lg)}}
+
+/* The Brand page (ui/app/brand-page.ts; its layout lives in growth.css with the go-to-market). A tile's or a rail card's
+   title is a card title (style guide, Card: 15px, ink), never the uppercase label; the Strategy page's brand strip names
+   its parts with a quiet word. Book and Edit sit in the Strategy header as its segment (page-head.css .ph-seg). */
+.br-k{margin:0;font-size:var(--t-card);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-normal);color:var(--ink)}
+.br-strip-l{color:var(--muted);font-weight:600}
+/* A phone: the Strategy header's 12px gutters, as on every other Strategy tab (growth.css gives Growth 16px). */
+@media (max-width:760px){#main.growth-layout.brand-layout{padding-left:12px;padding-right:12px}}

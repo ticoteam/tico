@@ -217,9 +217,10 @@ function pageCompanyPage() {
   cpTeardown();
   const main = cpFind(document, '#main');
   main.classList.add('strategy-layout', 'company-layout');
-  const title = '<div class="strat-head rd-strat-head cp-head"><h1>Share</h1>';
-  if (!cpAllowed()) { main.innerHTML = title + '</div>' + cpEmpty('Owners and admins only'); return; }
-  const head = title + `<span class="spacer"></span><a class="strat-sub" href="${OVERVIEW_COMPANY}" data-cp-view>View page</a></div>`;
+  // The shared header: "Company ›" leads back to the Share tab the section belongs to.
+  const back = {href: cpAllowed() ? OVERVIEW_COMPANY : OVERVIEW, label: 'Company'};
+  if (!cpAllowed()) { main.innerHTML = pageHead({title: 'Share', back, hook: 'cp-head'}) + cpEmpty('Owners and admins only'); return; }
+  const head = pageHead({title: 'Share', back, hook: 'cp-head', more: PAGE_HEAD_COPY});
   const state = CP = cpNewState();
   main.innerHTML = head + `<div id="cp-page" class="cp-page">${CP_PARTS.map(([id]) => `<section class="card cp-sec" id="cp-${id}">${cpSection(id, '', skelRows(2, {dot: false}))}</section>`).join('')}</div>`;
   state.onMq = () => { if (CP === state) cpDraw('disclosure'); };
@@ -798,7 +799,7 @@ function cpAudienceRow(a: CpAudience) {
   const cadence = CP_CADENCE.find(c => c[0] === a.cadence)?.[1] || a.cadence || '';
   const facts: CpPair[] = [['Approver', a.approver ? cpWho(a.approver) : 'Owner'], ['Sources', sources || 'None'], ['Due', [cadence, cpDueText(a)].filter(Boolean).join(', ')]];
   if (a.next_due && on) facts.push(['Next', finDayLabel(a.next_due)]);
-  return `<div class="cp-aud" data-cp-aud="${esc(a.id)}"><div class="cp-aud-t"><b>${esc(a.name)}</b>${a.built_in ? ' <span class="pill">Built in</span>' : ''}${on ? '' : ' <span class="pill">Off</span>'}<span class="spacer"></span>${cpBtn(`data-cp-audience="${esc(a.id)}"`, 'Edit')}</div>
+  return `<div class="cp-aud" data-cp-aud="${esc(a.id)}"><div class="cp-aud-t"><b>${esc(a.name)}</b>${a.built_in ? '<span class="nav-icon cp-builtin" role="img" aria-label="Built in" title="Built in">lock</span>' : ''}${on ? '' : ' <span class="muted cp-off">Off</span>'}<span class="spacer"></span>${cpBtn(`data-cp-audience="${esc(a.id)}"`, 'Edit')}</div>
     <dl class="cp-facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></div>`;
 }
 function cpAudiences() {
@@ -1212,16 +1213,12 @@ function pageOverviewCompany() {
   cpTeardown();
   const main = cpFind(document, '#main'), allowed = cpAllowed();
   main.classList.add('overview-layout');
-  // The frame can hold unapproved stats under the badge readers see, and its contents stay exactly what a reader gets,
-  // so the app says which one this is.
-  const acts = !allowed ? '' : `<span class="cp-tab-acts" hidden><span class="cp-tab-preview" data-cp-preview hidden>Preview</span><span class="cp-tab-pick" data-cp-tab-pick></span>
-    <button type="button" class="ghost cp-share-btn" data-cp-share aria-label="Share" aria-haspopup="dialog" title="Share"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M8 7.5l4-4 4 4"/><path d="M8 11H6v9.5h12V11h-2"/></svg></button>
-    <a class="cp-manage" href="${CP_ROUTE}" data-cp-manage>Manage</a></span>`;
-  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Share"><div class="overview-tabs"><h1>Company</h1>${dashTabsHTML('company')}${acts}</div>
+  // The tools come once the server has said the page is theirs (cpTabLoad): the audience to preview, Share, and Manage
+  // in ⋯ (used less than daily, style guide "Top bars: one line").
+  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Share">${dashCompanyHead('company', {hook: 'cp-tab-head'})}
     <div class="cp-tab-body" id="cp-tab-body">${allowed ? skelRows(4, {dot: false}) : cpEmpty('Owners and admins only')}</div></section>`;
   if (!allowed) return;
   const state = CP = {...cpNewState(), tab: true};
-  cpFind(main, '[data-cp-share]').onclick = cpShareOpen;
   cpFind(document, '#cp-tab-body').addEventListener('click', ev => { if (eventElement(ev)?.closest('[data-cp-retry]')) void cpTabLoad(state); });
   void cpTabLoad(state);
 }
@@ -1230,7 +1227,7 @@ async function cpTabLoad(state: CpState) {
   await cpLoad(state, 'transparency');
   if (CP !== state) return;
   if (errorStatus(state.err.transparency) === 403) { body.innerHTML = cpEmpty('Owners and admins only'); return; }
-  cpFind(document, '.cp-tab-acts').hidden = false;
+  cpTabTools();
   await cpLoad(state, 'audiences');
   if (CP !== state) return;
   void cpLoad(state, 'readers');
@@ -1239,9 +1236,18 @@ async function cpTabLoad(state: CpState) {
   cpTabPick(state);
   await cpTabFrame(state);
 }
+// The tab's tools in its header: the audience picker's slot, Share as an icon (the font has no share glyph), and Manage.
+function cpTabTools() {
+  const head = cpFind(document, 'header.cp-tab-head');
+  pageHeadSet(head, 'tools', `<span class="cp-tab-pick" data-cp-tab-pick></span><button type="button" class="ghost cp-share-btn" data-cp-share aria-label="Share" aria-haspopup="dialog" title="Share"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M8 7.5l4-4 4 4"/><path d="M8 11H6v9.5h12V11h-2"/></svg></button>`);
+  pageHeadSet(head, 'more', `<a href="${CP_ROUTE}" data-cp-manage>Manage</a>`);
+  cpFind(document, '[data-cp-share]').onclick = cpShareOpen;
+}
+// The audience the frame shows, when there is more than one. The frame can hold unapproved stats under the badge readers
+// see, and its contents stay exactly what a reader gets: the picker's name says it is a preview.
 function cpTabPick(state: CpState) {
   const slot = cpFind(document, '[data-cp-tab-pick]'), list = state.audiences || [];
-  slot.innerHTML = list.length > 1 ? `<select aria-label="Audience">${cpAudOptions(list, state.pick.frame)}</select>` : '';
+  slot.innerHTML = list.length > 1 ? `<select aria-label="Preview for" title="Preview for">${cpAudOptions(list, state.pick.frame)}</select>` : '';
   const pick = slot.querySelector<HTMLSelectElement>('select');
   if (pick) pick.onchange = () => { state.pick.frame = CP_TAB_AUDIENCE = pick.value; void cpTabFrame(state); };
 }
@@ -1249,14 +1255,12 @@ function cpTabPick(state: CpState) {
 // never an error page inside the frame.
 async function cpTabFrame(state: CpState) {
   const id = state.pick.frame, body = cpFind(document, '#cp-tab-body');
-  const label = cpFind(document, '[data-cp-preview]');
-  if (!id) { label.hidden = true; body.innerHTML = cpEmpty('No audiences yet'); return; }
+  if (!id) { body.innerHTML = cpEmpty('No audiences yet'); return; }
   const src = cpPreviewSrc(id);
   let failure: {status?: number; message: string} | null = null;
   try { const r = await fetch(src, {cache: 'no-store'}); if (!r.ok) failure = {status: r.status, message: 'Did not load'}; }
   catch { failure = {message: 'Did not load'}; }
   if (CP !== state || state.pick.frame !== id) return;
-  label.hidden = !!failure;
   body.innerHTML = failure ? `<div class="cp-tab-line">${cpFail('frame', failure)}</div>`
     : `<iframe class="cp-frame" title="Company page" sandbox="allow-scripts" referrerpolicy="no-referrer" src="${esc(src)}"></iframe>`;
 }

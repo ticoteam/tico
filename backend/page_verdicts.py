@@ -35,10 +35,14 @@ def _h() -> Any:
     return hubdb
 
 
-def rubric_hash(rubric: str, context: Row | None = None) -> str:
-    """The key for what a page is judged against: the rubric and the context Jev is shown beside the page (JSON-able,
-    key order does not matter)."""
-    text = json.dumps({"rubric": rubric.strip(), "context": context or {}}, sort_keys=True, separators=(",", ":"))
+def rubric_hash(rubric: str, context: Row | None = None, rules: list[str] | None = None) -> str:
+    """The key for what a page is judged against: the rubric, the context Jev is shown beside the page (JSON-able,
+    key order does not matter) and the rules added to the check (Flow's suggested rules), in order. With no rules the
+    key is what it was before rules existed, so no verdict already given is owed again."""
+    held: Row = {"rubric": rubric.strip(), "context": context or {}}
+    if rules:
+        held["rules"] = list(rules)
+    text = json.dumps(held, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -200,6 +204,8 @@ def job_of(
         "rubric": judged.get("rubric") or requirement.get("name") or "",
         "goal": pipeline.get("goal") or "",
         "pipeline_id": task.get("pipeline_id"),
+        # The rules added to the check when the page was attached (task_pages.judged_against): each one more part.
+        **({"rules": list(judged["rules"])} if judged.get("rules") else {}),
     }
     ref = f"page:{page['file_id']}@{page['version']}"
     attachment: Row = {

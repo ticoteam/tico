@@ -100,6 +100,8 @@ def test_reassign_snooze_and_unsnooze(api):
     assert next(t for t in get(api, "tasks?snoozed=all")["tasks"] if t["id"] == made["id"])["snoozed"] is True
     back = post(api, f"tasks/{made['id']}/unsnooze", {"why": "Dates came early"})
     assert back["snooze"] is None
+    timed = post(api, f"tasks/{made['id']}/snooze", {"until": "2099-01-05T15:30:00Z"})  # a time is kept to the minute
+    assert timed["snooze"]["until"].startswith("2099-01-05T15:30:00")
     refused(api, f"tasks/{made['id']}/snooze", {"until": "not a date"}, status=422)
 
 

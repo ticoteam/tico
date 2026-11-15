@@ -205,13 +205,13 @@ function kpiTargetFields(link: GkTarget) {
   return `<label class="goal-f"><span>Target</span><select name="kind"><option value="improve"${link.kind === 'improve' ? ' selected' : ''}>Improve</option><option value="maintain"${link.kind === 'maintain' ? ' selected' : ''}>Stay in range</option><option value="none"${link.kind === 'none' ? ' selected' : ''}>None</option></select></label>
     <div class="goal-fs" data-k="improve"><label class="goal-f"><span>Baseline</span><input name="baseline" type="number" step="any" value="${esc(n(link.baseline))}"></label>
       <label class="goal-f"><span>Target</span><input name="target" type="number" step="any" value="${esc(n(link.target))}"></label></div>
-    <div class="goal-fs" data-k="improve"><label class="goal-f"><span>Deadline</span><input name="deadline" type="date" value="${esc(link.deadline || '')}"></label></div>
+    <div class="goal-fs" data-k="improve"><label class="goal-f"><span>Deadline</span><input name="deadline" type="date" data-date-field value="${esc(link.deadline || '')}"></label></div>
     <div class="goal-fs" data-k="maintain"><label class="goal-f"><span>Min</span><input name="min" type="number" step="any" value="${esc(n(link.min))}"></label>
       <label class="goal-f"><span>Max</span><input name="max" type="number" step="any" value="${esc(n(link.max))}"></label></div>`;
 }
 function kpiTargetForm(link: GkKpiLink) {
   return `<form class="goal-form kpi-target-form" data-kpi-target="${esc(link.goal_id)}" novalidate>${kpiTargetFields(link)}
-    <div class="goal-actions"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-cancel>Cancel</button></div></form>`;
+    <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save</button></div></form>`;
 }
 function kpiTargetBody(form: GkTargetForm): GkTarget {
   const kind = form.elements.kind.value, num = (name: GkTargetField) => form.elements[name].value === '' ? null : Number(form.elements[name].value);
@@ -225,13 +225,14 @@ function kpiTargetKinds(form: GkTargetForm) {
 }
 
 // ---------------------------------------------------------------- suggestion cards
-// The yes / no row every suggestion card ends with, shared with the strategy cards: yes first, saying what it does, then
-// "No, leave it" (`no: null` for a card with one button). `line` is a plain sentence above the buttons. `decide` is what
+// The no / yes row every suggestion card ends with, shared with the strategy cards: "No, leave it" on the left, then yes,
+// saying what it does, last on the right (style guide, Button order and Decision card) (`no: null` for a card with one
+// button). `line` is a plain sentence above the buttons. `decide` is what
 // the yes button sends: a one-button card that changes nothing ("Got it" on a strategy change the draft holds) rejects.
 // `reason`: once no has rejected it, the card offers a line on why (propLeftHtml), which the Strategy Owner reads.
 function propDoHtml(p: GkProposal, {yes, no = 'No, leave it', line = '', decide = 'confirm', reason = false}: {yes: string | null; no?: string | null; line?: string; decide?: string; reason?: boolean}) {
   if (!p.may_decide) return '';
-  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}${yes ? `<button class="primary" type="button" data-decide="${decide}" data-prop-yes>${esc(yes)}</button>` : ''}${no ? `<button class="ghost" type="button" data-decide="reject"${reason ? ' data-prop-reason' : ''}>${esc(no)}</button>` : ''}</div>`;
+  return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}${no ? `<button class="ghost" type="button" data-decide="reject"${reason ? ' data-prop-reason' : ''}>${esc(no)}</button>` : ''}${yes ? `<button class="primary" type="button" data-decide="${decide}" data-prop-yes>${esc(yes)}</button>` : ''}</div>`;
 }
 // What a card asking a reason becomes after no (already rejected, in one click): one line, a one-line box and Send.
 // Sent, the reason is the suggestion's decision note (POST /v2/proposals/{id}/note, once, by whoever said no), read by
@@ -535,11 +536,11 @@ function kpiPanelHtml(d: GkKpiDetail, {back = false}: {back?: boolean} = {}) {
       ${d.may_log ? `<form class="goal-form kpi-log" data-kpi-log novalidate>
         <div class="kpi-correcting muted" hidden></div>
         <div class="goal-fs"><label class="goal-f"><span>Value</span><input name="value" type="number" step="any" inputmode="decimal"></label>
-          <label class="goal-f"><span>Period end</span><input name="period_end" type="date"></label></div>
+          <label class="goal-f"><span>Period end</span><input name="period_end" type="date" data-date-field></label></div>
         <div class="goal-fs"><label class="goal-f"><span>Evidence</span><input name="evidence" maxlength="2000" placeholder="Link or note"></label>
           <label class="goal-f"><span>Quality</span><select name="quality"><option value="measured">Measured</option><option value="estimate">Estimate</option><option value="partial">Partial</option></select></label></div>
         <label class="goal-f kpi-note-f" hidden><span>What changed</span><input name="note" maxlength="2000"></label>
-        <div class="goal-actions"><button class="primary" type="submit">Log reading</button><button class="ghost" type="button" data-correct-cancel hidden>Cancel</button></div></form>` : ''}
+        <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-correct-cancel hidden>Cancel</button><button class="primary" type="submit">Log reading</button></div></form>` : ''}
       ${d.may_edit && !k.auto ? `<div class="kpi-edit-host"><button class="linkish" type="button" data-kpi-edit>Edit</button>
         <button class="linkish${k.archived_at ? '' : ' danger'}" type="button" data-kpi-archive>${k.archived_at ? 'Restore KPI' : 'Archive KPI'}</button></div>` : ''}
     </div>`;
@@ -555,7 +556,7 @@ function kpiEditForm(k: GkKpi) {
     <div class="goal-fs"><label class="goal-f"><span>Cadence</span><select name="cadence">${opt([['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']], k.cadence)}</select></label>
       <label class="goal-f"><span>Owner</span><select name="owner">${ownerOptions(kpiOwnerChoices(k.owner_id), k.owner_id)}</select></label></div>
     <label class="goal-f"><span>Source</span><input name="source_note" maxlength="2000" value="${esc(k.source_note || '')}"></label>
-    <div class="goal-actions"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-cancel>Cancel</button></div></form>`;
+    <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Save</button></div></form>`;
 }
 
 function kpiPanelBind(dlg: HTMLDialogElement, d: GkKpiDetail) {
@@ -674,7 +675,7 @@ async function kpiOpen(id: string): Promise<void> {
   if (!dlg.open) { dlg.innerHTML = '<div class="tmodal-body"><p class="muted">Loading…</p></div>'; dlg.showModal(); }
   const data = await v2Get('/v2/kpis/' + encodeURIComponent(id));
   if (dlg.dataset.kpi !== id || !dlg.open) return;
-  if (!data) { dlg.innerHTML = '<div class="tmodal-body"><p class="err">Could not load the KPI.</p><div class="goal-actions"><button class="ghost" type="button" data-kpi-close>Close</button></div></div>'; dlg.querySelector<HTMLElement>('[data-kpi-close]')!.onclick = () => dlg.close(); return; }
+  if (!data) { dlg.innerHTML = '<div class="tmodal-head"><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-kpi-close aria-label="Close">✕</button></div><div class="tmodal-body"><p class="err">Could not load the KPI.</p></div>'; dlg.querySelector<HTMLElement>('[data-kpi-close]')!.onclick = () => dlg.close(); return; }
   if (inPage) {
     const panel = GOALS_ST?.panel;   // read after the await: the page may have re-rendered meanwhile
     if (!panel) throw new Error('The goal panel is not open');
@@ -703,7 +704,7 @@ function kpiAddHtml(goal: GkGoal | null, forOwner = '') {
         <label class="goal-f"><span>Owner</span><select name="owner">${ownerOptions(choices, owner)}</select></label></div>
       <label class="goal-f"><span>Source</span><input name="source_note" maxlength="2000" autocomplete="off"></label>
     </div>${target}
-    <div class="goal-actions"><button class="primary" type="submit">Add KPI</button><button class="ghost" type="button" data-cancel>Cancel</button></div></form>`;
+    <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-cancel>Cancel</button><button class="primary" type="submit">Add KPI</button></div></form>`;
 }
 async function kpiAddBind(form: GkAddForm, goal: GkGoal | null, done: (ok: boolean) => unknown) {
   const pick = form.elements.pick, fresh = form.querySelector<HTMLElement>('[data-new]')!;
@@ -808,7 +809,7 @@ function goalTreeRows(actor: string, depth: number, goals: GkGoal[], loose: GkKp
   const bet = (g: GkGoal) => { const st = GOALS_ST?.strategy, c = g.bet_id && (st?.bets || []).find((x: GkStrategyBet) => x.id === g.bet_id); return c ? ` · ${st?.label_one || 'Bet'}: ${c.statement}` : ''; };
   const goalCell = (g: GkGoal) => `<span class="gt-goal" title="${esc(g.title + (g.why || !bet(g) ? ' · Why: ' + (g.why || GOAL_NOT_TIED) : '') + bet(g))}">${gdot(g.status, goalStatusNote(g))}<span class="gt-title">${esc(g.title)}</span></span>`;
   // "+" adds a goal for this owner: always there, quiet until a pointer is over the line.
-  const add = goalMayEdit({owner_id: actor}, GOALS_ST?.goals || []) ? `<button type="button" class="gt-add" data-goal-add="${esc(actor)}" title="Add goal" aria-label="Add goal for ${esc(info.name)}">+</button>` : '';
+  const add = goalMayEdit({owner_id: actor}, GOALS_ST?.goals || []) ? `<button type="button" class="gt-add tap-mark" data-goal-add="${esc(actor)}" title="Add goal" aria-label="Add goal for ${esc(info.name)}">+</button>` : '';
   const row = (cls: string, goal: GkGoal | undefined, inner: string) => `<li class="gt-row${cls}" data-owner="${esc(actor)}"${goal ? ` data-goal="${esc(goal.id)}"` : ''} style="--d:${depth}" tabindex="0" role="button">`
     + `<span class="gt-ind" aria-hidden="true"></span>${inner}${cls.includes('gt-cont') ? '' : add}</li>`;
   const first = goals[0], words = String(standing || '').trim();
@@ -842,7 +843,7 @@ function goalWhyHtml(state: GkState, g: GkGoal, may: boolean) {
     const start = P.whyDraft ?? (editing === 'proposal' && p ? p.payload?.why || '' : why);
     return `<form class="goal-why-ed" data-why-form="${esc(g.id)}" data-why-from="${esc(editing)}"${p ? ` data-why-prop="${esc(p.id)}"` : ''} novalidate>
         <input type="text" name="why" maxlength="200" autocomplete="off" value="${esc(start)}" aria-label="Why: how this goal serves the vision" placeholder="One line: how this goal serves the vision">
-        <button class="primary" type="submit">Save</button><button class="ghost" type="button" data-why-cancel>Cancel</button></form>`;
+        <button class="ghost" type="button" data-why-cancel>Cancel</button><button class="primary" type="submit">Save</button></form>`;
   }
   // A goal that serves a bet needs no Why of its own: the bet is the why (its line follows).
   if (!why && !p && g.bet_id && (state.strategy?.bets || []).some(c => c.id === g.bet_id)) return '';
@@ -850,7 +851,7 @@ function goalWhyHtml(state: GkState, g: GkGoal, may: boolean) {
     ? `<div class="goal-why" data-why="${esc(g.id)}"><span class="goal-why-k">Why</span> <span data-why-text>${esc(why)}</span>${may ? ` <button class="linkish" type="button" data-why-edit="${esc(g.id)}">Edit</button>` : ''}</div>`
     : `<div class="goal-why goal-why-none" data-why="${esc(g.id)}"><span data-why-none>${GOAL_NOT_TIED}</span>${may && !p ? ` <button class="linkish" type="button" data-why-edit="${esc(g.id)}">Write a Why</button>` : ''}</div>`;
   const proposed = p ? `<div class="goal-why-prop" data-why-prop="${esc(p.id)}"><span class="kpi-prop-main"><span><b>${esc(goalActorName(p.proposed_by))} proposes</b> <span data-why-proposed>${esc(p.payload?.why || '')}</span></span>${p.reason ? `<span class="muted kpi-prop-why">${esc(p.reason)}</span>` : ''}</span>
-      ${p.may_decide ? `<span class="kpi-prop-do"><button class="primary" type="button" data-why-accept>Accept</button><button class="ghost" type="button" data-why-edit="${esc(g.id)}" data-why-from="proposal">Edit</button><button class="ghost" type="button" data-why-reject>Reject</button></span>` : ''}</div>` : '';
+      ${p.may_decide ? `<span class="kpi-prop-do"><button class="ghost" type="button" data-why-reject>Reject</button><button class="ghost" type="button" data-why-edit="${esc(g.id)}" data-why-from="proposal">Edit</button><button class="primary" type="button" data-why-accept>Accept</button></span>` : ''}</div>` : '';
   return line + proposed;
 }
 function bindGoalWhy(state: GkState, root: HTMLElement, reload: () => Promise<void>) {
@@ -968,7 +969,7 @@ function goalsRender(state: GkState<GkPanel | null>) {
     if (path.has(key)) return '';
     const below = walk(key, depth + 1, new Set([...path, key]));
     if (n.kind === 'group') {
-      const add = goalGroupOwner(n.id) ? `<button type="button" class="gt-add" data-goal-add-group="${esc(n.id)}" title="Add goal" aria-label="Add goal for ${esc(n.name)}">+</button>` : '';
+      const add = goalGroupOwner(n.id) ? `<button type="button" class="gt-add tap-mark" data-goal-add-group="${esc(n.id)}" title="Add goal" aria-label="Add goal for ${esc(n.name)}">+</button>` : '';
       return below ? `<li class="gt-group" data-group="${esc(n.id)}" style="--d:${depth}"><span class="gt-ind" aria-hidden="true"></span><span class="gt-name"><span>${esc(n.name)}</span></span>${add}</li>${below}` : '';
     }
     return rows(n.kind === 'person' ? 'human:' + n.id : 'bot:' + n.id, depth, n.kind === 'person' ? n.person!.goals : '') + below;
@@ -1080,7 +1081,7 @@ function goalUpdateHtml(g: GkGoal, P: GkPanel) {
         `<label><input type="radio" name="signal" value="${v}"${v === d.signal ? ' checked' : ''}>${label}</label>`).join('')}</div></fieldset>
       <p class="muted gp-update-note" data-gp-update-note${note ? '' : ' hidden'}>${esc(note)}</p>
       <p class="err" data-gp-update-err role="alert"${P.updateError && !P.updatePending ? '' : ' hidden'}>${esc(P.updateError)}</p>
-      <div class="goal-actions"><button class="primary" type="submit"${busy}>${P.updatePending ? 'Posting…' : 'Post'}</button><button class="ghost" type="button" data-gp-update-cancel${busy}>Cancel</button></div>
+      <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-gp-update-cancel${busy}>Cancel</button><button class="primary" type="submit"${busy}>${P.updatePending ? 'Posting…' : 'Post'}</button></div>
     </form>`;
 }
 function goalPanelHtml(state: GkState) {
@@ -1108,7 +1109,7 @@ function goalPanelHtml(state: GkState) {
   const profile = standing && person && !goals.some(g => g.title.trim() === standing)
     ? `<li class="gp-goal">${P.standing ? `<form class="goal-form" data-standing-ed="${esc(person.id)}" novalidate>
         <label class="goal-f"><span>Profile goal</span><input type="text" name="title" maxlength="2000" autocomplete="off" value="${esc(standing)}"${personCanEdit(person) ? '' : ' readonly'}></label>
-        <div class="goal-actions">${personCanEdit(person) ? '<button class="primary" type="submit">Save</button>' : ''}<button class="ghost" type="button" data-goal-cancel>Cancel</button></div></form>`
+        <div class="goal-actions"><span class="spacer"></span><button class="ghost" type="button" data-goal-cancel>Cancel</button>${personCanEdit(person) ? '<button class="primary" type="submit">Save</button>' : ''}</div></form>`
       : `<button class="gp-gline gt-standing" type="button" data-gp-standing title="${esc(standing)}"><span>${esc(standing)}</span></button>`}</li>` : '';
   const newGoal = P.goal === 'new' ? `<div class="gp-add">${goalFormHtml({}, state.goals, actor === GOAL_COMPANY ? {company: true} : {owner: actor, fixed: true})}</div>` : '';
   const newKpi = P.kpiAdd === '@owner' ? `<div class="gp-add">${kpiAddHtml(null, actor)}</div>` : '';

@@ -107,7 +107,7 @@ def test_a_stale_or_failing_source_marks_the_numbers_it_fills(api):
 def test_a_number_typed_before_origins_were_kept_counts_as_typed(api):
     """Old typed rows stay as they are, marked typed; with no number at all the card has no origin line."""
     post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
-    put(api, "growth/cohorts", {"channel": "search-ads", "month": M, "spend": 900})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": M, "spend": 900, "quality": "actual"})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM growth_origins")
     view = growth(api, f"?month={M}")

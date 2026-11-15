@@ -20,7 +20,7 @@ async function openDialog(page: Page) {
   try {
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP});
-      await page.waitForSelector('tr.au-row');
+      await page.waitForSelector('.au-row');
       await openDialog(page);
       // The viewer's own address, as their own: an email inbox is a person's or a bot's.
       assert.equal(await page.locator('.au-nd [data-n="inbox"]').inputValue(), 'dana@acme.example');
@@ -76,7 +76,7 @@ async function openDialog(page: Page) {
     // Turn on now left off saves it off.
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP});
-      await page.waitForSelector('tr.au-row');
+      await page.waitForSelector('.au-row');
       await openDialog(page);
       await page.locator('.au-nd [data-tid="blank"]').click();
       await page.locator('.au-nd [data-go]').click();
@@ -91,7 +91,7 @@ async function openDialog(page: Page) {
     // A phone: the dialog is a sheet that fits, nothing scrolls sideways.
     {
       const {page, errors} = await openAutomations(browser, {viewport: PHONE});
-      await page.waitForSelector('tr.au-row');
+      await page.waitForSelector('.au-row');
       await openDialog(page);
       const box = (await page.locator('dialog.au-nd').boundingBox())!;
       assert.ok(box.x >= 0 && box.x + box.width <= PHONE.width + 1, 'the dialog fits the phone');

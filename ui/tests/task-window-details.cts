@@ -1,8 +1,9 @@
-// The task window's Details line, run lines and needs-you banner (task #419, the rest of the task-window spec).
-// - 1280 × 800: the right column ends in one line "Owner · Team · N tags ›" until opened; opened it holds Owner, Human ("None"
-//   when unset), Asked by, Visible to, Followers, Due ("None" when unset), Tags and Part of; empty rows hide.
+// The task window's Details tab, run lines and the reader's own ask (the style guide's Task window).
+// - 1280 × 800: Details is a tab; its facts are one line each: Stage, Owner, Asked by, Visible to, Followers, Tags; a
+//   Human or a due date not set waits hidden, and ⋯ shows it and opens its editor. No "Details" fold.
 // - A bot's finished run is one chat line, "Builder worked 14 min", in order with the messages.
-// - A task waiting on the reader's own answer shows a banner above the chat with Answer; answering removes it.
+// - A task waiting on the reader's own answer opens on Chat, whose last row is that ask with Answer (the Chat tab has a
+//   dot); answering removes it.
 // Fixtures only (tasks-page.cts).
 import type {Need, Task} from './tasks-page.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -30,28 +31,37 @@ const RID = 'spec-ok-ana';
       assert.equal(await marks.count(), 1);
       assert.match((await marks.innerText()).replace(/\s+/g, ' '), /^Writer worked 14 min/);
       const order = await win.locator('.task-comments [data-message], .task-comments [data-run-line]').evaluateAll(els => els.map(e => e.getAttribute('data-message') || 'run'));
-      assert.deepEqual(order, ['m1', 'run', 'm5']);
-      // Details is one line until opened.
-      const details = win.locator('details.task-details');
-      assert.equal(await details.evaluate(d => (d as HTMLDetailsElement).open), false);
-      assert.match((await details.locator('> summary').innerText()).replace(/\s+/g, ' '), /^Details\s+Writer · Team · 2 tags/);
-      const inColumn = await details.evaluate(d => { const r = d.getBoundingClientRect(), s = document.querySelector('.task-side')!.getBoundingClientRect(); return r.bottom <= s.bottom + 1 && r.height < 60; });
-      assert.ok(inColumn, 'one line at the foot of the right column');
-      assert.equal(await win.locator('[data-prop-row="owner"]').isVisible(), false, 'its rows wait');
-      await details.locator('> summary').click();
-      const rows = await win.locator('details.task-details [data-prop-row]').evaluateAll(els => els.map(e => e.getAttribute('data-prop-row')));
-      assert.deepEqual(rows, ['owner', 'human', 'asker', 'visible', 'followers', 'due', 'tags'].filter(r => rows.includes(r)));
-      for (const r of ['owner', 'human', 'asker', 'visible', 'due', 'tags']) assert.ok(rows.includes(r), `${r} row`);
+      // The request is the chat's first message (its asker, when it was asked, its words); then the story in order.
+      assert.deepEqual(order, ['request:t-1', 'm1', 'run', 'm5']);
+      const request = win.locator('.task-comments .th-request');
+      assert.ok((await request.locator('.th-body').innerText()).trim().length > 0, 'the request\'s words');
+      assert.equal(await request.locator('.th-head time').count(), 1, 'when it was asked');
+      // The facts are on the Details tab, one line each; no fold.
+      assert.equal(await win.locator('details.task-details').count(), 0, 'no Details fold');
+      assert.equal(await win.locator('[data-prop-row="owner"]').isVisible(), false, 'a tab away');
+      await win.getByRole('tab', {name: /Details/}).click();
+      await win.locator('[data-prop-row="owner"]').waitFor({state: 'visible'});
+      const rows = await win.locator('[data-task-props] [data-prop-row]:not([hidden])').evaluateAll(els => els.map(e => e.getAttribute('data-prop-row')));
+      assert.deepEqual(rows, ['stage', 'owner', 'asker', 'visible', 'followers', 'tags'].filter(r => rows.includes(r)), `in order: ${rows}`);
+      for (const r of ['stage', 'owner', 'asker', 'visible', 'tags']) assert.ok(rows.includes(r), `${r} row`);
       assert.equal(await win.locator('[data-prop-row="parent"]').count(), 0, 'no parent: the row hides');
-      assert.match(await win.locator('[data-prop-row="due"]').innerText(), /None/);
-      assert.match(await win.locator('[data-prop-row="human"]').innerText(), /None/, 'no Human: the row says None');
+      // A Human and a due date not set wait hidden; ⋯ › Set a due date… shows the row and opens its editor.
+      for (const r of ['human', 'due']) assert.equal(await win.locator(`[data-prop-row="${r}"]`).isVisible(), false, `no ${r}: hidden`);
+      await win.locator('[data-task-more]').click();
+      await page.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Set the Human…'}).click();
+      await win.locator('[data-prop-row="human"]').waitFor({state: 'visible'});
+      await page.locator('.prop-pop:popover-open').getByText('Human').first().waitFor();
+      await page.keyboard.press('Escape');
       assert.ok(await win.locator('[data-prop-row="owner"]').isVisible());
       assert.deepEqual(errors, []);
       await page.close();
     }
     // ---- the banner
     {
-      const t: Task = task('t-2', 'Signup plans', 'spec', {turn: {state: 'person', who: 'human:ana', line: 'Which plan do signups get?', since: null, until: null, ask: true, requirement_id: RID}});
+      // The ask is one of the stage's requirements, and says who asked (PM): the row names them.
+      const req = {requirement_id: RID, kind: 'answer', line: 'Which plan do signups get?', who: 'human:ana', asked_by: 'bot:pm', choices: ['Pro trial', 'Free'],
+        may: ['answer'], met: false, shows: [], standing: 'waiting', answer: null};
+      const t: Task = task('t-2', 'Signup plans', 'spec', {to_leave: [req], turn: {state: 'person', who: 'human:ana', line: 'Which plan do signups get?', since: null, until: null, ask: true, requirement_id: RID}});
       const need: Need = {kind: 'ask', id: `ask-b:${RID}`, task_id: 't-2', requirement_id: RID, line: 'Which plan do signups get?', since: at(1), task: brief(t),
         ask: {requirement_id: RID, kind: 'answer', line: 'Which plan do signups get?', who: 'human:ana', asked_by: 'bot:pm', choices: ['Pro trial', 'Free'],
           may: ['answer', 'thumbs'], met: false, shows: [], standing: 'waiting', answer: null}};
@@ -63,13 +73,21 @@ const RID = 'spec-ok-ana';
       const banner = win.locator('.task-need');
       await banner.waitFor();
       assert.match(await banner.innerText(), /Which plan do signups get\?/);
-      const above = await page.evaluate(() => document.querySelector('#task-modal .task-need')!.getBoundingClientRect().bottom <= document.querySelector('#task-modal .task-chat')!.getBoundingClientRect().top + 1);
-      assert.ok(above, 'the banner is above the chat');
+      const head = (await banner.locator('.th-head').innerText()).replace(/\s+/g, ' ').trim();
+      assert.match(head, /^PM waiting on you$/, `the asker, then "waiting on you": ${head}`);
+      assert.equal(await banner.locator('.th-av').count(), 1, 'the asker\'s face');
+      assert.doesNotMatch(await banner.innerText(), /You waiting on you/);
+      // The ask is the chat's last row, and the window opens on Chat, whose tab carries a dot.
+      assert.equal(await win.getByRole('tab', {name: /Chat/}).getAttribute('aria-selected'), 'true');
+      assert.equal(await win.locator('[data-task-tab="chat"] .tw-dot').count(), 1, 'the Chat tab has a dot');
+      const last = await page.evaluate(() => { const rows = [...document.querySelectorAll('#task-modal .task-comments > *')]; return rows.at(-1)?.matches('.task-need'); });
+      assert.ok(last, 'the ask is the last row of the chat');
       await banner.getByRole('button', {name: 'Answer'}).click();
       await card.waitFor();
       await card.getByRole('button', {name: 'Pro trial'}).click();
       await win.locator('.task-need').waitFor({state: 'detached'});
       assert.equal(await win.locator('.task-need').count(), 0, 'answered: the banner goes');
+      await win.locator('[data-task-tab="chat"] .tw-dot').waitFor({state: 'detached'});   // and so does the Chat tab's dot
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -78,21 +96,35 @@ const RID = 'spec-ok-ana';
       const t: Task = task('t-3', 'Pricing page', 'spec', {owner_id: 'human:ana'});
       const {page, errors} = await open(browser, {viewport: {width: 1280, height: 800}, hash: '#/task/t-3', tasks: [t], needs: []});
       const win = page.locator('#task-modal[open]');
-      await win.locator('details.task-details > summary').click();
-      assert.ok(await win.locator('[data-prop-row="due"]').isVisible());
-      assert.equal(await win.locator('[data-prop-row="tags"]').count(), 0, 'no tags: the row hides even when editable');
+      await win.getByRole('tab', {name: /Details/}).click();
+      assert.equal(await win.locator('[data-prop-row="due"]').isVisible(), false, 'no due date: the row waits hidden');
+      assert.equal(await win.locator('[data-prop-row="tags"]').isVisible(), false, 'no tags: the row hides even when editable');
+      await win.getByRole('tab', {name: /Chat/}).click();
       assert.equal(await win.locator('.task-need').count(), 0);
       t.turn = {state: 'person', who: 'human:ana', line: 'Ship it?', since: null, until: null, ask: true, requirement_id: RID};
       t.version += 1;
       await page.evaluate(() => { void (window as unknown as {taskAskSettled: (id: string) => void}).taskAskSettled('t-3'); });
       await win.locator('.task-need').waitFor();
       assert.match(await win.locator('.task-need').innerText(), /Ship it\?/);
+      // No ask on record says who asked: the row leads with "Waiting on you", no name, no face.
+      assert.match((await win.locator('.task-need .th-head').innerText()).trim(), /^Waiting on you$/);
+      assert.equal(await win.locator('.task-need .th-av').count(), 0);
       assert.equal(await win.locator('.task-need').getByRole('button', {name: 'Answer'}).count(), 1);
-      assert.equal(await win.locator('.task-need [data-task-answer]').evaluate(b => typeof (b as HTMLButtonElement).onclick), 'function', 'the refreshed Answer button is bound');
-      assert.equal(await win.locator('[data-prop-row="add-tag"] [data-prop="tags"]').count(), 1, 'no tags: a button still adds the first tag');
+      // No files: Files waits hidden, and ⋯ › Add a file… shows it and opens the file picker.
+      assert.equal(await win.locator('[data-task-files]').isVisible(), false, 'no files: no Files section');
+      const chooser = page.waitForEvent('filechooser');
+      await win.locator('[data-task-more]').click();
+      await page.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Add a file…'}).click();
+      await chooser;
+      await win.locator('[data-task-files]').waitFor({state: 'visible'});
+      // No tags: ⋯ › Add a tag… shows the row and opens its menu.
+      await win.locator('[data-task-more]').click();
+      await page.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Add a tag…'}).click();
+      await win.locator('[data-prop-row="tags"]').waitFor({state: 'visible'});
+      await page.locator('.prop-pop:popover-open').getByRole('textbox', {name: 'Tag'}).waitFor();
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('task window details: Details line, run lines, needs-you banner: ok');
+    console.log('task window details: Details tab, run lines, your ask at the end of the chat: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -109,7 +109,7 @@ async function loginHosted(browser: import('playwright').Browser) {
       const dialog = login(page);
       await dialog.locator('[data-status]', {hasText: detail}).waitFor();
       assert.equal(await dialog.getByRole('button', {name: 'Try again', exact: true}).count(), 0);
-      await dialog.getByRole('button', {name: 'Close', exact: true}).last().click();
+      await dialog.getByRole('button', {name: 'Done', exact: true}).click();
       await dialog.waitFor({state: 'detached'});
       assert.deepEqual(errors, []);
       await page.close();

@@ -1,13 +1,13 @@
-// A stage's review (the ▶ on a stage, ui/app/decide.ts decideStageOpen), offline against the Tasks page's fake server
-// (tasks-page.cts). Checks, as the spec's acceptance criteria give them:
-//  - a pipeline shows "▶ n" on each stage with items waiting on the person, and no ▶ on a stage with none (columns, the
-//    list's group headers; a phone has none beside its tabs, the header's ▶ Review opens the open stage's items);
-//  - nothing moves when Needs you arrives after the board draws: ▶ keeps its 40 px slot at the right of a stage's
+// Flow on a stage or a pipeline (Flow's mark on a stage, ui/app/decide.ts decideStageOpen), offline against the Tasks
+// page's fake server (tasks-page.cts). Checks, as the spec's acceptance criteria give them:
+//  - a pipeline shows Flow's mark and n on each stage with items waiting on the person, and none on a stage with none
+//    (columns, the list's group headers; a phone has none beside its tabs, the header's Flow walks the pipeline);
+//  - nothing moves when Needs you arrives after the board draws: the mark keeps its 40 px slot at the right of a stage's
 //    header (columns and list alike), and a phone's tabs and tab strip keep their widths as Needs you and the Rules
 //    counts arrive and across stages whose Rules counts differ in digits, a stage with items getting a dot;
-//  - ▶ opens the review screen full screen on a phone, "Spec · 1 of 3", with only Spec's items in the walk;
+//  - Flow opens full screen on a phone; the crumb's menu switches the walk to Spec, with only Spec's items in it;
 //  - an answer, a send back with a note, or an OK is saved and the next item shows without leaving the screen;
-//  - a clear stage says "Spec is clear" and offers "▶ Review · 2", which walks Review's items;
+//  - a clear stage says All done, and the menu then walks Review's items;
 //  - a new ask in the stage joins the walk while it is open, without moving off the item on screen;
 //  - Tasks › You shows one chip per stage with items, and Other; a chip opens that stage's review;
 //  - #/decide?stage=<id> opens that stage's review, or, with nothing there, its pipeline on that stage saying so;
@@ -57,7 +57,14 @@ function needsOf(list: Task[]): Need[] {
 // A stage's OK names no grant (GET /api/v2/oks/{id} 404): Approve is a plain answer.
 const noGrant = async (page: Page) => { await page.route('**/api/v2/oks/**', r => r.fulfill({status: 404, contentType: 'application/json', body: '{"error":"not_found"}'})); };
 const opened = (b: Browser, o: Parameters<typeof open>[1] = {}) => { const list = tasks(); return open(b, {tasks: list, needs: needsOf(list), beforeGoto: noGrant, ...o}); };
-const count = (page: Page) => page.locator('#need-card .dc-count').innerText();
+// Where the walk is (the crumb), and how many items are left in it (decide.ts's own state).
+const crumb = (page: Page) => page.locator('#need-card .dc-crumb').textContent();
+const left = (page: Page) => page.evaluate('decideLive(DEC).length') as Promise<number>;
+const leftIs = (page: Page, n: number) => page.waitForFunction(`decideLive(DEC).length === ${n}`);
+const walkTo = async (page: Page, where: string) => {
+  await page.locator('#need-card .dc-crumb').click();
+  await page.locator(`#need-card .dc-menu [data-dc-walk="${where}"]`).click();
+};
 const question = (page: Page) => page.locator('#need-card .dc-side .dc-q').innerText();
 const plays = (page: Page) => page.locator('[data-pv-play]').evaluateAll(els => els.map(e => [(e as HTMLElement).dataset.pvPlay, e.textContent?.trim()]));
 
@@ -65,13 +72,12 @@ async function playOnStages(browser: Browser) {
   const {page, errors} = await opened(browser, {hash: '#/tasks?pipeline=product&layout=columns'});
   await page.locator('[data-pv-play]').first().waitFor();
   assert.deepEqual(await plays(page), [['spec', '3'], ['review', '2']], 'Spec and Review show ▶ with their counts; Build none');
-  await page.locator('#task-menu').click();
-  await page.locator('#task-mi-layout [data-layout="list"]').click();
+  await page.locator('#task-mi-layout [data-layout="list"]').click();   // List/Columns on the header's row
   await page.locator('.pv-group-head [data-pv-play]').first().waitFor();
   assert.deepEqual(await plays(page), [['spec', '3'], ['review', '2']], 'the list layout\'s group headers too');
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('▶ n on each stage with items, none on a stage without: ok');
+  console.log('Flow n on each stage with items, none on a stage without: ok');
 }
 
 /** Where each stage header's parts sit, and each phone tab's width. */
@@ -111,7 +117,8 @@ async function nothingMoves(browser: Browser) {
     await page.close();
   }
   {
-    // The stage's Rules count also arrives late, and differs in digits between stages (Spec 12, Review 1, Build 0).
+    // The stage's rules also arrive late, and differ between stages (Spec 12, Review 1, Build 0): the mark's name says so
+    // and the mark keeps one size, so the tabs do not move.
     let release = () => {}, rulesGo = () => {};
     const rulesHeld = new Promise<void>(r => { rulesGo = r; });
     const rule = (i: number, stages: string[]) => ({id: `r${i}`, scope: 'stage', stages});
@@ -124,7 +131,7 @@ async function nothingMoves(browser: Browser) {
     const before = await layoutOf(page);
     release(); rulesGo();
     await page.locator('.pv-tab-dot').first().waitFor();
-    await page.waitForFunction(() => document.querySelector('.pv-phone-head .sr-btn .tnum')?.textContent === '0');
+    await page.waitForFunction(() => document.querySelector('.pv-phone-head .sr-mark')?.getAttribute('aria-label') === 'Build: none of its own');
     const after = await layoutOf(page);
     assert.deepEqual([after.tabs, after.strip], [before.tabs, before.strip], 'the tabs keep their widths when the dots arrive');
     assert.deepEqual(await page.locator('.pv-tab:has(.pv-tab-dot)').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.pvTab)), ['spec', 'review']);
@@ -133,7 +140,9 @@ async function nothingMoves(browser: Browser) {
       await page.locator(`.pv-tab[data-pv-tab="${id}"]`).click();
       const now = await layoutOf(page);
       assert.deepEqual([now.tabs, now.strip], [before.tabs, before.strip], `the tabs do not move on ${id}`);
-      if (id === 'spec') assert.equal((await page.locator('.pv-phone-head .sr-btn').textContent())?.trim(), 'Rules 12', 'a two-digit Rules count, same strip');
+      if (id === 'spec') assert.equal(await page.locator('.pv-phone-head .sr-mark').getAttribute('aria-label'), 'Spec: 12 rules of its own', 'twelve rules, same strip');
+      // a mark only on a stage with rules of its own; Build's place is kept, empty
+      assert.equal(await page.locator('.pv-phone-head .sr-mark').isVisible(), id !== 'build', `${id}: the mark ${id === 'build' ? 'hidden' : 'shown'}`);
     }
     assert.deepEqual(errors, []);
     await page.close();
@@ -146,11 +155,20 @@ async function walkOnAPhone(browser: Browser) {
   await page.locator('.pv-tab[data-pv-tab="spec"]').click();
   assert.deepEqual(await plays(page), [], 'no ▶ beside the tabs');
   await page.waitForFunction(() => document.querySelector('#task-play .tl-review-n')?.textContent === '5');
-  await page.locator('#task-play').click();      // the header's ▶ Review: the open stage first
+  await page.locator('#task-play').click();      // the header's Flow: the pipeline
   await page.locator('#need-card[open]').waitFor();
   const box = await page.locator('#need-card').boundingBox();
   assert.ok(box && box.width === PHONE.width && box.height >= PHONE.height - 1, `full screen on a phone: ${JSON.stringify(box)}`);
-  assert.equal(await count(page), 'Spec · 1 of 3');
+  assert.equal(await crumb(page), 'All mine/Product');
+  assert.equal(await left(page), 5, "the walk is the pipeline's: Spec's and Review's");
+  // The menu lists only places where something waits, and a row switches the walk.
+  await page.locator('#need-card .dc-crumb').click();
+  const rows = await page.locator('#need-card .dc-menu [data-dc-walk]').allInnerTexts();
+  assert.deepEqual(rows.slice(0, 4), ['All mine', 'Product', 'Spec', 'Review'], `menu: ${rows.join(' | ')}`);
+  assert.ok(!rows.includes('Build') && rows.at(-1) === 'Other', `menu: only where something waits, then Other: ${rows.join(' | ')}`);
+  await page.locator('#need-card .dc-menu [data-dc-walk="spec"]').click();
+  await page.waitForFunction(() => document.querySelector('#need-card .dc-crumb')?.textContent === 'All mine/Product/Spec');
+  assert.equal(await left(page), 3);
   // Only Spec's items, answers first, then OKs: page through them, and back.
   const seen = [await question(page)];
   for (let i = 0; i < 2; i++) { await page.locator('#need-card [data-dc="next"]').dispatchEvent('click'); seen.push(await question(page)); }
@@ -158,34 +176,32 @@ async function walkOnAPhone(browser: Browser) {
   for (let i = 0; i < 2; i++) await page.locator('#need-card [data-dc="prev"]').dispatchEvent('click');
   // A question's answer: saved, and the next shows without leaving the screen.
   await page.locator('#need-card [data-dc-choice="Email"]').click();
-  await page.waitForFunction(() => document.querySelector('#need-card .dc-count')?.textContent === 'Spec · 1 of 2');
+  await leftIs(page, 2);
   assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-3/asks/r3/answer' && x.body.value === 'Email'));
   // Approve.
   assert.equal(await question(page), 'OK the spec for Review a stage');
   await page.locator('#need-card [data-dc="approve"]:not([disabled])').click();
-  await page.waitForFunction(() => document.querySelector('#need-card .dc-count')?.textContent === 'Spec · 1 of 1');
+  await leftIs(page, 1);
   assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-1/asks/r1/answer' && x.body.value === 'ok'), 'the OK was sent');
   // A new OK on a task in Spec joins the walk; the item on screen stays.
   const before = await question(page);
   // DEC and decideRefresh are the app's script globals: a live refresh hands the screen the new list.
   await page.evaluate(`S.v2.needs = [...S.v2.needs, {...S.v2.needs.find(n => n.requirement_id === 'r2'), id: 'a-r9:r9', requirement_id: 'r9',
     line: 'OK the late spec'}]; decideRefresh(DEC, S.v2.needs)`);
-  assert.equal(await count(page), 'Spec · 1 of 2', 'the new one joins the count');
+  assert.equal(await left(page), 2, 'the new one joins the walk');
   assert.equal(await question(page), before, 'and the item on screen stays');
   // Send back with a note. The server never had the late OK, so the read after the answer takes it out (answered
-  // elsewhere, it leaves): the stage is clear, and ▶ Review · 2 walks Review's items.
+  // elsewhere, it leaves): the stage is done, and the menu walks Review's items.
   await page.locator('#dc-notes').fill('Name the stage in the top bar.');
   await page.locator('#need-card [data-dc="sendback"]').click();
-  await page.locator('#need-card .dc-done h2', {hasText: 'Spec is clear'}).waitFor();
+  await page.locator('#need-card .dc-done h2').waitFor();
   assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-2/asks/r2/answer' && x.body.value === 'no' && x.body['note'] === 'Name the stage in the top bar.'));
-  assert.match(await page.locator('#need-card .dc-done').innerText(), /3 answered/);
-  assert.equal((await page.locator('#need-card [data-dc-walk]').innerText()).replace(/\s+/g, ' '), '▶ Review · 2');
-  await page.locator('#need-card [data-dc-walk="review"]').click();
-  await page.waitForFunction(() => document.querySelector('#need-card .dc-count')?.textContent === 'Review · 1 of 2');
+  await walkTo(page, 'review');
+  await leftIs(page, 2);
   assert.equal(await question(page), 'Ship it this week?');
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('▶ on a phone: full screen, only the stage, answers move on, new items join, clear offers the next stage: ok');
+  console.log('Flow on a phone: full screen, the menu switches to a stage, answers move on, new items join, the menu walks on: ok');
 }
 
 async function chipsOnYou(browser: Browser) {
@@ -195,11 +211,13 @@ async function chipsOnYou(browser: Browser) {
   const chips = await page.locator('.tk-stages [data-need-stage]').evaluateAll(els => els.map(e => [...e.children].map(c => c.textContent).join(' ')));
   assert.deepEqual(chips, ['Spec 3', 'Review 2', 'To do 1', 'Other 1'], `chips: ${chips.join(' | ')}`);
   await page.locator('[data-need-stage="review"]').click();
-  await page.waitForFunction(() => document.querySelector('#need-card .dc-count')?.textContent === 'Review · 1 of 2');
+  await page.waitForFunction(() => document.querySelector('#need-card .dc-crumb')?.textContent === 'All mine/Product/Review');
+  assert.equal(await left(page), 2);
   await page.locator('#need-card [data-dc="close"]').click();
-  // "Go through" still walks everything.
+  // Flow from You still walks everything.
   await page.locator('#task-play').click();
-  await page.waitForFunction(() => /^1 of 7$/.test(document.querySelector('#need-card .dc-count')?.textContent || ''));
+  await page.waitForFunction(() => document.querySelector('#need-card .dc-crumb')?.textContent === 'All mine');
+  assert.equal(await left(page), 7);
   assert.deepEqual(errors, []);
   await page.close();
   console.log('Needs you by stage: a chip per stage, each opening its review; play still walks all: ok');
@@ -208,7 +226,8 @@ async function chipsOnYou(browser: Browser) {
 async function deepLink(browser: Browser) {
   {
     const {page, errors} = await opened(browser, {hash: '#/decide?stage=spec'});
-    await page.waitForFunction(() => document.querySelector('#need-card .dc-count')?.textContent === 'Spec · 1 of 3');
+    await page.waitForFunction(() => document.querySelector('#need-card .dc-crumb')?.textContent === 'All mine/Product/Spec');
+    assert.equal(await left(page), 3);
     assert.deepEqual(errors, []);
     await page.close();
   }
@@ -254,6 +273,8 @@ async function phonePolish(browser: Browser) {
     assert.ok(rows.every(([h]) => Number(h) >= 44), `rows 44 px: ${JSON.stringify(rows)}`);
     await shot(page, '2-pipeline');
     await page.locator('#task-play').click();
+    await page.locator('#need-card[open]').waitFor();
+    await walkTo(page, 'spec');
     await page.locator('#need-card[open] [data-dc-choice]').first().waitFor();
     r = await smallTargets(page, '#need-card');
     assert.deepEqual(r.small, [], 'the review screen, a question: 44 px');

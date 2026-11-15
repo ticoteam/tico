@@ -373,21 +373,22 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.deepEqual(errors, []);
     await page.close();
 
-    // Phone: Tasks and Updates are in the bottom bar; Tasks stays in More too (the tour points at it there).
+    // Phone: five slots. Tasks is in the bottom bar (and in More too: the tour points at it there); Updates is in More,
+    // which carries its unread count and is the current tab on the Updates page.
     const phone = await open({width: 390, height: 844});
     const p = phone.page;
     await p.goto('http://tico-ui.test/#/updates');
     await p.locator('#upd-feed .upd-card').first().waitFor();
-    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Assistant', 'Tasks', 'Updates', 'More']);
-    // Six items; Assistant (the Liquid Dot) sits in the middle of the bar, and the items on each side of it share their
+    assert.deepEqual(await p.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), ['Team', 'Search', 'Assistant', 'Tasks', 'More']);
+    // Five items; Assistant (the Liquid Dot) sits in the middle of the bar, and the items on each side of it share their
     // side evenly.
     const nav = () => p.locator('#mobile-nav .mobile-nav-item:not([hidden])').evaluateAll(items => items.map(el => { const r = el.getBoundingClientRect(); return {w: r.width, mid: r.left + r.width / 2}; }));
     const even = (list: {w: number; mid: number}[]) => Math.max(...list.map(i => i.w)) - Math.min(...list.map(i => i.w)) < 1;
     const items = await nav();
-    assert.equal(items.length, 6);
+    assert.equal(items.length, 5);
     assert.ok(Math.abs(items[2]!.mid - 195) < 1, `Assistant in the middle: ${items[2]!.mid}`);
     assert.ok(even(items.slice(0, 2)) && even(items.slice(3)), 'each side spaced evenly');
-    // The six fit a 360px phone: no label is cut and the bar does not scroll sideways.
+    // The five fit a 360px phone: no label is cut and the bar does not scroll sideways.
     await p.setViewportSize({width: 360, height: 800});
     await p.waitForFunction(() => document.querySelector('#mobile-nav')!.getBoundingClientRect().width <= 360);
     assert.equal(await p.locator('#mobile-nav').evaluate(nav => nav.scrollWidth <= nav.clientWidth &&
@@ -397,11 +398,20 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await p.setViewportSize({width: 390, height: 844});
     await p.waitForFunction(() => document.querySelector('#mobile-nav')!.getBoundingClientRect().width > 380);
     assert.equal(await p.locator('#mobile-nav [data-nav="overview"]').count(),0);
-    // My bots is an icon on a phone; Daily and Weekly are the header's tabs, in words on their own row.
-    assert.equal(await p.locator('#upd-mine .nav-icon').isVisible(), true, '#upd-mine shows its icon');
-    assert.equal(await p.locator('#upd-mine .upd-lbl').isVisible(), false, '#upd-mine hides its word');
+    // On a phone the header's tools give way only as every header's do (page-head.ts): words while they fit, then their
+    // icons (.ph-icons), then ⋯; Updates has no phone rule of its own. Daily and Weekly are the header's tabs, in words
+    // on their own row.
+    const scope = await p.locator('#upd-scope').evaluate(b => {
+      const head = b.closest('header.ph')!, folded = !!b.closest('.ph-menu'), icons = head.classList.contains('ph-icons');
+      const word = getComputedStyle(b.querySelector('.upd-lbl')!).display !== 'none', icon = getComputedStyle(b.querySelector('.nav-icon')!).display !== 'none';
+      return folded || (icons ? icon && !word : word && !icon);
+    });
+    assert.equal(scope, true, 'Whole org follows the shared header: words, its icon, or folded into ⋯');
     for (const kind of ['daily', 'weekly']) assert.equal(await p.locator(`.upd-head .ph-tab[data-upd-kind="${kind}"]`).isVisible(), true, kind + ' tab shows');
-    assert.equal(await p.locator('#mobile-nav [data-nav="updates"]').evaluate(el => el.classList.contains('cur')), true);
+    assert.equal(await p.locator('#mobile-nav [data-nav="updates"]').count(), 0, 'Updates is in More');
+    assert.equal(await p.locator('#mobile-more').evaluate(el => el.classList.contains('cur')), true, 'More is the current tab on Updates');
+    const badge = (sel: string) => p.locator(sel).evaluate(el => [(el as HTMLElement).hidden, el.textContent]);
+    assert.deepEqual(await badge('#mobile-more [data-upd-badge]'), await badge('#side [data-nav="updates"] [data-upd-badge]'), "More carries Updates' unread count");
     const card = (await p.locator('#upd-feed .upd-card').first().boundingBox())!;
     assert(card.x >= 8 && card.x + card.width <= 390 - 8, 'cards fit the phone with a gutter');
     if (shots) await p.screenshot({path: path.join(shots, 'updates-phone.png')});
@@ -550,6 +560,6 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     assert.equal(await none.page.locator('#main .talk-line, #main [data-chat-with-us]').count(), 0, 'no Chat with us');
     assert.deepEqual(none.errors, []);
     await none.page.close();
-    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks and Updates in a six-item bottom bar (with Support) that fits 360px, with Tasks also in More.');
+    console.log('PASS: Updates first in the rail with an unread badge, just the bullets (no title, sections, greeting, day headers or missed list), seen-is-read in one batched request, mark unread without re-sorting, unread first on the next visit, an instant reply that goes to the bot\'s chat, threads, j/k, Daily/Weekly toggle, a week in review as five swipeable slides with KPI lines, cached paint, and on a phone Tasks in a five-item bottom bar that fits 360px, with Tasks also in More and Updates (and its count) in More.');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

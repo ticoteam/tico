@@ -76,7 +76,7 @@ async function review(browser: Browser, {viewport, theme, paged = false}: {viewp
   };
   const {page, errors} = await open(browser, {viewport, theme, hash: '#/task/t-review', tasks: [REVIEW], needs: [], beforeGoto: holdRoutes});
   const card = page.locator('#task-modal .rh-card[data-hold="h-1"]');
-  if (viewport.width <= 760) await page.locator('#task-modal[open] [data-task-tab="info"]').click();   // at max-width:760px the window is tabs opening on Chat; holds are in Info (task #409)
+  // A rule's holds sit under the window's tabs, in view whichever tab is shown.
   await card.waitFor();
   await page.waitForTimeout(400);   // the dialog's open animation, so the screenshot is the settled modal
   const text = await card.innerText();
@@ -126,15 +126,16 @@ async function review(browser: Browser, {viewport, theme, paged = false}: {viewp
           await card.locator('.rh-done').waitFor();
           assert.deepEqual(posted.map(x => x.act), ['keep']);
         }
-        // Edit rule opens the rule on the Rules page, whose header carries the checks line.
+        // Edit rule opens the rule on the Rules page, whose header's ⋯ carries the checks line (read rarely, so not on the bar).
         const edit = card.locator('a.rh-btn');
         if (await edit.count()) await edit.click();
         else await page.evaluate(() => { location.hash = '#/rules?rule=r-eu'; });   // a decided card has no buttons
         await page.evaluate(() => document.querySelector<HTMLDialogElement>('#task-modal')?.open && document.querySelector<HTMLDialogElement>('#task-modal')!.close());
         await page.locator('#ru-side form[data-rule="r-eu"]').waitFor();
-        const line = page.locator('#ru-root .ru-ph .ru-checks');
-        await line.waitFor();
-        assert.equal(await line.innerText(), 'Checks on · 12 today · 0 unchecked · $48 left');
+        const line = page.locator('#ru-root .ru-ph > .ph-menu > .ru-checks');
+        await line.waitFor({state: 'attached'});
+        assert.equal(await line.isVisible(), false, 'not on the bar');
+        assert.equal(await line.textContent(), 'Checks on · 12 today · 0 unchecked · $48 left');
         assert.equal(await page.locator('.ru-checks').count(), 1);
         // The header on its own (on a phone the panel is a sheet over it), once the page change has settled.
         await page.evaluate(() => { location.hash = '#/rules'; });
@@ -142,6 +143,11 @@ async function review(browser: Browser, {viewport, theme, paged = false}: {viewp
         await page.waitForTimeout(600);
         const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         assert.ok(wide <= 1, `no sideways scroll on Rules (${wide}px)`);
+        // Opened, ⋯ shows it as a muted status line, with no hue.
+        await page.locator('#ru-root .ru-ph > .ph-more').click();
+        await line.waitFor();
+        assert.equal(await line.evaluate(e => getComputedStyle(e).color === getComputedStyle(document.querySelector('.ph-menu .ph-copy')!).color), false, 'muted, not the items\' ink');
+        await page.keyboard.press('Escape');
         assert.equal(await page.locator('.ru-checks').count(), 1);
         await shot(page, `rules-header-${viewport.width}-${theme}`);
         // The held reply in a chat, drawn by the same code the chat uses.

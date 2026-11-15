@@ -6,15 +6,16 @@
 /* the page: no filters, range or tabs; the search sits in the header's tools (auPlace), before the chat */
 .au-lst .au-body{grid-template-columns:minmax(0,1fr)}
 .au-lst.ed-open .au-body{grid-template-columns:minmax(0,1fr) var(--rail-right,340px)}
-.au-lst :is(.au-rail,.au-range,.au-fbtn,.au-ctl){display:none}
+.au-lst :is(.au-rail,.au-fbtn){display:none}
 .au-lst .ph-tools>.au-s{padding:0;width:240px}
 .au-lst .ph-tools .au-q{width:100%}
-/* one listening open: the search and New listening are the list's */
-.au-lst.au-one>.ph :is(.au-s,.ph-act){display:none}
+/* one listening open: the search and New listening are the list's; with none yet there is nothing to search, and the
+   empty state's New listening is the one add */
+.au-lst.au-one>.ph :is(.au-s,.ph-act),.au-lst.lst-none>.ph :is(.au-s,.ph-act){display:none}
 
 /* the list: a dot, the name, the limits, when it last sent */
 .lst-list{display:grid;padding:0 28px 48px}
-.lst-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto 64px;align-items:center;gap:12px;min-height:44px;padding:0 4px;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none}
+.lst-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto minmax(64px,auto);align-items:center;gap:12px;min-height:44px;padding:0 4px;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none}
 .lst-row:hover{background:var(--surface2)}
 .lst-nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lst-row.off .lst-nm{color:var(--muted)}
@@ -65,16 +66,17 @@
 @media (max-width:760px){
   .au-lst .ph-tools>.au-s{flex:1;width:auto}
   .lst-list{padding:0 12px 24px}
-  .lst-row{grid-template-columns:10px minmax(0,1fr) 48px;min-height:48px}
-  .lst-lim{display:none}
+  /* a row: the name over its facts (the limits, when it last sent); nothing is cut away */
+  .lst-row{grid-template-columns:10px minmax(0,1fr) auto;grid-template-areas:"dot nm last" ". lim lim";row-gap:2px;min-height:52px;padding:8px 4px}
+  .lst-row>.au-dot{grid-area:dot}
+  .lst-nm{grid-area:nm}
+  .lst-lim{grid-area:lim;white-space:normal}
+  .lst-last{grid-area:last}
   .lst-run{grid-template-columns:minmax(0,1fr);gap:10px}
-  /* A listening open: the header hides, but the owner's face stays, at the right of the ‹ Listening row, so a
-     question can name the listening. */
+  /* A listening open: the header hides, but the owner's face (the chat mark, page-chat.ts) stays, at the right of the
+     ‹ Listening row, so a question can name the listening. */
   .au-lst[data-screen="detail"]{position:relative}
   .au.au-lst[data-screen="detail"]>.ph{display:block;position:absolute;z-index:2;top:4px;right:12px;margin:0;padding:0;min-height:0;border:0}
-  .au.au-lst[data-screen="detail"]>.ph>:not(.ph-tools),.au.au-lst[data-screen="detail"]>.ph>.ph-tools>:not(.au-chat){display:none}
+  .au.au-lst[data-screen="detail"]>.ph>:not(.ph-chat){display:none}
   .au-lst[data-screen="detail"] .au-crumb{min-height:44px;padding-right:60px}
 }
-/* The owner's Chat button (page-chat.ts); the chat itself is the shared column (page-chat.css). */
-.au-lst .au-chat{display:inline-flex;margin-left:6px}
-.au-lst .au-chat:empty{display:none}

@@ -50,7 +50,7 @@ const init = () => {
    await page.route('**/api/v2/me', route => route.fulfill(expired
     ? {status: 401, json: {error: {code: 'identity', sign_in: '/auth/login'}}}
     : {json: {id: me.id}}));
-   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
+   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'});
    await page.evaluate(() => { taskLiveStop(taskModal()); taskModal().taskRail = null; S.config!.environment_id = 'acme-org'; sessionReturn(); });
    await page.evaluate(init); await page.addInitScript(init);
    await page.route('**/api/v2/tasks/' + task.id, async route => {
@@ -64,12 +64,10 @@ const init = () => {
     return route.fulfill({json: {task}});
    });
    await page.route('**/api/v2/presence**', route => route.fulfill({json: {actors: []}}));
-   // A phone shows the details and properties in the task window's Info tab (task #409).
-   const info = async () => { if (width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click(); };
+   // The request and its Edit are on the task window's Description tab.
+   const info = async () => { await page.locator('#task-modal[open] [data-task-tab="desc"]').click(); };
    await page.evaluate(async task => taskModalShow(task), task);
    await info();
-   // Details is one line until opened (task #419); the due date's field is one of its rows.
-   await page.locator('#task-modal[open] details.task-details:not([open]) > summary').click({timeout: 1000}).catch(() => {});
    const idle = () => page.waitForFunction(() => !taskModal().taskLive!.reading && !taskModal().taskLive!.draft.flight);
    const tasksReady = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tk-row, #task-body .empty'));
    const emit = (topic: string) => page.evaluate(topic => {
@@ -108,6 +106,7 @@ const init = () => {
    // A task in the Product pipeline is a roadmap item (ui/app/roadmaps.ts roadmapTask).
    Object.assign(task, {pipeline_id: 'product', public_title: 'Public A', public_summary: 'Summary A'});
    await update();
+   await page.locator('#task-modal[open] [data-task-tab="details"]').click();   // the public text is under Activity and links
    for (const [key, label] of [['public_title', 'Public title'], ['public_summary', 'Public summary']] as const) {
     const box = page.getByRole('textbox', {name: label, exact: true}), base = task.version, original = task[key];
     await box.focus();
@@ -178,7 +177,8 @@ const init = () => {
    await page.locator('[data-task-more]').click(); await page.getByText('Add subtask', {exact: true}).click();
    await page.getByRole('button', {name: 'Add a link', exact: true}).click();
    await page.getByRole('button', {name: 'Add a session', exact: true}).click();
-   const boxes = ['Add subtask', 'Add a link', 'Add a session', 'Message'].slice(0, width <= 390 ? 3 : 4);
+   // The message box is on the Chat tab, a tab away from these; it is checked on its own below.
+   const boxes = ['Add subtask', 'Add a link', 'Add a session'];
    const values = ['Typed child', 'https://acme.example/typed', 'session to keep', 'Unsent comment'];
    for (let i = 0; i < boxes.length; i++) await page.getByRole('textbox', {name: boxes[i]!, exact: true}).fill(values[i]!);
    for (let i = 0; i < boxes.length; i++) {
@@ -194,6 +194,16 @@ const init = () => {
     await box.pressSequentially('X'); values[i] = values[i]!.slice(0, 2) + 'X' + values[i]!.slice(2);
     assert.equal(await box.inputValue(), values[i]!, boxes[i]! + ' keeps its native caret');
    }
+   // The comment box keeps its text and focus through both redraw paths too.
+   await page.locator('#task-modal[open] [data-task-tab="chat"]').click();
+   const message = page.getByRole('textbox', {name: 'Message', exact: true});
+   await message.fill('Unsent comment'); await message.focus();
+   for (const redraw of [update, refresh]) {
+    await redraw();
+    assert.equal(await message.inputValue(), 'Unsent comment');
+    assert.equal(await message.evaluate(el => document.activeElement === el), true, 'Message keeps focus');
+   }
+   await message.fill('');
    const draw = await page.evaluate(() => taskModal().drawSeq!);
    const presenceRead = page.waitForResponse(r => r.url().includes('/v2/presence?'));
    await emit('presence'); await presenceRead;
@@ -212,7 +222,7 @@ const init = () => {
    assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().taskLive!.id) === taskModal().taskLive!.draft), true, 'late success cannot evict the reopened draft');
    // B opens clean before A edits; both actual pages share localStorage in one browser context.
    const clean = await open(sharedBrowser, {viewport: {width, height: 900}});
-   await clean.page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor();
+   await clean.page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'});
    await clean.page.evaluate(async task => { taskLiveStop(taskModal()); S.config!.environment_id = 'acme-org'; sessionReturn(); await taskModalShow(task); }, task);
    assert.equal(await clean.page.evaluate(() => taskModal().taskLive!.identity), await page.evaluate(() => taskModal().taskLive!.identity));
    offline = true;
@@ -226,7 +236,7 @@ const init = () => {
    await page.evaluate(() => taskModal().close()); await page.waitForFunction(() => !taskModal().taskLive);
    // Closing left the task's address; open it by its address again, so a reload opens it too.
    await page.evaluate(id => { location.hash = '#/task/' + id; }, task.id);
-   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
+   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'}); await idle();
    assert.equal(await title.textContent(), 'New view failed draft');
    // Offline title/details survive a real reload with their old revisions and still conflict before overwriting B.
    await info();
@@ -327,7 +337,7 @@ const init = () => {
    // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
-   if (width <= 390) await page.locator('#task-modal[open] [data-task-tab="chat"]').click();
+   await page.locator('#task-modal[open] [data-task-tab="chat"]').click();
    await page.getByRole('textbox', {name: 'Message', exact: true}).fill('Ana private comment');
    await page.evaluate(() => taskModal().close());
    await page.waitForFunction(() => !taskModal().taskLive);
@@ -339,9 +349,9 @@ const init = () => {
    // Closing left the task's address: Ben's reload is on it again.
    await page.evaluate(id => history.replaceState(null, '', '#/task/' + id), task.id);
    await page.reload(); await page.waitForFunction(() => SESSION.identity === JSON.stringify(['acme-org', 'ben']));
-   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
+   await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'}); await idle();
    assert.equal(await title.textContent(), task.title);
-   assert.equal(await page.getByRole('textbox', {name: 'Message', exact: true}).inputValue(), '');
+   assert.equal(await page.locator('#task-modal textarea[aria-label="Message"]').inputValue(), '');
    assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)!), null);
    assert.equal(await page.evaluate(() => TASK_EDIT_DRAFTS.get(taskModal().dataset.task!)?.patch.title), undefined);
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
@@ -351,7 +361,7 @@ const init = () => {
    await fillTitle('Ben old org draft'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();
    await page.evaluate(() => sessionKeep());
    me = {...me, config: {environment_id: 'other-org'}}; offline = false;
-   await page.reload(); await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor(); await idle();
+   await page.reload(); await page.locator('#task-modal[open] textarea[aria-label="Message"]').waitFor({state: 'attached'}); await idle();
    assert.equal(await title.textContent(), task.title);
    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith(TASK_EDIT_STORAGE))), false);
    assert.equal(await page.evaluate(() => sessionStorage.getItem(SESSION_RETURN)!), null);

@@ -26,7 +26,7 @@ const {mailboxesFake, open} = require('./support/mailboxes-fake.cts') as Mailbox
 const {googleFake} = require('./support/google-fake.cts') as GoogleFake.Api;
 const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFakeSupport.Api;
 
-const OWNER = 'tools-product-owner';
+const OWNER = 'it-support-specialist';
 const RULES: unknown = JSON.parse(fs.readFileSync(path.join(__dirname, '../../backend/secret_rules.json'), 'utf8'));
 // Made-up values, joined here so this file holds no key-shaped text.
 const PASSWORD = ['Tr0ub', '4dor&3'].join('');
@@ -50,7 +50,7 @@ async function start(browser: import('playwright').Browser, {width = 1280, admin
   const saved: Saved[] = [], sent: Sent[] = [], grants: unknown[] = [];
   let failures = failSaves;
   const threads = threadsFake({bot: OWNER, me: 'human:ana', sent, messages: card ? [CARD] : []});
-  const got = await open(browser, mailboxesFake(), googleFake(), {hash: '#/tools', width, height: width < 500 ? 780 : 860, ready: '.tt-row, [data-tl-empty], .tt-table',
+  const got = await open(browser, mailboxesFake(), googleFake(), {hash: '#/tools', width, height: width < 500 ? 780 : 860, ready: '[data-tl-table]',
     extra: (p, method, body, url) => {
       if (p === '/api/v2/tool-index') return {rows: ROWS, counts: null};
       if (p === '/api/v2/page-owners') return {pages: {tools: {bot: 'bot:' + OWNER, name: 'Tools'}}};
@@ -95,8 +95,12 @@ const shot = async (page: Page, name: string) => {
   const dir = process.env.TICO_UI_SHOTS;
   if (dir) { fs.mkdirSync(dir, {recursive: true}); await page.screenshot({path: path.join(dir, `tools-chat-keys-${name}.png`)}); }
 };
+// The Tools owner's chat, mounted by the router (page-chat.ts): docked open at first where it fits (1440), else the tab
+// on the right edge opens it.
 async function openChat(page: Page) {
-  await page.locator('.tt-chat [data-pgc-open]').click();
+  const tab = page.locator('body > .pgc-edge:not([hidden]) .pgc-tab');
+  await tab.or(page.locator('aside.pgc:not([hidden]) .pgc-name')).first().waitFor();
+  if (await tab.isVisible()) await tab.click();
   await page.locator('aside.pgc .p-text').waitFor();
 }
 
@@ -204,7 +208,7 @@ async function openChat(page: Page) {
     {
       // AC-8 on a phone, 360 px: full screen, no sideways scroll, Mark as secret in the bar.
       const {page} = await start(browser, {width: 360});
-      await page.locator('.tt-chat [data-pgc-open]').click();
+      await page.locator('#main header.ph > .ph-chat > [data-pgc-open]').click();   // the header's chat mark
       await page.locator('aside.pgc.pgc-full .p-text').waitFor();
       // Full screen over the page, as page-chat's phone layout says, not a block under the list.
       const panel = await page.locator('aside.pgc').evaluate(el => {

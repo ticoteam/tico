@@ -74,7 +74,8 @@ type Call = {slug: string; what: string; body: {expected_revision: number; model
         runnable: {beta: {claude: {can_run: false, problem: 'Provider is signed out', short: 'sign in'}}}});
       if (p === '/api/v2/models') return json({models: [opus, sonnet, haiku].map(model), harnesses: [{id: 'claude', label: 'Claude Code', runtime: 'claude'}], enabled_providers: ['anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['anthropic'], revision: 1, providers: [{id: 'anthropic', label: 'Anthropic'}]});
-      if (p === '/api/v2/usage/limits') return json({bots: {}});
+      // alpha has a limit, beta none (an empty Limit cell whose Set limit shows on hover or focus), the rest none to edit
+      if (p === '/api/v2/usage/limits') return json({bots: {alpha: {may_edit: true, daily_usd: 20, percent: 10}, beta: {may_edit: true, percent: 0}}});
       if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
@@ -87,6 +88,20 @@ type Call = {slug: string; what: string; body: {expected_revision: number; model
     assert.equal(await page.evaluate(() => localStorage.getItem('hub.settings.bots.filters')), null, 'retired preference removed');
     assert.equal(await page.locator('[data-bots-filter],[data-bots-filters-toggle]').count(), 0);
     const shown = () => rows.evaluateAll(nodes => nodes.map(n => n.dataset.settingsBot).sort());
+    // Limit (style guide, The Bots table): a set limit shows; no limit is an empty cell until the row is pointed at or
+    // its Set limit holds the focus, by keyboard or as focus returns after its dialog (not only :focus-visible).
+    const limitShown = (slug: string) => page.locator(`[data-settings-bot=${slug}] .use-limit > span`).last().evaluate(e => getComputedStyle(e).opacity);
+    await page.mouse.move(5, 5);
+    assert.equal(await limitShown('alpha'), '1', 'a set limit shows');
+    assert.equal(await limitShown('beta'), '0', 'no limit, an empty cell');
+    await page.locator('[data-settings-bot=beta] .use-limit').evaluate(b => (b as HTMLElement).focus());
+    assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-settings-bot=beta] .use-limit')), true);
+    await page.waitForTimeout(50);   // past the reduced-motion transition
+    assert.equal(await limitShown('beta'), '1', 'Set limit shows while it has the focus');
+    await page.locator('[data-settings-bot=beta] .use-limit').evaluate(b => (b as HTMLElement).blur());
+    await page.locator('[data-settings-bot=beta]').hover(); await page.waitForTimeout(50);
+    assert.equal(await limitShown('beta'), '1', 'and while its row is pointed at');
+    await page.mouse.move(5, 5);
     await search.pressSequentially('OPUS');
     assert.deepEqual(await shown(), ['alpha', 'beta', 'default', 'gamma', 'inherit', 'readable']);
     const reason = (slug: string) => page.locator(`[data-settings-bot=${slug}] [data-model-match]`).innerText();
@@ -201,6 +216,10 @@ type Call = {slug: string; what: string; body: {expected_revision: number; model
     await page.locator('[data-bots-pick-all]').click();
     assert.deepEqual(await page.evaluate(() => [...SETTINGS_BOTS_VIEW.selected].sort()), ['alpha', 'default', 'gamma', 'inherit']);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'phone search fits');
+    // A phone shows what a computer's columns show: the computer under the model, and a limit only where one is set.
+    assert.equal(await page.locator('[data-settings-bot=alpha] td.sb-cell-computer').isVisible(), true, 'the computer shows on a phone');
+    assert.equal(await page.locator('[data-settings-bot=alpha] td.sb-cell-limit').isVisible(), true, 'a set limit shows on a phone');
+    assert.equal(await page.locator('[data-settings-bot=beta] td.sb-cell-limit').isVisible(), false, 'no limit, nothing on a phone');
     const geometry = await page.locator('[data-model-match]').evaluateAll(nodes => nodes.map(n => {
       const r = n.getBoundingClientRect(); return {width: r.width, height: r.height, left: r.left, right: r.right};
     }));

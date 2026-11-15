@@ -1,5 +1,5 @@
-/* ui/app/growth-page.ts — The Growth page (#/growth, docs/growth.md): a head (the North Star, the month picker, the
-   Growth board and Settings) and, until Growth is set up, the Get started panel (growth-start.ts), over the Dashboard's
+/* ui/app/growth-page.ts — The Growth page (#/growth, docs/growth.md): the shared page header (the month picker and the
+   Growth board as tools; Settings in ⋯) and, until Growth is set up, the Get started panel (growth-start.ts), over the Dashboard's
    grid of cards for the place `growth` (ui/app/dashboard.ts, backend/cards.py), which the owner, admins and bots
    arrange. Its cards read the month picked here (GET /api/v2/places/growth?month=); this file draws them: a Number, the
    Funnel, Channels, Retention and the Growth board. Settings (growth-channels.js) keeps the numbers the maths uses, the
@@ -15,10 +15,11 @@
 let GR_BOARD_PIPE: string | null | undefined;
 const GR_BOARD_PRESET = 'growth-experiments';
 const grBoardHref = (slug = '') => GR_BOARD_PIPE ? `${TASKS}?pipeline=${encodeURIComponent(GR_BOARD_PIPE)}&who=all${slug ? '&tag=' + encodeURIComponent('channel:' + slug) : ''}` : '';
-// A board link, hidden until the board is known; grBoardLinks points or hides it.
-const grBoardLink = (cls: string, text: string, slug = '', attrs = '') => {
+// A board link, hidden until the board is known; grBoardLinks points or hides it. `inner`: its own HTML in place of the
+// words (the header's tool: an icon and the words that give way to it).
+const grBoardLink = (cls: string, text: string, slug = '', attrs = '', inner = '') => {
   const href = grBoardHref(slug);
-  return `<a class="${cls}" data-gr-board-link="${esc(slug)}"${attrs}${href ? ` href="${href}"` : ' hidden'}>${esc(text)}</a>`;
+  return `<a class="${cls}" data-gr-board-link="${esc(slug)}"${attrs}${href ? ` href="${href}"` : ' hidden'}>${inner || esc(text)}</a>`;
 };
 function grBoardLinks(root: ParentNode) {
   root.querySelectorAll<HTMLAnchorElement>('a[data-gr-board-link]').forEach(a => {
@@ -96,7 +97,8 @@ const grX = (v: unknown, d = 1) => Number(v).toLocaleString('en-US', {maximumFra
 const grRatio = (v: unknown) => `${grX(v)}×`;
 const GR_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const grMonth = (m: unknown) => { const [y, n] = String(m || '').split('-').map(Number); return n ? `${GR_MON[n - 1]} ${y}` : String(m || ''); };
-const grMonthShort = (m: unknown) => { const [y, n] = String(m || '').split('-').map(Number); return n ? `${GR_MON[n - 1]} ${String(y).slice(2)}` : ''; };
+// A month in a row or beside a figure: "Sep", with its year only when not this year ("Sep 2025"). "Sep 26" read as a day.
+const grMonthShort = (m: unknown) => { const [y, n] = String(m || '').split('-').map(Number); return n ? `${GR_MON[n - 1]}${y === new Date().getFullYear() ? '' : ` ${y}`}` : ''; };
 const grDay = (iso: string | null | undefined) => {
   if (!iso) return '';
   const d = new Date(String(iso).length <= 10 ? iso + 'T12:00:00' : iso);
@@ -106,7 +108,10 @@ const grDay = (iso: string | null | undefined) => {
 const grKpiVal = (k: GrKpiVal | null | undefined) => k?.latest == null ? '—' : kpiNum(k.latest, k.unit);
 const grTaskHref = (id: string) => '#/task/' + encodeURIComponent(id);
 const grGoalHref = (id: string) => `${GR_GOALS}?kpi=${encodeURIComponent(id)}`;
-const grFail = (e: unknown) => `<p class="muted gr-note">${esc(errorStatus(e) === 403 ? 'Not in your view.' : errorMessage(e, 'Did not load.'))}</p>`;
+// A read that failed says what happened and carries the fix: Try again draws the page again (none for a refusal).
+const grFail = (e: unknown) => errorStatus(e) === 403 ? '<p class="muted gr-note">Not in your view.</p>'
+  : `<p class="muted gr-note" role="alert">${esc(errorMessage(e, 'Did not load.'))} <button type="button" class="linkish tap-mark" data-gr-retry>Try again</button></p>`;
+document.addEventListener('click', ev => { if (eventElement(ev)?.closest('#main [data-gr-retry]')) route(); });
 const grOpts = (pairs: string[][], value: string | number | null | undefined, blank: string | null = '') => (blank !== null ? `<option value="">${esc(blank)}</option>` : '')
   + pairs.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(value ?? '') ? ' selected' : ''}>${esc(l)}</option>`).join('');
 // A segmented switch: [[value, label]], the chosen one aria-checked.
@@ -134,8 +139,8 @@ function grRetireButton(btn: HTMLButtonElement, dlg: HTMLDialogElement, path: st
   };
 }
 
-// A small dialog: a title, a form, Cancel and the primary button (none, and Close, with no `saveLabel`). `onSave(form)`
-// throws to show an error.
+// A small dialog: a title, a form, Cancel and the primary button (with no `saveLabel`, no foot: ✕ dismisses it, style
+// guide "Overlays"). `onSave(form)` throws to show an error.
 function grDialog(title: string, body: string, saveLabel: string | null | undefined, onSave: ((form: HTMLFormElement) => unknown) | null) {
   document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => d.close());
   const dlg = document.createElement('dialog');
@@ -144,7 +149,7 @@ function grDialog(title: string, body: string, saveLabel: string | null | undefi
   dlg.innerHTML = `<div class="tmodal-head"><b>${esc(title)}</b><span class="spacer"></span>
       <button type="button" class="ghost tmodal-x" data-close aria-label="Close">✕</button></div>
     <form class="tmodal-body gr-form" novalidate>${body}<p class="err" data-error hidden></p>
-      <div class="gr-foot"><button type="button" class="ghost" data-close>${saveLabel ? 'Cancel' : 'Close'}</button>${saveLabel ? `<button type="submit" class="primary">${esc(saveLabel)}</button>` : ''}</div></form>`;
+      ${saveLabel ? `<div class="gr-foot"><button type="button" class="ghost" data-close>Cancel</button><button type="submit" class="primary">${esc(saveLabel)}</button></div>` : ''}</form>`;
   document.body.appendChild(dlg);
   dlg.querySelectorAll<HTMLElement>('[data-close]').forEach(b => { b.onclick = () => dlg.close(); });
   dlg.onclose = () => dlg.remove();
@@ -206,8 +211,10 @@ function pageGrowth() {
   if (sub !== 'sources') { GR_BOARD_PIPE = grBoardOf(TASK_PIPELINES); void grBoardRead(load); void pageDashboard('growth', {month: GR.month}); return; }
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
-  main.innerHTML = `<div class="strat-head rd-strat-head gr-head"><a class="gr-back" href="${GR_ROUTE}" data-gr-back>Growth</a><span class="muted" aria-hidden="true">/</span><h1>Sources</h1><span class="spacer"></span>
-    <div class="strat-actions" id="strat-actions"></div></div><div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
+  // The shared header: "Growth › Sources", the parent a link back; Sources fills its quiet + and ⋯ (gsrcDraw).
+  main.innerHTML = pageHead({title: 'Sources', back: {href: GR_ROUTE, label: 'Growth'}, hook: 'gr-head', id: 'gr-head', actId: 'strat-actions', more: PAGE_HEAD_COPY})
+    + `<div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
+  $('#gr-head .ph-back')?.setAttribute('data-gr-back', '');
   pageGrowthSources(GR);
 }
 // After Settings or a channel saves: the cards and the Get started panel read again.
@@ -220,28 +227,44 @@ function grReload(state: unknown) {
 // ----------------------------------------------------------------- the head over the grid
 // A KPI's figure: a word unit is the KPI's name's to say, a sign stays on the number.
 const grKpiFig = (v: number | null | undefined, unit?: string) => ['$', '€', '£', '%', 'pp'].includes(String(unit || '').trim()) ? kpiNum(v, unit) : kpiNum(v);
+// The one page header (page-head.ts, style guide "Top bars: one line"): Growth, then its tools (the month picker and
+// the Growth board), then ⋯ with Settings (or Sources, for whoever cannot change the numbers) and the dashboard's Edit.
+// Settings and arranging the cards are rarer than daily, so they are ⋯ items; nothing sits in both places. The North
+// Star is the Funnel card's to show (marked there, with its target), not a line beside the title.
+// The month picker's options are the months with numbers, newest first, the one the cards read selected: the header
+// draws its tools again (Edit, Done), so the picker must carry its month. A month picked redraws it; the focus is put
+// back on it then (drawn).
+const grMonthTool = (state: DashState) => {
+  const v = state.view, months = [...new Set([...(v?.months || []), ...(v?.month ? [v.month] : [])])].sort().reverse();
+  return `<label class="grh-month"${months.length < 2 ? ' hidden' : ''}><span class="sr-only">Month</span><select data-gr-month>${months.map(m => `<option value="${esc(m)}"${m === v?.month ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join('')}</select></label>`;
+};
+let GR_MONTH_FOCUS = false;   // the picker had the focus when a month was picked
+const grHeadTools = (state: DashState) => grMonthTool(state) + grBoardLink('gr-btn grh-btn', 'Growth board', '', ' data-gr-board title="Growth board"', `${TL_ICON.board}<span class="ph-w">Growth board</span>`);
+const grHeadMore = () => grAdmin() ? '<button type="button" data-gr-settings>Settings</button>' : `<a href="${GR_SOURCES}" data-gr-sources>Sources</a>`;
 DASH_PLACES.growth = {
   first: 'growth_number',
   // A bot pins only cards here (backend/cards.py).
   pages: () => S.me?.role !== 'bot',
-  head: () => `<h1>Growth</h1><a class="grh-ns" data-gr-ns hidden></a><span class="spacer"></span>
-    <label class="grh-month" hidden><span class="sr-only">Month</span><select data-gr-month></select></label>
-    ${grBoardLink('gr-btn grh-btn', 'Growth board', '', ' data-gr-board')}
-    ${grAdmin() ? '<button type="button" class="ghost grh-btn" data-gr-settings>Settings</button>' : `<a class="gr-btn grh-btn" href="${GR_SOURCES}" data-gr-sources>Sources</a>`}`,
+  head: state => pageHead({title: 'Growth', pad: true, hook: 'dash-head gr-head-ph', tools: grHeadTools(state), more: grHeadMore() + PAGE_HEAD_COPY}),
+  tools: grHeadTools,
+  more: grHeadMore,
   wire(state) {
     const root = state.root;
     if (!root) return;   // G: the grid is there before a place is wired
-    root.querySelector('[data-gr-settings]')?.addEventListener('click', () => { if (GR) void gcSettings(GR); });
+    // Settings is a ⋯ item, which the header draws again with its tools: one listener on the page catches it.
+    root.addEventListener('click', ev => { if (eventElement(ev)?.closest('[data-gr-settings]') && GR) void gcSettings(GR); });
     if (GR) grStartMount(GR, root);   // the Get started panel under the head while setup is not done
     // A stale or failing source is said once, right under the head and over every other panel (grHealthRead).
-    root.querySelector('.dash-head')?.insertAdjacentHTML('afterend', '<div class="gr-banner gr-amber gr-health" data-gr-health role="status" hidden></div>');
+    root.querySelector('header.ph')?.insertAdjacentHTML('afterend', '<div class="gr-banner gr-amber gr-health" data-gr-health role="status" hidden></div>');
     grResolveWire(root);
-    const sel = root.querySelector<HTMLSelectElement>('[data-gr-month]');
-    if (!sel) return;   // G
-    // A month picked reads every card again for it; the address keeps it.
-    sel.addEventListener('change', ev => {
-      const month = ev.target instanceof HTMLSelectElement ? ev.target.value : '';
+    // A month picked reads every card again for it; the address keeps it. The picker sits in the header's tools, which
+    // the header may fold into ⋯ and draw again, so the page listens for it rather than the element.
+    root.addEventListener('change', ev => {
+      const sel = eventElement(ev)?.closest<HTMLSelectElement>('select[data-gr-month]');
+      if (!sel) return;
+      const month = sel.value;
       if (!GR_MONTH_RE.test(month) || DASH !== state) return;
+      GR_MONTH_FOCUS = document.activeElement === sel;
       state.month = month; state.key = dashKey(state);
       if (GR) GR.month = month;
       const hash = `${GR_ROUTE}?m=${encodeURIComponent(month)}`;
@@ -255,23 +278,10 @@ DASH_PLACES.growth = {
     if (!v || !root) return;   // G: drawn only once the place has its view and its grid
     grBoardLinks(root);
     void grHealthRead(state);
-    // The month picker: the months with numbers, newest first, and the one the cards read.
-    const months = [...new Set([...(v.months || []), ...(v.month ? [v.month] : [])])].sort().reverse();
-    const sel = root.querySelector<HTMLSelectElement>('[data-gr-month]');
-    if (!sel) return;   // G
-    const picker = sel.closest<HTMLLabelElement>('label');
-    if (picker) picker.hidden = months.length < 2;   // G
-    patchHTML(sel, months.map(m => `<option value="${esc(m)}"${m === v.month ? ' selected' : ''}>${esc(grMonth(m))}</option>`).join(''));
-    sel.value = v.month || '';
-    // The North Star line, from the Funnel card's when one is pinned.
-    const ns = (v.pins.find(p => p.card?.template === 'growth_funnel' && p.card.data?.north_star)?.card?.data as GrFunnelData | null | undefined)?.north_star;
-    const line = root.querySelector<HTMLAnchorElement>('[data-gr-ns]');
-    if (!line) return;   // G
-    line.hidden = ns?.value == null;
-    if (line.hidden || !ns) return;   // G: a hidden line has no North Star
-    line.href = grGoalHref(ns.id);
-    patchHTML(line, `<span class="muted">North Star</span> <span class="grh-ns-n">${esc(ns.name)}</span> <b>${esc(grKpiFig(ns.value, ns.unit))}</b>
-      ${grDelta(ns.value, ns.prev, {good: 'up'})}${ns.target != null ? ` <span class="muted">· Target ${esc(grKpiFig(ns.target, ns.unit))}</span>` : ''}`);
+    // The month the cards read is the one the picker shows (its options are the header's tools, grMonthTool).
+    const sel = root.querySelector<HTMLSelectElement>('select[data-gr-month]');
+    if (sel && sel.value !== (v.month || '')) sel.value = v.month || '';
+    if (sel && GR_MONTH_FOCUS) { GR_MONTH_FOCUS = false; if (document.activeElement !== sel) sel.focus(); }
   },
 };
 
@@ -416,26 +426,32 @@ async function grHealthRead(state: DashState) {
 }
 // The Funnel: Reach to Refer, each stage's KPI with its share of the stage before; the North Star marked, and Refer
 // feeding Reach again.
+// The North Star is the Funnel's to show (it was a line beside the page title, which the header no longer holds): the
+// stage it measures is marked, with its target; a North Star no stage measures is one line under the stages, opening
+// its KPI.
 function grFunnelCard(d: GrFunnelData) {
+  const ns = d.north_star, staged = d.stages.some(st => st.north_star);
+  const nsLine = ns && ns.value != null && !staged ? `<a class="grc-ns" href="${grGoalHref(ns.id)}" data-gr-ns><span class="grc-ns-k">★ North Star</span> <span>${esc(ns.name)}</span> <b>${esc(grKpiFig(ns.value, ns.unit))}</b>
+    ${grDelta(ns.value, ns.prev, {good: 'up'})}${ns.target != null ? ` <span class="muted">· Target ${esc(grKpiFig(ns.target, ns.unit))}</span>` : ''}</a>` : '';
   return `<div class="grc-fun"><ol class="grc-funnel">${d.stages.map(st => {
     const inner = `<span class="grc-st-h"><span class="grc-st-k">${esc(st.label)}</span>${st.conv != null ? `<span class="grc-st-c" title="Of the stage before">${esc(grX(st.conv, st.conv < 10 ? 1 : 0))}%</span>` : ''}</span>
       <span class="grc-st-n">${esc(st.name || 'No KPI')}</span>
       <span class="grc-st-v"><b>${st.value == null ? '—' : esc(kpiNum(st.value, st.unit))}</b>${grDelta(st.value, st.prev, {good: 'up'})}</span>
       <span class="grc-st-s">${grSpark(st.series || [], -1, {w: 120, h: 22})}</span>
-      <span class="grc-st-t">${st.north_star ? '★ North Star' : st.stage === 'refer' ? '↺ loops back to Reach' : ''}</span>`;
+      <span class="grc-st-t">${st.north_star ? `★ North Star${ns?.target != null ? ` · Target ${esc(grKpiFig(ns.target, ns.unit))}` : ''}` : st.stage === 'refer' ? '↺ loops back to Reach' : ''}</span>`;
     return `<li class="grc-st${st.north_star ? ' grc-st-ns' : ''}" data-stage="${esc(st.stage)}">${st.kpi
       ? `<a class="grc-st-in" href="${grGoalHref(st.kpi)}">${inner}</a>` : `<div class="grc-st-in">${inner}</div>`}</li>`;
-  }).join('')}</ol></div>`;
+  }).join('')}</ol>${nsLine}</div>`;
 }
 // Channels: one row each, as stored, with the month's New and CAC, LTV:CAC (carried back, dimmed, when the month has
 // none yet), six months of new customers and what is being worked on there.
 function grChannelsCard(d: GrChannelsData) {
   const chip = (t: GrTask) => `<a class="grc-chip" href="${grTaskHref(t.id)}" title="${esc(grStageWord(t.stage))}: ${esc(t.title)}"><i class="grc-sq" data-stage="${esc(t.stage)}" aria-hidden="true"></i><span class="sr-only">${esc(grStageWord(t.stage))}: </span><span class="grc-chip-t">${esc(t.title)}</span></a>`;
   // data-k labels a number when a narrow card stacks the rows and drops the table's head.
-  // A computed figure is dotted, and each says computed or typed on hover.
+  // A computed figure is dotted, and each says computed or typed on hover. An empty cell shows nothing (style guide tables).
   const num = (k: string, v: number | null | undefined, fmt: (v: number) => string, from: string | null | undefined = '', origin: string | null | undefined = null) => {
     const title = [from ? grMonth(from) : '', v != null && origin ? (origin === 'computed' ? 'Computed from customers' : 'Typed') : ''].filter(Boolean).join(' · ');
-    return `<td class="grc-n${v == null ? ' muted' : from ? ' grc-old' : ''}${v != null && origin === 'computed' ? ' grc-comp' : ''}" data-k="${k}"${v != null && origin ? ` data-origin="${esc(origin)}"` : ''}${title ? ` title="${esc(title)}"` : ''}>${v == null ? '—' : esc(fmt(v))}</td>`;
+    return `<td class="grc-n${v == null ? ' muted' : from ? ' grc-old' : ''}${v != null && origin === 'computed' ? ' grc-comp' : ''}" data-k="${k}"${v != null && origin ? ` data-origin="${esc(origin)}"` : ''}${title ? ` title="${esc(title)}"` : ''}>${v == null ? '' : esc(fmt(v))}</td>`;
   };
   const row = (r: GrChannelRow) => `<tr data-channel="${esc(r.slug)}"><th scope="row">${esc(r.name)}</th>${num('New', r.new_customers, v => grX(v, 0), '', r.origin?.new_customers)}${num('CAC', r.cac, grUsd, '', r.origin?.cac)}${num('LTV:CAC', r.ltv_cac, grRatio, r.ltv_from, r.origin?.ltv_cac)}
     <td class="grc-sp">${grSpark(r.series || [], -1, {w: 72, h: 20})}</td>

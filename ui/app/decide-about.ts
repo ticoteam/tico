@@ -56,10 +56,10 @@ function decideAboutLoad(taskId: string) {
     if (DEC_ABOUT.get(taskId) !== v) return;
     const st = DEC, it = st ? decideCurrent(st) : null;
     if (!st || !it || decideTaskId(it) !== taskId) return;
-    // An OK shows its own content, not the task's text; only its 👎 sheet (Give to…'s suggestions) reads the task.
-    const ok = decideKind(it) === 'ok';
-    if (!ok) decidePaintBody(st);
-    if (!ok || st.sheet) decidePaintSideKeepGive(st, it);
+    // An OK shows its own content, not the task's text.
+    if (decideKind(it) === 'ok') return;
+    decidePaintBody(st);
+    decidePaintSideKeepGive(st, it);
   })();
 }
 /** The item on screen, and ahead of it the next item that shows a task's text (an OK shows its own content). */

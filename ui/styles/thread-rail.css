@@ -48,12 +48,12 @@
 /* Archive is a row action: a desktop shows it on hover or keyboard focus, a touch screen always. */
 .tr-item{display:flex;align-items:center;gap:2px;min-width:0}
 .tr-item>.tr-row{flex:1 1 auto}
-.tr-arch,.thv-arch,.thv-del{flex:none;display:inline-grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.tr-arch,.thv-arch{flex:none;display:inline-grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
 .tr-arch{opacity:0}
 .tr-arch .nav-icon,.thv-arch .nav-icon{font-size:18px;color:inherit}
 .tr-item:hover .tr-arch,.tr-arch:focus-visible{opacity:1}
-.thv-arch.ghost,.thv-del.ghost{width:auto;padding:0 8px;border:0;box-shadow:none;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans)}
-.tr-arch:hover,.thv-arch:hover,.thv-del:hover{background:var(--surface2);color:var(--ink)}
+.thv-arch.ghost{width:auto;padding:0 8px;border:0;box-shadow:none;background:none;color:var(--muted);font:500 var(--t-sm)/var(--lh-none) var(--sans)}
+.tr-arch:hover,.thv-arch:hover{background:var(--surface2);color:var(--ink)}
 .tr-browse-tabs{display:flex;gap:6px;margin-bottom:8px}
 .tr-browse-tabs .on{font-weight:600}
 @media (hover:none){.tr-arch{opacity:1}}
@@ -259,4 +259,4 @@
 }
 
 /* #282: in a bot's top line, Archive moves to More (Chris, 13 Nov). */
-#bot-top-acts .thv-arch{display:none}   /* a bot's private chat is archived from More */
+#bot-top-acts [data-thv-archive]{display:none}   /* a bot's private chat is archived from More; Members shares the look and stays */

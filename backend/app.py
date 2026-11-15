@@ -5554,6 +5554,12 @@ def create_app(settings=None):
     from . import thread_catchup
 
     thread_catchup.install(app, store, auth, mutate)
+    from . import flow_opinions
+
+    flow_opinions.install(app, store, auth)
+    from . import flow_suggestions
+
+    flow_suggestions.install(app, store, auth, mutate)  # Flow's suggested rules, drawn from send-back notes
     from . import maintenance, system_routines
 
     system_routines.install(app, store, auth, mutate)
@@ -5600,7 +5606,7 @@ def create_app(settings=None):
     reach.install(app, store, auth, mutate)  # Rules › Internal: who reaches whom (docs/reach.md)
     from . import feedback
 
-    feedback.install(app, store, auth, mutate)  # 👍/👎 on bot work (backend/feedback.py)
+    feedback.install(app, store, auth, mutate)  # 👍/👎 on bot and person work (backend/feedback.py)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import screening
 

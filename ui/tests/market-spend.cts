@@ -178,7 +178,7 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
       // No briefing and no listening here: those questions are left out.
       assert.deepEqual(await page.locator('.mkt-q h3').allInnerTexts(), ['Where is the money going?', 'Who are we up against?', 'How does it reach buyers?']);
       assert.equal(await page.locator('.mkt-ans').count(), 0, 'no briefing, no answer lines');
-      assert.deepEqual(await page.locator('.mkt-tile-k .mkt-lab').allInnerTexts(), ['YEARLY SPEND', 'FASTEST GROWING']);
+      assert.deepEqual(await page.locator('.mkt-tile-k .mkt-lab').allInnerTexts(), ['Yearly spend', 'Fastest growing']);
       assert.equal(await page.locator('.mkt-tile-k .mkt-big').first().innerText(), '$16.8B');
       assert.equal(await page.locator('.mkt-tile-k .mkt-big').nth(1).innerText(), 'Specialty cleaning');
       assert.equal(await page.locator('.mkt-tile-k .mkt-sure').innerText(), 'Estimated', 'how sure, once, on the spend tile');
@@ -261,7 +261,9 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
     {
       const {page, errors} = await open(browser);
       await page.locator('.mkt-map .mkt-box').first().waitFor();
-      await page.locator('.mkt-top a', {hasText: 'Open map'}).click();
+      // Open map is in the header's ⋯ (less than daily, so not on the bar).
+      await page.locator('.rd-strat-head > .ph-more').click();
+      await page.locator('.rd-strat-head > .ph-menu [data-market-map]').click();
       await page.locator('.market-shell .market-graph').waitFor();
       assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/map');
       await page.locator('[data-market-close]').click();
@@ -346,7 +348,8 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
     {
       const {page, errors, reads} = await open(browser);
       await page.locator('.mkt-map .mkt-box').first().waitFor();
-      await page.locator('[data-mkt-def]').click();
+      await page.locator('.rd-strat-head > .ph-more').click();
+      await page.locator('.rd-strat-head > .ph-menu [data-mkt-def]').click();
       const panel = page.locator('.mkt-panel[open]');
       await panel.waitFor();
       assert.match(await panel.innerText(), /Includes[\s\S]*Recurring cleaning[\s\S]*Excludes[\s\S]*In-house staff[\s\S]*Counting rules[\s\S]*One vendor per segment[\s\S]*smb_share[\s\S]*Judgement/i);
@@ -377,7 +380,7 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
       const chained = {...chain, layers: chain.layers.map(l => l.key === 'buyers' ? {...l, nodes: [...l.nodes, {id: 'segment/home', name: 'Home cleaning', type: 'segment', self: false}]} : l)};
       const {page, errors} = await open(browser, {data: {chain: chained}});
       await page.locator('.mkt-chain').waitFor();
-      assert.deepEqual(await page.locator('.mkt-layer h4').allInnerTexts(), ['SUPPLIERS', 'PLATFORMS', 'US AND RIVALS', 'CHANNELS', 'BUYERS']);
+      assert.deepEqual(await page.locator('.mkt-layer h4').allInnerTexts(), ['Suppliers', 'Platforms', 'Us and rivals', 'Channels', 'Buyers']);
       assert.equal(await page.locator('.mkt-node.self').innerText(), 'Acme');
       assert.equal(await page.locator('.mkt-node[data-node="segment/home"] b').innerText(), '$3.1B');
       await shot(page, 'chain', 'light');

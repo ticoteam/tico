@@ -112,7 +112,7 @@ function subsUsageHTML(sub: SubsRow) {
   if (typeof usage.used_pct === 'number') {
     const left = 100 - Math.max(0, Math.min(100, Math.round(usage.used_pct)));
     const resetIn = subsHoursUntil(usage.resets_at);
-    const at = resetIn ? new Date(usage.resets_at!).toLocaleString(undefined, {weekday: 'short', hour: 'numeric', minute: '2-digit'}) : '';
+    const at = resetIn ? timeSaid(usage.resets_at) : '';
     const window = usage.window === 'week' ? 'Week' : usage.window === '5h' ? '5-hour window' : '';
     const words = [`${window ? `${window}: ` : ''}${left}% left`, at ? `resets ${at} (in ${resetIn})` : ''].filter(Boolean).join(' · ');
     const level = left <= 5 ? ' bad' : left <= 20 ? ' warn' : '';
@@ -132,11 +132,8 @@ function subsStatusHTML(sub: SubsRow) {
   return subsMayEdit() ? `<span class="subs-diagnosis">Sign-in expired</span> <button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Sign in again</button>`
     : `<span class="pill waiting"${title}>Sign-in expired. Ask an admin to sign in again.</span>`;
 }
-// A short day and time ("Fri 09:00") for a hold's end.
-const subsWhen = (iso: string | null | undefined) => {
-  const at = Date.parse(iso || '');
-  return Number.isFinite(at) ? new Date(at).toLocaleString(undefined, {weekday: 'short', hour: '2-digit', minute: '2-digit'}) : '';
-};
+// A day and time for a hold's end, month first and 12-hour ("today, 3:00 PM", "Fri, Nov 14, 9:00 AM": ui/app/format.ts).
+const subsWhen = (iso: string | null | undefined) => Number.isFinite(Date.parse(iso || '')) ? timeSaid(iso) : '';
 // The computers a subscription is given to: directly, or (a plan) through its owner's plans for its tool, so a person's
 // next or held plan counts the computers its set is on.
 function subsComputers(sub: SubsRow): SubsComputer[] {
@@ -292,7 +289,7 @@ function subsDialog(sub: SubsRow | null | undefined) {
   const title = `Edit ${sub.name}`;
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal tmodal-shell subs-dialog'; dialog.setAttribute('aria-label', title);
-  dialog.innerHTML = `<form data-subs-form="edit" novalidate><header><h2>${esc(title)}</h2><button class="ghost" type="button" data-close>Close</button></header>
+  dialog.innerHTML = `<form data-subs-form="edit" novalidate><header class="tmodal-head"><h2>${esc(title)}</h2><button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     <div class="tmodal-body subs-form">
       <label class="subs-field"><span class="k">Name</span><input name="name" type="text" required maxlength="80" autocomplete="off" value="${esc(sub.name || '')}"></label>
       ${subsOwned(sub.kind) ? subsOwnerHTML(subsPersonId(sub.owner_id), true) : ''}

@@ -80,6 +80,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
 
     // 1. The Bots table's Fallback picker: Same as bot first, every size for a 1M model, then a 500K model lowers 700K
     //    to 500K and lists nothing larger; Apply sends it, and the closed button shows it.
+    await page.locator('[data-task-open="helper"]').click();   // Fallback sits with the task model, under the bot
     const cell = page.locator('.sb-cell-fallback').filter({has: page.locator('[data-bot-choice="helper"]')}).locator('[data-bot-choice]');
     let pop = await openPicker(cell);
     const pick = pop.locator('[data-choice-compact]');

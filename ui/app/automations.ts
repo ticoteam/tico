@@ -48,8 +48,8 @@ function automationsStop() {
   if (!AU) return;
   if (AU.list && !AU.listError && !AU.lst) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range, maint: AU.maint, heart: AU.heart};
   clearTimeout(AU.hbPoll ?? undefined);
-  if (AU.lst) pageChatLeave();
   AU = null;
+  AU_HELD = null;
 }
 
 // #/automations[/<id>[/runs]]; an old #/automations/bot or <id>/bot link opens the list or the flow.
@@ -105,7 +105,7 @@ function auEventWords(name: unknown) {
 function auCronWords(cron: string | null | undefined): string {
   const f = String(cron || '').trim().split(/\s+/), [mi, hr, dom, mon, dow] = f;
   if (f.length === 5 && dom === '*' && mon === '*' && /^[\d,-]+$/.test(dow!) && /^(\*|\*\/\d+)$/.test(hr!) && /^(\d+|\*\/\d+)$/.test(mi!)) {
-    const each = cronWords(`${mi} ${hr} * * *`), days = cronWords(`0 0 * * ${dow}`).replace(/ at 00:00$/, '');
+    const each = cronWords(`${mi} ${hr} * * *`), days = cronWords(`0 0 * * ${dow}`).replace(/ at 12 AM$/, '');
     if (each !== `${mi} ${hr} * * *` && !days.includes('*')) return `${each}, ${days}`;
   }
   return cronWords(cron || '');
@@ -209,7 +209,7 @@ async function pageAutomations() {
     }
   }
   auDrawHead(); auDrawPane(); auDrawSide();
-  if (id) auFacetsDraw(); else auOverviewShow(state);
+  if (id) { auFacetsDraw(); auCtlDraw(); } else auOverviewShow(state);
   if (state.view === 'runs' && state.cur && !state.runs) void auRunsLoad(state);
   if (state.view === 'runs' && id === AU_MAINT) void auMaintRunsLoad(state);   // each visit: a run may have ended since
 }
@@ -220,10 +220,14 @@ const auNormal = (x: AuAnswer | null | undefined): AuAutomation => { const a: Au
 function auShell() {
   auHave(AU);
   const lst = !!AU.lst;
+  // The header holds the page's views (Automations | Runs), the time range (a computer's; a phone picks it in ⋯), the
+  // filter button (a phone's), the quiet + and ⋯ (Group by and Sort by, auCtlDraw). Listening has none of the views.
   $('#main').innerHTML = `<div class="au${lst ? ' au-lst' : ''}" id="au-root">
     ${pageHead({title: lst ? 'Listening' : 'Automations', hook: 'au-ph', pad: true,
-      tools: `<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>${lst ? '<span class="au-chat"></span>' : ''}`,
-      primary: `<span class="au-newbox"><button class="primary ph-go au-new" type="button"${lst ? '' : ' aria-haspopup="menu" aria-expanded="false"'}>${lst ? 'New listening' : 'New automation'}</button>`
+      tabs: lst ? undefined : [{label: 'Automations', cur: true, attrs: 'data-tab="list"'}, {label: 'Runs', attrs: 'data-tab="runs"'}],
+      tabsHook: lst ? undefined : 'au-tabs', tabsAttrs: 'aria-label="View"',
+      tools: `${lst ? '' : '<div class="au-seg au-range ph-seg" role="group" aria-label="Time range"></div>'}<button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button>`,
+      primary: `<span class="au-newbox"><button class="ghost ph-go au-new au-plus" type="button" aria-label="${lst ? 'New listening' : 'New automation'}" title="${lst ? 'New listening' : 'New automation'}"${lst ? '' : ' aria-haspopup="menu" aria-expanded="false"'}><span class="nav-icon" aria-hidden="true">add</span></button>`
         + `<div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span>`})}
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
@@ -231,9 +235,7 @@ function auShell() {
         <div class="au-facets"></div>
       </aside>
       <section class="au-c" aria-live="polite">
-        <div class="au-ov"><div class="au-ctl"><div class="au-tabs" role="tablist" aria-label="View">
-          <button type="button" class="ph-tab" role="tab" data-tab="list" aria-selected="true">Automations</button>
-          <button type="button" class="ph-tab" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><div class="au-seg au-range ph-seg" role="group" aria-label="Time range"></div><span class="au-sels"></span></div><div class="au-tbl"></div></div>
+        <div class="au-ov"><div class="au-tbl"></div></div>
         <div class="au-crumb"></div><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
       <aside class="au-side"><div class="au-ed" hidden></div></aside>
       <div class="au-scrim" hidden></div>
@@ -257,13 +259,13 @@ function auShell() {
     if ((e.key === 'Enter' || e.key === ' ') && e.target instanceof HTMLElement && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
   });
   auEdWire(root.querySelector('.au-ed'));
-  // Listening's owner's chat (page-chat.ts); a listening's editor takes its place while open (auEdDraw).
-  if (lst) void pageChatMount({page: 'listening', label: 'Listening', button: root.querySelector('.au-chat'), stays: r => auUnder(r, LISTENING),
-    item: () => {
-      const a = AU;
-      if (!a || a.root !== root || !a.lst || !a.cur || !a.id) return null;
-      return {kind: 'automation', id: a.id, name: String(a.cur.name || '').trim() || 'Untitled'};
-    }});
+  // The page's owner's chat (page-chat.ts, mounted by the router): the listening or automation open rides along. An
+  // editor takes the chat's place while open (auEdDraw).
+  pageChatUse(lst ? 'listening' : 'automations', {item: () => {
+    const a = AU;
+    if (!a || a.root !== root || !!a.lst !== lst || !a.cur || !a.id) return null;
+    return {kind: 'automation', id: a.id, name: String(a.cur.name || '').trim() || 'Untitled'};
+  }});
 }
 
 // + New's menu: New inbox (automations-new.js), or which trigger a blank one starts with.
@@ -395,12 +397,12 @@ function auDrawHead() {
       ${auHeadSwitch(a, name)}
       ${a.readonly ? '' : `${a.can_edit ? `<button class="au-chip" type="button" data-spend><span class="nav-icon" aria-hidden="true">payments</span>${esc(auSpendWords(a))}</button>`
         : `<span class="au-chip"><span class="nav-icon" aria-hidden="true">payments</span>${esc(auSpendWords(a))}</span>`}
-      <button class="au-help" type="button" aria-label="Spend limit help" data-help="Spend limit per 30 minutes. It resumes on its own.">?</button>`}
+      <button class="au-help tap-mark" type="button" aria-label="Spend limit help" data-help="Spend limit per 30 minutes. It resumes on its own.">?</button>`}
       <span class="au-sp au-sp-phone"></span>
       <div class="au-seg ph-seg" role="tablist" aria-label="View">${seg}</div>
     </div>
     <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}${row?.pending ? ' · Proposed' : ''}</button>
-    <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
+    <button class="au-icon au-more au-hd-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
     ${auHeadLock(a)}${auHoldLine(a)}${auWarn(a)}` : ''}`;
 }
 
@@ -423,6 +425,9 @@ function auDrawPane() {
 // A redraw while a field is being typed in (a late load of question sets or the last run) keeps that field focused.
 // The focused element as auDrawSide reads it: any element; a text field's binding and caret where it has them.
 type AuTyping = Element & {dataset?: DOMStringMap; selectionStart?: number | null; selectionEnd?: number | null};
+// The editor that last took the page chat's place (page-chat.ts pageChatHold): only another editor, or none, moves it
+// again, so a redraw of the same one keeps a chat the person opened over it.
+let AU_HELD: AuEd | null = null;
 function auDrawSide() {
   auDrawn(AU);
   const ed = auEl(AU.root, '.au-ed'), html = AU.ed ? auEdHTML() : '';
@@ -434,7 +439,8 @@ function auDrawSide() {
   const again = b && html ? ed.querySelector<HTMLInputElement>(`[data-b="${CSS.escape(b)}"]`) : null;
   if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
   AU.root.classList.toggle('ed-open', !!html);
-  if (AU.lst) pageChatHold(!!html);
+  const held = html ? AU.ed : null;
+  if (held !== AU_HELD) { AU_HELD = held; pageChatHold(!!held); }
   // The board's pop-ups float over it on a computer; a phone keeps the sheet.
   AU.root.classList.toggle('ed-pop', !!html && AU.ed?.kind === 'board');
   auEl(AU.root, '.au-scrim').hidden = !html;
@@ -492,7 +498,11 @@ function auOnClick(e: Event) {
   if (auHeartClick(t)) return;
   let m: (HTMLElement & {disabled?: boolean}) | null;   // a [data-bmode] is a button
   if ((m = t.closest<HTMLElement>('.au-menu [data-ty]'))) { auInsert(m.dataset.ty!); return; }   // matched on [data-ty], so it is set
-  if ((m = t.closest<HTMLElement>('.au-menu [data-mi]'))) { auMoreAct(m.dataset.mi); return; }
+  if ((m = t.closest<HTMLElement>('.au-menu [data-mi], .au-ph > .ph-menu [data-mi]'))) {
+    const pop = m.closest<HTMLElement>('.ph-menu');
+    if (pop?.matches(':popover-open')) pop.hidePopover();
+    auMoreAct(m.dataset.mi); return;
+  }
   if ((m = t.closest<HTMLElement>('[data-add]'))) { auMenuOpen(m, 'add'); return; }
   if ((m = t.closest<HTMLElement>('[data-more]'))) { auMenuOpen(m, 'more'); return; }
   if ((m = t.closest<HTMLElement>('[data-help]'))) { m.classList.toggle('on'); m.dataset.tip = m.dataset.help; return; }
@@ -509,16 +519,31 @@ function auOnClick(e: Event) {
   if ((m = t.closest<HTMLElement>('[data-open]'))) { auEdOpenStep(m.dataset.open ?? '', m.dataset.path); return; }
 }
 
-// The ⋯ menu: test run, Apply template (an October inbox, automations-new.js), versions, delete (refused for a built-in,
-// so it is shown off with why).
-function auMoreHTML() {
+// The open automation's ⋯: test run, Apply template (an October inbox, automations-new.js), versions, and delete
+// (refused for a built-in, so it is shown off with why). Delete is last, red, after a separator. On a computer these
+// are the page header's ⋯ (auMoreHead, through auCtlDraw), so the screen has one ⋯; a phone, whose header steps aside
+// while an automation is open, keeps the automation's own ⋯ (auMoreHTML in .au-menu).
+function auMoreItems(): {items: string; del: string} {
   auHave(AU);
   const a = auNeed(AU.cur, 'the open automation');
-  return `${a.can_edit && !a.readonly ? '<button type="button" role="menuitem" data-mi="run"><span class="nav-icon" aria-hidden="true">play_arrow</span>Test run</button>' : ''}
-    ${auApplies(a) ? '<button type="button" role="menuitem" data-mi="apply"><span class="nav-icon" aria-hidden="true">dashboard_customize</span>Apply template</button>' : ''}
-    <button type="button" role="menuitem" data-mi="versions"><span class="nav-icon" aria-hidden="true">history</span>Versions</button>
-    ${a.can_edit ? `<button type="button" role="menuitem" data-mi="delete"${a.builtin ? ' disabled title="Built-in automations can’t be deleted"' : ''}>
-      <span class="nav-icon" aria-hidden="true">delete</span>${a.builtin ? 'Built-in' : 'Delete'}</button>` : ''}`;
+  return {
+    items: `${a.can_edit && !a.readonly ? '<button type="button" role="menuitem" data-mi="run"><span class="nav-icon" aria-hidden="true">play_arrow</span>Test run</button>' : ''}`
+      + `${auApplies(a) ? '<button type="button" role="menuitem" data-mi="apply"><span class="nav-icon" aria-hidden="true">dashboard_customize</span>Apply template</button>' : ''}`
+      + '<button type="button" role="menuitem" data-mi="versions"><span class="nav-icon" aria-hidden="true">history</span>Versions</button>',
+    del: a.can_edit ? `<button type="button" role="menuitem" data-mi="delete"${a.builtin ? ' disabled title="Built-in automations can’t be deleted"' : ' class="au-mdel"'}>`
+      + `<span class="nav-icon" aria-hidden="true">delete</span>${a.builtin ? 'Built-in' : 'Delete'}</button>` : '',
+  };
+}
+const AU_MENU_SEP = '<div class="au-msep" role="separator"></div>';
+function auMoreHTML() {
+  const {items, del} = auMoreItems();
+  return items + (del ? AU_MENU_SEP + del : '');
+}
+// The page header's ⋯ while an automation is open: its items, Copy link, then Delete. The header's ⋯ is a group of plain
+// buttons, not an ARIA menu (page-head.ts), so its items drop their menu roles.
+function auMoreHead(): string {
+  const {items, del} = auMoreItems();
+  return (items + PAGE_HEAD_COPY + (del ? AU_MENU_SEP + del : '')).replace(/ role="menuitem"/g, '');
 }
 async function auMoreAct(what: string | undefined) {
   auMenuClose();

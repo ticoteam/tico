@@ -1,7 +1,7 @@
 /* ui/app/org-rules.ts — Rules (docs/rules-plan.md, Screens 1, 2, 4–8; docs/reach.md): the Rules page with a tab for every
    kind of rule, each with its count (GET /rule-groups): Company (internal; Reach: the org chart and a party's panel),
-   Outside (external), Pipelines and stages (stage rules by pipeline, then stage; changed from a stage's Rules button,
-   stage-rules.ts), Due, Wakes and Automations on tasks (listed, edited on the Automations page), Built in (read-only)
+   Outside (external), Pipelines and stages (stage rules by pipeline, then stage, in the stage panel's one-line row; one
+   the viewer may change opens the panel's form, and its ⋯ has Edit and Retire, stage-rules.ts), Due, Wakes and Automations on tasks (listed, edited on the Automations page), Built in (read-only)
    and Suggested (a bot's org rules and stage rules, for a person to accept or skip); the rule and due-date side panels, the
    Add rule and Add document dialogs, and a bot's Rules tab.
    Everything is read from and written to the org rules API (backend/org_rules.py): GET /api/v2/rules (paged; every
@@ -17,7 +17,10 @@
 'use strict';
 
 const RU_REPEATS: [string, string][] = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['quarterly', 'Quarterly'], ['yearly', 'Yearly']];
-const RU_STATUS: Record<string, [string, string]> = {overdue: ['Overdue', 'fail'], due_soon: ['Due soon', 'ready'], upcoming: ['Upcoming', ''], satisfied: ['Satisfied', 'ok']};
+const RU_STATUS: Record<string, [string, string]> = {overdue: ['Overdue', 'fail'], due_soon: ['Due soon', 'waiting'], upcoming: ['Upcoming', ''], satisfied: ['Satisfied', '']};
+// A due date's pill only where something needs doing (style guide: "A row with nothing wrong has no pill"); upcoming and
+// satisfied rows say nothing, and the Status filter still names them.
+const RU_STATUS_QUIET = new Set(['upcoming', 'satisfied']);
 const RU_KINDS: [string, string][] = [['vendor', 'Vendor'], ['customer', 'Customer'], ['government', 'Government'], ['other', 'Other']];
 // If broken: the stored values stay block / escalate / warn; each label says what happens (org-rule-holds.js and
 // overview-graph.js use the same words).
@@ -149,6 +152,8 @@ interface ReachState extends ReachNormal {
   shut: Set<string>;
   chart: string;
   shown?: string | null;
+  /** A phone's team, shown one at a time (rrPhoneParts): a group id, or '' for the top of the chart. */
+  team?: string;
 }
 /** The Rules page's state (RU): the open tab, every list it has read, its filters and the side panel's note. */
 interface RuState {
@@ -221,6 +226,8 @@ function ruClosest<E extends HTMLElement>(el: Element, selector: string): E {
 /** A form's named controls, typed by the caller (a form's elements are read by their names). */
 function ruControls<T>(form: HTMLFormElement): T { return form.elements as unknown as T; }
 const ruPhone = () => matchMedia('(max-width:760px)').matches;
+// Company is the chart on a computer and one team at a time on a phone: crossing over draws it again.
+matchMedia('(max-width:760px)').addEventListener?.('change', () => { if (RU?.tab === 'internal' && document.body.contains(RU.root)) ruDraw(); });
 const ruQuery = () => new URLSearchParams((S.route || '').split('?')[1] || '');
 const ruTabOf = (r: string): RuleTab => { const t = ((r || '').split('?')[0] ?? '').slice(RULES_ROUTE.length + 1); return RU_TABS.some(([k]) => k === t) ? t as RuleTab : 'internal'; };
 
@@ -281,7 +288,12 @@ function ruDay(iso: string | null | undefined, year = false) {
   return d.toLocaleDateString(undefined, opts);
 }
 const ruRepeatWord = (r: string | undefined) => (RU_REPEATS.find(([k]) => k === r) || [, r || ''])[1] ?? '';
-const ruPill = (status: string) => { const [label, tone] = RU_STATUS[status] || [status, '']; return `<span class="pill ru-pill ${tone}">${esc(label)}</span>`; };
+// A due date's status: a pill when it needs doing; otherwise nothing in a list row (`row`), and plain words in its panel.
+const ruPill = (status: string, row = false) => {
+  const [label, tone] = RU_STATUS[status] || [status, ''];
+  if (RU_STATUS_QUIET.has(status)) return row ? '' : `<span class="ru-st muted">${esc(label)}</span>`;
+  return `<span class="pill ru-pill ${tone}">${esc(label)}</span>`;
+};
 // A rule's due dates, the most urgent first: overdue, then due soon, upcoming, satisfied; the nearest within each.
 const RU_URGENCY: Record<string, number> = {overdue: 0, due_soon: 1, upcoming: 2, satisfied: 3};
 const ruDueSorted = (rule: RuleRow) => (rule.due || []).slice().sort((a, b) => (RU_URGENCY[a.status] ?? 9) - (RU_URGENCY[b.status] ?? 9) || a.due_on.localeCompare(b.due_on));
@@ -345,7 +357,8 @@ async function pageRules() {
     main.innerHTML = `<div class="ru" id="ru-root">
       ${pageHead({title: 'Rules', hook: 'ru-ph', pad: true, tabsHook: 'ru-tabs', tabsAttrs: 'aria-label="Rules"'})}
       <div class="ru-body"><aside class="ru-filters" aria-label="Filters"></aside><section class="ru-list" aria-live="polite">${skelRows(6)}</section>
-        <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
+        <aside class="ru-side" id="ru-side" hidden></aside></div>
+      <div id="task-filter-pop" class="tl-pop ru-fpop" popover role="menu" aria-label="Filter"></div></div>`;
     const root: HTMLElement | null = $('#ru-root');
     if (!root) throw new Error('The Rules page did not draw');
     RU = {root, tab: null, rules: {internal: [], external: []}, suggested: [], stageRules: [], stageSuggested: [], groups: null, due: [], sources: [],
@@ -371,25 +384,30 @@ async function pageRules() {
 }
 function rulesStop() { RU = null; }
 
-// The header (pageHead, drawn once by pageRules) keeps its title; each tab change fills its tabs, tools and button.
+// The header (pageHead, drawn once by pageRules) keeps its title; each tab change fills its tabs, tools, its quiet + and
+// ⋯. Adding is rare, so it is a quiet + (style guide, "Top bars: one line"); Outside's second way in, Add document, is
+// in ⋯ with the checks line (org-rule-holds.ts ruleChecksPaint) and Copy link, so ⋯ is on every tab.
 function ruDrawHead() {
   const ru = ruOpen(), head = ruFind('.ru-ph', ru.root);
   const count = (k: RuleTab) => ru.groups?.groups?.find(g => g.key === k)?.count;
   pageHeadSet(head, 'tabs', pageHeadTabs(RU_TABS.map(([k, label]) => ({label, href: ruHref(k), count: count(k), cur: ru.tab === k, attrs: `data-ru-tab="${k}"`}))));
   const human = S.me?.role !== 'bot';
-  // Internal's search stays put while the page draws again, so it keeps what is typed and its focus.
-  if (ru.tab === 'internal' && head.querySelector('.ph-tools .rr-q')) return;
-  const toolsBy: Partial<Record<RuleTab, string>> = {
-    internal: `<div class="rr-find"><input class="rr-q" type="search" placeholder="Search people, bots and teams" aria-label="Search people, bots and teams" autocomplete="off">
-      <div class="rr-results" role="listbox" aria-label="Matches" hidden></div></div>`,
-    external: human ? '<button class="ghost" type="button" data-ru-add>Add rule</button>' : '',
+  const addBy: Partial<Record<RuleTab, string>> = {
+    external: human ? pageHeadAdd('Add rule', 'data-ru-add') : '',
+    due: human ? pageHeadAdd('Add due date', 'data-ru-add-due') : '',
   };
-  const primaryBy: Partial<Record<RuleTab, string>> = {
-    external: human ? '<button class="primary ph-go" type="button" data-ru-add-doc>Add document</button>' : '',
-    due: human ? '<button class="primary ph-go" type="button" data-ru-add-due>Add due date</button>' : '',
+  const more = (ru.tab === 'external' && human ? '<button type="button" data-ru-add-doc>Add document</button>' : '') + PAGE_HEAD_COPY;
+  const menu = head.querySelector<HTMLElement>(':scope > .ph-menu');
+  if (menu?.dataset.ru !== ru.tab) { pageHeadSet(head, 'more', more); const m = head.querySelector<HTMLElement>(':scope > .ph-menu'); if (m) m.dataset.ru = ru.tab ?? ''; }
+  ruleChecksPaint(head);
+  pageHeadSet(head, 'primary', addBy[ruTab()] || '');
+  // Internal's search stays put while the page draws again, so it keeps what is typed and its focus.
+  if (ru.tab === 'internal' && pageHeadTools(head)?.querySelector('.rr-q')) return;
+  const toolsBy: Partial<Record<RuleTab, string>> = {
+    internal: `<div class="rr-find"><input class="rr-q" type="search" placeholder="Search" aria-label="Search people, bots and teams" autocomplete="off">
+      <div class="rr-results" role="listbox" aria-label="Matches" hidden></div></div>`,
   };
   pageHeadSet(head, 'tools', toolsBy[ruTab()] || '');
-  pageHeadSet(head, 'primary', primaryBy[ruTab()] || '');
 }
 function ruDraw() {
   ruDrawHead();
@@ -399,6 +417,58 @@ function ruDraw() {
   const draw = {internal: ruDrawInternal, external: ruDrawExternal, due: ruDrawDue, suggested: ruDrawSuggested, stages: ruDrawStages,
     wakes: ruDrawWakes, automations: ruDrawAutomations, builtin: ruDrawBuiltIn}[ruTab()];
   draw(filters, list);
+  ruFilterPaint(filters);
+}
+
+// ----------------------------------------------------------------- a phone's filters
+// A phone shows no rail: its filters sit behind the shared filter icon beside the search (style guide: "Filters go
+// behind the shared filter icon"), its badge the number on. The menu (task-list-menus.ts tasksMenu, a sheet from the
+// bottom on a phone) is read from the rail as drawn, so both always hold the same choices: each heading, then each
+// choice with its count and a check when on; a choice at 0 is left out unless it is the one on. A pick goes through the
+// rail's own click handling (the menu is inside #ru-root), then the menu is drawn again from the new rail.
+const RU_MENU: TasksMenuHost = {};
+function ruFilterMenuHTML(filters: HTMLElement): string {
+  let html = '';
+  for (const el of filters.children) {
+    if (el.matches('.ru-fh')) html += `<div class="tl-menu-h" aria-hidden="true">${esc(el.textContent || '')}</div>`;
+    else if (el.matches('.ru-more')) html += `<button type="button" class="tl-mi" role="menuitem" data-ru-more><span class="tl-mi-t">${esc(el.textContent || '')}</span></button>`;
+    else if (el.matches('.ru-f')) {
+      const f = el as HTMLElement, on = f.getAttribute('aria-pressed') === 'true', n = Number(f.querySelector('.ru-n')?.textContent || 0);
+      if (!n && !on) continue;
+      html += `<button type="button" class="tl-mi" role="menuitemcheckbox" aria-checked="${on}" data-ru-f="${esc(f.dataset.ruF || '')}" data-v="${esc(f.dataset.v || '')}">`
+        + `<span class="tl-mi-t">${esc(f.firstElementChild?.textContent || '')}</span><span class="tl-mi-n tnum">${n}</span>${on ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
+    }
+  }
+  return `<div class="tl-menu" role="group" aria-label="Filter">${html.replace(/(<div class="tl-menu-h"[^>]*>[^<]*<\/div>)(?=<div class="tl-menu-h"|$)/g, '')}</div>`;
+}
+function ruFilterPaint(filters: HTMLElement) {
+  const facets = filters.querySelectorAll('.ru-f[data-ru-f]').length > 0, on = filters.querySelectorAll('.ru-f[aria-pressed="true"]').length;
+  const pop = ruOpen().root.querySelector<HTMLElement>('#task-filter-pop');
+  if (!facets) { if (pop?.matches(':popover-open')) pop.hidePopover(); return; }
+  filters.insertAdjacentHTML('beforeend', `<button type="button" class="tl-ib ru-fbtn" data-ru-filter aria-haspopup="true" aria-expanded="${!!pop?.matches(':popover-open')}"`
+    + ` aria-label="${on ? `Filter, ${on} on` : 'Filter'}" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true"${on ? '' : ' hidden'}>${on}</span></button>`);
+  const btn = filters.querySelector<HTMLElement>('[data-ru-filter]');
+  if (pop?.matches(':popover-open') && btn) {
+    // The open menu follows the rail; the choice that had the focus keeps it.
+    const had = document.activeElement instanceof HTMLElement && pop.contains(document.activeElement) ? document.activeElement : null;
+    const key = had ? `[data-ru-f="${CSS.escape(had.dataset.ruF || '')}"][data-v="${CSS.escape(had.dataset.v || '')}"]` : '';
+    RU_MENU.menuAnchor = btn;
+    pop.innerHTML = ruFilterMenuHTML(filters);
+    (key && pop.querySelector<HTMLElement>(key) || pop.querySelector<HTMLElement>('.tl-mi'))?.focus();
+  }
+}
+function ruFilterOpen(btn: HTMLElement) {
+  const filters = ruFind('.ru-filters', ruOpen().root), pop = ruFind('#task-filter-pop', ruOpen().root);
+  if (!pop.dataset.wired) {
+    pop.dataset.wired = '1';
+    pop.addEventListener('keydown', tasksMenuKeys);
+    pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
+      const b = ruOpen().root.querySelector<HTMLElement>('[data-ru-filter]');
+      b?.setAttribute('aria-expanded', String(ev.newState === 'open'));
+      if (ev.newState === 'closed' && (pop.contains(document.activeElement) || document.activeElement === document.body)) b?.focus();
+    });
+  }
+  tasksMenu(RU_MENU, btn, ruFilterMenuHTML(filters));
 }
 
 // Draws again, the search box keeping its focus and caret when it had them.
@@ -571,6 +641,10 @@ function rrMapPaint() {
   const hits = q ? new Set(rrFind(q).map(x => x.party)) : null;
   map.classList.toggle('has-sel', !!p && p !== '*');
   map.classList.toggle('searching', !!q);
+  // The chart is drawn at its own size beside the panel: an edge with more of it past it fades, so it reads as cut on
+  // purpose and scrolls (or drags) into view, not as covered.
+  map.classList.toggle('more-l', pane.scrollLeft > 1);
+  map.classList.toggle('more-r', pane.scrollLeft + pane.clientWidth < pane.scrollWidth - 1);
   for (const n of nodes) {
     const party = n.dataset.rrParty ?? '';
     n.classList.toggle('on', party === p);
@@ -662,7 +736,8 @@ function rrPanelDraw(note = '') {
   const may = rrMay(p), dis = may ? '' : ' disabled', eff = rrEff(p), own = rrOwn(p);
   const human = S.me?.role !== 'bot';
   const {inherited, own: mine} = rrRules(p);
-  const rule = (r: RuleRow, cls = 'rr-rule') => `<a class="${cls}" href="${ruHref('internal', {party: p, rule: r.id})}" data-rule="${esc(r.id)}">${ruTextHTML(r.text, 'inline')}</a>`;
+  // its outcome (Stop, Ask first, Warn) leads, in the mark every rule uses (stage-rules.ts ruleOutcomeIconHTML)
+  const rule = (r: RuleRow, cls = 'rr-rule') => `<a class="${cls}" href="${ruHref('internal', {party: p, rule: r.id})}" data-rule="${esc(r.id)}"><span class="ru-outcome">${ruleOutcomeIconHTML(r.if_broken, 'Stop')}</span><span class="rr-rule-t">${ruTextHTML(r.text, 'inline')}</span></a>`;
   // A cap shows the value that applies: typed over it, it is the party's own; cleared, it is taken from above again.
   const cap = (f: 'chats_per_day' | 'tasks_per_day', word: string) => `<label class="rr-cap"><span>Up to</span><input type="text" inputmode="numeric" data-rr-cap="${f}" value="${esc(own[f] ?? eff[f])}"
     aria-label="${esc((word[0] ?? '').toUpperCase() + word.slice(1))}"${dis}><span>${esc(word)}</span>${rrFromTag(p, eff, f)}</label>`;
@@ -713,8 +788,69 @@ function rrEditorHTML(p: string, E: RrEdit) {
     <div class="ru-seg rr-dirs" role="group" aria-label="Direction">${way('to', `${me} → ${them}`, rrMay(p))}${way('from', `${them} → ${me}`, rrMay(E.other))}</div>
     <label class="rr-cap"><span>Up to</span><input type="text" inputmode="numeric" name="per_day" value="${esc(E.per_day ?? '')}" aria-label="Up to a day"><span>a day</span></label>
     <textarea name="rule" rows="2" maxlength="1000" placeholder="Rule" aria-label="Rule">${esc(E.rule || '')}</textarea>
-    <div class="rr-foot"><button class="primary small" type="button" data-rr-save>${E.id ? 'Save' : 'Add'}</button><button class="ghost small" type="button" data-rr-cancel>Cancel</button>
-      <span class="spacer"></span>${E.id ? '<button class="ghost small rr-rm" type="button" data-rr-remove>Remove</button>' : ''}</div></div>`;
+    <div class="rr-foot">${E.id ? '<button class="ghost small rr-rm" type="button" data-rr-remove>Remove</button>' : ''}<span class="spacer"></span>
+      <button class="ghost small" type="button" data-rr-cancel>Cancel</button><button class="primary small" type="button" data-rr-save>${E.id ? 'Save' : 'Add'}</button></div></div>`;
+}
+
+// ----------------------------------------------------------------- a phone: one team at a time
+// The chart never shrinks to fit a phone (style guide, Org chart: "The switcher replaces the canvas"): a Team select, then
+// that team as rows. The first row is the team itself (Everyone at the top of the chart), then its people and bots, each
+// with its role, then the teams inside it, which step in. A row opens its party's panel, full width, with ‹ back.
+const rrPartyOf = (n: OrgNode) => n.kind === 'group' ? 'group:' + n.id : rrOfRef(rdoRef(n));
+// The teams in chart order, each named with the teams above it ("Customer Support › Success").
+function rrTeamList(by: OrgByParent): [string, string][] {
+  const out: [string, string][] = [], seen = new Set<string>();
+  const walk = (key: string, above: string, depth: number) => {
+    if (depth > 14) return;
+    for (const n of rdoSorted(by[key] || [], key.startsWith('g:') ? key.slice(2) : '', key.startsWith('g:') ? rrLead(key.slice(2)) : '')) {
+      if (seen.has(rdoKey(n))) continue;
+      seen.add(rdoKey(n));
+      const name = n.kind === 'group' ? (above ? above + ' › ' : '') + rdoName(n) : above;
+      if (n.kind === 'group') out.push([n.id, name]);
+      walk(rdoKey(n), name, depth + 1);
+    }
+  };
+  const top = rdoTop(by);
+  if (top) walk(rdoKey(top), '', 0);
+  walk('', '', 0);
+  return out;
+}
+// A team's rows: its people and bots (whoever reports inside it too), then the teams directly inside it.
+function rrTeamRows(by: OrgByParent, key: string): {people: OrgNode[]; teams: OrgNode[]} {
+  const people: OrgNode[] = [], teams: OrgNode[] = [], seen = new Set<string>();
+  const top = rdoTop(by), topKey = top ? rdoKey(top) : '';
+  const walk = (k: string, depth: number) => {
+    if (depth > 14) return;
+    const gid = k.startsWith('g:') ? k.slice(2) : '';
+    for (const n of rdoSorted(by[k] || [], gid, gid ? rrLead(gid) : '')) {
+      if (seen.has(rdoKey(n)) || rdoKey(n) === topKey || n.kind === 'seat') continue;
+      seen.add(rdoKey(n));
+      if (n.kind === 'group') { teams.push(n); continue; }
+      people.push(n);
+      walk(rdoKey(n), depth + 1);
+    }
+  };
+  if (key) walk(key, 0);
+  else { if (top) { people.push(top); walk(topKey, 0); } walk('', 0); }
+  return {people, teams};
+}
+// The phone's two parts: the Team select's options and the team's rows. ruDrawInternal keeps the select itself and sets
+// its value, so a pick never takes the focus off it.
+function rrPhoneParts(): {team: string; options: string; rows: string} {
+  const R = ruOpen().reach, by = rdoTree(rrLead), teams = rrTeamList(by);
+  if (R.team && !teams.some(([id]) => id === R.team)) R.team = '';
+  const team = R.team || '', {people, teams: inside} = rrTeamRows(by, team ? 'g:' + team : '');
+  const row = (party: string, face: string, name: string, kind: string, attrs = '') => `<button type="button" class="rr-opt rr-trow" ${attrs || `data-rr-party="${esc(party)}"`}>${face}`
+    + `<span class="rr-on">${esc(name)}</span><span class="rr-k">${esc(kind)}</span></button>`;
+  const face = (n: OrgNode) => n.kind === 'person' ? personAvatar(n.person || {name: rdoName(n)}, 22) : n.kind === 'bot' ? avatar(n.id, 22) : '';
+  const role = (n: OrgNode) => n.kind === 'person' ? String(n.person?.title || '').trim() || 'Person' : n.kind === 'bot' ? String(botRow(n.id)?.role || '').trim() || 'Bot' : '';
+  const own = team ? row('group:' + team, `<span class="nav-icon rr-ti" aria-hidden="true">groups</span>`, ruGroupName(team), 'Team')
+    : row('*', `<span class="nav-icon rr-ti" aria-hidden="true">groups</span>`, 'Everyone', '');
+  return {team,
+    options: `<option value="">Everyone</option>${teams.map(([id, name]) => `<option value="${esc(id)}">${esc(name)}</option>`).join('')}`,
+    rows: `${own}${people.map(n => row(rrPartyOf(n), face(n), rdoName(n), role(n))).join('')}`
+      + `${inside.map(n => row('', `<span class="nav-icon rr-ti" aria-hidden="true">groups</span>`, rdoName(n), 'Team', `data-rr-team-go="${esc(n.id)}"`)
+        .replace('</button>', '<span class="nav-icon rr-tgo" aria-hidden="true">chevron_right</span></button>')).join('')}`};
 }
 
 function ruDrawInternal(filters: HTMLElement, list: HTMLElement) {
@@ -722,6 +858,24 @@ function ruDrawInternal(filters: HTMLElement, list: HTMLElement) {
   const R = ruOpen().reach, p = rrSel();
   if (R.party !== p) Object.assign(R, {party: p, edit: null, adding: false});
   let rr = list.querySelector<HTMLElement>(':scope > .rr');
+  if (ruPhone()) {
+    const {team, options, rows} = rrPhoneParts();
+    if (!rr?.classList.contains('rr-phone')) {
+      R.chart = 'phone';
+      list.innerHTML = `<div class="rr rr-phone"><label class="rr-team"><span class="ru-lbl">Team</span><select data-rr-team aria-label="Team"></select></label>
+        <div class="rr-tlist"></div><div class="rr-pick" role="listbox" aria-label="People, bots and teams"></div>
+        <aside class="rr-side" aria-label="Reach"></aside></div>`;
+      rr = ruFind<HTMLElement>(':scope > .rr', list);
+    }
+    // Only what changed is drawn again: the select keeps its focus and is given its value.
+    const sel = ruFind<HTMLSelectElement>('select[data-rr-team]', rr), tlist = ruFind('.rr-tlist', rr);
+    if (sel.dataset.options !== options) { sel.innerHTML = options; sel.dataset.options = options; }
+    sel.value = team;
+    if (tlist.dataset.rows !== rows) { tlist.innerHTML = rows; tlist.dataset.rows = rows; }
+    rrSearchPaint();
+    rrPanelDraw();
+    return;
+  }
   const chart = rrChartHtml();
   if (!rr || R.chart !== chart) {
     R.chart = chart;
@@ -838,6 +992,8 @@ function rrClick(ev: Event) {
   if (!t) return false;
   const party = t.closest<HTMLElement>('[data-rr-party]');
   if (party) { rrPick(party.dataset.rrParty ?? ''); return true; }
+  const into = t.closest<HTMLElement>('[data-rr-team-go]');
+  if (into) { R.team = into.dataset.rrTeamGo ?? ''; ruDraw(); ruOpen().root.querySelector<HTMLElement>('.rr-tlist .rr-trow')?.focus(); return true; }
   const inh = t.closest<HTMLElement>('[data-rr-inh]');
   if (inh) { const k = inh.dataset.rrInh ?? ''; R.shut.has(k) ? R.shut.delete(k) : R.shut.add(k); rrPanelDraw(); return true; }
   if (t.closest('[data-rr-add-rule]')) {
@@ -903,6 +1059,8 @@ function rrInput(ev: Event) {
   return false;
 }
 function rrChange(ev: Event) {
+  const pick = eventElement(ev)?.closest<HTMLSelectElement>('select[data-rr-team]');
+  if (pick) { ruOpen().reach.team = pick.value; ruDraw(); return true; }
   const cap = eventElement(ev)?.closest<HTMLInputElement>('[data-rr-cap]');
   if (!cap) return false;
   const v = cap.value.trim(), field = cap.dataset.rrCap ?? '';
@@ -957,7 +1115,7 @@ function ruDrawExternal(filters: HTMLElement, list: HTMLElement) {
     && ruMatches(r.text + ' ' + r.description + ' ' + (r.source?.name || ''), f.q));
   const head = '<div class="ru-row ru-head" role="row"><span>Rule</span><span>From</span><span>Followed by</span><span>Due</span></div>';
   const body = rows.map(r => `<a class="ru-row${ruSel(r.id) ? ' sel' : ''}" role="row" href="${ruHref('external', {rule: r.id})}" data-rule="${esc(r.id)}">
-      <span class="ru-txt">${ruTextHTML(r.text, 'inline')}</span><span class="ru-c" data-l="From">${r.source ? `<span class="ru-src ${esc(r.source.kind)}">${esc(r.source.name)}</span>` : '—'}</span>
+      <span class="ru-txt"><span class="ru-outcome">${ruleOutcomeIconHTML(r.if_broken, 'Stop')}</span>${ruTextHTML(r.text, 'inline')}</span><span class="ru-c" data-l="From">${r.source ? `<span class="ru-src ${esc(r.source.kind)}">${esc(r.source.name)}</span>` : '—'}</span>
       <span class="ru-c" data-l="Followed by">${esc(ruScopeWords(r.who))}</span><span class="ru-c" data-l="Due">${ruDueCell(r)}</span></a>`).join('');
   list.innerHTML = `<div class="ru-table ru-ext" role="table">${head}${body}</div>${body ? '' : `<p class="muted ru-pad">${all.length ? 'Nothing matches.' : 'No external rules yet.'}</p>`}`;
 }
@@ -969,13 +1127,16 @@ function ruDrawDue(filters: HTMLElement, list: HTMLElement) {
     <div class="ru-fh">Routine</div>${ruFacet('routine', 'on', 'Task', all.filter(d => d.task_days != null).length, f.routine === 'on')}${ruFacet('routine', 'none', 'None', all.filter(d => d.task_days == null).length, f.routine === 'none')}`;
   const rows = all.filter(d => (!f.status || d.status === f.status) && (!f.routine || (f.routine === 'on') === (d.task_days != null)));
   const open = ruQuery().get('due');
-  const head = '<div class="ru-row ru-head" role="row"><span>Due</span><span>Rule</span><span>Repeats</span><span>Routine</span><span>Owner</span><span>Status</span></div>';
+  // Status is drawn only when a due date has one worth a word (Overdue, Due soon); decided from every due date, so a
+  // filter never moves a column.
+  const status = all.some(d => !RU_STATUS_QUIET.has(d.status));
+  const head = `<div class="ru-row ru-head" role="row"><span>Due</span><span>Rule</span><span>Repeats</span><span>Routine</span><span>Owner</span>${status ? '<span>Status</span>' : ''}</div>`;
   const body = rows.map(d => `<a class="ru-row${open === d.id ? ' sel' : ''}" role="row" href="${ruHref('due', {due: d.id})}" data-due="${esc(d.id)}">
       <span class="ru-c ru-day">${esc(ruDay(d.due_on))}</span><span class="ru-txt">${ruTextHTML(d.rule.text, 'inline')}</span>
       <span class="ru-c" data-l="Repeats">${esc(ruRepeatWord(d.repeats))}</span>
       <span class="ru-c${d.task_days != null ? '' : ' ru-none'}" data-l="Routine">${esc(ruLead(d.task_days) || '—')}</span>
-      <span class="ru-c ru-owner" data-l="Owner">${ruOwnerHTML(d.owner)}</span><span class="ru-c">${ruPill(d.status)}</span></a>`).join('');
-  list.innerHTML = `<div class="ru-table ru-duet" role="table">${head}${body}</div>${body ? '' : `<p class="muted ru-pad">${all.length ? 'Nothing matches.' : 'No due dates yet.'}</p>`}`;
+      <span class="ru-c ru-owner" data-l="Owner">${ruOwnerHTML(d.owner)}</span>${status ? `<span class="ru-c">${ruPill(d.status, true)}</span>` : ''}</a>`).join('');
+  list.innerHTML = `<div class="ru-table ru-duet${status ? '' : ' ru-nost'}" role="table">${head}${body}</div>${body ? '' : `<p class="muted ru-pad">${all.length ? 'Nothing matches.' : 'No due dates yet.'}</p>`}`;
 }
 function ruOwnerHTML(actor: string | undefined) {
   const [kind, id] = String(actor || '').split(/:(.*)/);
@@ -1009,13 +1170,35 @@ function ruDrawSuggested(filters: HTMLElement, list: HTMLElement) {
 }
 
 // ----------------------------------------------------------------- Pipelines and stages, Wakes, Automations, Built in
-// Stage rules are read here and changed from a stage's Rules button (stage-rules.ts), where On starts as that stage.
+// Stage rules are read here, in the stage panel's row (stage-rules.ts); one the viewer may change is edited or retired from
+// here too, in the panel's own form.
 const ruStageWhere = (r: StageRuleCore) => r.scope === 'company' ? 'Every pipeline'
   : r.scope === 'pipeline' ? `${r.pipeline_name || r.pipeline_id}: every stage` : `${r.pipeline_name || r.pipeline_id}: ${(r.stage_names || r.stages).join(', ')}`;
-function ruStageRowHTML(r: StageRule, acts = ''): string {
-  return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}"><div class="sr-line"><span class="sr-name">${esc(r.name)}</span>`
-    + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
-    + `<div class="sr-what muted">${esc(ruStageWhere(r))} · ${esc(srSentence(r))}</div>${srIdleHTML(r)}</div>`;
+// A rule under its pipeline's heading (ruDrawStages), as the stage's panel draws it (stage-rules.ts stageRuleRowHTML):
+// one line, what it does, its marks (a Jev call, not acting); where it applies is the heading. One the viewer may change
+// opens the panel's form for it, with ⋯ (Edit, Retire); any other opens its whole text in place.
+function ruStageRowHTML(r: StageRule): string {
+  // One the viewer may change (any scope): the row opens the panel's own form for it, and ⋯ holds Edit and Retire.
+  return stageRuleRowHTML({key: `ru-${r.id}`, tag: 'div', attrs: `data-stage-rule="${esc(r.id)}"`, outcome: r.then, text: srSentence(r, true),
+    cost: r.cost, idle: r.not_acting, name: r.name,
+    ...(r.can_edit ? {open: `data-sr-page-edit="${esc(r.id)}"`, more: r.id} : {detail: stageRuleReadHTML(r)})});
+}
+/** After a stage rule is changed or retired from this page: its rules are read again, and the board's counts. */
+async function ruStageReload(): Promise<void> {
+  ruOpen().loaded.clear();
+  SR_BOARD.clear();
+  const tab = ruOpen().tab;
+  if (tab && await ruLoad(tab)) ruDraw();
+}
+/** A stage rule's row or ⋯ on this page (Pipelines and stages): Edit opens the panel's form for it; Retire asks first. */
+function ruStageRuleClick(ev: MouseEvent): boolean {
+  const el = eventElement(ev)?.closest<HTMLElement>('[data-sr-page-edit],[data-sr-more]');
+  const id = el?.dataset['srPageEdit'] ?? el?.dataset['srMore'] ?? '';
+  const r = id ? ruOpen().stageRules.find(x => x.id === id) : undefined;
+  if (!el || !r) return false;
+  if (el.dataset['srPageEdit'] !== undefined) { stageRuleEdit(r, el, ruStageReload); return true; }
+  srMenuOpen(el, r, (what, from) => { if (what === 'edit') stageRuleEdit(r, from, ruStageReload); else void stageRuleRetire(r, from, ruStageReload); });
+  return true;
 }
 /** What a suggested change alters in the rule it replaces: "When: A task enters → The owner changes", one per part. */
 function ruStageDiff(old: StageRuleCore, r: StageRuleCore): [string, string, string][] {
@@ -1032,63 +1215,70 @@ function ruStageSuggestedHTML(rows: StageRule[]): string {
   return `<section class="ru-sg" data-group="stage-rules"><header><h2>Stage rules</h2></header>${rows.map(r => {
     const old = r.replaces, kind = !r.suggests ? 'new' : r.retires ? 'retire' : 'change';
     const accept = kind === 'retire' ? 'Retire' : kind === 'change' ? 'Accept change' : 'Accept';
+    // Skip at the left, the one filled button (Accept) at the right, last: inside the row's opened view.
     const acts = human && r.can_edit ? `<span class="ru-pacts"><button class="ghost small" type="button" data-sr-decide="skip">Skip</button>`
       + `<button class="primary small" type="button" data-sr-decide="accept">${accept}</button></span>` : '';
     const title = kind === 'retire' ? `Retire: ${old?.name ?? r.name}` : kind === 'change' ? `Change to ${old?.name ?? r.name}` : `New: ${r.name}`;
     let more = '';
-    if (kind === 'retire') more = `<div class="sr-says muted" data-sr-why>${r.retire_why ? `Why: ${esc(r.retire_why)}` : 'No reason given.'}</div>`;
+    if (kind === 'retire') more = `<p class="muted" data-sr-why>${r.retire_why ? `Why: ${esc(r.retire_why)}` : 'No reason given.'}</p>`;
     else if (kind === 'change' && old) {
       const diff = ruStageDiff(old, r);
       more = `<ul class="sr-diff" data-sr-diff>${diff.map(([k, x, y]) => `<li><span class="sr-diff-k">${esc(k)}</span> <s class="muted">${esc(x || '(none)')}</s> → ${esc(y || '(none)')}</li>`).join('')
         || '<li class="muted">Nothing differs from the rule as it is now.</li>'}</ul>`;
-    } else if (kind !== 'new') more = '<div class="sr-says muted">The rule it changes is gone; skip it.</div>';
-    return `<div class="ru-row sr-row-ru" data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"><div class="sr-line"><span class="sr-name">${esc(title)}</span>`
-      + `<span class="sr-cost${r.cost === SR_FREE ? '' : ' sr-cost-jev'}">${esc(r.cost === SR_FREE ? 'Free' : r.cost)}</span>${acts}</div>`
-      + `<div class="sr-what muted">${esc(ruStageWhere(old ?? r))} · ${esc(srSentence(old ?? r))}</div>${more}${kind === 'retire' ? '' : srIdleHTML(r)}</div>`;
+    } else if (kind !== 'new') more = '<p class="muted">The rule it changes is gone; skip it.</p>';
+    // One line as any rule (the rule it would be; the one it retires), with the suggestion's mark; opened: what it is, where,
+    // the whole rule, what changes or why, and Skip and Accept.
+    const shown = kind === 'retire' ? old ?? r : r;
+    return stageRuleRowHTML({key: `rs-${r.id}`, tag: 'div', attrs: `data-stage-rule="${esc(r.id)}" data-sr-kind="${kind}"`, outcome: shown.then,
+      text: srSentence(shown, true), cost: r.cost, idle: kind === 'retire' ? '' : r.not_acting, name: title,
+      suggest: kind === 'retire' ? 'Suggested retire' : kind === 'change' ? 'Suggested change' : 'Suggested rule',
+      detail: `<p class="sr-d-name" data-sr-title>${esc(title)}</p><p class="muted">${esc(ruStageWhere(old ?? r))}</p><p>${esc(srSentence(shown))}</p>`
+        + `${more}${kind === 'retire' ? '' : srIdleHTML(r)}${acts}`});
   }).join('')}</section>`;
 }
 // By pipeline, then stage: Company first, then each pipeline's whole-pipeline rules and its stages' rules.
 function ruDrawStages(filters: HTMLElement, list: HTMLElement) {
   filters.innerHTML = '';
-  const rows = ruOpen().stageRules, groups = new Map<string, StageRule[]>();
+  // A heading is the pipeline and its count, then where in it, muted: the count never reads as part of a stage's name.
+  const rows = ruOpen().stageRules, groups = new Map<string, {name: string; where: string; rows: StageRule[]}>();
   for (const r of rows) {
-    const key = r.scope === 'company' ? 'Company: every pipeline' : r.scope === 'pipeline' ? `${r.pipeline_name || r.pipeline_id} · Whole pipeline`
-      : `${r.pipeline_name || r.pipeline_id} · ${(r.stage_names || r.stages).join(', ')}`;
-    groups.set(key, [...(groups.get(key) || []), r]);
+    const name = r.scope === 'company' ? 'Every pipeline' : r.pipeline_name || r.pipeline_id;
+    const where = r.scope === 'company' ? '' : r.scope === 'pipeline' ? 'Whole pipeline' : (r.stage_names || r.stages).join(', ');
+    const key = name + '\n' + where, g = groups.get(key) || {name, where, rows: []};
+    g.rows.push(r);
+    groups.set(key, g);
   }
-  list.innerHTML = [...groups].map(([name, rs]) => `<section class="ru-sg sr-ru-group"><header><h2>${esc(name)} <span class="ru-n tnum">${rs.length}</span></h2></header>`
-    + rs.map(r => ruStageRowHTML(r, r.can_edit && r.scope === 'stage'
-      ? `<span class="ru-pacts"><button class="ghost small" type="button" data-sr-open-ru="${esc(r.stages[0] ?? '')}" data-sr-pipeline="${esc(r.pipeline_id)}" data-sr-name="${esc(r.stage_names?.[0] ?? '')}">Edit</button></span>` : '')).join('')
-    + '</section>').join('') || '<p class="muted ru-pad">No stage rules. Add one from a stage\'s Rules button on its pipeline.</p>';
+  list.innerHTML = [...groups.values()].map(({name, where, rows: rs}) => `<section class="ru-sg sr-ru-group"><header><h2><span>${esc(name)}</span> <span class="ru-n tnum">${rs.length}</span></h2>`
+    + `${where ? `<span class="ru-sg-where muted">${esc(where)}</span>` : ''}</header>`
+    + rs.map(ruStageRowHTML).join('')
+    + '</section>').join('') || '<p class="muted ru-pad">No stage rules.</p>';
 }
+// Each row is the automation's name, a link to it on the Automations page (where it is changed); an Off one says so.
 function ruAutosHTML(rows: RuleAuto[], empty: string): string {
-  return rows.length ? `<p class="muted ru-pad">Listed here; edited on the Automations page.</p>${rows.map(a => `<div class="ru-row sr-row-ru"><div class="sr-line">`
-    + `<a class="sr-name" href="${AUTOMATION_HREF(a.id)}">${esc(a.name)}</a><span class="sr-cost">${a.enabled ? 'On' : 'Off'}</span></div></div>`).join('')}`
+  return rows.length ? rows.map(a => `<div class="ru-row sr-row-ru"><div class="sr-line">`
+    + `<a class="sr-name" href="${AUTOMATION_HREF(a.id)}">${esc(a.name)}</a>${a.enabled ? '' : '<span class="pill">Off</span>'}</div></div>`).join('')
     : `<p class="muted ru-pad">${empty}</p>`;
 }
 function ruDrawWakes(filters: HTMLElement, list: HTMLElement) {
   filters.innerHTML = '';
-  list.innerHTML = ruAutosHTML(ruOpen().groups?.wakes || [], 'No What wakes automations.');
+  list.innerHTML = ruAutosHTML(ruOpen().groups?.wakes || [], 'No automations wake bots.');
 }
 function ruDrawAutomations(filters: HTMLElement, list: HTMLElement) {
   filters.innerHTML = '';
   list.innerHTML = ruAutosHTML(ruOpen().groups?.automations || [], 'No automations start from a task.');
 }
-// What Tico does in code: read-only.
+// What Tico does in code: each rule's name and what it does. Read-only, as the tab's lack of any control says; where in
+// the code it lives is a developer's detail and is not shown.
 function ruDrawBuiltIn(filters: HTMLElement, list: HTMLElement) {
   filters.innerHTML = '';
   const rows = ruOpen().groups?.built_in || [];
-  list.innerHTML = `<p class="muted ru-pad">In code, read-only.</p>` + rows.map(b => `<div class="ru-row sr-row-ru sr-builtin" data-built-in><div class="sr-line"><span class="sr-name">${esc(b.name)}</span></div>`
-    + `${b.what ? `<div class="sr-what muted">${esc(b.what)}${b.where ? ` · ${esc(b.where)}` : ''}</div>` : ''}</div>`).join('');
+  // the stage panel's row (stage-rules.ts): what it does, the lock; its name opens under it
+  list.innerHTML = rows.map((b, i) => builtInRowHTML(b, `rb-${i}`, 'div', 'data-built-in')).join('') || '<p class="muted ru-pad">No built-in rules.</p>';
 }
-// Accept or Skip on a suggested stage rule; Edit opens the stage's Rules panel.
+// Accept or Skip on a suggested stage rule.
 async function ruStageClick(ev: MouseEvent): Promise<boolean> {
-  const el = eventElement(ev)?.closest<HTMLElement>('[data-sr-decide],[data-sr-open-ru]');
+  const el = eventElement(ev)?.closest<HTMLElement>('[data-sr-decide]');
   if (!el) return false;
-  if (el.dataset['srOpenRu'] !== undefined) {
-    await stageRulesOpen(el.dataset['srPipeline'] ?? '', el.dataset['srOpenRu'] ?? '', el.dataset['srName'] ?? '');
-    return true;
-  }
   const id = el.closest<HTMLElement>('[data-stage-rule]')?.dataset['stageRule'] ?? '', action = el.dataset['srDecide'] ?? '';
   const r = ruOpen().stageSuggested.find(x => x.id === id);
   if (!r) return true;
@@ -1151,6 +1341,8 @@ function ruWire() {
       ruAddAllSync(ruClosest<HTMLElement>(prop, '.ru-sg'));
     }
   });
+  // Esc in a stage rule's opened text closes it and gives its row the focus back (stage-rules.ts).
+  root.addEventListener('keydown', stageRuleRowKey);
   root.addEventListener('click', ev => {
     const t = eventElement(ev);
     if (!t) return;
@@ -1163,7 +1355,11 @@ function ruWire() {
       else f[key] = f[key] === v ? '' : v;
       ruDraw(); return;
     }
-    if (t.closest('[data-sr-decide],[data-sr-open-ru]')) { void ruStageClick(ev); return; }
+    const fbtn = t.closest<HTMLElement>('[data-ru-filter]');
+    if (fbtn) { ruFilterOpen(fbtn); return; }
+    if (t.closest('[data-sr-decide]')) { void ruStageClick(ev); return; }
+    if (ruStageRuleClick(ev)) return;     // a stage rule's Edit, or its ⋯
+    if (stageRuleRowToggle(ev)) return;   // a read-only stage rule's row opens its whole text (stage-rules.ts)
     if (t.closest('[data-ru-more]')) { ruOpen().filter.moreFrom = true; ruDraw(); return; }
     if (t.closest('[data-ru-add]')) { ruAddOpen({kind: ruOpen().tab === 'external' ? 'external' : 'internal'}); return; }
     if (t.closest('[data-ru-add-due]')) { location.hash = ruHref('due', {due: 'new'}); return; }
@@ -1387,7 +1583,7 @@ async function ruRulePanel(side: HTMLElement, id: string, note = '') {
         : `<label class="ru-fl"><span class="ru-lbl">From</span><select name="source"${dis}>${ruSourceOptions(ruOpen().sources, r.source?.id)}</select></label>`}
       <div class="ru-fl"><span class="ru-lbl">If broken</span>${ruBrokenHTML(r.if_broken, r.reviewer?.id, !edit)}</div>
       <div class="ru-fl"><span class="ru-lbl">Due</span>${dues.map(due =>
-          `<a class="ru-duebox" href="${ruHref('due', {due: due.id})}" data-due="${esc(due.id)}"><span>${esc(ruDay(due.due_on, true))}${due.repeats && due.repeats !== 'once' ? ' · ' + esc(ruRepeatWord(due.repeats).toLowerCase()) : ''}${due.task_days != null ? ' · task ' + esc(ruLead(due.task_days)) : ''}</span>${ruPill(due.status)}<span class="spacer"></span><span class="muted">›</span></a>`).join('')}
+          `<a class="ru-duebox" href="${ruHref('due', {due: due.id})}" data-due="${esc(due.id)}"><span>${esc(ruDay(due.due_on, true))}${due.repeats && due.repeats !== 'once' ? ' · ' + esc(ruRepeatWord(due.repeats).toLowerCase()) : ''}${due.task_days != null ? ' · task ' + esc(ruLead(due.task_days)) : ''}</span>${ruPill(due.status, true)}<span class="spacer"></span><span class="muted">›</span></a>`).join('')}
         ${r.due_more ? `<a class="ru-adddue" href="${ruHref('due')}">${r.due_more} more</a>` : ''}
         ${edit ? `<a class="ru-adddue" href="${ruHref('due', {due: 'new', rule: r.id})}">+ Add due date</a>` : dues.length ? '' : '<span class="ru-none">—</span>'}</div>
       ${quote}
@@ -1804,7 +2000,8 @@ async function ruDocOpen() {
 // ----------------------------------------------------------------- the bot's Rules tab
 // Internal first (the written rules whose Who or With names the bot, then its settings as sentences, each opening the
 // setting), then External. Every teammate reads it. Each kind is paged on its own: a More row reads its next page.
-const ruBotRow = (r: RuleRow) => `<a class="ru-row" role="row" href="${ruHref(r.kind, {rule: r.id})}" data-rule="${esc(r.id)}"><span class="ru-txt">${ruTextHTML(r.text, 'inline')}</span>${r.kind === 'internal'
+// Each leads with its outcome (Stop, Ask first, Warn) in the mark every rule uses (stage-rules.ts ruleOutcomeIconHTML).
+const ruBotRow = (r: RuleRow) => `<a class="ru-row" role="row" href="${ruHref(r.kind, {rule: r.id})}" data-rule="${esc(r.id)}"><span class="ru-txt"><span class="ru-outcome">${ruleOutcomeIconHTML(r.if_broken, 'Stop')}</span>${ruTextHTML(r.text, 'inline')}</span>${r.kind === 'internal'
   ? `<span class="ru-c${ruScopeWords(r.with, 'Anyone') === 'Anyone' ? ' ru-none' : ''}" data-l="With">${esc(ruScopeWords(r.with, 'Anyone'))}</span><span class="ru-c" data-l="Followed by">${esc(ruScopeWords(r.who))}</span>`
   : `<span class="ru-c" data-l="From">${r.source ? `<span class="ru-src ${esc(r.source.kind)}">${esc(r.source.name)}</span>` : '—'}</span><span class="ru-c" data-l="Due">${ruDueCell(r)}</span>`}</a>`;
 const ruBotMore = (kind: string, cursor: string | null | undefined) => cursor ? `<button type="button" class="ru-row ru-more-row" data-ru-bot-more="${kind}" data-cursor="${esc(cursor)}">More</button>` : '';

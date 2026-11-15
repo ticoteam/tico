@@ -278,7 +278,7 @@ async function navigation(browser: Browser) {
     assert.equal(await page.locator('#settings-tasks').isVisible(), true, `${alias} opens Tasks`);
   }
   for (const alias of ['credentials', 'cloud']) {
-    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), alias === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools');
+    assert.equal(await page.evaluate(alias => { settingsShow(alias); return location.hash; }, alias), alias === 'credentials' ? '#/tools?show=keys' : '#/tools');
   }
   assert.deepEqual(errors, []);
   await page.close();
@@ -773,7 +773,7 @@ async function computersTable(browser: Browser) {
   assert.equal(await page.locator('#machine-label').isVisible(), false);
   await page.locator('#machine-add-open').click();
   assert.equal(await page.locator('#machine-add-dialog #machine-label').isVisible(), true);
-  await page.locator('#machine-add-dialog [data-machine-add-close]').click();
+  await page.locator('#machine-add-dialog .tmodal-x').click();
   assert.deepEqual(errors, []);
   await page.close();
   console.log('computers table and pickers: ok');

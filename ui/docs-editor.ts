@@ -333,8 +333,7 @@ declare var DocsEditor: DocsEditorApi;
         const sent: DocsResearchFiled = await post('/v2/librarian/research', {target, section: form.elements.section?.value || '', instructions});
         form.innerHTML = `<header><h2>Research</h2><button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
           <p class="docs-dialog-lead">On it. The changes show in this page's history.</p>
-          <div class="gs-card-actions"><a class="primary" role="button" href="#/task/${esc(sent.task_id)}" data-close>View task</a>
-            <button class="ghost" type="button" data-close>Close</button></div>`;
+          <div class="gs-card-actions"><a class="primary" role="button" href="#/task/${esc(sent.task_id)}" data-close>View task</a></div>`;   // ✕ dismisses it
       } catch (error) {
         submit.disabled = false;
         line.textContent = errorCode(error) === 'librarian_off' ? 'Research is off right now.' : errorMessage(error, 'That did not go through.');

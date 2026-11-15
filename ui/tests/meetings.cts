@@ -3,6 +3,8 @@ import type {Route} from 'playwright';
 // "Add notes" button, an empty state of source tiles (Granola, Zoom, Google Meet, Close) alone, then a Sources
 // link (ui/app/meetings-sources.ts) whose dialog lists every source with its status and error, Remove and Connect;
 // filters and rows only once there is a meeting, setup in a dialog, and a transcript upload inside Add notes.
+// Filters sit behind the shared filter icon (the Tasks popover: fields, then a field's values with a way back); a filter
+// in force is a chip under the header with "N of M", and no row of bare selects or "N total" is drawn.
 // Fixtures only, no network.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -107,6 +109,13 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
   return {page, errors, context};
 }
 const world = (extra: Partial<World> = {}): World => ({role: 'owner', sources: NONE, meetings: [], importers: structuredClone(IMPORTERS), saved: [], imported: [], pushes: [], itemEdits: [], ...extra});
+// Pick one value of one filter through the filter icon: the fields, then the field's values in the same popover.
+async function pickFilter(page: import('playwright').Page, field: string, label: string) {
+  await page.locator('#notes-filter').click();
+  await page.locator(`#task-filter-pop [data-meet-field=${field}]`).click();
+  await page.locator('#task-filter-pop .tl-opt', {hasText: label}).click();
+  await page.locator('#task-filter-pop').waitFor({state: 'hidden'});
+}
 async function shot(page: import('playwright').Page, name: string) {
   if (!process.env.TICO_MEETINGS_SCREENSHOTS) return;
   fs.mkdirSync(process.env.TICO_MEETINGS_SCREENSHOTS, {recursive: true});
@@ -212,16 +221,31 @@ async function shot(page: import('playwright').Page, name: string) {
       assert.equal(await page.locator('.meet-blank').count(), 0);
       assert.equal(await page.locator('#notes-import').count(), 0);
       assert.equal(await page.locator('#meet-sources').evaluate((el: HTMLElement) => el.hidden), false, 'Sources is offered');
-      assert.equal(await page.locator('#notes-filters').isVisible(), true);
-      assert.deepEqual(await page.locator('#notes-filters select').evaluateAll((els: HTMLElement[]) => els.map(el => el.getAttribute('aria-label'))), ['When', 'Participant', 'Source', 'Status']);
+      // The filters are behind the one filter icon: no bare selects, no caption, no "N total".
+      assert.equal(await page.locator('#main select').count(), 0, 'no bare filter selects');
+      assert.equal(await page.locator('#notes-filters').isHidden(), true, 'no chips until a filter is on');
+      assert.doesNotMatch(await page.locator('#main').innerText(), /\btotal\b|Only you see/);
+      await page.locator('#notes-filter').click();
+      assert.deepEqual(await page.locator('#task-filter-pop [data-meet-field]').allInnerTexts(), ['When', 'Participant', 'Source', 'Status']);
+      await page.locator('#task-filter-pop [data-meet-field=when]').click();
+      await page.locator('#task-filter-pop [data-meet-back]').click();     // the way back to the fields
+      await page.locator('#task-filter-pop [data-meet-field=filter]').waitFor();
+      await page.keyboard.press('Escape');
+      await page.locator('#task-filter-pop').waitFor({state: 'hidden'});
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'notes-filter', 'Esc returns focus to the filter icon');
       assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Weekly ops sync', 'Renewal call with Dana', 'Notes from standup']);
       // A row counts what a meeting turned into (pushed items), and only otherwise what is still proposed.
       assert.deepEqual(await page.locator('.meet-row').evaluateAll((rows: HTMLElement[]) => rows.map(r => [...(r.querySelectorAll('.meet-made-chip, .meet-proposed') as unknown as Iterable<Element>)].map(e => e.textContent).join(' '))), ['1 task', '1 proposed', '']);
       assert.match(await page.locator('.meet-row').first().locator('.meet-meta').innerText(), /Ana, Ben \+1/);
       // Search and the Source filter narrow the list.
-      await page.locator('#notes-source').selectOption('granola');
+      await pickFilter(page, 'source', 'Granola');
       assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Renewal call with Dana']);
-      await page.locator('#notes-source').selectOption('');
+      assert.match(await page.locator('#notes-chips').innerText(), /Source\s*Granola/);
+      assert.equal(await page.locator('#notes-count').innerText(), '1 of 3');
+      assert.equal(await page.locator('#notes-filter .tl-fbadge').innerText(), '1');
+      await page.locator('[data-chip-drop=source]').click();             // the chip's ✕ takes it off
+      assert.equal(await page.locator('.meet-row').count(), 3);
+      assert.equal(await page.locator('#notes-filters').isHidden(), true);
       await page.evaluate(() => { (window as unknown as PageWin).opened = []; window.open = (url: string | URL | undefined) => ((window as unknown as PageWin).opened.push(url as string), {} as Window); });
       await page.locator('.meet-row .note-title').first().click();   // a click opens the meeting here, never only in a window
       await page.locator('#notes-modal[open] #notes-detail').waitFor();
@@ -249,7 +273,7 @@ async function shot(page: import('playwright').Page, name: string) {
       assert.deepEqual(await panel.locator('ul[aria-label="Not connected"] > li').evaluateAll((els: HTMLElement[]) => els.map(e => e.dataset.src)), ['google-meet']);
       const zoom = panel.locator('[data-src=zoom]');
       assert.equal(await zoom.getAttribute('data-state'), 'error');
-      assert.match(await zoom.locator('.msrc-line').innerText(), /Zoom[\s\S]*Error[\s\S]*Synced 9h ago/);
+      assert.match(await zoom.locator('.msrc-line').innerText(), /Zoom[\s\S]*Error[\s\S]*Synced 9h/);
       assert.equal(await zoom.locator('.msrc-err').innerText(), 'The tool refused the credential.');
       assert.equal(await zoom.locator('[data-act=imp-connect]').innerText(), 'Reconnect');
       await shot(page, 'sources-desktop-' + scheme);
@@ -311,8 +335,7 @@ async function shot(page: import('playwright').Page, name: string) {
         await page.goto('https://tico-ui.test/#/meetings');
         await page.locator('.meet-row').first().waitFor();
         assert.equal(await page.locator('[data-msrc=fireflies]').count(), 0);
-        assert.equal(await page.locator('#notes-source option[value=fireflies]').innerText(), 'Fireflies');
-        await page.locator('#notes-source').selectOption('fireflies');
+        await pickFilter(page, 'source', 'Fireflies');
         assert.deepEqual(await page.locator('.meet-row .note-title').allInnerTexts(), ['Historical Fireflies call']);
         assert.equal(await page.locator('.meet-row[title="Fireflies"]').count(), 1);
         await shot(page, 'historical-' + (viewport.width > 760 ? 'desktop-' : 'phone-') + scheme);

@@ -1,5 +1,5 @@
-/* ui/styles/feedback.css — 👍 / 👎 on a bot's work (ui/app/feedback.ts). Nothing shows until the server is known to
-   have feedback (body.fb-on). Icons are the icon font's, muted; a chosen thumb draws filled. */
+/* ui/styles/feedback.css — 👍 / 👎 on a bot's or another person's work (ui/app/feedback.ts). Nothing shows until the
+   server is known to have feedback (body.fb-on). Icons are the icon font's, muted; a chosen thumb draws filled. */
 .fb-ctl,.fb-row{display:none}
 body.fb-on .fb-ctl{display:inline-flex;align-items:center;gap:2px}
 .fb-btn{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;
@@ -13,12 +13,12 @@ body.fb-on .fb-mark:not(:empty){display:inline-flex;vertical-align:middle}
 .fb-mark-i>.fb-i.nav-icon{width:13px;height:13px;font-size:13px}
 [data-fb-press]{-webkit-touch-callout:none}
 
-/* A message's row, right under its words: Copy, 👍, 👎. With a pointer it adds no height to a reply nobody rated: it
-   floats just below the words, shown on hover or focus. Once a thumb is chosen the row joins the reply and the chosen
+/* A message's row, right under its words: Copy, 👍, 👎. With a pointer it adds no height to a message nobody rated: it
+   floats just below the words, shown on hover or focus. Once a thumb is chosen the row joins the message and the chosen
    thumb stays there, filled. On touch the row shows only once a thumb is chosen (a long press opens the rest). The
    chat's own Copy line (chat.css) becomes this row. */
 body.fb-on .fb-row,
-body.fb-on .bubble.bot>.chat-message-actions:has(.fb-ctl){display:flex;align-items:center;justify-content:flex-start;gap:2px;height:28px;margin:0;padding:0 2px;
+body.fb-on .bubble>.chat-message-actions:has(.fb-ctl){display:flex;align-items:center;justify-content:flex-start;gap:2px;height:28px;margin:0;padding:0 2px;
   position:absolute;top:100%;bottom:auto;left:-8px;right:auto;z-index:2;border-radius:7px;background:transparent;pointer-events:none}
 body.fb-on .th-main:has(>.fb-row){position:relative}
 /* Each chat run and thread message is its own layer (a transform, a position): the one in use rises above the next. */
@@ -26,19 +26,19 @@ body.fb-on :is(.conv-run.chat,.th-msg):is(:hover,:focus-within):has(.fb-ctl){z-i
 body.fb-on :is(.bubble:hover,.th-msg:hover .th-main,.tcomment:hover .bubble)>:is(.fb-row,.chat-message-actions),
 body.fb-on :is(.fb-row,.chat-message-actions):focus-within{background:var(--bg);pointer-events:auto}
 body.fb-on .fb-row:has([aria-pressed="true"]),
-body.fb-on .bubble.bot>.chat-message-actions:has([aria-pressed="true"]){position:static;margin:2px 0 0 -8px;background:none;pointer-events:auto}
+body.fb-on .bubble>.chat-message-actions:has([aria-pressed="true"]){position:static;margin:2px 0 0 -8px;background:none;pointer-events:auto}
 .fb-row .fb-btn,.chat-message-actions .fb-btn{opacity:0;transition:opacity var(--dur-fast) var(--ease)}
 .bubble:hover .fb-btn,.th-msg:hover .fb-row .fb-btn,.tcomment:hover .fb-row .fb-btn,.fb-row:focus-within .fb-btn,
 .chat-message-actions:focus-within .fb-btn,.fb-row .fb-btn[aria-pressed="true"],.chat-message-actions .fb-btn[aria-pressed="true"]{opacity:1}
-body.fb-on .bubble.bot>.chat-message-actions:has(.fb-ctl) .chat-message-copy{width:28px;height:28px;border-radius:6px}
-body.fb-on .bubble.bot>.chat-message-actions:has(.fb-ctl) .chat-message-copy .nav-icon{width:16px;height:16px;font-size:16px}
+body.fb-on .bubble>.chat-message-actions:has(.fb-ctl) .chat-message-copy{width:28px;height:28px;border-radius:6px}
+body.fb-on .bubble>.chat-message-actions:has(.fb-ctl) .chat-message-copy .nav-icon{width:16px;height:16px;font-size:16px}
 body.fb-on .chat-message-actions:focus-within .chat-message-copy{opacity:1}
 @media (pointer:coarse){
-  body.fb-on .bubble.bot>.chat-message-actions:has(.fb-ctl){display:none}
-  body.fb-on .bubble.bot.acts>.chat-message-actions:has(.fb-ctl),
-  body.fb-on .bubble.bot>.chat-message-actions:has([aria-pressed="true"]){display:flex;height:30px;position:static;margin:2px 0 0 -8px;background:none;pointer-events:auto}
-  body.fb-on .bubble.bot:not(.acts)>.chat-message-actions :is(.chat-message-copy,.fb-btn:not([aria-pressed="true"])){visibility:hidden}
-  body.fb-on .bubble.bot>.chat-message-actions:has(.fb-ctl) :is(.chat-message-copy,.fb-btn){width:40px;height:30px;opacity:1}
+  body.fb-on .bubble>.chat-message-actions:has(.fb-ctl){display:none}
+  body.fb-on .bubble.acts>.chat-message-actions:has(.fb-ctl),
+  body.fb-on .bubble>.chat-message-actions:has([aria-pressed="true"]){display:flex;height:30px;position:static;margin:2px 0 0 -8px;background:none;pointer-events:auto}
+  body.fb-on .bubble:not(.acts)>.chat-message-actions :is(.chat-message-copy,.fb-btn:not([aria-pressed="true"])){visibility:hidden}
+  body.fb-on .bubble>.chat-message-actions:has(.fb-ctl) :is(.chat-message-copy,.fb-btn){width:40px;height:30px;opacity:1}
 }
 @media (hover:none){
   body.fb-on .fb-row{display:none}
@@ -65,7 +65,7 @@ dialog.fb-sheet{box-sizing:border-box;width:min(380px,calc(100vw - 32px));paddin
   background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45)}
 dialog.fb-sheet::backdrop{background:rgba(0,0,0,.35)}
 .fb-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
-.fb-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.fb-head h2{margin:0;font-size:var(--t-card);font-weight:600}
 .fb-corner{position:absolute;top:8px;right:8px}
 dialog.fb-down .fb-chips,dialog.fb-show .fb-reason{padding-right:32px}
 dialog.fb-down .fb-chips[hidden]+.fb-why{margin-right:32px}

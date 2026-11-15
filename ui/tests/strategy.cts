@@ -95,8 +95,9 @@ const v1 = {id: 'v-1', n: 1, status: 'published', guide: 'default',
   vision: 'Every home in Austin cleaned by Acme.', sections, bets: bets().filter(b => b.id !== 'b-weekly'), note: 'First version', revision: 7,
   updated_at: '2026-10-24T09:00:00Z', updated_by: 'human:ana', published_at: '2026-10-24T09:00:00Z', published_by: 'human:ana'};
 
-async function open(browser: Browser, {role = 'owner', route = '#/strategy', viewport = DESKTOP, fresh = false, needs = [], more = [], marketOf = market}: {role?: string; route?: string; viewport?: {width: number; height: number}; fresh?: boolean; needs?: unknown[]; more?: Goal[]; marketOf?: typeof market} = {}) {
-  const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});  // dates read "24 Oct"
+async function open(browser: Browser, {role = 'owner', route = '#/strategy', viewport = DESKTOP, fresh = false, needs = [], more = [], marketOf = market, touch = false}: {role?: string; route?: string; viewport?: {width: number; height: number}; fresh?: boolean; needs?: unknown[]; more?: Goal[]; marketOf?: typeof market; touch?: boolean} = {}) {
+  // touch: a phone's touch screen (no hover), where the small marks always show
+  const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB', hasTouch: touch, isMobile: touch});  // dates read "24 Oct"
   const errors: string[] = [], sent: Sent[] = [];
   page.on('pageerror', e => errors.push(e.message));
   // fresh: nothing published yet, one proposed bet with no Rules out, and What we won't do unwritten.
@@ -359,7 +360,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       const where = page.locator('#strat-where');
       await where.locator('.strat-map').waitFor();
       const tile = (id: string) => where.locator(`[data-seg="segment/${id}"]`);
-      assert.equal(await where.locator('.strat-hint').innerText(), 'Click to target');
+      assert.equal(await where.locator('.strat-hint').count(), 0, 'no helper line: a tile says what it is (aria-pressed)');
       assert.equal(await tile('homes').getAttribute('aria-pressed'), 'true');
       // Opening a source does not target its tile: the link's click is not the tile's (the link itself stays put here).
       await page.evaluate(() => {
@@ -435,7 +436,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       await page.locator('#strat-news .strat-none-s').waitFor();
       assert.equal(await page.locator('.strat-x, .strat-addrow, .strat-tm.pick, .strat-hint').count(), 0);
       assert.deepEqual(await page.locator('#strat-rivals .strat-chip').allInnerTexts(), ['CleanCo', 'Sparkle']);
-      assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', "WHAT WE KNOW THAT OTHERS DON'T", "WHAT WE WON'T DO", 'BRAND']);
+      assert.deepEqual(await sectionTitles(page), ['Who we serve', 'What we sell, and for how much', "What we know that others don't", "What we won't do", 'Brand']);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -446,7 +447,143 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       await page.locator('#strat-where .strat-map').waitFor();
       await page.locator('#strat-news .strat-posts').waitFor();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && $('#main').scrollWidth <= $('#main').clientWidth), 'no horizontal scroll');
+      // The title stands where every page's does: #main keeps its 18px phone padding, the header adds none.
+      const at = await page.evaluate(() => {
+        const main = document.querySelector<HTMLElement>('#main')!, h1 = document.querySelector<HTMLElement>('.rd-strat-head > h1')!;
+        return {pad: getComputedStyle(main).paddingTop, gap: Math.round(h1.getBoundingClientRect().top - main.getBoundingClientRect().top)};
+      });
+      assert.deepEqual(at, {pad: '18px', gap: 18}, 'the title lines up with the other pages');
+      // The small marks in a card are 44px targets on a phone (.tap-mark), though they stay small marks.
+      for (const sel of ['li[data-bet="b-price"] [data-bet-x]', 'li[data-bet="b-price"] [data-bet-drag]', '#strat-rivals [data-rival-x]']) {
+        const hit = await page.locator(sel).first().evaluate((el: Element) => {
+          const r = getComputedStyle(el, '::before');
+          return {pos: getComputedStyle(el).position, before: r.content !== 'none' && r.position === 'absolute', h: el.getBoundingClientRect().height + 2 * Math.max(0, -parseFloat(r.top))};
+        });
+        assert.ok(hit.pos !== 'static' && hit.before && hit.h >= 43.5, `${sel}: a 44px target (${JSON.stringify(hit)})`);
+      }
       await shot(page, 'phone', ['dark']);
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // A touch phone: every map tile's × shows and removes the segment without retargeting it; a competitor's × target
+    // stays clear of its name (a tap on the name's last pixels keeps it) and its removal has an Undo; a bet's × target
+    // stays clear of Make active; a bet's pill, Make active and × sit on their own row under the statement.
+    {
+      const {page, errors, sent} = await open(browser, {viewport: PHONE, touch: true});
+      page.context().on('page', p => void p.close());   // a competitor's link opens out; the test stays on this page
+      const where = page.locator('#strat-where');
+      await where.locator('.strat-map').waitFor();
+      assert.ok(await page.evaluate(() => matchMedia('(hover:none)').matches), 'a touch screen');
+      const xs = await where.locator('.strat-map .strat-x').evaluateAll(els => els.map(e => (e as HTMLElement).offsetWidth > 0));
+      assert.ok(xs.length > 0 && xs.every(Boolean), 'every tile shows its ×');
+      // Each × has the tile's corner to itself: nothing else answers inside its 44px target.
+      const clash = await where.locator('.strat-map .strat-tm').evaluateAll(tiles => tiles.flatMap(t => {
+        const x = t.querySelector('.strat-x'), r = t.getBoundingClientRect();
+        if (!x) return [];
+        const hits: string[] = [];
+        for (let dx = 2; dx < Math.min(44, r.width); dx += 6) for (let dy = 2; dy < Math.min(44, r.height); dy += 6) {
+          const el = document.elementFromPoint(r.right - dx, r.top + dy);
+          if (el && !x.contains(el) && el.closest('a, button')) hits.push(el.outerHTML.slice(0, 40));
+        }
+        return hits;
+      }));
+      assert.deepEqual(clash, [], 'no link or button under a tile\'s × target');
+      await where.locator('[data-seg="segment/offices"] [data-seg-x]').tap();
+      await where.locator('.strat-map [data-seg="segment/offices"]').waitFor({state: 'detached'});
+      for (let i = 0; i < 50 && !sent.some(x => x[1] === '/api/v2/market/segments/remove'); i++) await page.waitForTimeout(20);
+      assert.deepEqual(sent.find(x => x[1] === '/api/v2/market/segments/remove'), ['POST', '/api/v2/market/segments/remove', {id: 'segment/offices'}]);
+      assert.equal(sent.filter(x => x[1] === '/api/v2/market/segments/target').length, 0, 'removing sent no target change');
+
+      // A competitor: the last pixels of its name are the name, not the ×.
+      const rivals = page.locator('#strat-rivals');
+      await rivals.locator('.strat-chips').scrollIntoViewIfNeeded();
+      const name = rivals.locator('.strat-chip').first().locator('a, span').first();
+      const nb = (await name.boundingBox())!;
+      assert.equal(await page.evaluate(([x, y]) => !!document.elementFromPoint(x!, y!)?.closest('[data-rival-x]'), [nb.x + nb.width - 2, nb.y + nb.height / 2]), false, 'the name\'s end is not the ×');
+      await page.touchscreen.tap(nb.x + nb.width - 3, nb.y + nb.height / 2);
+      await page.waitForTimeout(200);
+      assert.deepEqual(await rivals.locator('.strat-chip').allInnerTexts(), ['CleanCo', 'Sparkle'], 'a tap on the name keeps the competitor');
+      assert.equal(sent.filter(x => x[1] === '/api/v2/market/competitors/remove').length, 0);
+      // The next chip's first pixels are that chip, not this one's ×.
+      const second = (await rivals.locator('.strat-chip').nth(1).boundingBox())!;
+      const atNext = await page.evaluate(([x, y]) => { const e = document.elementFromPoint(x!, y!); return e?.closest('[data-rival]')?.getAttribute('data-rival') || e?.outerHTML.slice(0, 80); }, [second.x + 2, second.y + second.height / 2]);
+      assert.equal(atNext, 'company/sparkle', `the next chip starts clear of the ×: ${JSON.stringify(second)}`);
+      // Removing one offers Undo, which adds it back.
+      await rivals.locator('[data-rival="company/cleanco"] [data-rival-x]').tap();
+      await rivals.locator('[data-rival="company/cleanco"]').waitFor({state: 'detached'});
+      await page.locator('.toast', {hasText: 'Removed CleanCo'}).getByRole('button', {name: 'Undo'}).click();
+      await rivals.locator('.strat-chip', {hasText: 'cleanco'}).or(rivals.locator('.strat-chip', {hasText: 'CleanCo'})).first().waitFor();
+      assert.deepEqual(sent.filter(x => x[1] === '/api/v2/market/competitors').map(x => x[2]), [{name: 'CleanCo'}], 'Undo adds it back by its name');
+
+      // A proposed bet: its pill, Make active and × on a row of their own under the statement, the statement the
+      // card's width; Make active's right edge is Make active, not the ×; it is named for its bet.
+      const bet = page.locator('li[data-bet="b-weekly"]');
+      await bet.locator('[data-bet-activate]').scrollIntoViewIfNeeded();
+      const layout = await bet.evaluate((li: Element) => {
+        const st = li.querySelector('.strat-bet-st')!.getBoundingClientRect(), side = li.querySelector('.strat-bet-side')!.getBoundingClientRect();
+        const go = li.querySelector<HTMLElement>('[data-bet-activate]')!, g = go.getBoundingClientRect();
+        return {under: side.top >= st.bottom - 1, wide: Math.round(st.width), sideH: Math.round(side.height),
+          edge: document.elementFromPoint(g.right - 1, g.top + g.height / 2) === go, mid: document.elementFromPoint(g.right - 5, g.top + 4) === go};
+      });
+      assert.ok(layout.under && layout.wide >= 290 && layout.sideH >= 44, `the side row under the statement: ${JSON.stringify(layout)}`);
+      assert.ok(layout.edge && layout.mid, `Make active's right edge is Make active: ${JSON.stringify(layout)}`);
+      assert.match(await bet.locator('[data-bet-activate]').getAttribute('aria-label') || '', /^Make bet \d+ active$/, 'named for its bet');
+      // An active bet has nothing to decide: no row of its own. Its × is the small mark at the top right, its 44px target
+      // inside the bet (clear of the statement, the number and the bets around it); its health dot sits under its number.
+      const active = page.locator('li[data-bet="b-offices"]');
+      await active.scrollIntoViewIfNeeded();
+      const act = await active.evaluate((li: Element) => {
+        const box = li.getBoundingClientRect(), x = li.querySelector('[data-bet-x]')!.getBoundingClientRect(), st = li.querySelector('.strat-bet-st')!.getBoundingClientRect();
+        const n = li.querySelector('.strat-bet-n')!.getBoundingClientRect(), dot = li.querySelector('.strat-health')!.getBoundingClientRect();
+        const cx = x.left + x.width / 2, cy = x.top + x.height / 2;
+        // inside the bet top to bottom; on the right it may use the card's padding (nothing there), never past the card
+        const card = li.closest('section')!.getBoundingClientRect();
+        const inside = cy - 22 >= box.top - 0.5 && cy + 22 <= box.bottom + 0.5 && cx + 22 <= card.right - 1 && cx - 22 >= st.right - 0.5;
+        const stEdge = document.elementFromPoint(st.right - 2, st.top + 6)?.closest('[data-bet-x]') == null;
+        return {sideRow: getComputedStyle(li.querySelector('.strat-bet-side')!).display, xTop: Math.round(x.top - st.top), inside, stEdge,
+          dotUnderNumber: dot.top >= n.bottom - 1 && Math.abs((dot.left + dot.width / 2) - (n.left + n.width / 2)) <= 2};
+      });
+      assert.deepEqual(act, {sideRow: 'contents', xTop: act.xTop, inside: true, stEdge: true, dotUnderNumber: true}, `an active bet: no side row, × at the top right: ${JSON.stringify(act)}`);
+      assert.ok(Math.abs(act.xTop) <= 4, 'the × beside the statement\'s first line');
+      assert.notEqual(await bet.locator('.strat-bet-side').evaluate(el => getComputedStyle(el).display), 'contents', 'a proposed bet keeps its row');
+      for (const theme of ['dark', 'light']) {
+        await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
+        await bet.scrollIntoViewIfNeeded();
+        await shot(page, 'phone-proposed-bet-' + theme, [theme]);
+      }
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // The header (style guide, "Top bars: one line"): ⋯ last at the far right, after Publish; Lenses and Versions are in
+    // it, not on the bar. Card titles are card titles, not the uppercase label. Every action row is Cancel, then the
+    // action, last; Versions closes with ✕, never a "Close" word.
+    {
+      const {page, errors} = await open(browser);
+      await page.locator('li[data-bet="b-price"]').waitFor();
+      const order = await page.locator('.rd-strat-head > :is(.ph-tools, .ph-act, .ph-more)').evaluateAll(els => els.filter(e => (e as HTMLElement).offsetWidth).map(e => e.className.split(' ')[0]));
+      assert.equal(order.at(-1), 'ph-more', `⋯ is the last control: ${order}`);
+      assert.equal(await page.locator('.rd-strat-head > .ph-tools :is(a, button)').count(), 0, 'nothing less than daily on the bar');
+      assert.equal(await page.locator('.strat-sub').count(), 0, 'no Lenses link on the bar');
+      await page.locator('.rd-strat-head > .ph-more').click();
+      const menu = page.locator('.rd-strat-head > .ph-menu');
+      assert.equal(await menu.locator('[data-strat-lenses]').getAttribute('href'), '#/strategy/lenses', 'Lenses in ⋯');
+      await menu.locator('[data-strat-versions]').click();
+      const drawer = page.locator('#strat-versions[open]');
+      await drawer.waitFor();
+      assert.equal(await drawer.locator('.tmodal-x').getAttribute('aria-label'), 'Close', 'the drawer has its ✕');
+      assert.equal(await drawer.getByRole('button', {name: /^Close$/}).filter({hasText: 'Close'}).count(), 0, 'no Close word');
+      await page.keyboard.press('Escape');
+      await drawer.waitFor({state: 'detached'}).catch(() => drawer.waitFor({state: 'hidden'}));
+      const title = await page.locator('#strat-where .strat-k').evaluate((el: Element) => ({size: getComputedStyle(el).fontSize, caps: getComputedStyle(el).textTransform}));
+      assert.deepEqual(title, {size: '15px', caps: 'none'}, 'a card title is 15px, in sentence case');
+      // Adding a bet is the card's quiet mini button, like a section's Edit.
+      assert.match(await page.locator('[data-bet-add]').getAttribute('class') || '', /\bghost\b.*\bstrat-mini\b/);
+      // The publish form, a section's form and the bet form: Cancel, then the action, last.
+      await page.locator('[data-strat-publish]:not([disabled])').click();
+      assert.deepEqual(await page.locator('[data-strat-publish-form] button').allInnerTexts(), ['Cancel', 'Publish']);
+      await page.locator('[data-strat-publish-cancel]').click();
+      await page.locator('[data-section="not"] [data-section-edit]').click();
+      assert.deepEqual(await page.locator('[data-section-form] .goal-actions button').allInnerTexts(), ['Cancel', 'Save']);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -510,7 +647,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       // A section renamed with its text unchanged is a change, not "already says this".
       const rename = page.locator('#goal-needs [data-proposal="p-rename"]');
       assert.equal((await rename.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Positioning · Title Now Brand Proposed Positioning');
-      assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
+      assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['No, leave it', 'Add to draft']);
       await lens.waitFor();
       assert.match(await lens.locator('.kpi-prop-head').innerText(), /^Strategy Owner suggests a change to your strategy from the Blue Ocean lens/);
       const values = lens.locator('.prop-np-v');
@@ -523,7 +660,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       assert.match(await same.locator('.kpi-prop-head').innerText(), /from this week's market briefing/);
       assert.equal(await same.locator('.kpi-prop-detail').innerText(), 'Your draft already says this.');
       assert.deepEqual(await same.locator('.kpi-prop-do button').allInnerTexts(), ['Got it']);
-      assert.deepEqual(await lens.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
+      assert.deepEqual(await lens.locator('.kpi-prop-do button').allInnerTexts(), ['No, leave it', 'Add to draft']);
       await same.locator('[data-prop-yes]').click();
       await same.waitFor({state: 'detached'});
       assert.deepEqual(sent.find(x => x[1] === '/proposals/p-same'), ['POST', '/proposals/p-same', {decision: 'reject'}]);

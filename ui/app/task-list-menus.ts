@@ -36,10 +36,19 @@ const TL_ICON = {
 };
 // One popover for every menu on the page: a filter's values, the fields, Group by, and the bulk actions.
 // ↑/↓ move between its items (and in and out of its find box), Home/End jump, Enter picks, Esc closes.
+let TASKS_MENU_FROM: HTMLElement | null = null;
 function tasksMenu(state: TasksMenuHost, anchor: HTMLElement | null | undefined, html: string, bind?: TasksMenuBind, toggle = true) {
   const pop = $('#task-filter-pop');
   if (!pop) return;
-  if (toggle && pop.matches(':popover-open') && state.menuAnchor === anchor) { pop.hidePopover(); return; }
+  // A second click on the menu's own button closes it. Its press may have closed it already (light dismiss), so the
+  // press's record counts too (POP_PRESS), or the click would open it again.
+  // (a page's close handler clears state.menuAnchor, so the button it last opened from is kept here)
+  const pressed = Date.now() - POP_PRESS.at < 600 && POP_PRESS.open.has(pop) && TASKS_MENU_FROM === anchor;
+  if (toggle && (pressed || pop.matches(':popover-open') && state.menuAnchor === anchor)) {
+    if (pop.matches(':popover-open')) pop.hidePopover();
+    return;
+  }
+  TASKS_MENU_FROM = anchor ?? null;
   state.menuAnchor = anchor;
   state.menuField = '';
   pop.innerHTML = html;
@@ -50,6 +59,7 @@ function tasksMenu(state: TasksMenuHost, anchor: HTMLElement | null | undefined,
   (pop.querySelector('input[type=search], input[type=text]') || pop.querySelector('[aria-checked="true"], input:checked') || pop.querySelector('.tl-mi, .tl-opt input') || pop).focus();
 }
 function tasksMenuKeys(ev: KeyboardEvent) {
+  if (eventElement(ev) instanceof HTMLSelectElement) return;   // a select keeps its own arrow keys
   const pop = ev.currentTarget as HTMLElement;      // the popover the keys are bound on
   const items: (HTMLElement | null)[] = [...pop.querySelectorAll<HTMLElement>('.tl-mi, .tl-opt input, .tl-menu-q, .tl-menu-new input')].filter(el => !el.closest('[hidden]'));
   const active = document.activeElement as HTMLInputElement | null;     // its type is read only to tell a text box
@@ -66,5 +76,30 @@ function tasksMenuPlace(pop: HTMLElement, anchor: HTMLElement | null | undefined
   const r = anchor.getBoundingClientRect();
   pop.style.top = `${Math.max(8, Math.min(r.bottom + 6, innerHeight - pop.offsetHeight - 8))}px`;
   pop.style.left = `${Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8))}px`;
+}
+// ---- a menu opened from a button anywhere (a stage rule's ⋯, the pipeline editor's + Requirement): its press and place
+/** The menus open when the last pointer press came, with whose they were (data-for): light dismiss closes a popover on
+ * that press, before its click, so the click on the menu's own button must close it, not open it again. */
+let POP_PRESS: {at: number; open: Map<Element, string>} = {at: 0, open: new Map()};
+document.addEventListener('pointerdown', () => {
+  POP_PRESS = {at: Date.now(), open: new Map([...document.querySelectorAll<HTMLElement>('[popover]:popover-open')].map(p => [p, p.dataset['for'] ?? '']))};
+}, true);
+/** Whether this click's press found `pop` open for `key`: the click is the second one on its button, which closes it. */
+const popClosedByPress = (pop: HTMLElement | null, key: string): boolean =>
+  !!pop && !!key && Date.now() - POP_PRESS.at < 600 && POP_PRESS.open.get(pop) === key;
+/** Places a menu under its button, or above it when there is no room below; it never covers the button or runs off
+ * the window, and scrolls inside only when neither side holds it. A phone's sheet places itself (task-list.css). */
+function popPlace(pop: HTMLElement, button: HTMLElement): void {
+  if (matchMedia(PHONE).matches) { pop.style.top = pop.style.left = pop.style.maxHeight = ''; return; }
+  pop.style.maxHeight = 'none';
+  const r = button.getBoundingClientRect(), h = pop.offsetHeight, w = pop.offsetWidth, gap = 4, edge = 8;
+  const below = innerHeight - r.bottom - gap - edge, above = r.top - gap - edge;
+  let top: number;
+  if (h <= below) top = r.bottom + gap;
+  else if (h <= above) top = r.top - gap - h;
+  else if (below >= above) { pop.style.maxHeight = `${below}px`; top = r.bottom + gap; }
+  else { pop.style.maxHeight = `${above}px`; top = edge; }
+  pop.style.top = `${Math.round(top)}px`;
+  pop.style.left = `${Math.round(Math.max(edge, Math.min(r.left, innerWidth - w - edge)))}px`;
 }
 function tasksMenuClose() { const pop = $('#task-filter-pop'); if (pop?.matches(':popover-open')) pop.hidePopover(); }

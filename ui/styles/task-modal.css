@@ -1,4 +1,4 @@
-/* ui/styles/task-modal.css — Task modal: labels, links, comments, conversation shortcut, Ask this doc.
+/* ui/styles/task-modal.css — Task window: labels, links, the chat's rows, its thread view and box, Ask this doc.
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* tasks: labels, links, comments */
 .tfilters{display:flex;gap:6px;align-items:center}
@@ -8,10 +8,14 @@
 .tlink a{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis}
 .tlink .tcopy{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 2px;display:inline-flex;align-items:center}
 .tlink.session.primary{color:var(--ink)}
-/* Sessions on a phone: Copy and Remove are 40 px tap areas (padding round the same icon) with a gap between them, so a
-   thumb that misses Copy does not land on Remove; a long session name is cut short instead of pushing them out. */
-@media (max-width:760px){.task-sessions .tlink{gap:8px;border-radius:12px}.task-sessions .tlink .tsess-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .task-sessions .tlink .tcopy,.task-sessions .tlink .x{flex:none;display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:0}}
+/* Sessions on a phone: every chip is the same compact height, Copy and Remove keep their small icons, and each takes a
+   44px tap area round it (.tap-mark, forms.css; the chip lets it reach past its edge). Remove sits far enough from Copy
+   that the two areas do not overlap, and the rows of chips far enough apart that no area reaches the next row; a long
+   session name is cut short instead of pushing them out. */
+@media (max-width:760px){.task-sessions .tlinks{gap:20px 16px}
+  .task-sessions .tlink{gap:8px;min-height:26px;overflow:visible}.task-sessions .tlink .tsess-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .task-sessions .tlink :is(.tcopy,.x){position:relative;flex:none;display:inline-flex;align-items:center;justify-content:center;width:16px;min-height:0;padding:0}
+  .task-sessions .tlink .tcopy+.x{margin-left:22px}}
 .tlink.task .linkish{color:inherit;text-decoration:none;overflow:hidden;text-overflow:ellipsis;font-size:inherit}
 .tlink.pr{border-color:color-mix(in srgb,var(--run) 45%,var(--line));color:var(--run)}
 .tlink.pr.merged,.tlink.pr.shipped{border-color:color-mix(in srgb,var(--ok) 45%,var(--line));color:var(--ok)}
@@ -35,7 +39,7 @@
 .tchildren{display:flex;flex-direction:column}
 .task-comments{max-height:320px;overflow:auto;overflow-wrap:anywhere;display:flex;flex-direction:column;gap:8px;padding:4px 0}
 /* comments read like the chat column: a person's in a bubble, a bot's on the page */
-.tcomment{background:var(--bubble);border-radius:12px;padding:8px 12px;font-size:var(--read-size);line-height:var(--read-leading)}
+.tcomment:not(.th-msg){background:var(--bubble);border-radius:12px;padding:8px 12px;font-size:var(--read-size);line-height:var(--read-leading)}
 .tcomment.bot{background:none;padding:4px 0}
 .tcomment .tcomment-head{line-height:var(--lh)}
 .tcomment .md{margin-top:4px}
@@ -44,47 +48,37 @@
 .tcomment-who{display:inline-flex;align-items:center;gap:5px;font-weight:600;color:var(--ink)}
 .tcomment .spacer{flex:1}
 .task-chat .row{display:flex;gap:8px;align-items:center}
-/* The conversation reads as the task's session in the bot's chat (styles/chat.css bubbles): a person's line is a
-   bubble on the right under their name, yours without one; the bot's is page text under its name, its run folded
-   below; what changed is a quiet centred line between messages; the "Working" line follows a live run. */
-.task-chat .tcomment.tmsg{display:flex;flex-direction:column;align-items:flex-start;min-width:0;padding:2px 0;border:0;border-radius:0;background:none}
-.task-chat .tcomment.tmsg.you{align-items:flex-end}
-.task-chat .tcomment.tmsg .bubble{margin:2px 0 0;max-width:min(78ch,100%)}
-.task-chat .tcomment.tmsg .bubble.you{white-space:normal;max-width:min(78ch,88%)}
-.task-chat .tcomment.tmsg .bubble.you .md{margin:0}
-.task-chat .tcomment.tmsg .bubble.bot{padding-top:0;padding-bottom:0;width:100%}
-.task-chat .tcomment.tmsg.from-me .tcomment-who{display:none}
-.task-chat .tcomment.tmsg.you .tcomment-head{justify-content:flex-end}
-.task-chat .tcomment.tmsg.you .tcomment-head .spacer{display:none}
-.task-chat .tcomment.tmsg .run-steps{font-size:var(--t-sm);margin-top:2px}
-.task-chat .tcomment.sys.tmark{justify-content:center;text-align:center;border:0;padding:2px 8px;color:var(--muted)}
+/* The conversation is the chat's own rows (styles/threads.css .th-msg, task-modal.ts commentLineHTML): the face, the
+   name and time, the words; no bubbles, nothing on the right. What changed is a quiet line between messages, and two
+   or more in a row fold into one "N updates" line. The rows' own padding stands; the older window's bubble and
+   divider do not apply. */
+#task-modal .task-chat .th-msg{border:0;border-radius:8px;background:none;padding:6px;font-size:var(--read-size,var(--t-md));line-height:var(--lh-read,1.5)}
+#task-modal .task-chat .th-msg .th-av{width:28px}
+#task-modal .task-chat .th-msg .run-steps{font-size:var(--t-sm);margin:2px 0 4px}
+#task-modal .task-chat .th-msg .th-head .pill{align-self:center}
+#task-modal .task-chat .th-msg .fb-row{margin-top:2px}
+.task-chat .tcomment.sys.tmark{justify-content:flex-start;text-align:left;border:0;padding:2px 6px 2px 44px;color:var(--muted)}
 .task-chat .tcomment.sys.tmark .tcomment-who{font-weight:500;color:var(--muted)}
-.task-chat .task-live{width:auto;flex-wrap:wrap;align-items:flex-start;gap:6px}
-.task-chat .task-live .run-steps{min-width:0;flex:1}
-.task-chat .task-live .run-steps>summary{display:flex;align-items:center;gap:8px;padding-left:0}
-.task-chat .task-live .run-steps>summary::before{display:none}
-.task-chat .task-live-step{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm);font-family:var(--mono)}
-.task-chat .task-live-stop{flex:none;padding:2px 10px;font-size:var(--t-sm)}
+.task-chat details.src-group .tcomment.sys.tmark{padding-left:var(--s4)}
+.task-chat .task-live .th-main{flex:1}
+.task-chat .task-live-step{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Task conversation shortcut and the Docs "Ask this doc" button. */
 .chat-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;vertical-align:middle;flex:none}
 .chat-btn svg{width:17px;height:17px;display:block}
 .chat-btn:hover{color:var(--ink);background:var(--surface2)}
 .issue-actions .chat-btn{border:1px solid var(--line);border-radius:6px;width:30px;height:30px}
-/* A task's own thread, opened from a bot's chat (taskThreadShow): the bar (back, title, Details) and the
-   conversation with its box at the foot. Details takes the class off and the full task shows. */
+/* A task's own thread, opened from a bot's chat (taskThreadShow): the head (back, the title, Details) and the chat with
+   its box at the foot; no tabs. Details takes the class off and the whole task shows, on its Details tab. */
 .tmodal .tthread-only{display:none}
-#task-modal.thread[open]{display:flex;flex-direction:column}
 #task-modal.thread[open] .tthread-only{display:inline-flex;align-items:center;justify-content:center}
-#task-modal.thread[open] .tmodal-head{padding:10px 12px;padding-top:max(10px,env(safe-area-inset-top));border-bottom:1px solid var(--line)}
-#task-modal.thread[open] .tmodal-head>:not(.tthread-only){display:none}
-#task-modal.thread[open] .tthread-back{order:-2;flex:none;display:grid;place-items:center;color:var(--ink)}
+#task-modal.thread[open] .tw-head{align-items:center;padding-top:max(var(--s3),env(safe-area-inset-top));border-bottom:1px solid var(--line)}
+#task-modal.thread[open] .tw-acts>:not(.tthread-only){display:none}
+#task-modal.thread[open] .tthread-back{flex:none;display:grid;place-items:center;color:var(--ink)}
 #task-modal.thread[open] .tthread-back svg{width:14px;height:14px;flex:none}
-#task-modal.thread[open] .tthread-title{order:-1;flex:1;min-width:0;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md);font-weight:600;color:var(--ink);outline:0;letter-spacing:var(--track-snug)}
-#task-modal.thread[open]>.tmodal-title,#task-modal.thread[open]>.tmeta,#task-modal.thread[open] .tmodal-main,#task-modal.thread[open] .task-side,#task-modal.thread[open] .task-tabs,#task-modal.thread[open]>.task-wait{display:none}
-#task-modal.thread[open] .tmodal-body.task-layout{flex:1;min-height:0;max-height:none;display:flex;flex-direction:column;align-items:stretch;overflow:hidden;padding:0 16px max(12px,env(safe-area-inset-bottom))}
-#task-modal.thread[open] .task-chat{flex:1;min-height:0;display:flex;flex-direction:column;margin:0;padding:0;border:0}
-#task-modal.thread[open] .task-chat>h3{display:none}
-#task-modal.thread[open] .task-comments{flex:1;max-height:none;padding:8px 0}
+#task-modal.thread[open] .tw-head .tmodal-title,#task-modal.thread[open] .tw-head .tmodal-title[contenteditable="plaintext-only"]{display:-webkit-box;padding-top:0;font-size:var(--t-card);-webkit-line-clamp:1;line-clamp:1;overflow:hidden}
+#task-modal.thread[open] .task-tabs,#task-modal.thread[open] .task-desc,#task-modal.thread[open] .task-side,#task-modal.thread[open]>.rule-holds{display:none}
+#task-modal.thread[open] .task-layout>.task-chat{visibility:visible;pointer-events:auto}
+@media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}
 .task-chat .task-pill{flex:none;display:flex;flex-direction:column;gap:4px;margin:8px 0 0;padding:0;border:0;background:none}
 /* the shared composer frame (meetings.css .p-pill): whole lines, the send on the last line, eight lines then a scroll */
 .task-chat .task-pill .p-pill{flex-wrap:nowrap}
@@ -104,7 +98,6 @@
 .task-chat .task-send .p-menu{top:auto;bottom:calc(100% + 8px);right:0;min-width:168px}
 .task-chat .task-send .p-menu button{border:0}
 @media (max-width:760px){.task-chat .task-pill .p-text{font-size:16px}.task-chat .task-send .task-send-caret{width:34px;height:44px;margin-block:-5px}}
-@media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}
 /* A reconnect card (ui/app/task-modal.ts reconnectCardHTML): one line and its fix, as dense as a credential card. */
 .rc-card{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;width:min(560px,100%);border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:4px 0;background:var(--surface)}
 .rc-line{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
@@ -113,11 +106,9 @@
 .rc-done{font-size:12.5px;color:var(--ok);font-weight:600}
 
 /* Editors stay mounted through live task redraws. */
-.tmodal-title[data-task-field="title"] { cursor: text; min-height: 1.25em; white-space: pre-wrap; overflow-wrap: anywhere; }
-.task-edit-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 24px 12px; font-size: 12px; }
-.task-edit-meta:empty { display: none; }
+.tmodal-title[data-task-field="title"] { cursor: text; min-height: 1.25em; overflow-wrap: anywhere; }
+.tmodal-title[data-task-field="title"]:is(:focus,[contenteditable="plaintext-only"]) { white-space: pre-wrap; }
 [data-task-edit-body] { position: relative; }
-[data-task-body-edit] { float: right; font-size: 12px; }
+[data-task-body-edit] { font-size: var(--t-sm); }
 @media (max-width:760px){button.linkish[data-task-body-edit]{min-width:44px;min-height:44px}}
 textarea[data-task-field="body"] { width: 100%; min-height: 140px; resize: vertical; font: inherit; }
-[data-task-edit-current] { margin: 0 24px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }

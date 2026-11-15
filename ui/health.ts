@@ -321,14 +321,14 @@ function hlFailuresHtml(rows: HlFailure[] | null | undefined): string {
 const hlReportHtml = (report: HlReport | false): string => report && window.supportOn?.() && window.reportThisHTML ? window.reportThisHTML(report) : '';
 
 function hlCredentialFix(source: string | undefined): string {
-  if (source === 'credentials') return 'Replace the model key in <a href="#/tools/keys?show=credentials">Tools > Keys</a>';
+  if (source === 'credentials') return 'Replace the model key in <a href="#/tools?show=keys">Tools</a>';
   if (source === 'computer') return 'Update the computer-local key or sign in again';
-  return 'If the key is stored in <a href="#/tools/keys?show=credentials">Tools > Keys</a>, replace it there; otherwise update the computer-local key or sign in again';
+  return 'If the key is stored in <a href="#/tools?show=keys">Tools</a>, replace it there; otherwise update the computer-local key or sign in again';
 }
 
 function hlComputerHtml(machine: HlComputer): string {
   const models = machine.runtimes.map(row => {
-    const state = row.rejected ? `sign-in rejected${row.rejected_at ? ' ' + esc(ago(row.rejected_at)) : ''}${row.rejected_reason ? ' (' + esc(row.rejected_reason) + ')' : ''}. ${hlCredentialFix(row.credential_source)}`
+    const state = row.rejected ? `sign-in rejected${row.rejected_at ? ' ' + esc(agoSaid(row.rejected_at)) : ''}${row.rejected_reason ? ' (' + esc(row.rejected_reason) + ')' : ''}. ${hlCredentialFix(row.credential_source)}`
       : row.plan ? (row.plan === 'api' ? 'company API key' : 'company plan') : row.ready ? 'signed in' : row.installed ? 'not signed in' : 'not installed';
     const login = row.signable
       ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(row.name)}" data-machine="${esc(machine.label)}">Sign in</button>` : '';
@@ -337,7 +337,7 @@ function hlComputerHtml(machine: HlComputer): string {
     return `<li data-ready="${row.ready}"${bad ? ' class="hl-model-bad"' : ''}>${esc(harnessWords(row.name))}: ${state}${login}</li>`;
   }).join('');
   return `<li class="hl-computer" data-online="${machine.online}"><span class="hl-dot ${machine.online ? 'on' : 'off'}" aria-hidden="true"></span>
-    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : machine.resting ? 'stopped until work comes' : 'offline'}${machine.last_seen_at ? ', last seen ' + esc(ago(machine.last_seen_at)) : ', never seen'}</span>
+    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : machine.resting ? 'stopped until work comes' : 'offline'}${machine.last_seen_at ? ', last seen ' + esc(agoSaid(machine.last_seen_at)) : ', never seen'}</span>
     ${window.runnerUpdateHtml?.(machine.update, machine.release || machine.update?.release || machine.version) || ''}
     <ul class="hl-models">${models || '<li class="muted">No models reported</li>'}</ul></div></li>`;
 }
@@ -362,7 +362,7 @@ function hlStorageHtml(st: HlStorage | null | undefined): string {
 // How often the hourly scan has seen a finding, and when it last did: seeing it again counts and wakes nobody.
 function hlSeen(f: HlFinding): string {
   const n = Number(f.occurrences) || 1;
-  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen_at)}`;
+  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${agoSaid(f.last_seen_at)}`;
 }
 
 // Checks: what Check health (the maintenance step) still has open, from GET /api/v2/health/findings. A setup problem is
@@ -423,7 +423,7 @@ window.hlStuckHtml = function hlStuckHtml(rows: HlStuck[] | null | undefined): s
     // Refused words are manager-only context, not support diagnostics.
     const reportWhy = row.reason === 'quarantined' ? 'Quarantined: queued work waits for the quarantine to clear.' : row.why;
     return `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
-    <a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
+    <a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(agoSaid(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
     ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${reportWhy}`, detail: reportWhy, ref: row.bot, group: 'stuck:' + row.reason})}</li>`;
   }).join('');
 };
@@ -457,7 +457,7 @@ function hlPageDraw(): void {
   const host: HTMLElement | null = $('#hl-page');
   if (!host) return;
   if (!HL) { host.innerHTML = '<div class="empty">Nothing to show yet.</div>'; return; }
-  const bots = (list: HlStuck[]) => list.map(row => `<li><a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
+  const bots = (list: HlStuck[]) => list.map(row => `<li><a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(timeSaid(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
   // A stuck bot is listed once, with its reason; "waiting" keeps only the offline ones with nothing queued.
   const stuck = HL.stuck || [], idle = (HL.waiting || []).filter(row => !stuck.some(s => s.bot === row.bot));
   // Settings' own checks that need nobody (ui/app/settings.ts shows only the ones that do).

@@ -1233,6 +1233,68 @@ STABLE = [
         "NeedsYou",
     ),
     (
+        "/api/v2/flow/opinions",
+        "post",
+        "Needs you",
+        "getFlowOpinions",
+        "Tico's opinion on each ask in Flow's set (`items`: the Needs-you ids of asks, at most 30), one entry per id in "
+        "order: `ready` with `pick` (an OK: approve, send_back or snooze; a question: one of its choices, or empty), "
+        "`line` (80 characters at most), `note` (for a send back) and `score` (0-100, to sort by, never shown); "
+        "`pending` while it is worked out: ask again for those; `none` when there is none, including any id that is "
+        "not an ask on the caller's own Needs you. Answers at once, never waits on a model and changes no task. One "
+        "opinion per ask, shared by everyone the ask waits on, for 24 hours or until the ask changes",
+        "FlowOpinions",
+    ),
+    (
+        "/api/v2/flow/suggestions",
+        "post",
+        "Needs you",
+        "getFlowSuggestions",
+        "Suggested rules for the stage page checks on every pipeline the caller may change (people only, no body): "
+        "short sentences drawn from people's send-back notes, each with how many of the send backs it rests on "
+        "(`notes_used` of `notes_of`). Open ones, and those added in the last 24 hours (for Undo). `pending` while one "
+        "is worked out or rewritten (ask again), else `ready`. A check with five send backs newer than its last "
+        "working-out is worked out off the request, with one metered call; nothing waits on a model",
+        "FlowSuggestions",
+    ),
+    (
+        "/api/v2/flow/suggestions/{suggestion_id}/add",
+        "post",
+        "Needs you",
+        "addFlowSuggestion",
+        "Add a suggested rule: Jev asks it of the next page attached at its check, as one more yes/no part beside the "
+        "check's own. 403 when the caller may not change the pipeline, 409 unless it is open and not being rewritten, "
+        "or when its check already has 20 added rules",
+        "FlowSuggestion",
+    ),
+    (
+        "/api/v2/flow/suggestions/{suggestion_id}/undo",
+        "post",
+        "Needs you",
+        "undoFlowSuggestion",
+        "Undo adding a suggested rule: the next page attached at its check is no longer asked it; a page already "
+        "judged keeps its verdict. 409 unless it is added",
+        "FlowSuggestion",
+    ),
+    (
+        "/api/v2/flow/suggestions/{suggestion_id}/dismiss",
+        "post",
+        "Needs you",
+        "dismissFlowSuggestion",
+        "Dismiss a suggested rule: it leaves the list for everyone who may change the pipeline. 409 unless it is open",
+        "FlowSuggestion",
+    ),
+    (
+        "/api/v2/flow/suggestions/{suggestion_id}/feedback",
+        "post",
+        "Needs you",
+        "feedbackFlowSuggestion",
+        "Tell Tico what to change in an open suggested rule (`text`, 1 to 500 characters): it is rewritten in place "
+        "off the request, with one metered call, and is `pending` until then; it keeps its text when that fails or no "
+        "model is to be had. 409 while it is already being rewritten or is not open",
+        "FlowSuggestion",
+    ),
+    (
         "/api/v2/meetings",
         "get",
         "Meetings",
@@ -1354,6 +1416,15 @@ STABLE = [
         "q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) "
         "narrow the same list",
         "BotFileList",
+    ),
+    (
+        "/api/v2/bots/{bot}/files/mentions",
+        "get",
+        "Files",
+        "resolveBotFileMentions",
+        "The bot's files that the paths and names it wrote name (m, up to 60): each name that is exactly one file "
+        "the caller may see, keyed by the name as sent; any other name is absent",
+        "BotFileMentions",
     ),
     (
         "/api/v2/files/uploads",
@@ -3733,6 +3804,44 @@ SCHEMAS = {
             obj({"actor": "s", "count": "i"}),
         ]
     },
+    "FlowOpinions": obj(
+        {
+            "opinions": items(
+                obj(
+                    {
+                        "id": "s",
+                        "state": {"type": "string", "enum": ["ready", "pending", "none"]},
+                        "pick": "s",
+                        "line": "s",
+                        "note": "s",
+                        "score": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
+                    }
+                )
+            )
+        }
+    ),
+    "FlowSuggestions": obj(
+        {
+            "state": {"type": "string", "enum": ["ready", "pending"]},
+            "suggestions": items(ref("FlowSuggestionRow")),
+        }
+    ),
+    "FlowSuggestion": obj({"suggestion": ref("FlowSuggestionRow")}),
+    "FlowSuggestionRow": obj(
+        {
+            "id": "s",
+            "text": "s",
+            "state": {"type": "string", "enum": ["open", "added", "dismissed"]},
+            "pending": "b",
+            "notes_used": "i",
+            "notes_of": "i",
+            "pipeline_id": "s",
+            "pipeline": "s",
+            "stage_id": "s",
+            "stage": "s",
+            "requirement_id": "s",
+        }
+    ),
     "TaskBrief": obj(
         {
             "id": "s",
@@ -4158,6 +4267,18 @@ SCHEMAS = {
         },
         required=["bot", "files", "total", "next_cursor", "has_more", "can_manage"],
         actors=ACTORS,
+    ),
+    "BotFileMentions": obj(
+        {
+            "bot": "s",
+            "files": {
+                "type": "object",
+                "additionalProperties": ref("BotFile"),
+                "description": "{name as sent, trimmed: the file}; a name that is not exactly one file the caller may "
+                "see (none, two or more, or one they may not read) is absent",
+            },
+        },
+        required=["bot", "files"],
     ),
     "BotFileResult": obj({"file": "o", "created": "b"}, required=["file"]),
     "FileActivity": obj({"file": "s", "activity": "a"}, actors=ACTORS),
@@ -10643,11 +10764,11 @@ SCHEMAS.update(
 )
 
 
-# Feedback on bot work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot made.
+# Feedback on work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot or a person made.
 TAGS["Feedback"] = (
-    "A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell "
-    "the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves "
-    "out feedback on what the caller cannot read."
+    "A person's 👍 or 👎 on a message, task or approval a bot or another person made, with an optional reason: "
+    "a 👎 on a bot's work can tell the bot (a note for its next run in that conversation) or become an org rule. "
+    "Every answer leaves out feedback on what the caller cannot read."
 )
 STABLE.extend(
     [
@@ -10656,7 +10777,8 @@ STABLE.extend(
             "post",
             "Feedback",
             "giveFeedback",
-            "Rate a message, task or approval a bot made; rating again replaces it. tell_bot (a 👎 only) leaves the bot a note",
+            "Rate a message, task or approval a bot or another person made; rating again replaces it. tell_bot (a 👎 on a "
+            "bot's work only) leaves the bot a note",
             "Feedback",
         ),
         (
@@ -10955,6 +11077,20 @@ SCHEMAS.update(
 )
 
 
+MENTIONS_DESCRIPTION = (
+    "Turns the file paths and names a bot wrote (in a message, a page, a report) into its files, for links. "
+    "A value with a folder (`reports/pack.docx`, `/home/bot/checkout/reports/pack.docx`) matches the file published "
+    "from that path in the bot's checkout, else the one file whose path it ends with or that ends with it. A bare name "
+    "(`pack.docx`) matches only when exactly one of the bot's files has that name. Only the files the caller may see "
+    "count, by each file's current version; archived files and links never match. A value that is not exactly one "
+    "file is absent from `files`: none, two or more (never a guess), or one the caller may not read all look the same. "
+    "Tico's web app also tries a bare name inside a folder named earlier in the same paragraph; this route does not, "
+    "so send the joined path yourself. A caller who may see the bot but none of its files gets 200 with `files` "
+    "empty, as does a request with no m. Errors: 401 not signed in, 404 no such bot or one the caller may not see, "
+    "422 more than 60 m values."
+)
+
+
 def spec(app):
     """The v2 document for this app: the stable operations of `app.openapi()`, described."""
     full = copy.deepcopy(app.openapi())
@@ -10988,6 +11124,16 @@ def spec(app):
             responses["502"] = {"description": "Didn't reach Tico HQ, or HQ's answer could not be used", **ERROR}
             if method == "put":
                 responses["404"] = {"description": "not_cloud: cloud-machine support is not available", **ERROR}
+        if path == "/api/v2/bots/{bot}/files/mentions":
+            op["description"] = MENTIONS_DESCRIPTION
+            for param in op.get("parameters", []):
+                if param.get("name") == "m":
+                    param["description"] = (
+                        "A path or file name as the bot wrote it; repeat for each (m=a&m=b), at most 60. Values are "
+                        "trimmed, a repeat counts once, and one over 300 characters is ignored. Before matching, "
+                        "\\ becomes / and a leading ./ is dropped; the answer keeps the value as sent (trimmed)"
+                    )
+            responses["404"] = {**ERROR, "description": "not_found: no such bot, or one the caller may not see"}
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {
                 "description": "The file's bytes (application/octet-stream, sent as an attachment)",

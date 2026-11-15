@@ -83,8 +83,6 @@ interface TaskFormSaved {
 }
 interface TaskFormFold { key: string; hidden: boolean; open: boolean | undefined; }
 interface TaskFormCapture { fields: TaskFormSaved[]; folds: TaskFormFold[]; }
-// A task event as the detail lists it, for who edited last.
-interface TaskEditEvent { field?: string; actor?: string; ts?: string; created_at?: string; }
 
 function taskLiveStop(d: TaskDialog) {
   const live = d.taskLive;
@@ -283,11 +281,15 @@ function taskLiveFocusRestore(d: TaskDialog) {
     window.getSelection()?.setBaseAndExtent(...point(focus.text[0]), ...point(focus.text[1]));
   }
 }
-function taskEditBodyHTML(t: PropTask, original: string, waitText: string | undefined) {
-  const may = taskPropRights(t).edit;
+// The Description tab's request: who asked and when, Edit for whoever may change it, then the words.
+function taskEditBodyHTML(t: PropTask, original: string) {
+  const may = taskPropRights(t).edit, who = taskAskerLabel(t);
   const preview = `<div class="tdesc md" data-task-body-preview>${original ? safeMd(original) : '<p class="muted">No details.</p>'}</div>`;
-  const body = `<section data-task-edit-body>${may ? '<button type="button" class="linkish" data-task-body-edit aria-label="Edit details">Edit</button>' : ''}${preview}</section>`;
-  return original && waitText ? `<details class="task-orig"><summary>Original request</summary>${body}</details>` : body;
+  // "Fri, Nov 13, 2:21 PM" (format.ts timeWords: month first, 12-hour, the year when it is not this one).
+  const at = t.created_at ? timeWords(t.created_at) : '';
+  const head = `<div class="task-desc-h"><span class="muted">${esc([who, at].filter(Boolean).join(' · '))}</span>${
+    may ? '<button type="button" class="linkish" data-task-body-edit aria-label="Edit details">Edit</button>' : ''}</div>`;
+  return `<section data-task-edit-body>${head}${preview}</section>`;
 }
 function taskLiveBind(d: TaskDialog, task: PropTask) {
   const id = String(task.id);
@@ -301,8 +303,6 @@ function taskLiveBind(d: TaskDialog, task: PropTask) {
   for (const selector of ['.tmodal-title', '[data-task-edit-body]', '[data-task-field="public_title"]', '[data-task-field="public_summary"]', '[data-task-field="due"]', '[data-task-field="size"]']) {
     const slot = $(selector, d), kept = live.nodes[selector];
     if (slot && kept && slot !== kept && slot.readOnly === kept.readOnly && slot.disabled === kept.disabled && !!slot.querySelector('[data-task-body-edit]') === !!kept.querySelector('[data-task-body-edit]')) {
-      const fold = slot.closest('details.task-orig'), prior = kept.closest<HTMLDetailsElement>('details.task-orig');
-      if (fold && prior) fold.open = prior.open;
       slot.replaceWith(kept);
     }
     else if (slot) live.nodes[selector] = slot;
@@ -325,7 +325,7 @@ function taskLiveBind(d: TaskDialog, task: PropTask) {
   let details = $('[data-task-field="body"]', d);
   if (!details && may && 'body' in draft.dirty) {
     details = document.createElement('textarea'); details.dataset.taskField = 'body'; details.setAttribute('aria-label', 'Details');
-    $('[data-task-body-edit]', d)?.after(details);
+    $('.task-desc-h', d)?.after(details);
     const preview = $('[data-task-body-preview]', d); if (preview) preview.hidden = true;
   }
   const edit = $('[data-task-body-edit]', d);
@@ -349,7 +349,7 @@ function taskLiveBind(d: TaskDialog, task: PropTask) {
       if (!may) return;
       if (!details) {
         details = document.createElement('textarea'); details.dataset.taskField = 'body'; details.setAttribute('aria-label', 'Details');
-        edit.after(details); wireField(details);
+        (edit.closest('.task-desc-h') || edit).after(details); wireField(details);
       }
       $('[data-task-body-preview]', d).hidden = true;
       taskLivePaint(d, live); details.focus();
@@ -459,12 +459,6 @@ async function taskLiveRead(d: TaskDialog, live: TaskLive) {
     live.reading = false;
     if (live.again) { live.again = false; void taskLiveRead(d, live); }
   }
-}
-function taskLiveEdited(d: TaskDialog, detail: {events?: TaskEditEvent[]}) {
-  const event = (detail.events || []).filter(e => ['title', 'body', 'owner', 'due'].includes(String(e.field)))
-    .reverse().sort((a, b) => String(b.ts || b.created_at).localeCompare(String(a.ts || a.created_at)))[0];
-  const el = $('[data-task-edited]', d);
-  if (el) { el.textContent = sharedEdited(event?.actor); el.title = event ? fmt(event.ts || event.created_at) : ''; }
 }
 async function taskLiveSave(d: TaskDialog, live: TaskLive) {
   if (live.revoked || SESSION.out || live.identity !== sessionIdentity()) return;

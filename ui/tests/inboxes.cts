@@ -75,7 +75,8 @@ const scenarios = {
       await page.waitForFunction((want: string) => location.hash === want, to).catch(() => assert.fail(`${from} leads to ${to}`));
     }
     await page.locator('#tools-inbox [data-ib-section=texts]').waitFor();
-    assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, 'Tools is current');
+    // The sidebar marks the page once it has drawn: wait for the mark rather than read it in the same instant.
+    await page.locator('#side a[data-nav="tools"].cur').waitFor({state: 'attached'}).catch(() => assert.fail('Tools is current'));
     // A reload keeps the page it was on.
     await page.evaluate(() => { location.hash = '#/tools/mailbox/mb-support'; });
     await page.locator('#inbox-head h1', {hasText: 'support@acme.example'}).waitFor();
@@ -207,8 +208,8 @@ const scenarios = {
   'Add tool > Email (Google) connects a mailbox and opens its page; an address already in Tico says so in the dialog': async (browser: import('playwright').Browser) => {
     const fake = mailboxesFake();
     const {page, seen} = await open(browser, fake, googleFake(), {ready: '#tools-root [data-tl-add]'});
-    await page.locator('[data-tl-add] > summary').click();
-    assert.deepEqual(await page.locator('[data-tl-add-item]').allTextContents(), ['API', 'Website', 'Email (Google)', 'Tico address', 'Phone number', 'Mailing address', 'Outgoing webhook']);
+    await page.locator('[data-tl-add]').click();
+    assert.deepEqual(await page.locator('[data-tl-add-item]').evaluateAll(b => b.map(x => x.lastChild?.textContent)), ['API', 'Website', 'Email (Google)', 'Tico address', 'Phone number', 'Mailing address', 'Outgoing webhook']);
     await page.locator('[data-tl-add-item="kind:mailbox"]').click();
     const dialog = page.locator('dialog.mb-dialog');
     await dialog.locator('[name=address]').fill('ana@acme.example');
@@ -272,13 +273,13 @@ const scenarios = {
       const fake = mailboxesFake(), more = others();
       const {page, seen} = await open(browser, fake, googleFake(), {ready: '#tools-root [data-tl-add]', extra: more.extra, width: 390, height: 844, theme});
       // Add tool opens inside the screen, every item whole.
-      await page.locator('[data-tl-add] > summary').click();
-      const menu = (await page.locator('.tt-add-menu').boundingBox())!;
+      await page.locator('[data-tl-add]').click();
+      const menu = (await page.locator('.au-newm').boundingBox())!;
       assert.ok(menu.x >= 0 && menu.x + menu.width <= 390, `the Add tool menu stays on screen (${menu.x}..${menu.x + menu.width})`);
       assert.ok(await page.evaluate(() => { const m = document.querySelector('#main'); return !m || m.scrollWidth <= m.clientWidth; }),
         'opening it scrolls nothing sideways');
-      assert.ok(await page.locator('.tt-add-menu button').evaluateAll(bs => bs.every(b => b.scrollWidth <= b.clientWidth)), 'no item is cut off');
-      await page.locator('[data-tl-add] > summary').click();
+      assert.ok(await page.locator('.au-newm button').evaluateAll(bs => bs.every(b => b.scrollWidth <= b.clientWidth)), 'no item is cut off');
+      await page.locator('[data-tl-add]').click();
       await page.evaluate(() => { location.hash = '#/tools/settings'; });
       await page.locator('#settings-mail-addresses [data-pm-address="as_1"]').waitFor();
       await settle(page);

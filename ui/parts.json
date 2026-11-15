@@ -359,7 +359,7 @@
    "pageCompanyDocs",
    "pageDirectory",
    "pageDirectoryEntity",
-   "pageRdTools",
+   "pageToolKey",
    "pageSkill",
    "pageSkillProposal",
    "pageSkills",
@@ -538,6 +538,7 @@
   ],
   "calls": [
    "githubNudgeBot",
+   "githubNudgeTools",
    "openPipelineEditor",
    "roadmapSettingsMount",
    "taskChatLive",

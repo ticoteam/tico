@@ -183,7 +183,9 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await row(page, 'm2').evaluate(e => e.classList.contains('th-cont')), true);
     assert.equal(await row(page, 'm2').locator('.th-head').count(), 0);
     assert.equal(await row(page, 'm2').locator('.th-cont-time').count(), 1, 'its time in the avatar column');
-    assert.equal(await row(page, 'm3').locator('.th-head .th-bot').count(), 1, 'a bot is tagged');
+    // A bot's name carries no "bot" tag (the style guide's chat window); its name and time head the row.
+    assert.equal(await row(page, 'm3').locator('.th-head .th-who').count(), 1, 'a bot heads its row with its name');
+    assert.equal(await row(page, 'm3').locator('.th-head .th-bot').count(), 0, 'no bot tag');
     assert.equal(await row(page, 'm1').locator('.th-bot').count(), 0);
     // A reply starts a new group even from the same author.
     assert.equal(await row(page, 'm6').locator('.th-head').count(), 1);
@@ -193,10 +195,12 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await row(page, 'm3').locator('.th-quote-who').textContent(), 'Bea');
     assert.equal(await row(page, 'm6').locator('.th-quote-hidden').count(), 1);
     assert.equal(await row(page, 'm6').locator('[data-th-quote]').count(), 0, 'a hidden quote leads nowhere');
-    // A bot's reply: its steps line first, then its words, then Copy · 👍 · 👎.
-    const parts = await row(page, 'm3').evaluate(e => [...(e.querySelector('.th-main')!.children as HTMLCollection & Iterable<Element>)].map(c => c.matches('.th-quote') ? 'quote'
+    // A bot's reply: what it answers on its name line, right of the time (the style guide's chat window); its steps line
+    // next, closed; then its words, then Copy · 👍 · 👎.
+    const parts = await row(page, 'm3').evaluate(e => [...(e.querySelector('.th-main')!.children as HTMLCollection & Iterable<Element>)].map(c => c.matches('.th-head') && c.querySelector('time + .th-quote') ? 'head+quote'
       : c.matches('.run-steps') || c.querySelector('.run-steps') ? 'steps' : c.matches('.th-body') ? 'body' : c.matches('.fb-row') ? 'fb' : 'other'));
-    assert.deepEqual(parts.filter(x => x !== 'other'), ['quote', 'steps', 'body', 'fb'], 'quote, steps, words, then feedback: ' + parts);
+    assert.deepEqual(parts.filter(x => x !== 'other'), ['head+quote', 'steps', 'body', 'fb'], 'name line with the quote, steps, words, then feedback: ' + parts);
+    assert.equal(await row(page, 'm3').locator('details.run-steps').evaluate(d => (d as HTMLDetailsElement).open), false, 'the steps start closed');
 
     // Routing: under a person's message, the bots it asked; none, it says so. Never under a bot's.
     assert.match(await row(page, 'm4').locator('.th-routed').textContent(), /Ops/);
@@ -279,7 +283,8 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.locator('#bot-thread .thv-composer .p-text').getAttribute('placeholder'), 'Message Ops', 'the name alone, never its slug');
     await page.locator('#bot-top #bot-top-acts').waitFor();
     assert.equal(await page.locator('#bot-top-acts [data-thv-menu]').count(), 0, 'a bot thread has no settings menu');
-    assert.equal(await page.locator('#bot-more-btn .nav-icon').count(), 0, 'Info is not a second ⋮ beside the ⋯');
+    assert.equal(await page.locator('#bot-top > .ph-more').count(), 1, 'one ⋯ in the top line, the details list');
+    assert.equal(await page.locator('#bot-top > :is(button, a):visible').last().getAttribute('id'), 'bot-more-btn', '⋯ is the last control');
     assert.equal(await page.locator('#pane-chat .bot-talk-bar .thv-menu-btn').count(), 0, 'no box of its own under the tabs');
     await themed(page, 'bot-dm-working');
     // /new: the fresh DM starts with nothing of the old one, its status rows and Stop included.
@@ -352,10 +357,12 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/thread/t-ship');
     await row(page, 'm6').waitFor();
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll');
-    // The quote is cut short on one line, and a finger's size.
+    // The quote is cut short on its name line, and a finger's size: its target reaches past the line above and below.
     const q = row(page, 'm3').locator('.th-quote');
     const qb = await box(q);
-    assert.ok(qb.x + qb.width <= 390 && qb.height >= 44, 'quote fits and is tappable: ' + JSON.stringify(qb));
+    const hits = await q.evaluate(el => { const r = el.getBoundingClientRect(), x = r.left + r.width / 2, y = r.top + r.height / 2;
+      return [y - 21, y + 21].map(at => !!document.elementFromPoint(x, at)?.closest('.th-quote')); });
+    assert.ok(qb.x + qb.width <= 390 && hits.every(Boolean), 'quote fits and is tappable: ' + JSON.stringify({qb, hits}));
     assert.equal(await q.locator('.th-quote-text').evaluate(e => e.scrollWidth > e.clientWidth && getComputedStyle(e).textOverflow === 'ellipsis'), true);
     for (const sel of ['.th-status-working [data-th-stop]', '.th-status-cant_reply a']) assert.ok((await box(page.locator(sel))).height >= 44, sel + ' is finger-sized');
     assert.equal(await row(page, 'm2').locator('[data-th-reply]').isVisible(), false);

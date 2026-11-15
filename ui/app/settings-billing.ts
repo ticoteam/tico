@@ -35,12 +35,21 @@ const billingLine = (micros: number): string => micros !== 0 && Math.abs(micros)
 const BILLING_PRODUCTS: Record<string, string> = {gateway: 'Tico models', hosting: 'Hosting', support: 'Support', refund: 'Refunds'};
 const BILLING_SOURCES: Record<string, string> = {grant: 'Grant', adjustment: 'Credit added by Tico', arrangement: 'Credit added by Tico', payment: 'Payment', refund_back: 'Payment'};
 const billingModel = (sku: string | null | undefined): string => String(sku || '').split(':')[0] || '—';
+// HQ bills by UTC month, day and hour ("2026-11", "2026-11-01", "2026-11-01T14"): said month first and 12-hour, read in
+// UTC so a day never shifts to its neighbour in the viewer's own time zone.
+const billingUtc = (key: string): Date => new Date(`${key.length === 7 ? key + '-01' : key.slice(0, 10)}T${key.length > 10 ? key.slice(11, 13) : '00'}:00:00Z`);
+const billingMonthWords = (month: string): string => Number.isNaN(billingUtc(month).getTime()) ? month
+  : billingUtc(month).toLocaleDateString(DATE_LOCALE, {timeZone: 'UTC', month: 'long', year: 'numeric'});
+const billingDayWords = (day: string): string => Number.isNaN(billingUtc(day).getTime()) ? day
+  : billingUtc(day).toLocaleDateString(DATE_LOCALE, {timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric'});
+const billingHourWords = (hour: string): string => Number.isNaN(billingUtc(hour).getTime()) ? hour
+  : billingUtc(hour).toLocaleTimeString(DATE_LOCALE, {timeZone: 'UTC', hour: 'numeric'});
 function billingStatus(v: BillingView): [string, string] {
   const min = billingCents(v.min_balance_micros);
   if (v.state === 'grace') {
     // grace_until is a date, or null: the page has always drawn null as the epoch, since new Date(null) is 0.
     const at = new Date(v.grace_until ?? 0), day = at.toLocaleDateString('en-US', {timeZone: 'UTC', month: 'long', day: 'numeric', year: 'numeric'});
-    const time = at.toLocaleTimeString('en-GB', {timeZone: 'UTC', hour: '2-digit', minute: '2-digit'});
+    const time = at.toLocaleTimeString(DATE_LOCALE, {timeZone: 'UTC', hour: 'numeric', minute: '2-digit'});
     return ['bad', `Hosting grace period: servers stop on ${day} at ${time} UTC unless credit is added.`];
   }
   if (v.state === 'paused') return ['bad', `Tico models paused: balance reached ${min}. Your bots are using their other models.`];
@@ -127,11 +136,11 @@ async function renderSettingsBilling(): Promise<void> {
 }
 function billingUsageHTML(v: BillingView): string {
   const months = v.months.length ? v.months : [v.month];
-  return `<h3>Usage <select data-billing-month aria-label="Month">${months.map(m => `<option value="${esc(m)}"${m === v.month ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select></h3>
-    ${v.usage.length ? `<div class="billing-days">${v.usage.map(d => `<details data-billing-day="${esc(d.period)}"><summary><span>${esc(d.period)}</span><span class="num">${billingCents(d.total_micros)}</span></summary>
+  return `<h3>Usage <select data-billing-month aria-label="Month">${months.map(m => `<option value="${esc(m)}"${m === v.month ? ' selected' : ''}>${esc(billingMonthWords(m))}</option>`).join('')}</select></h3>
+    ${v.usage.length ? `<div class="billing-days">${v.usage.map(d => `<details data-billing-day="${esc(d.period)}"><summary><span>${esc(billingDayWords(d.period))}</span><span class="num">${billingCents(d.total_micros)}</span></summary>
       <table class="billing-table"><tbody>${billingSplit(d.lines)}</tbody></table><div data-billing-hours></div></details>`).join('')}</div>` : '<p class="muted">No usage this month.</p>'}
-    <h3>Statement for ${esc(v.month)}</h3>${billingStatement(v.statement)}
-    <p><a class="link" href="${API}/v2/billing/statements/${encodeURIComponent(v.month)}.csv" download="tico-statement-${esc(v.month)}.csv" data-billing-csv>Download CSV</a></p>`;
+    <h3>Statement for ${esc(billingMonthWords(v.month))}</h3>${billingStatement(v.statement)}
+    <p><a class="ghost" href="${API}/v2/billing/statements/${encodeURIComponent(v.month)}.csv" download="tico-statement-${esc(v.month)}.csv" data-billing-csv>Download CSV</a></p>`;
 }
 function billingBind(host: HTMLElement): void {
   const month = host.querySelector<HTMLSelectElement>('[data-billing-month]');
@@ -145,7 +154,7 @@ function billingBind(host: HTMLElement): void {
       const r: BillingHoursView = await get(`/v2/billing/usage?day=${encodeURIComponent(day.dataset.billingDay ?? '')}`);
       // HQ refused or did not answer: say so, and ask again the next time the day opens.
       if (r.state !== 'ok') { hours.innerHTML = `<p class="muted">${billingEmptyHTML(r.state)}</p>`; delete hours.dataset.loaded; return; }
-      hours.innerHTML = r.hours?.length ? `<h4>By hour</h4>${r.hours.map(h => `<div class="billing-hour"><div class="billing-hour-head"><span>${esc(h.period.slice(11))}:00 UTC</span><span class="num">${billingCents(h.total_micros)}</span></div>
+      hours.innerHTML = r.hours?.length ? `<h4>By hour</h4>${r.hours.map(h => `<div class="billing-hour"><div class="billing-hour-head"><span>${esc(billingHourWords(h.period))} UTC</span><span class="num">${billingCents(h.total_micros)}</span></div>
         <table class="billing-table"><tbody>${billingSplit(h.lines)}</tbody></table></div>`).join('')}` : '<p class="muted">No hours to show.</p>';
     } catch (e) { hours.innerHTML = `<p class="muted">${esc(errorMessage(e, ''))}</p>`; delete hours.dataset.loaded; }
   }); });

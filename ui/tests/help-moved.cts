@@ -131,7 +131,7 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     const top = v.page.locator('.release-page');
     await top.locator('#changelog-known-issues').waitFor();
     assert.deepEqual(await top.evaluate(page => [...(page.children as unknown as Iterable<Element>)].slice(0, 4).map(el => el.id || el.className)),
-      ['release-header', 'changelog-beta', 'changelog-known-issues', 'release-filters']);
+      ['ph cl-head', 'changelog-beta', 'changelog-known-issues', 'release-list'], 'the header (search and filter in it), Beta features, known issues, then the changes');
     assert.equal(await v.page.locator('#changelog-beta summary').innerText(), 'Beta features');
     assert.deepEqual(await v.page.locator('#changelog-beta li').evaluateAll(rows => rows.map(li => li.firstChild!.textContent)), (beta as {name: string}[]).map(f => f.name));
     assert.equal(await v.page.locator('#changelog-beta li .pill.beta').count(), (beta as unknown[]).length);
@@ -148,10 +148,10 @@ const CHECKS = [{name: 'HTTPS certificate', status: 'bad', detail: 'could not co
     await v.page.locator('#changelog-known-issues').waitFor();
     assert.equal(await v.page.locator('#changelog-known-issues .changelog-ki-none').textContent(), 'None known in v0.2.17.');
     await v.ctx.close();
-    // HQ not reached: it says it could not check rather than "none".
+    // HQ not reached: it says the list is not here rather than "none".
     v = await visit({hash: '#/changelog', update: {...base, known_issues: [], known_issues_checked: false}});
     await v.page.locator('#changelog-known-issues').waitFor();
-    assert.match(await v.page.locator('#changelog-known-issues').textContent(), /Could not check/);
+    assert.match(await v.page.locator('#changelog-known-issues').textContent(), /known issues are not listed here/);
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
     console.log('PASS: Settings shows the versions and the app log; Health runs the Setup check and sends it attached; What\'s new opens with Beta features and known issues.');

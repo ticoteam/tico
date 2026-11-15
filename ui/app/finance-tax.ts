@@ -37,9 +37,10 @@ function finTaxPage() {
   finNeed(FIN, 'the Finance page').tax = {data: null, load: 0};
   const now = new Date().getFullYear(), years = Array.from({length: 6}, (_, i) => now - i);
   $('#fin-body').innerHTML = `<div class="fin-bar">${finSeg('tax', 'Workpaper', [['sales', 'Sales tax'], ['1099', '1099']], t.view)}
-      <select data-fin-year aria-label="Year">${years.map(y => `<option value="${y}"${y === t.year ? ' selected' : ''}>${y}</option>`).join('')}</select>
-      <span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button></div>`
+      <select data-fin-year aria-label="Year">${years.map(y => `<option value="${y}"${y === t.year ? ' selected' : ''}>${y}</option>`).join('')}</select></div>`
     + finSplit(`<div class="fin-scroll" id="fin-tax">${skelRows(6, {dot: false})}</div>`, '', 'Selected row');
+  // Export is rarer than daily: an item in the header's ⋯.
+  finHeadMore('<button type="button" data-fin-export>Export</button>');
   const body = $('#fin-body');
   body.querySelector('[data-fin-year]').onchange = (ev: Event) => { t.year = Number((eventElement(ev) as HTMLSelectElement).value); t.sel = ''; void finTaxLoad(); };
   body.onclick = (ev: Event) => {
@@ -79,16 +80,19 @@ function finTaxDraw() {
   if (!rows.length) { box.innerHTML = finNote(t.view === '1099' ? 'No 1099 vendors.' : 'No sales tax.'); return; }
   const on = (r: FinTaxRow) => t.sel === finTaxKey(r) ? ' class="fin-on"' : '';
   if (t.view === '1099') {
-    box.innerHTML = `<table class="fin-t"><thead><tr><th>Vendor</th><th>TIN</th><th class="fin-n">Cash paid</th><th class="fin-n">Card paid</th><th>1099-NEC</th></tr></thead><tbody>${rows.map(r =>
-      `<tr data-fin-tax="${esc(finTaxKey(r))}"${on(r)}><td><button type="button" class="fin-link">${esc(r.vendor || '—')}</button></td>
-        <td>${r.tin_on_file ? 'On file' : '<span class="fin-bad">Missing</span>'}</td><td class="fin-n">${finNum(r.cash_paid)}</td>
-        <td class="fin-n muted">${finNum(r.card_paid_excluded)}</td><td>${r.reportable ? '<span class="pill waiting">Due</span>' : '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table>`;
+    // A TIN on file is the normal state and says nothing; a missing one is red. A 1099-NEC due is the row's news.
+    box.innerHTML = `<table class="fin-t fin-rows"><thead><tr><th>Vendor</th><th>TIN</th><th class="fin-n">Cash paid</th><th class="fin-n">Card paid</th><th>1099-NEC</th></tr></thead><tbody>${rows.map(r =>
+      `<tr data-fin-tax="${esc(finTaxKey(r))}"${on(r)}><td><button type="button" class="fin-link">${esc(r.vendor || 'No name')}</button></td>
+        <td data-sk="TIN">${r.tin_on_file ? '' : '<span class="fin-bad">TIN missing</span>'}</td><td class="fin-n fin-amt">${finNum(r.cash_paid)}</td>
+        <td class="fin-n muted" data-k="Card">${finNum(r.card_paid_excluded)}</td><td data-k="1099-NEC">${r.reportable ? '<span class="pill waiting">Due</span>' : ''}</td></tr>`).join('')}</tbody></table>`;
+    finTrim(box.querySelector('table'), 'tax-1099');
     return;
   }
-  box.innerHTML = `<table class="fin-t"><thead><tr><th>Quarter</th><th>Jurisdiction</th><th class="fin-n">Taxable</th><th class="fin-n">Exempt</th><th class="fin-n">Collected</th><th class="fin-n">Remitted</th><th class="fin-n">Due</th><th>Due on</th></tr></thead><tbody>${rows.map(r =>
-    `<tr data-fin-tax="${esc(finTaxKey(r))}"${on(r)}><td class="fin-nowrap">${esc(finQuarter(r.period))}</td><td><button type="button" class="fin-link">${esc(r.jurisdiction || r.code || '—')}</button></td>
-      <td class="fin-n">${finNum(r.taxable_sales)}</td><td class="fin-n">${finNum(r.exempt_sales)}</td><td class="fin-n">${finNum(r.tax_collected)}</td>
-      <td class="fin-n">${finNum(r.tax_remitted)}</td><td class="fin-n${(r.due ?? 0) > 0 ? ' fin-bad' : ''}">${finNum(r.due)}</td><td class="fin-nowrap">${esc(finDayLabel(r.due_on))}</td></tr>`).join('')}</tbody></table>`;
+  box.innerHTML = `<table class="fin-t fin-rows fin-rows-tt"><thead><tr><th>Quarter</th><th>Jurisdiction</th><th class="fin-n">Taxable</th><th class="fin-n">Exempt</th><th class="fin-n">Collected</th><th class="fin-n">Remitted</th><th class="fin-n">Due</th><th>Due on</th></tr></thead><tbody>${rows.map(r =>
+    `<tr data-fin-tax="${esc(finTaxKey(r))}"${on(r)}><td class="fin-nowrap" data-sk="Quarter">${esc(finQuarter(r.period))}</td><td class="fin-tt"><button type="button" class="fin-link">${esc(r.jurisdiction || r.code || 'No name')}</button></td>
+      <td class="fin-n" data-k="Taxable">${finNum(r.taxable_sales)}</td><td class="fin-n" data-k="Exempt">${finNum(r.exempt_sales)}</td><td class="fin-n" data-k="Collected">${finNum(r.tax_collected)}</td>
+      <td class="fin-n" data-k="Remitted">${finNum(r.tax_remitted)}</td><td class="fin-n fin-amt${(r.due ?? 0) > 0 ? ' fin-bad' : ''}" data-sk="Due">${finNum(r.due)}</td><td class="fin-nowrap" data-k="Due on">${esc(finDayLabel(r.due_on))}</td></tr>`).join('')}</tbody></table>`;
+  finTrim(box.querySelector('table'), 'tax-sales');
 }
 // "2026-Q3" → "Q3 2026".
 const finQuarter = (p: string | undefined): string => { const m = /^(\d{4})-Q([1-4])$/.exec(String(p || '')); return m ? `Q${m[2]} ${m[1]}` : String(p || ''); };

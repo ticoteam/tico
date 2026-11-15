@@ -694,12 +694,16 @@ async function teamAdd(browser: Browser) {
   assert.equal(await page.locator('#tree a.node.seat[data-seat-open="seat1"]').getAttribute('href'), '#/seat/seat1');
   assert.deepEqual(await page.evaluate(() => orgTreeByParent()['b:scout']!.map(n => n.kind + ':' + n.id)), ['seat:seat1']);
   await shot(page, 'team-add-bot-applicants');
-  // Close job asks on the same button and closes nothing on the first click; moving away puts it back.
+  // Close job is the archive icon in the seat's header (named Close job); it asks once (askConfirm), and a no closes nothing.
   const closeJob = page.locator('[data-recruit-close]');
+  assert.equal(await closeJob.getAttribute('aria-label'), 'Close job');
+  assert.equal(await closeJob.locator('.nav-icon').textContent(), 'archive');
+  const asked: string[] = [];
+  page.once('dialog', d => { asked.push(d.message()); void d.dismiss(); });
   await closeJob.click();
-  assert.equal(await closeJob.textContent(), 'Close job?');
-  await closeJob.evaluate(el => el.blur());
-  assert.equal(await closeJob.textContent(), 'Close job');
+  for (let i = 0; i < 50 && !asked.length; i++) await page.waitForTimeout(50);
+  assert.match(asked[0] || '', /^Close the job "Ledger"\?/);
+  assert.equal(await closeJob.locator('.nav-icon').textContent(), 'archive');
   assert.equal(calls.some(c => c[1] === 'close'), false);
   await page.locator('[data-recruit-hire="finance-owner"]').click();
   await node(page, 'b:' + LEDGER_ID).waitFor({state: 'attached'});

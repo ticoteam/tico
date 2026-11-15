@@ -1,4 +1,6 @@
 /* ui/app/messaging.ts — Message bot review page
+   The one page header: the bot's name, and in its ⋯ Automations, Bot settings and Pause (nothing used daily sits on the
+   bar). Its sources are a single-choice segment; its instructions read as text; its example messages sit beside them.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -128,24 +130,27 @@ function messagingRuns(data: MessagingDetail): string {
 }
 function messagingDetail(data: MessagingDetail): void {
   const b = data.bot, state = messagingParams();
-  const sources = `<button type="button" class="msg-source${state.source ? '' : ' on'}" data-msg-source="">All sources</button>` +
-    b.sources.map(s => `<button type="button" class="msg-source${state.source === s.id ? ' on' : ''}" data-msg-source="${esc(s.id)}" title="${esc(s.purpose || s.error || s.name)}">${s.kind === 'email' ? '✉' : '#'} ${esc(s.name.replace(/^#/, ''))}</button>`).join('');
+  // One choice of source: the segment the guide uses for every single-choice filter, or a select when there are many.
+  const sources = `<button type="button" class="msg-source" data-msg-source="" aria-pressed="${!state.source}">All sources</button>` +
+    b.sources.map(s => `<button type="button" class="msg-source" data-msg-source="${esc(s.id)}" aria-pressed="${state.source === s.id}" title="${esc(s.purpose || s.error || s.name)}">${s.kind === 'email' ? '✉' : '#'} ${esc(s.name.replace(/^#/, ''))}</button>`).join('');
   const sourceControl = b.sources.length > 8
-    ? `<div class="msg-source-picker"><select id="msg-source-select" aria-label="Choose a messaging source"><option value="">All ${b.sources.length} sources</option>${b.sources.map(s => `<option value="${esc(s.id)}"${state.source === s.id ? ' selected' : ''}>${s.kind === 'email' ? 'Email' : 'Slack'} · ${esc(s.name)}</option>`).join('')}</select><details><summary>Show all sources</summary><div class="msg-sources" aria-label="Sources covered by ${esc(b.name)}">${sources}</div></details></div>`
-    : `<div class="msg-sources" aria-label="Sources covered by ${esc(b.name)}">${sources}</div>`;
+    ? `<div class="msg-source-picker"><select id="msg-source-select" aria-label="Choose a messaging source"><option value="">All ${b.sources.length} sources</option>${b.sources.map(s => `<option value="${esc(s.id)}"${state.source === s.id ? ' selected' : ''}>${s.kind === 'email' ? 'Email' : 'Slack'} · ${esc(s.name)}</option>`).join('')}</select><details><summary>Show all sources</summary><div class="msg-sources ph-seg" role="group" aria-label="Sources covered by ${esc(b.name)}">${sources}</div></details></div>`
+    : `<div class="msg-sources ph-seg" role="group" aria-label="Sources covered by ${esc(b.name)}">${sources}</div>`;
   const shownSources = state.source ? b.sources.filter(s => s.id === state.source) : b.sources.length > 8 ? [] : b.sources;
   const checks = messagingRuns(data);
-  messagingNeed('#msg-detail').innerHTML = `<div class="msg-workspace">
+  const more = `<a href="${AUTOMATIONS}?q=${encodeURIComponent(b.name)}" data-msg-automations>Automations</a><a href="#/bot/${encodeURIComponent(b.bot)}">Bot settings</a>`
+    + (b.can_manage && ['active', 'paused'].includes(b.state) ? `<button type="button" data-msg-pause="${esc(b.bot)}">${b.state === 'active' ? 'Pause bot' : 'Resume bot'}</button>` : '');
+  const updated = data.instructions.published && data.instructions.updated_at ? `Updated ${ago(data.instructions.updated_at)}` : '';
+  messagingNeed('#msg-detail').innerHTML = `${pageHead({title: b.name, hook: 'msg-head', more})}
+  <div class="msg-workspace">
     <div class="msg-config">
-      <div class="msg-detail-head"><div><h1>${esc(b.name)}</h1><div class="muted">${esc(b.description || b.bot)}</div></div>
-        <div class="msg-actions"><a class="ghost" href="${AUTOMATIONS}?q=${encodeURIComponent(b.name)}" data-msg-automations>Automations</a><a class="ghost" href="#/bot/${encodeURIComponent(b.bot)}">Bot settings</a>${b.can_manage && ['active', 'paused'].includes(b.state) ? `<button class="ghost" type="button" data-msg-pause="${esc(b.bot)}">${b.state === 'active' ? 'Pause bot' : 'Resume bot'}</button>` : ''}</div></div>
       ${sourceControl}
       <section class="msg-panel" aria-labelledby="msg-instructions-title">
-        <div class="msg-panel-title"><h2 id="msg-instructions-title">Instructions</h2><div class="muted">${data.instructions.published ? 'Published by its computer' + (data.instructions.updated_at ? ' · ' + ago(data.instructions.updated_at) : '') : 'Published summary; its instructions have not been reported yet'}</div></div>
+        <div class="msg-panel-title"><h2 id="msg-instructions-title"${updated ? ` title="${esc(updated)}"` : ''}>Instructions</h2></div>
         <div class="msg-panel-body">
           <div class="msg-facts"><span><strong>${b.sources.length}</strong> source${b.sources.length === 1 ? '' : 's'}</span><span>Last run <strong>${b.last_run ? esc(ago(b.last_run)) : 'not recorded'}</strong></span><span>Next <strong>${b.next_run ? esc(fmt(b.next_run)) : b.slack_interval_minutes ? `Slack every ${b.slack_interval_minutes} minutes when new` : 'not scheduled'}</strong></span></div>
-          ${shownSources.length ? `<div class="msg-facts" style="margin-top:10px">${shownSources.map(s => `<span>${esc(s.name)}${s.kind === 'email' ? ` · ${s.error ? 'sync error' : s.synced_at ? 'synced ' + ago(s.synced_at) : 'not synced'}` : ` · ${s.post ? 'can post' : 'reads only'}`}</span>`).join('')}</div>` : ''}
-          <pre>${esc(data.instructions.content || 'No instructions have been published.')}</pre>
+          ${shownSources.length ? `<div class="msg-facts msg-facts-sources">${shownSources.map(s => `<span>${esc(s.name)}${s.kind === 'email' ? ` · ${s.error ? 'sync error' : s.synced_at ? 'synced ' + ago(s.synced_at) : 'not synced'}` : ` · ${s.post ? 'can post' : 'reads only'}`}</span>`).join('')}</div>` : ''}
+          <div class="msg-instructions">${esc(data.instructions.content || 'No instructions have been published.')}</div>
         </div>
       </section>
       ${checks ? `<section class="msg-section msg-scheduled"><h2>Slack checks</h2>${checks}</section>` : ''}
@@ -196,8 +201,8 @@ async function pageMessaging(): Promise<void> {
   main.classList.add('messaging-layout');
   const load = ++MESSAGING_LOAD;
   if (!$('#message-bot-page')) {
-    main.innerHTML = `<div id="message-bot-page"><div class="msg-detail" id="msg-detail"><div class="empty">Loading message bot…</div></div>
-      <dialog class="msg-message-dialog" id="msg-message-dialog"><div class="msg-message-head"><strong id="msg-message-title"></strong><button class="ghost" type="button" id="msg-message-close" aria-label="Close message">×</button></div><div class="msg-message-body" id="msg-message-body"></div></dialog></div>`;
+    main.innerHTML = `<div id="message-bot-page"><div class="msg-detail" id="msg-detail">${skelRows(4)}</div>
+      <dialog class="msg-message-dialog" id="msg-message-dialog"><div class="msg-message-head"><strong id="msg-message-title"></strong><button class="ghost" type="button" id="msg-message-close" aria-label="Close message"><span class="nav-icon" aria-hidden="true">close</span></button></div><div class="msg-message-body" id="msg-message-body"></div></dialog></div>`;
     ($('#msg-message-close') as HTMLElement).onclick = () => messagingMessageDialog().d.close();
     const detailPanel = $('#msg-detail') as HTMLElement;
     detailPanel.onclick = async ev => {
@@ -223,7 +228,7 @@ async function pageMessaging(): Promise<void> {
     };
   }
   try { if (!MESSAGING_LIST) MESSAGING_LIST = await get<MessagingList>('/v2/messaging/bots'); }
-  catch (e) { if (load === MESSAGING_LOAD) messagingNeed('#msg-detail').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
+  catch (e) { if (load === MESSAGING_LOAD) messagingNeed('#msg-detail').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== MESSAGING_LOAD) return;
   const list = MESSAGING_LIST;
   if (!list) throw new Error('the message bot list did not load');
@@ -232,13 +237,13 @@ async function pageMessaging(): Promise<void> {
   if (!state.bot && list.bots.length) { messagingGo({bot: list.bots[0]!.bot}); return; }
   if (state.bot && !list.bots.some(b => b.bot === state.bot)) { messagingGo({bot: list.bots[0]?.bot || '', source: ''}); return; }
   if (!state.bot) { detailBox.innerHTML = '<div class="empty">No bots are assigned to a visible messaging source.</div>'; return; }
-  detailBox.innerHTML = '<div class="empty">Loading bot activity…</div>';
+  detailBox.innerHTML = skelRows(4);
   try {
     const query = state.source ? `?source=${encodeURIComponent(state.source)}` : '';
     const detail = await get<MessagingDetail>(`/v2/messaging/bots/${encodeURIComponent(state.bot)}${query}`);
     if (load !== MESSAGING_LOAD) return;
     messagingDetail(detail);
   } catch (e) {
-    if (load === MESSAGING_LOAD) messagingNeed('#msg-detail').innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`;
+    if (load === MESSAGING_LOAD) messagingNeed('#msg-detail').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`;
   }
 }

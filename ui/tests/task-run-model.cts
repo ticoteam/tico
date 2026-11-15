@@ -73,7 +73,7 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
     await page.evaluate(t => taskModalShow(t), task);
     const modal = page.locator('#task-modal'), sec = modal.locator('[data-task-run-model]');
-    if (viewport.width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();   // a phone: Runs on is in Info (task #409)
+    await page.locator('#task-modal[open] [data-task-tab="details"]').click();   // Runs on is one of the facts on the Details tab
     const box = sec.locator('[data-bot-choice]');
     await box.waitFor();
     assert.equal(await closedText(box), 'Same as bot', 'no choice of its own: Same as bot, nothing else');

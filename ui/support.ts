@@ -1,5 +1,7 @@
-/* The Tico team chat: one ongoing conversation with the Tico team (docs/support.md). The ? beside Search opens it
-   (#support-open); so do a #/support link, Report this, Want help setting up? and old #/help links.
+/* The Tico team chat: one ongoing conversation with the Tico team (docs/support.md). Help beside Search opens it
+   (#support-open); so do a #/support link, Report this, Want help setting up? and old #/help links. Help is there
+   whether or not this server lets messages out: where they are off (demo, rehearsal, TICO_SUPPORT=off) the same window
+   offers the help Tico has without the team: the Assistant, the tour and the docs.
    Underneath it rides the ticket transport (backend/support.py): every one of the person's tickets is drawn as one
    conversation in time order, and a message goes to the newest ticket still open, or starts a new one with it. The
    person never sees a ticket, a status or a form. The draft stays on this page's account in memory; an attachment is an
@@ -126,14 +128,13 @@
     if (!r.ok) throw Object.assign(new Error(data.error?.detail || data.error?.message || (typeof data.detail === 'string' ? data.detail : '') || 'Could not reach the Tico team. Try again.'), {status: r.status, code: data.error?.code || ''});
     return data;
   }
-  // The ? beside Search: gone where support is off, a dot on it while a reply is unread.
+  // Help beside Search: always there (support off, it opens the help Tico has without the team), a dot on it while a
+  // reply is unread.
   function mark() {
     const n = state.unread, b = document.getElementById('support-open');
     if (b) {
-      const off = state.enabled === false;
-      if (b.hidden !== off) b.hidden = off;
       if (b.classList.contains('has-unread') !== !!n) b.classList.toggle('has-unread', !!n);
-      const label = n ? `${NAME}, ${n} new` : NAME;
+      const label = n ? `Help, ${n} new from the ${NAME}` : 'Help';
       if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
     }
     document.dispatchEvent(new CustomEvent('tico:support'));
@@ -657,7 +658,12 @@
         <button type="button" class="support-close" data-close aria-label="Close" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <p class="support-connection" data-connection role="status"></p>
       <p class="support-note support-loading" data-loading hidden>Loading…</p>
-      <p class="support-off" data-off hidden>Messages to the ${NAME} are off on this Tico server.</p>
+      <div class="support-off" data-off hidden><p>Messages to the ${NAME} are off on this Tico server.</p>
+        <nav class="support-help" aria-label="Help">
+          <button class="nav-link" type="button" data-help-go data-ask-open><span class="nav-icon" aria-hidden="true">forum</span>Ask the Assistant</button>
+          <button class="nav-link" type="button" data-help-go data-gs-tour><span class="nav-icon" aria-hidden="true">tour</span>Take the tour</button>
+          <a class="nav-link" data-help-go href="${GH}/blob/main/docs/README.md" target="_blank" rel="noopener noreferrer"><span class="nav-icon" aria-hidden="true">description</span>Read the docs</a>
+        </nav></div>
       <div class="support-confirm" data-confirm role="alertdialog" aria-labelledby="support-confirm-h" hidden>
         <p id="support-confirm-h"><strong>Delete chat history?</strong></p>
         <p class="support-note">Every message and its diagnostics, here and at the ${NAME}. This cannot be undone.</p>
@@ -670,6 +676,9 @@
       </div></div>`;
     document.body.appendChild(dialog);
     dialog.querySelector<HTMLElement>('[data-close]')!.onclick = () => dialog.close();
+    // Support off, each way to help closes this window first; the Assistant and the tour then open on their own clicks
+    // (ask-panel.ts, getting-started.ts), the docs in a new tab.
+    dialog.querySelectorAll<HTMLElement>('[data-help-go]').forEach(b => { b.addEventListener('click', () => dialog.close()); });
     // Delete chat history: asked inside the chat, then every one of the person's tickets is deleted at HQ.
     const ask = dialog.querySelector<HTMLElement>('[data-confirm]')!, askErr = dialog.querySelector<HTMLElement>('[data-confirm-error]')!;
     const no = dialog.querySelector<HTMLElement>('[data-confirm-no]')!, yes = dialog.querySelector<HTMLButtonElement>('[data-confirm-yes]')!;

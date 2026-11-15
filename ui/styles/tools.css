@@ -2,24 +2,31 @@
    only, so light and dark follow the theme. At phone width (760px) every table becomes stacked rows and nothing
    scrolls sideways. */
 
-/* The list */
+/* The list: Automations' layout and classes (ui/styles/automations.css .au-*, its rail, facets, table and phone
+   behaviour), with what only Tools has: a fixed Who can use it column, the private lock and the empty state. */
 .tt{min-width:0}
-/* Tools' header is the one page header (ui/app/page-head.ts, hook .tt-head). Contacts and Skills still draw their own
-   .tt-head, so its old rules stay for them only (:not(.ph)). */
-.tt-head:not(.ph){display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:48px;margin:0 0 8px}
-.tt-head:not(.ph) h1{margin:0;font-size:var(--t-lg);font-weight:600}
-.tt-head:not(.ph) .spacer{flex:1}
+.tt-au .tt-who-col{width:184px}
+.tt-au .au-row td{height:40px}
+.tt-au .au-tn>div{gap:10px}
+.tt-au .au-tn a{flex:0 1 auto;min-width:min(50%,9em);overflow:hidden}
+/* Short of room the name gives way first, down to half the cell; past that the pill ends in … */
+.tt-au .au-tn .pill{flex:none;max-width:calc(50% - 10px);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.tt-lock{flex:none;font-size:14px!important;width:14px!important;height:14px!important;color:var(--muted)}
+.tt-au .au-fb .av{flex:none}
+.tt-au .tt-who{overflow:hidden}
+.tt-au .tt-more{font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.tt-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:48px 16px;text-align:center}
+.tt-empty p{margin:0}
+.tt-err{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px}
+@media (max-width:1099px) and (min-width:761px){.tt-au .tt-who-col{width:128px}}
 .tt-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px;min-width:0}
 .tt-bar .theme-seg{flex-wrap:wrap;max-width:100%;min-height:var(--ctl)}
 .tt-q{flex:0 1 240px;min-width:0;margin-left:auto}
-.tt-n{color:var(--muted);font-weight:500;margin-left:2px}
 .tt-list{width:100%;border-collapse:collapse;table-layout:auto}
 .tt-list th{text-align:left;font-size:var(--t-label);font-weight:600;color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--line)}
 .tt-list td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}
 .tt-list tbody tr{cursor:pointer}
 .tt-list tbody tr:hover{background:var(--hover, var(--surface2))}
-.tt-tool a{display:flex;align-items:center;gap:10px;min-width:0;color:var(--ink);text-decoration:none}
-.tt-tool a:hover{text-decoration:none}
 .tt-tile{flex:none;display:inline-grid;place-items:center;width:32px;height:32px;border-radius:8px;background:var(--surface2);color:var(--muted)}
 .tt-tile .nav-icon{font-size:18px;width:18px;height:18px}
 .tt-tile.lg{width:44px;height:44px;border-radius:10px}
@@ -29,10 +36,6 @@
 .tt-private{margin-left:6px;vertical-align:middle;font-size:var(--t-xs, .75rem);font-weight:500}
 .tt-see-choice{gap:6px;flex-wrap:wrap;margin-bottom:8px}
 .tt-see-table th{text-align:left;font-weight:500;color:var(--muted);font-size:var(--t-sm);padding:4px}
-.tt-nm{min-width:0;display:flex;flex-direction:column;overflow-wrap:anywhere}
-.tt-nm strong{font-weight:600}
-.tt-nm .muted{font-size:var(--t-sm)}
-.tt-way,.tt-st{white-space:nowrap}
 .tt-who{white-space:nowrap}
 .tt-faces{display:inline-flex;vertical-align:middle}
 .tt-face{display:inline-flex;border-radius:50%;box-shadow:0 0 0 2px var(--surface)}
@@ -40,19 +43,11 @@
 .tt-more{margin-left:6px;font-size:var(--t-sm)}
 .tt-status{display:inline-flex;align-items:center;gap:5px}
 .tt-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
-.tt-chev{width:16px;color:var(--muted);text-align:right}
-.tt-add{position:relative}
-.tt-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;box-sizing:border-box;min-height:var(--ctl, 32px);padding:0 14px;border-radius:var(--r-ctl);background:var(--accent);color:var(--accent-ink, var(--surface));font-weight:600;font-size:var(--t-base)}
-.tt-add>summary::-webkit-details-marker{display:none}
-.tt-add-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:grid;min-width:200px;max-width:calc(100vw - 32px);padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--raised, var(--surface));box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 14%,transparent)}
-.tt-add-menu button{all:unset;cursor:pointer;padding:8px 10px;border-radius:6px;font-size:var(--t-sm);color:var(--ink)}
-.tt-add-menu button:hover,.tt-add-menu button:focus-visible{background:var(--surface2)}
 
 /* A tool's page: crumb, title, tabs, two columns of cards */
 .tt-crumb{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:var(--t-sm);color:var(--muted);margin:8px 0 10px;overflow-wrap:anywhere}
 .tt-crumb a{color:var(--muted)}
 @media(max-width:760px){.tt-crumb a{display:inline-flex;align-items:center;min-width:40px;min-height:40px}}
-.lc-ph .tt-crumb{margin:0;font-size:var(--t-lg)}
 .tt-title{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin:0 0 10px}
 .tt-title-text{flex:1 1 220px;min-width:0}
 .tt-title h1,.ib-title h1{margin:0 0 2px;font-size:var(--t-xl, 1.4rem);font-weight:600;overflow-wrap:anywhere}
@@ -123,24 +118,23 @@ section.card.tt-soon>header .pill{margin-left:auto}
 #mailbox-access{order:1}#inbox-sending{order:2}#inbox-waiting-to-send{order:3}#mailbox-keys{order:4}#mailbox-routines{order:5}#mailbox-recent{order:6}
 
 @media (max-width:760px){
-  .tt-head:not(.ph){min-height:0}
+  /* The list is rows, not a table that scrolls sideways: the name, then the faces; each row a 44px target. */
+  .tt-au .au-tbl{overflow-x:visible}
+  .tt-au .au-tbl-t{min-width:0}
+  .tt-au .au-tbl-t thead{display:none}
+  .tt-au .tt-who-col{width:132px}
+  .tt-au .au-row td{height:48px}
+  .tt-au .au-grp td{height:44px;padding:0 12px}
+  .tt-au .au-row td:first-child{padding-left:12px}
+  .tt-au .au-row td:last-child{padding-right:12px;text-align:right}
+  .tt-au .au-tn a{min-height:44px}
   .tt-q{flex:1 1 100%;margin-left:0}
-  /* Filters at zero are hidden, so "All" can be the bar's only button: a full-size touch target. .ph-seg in the
-     selector outranks the shared filter look (page-head.css), which loads later and zeroes min-height. */
-  .tt-filters.ph-seg>button{min-height:40px}
   .tt-cols{grid-template-columns:minmax(0,1fr)}
   /* Tables become stacked rows: each row a block, its cells wrapping under one another. */
   .tt-list thead,.tt-log thead,.tt-limits thead{display:none}
   .tt-list,.tt-list tbody,.tt-log,.tt-log tbody,.tt-limits,.tt-limits tbody{display:block;width:100%}
   .tt-list tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 10px;padding:10px 4px;border-bottom:1px solid var(--line)}
   .tt-list td{display:block;padding:0;border:0;min-width:0}
-  .tt-list .tt-tool{grid-column:1 / -1}
-  .tt-list .tt-way{grid-column:1;padding-left:42px}
-  .tt-list .tt-st{grid-column:2;grid-row:2;text-align:right}
-  .tt-list .tt-who{grid-column:1 / -1;padding-left:42px;white-space:normal}
-  /* Nobody can use it yet: the words are for screen readers only, so the cell leaves no empty line. */
-  .tt-list .tt-who:not(:has(.tt-faces)){position:absolute}
-  .tt-list .tt-chev{display:none}
   .tt-log tr,.tt-limits tr{display:flex;flex-wrap:wrap;gap:4px 10px;padding:8px 0;border-bottom:1px solid var(--line)}
   .tt-log td,.tt-limits td{display:block;padding:0;border:0;min-width:0}
   .tt-log .tt-log-what,.tt-log .tt-call{flex:1 1 100%;order:3}
@@ -229,8 +223,6 @@ button.tw-x:hover{background:var(--surface2)}
   .tw-acct .tw-acct-who:not(:has(*)){display:none}
   .tw-acct-user{max-width:100%}
 }
-.tt-chat{display:inline-flex}
-.tt-chat:empty{display:none}
 /* Keys dropped in that chat (ui/app/tools-key-drop.ts): items show what they are, never a value. */
 .kd-tray{display:flex;flex-direction:column;gap:6px;padding:8px 8px 0;max-height:40vh;max-height:40dvh;overflow-y:auto;overscroll-behavior:contain}
 .kd-tray[hidden]{display:none}

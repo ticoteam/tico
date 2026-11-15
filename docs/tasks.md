@@ -154,7 +154,30 @@ cause they can fix (one row per cause, not per task), every task the ladder or L
 them by a person until they reply. A bot's @ only marks the task unread. No chat, email or push goes to a person about
 a task.
 
-`GET /api/v2/needs-you` returns the list; `?count=true` returns the one number on the Tasks badge.
+`GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0).
+
+When Flow (the screen that walks the list one ask at a time) opens, Tico gives its opinion on each ask: the button it
+would press and one line of 80 characters or fewer saying why, with a note ready when it would send back, plus a
+hidden score the screen sorts by. It is worked out then, not on a timer, with the same model as the daily update
+drafts, from the task alone, never from who is looking. So one opinion per ask is shared by everyone the ask waits
+on, for 24 hours or until the ask's words, choices or shown page change. Tico only advises: a person presses the
+button. With no model, the ask shows plain buttons. `POST /api/v2/flow/opinions` takes up to 30 Needs-you ids and
+answers at once: `ready`, `pending` (ask again) or `none`.
+
+When Flow shows All done to someone who may change a pipeline (its owner, its manager, the company's owner and
+Admins), it lists **Suggested rules** under it: short sentences saying what work at a stage's page check must contain
+or do, drawn from the notes people wrote when they sent a bot's page back there. Each shows its pipeline and stage and
+how many of the send backs it rests on. **Add** makes Jev ask it of the next page judged at that check, as one more
+yes/no part beside the check's own (a shipped check keeps its parts and bars); Undo takes it out again, and a page
+already judged keeps its verdict. Jev is shown an added rule as text to check the page against, never as an
+instruction, and a check holds at most 20 of them. ✎ tells Tico what to change and it rewrites the sentence; ✕
+dismisses it for everyone. A rule is one plain sentence on one line: anything else the model writes is dropped. A check
+is worked out again once it has five new send backs, with one call to the daily update drafts' model, metered with
+Jev's spend. It reads only people's notes on tasks every member may read (not private, not owned or asked for by a bot
+whose access is restricted) in pipelines that are not private, and the model sees the notes and the check's own text,
+never a task's title, a page or anyone's name.
+`POST /api/v2/flow/suggestions` answers at once, `ready` or `pending` (ask again); `/{id}/add`, `/undo`, `/dismiss`
+and `/feedback` act on one. Added rules do not show in the stage editor yet.
 
 ## Sub-tasks
 

@@ -31,9 +31,8 @@ function botInstructionsMount(slug: string): void {
   if (!host || !bot || bot.shared_from || !settingsCanManageBot(bot)) return;
   host.innerHTML = `<form class="bot-instructions-form">
     <label for="bot-instructions-changes">Request instruction changes</label>
-    <textarea id="bot-instructions-changes" name="changes" required rows="6" aria-label="Instructions changes" placeholder="Describe what should change in this bot’s instructions"></textarea>
-    <p class="muted">Sent through your Assistant: the changes are made to AGENTS.md on the bot’s computer and the file is checked.</p>
-    <div class="row"><button class="primary" type="submit">Send changes</button><button class="ghost" type="reset">Cancel</button><span role="status" data-instructions-status></span></div>
+    <textarea id="bot-instructions-changes" name="changes" required rows="6" aria-label="Instructions changes" placeholder="What should change. Your Assistant makes it in AGENTS.md on the bot’s computer."></textarea>
+    <div class="row bot-instructions-acts"><span role="status" data-instructions-status></span><button class="ghost" type="reset">Cancel</button><button class="primary" type="submit">Send changes</button></div>
   </form>`;
   const form = host.querySelector('form'), status = host.querySelector('[data-instructions-status]');
   form.onreset = () => { status.textContent = ''; };

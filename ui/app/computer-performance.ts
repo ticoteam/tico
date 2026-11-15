@@ -81,7 +81,7 @@ async function pageComputerPerformance(id: string): Promise<void> {
   $('#main').innerHTML = `<div class="perf-page">
     <div class="perf-head"><a class="ghost perf-back" href="#/settings" aria-label="Back to Settings" title="Back"><span class="nav-icon" aria-hidden="true">chevron_left</span></a>
       <h1 id="perf-title">${esc(screenMachine(id)?.label || 'Computer')} · Performance${betaPill('replay_performance')}</h1><span class="spacer"></span>
-      ${repoSegHTML('perf-hours', 'Window', PERF_WINDOWS, state.hours, false, ' repo-seg-sm')}</div>
+      ${repoSegHTML('perf-hours', 'Window', PERF_WINDOWS, state.hours, false, ' repo-seg-sm')}${pageChatSlot()}</div>
     <div id="perf-body" aria-live="polite"><p class="empty">Loading…</p></div></div>`;
   // The window's radio inputs are the only controls in .repo-seg, so a change always comes from one of them.
   const seg: HTMLElement = $('#main').querySelector('.repo-seg');

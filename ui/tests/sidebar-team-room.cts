@@ -227,7 +227,9 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
             wordLines: new Set([...r.getClientRects()].map(x => Math.round(x.top))).size,
             cut: word.scrollWidth > word.clientWidth + 0.5 || a.scrollWidth > a.clientWidth + 0.5};
         });
-        assert.ok(box.wordTop >= box.nameBottom - 0.5, `${id}: the state word is on its own line under the name`);
+        // The two line boxes may share a pixel (the name's box is taller than its letters); a word beside the name would be a
+        // whole line higher.
+        assert.ok(box.wordTop >= box.nameBottom - 2, `${id}: the state word is on its own line under the name`);
         assert.equal(box.cut, false, `${id}: the state word and row are whole at 200px`);
         assert.equal(box.wordLines, 1, `${id}: the state word is never split (the count drops a line instead)`);
         assert.equal(box.word, id === 's-cloud' ? ' · Connecting' : ' · Recruiting');
@@ -274,7 +276,9 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
       const {context, page, errors} = await open(browser, {width: 390, height: 844});
       await page.locator('#mobile-more').click();
       await page.waitForFunction(() => document.body.classList.contains('drawer'));
-      assert.deepEqual(await page.locator('#org-more').evaluate(el => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }), [40, 40], '⋯ is 40×40 on a phone');
+      // 40 wide, and as tall as the foot's row (your picture's 44px target beside it).
+      const more = await page.locator('#org-more').evaluate(el => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; });
+      assert.ok(more[0] === 40 && more[1]! >= 40 && more[1]! <= 44, `⋯ is at least 40×40 on a phone: ${more}`);
       assert.deepEqual(errors, []);
       await context.close();
     }

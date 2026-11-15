@@ -1,10 +1,10 @@
 /* ui/app/tasks-page.ts — the Tasks page (docs/pipelines-v3.md S2, S7): the header, You, a pipeline, the archive, search
    and filter, and New task (S6).
    The header, left to right: "Tasks", the view button ("You 7 ▾" or a pipeline's name), the pencil on a pipeline,
-   then search, filter, list or columns on a pipeline, archive, play (Catch up) and +.
+   then search, filter, list or columns on a pipeline, archive, Flow (decide.ts) and +.
    You is Needs you in three groups, Answer, Review and Do; a row is the sentence asked, and opens the ask screen
    (decide.ts). A pipeline is drawn by task-pipelines.ts through TASK_PAGE_HOOKS (task-row.ts), else as a list grouped
-   by stage; its manager's rail sits beside it. The archive is Snoozed, Done and Closed, of the pipeline in view or of every pipeline from You.
+   by stage; its manager answers the page's chat (pipeline-rail.ts, page-chat.ts). The archive is Snoozed, Done and Closed, of the pipeline in view or of every pipeline from You.
    Reads: GET /api/v2/needs-you, GET /api/v2/pipelines, GET /api/v2/tasks (through task-api.ts).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -99,20 +99,28 @@ function pageTasks(openId = '') {
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
       ${pageHead({title: 'Tasks', hook: 'tl-head',
         after: '<button type="button" class="tl-scope" id="task-scope" aria-haspopup="menu" aria-expanded="false"></button>',
-        // One row (spec "Pipeline board: one-row header", part A): search, Filter, ▶ Review, the manager's face and ⋯. Nothing
-        // on it is accent: New task, Archived, Edit pipeline and List/Columns are in ⋯ (C still makes a task).
+        // One row (spec "Pipeline board: one-row header", part A; style guide "Top bars: one line"): search, Filter, Flow,
+        // a pipeline's List/Columns switch, the manager's face, the quiet + (New task) and ⋯. Nothing on it is accent.
+        // Tight, the row gives way as every header does (page-head.ts): the search shrinks, then the tools (the switch
+        // with them) go into ⋯; the + keeps the row, so New task is the last to go: on a phone it is ⋯'s first item
+        // instead (task-list.css). Archived and Edit pipeline are in ⋯. C still makes a task.
         tools: `<div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd>`
           + `<button type="button" class="tl-search-x" aria-label="Close search" title="Close search">${TL_ICON.x}</button></div>`
           + `<button type="button" class="tl-ib" id="task-filter" aria-haspopup="true" aria-label="Filter" title="Filter">${TL_ICON.filter}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>`
-          + '<button type="button" class="tl-review none" id="task-play" aria-label="Review: nothing waits on you" title="Review"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tl-review-n tnum"></span></button>'
-          + `<button type="button" class="tl-ib" id="task-manager" aria-pressed="false" aria-label="Manager" title="Manager" hidden>${TL_ICON.chat}</button>`,
+          + `<button type="button" class="tl-review none" id="task-play" aria-label="Flow" title="Flow">${flowMarkHTML(14)}<span class="tl-review-n tnum"></span></button>`
+          + '<div class="tl-pair ph-seg" id="task-mi-layout" role="group" aria-label="View" hidden>'
+          // (drawn here: the icon font has no columns glyph, and the pair should read as one set)
+          + '<button type="button" data-layout="list" aria-pressed="false" aria-label="List" title="List"><svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true" focusable="false"><path d="M3 4.5h12M3 9h12M3 13.5h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg></button>'
+          + '<button type="button" data-layout="columns" aria-pressed="false" aria-label="Columns" title="Columns"><svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true" focusable="false"><rect x="2.5" y="3.5" width="3.4" height="11" rx="1" stroke="currentColor" stroke-width="1.4" fill="none"/><rect x="7.3" y="3.5" width="3.4" height="11" rx="1" stroke="currentColor" stroke-width="1.4" fill="none"/><rect x="12.1" y="3.5" width="3.4" height="11" rx="1" stroke="currentColor" stroke-width="1.4" fill="none"/></svg></button></div>'
+          + `<button type="button" class="tl-ib" id="task-manager" aria-label="Manager" title="Manager" hidden>${TL_ICON.chat}</button>`,
+        add: {label: 'New task', attrs: 'id="task-new" aria-keyshortcuts="c"'},
         moreId: 'task-menu', menuId: 'task-menu-pop',
-        more: '<button type="button" id="task-mi-new" class="tl-mi-k" data-key="C" aria-keyshortcuts="c">New task</button>'
+        // Search: on a phone under 340 px the search's icon folds into ⋯ (task-list.css), so a long pipeline's name keeps
+        // its room on the row; the item opens the search over the row as the icon does.
+        more: '<button type="button" id="task-mi-search">Search</button>'
+          + '<button type="button" id="task-mi-new" class="tl-mi-k" data-key="C" aria-keyshortcuts="c">New task</button>'
           + '<button type="button" id="task-mi-archive">Archived</button>'
-          + '<button type="button" id="task-mi-edit" hidden>Edit pipeline</button>'
-          + '<div class="tl-mi-layout" id="task-mi-layout" role="group" aria-label="View" hidden><hr>'
-          + '<button type="button" role="menuitemradio" data-layout="list" aria-checked="false">List</button>'
-          + '<button type="button" role="menuitemradio" data-layout="columns" aria-checked="false">Columns</button></div>'})}
+          + '<button type="button" id="task-mi-edit" hidden>Edit pipeline</button>'})}
       <div class="tl-bar" id="task-bar" hidden>
         <button type="button" class="tl-ib" id="task-archive-x" aria-label="Leave Archived" title="Leave Archived" hidden>${TL_ICON.x}</button>
         <div class="tl-pair ph-seg" id="task-archives" role="group" aria-label="Archive" hidden>${TASK_ARCHIVES.map(([k, label]) =>
@@ -122,14 +130,18 @@ function pageTasks(openId = '') {
       <div id="task-body" role="region" aria-label="Tasks"></div>
       <div class="tl-more" id="task-more" hidden><button type="button" class="ghost">More</button></div>
       <div class="pa-host" id="task-ask" hidden></div>
-    </div><aside class="tl-rail" id="task-rail" hidden></aside></div>
+    </div></div>
     <div id="task-filter-pop" class="tl-pop" popover></div>`;
   const signal = state.abort.signal;
   const anchorOf = (ev: Event) => ev.currentTarget as HTMLElement;
   $('#task-scope').onclick = (ev: MouseEvent) => tasksScopeMenu(state, anchorOf(ev));
-  $('#task-manager').onclick = () => pipelineRailToggle();
+  // The manager's face, a phone's only: the page's chat mark, which opens the board's bots (pipeline-ask.ts), as nothing
+  // floats over the board. A computer's way in is the page chat's column and its tab (page-chat.ts).
+  $('#task-manager').onclick = () => pipelineAskOpen();
   // ⋯: each item does what its button on the row did (the shared header closes the menu on a pick).
-  $('#task-mi-new').onclick = () => openTaskCreate('', {pipeline: state.pipeline || null});
+  $('#task-mi-new').onclick = $('#task-new').onclick = () => openTaskCreate('', {pipeline: state.pipeline || null});
+  // after the header has closed ⋯ (its own click, page-head.ts), so the focus is not handed back to ⋯
+  $('#task-mi-search').onclick = () => setTimeout(() => $('#task-q')?.focus());
   $('#task-mi-archive').onclick = () => tasksShow(state, {archive: state.archive ? '' : 'snoozed'});
   $('#task-mi-edit').onclick = () => { const p = tasksPipeline(state); if (p) TASK_PAGE_HOOKS.pipeline?.edit?.(p); };
   $('#task-mi-layout').onclick = (ev: MouseEvent) => {
@@ -421,21 +433,19 @@ const tasksStageName = (state: TasksPageState, id: string | null | undefined) =>
   }
   return '';
 };
-// ▶ Review's count: on a pipeline, what waits on the person in its stages; elsewhere all of Needs you.
+// Flow's count: on a pipeline, what waits on the person in its stages; elsewhere all of Needs you.
 function tasksReviewCount(state: TasksPageState): number {
   const p = tasksPipeline(state);
   if (!p) return decideCount();
   const counts = needsStageCounts();
   return p.stages.reduce((sum, s) => sum + (counts.get(s.id || '') || 0), 0);
 }
-// ▶ Review: on You, all of Needs you as before; on a pipeline, the phone's open stage first, else the first stage with
-// items, never another pipeline's. Nothing to walk says so.
+// Flow: on You, all of Needs you; on a pipeline, what waits in its stages, never another pipeline's. Nothing to walk
+// says so.
 async function tasksReview(state: TasksPageState): Promise<void> {
   const p = tasksPipeline(state);
   if (!p) { if (!decideGoThrough()) toast('Nothing waits on you'); return; }
-  const counts = needsStageCounts(), open = matchMedia(PHONE).matches ? pvStateFor(p).stage : '';
-  const stage = open && counts.get(open) ? open : p.stages.find(s => counts.get(s.id || ''))?.id || '';
-  if (!stage || !await decideStageOpen(stage)) toast(`Nothing waits on you in ${p.name}`);
+  if (!await decideStageOpen('', p.id)) toast(`Nothing waits on you in ${p.name}`);
 }
 function tasksHeadPaint(state: TasksPageState) {
   // A bot's read-only view has no Needs you: its scope is the bot's own open tasks, with their count.
@@ -446,28 +456,22 @@ function tasksHeadPaint(state: TasksPageState) {
     : `<span class="tl-scope-l">${esc(you)}</span>${own ? `<span class="cnt tnum">${own}${state.more ? '+' : ''}</span>` : ''}`;
   if (scope.dataset.label !== label) { scope.dataset.label = label; scope.innerHTML = label + TL_ICON.caret; }
   scope.setAttribute('aria-label', p ? `Showing ${p.name}` : `Showing ${you}${own ? `, ${own}` : ''}`);
-  // ▶ is always on the row and keeps one width: its count is the one count of what waits on the person.
+  // Flow is always on the row and keeps one width: its count is the one count of what waits on the person.
   const n = tasksReviewCount(state), play = $('#task-play');
   play.hidden = view;                       // a view reviews nothing: no Needs you, no answers
   play.classList.toggle('none', !n);
   play.querySelector('.tl-review-n')!.textContent = n ? (n > 99 ? '99+' : String(n)) : '';
-  play.setAttribute('aria-label', n ? `Review: ${n} wait${n === 1 ? 's' : ''} on you` : 'Review: nothing waits on you');
-  // The manager's own face opens its panel, where a generic chat icon did.
-  const manager = $('#task-manager');
-  manager.hidden = !p || !!state.archive || !TASK_PAGE_HOOKS.pipeline?.rail || !pipelineRailFor(p);
-  const who = p?.manager_id ? prActor(p.manager_id) : '', face = who ? actorFace(who, 20) : TL_ICON.chat;
-  if (manager.dataset.face !== face) {      // drawn again only when the face changes (its name or picture arrives)
-    manager.dataset.face = face;
-    manager.innerHTML = face;
-    const words = who ? `Chat with ${actorLabel(who)}` : 'Manager';
-    manager.setAttribute('aria-label', words); manager.title = words;
-  }
+  play.setAttribute('aria-label', n ? `Flow, ${n}` : 'Flow');
+  // The manager's face: no chat button in a computer's header (style guide "Where chat lives"). On a phone the board's
+  // bots show it once the board is drawn (pipeline-ask.ts pipelineAskPaint, right after this): the face of whom it opens,
+  // none with no bot.
+  $('#task-manager').hidden = true;
   // ⋯
   const archive = $('#task-mi-archive');
   archive.textContent = state.archive ? 'Leave Archived' : 'Archived';
   $('#task-mi-edit').hidden = !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive;
   $('#task-mi-layout').hidden = !p || !!state.archive || matchMedia(PHONE).matches;
-  for (const b of document.querySelectorAll<HTMLElement>('#task-mi-layout [data-layout]')) b.setAttribute('aria-checked', String(b.dataset.layout === state.layout));
+  for (const b of document.querySelectorAll<HTMLElement>('#task-mi-layout [data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.layout));
   $('#task-archive-x').hidden = !state.archive;
   const archives = $('#task-archives');
   archives.hidden = !state.archive;
@@ -499,8 +503,9 @@ function tasksRender(state: TasksPageState | null) {
   }
   body.dataset.view = state.archive ? 'archive' : state.pipeline ? 'pipeline' : 'you';
   const p = state.archive ? null : tasksPipeline(state), hooks = TASK_PAGE_HOOKS.pipeline;
-  if (p && hooks?.rail) hooks.rail($('#task-rail'), p); else tasksRailOff();
-  if (p && hooks && !state.failed && !(state.loading && !state.kept && !state.tasks.length)) {
+  const board = !!p && !!hooks && !state.failed && !(state.loading && !state.kept && !state.tasks.length);
+  if (p && hooks?.rail) hooks.rail(p, board); else tasksRailOff();
+  if (p && hooks && board) {
     // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound to.
     const html = hooks.html(p, state.tasks, {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches});
     if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
@@ -521,11 +526,8 @@ function tasksRender(state: TasksPageState | null) {
 function tasksAskOff() {
   if (typeof pipelineAskLeave === 'function') pipelineAskLeave();
 }
-/** The rail's host is emptied and hidden away from a pipeline (and its chat goes, pipeline-rail.ts). */
+/** Away from a pipeline the page's chat is its own owner's again, with no board (pipeline-rail.ts). */
 function tasksRailOff() {
-  const rail = document.getElementById('task-rail');
-  if (rail && !rail.hidden) { rail.hidden = true; rail.replaceChildren(); }
-  rail?.closest('.tasks-page')?.classList.remove('has-rail');
   if (typeof pipelineRailLeave === 'function') pipelineRailLeave();
 }
 const tasksGroupHTML = (name: string, rows: string[]) => !rows.length ? ''
@@ -560,7 +562,7 @@ function needsRowHTML(it: NeedsEntry): string {
   return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
     + (after ? `<span class="tk-after">${after}</span>` : '')
-    + `<span class="tk-who">${who ? actorFace(who, 18) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
+    + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }
 /** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
     stage's review (decide.ts). None until a stage of a pipeline in view has items. */

@@ -1,7 +1,8 @@
 /* ui/app/github-nudge.ts — The nudge to connect GitHub, where a bot's work is kept. While GitHub is not connected and
    installed, a bot someone made (its page) and a live "Build a bot" task (BotOps's) say that the work is backed up
    nowhere, and offer the one fix: the owner gets Connect GitHub (Tools › GitHub, ui/github-connect.js); anyone else is
-   asked to ask the owner. It goes as soon as GitHub is connected. The team's answer is read once per page
+   asked to ask the owner. Tools (#/tools) carries the same card above its list, so the way to connect is found
+   where tools are looked for. It goes as soon as GitHub is connected. The team's answer is read once per page
    (GET /v2/repositories, which any teammate may read): a draw after the first fills its card in the same tick, so a
    redraw does not flicker. Visiting Tools › GitHub forgets the answer; a failed read is asked again on the next draw.
    Nothing polls, and nothing is sent to anyone.
@@ -84,4 +85,16 @@ async function githubNudgeTask(dialog: HTMLElement, task: GithubNudgeTask): Prom
   const host = dialog.querySelector<HTMLElement>('[data-gh-nudge-task]');
   if (!host || host.dataset.task !== String(task.id)) return;   // the dialog drew another task meanwhile
   host.innerHTML = ghNudgeHTML(name, S.me?.role === 'owner', settingsOwnerName());
+}
+
+// Tools (#/tools): the card above the list, from the same read. The owner's goes to Tools › GitHub, whose visit asks
+// again, so it is gone once GitHub is connected.
+async function githubNudgeTools(host: HTMLElement | null): Promise<void> {
+  if (!host) return;
+  const missing = ghNudgeAnswer ?? (await ghNudgeMissingRead());
+  if (!missing || !host.isConnected) return;
+  const owner = S.me?.role === 'owner';
+  const sentence = owner ? 'Bots need GitHub.' : `Ask ${esc(settingsOwnerName() || 'the owner')} to connect GitHub.`;
+  host.innerHTML = `<section class="gh-nudge" role="status" aria-label="GitHub"><span>${sentence}</span>${
+    owner ? '<a class="primary" href="#/tools/github" data-gh-connect>Connect GitHub</a>' : ''}</section>`;
 }

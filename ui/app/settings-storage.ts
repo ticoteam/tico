@@ -53,7 +53,7 @@ const TICO_HOSTING: Record<string, string> = {
   credits_out: "Gateway credits have run out: files in Tico file hosting still open, and new files go to the company's own storage below until credits are added.",
   stopped: "Tico file hosting is stopped: new files go to the company's own storage below. Tico keeps the files it holds {until} and emails the owner before deleting them, so download them or move them back first.",
 };
-const keptUntil = (t: SettingsStorageTico): string => t.keep_until ? `until ${new Date(t.keep_until).toLocaleDateString(undefined, {dateStyle: 'long'})}` : 'for 30 days';
+const keptUntil = (t: SettingsStorageTico): string => t.keep_until ? `until ${lowerDay(dayWords(t.keep_until))}` : 'for 30 days';
 const gb = (n: number): string => `${(n / 1e9).toFixed(n < 1e7 ? 3 : 2)} GB`;
 function storageTicoHtml(t: SettingsStorageTico | null | undefined): string {
   if (!t || t.state === 'off') return '';
@@ -101,7 +101,7 @@ async function renderSettingsStorage(): Promise<void> {
   const copy = v.copy.running || v.copy.failed ? `<p class="settings-cell-note" role="status">Copying files from this server's disk: ${v.copy.done} of ${v.copy.total}${v.copy.failed ? `, ${v.copy.failed} failed (Settings › Health says why)` : ''}</p>` : '';
   const own = a ? `${storageWhere(a)}, read and written with key <code>${esc(a.access_key_id)}</code>` : server;
   host.innerHTML = `<p>${t.state === 'on' ? `New files go to Tico file hosting; the company's own storage is ${own}.` : `New files go to ${own}.`}
-      Files already stored keep opening from where they are. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">How it works</a></p>
+      <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">How it works</a></p>
     ${storageTicoHtml(t)}
     ${copy}
     <form class="storage-form" data-storage-form autocomplete="off">
@@ -111,13 +111,13 @@ async function renderSettingsStorage(): Promise<void> {
       <label>Access key ID<input name="access_key_id" required maxlength="128" placeholder="AKIA…" spellcheck="false"></label>
       <label>Secret access key<input name="secret_access_key" type="password" maxlength="128" autocomplete="new-password"
         placeholder="${a ? 'Leave empty to keep the saved one for the same key ID' : ''}"></label>
-      <p class="settings-cell-note">The keys need <code>s3:PutObject</code>, <code>s3:GetObject</code> and <code>s3:AbortMultipartUpload</code> on the bucket, and <code>s3:DeleteObject</code> to replace the team icon. Tico writes and reads back a small check object before saving.</p>
-      <div class="row"><button class="primary" type="submit">${a ? 'Save changes' : 'Use this bucket'}</button>
-        ${a ? `<button class="ghost" type="button" data-storage-off>Use the server's storage</button>` : ''}</div>
+      <p class="settings-cell-note">Keys need <code>s3:PutObject</code>, <code>s3:GetObject</code>, <code>s3:AbortMultipartUpload</code> and <code>s3:DeleteObject</code>.</p>
+      <div class="onb-actions">${a ? `<button class="ghost" type="button" data-storage-off>Use the server's storage</button>` : ''}<span class="spacer"></span>
+        <button class="primary" type="submit">${a ? 'Save changes' : 'Use this bucket'}</button></div>
       <p class="settings-cell-note" data-storage-status role="status"></p>
     </form>
     ${v.earlier.length ? `<details><summary>Still read from (${v.earlier.length})</summary><ul class="storage-earlier">${v.earlier.map(p =>
-      `<li>${storageWhere(p)} <span class="muted">· replaced ${esc(ago(p.retired_at))}</span></li>`).join('')}</ul></details>` : ''}`;
+      `<li>${storageWhere(p)} <span class="muted">· replaced ${esc(agoSaid(p.retired_at))}</span></li>`).join('')}</ul></details>` : ''}`;
   // The form and its status line are drawn just above.
   const form = host.querySelector<HTMLFormElement>('[data-storage-form]')!;
   const status = host.querySelector<HTMLElement>('[data-storage-status]')!;

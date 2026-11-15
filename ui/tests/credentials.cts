@@ -1,7 +1,8 @@
-// Credentials in Tools › Keys: an owner (or credential admin) adds a credential from the page's header, finds it on
-// the tool whose variable it fills, and grants it to a bot. The secret is sent once, in the create request, and is
-// never shown again (only its preview); a member with no vault access never reads the vault and has nothing to add.
-// The old Credentials address lands here. Fixtures only, no network.
+// Keys on Tools (Keys is no page of its own any more): an owner (or credential admin) adds a key from the keys' empty
+// state (the old Credentials address lands there), finds it on the tool whose variable it fills, and grants it to a
+// bot from that tool's page; the list follows. The secret is sent once, in the create request, and is never shown
+// again (only its preview); a member with no vault access never reads the vault and has nothing to add.
+// Fixtures only, no network.
 import type {Browser, LaunchOptions, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
 import type * as RouteSupport from './support/routes.cts';
@@ -41,6 +42,7 @@ async function open(browser: Browser, me: Record<string, unknown>, vault: Vault)
     if (p === '/api/v2/tools') return json({integrations: [jira]});
     if (p === '/api/v2/tools/jira') return json({...jira, queries: [], body: 'Tickets.', learnings: []});
     if (p === '/api/v2/groups') return json([]);
+    if (p === '/api/v2/tool-index') return json({rows: [], counts: {}, next: null});
     if (p === '/api/v2/credentials' && req.method() === 'GET') { seen.reads++; return json(seen.vault); }
     if (p === '/api/v2/credentials' && req.method() === 'POST') {
       const body = JSON.parse(req.postData()!);
@@ -67,17 +69,21 @@ async function open(browser: Browser, me: Record<string, unknown>, vault: Vault)
     {
       const {page, seen} = await open(browser, {id: 'ana', name: 'Ana', role: 'owner', cloud: true, credential_access: true}, vault);
       await page.goto('https://tico-ui.test/#/credentials');
-      await page.waitForFunction(() => location.hash === '#/tools/keys/jira');
-      await page.locator('#int-detail h1').filter({hasText: 'Jira'}).waitFor();
-      // The tool names a variable the vault does not hold yet.
-      await page.locator('.lc-creds [data-lc-add-env="JIRA_BASIC_AUTH"]').waitFor();
-
-      await page.locator('.lc-add button').click();
+      await page.waitForFunction(() => location.hash === '#/tools?show=keys');
+      // No keys yet: one line, and Add a key.
+      await page.locator('[data-tl-empty]').filter({hasText: 'No keys yet.'}).waitFor();
+      await page.locator('[data-tl-add-key]').click();
       const form = page.locator('#vault-form');
       await form.locator('[name=name]').fill('Jira login');
       await form.locator('[name=env]').fill('JIRA_BASIC_AUTH');
       await form.locator('[name=secret]').fill(SECRET);
       await form.locator('[type=submit]').click();
+      // The key fills the Jira tool's variable: it is Jira's, not a loose key.
+      await page.locator('[data-tl-empty]').filter({hasText: 'No keys yet.'}).waitFor();
+      await page.evaluate(() => { location.hash = '#/tools'; });
+      await page.locator('tr[data-tl-row="service:jira"] .au-nm').click();
+      await page.waitForFunction(() => location.hash === '#/tools/jira');
+      await page.locator('#int-detail h1').filter({hasText: 'Jira'}).waitFor();
       await page.locator('.lc-creds [data-vault-share]').waitFor();
       const created = seen.posts.filter(r => r.path === '/api/v2/credentials');
       assert.equal(created.length, 1);
@@ -95,7 +101,9 @@ async function open(browser: Browser, me: Record<string, unknown>, vault: Vault)
       await page.locator('#vault-grant-form select').selectOption('bot:jira-manager');
       await page.locator('#vault-grant-form [type=submit]').click();
       await page.locator('.lc-access .lc-wn').filter({hasText: 'Jira Manager'}).waitFor();
-      assert.equal(await page.locator('.lc-row[data-key="jira"] .lc-n').innerText(), '1');
+      await page.locator('.tt-crumb a[href="#/tools"]').click();
+      await page.locator('tr[data-tl-row="service:jira"] .tt-face').waitFor();
+      assert.equal(await page.locator('tr[data-tl-row="service:jira"] .tt-face').count(), 1, 'the list follows');
       const grants = seen.posts.filter(r => r.path === '/api/v2/credentials/c1/grants');
       assert.deepEqual(grants.map(r => JSON.parse(r.body)), [{subject: 'bot:jira-manager'}]);
       assert.ok(seen.posts.filter(r => r.body.includes(SECRET)).every(r => r.path === '/api/v2/credentials'), 'the secret is sent only when it is created');
@@ -105,9 +113,14 @@ async function open(browser: Browser, me: Record<string, unknown>, vault: Vault)
     {
       // No vault access: nothing to add, and the vault is not even read.
       const {page, seen} = await open(browser, {id: 'cara', name: 'Cara', role: 'human', cloud: true, credential_access: false}, vault);
-      await page.goto('https://tico-ui.test/#/tools/keys');
+      await page.goto('https://tico-ui.test/#/tools/keys/jira');
+      await page.waitForFunction(() => location.hash === '#/tools/jira');
       await page.locator('#int-detail h1').filter({hasText: 'Jira'}).waitFor();
-      assert.equal(await page.locator('.lc-add button, [data-lc-add-env], [data-vault-share]').count(), 0);
+      assert.equal(await page.locator('[data-lc-add-env], [data-vault-share]').count(), 0);
+      await page.locator('.tt-crumb a[href="#/tools"]').click();
+      await page.locator('tr[data-tl-row="service:jira"]').waitFor();
+      await page.locator('[data-tl-add]').click();
+      assert.equal(await page.locator('[data-tl-add-item="key"]').count(), 0, 'no key to add');
       assert.equal(seen.reads, 0, 'the vault is not even read');
       assert.deepEqual(seen.errors, []);
       await page.close();

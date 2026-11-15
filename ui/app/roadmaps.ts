@@ -1,4 +1,4 @@
-/* Roadmap publication, internal requesters, ranking and company settings. */
+/* ui/app/roadmaps.ts — Roadmap publication, internal requesters, the Roadmap page's ranking and company settings. */
 'use strict';
 
 // A requester of a task as GET /v2/tasks/{id}/requesters lists it: a teammate or an outside person.
@@ -197,36 +197,62 @@ const roadmapPipeline = () => pipelinesAll().then(list => {
   if (product) ROADMAP_PRODUCT_ID = product.id;
   return product;
 }).catch(() => undefined);
+// The Roadmap page (#/roadmap): the Product pipeline's tasks ranked by who asked for them. The one page header holds the
+// sort and a quiet + for a new task once the ranking has loaded. While the public roadmap is not offered (the server
+// answers 404 not_found), the page is one calm empty state that says so and leads to the Product pipeline, where the
+// same tasks are; any other failure is an error with Retry.
 function pageRoadmap() {
   const state: RoadmapRankingState = ROADMAP_RANKING = {sort: 'requester_count', direction: 'desc', offset: 0, previous: [], next: null, seq: 0};
-  $('#main').innerHTML = `<div class="roadmap-page"><header class="meeting-head"><h1 data-roadmap-title></h1><button class="primary" type="button" data-roadmap-new>New task</button></header>
-    <div class="roadmap-sort"><button type="button" class="tl-chip tl-chip-main tl-groupchip" data-roadmap-sort aria-haspopup="menu"><span class="k">Sort</span><span data-sort-word>Requests</span>${TL_ICON.caret}</button><button class="ghost" type="button" data-roadmap-direction aria-label="Sort ascending">↓</button></div>
-    <div data-roadmap-table></div><div class="row roadmap-pager"><button class="ghost" type="button" data-roadmap-back disabled>Previous</button><button class="ghost" type="button" data-roadmap-next disabled>Next</button><span class="err" role="status" data-roadmap-error></span></div></div><div id="task-filter-pop" class="tl-pop" popover></div>`;
+  $('#main').innerHTML = `<div class="roadmap-page">${pageHead({title: 'Roadmap', hook: 'roadmap-head'})}<div data-roadmap-body>${skelRows(4)}</div></div><div id="task-filter-pop" class="tl-pop" popover></div>`;
   $('#task-filter-pop').onkeydown = tasksMenuKeys;
-  $('[data-roadmap-new]').onclick = () => { void roadmapPipeline().then(product => openTaskCreate(botByRef(product?.manager_id)?.id || '', {pipeline: product?.id || 'product'})); };
-  $('[data-roadmap-sort]').onclick = (ev: MouseEvent) => tasksMenu(state, ev.currentTarget as HTMLElement | null, `<div class="tl-menu" role="menu" aria-label="Sort roadmap">${ROADMAP_SORTS.map(([key, label]) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${state.sort === key}" data-sort="${key}">${label}</button>`).join('')}</div>`, (pop: HTMLElement) => pop.onclick = (e: MouseEvent) => { const button = eventElement(e)?.closest<HTMLElement>('[data-sort]'); if (button) { state.sort = button.dataset.sort; state.offset = 0; state.previous = []; tasksMenuClose(); void roadmapRankingLoad(state); } });
-  $('[data-roadmap-direction]').onclick = () => { state.direction = state.direction === 'desc' ? 'asc' : 'desc'; state.offset = 0; state.previous = []; void roadmapRankingLoad(state); };
-  $('[data-roadmap-back]').onclick = () => { state.offset = state.previous.pop() || 0; void roadmapRankingLoad(state); };
-  $('[data-roadmap-next]').onclick = () => { if (state.next != null) { state.previous.push(state.offset); state.offset = state.next; void roadmapRankingLoad(state); } };
   void roadmapRankingLoad(state);
-  void roadmapPipeline().then(product => { const title = $('[data-roadmap-title]'); if (title) title.textContent = product?.name || ''; });
+}
+// The header's tools and its +, drawn once the ranking answers (none while the roadmap is not offered).
+function roadmapHeadTools(state: RoadmapRankingState): void {
+  const head = $('#main header.roadmap-head');
+  if (!head || head.querySelector('[data-roadmap-sort]')) return;
+  pageHeadSet(head, 'tools', `<button type="button" class="tl-chip tl-chip-main tl-groupchip" data-roadmap-sort aria-haspopup="menu"><span class="k">Sort</span><span data-sort-word>Requests</span>${TL_ICON.caret}</button>`
+    + '<button class="ghost" type="button" data-roadmap-direction aria-label="Sort ascending">↓</button>');
+  pageHeadSet(head, 'primary', pageHeadAdd('New task', 'data-roadmap-new'));
+  $('[data-roadmap-new]').onclick = () => { void roadmapPipeline().then(product => openTaskCreate(botByRef(product?.manager_id)?.id || '', {pipeline: product?.id || 'product'})); };
+  // The sort menu opens under the chip, or under ⋯ while a narrow header has folded the chip into it.
+  $('[data-roadmap-sort]').onclick = (ev: MouseEvent) => tasksMenu(state, phFilterAnchor(ev.currentTarget as HTMLElement), `<div class="tl-menu" role="menu" aria-label="Sort roadmap">${ROADMAP_SORTS.map(([key, label]) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${state.sort === key}" data-sort="${key}">${label}</button>`).join('')}</div>`, (pop: HTMLElement) => pop.onclick = (e: MouseEvent) => { const button = eventElement(e)?.closest<HTMLElement>('[data-sort]'); if (button) { state.sort = button.dataset.sort; state.offset = 0; state.previous = []; tasksMenuClose(); void roadmapRankingLoad(state); } });
+  $('[data-roadmap-direction]').onclick = () => { state.direction = state.direction === 'desc' ? 'asc' : 'desc'; state.offset = 0; state.previous = []; void roadmapRankingLoad(state); };
 }
 async function roadmapRankingLoad(state: RoadmapRankingState) {
   const seq = ++state.seq;
+  const body = () => $('#main [data-roadmap-body]');
   try {
     const data = await get<RoadmapRankPage>(`/v2/roadmap-tasks?sort=${state.sort}&direction=${state.direction}&offset=${state.offset}&limit=25`);
-    if (ROADMAP_RANKING !== state || S.route !== '#/roadmap' || seq !== state.seq) return;
+    if (ROADMAP_RANKING !== state || S.route !== '#/roadmap' || seq !== state.seq || !body()) return;
     state.next = data.next_offset;
+    roadmapHeadTools(state);
     const columns: [string, string][] = [['requester_count', 'Requests'], ['important', 'Important'], ['organization', 'Organization'], ['size', 'Size']];
     const requests = (t: RoadmapRankTask): string => `${t.requester_count || 0} (${t.external_requesters || 0} ext)`;
-    $('[data-sort-word]').textContent = ROADMAP_SORTS.find(([key]) => state.sort === key)?.[1] || 'Requests';
-    const direction = $('[data-roadmap-direction]'); direction.textContent = state.direction === 'desc' ? '↓' : '↑'; direction.setAttribute('aria-label', state.direction === 'desc' ? 'Sort ascending' : 'Sort descending');
+    const word = $('[data-sort-word]'); if (word) word.textContent = ROADMAP_SORTS.find(([key]) => state.sort === key)?.[1] || 'Requests';
+    const direction = $('[data-roadmap-direction]');
+    if (direction) { direction.textContent = state.direction === 'desc' ? '↓' : '↑'; direction.setAttribute('aria-label', state.direction === 'desc' ? 'Sort ascending' : 'Sort descending'); }
     const tasks = data.tasks || [];
-    $('[data-roadmap-table]').innerHTML = tasks.length ? `<table class="roadmap-table"><thead><tr><th>Task</th>${columns.map(([key, label]) => `<th aria-sort="${state.sort === key ? (state.direction === 'asc' ? 'ascending' : 'descending') : 'none'}"><button type="button" data-sort-column="${key}">${label}</button></th>`).join('')}</tr></thead><tbody>${tasks.map(t => `<tr tabindex="0" role="button" data-roadmap-task="${esc(t.id)}" aria-label="${esc(t.title)}"><td><strong>${esc(t.title)}</strong><div class="muted">${esc(t.step || '')}</div><div class="roadmap-phone-summary muted">${esc([`${t.requester_count || 0} requests`, `${t.external_requesters || 0} external`, `${t.important_requesters || 0} important`, t.organization].filter(Boolean).join(' · '))}</div></td><td>${requests(t)}</td><td>${t.important_requesters || 0}</td><td>${esc(t.organization || '—')}</td><td>${esc(t.size ?? '—')}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">No roadmap tasks</p>';
+    // Previous and Next show only when there is a page to go to.
+    const pager = state.offset || state.next != null ? `<div class="row roadmap-pager">${state.offset ? '<button class="ghost" type="button" data-roadmap-back>Previous</button>' : ''}${state.next != null ? '<button class="ghost" type="button" data-roadmap-next>Next</button>' : ''}</div>` : '';
+    body().innerHTML = (tasks.length ? `<table class="roadmap-table"><thead><tr><th>Task</th>${columns.map(([key, label]) => `<th aria-sort="${state.sort === key ? (state.direction === 'asc' ? 'ascending' : 'descending') : 'none'}"><button type="button" data-sort-column="${key}">${label}</button></th>`).join('')}</tr></thead><tbody>${tasks.map(t => `<tr tabindex="0" role="button" data-roadmap-task="${esc(t.id)}" aria-label="${esc(t.title)}"><td><strong>${esc(t.title)}</strong><div class="muted">${esc(t.step || '')}</div><div class="roadmap-phone-summary muted">${esc([`${t.requester_count || 0} requests`, `${t.external_requesters || 0} external`, `${t.important_requesters || 0} important`, t.organization].filter(Boolean).join(' · '))}</div></td><td>${requests(t)}</td><td>${t.important_requesters || 0}</td><td>${esc(t.organization || '—')}</td><td>${esc(t.size ?? '—')}</td></tr>`).join('')}</tbody></table>` : '<div class="empty-state"><p>No roadmap tasks</p></div>') + pager;
     document.querySelectorAll<HTMLElement>('[data-roadmap-task]').forEach(row => { row.onclick = () => { if (row.dataset.roadmapTask) void taskModalOpen(row.dataset.roadmapTask); }; row.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); row.click(); } }; });
     document.querySelectorAll<HTMLElement>('[data-sort-column]').forEach(button => button.onclick = () => { if (state.sort === button.dataset.sortColumn) state.direction = state.direction === 'asc' ? 'desc' : 'asc'; else state.sort = button.dataset.sortColumn; state.offset = 0; state.previous = []; void roadmapRankingLoad(state); });
-    $('[data-roadmap-back]').disabled = !state.offset; $('[data-roadmap-next]').disabled = state.next == null; $('[data-roadmap-error]').textContent = '';
-  } catch (error) { if (S.route === '#/roadmap' && seq === state.seq) $('[data-roadmap-error]').textContent = errorMessage(error, ''); }
+    const back = $('[data-roadmap-back]'), next = $('[data-roadmap-next]');
+    if (back) back.onclick = () => { state.offset = state.previous.pop() || 0; void roadmapRankingLoad(state); };
+    if (next) next.onclick = () => { if (state.next != null) { state.previous.push(state.offset); state.offset = state.next; void roadmapRankingLoad(state); } };
+  } catch (error) {
+    if (ROADMAP_RANKING !== state || S.route !== '#/roadmap' || seq !== state.seq || !body()) return;
+    if (errorStatus(error) === 404) {
+      // Not offered yet: a normal state, not an error. Its one way on is the Product pipeline, where these tasks live.
+      const product = await roadmapPipeline();
+      if (ROADMAP_RANKING !== state || seq !== state.seq || !body()) return;
+      body().innerHTML = `<div class="empty-state roadmap-empty"><p>The public roadmap isn't available yet.</p>${product ? `<a class="ghost" href="${esc(pipelineHref(product.id))}">Open ${esc(product.name || 'Product')}</a>` : ''}</div>`;
+      return;
+    }
+    body().innerHTML = `<div class="empty-state roadmap-empty" role="alert"><p>${esc(errorMessage(error, ''))}</p><button type="button" class="ghost" data-roadmap-retry>Retry</button></div>`;
+    $('[data-roadmap-retry]').onclick = () => { body().innerHTML = skelRows(4); void roadmapRankingLoad(state); };
+  }
 }
 // Display names of a chosen bot the roster leaves out (archived bots are not in /employees), read on mount.
 const ROADMAP_BOT_NAMES: Record<string, string> = {};

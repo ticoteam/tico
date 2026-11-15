@@ -1,35 +1,25 @@
 /* Library › Contacts (ui/app/directory.ts, directory-entity.ts) and Settings › Contacts (directory-settings.ts).
    Tokens only, so light and dark both follow the theme; the list stacks at phone width with the shared .tt-list rules. */
-.dir .tt-tabs{margin-bottom:12px;overflow-x:auto;scrollbar-width:none}
-.dir-tab-n{color:var(--muted);font-weight:500;margin-left:2px}
+.ph>.ph-tools>.dir-q{flex:0 1 240px;width:240px}   /* the list's search, a tool of the one page header (page-head.ts) */
+.dir-active{margin:-4px 0 12px}   /* the relationship chip under the header (task-list.css .tl-bar, .tl-chip) */
+/* the filter icon's count sits on the icon's top-right corner, clear of the icon itself */
+.dir-head>.ph-tools .tl-fbadge{top:-4px;right:-6px}
+/* folded into ⋯ (page-head.ts): the filter is one of the menu's rows, its icon, its name, then its count */
 .dir-icon{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border-radius:8px;color:var(--muted);cursor:pointer}
 .dir-icon:hover,.dir-icon.on{color:var(--ink);background:var(--surface2)}
-.dir-menu{position:relative}
-.dir-menu>summary{list-style:none}
-.dir-menu>summary::-webkit-details-marker{display:none}
-.dir-menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:170px;padding:4px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.14)}
-.dir-menu-list a{display:block;padding:6px 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:var(--t-sm)}
-.dir-menu-list a:hover{background:var(--surface2);text-decoration:none}
-.dir-menu-list a[aria-checked=true]{font-weight:600}
-.dir-tools{margin:0 0 10px}
 .dir-q{width:min(320px,100%)}
-.dir-active{display:flex;align-items:center;gap:4px;margin:0 0 10px}
-.dir-active a{display:inline-flex;color:var(--muted)}
-.dir-count{margin:0 0 6px;font-size:var(--t-sm)}
+.dir-filter-menu a.tl-mi{text-decoration:none}   /* the relationship menu's picks are links, drawn as menu rows */
 .dir-more{display:flex;justify-content:center;padding:14px 0}
-.dir-name a{display:inline-flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;min-width:0}
+.dir-name a{display:inline-flex;align-items:center;gap:10px;max-width:min(100%,420px);color:var(--ink);text-decoration:none;min-width:0}   /* a long name is cut with …, never widens the page */
 .dir-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dir-av{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--surface2);color:var(--ink);font-size:var(--t-xs);font-weight:600;letter-spacing:.02em}
 .dir-av-lg{width:48px;height:48px;font-size:var(--t-md, 16px)}
 .dir-org a{color:var(--ink)}
 .dir-from,.dir-last,.dir-owner{white-space:nowrap}
 
-.dir-crumb{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:4px 0 12px;font-size:var(--t-sm);color:var(--muted)}
-.dir-crumb a{color:var(--muted)}
-.dir-hero{display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin:0 0 16px}
-.dir-hero-text{flex:0 1 auto;min-width:0}
-.dir-hero h1{margin:0;font-size:var(--t-lg);font-weight:600}
-.dir-sub{margin:2px 0 0}
+/* a contact's page: the one page header ("Contacts › name", page-head.ts), then the identity line under it */
+.dir-hero{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;margin:0 0 16px}
+.dir-sub{flex:0 1 auto;min-width:0;margin:0}
 .dir-sub a{color:inherit}
 .dir-chips{display:flex;flex-wrap:wrap;gap:6px}
 .dir-main{display:flex;flex-direction:column;gap:12px;max-width:820px}
@@ -38,9 +28,9 @@
 .dir-kv th,.dir-kv td{border:0;padding:7px 0;vertical-align:top;font-size:var(--t-sm)}
 .dir-kv th{width:30%;padding-right:10px;text-align:left;font-weight:500;color:var(--muted);text-transform:none;letter-spacing:normal}
 .dir-kv tr+tr>*{border-top:1px solid var(--line)}
-.dir-meta{text-align:right;white-space:nowrap}
-.dir-src{margin-right:6px}
-.dir-age{border:0;background:none;padding:0 2px;color:var(--muted);font:inherit;font-size:var(--t-xs);cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+/* where a value came from and when: one muted line on its row ("You · Nov 11"); the age is a quiet button to its history */
+.dir-meta{text-align:right;white-space:nowrap;color:var(--muted);font-size:var(--t-xs)}
+.dir-age{position:relative;min-height:0;border:0;background:none;padding:0;color:inherit;font:inherit;cursor:pointer}
 .dir-age:hover{color:var(--ink)}
 .dir-none{margin:0}
 .dir-rules{list-style:none;margin:0;padding:0}
@@ -82,11 +72,13 @@
 [data-dirs-fields] header select{margin-left:auto;width:auto;max-width:220px}
 
 @media (max-width:760px){
+  .ph>.ph-tools>.dir-q{flex:0 1 160px;width:160px}   /* room for the title on the phone's title line */
   .dir-list tr{grid-template-columns:minmax(0,1fr) auto}
   .dir-list .dir-name{grid-column:1}
   .dir-list .dir-relcell{grid-column:2;grid-row:1;text-align:right}
-  .dir-list .dir-org,.dir-list .dir-owner,.dir-list .dir-last,.dir-list .dir-from{grid-column:1 / -1;padding-left:38px;font-size:var(--t-sm)}
+  .dir-list .dir-org,.dir-list .dir-owner,.dir-list .dir-last,.dir-list .dir-from{grid-column:1 / -1;padding-left:38px;font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dir-list .dir-owner:empty,.dir-list .dir-last:empty,.dir-list .dir-from:empty,.dir-list .dir-org:empty{display:none}
   .dir-kv th{width:38%}
-  .dir-meta{white-space:normal}
+  /* each row is 44px, so an age's 44px hit area (.tap-mark) stays on its own row */
+  .dir-kv th,.dir-kv td{padding-top:12px;padding-bottom:12px}
 }

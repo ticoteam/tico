@@ -59,8 +59,11 @@ async function open(browser: import('playwright').Browser, role: string, viewpor
   });
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('#settings-tabs').waitFor();
-  const tab = page.locator('#settings-tabs > [data-settings-tab="security"]');
-  if (role !== 'member') await tab.click();
+  // Security is past the header's fifth tab: it is chosen from ⋯ (the shared page header's overflow).
+  if (role !== 'member') {
+    await page.locator('header.ph > .ph-more').click();
+    await page.locator('header.ph > .ph-menu .ph-mtab', {hasText: 'Security'}).click();
+  }
   return {page, errors, writes};
 }
 
@@ -88,7 +91,9 @@ async function open(browser: import('playwright').Browser, role: string, viewpor
       assert.equal(await card.locator('[data-screening-mode="webhook"]').inputValue(), 'hold');
       // Recent: a hold links its task; a warning with no task shows a dash.
       const recent = await card.locator('.tm-row').allInnerTexts();
-      assert.match(recent[0], /Held · Webhooks[\s\S]*97%[\s\S]*20m ago[\s\S]*Task/);
+      assert.match(recent[0], /Held · Webhooks[\s\S]*97%[\s\S]*Task/);
+      // the age is a bare age in its own cell (format.ts ago), not words in a sentence
+      assert.equal(await card.locator('.tm-row').first().locator('span.tnum.muted').innerText(), '20m');
       assert.match(recent[1], /Warned · Mail[\s\S]*—/);
       assert.equal(await card.locator('.tm-row a[href="#/task/t-held"]').count(), 1);
       // A change is one PUT, and the select reads it back.

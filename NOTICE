@@ -32,7 +32,14 @@ It includes third-party software, kept under its own license:
       BSD-style notice in its header. Includes pako (ui/vendor/novnc/vendor/pako/), MIT License.
       License text: licenses/MPL-2.0.txt, ui/vendor/novnc/LICENSE.txt and ui/vendor/novnc/vendor/pako/LICENSE
 
-  ui/vendor/fonts/inter-variable.woff2 (a subset of Inter 4.1 built by scripts/build-text-font.py)
+  ui/vendor/fonts/atkinson-hyperlegible-next-plain-zero.woff2 (a modified subset of Atkinson Hyperlegible Next, built by
+      scripts/build-text-font.py from ui/vendor/fonts/atkinson-hyperlegible-next.woff2; the zero has no slash, on ss09)
+      Atkinson Hyperlegible Next, Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors
+      (https://github.com/googlefonts/atkinson-hyperlegible-next), SIL Open Font License 1.1.
+      License text: ui/vendor/fonts/LICENSE-atkinson-hyperlegible-next.txt
+
+  ui/vendor/fonts/inter-variable.woff2 (a subset of Inter 4.1 built by scripts/build-symbol-font.py: the arrows, check
+      marks and symbols Atkinson Hyperlegible Next lacks; only pages that show one of them load it)
       Inter, Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter), SIL Open Font
       License 1.1. License text: ui/vendor/fonts/LICENSE-inter.txt
 

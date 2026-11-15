@@ -82,7 +82,7 @@ async function renderSettingsSleep(): Promise<void> {
   const admin = settingsIsAdmin(), off = admin ? '' : ' disabled';
   const hours: [string, string][] = [['0', 'Off'], ...Array.from({length: 24}, (_, i): [string, string] => [String(i + 1), `After ${i + 1} h`])];
   const status = !v.hours ? '' : v.blocker ? `Awake: ${esc(SLEEP_BLOCKERS[v.blocker] || v.blocker)}`
-    : v.idle_since ? `Quiet since ${esc(fmt(v.idle_since))}` : '';
+    : v.idle_since ? `Quiet since ${esc(timeSaid(v.idle_since))}` : '';
   const line = [status, v.wake_at && `Next wake ${esc(fmt(v.wake_at))}`].filter(Boolean).join(' · ');
   host.innerHTML = `<div class="sleep-row">
       <select class="settings-inline-select" data-sleep-hours aria-label="Sleep when idle"${off}>${hours.map(([k, w]) => `<option value="${k}"${+k === v.hours ? ' selected' : ''}>${w}</option>`).join('')}</select>

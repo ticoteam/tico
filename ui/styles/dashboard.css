@@ -2,16 +2,15 @@
    medium a half, large the row), halves on a narrow screen, one column on a phone. The bot sidebar's card and page widgets reuse the card bodies. */
 #main.dash-layout{max-width:none;padding:0}
 .dash{display:flex;flex-direction:column;min-height:100%}
-.dash-head{display:flex;align-items:center;gap:8px;padding:8px 28px;min-height:48px;flex-wrap:wrap}
-.dash-head h1{margin:0;font-size:var(--t-lg);font-weight:600}
-.dash-head h1:empty{display:none}
-.dash-head .spacer{flex:1}
-.dash-actions{display:flex;gap:4px;flex-wrap:wrap}
-.dash-actions[hidden]{display:none}
-.dash-actions button[hidden]{display:none}
-.dash-actions button{display:inline-flex;align-items:center;gap:4px}
-.dash-actions .nav-icon{font-size:16px;width:16px;height:16px}
-.dash-actions button{gap:6px}
+/* Every place (Company's views, team pages, Growth) draws the shared header (ui/app/page-head.ts, .ph); the grid keeps
+   the header's gap. */
+.dash>.ph.ph-pad{margin-bottom:14px}
+.ph [data-dash-add] .dash-plus{margin-right:4px}
+/* "Seen by" is a quiet tool, no border, as the header's other icon buttons; its icon at the size they use */
+.ph button.dash-audience{display:inline-flex;align-items:center;box-sizing:border-box;height:var(--ctl);border-color:transparent;color:var(--muted)}
+.ph button.dash-audience:hover{background:var(--surface2);color:var(--ink)}
+.ph .dash-audience .nav-icon{font-size:18px;width:18px;height:18px;margin-right:6px}
+.ph.ph-icons .dash-audience .nav-icon{margin-right:0}
 .dash-error{margin:0 28px 8px}
 .dash-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;padding:0 28px 24px}
 /* A card redrawn with new numbers lays out only the grid, never the page around it; its menus are not clipped (layout only). */
@@ -26,7 +25,7 @@
 .dash-needs li>a{flex:1;display:flex;align-items:baseline;gap:6px;color:inherit;text-decoration:none}
 .dash-needs li>a:hover .dash-needs-t{text-decoration:underline}
 .dash-needs-t{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dash-needs li>a>.muted{flex:none;font-size:var(--t-sm)}
+.dash-needs li>a>.dash-act{flex:none;align-self:center;font-size:16px;width:16px;height:16px;color:var(--muted)}
 .dash-pin-head h2 .muted{font-weight:500}
 .dash-head-n{flex:none;color:var(--muted);font-size:var(--t-base);font-weight:500;font-variant-numeric:tabular-nums;text-decoration:none}
 .dash-head-n:hover{text-decoration:underline}
@@ -107,10 +106,6 @@
 .dash-form-foot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
 .dash-form-foot .spacer{flex:1}
 
-/* Campus keeps its own full-height layout; the tabs sit in its first row. */
-.overview-tabs{flex:none;display:flex;align-items:center;gap:8px;padding:8px 28px;border-bottom:1px solid var(--line);background:var(--surface)}
-.overview-tabs h1{margin:0;font-size:var(--t-lg);font-weight:600}
-
 /* the bot sidebar's card and page widgets */
 .bot-pin{padding:8px 12px 12px}
 .bot-pin>.rail-h{margin:0 0 6px}
@@ -122,26 +117,18 @@
   .dash-pin[data-size=medium]{grid-column:1/-1}
 }
 @media(max-width:760px){
-  .dash-head{padding:10px 12px}
   .dash-grid{grid-template-columns:minmax(0,1fr);padding:0 12px 24px;gap:10px}
   .dash-pin,.dash-pin[data-size]{grid-column:1/-1}
   .dash-error{margin:0 16px 8px}
-  /* Sole task and question actions in Home cards need a full finger-height hit area. */
-  .dash-list{gap:4px}
-  .dash-list li>a{display:flex;align-items:center;min-height:40px}
-  .dash-head-n{display:inline-flex;align-items:center;min-height:40px;padding:0 6px}
-  /* So are the page's own controls: the Mine/Dashboard tabs, Edit, + Card, + Page, Done, the grips and the card menu. */
-  .dash-head .dash-tabs a{display:inline-flex;align-items:center;min-height:40px}
-  .dash-none a{display:flex;align-items:center;min-height:40px}
-  .dash-actions button{min-height:40px}
-  .dash-more{width:40px;height:40px}
-  .dash-grip{width:40px;height:40px}
-  .dash-menu button{display:flex;align-items:center;min-height:40px}
-  .overview-tabs{padding:10px 12px}
-  /* Factories adds a period control and + Factory to the row: the Company tabs take their own full-width row below. */
-  .of-page .overview-tabs{flex-wrap:wrap}
-  .of-page .overview-tabs>.dash-tabs{order:9;flex-basis:100%;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
-  .of-page .overview-tabs>.dash-tabs::-webkit-scrollbar{display:none}
-  /* Six tabs (Share included) fit one 390 px row at this size; a narrower screen scrolls the row, never the page. */
-  .of-page .overview-tabs>.dash-tabs a{flex:none;white-space:nowrap;padding:4px 6px;font-size:var(--t-sm)}
+  /* A phone's targets are 44px (style guide, Platform rules): a card's rows and count are links, which the shared floor
+     for buttons (ui/styles/forms.css) does not reach; the grips, the card menu and its items opt out of it (all:unset,
+     a fixed size), so they say their size here. The header's controls are the shared header's. */
+  .dash-list{gap:0}
+  .dash-list li:has(>a){padding:0}
+  .dash-list li>a{display:flex;align-items:center;min-height:44px}
+  .dash-head-n{display:inline-flex;align-items:center;min-height:44px;padding:0 6px}
+  .dash-none a{display:flex;align-items:center;min-height:44px}
+  .dash-more{width:44px;height:44px}
+  .dash-grip{width:44px;height:44px}
+  .dash-menu button{display:flex;align-items:center;min-height:44px}
 }

@@ -92,6 +92,7 @@ link
 local_library
 local_shipping
 lock
+login
 logout
 loyalty
 mail
@@ -100,6 +101,7 @@ manage_search
 mark_email_read
 mark_email_unread
 menu
+merge
 mic
 mic_off
 monitor_heart
@@ -168,6 +170,7 @@ troubleshoot
 unarchive
 unsubscribe
 verified_user
+vertical_align_top
 view_agenda
 warning
 waving_hand

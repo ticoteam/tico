@@ -66,7 +66,7 @@ function world(over: {title?: string} = {}) {
         await left.locator('.skel').waitFor({timeout: 5000});
         release();
         await left.locator('.dc-md').waitFor({timeout: 5000});
-        assert.match(await left.locator('.dc-who').innerText(), /^From PM · \dh ago$/);
+        assert.match(await left.locator('.dc-who').innerText(), /^From PM · \dh$/);
         assert.equal(await left.locator('.dc-md strong').innerText(), 'Vision', 'the text is Markdown');
         assert.equal(await left.locator('.dc-md li').count(), 2);
         assert.equal(await left.locator('a.dc-ref-chip[href="/api/v2/files/f-brief"]').innerText(), 'brief.pdf', 'its file is a chip');
@@ -91,7 +91,6 @@ function world(over: {title?: string} = {}) {
 
         // Reply to PM: a comment that names PM; the item stays; the box clears and says Sent.
         assert.equal(await card(page).locator('.dc-reply .dc-notes span').innerText(), 'Reply to PM');
-        const count = await card(page).locator('.dc-count').innerText();
         await card(page).locator('#dc-reply').fill('What do you mean by Vision?');
         await card(page).locator('[data-dc="reply"]').click();
         await card(page).locator('.dc-sent', {hasText: 'Sent'}).waitFor({timeout: 5000});
@@ -100,15 +99,14 @@ function world(over: {title?: string} = {}) {
         assert.equal(sent[0]!.body.text, '@pm What do you mean by Vision?');
         assert.equal(await card(page).locator('#dc-reply').inputValue(), '', 'the box clears');
         assert.equal(await card(page).locator('.dc-q').innerText(), 'Book the team offsite', 'the item stays on screen');
-        assert.equal(await card(page).locator('.dc-count').innerText(), count, 'and in the walk');
 
-        // Go to Strategy ↗: the view closes on #/strategy; ▶ picks up at this item.
+        // Go to Strategy ↗: the view closes on #/strategy; Flow picks up at this item.
         const go = card(page).locator('[data-dc="go"]');
         assert.equal(await go.innerText(), 'Go to Strategy ↗');
         await go.click();
         await page.waitForFunction(() => location.hash === '#/strategy');
         assert.equal(await card(page).count(), 0, 'the decision view closed');
-        // Back on Tasks, ▶ opens at the item Go to left from (t-3 is the last in the walk).
+        // Back on Tasks, Flow opens at the item Go to left from (t-3 is the last in the walk).
         await page.evaluate(() => { location.hash = '#/tasks'; });
         await page.locator('#task-body .tk-row').first().waitFor({timeout: 5000});
         await page.locator('#task-play').click();

@@ -13,11 +13,11 @@
 .cal-row>.nav-link{flex:none;padding-right:4px}
 .cal-next{flex:1;min-width:0;display:none;align-items:center;justify-content:flex-end}
 .cal-row.cal-on .cal-next{display:flex}
-.cal-nx{display:flex;gap:3px;min-width:0;padding:0 2px;font-size:var(--t-sm);color:var(--ink);white-space:nowrap}
+.cal-nx{display:flex;gap:3px;min-width:0;padding:0 2px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}   /* always subdued: the row's name leads */
 .cal-nx .cal-nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .cal-nx .cal-tm{flex:none;font-variant-numeric:tabular-nums}
 a.cal-nx:hover{color:var(--accent);text-decoration:underline}
-.cal-nx.cal-none{display:block;padding:0;overflow:hidden;text-overflow:ellipsis}
+.cal-nx.cal-none{display:block;padding:0;opacity:.6}
 .cal-step{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:24px;padding:0;border:0;border-radius:4px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:1;cursor:pointer}
 .cal-step:hover{background:var(--surface2)}
 .cal-step:focus-visible{outline:var(--focus-ring);outline-offset:-1px}
@@ -34,13 +34,13 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 /* ----------------------------------------------------------------- the page */
 #main.cal-layout{max-width:none}
 .cal{display:flex;flex-direction:column;min-height:0}
-/* One line: Today, the arrows, the range, the chips and Add, then search (an icon until opened), the views and ⋯. */
+/* One line: Today, the arrows, the range, the chips and Add, then the search field, the views and ⋯. */
 .cal-h{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:8px;min-height:44px;margin:0 0 10px}
 .cal-h>*{flex:none}
 .cal-br{display:none}
 .cal-nav{display:inline-flex}
 .cal-range{font-size:var(--t-md);font-weight:600;white-space:nowrap}
-.cal-chips{display:flex;flex:0 1 auto;min-width:0;gap:6px;overflow:hidden}
+.cal-chips{display:flex;flex:none;min-width:0;gap:6px;overflow:hidden}
 .cal-chip{flex:none;display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 4px 0 10px;border-radius:999px;background:hsl(var(--h) var(--cv-s) var(--cv-l));color:hsl(var(--h) 30% var(--cv-fl));font-size:var(--t-sm);font-weight:600;white-space:nowrap}
 .cal-chip button{width:20px;height:20px;padding:0;border:0;border-radius:50%;background:none;color:inherit;font-size:15px;line-height:1;cursor:pointer;opacity:.7}
 .cal-chip button:hover{opacity:1;background:rgba(127,127,127,.2)}
@@ -51,13 +51,17 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-sr{position:relative;margin-left:auto;display:flex;align-items:center;gap:6px;height:32px;border:1px solid transparent;border-radius:8px}
 .cal-sr input{display:none;flex:1;min-width:0;border:0;background:none;outline:0;color:var(--ink);font:inherit;font-size:var(--t-base);padding:0}
 .cal-sr input::-webkit-search-cancel-button{display:none}
-.cal-sr.open{flex:0 1 260px;min-width:160px;padding:0 10px 0 2px;border-color:var(--line);background:var(--surface)}
+/* The field gives way before the chips do (down to 180px); past that the chips fold to +N (calendar.ts calChipsFit). */
+.cal-sr.open{flex:0 1 260px;min-width:180px;padding:0 10px 0 2px;border-color:var(--line);background:var(--surface)}
 .cal-sr.open input{display:block}
 .cal-sr.open:focus-within{border-color:var(--g5)}
 .cal-sr.open .cal-sr-ic{pointer-events:none}
 .cal-ib{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0}
 .cal-ib .nav-icon{font-size:20px;margin:0}
 .cal-more{position:relative}
+/* ⋯ is the same quiet icon as on every other page head: no outline. */
+.cal-more>[data-cal-more]{border:0;background:none;color:var(--muted)}
+.cal-more>[data-cal-more]:hover,.cal-more>[data-cal-more][aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .cal-menu,.cal-addm{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:200px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 8px 24px rgba(0,0,0,.25)}
 .cal-menu[hidden],.cal-addm[hidden]{display:none}
 .cal-menu button{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
@@ -190,7 +194,7 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 
 /* the card */
 .cal-card{position:fixed;z-index:60;display:flex;flex-direction:column;gap:3px;width:280px;max-width:calc(100vw - 16px);padding:12px 14px;border:1px solid var(--line);border-left:4px solid hsl(var(--h) 45% var(--cv-bl));border-radius:10px;background:var(--surface);box-shadow:0 12px 32px rgba(0,0,0,.3);box-sizing:border-box}
-.cal-card>b{padding-right:24px;font-size:var(--t-md);font-weight:600}
+.cal-card>b{padding-right:24px;font-size:var(--t-card);font-weight:600}
 .cal-card .w{color:var(--muted);font-size:var(--t-sm)}
 .cal-card-x{position:absolute;top:6px;right:6px;width:26px;height:26px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
 .cal-card-x:hover{background:var(--surface2);color:var(--ink)}
@@ -203,21 +207,27 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-card-runs button:hover{background:var(--surface2)}
 .cal-card-runs .t{flex:none;width:44px;color:var(--muted);font-variant-numeric:tabular-nums}
 
-/* Phone: search, chips, a week strip and the list first */
-/* Phone: two header lines (the date and arrows, then the views and chips), search, chips, a week strip and the list */
+/* Phone: two header lines (the date, arrows, search and ⋯, then the views and chips), a week strip and the list. Search
+   is an icon on the first line; a tap opens the field on a line of its own, and it stays open while it holds words. The
+   closed field is still there to take the cursor (the icon, and "/", focus it), only drawn 1px wide. In the strip today is a filled circle and the selected day a quiet pill, so the two read apart. */
 @media (max-width:760px){
   .cal-h{flex-wrap:wrap;gap:6px}
   .cal-today{order:1}.cal-nav{order:2}.cal-range{order:3;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .cal-sr{order:4}.cal-more{order:5}.cal-br{display:block;order:6;flex-basis:100%;height:0}
+  .cal-more{order:5}.cal-br{display:block;order:6;flex-basis:100%;height:0}
   .cal-views{order:7}.cal-chips{order:8;flex:1 1 0;overflow-x:auto;scrollbar-width:none}.cal-add{order:9}
   .cal-views [data-cal-view="week"],.cal-views [data-cal-view="month"]{display:none}
-  .cal-sr.open{position:absolute;left:0;right:0;top:0;z-index:41;flex:none;min-width:0;margin:0}
+  .cal-sr.open{order:4;flex:none;min-width:0;width:44px;height:44px;margin:0;padding:0;border-color:transparent;background:none;justify-content:center}
+  .cal-sr.open input{position:absolute;width:1px;opacity:0;pointer-events:none;font-size:16px}
+  .cal-sr.open .cal-sr-ic{pointer-events:auto}
+  .cal-sr.open:is(:focus-within,:has(input:not(:placeholder-shown))){order:10;flex:1 1 100%;width:auto;padding:0 10px 0 2px;border-color:var(--line);background:var(--surface);justify-content:flex-start}
+  .cal-sr.open:is(:focus-within,:has(input:not(:placeholder-shown))) input{position:static;width:auto;opacity:1;pointer-events:auto}
   .cal-addm{position:fixed;left:8px;right:8px;top:auto;width:auto}
   .cal-strip{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:0 0 8px}
   .cal-strip button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;border:0;border-radius:8px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
   .cal-strip button b{color:var(--ink);font-size:var(--t-md)}
   .cal-strip button[aria-pressed="true"]{background:var(--surface2)}
-  .cal-strip button.today b{text-decoration:underline;text-underline-offset:3px}
+  .cal-strip button{min-height:44px}
+  .cal-strip button.today b{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--accent);color:var(--accent-ink)}
   .cal-grid{--gut:32px}
   .cal-mc{min-height:64px}
   .cal-mev .t{display:none}

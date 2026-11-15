@@ -32,6 +32,7 @@ let closed = 0;
 const dialog = {
   className: '', innerHTML: '', onclose: null as null | (() => void),
   querySelector: (sel: string) => sel === 'form' ? form : sel.includes('pair-status') ? status : sel.includes('data-close') ? close : preview,
+  querySelectorAll: (sel: string) => sel.includes('data-close') ? [close] : [],
   showModal() {}, close() { closed++; this.onclose?.(); }, remove() {},
 };
 const ctx = vm.createContext({
