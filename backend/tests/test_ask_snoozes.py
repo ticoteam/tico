@@ -182,12 +182,7 @@ def test_a_new_version_of_the_page_is_not_hidden(store):
         _say(c, made, "met")
         (item,) = [i for i in W.needs(c, ANA) if i["kind"] == "ask"]
         visit_id, requirement_id = W.ask_id(item).split(":")
-        now = H.now()
-        c.execute(
-            "INSERT INTO ask_snoozes (person_id, visit_id, requirement_id, task_id, asked_at, snoozed_until, "
-            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-            (ANA, visit_id, requirement_id, row["id"], item["since"], at(days=7), now, now),
-        )
+        snooze_row(c, ANA, item, at(days=7))
         assert [i for i in W.needs(c, ANA) if i["kind"] == "ask"] == []
         assert [i["snoozed_until"] for i in W.needs(c, ANA, "only")] == [at_of(c)]
         assert W.needs_by_person(c).get(ANA, []) == W.needs(c, ANA), "every person's pass agrees"
@@ -198,6 +193,17 @@ def test_a_new_version_of_the_page_is_not_hidden(store):
         _say(c, second, "met")
         assert [i["requirement_id"] for i in W.needs(c, ANA) if i["kind"] == "ask"] == [requirement_id]
         assert W.needs(c, ANA, "only") == []
+
+
+def snooze_row(c, person, item, until):
+    """`person`'s snooze of a waiting_on.needs ask, as the snooze route stores it."""
+    visit_id, requirement_id = W.ask_id(item).split(":")
+    now = H.now()
+    c.execute(
+        "INSERT INTO ask_snoozes (person_id, visit_id, requirement_id, task_id, asked_at, ask_version, snoozed_until, "
+        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (person, visit_id, requirement_id, item["task_id"], item["since"], S._version(c, item), until, now, now),
+    )
 
 
 def at_of(c):
@@ -215,12 +221,7 @@ def test_never_stuck_counts_a_snoozed_ask_as_listed(store):
         E.add_requirement(c, task["id"], "bot:builder", "ok", BEN, "OK the headline", seen_version=task["version"])
         (item,) = [i for i in W.needs(c, BEN) if i["kind"] == "ask"]
         visit_id, requirement_id = W.ask_id(item).split(":")
-        now = H.now()
-        c.execute(
-            "INSERT INTO ask_snoozes (person_id, visit_id, requirement_id, task_id, asked_at, snoozed_until, "
-            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-            (BEN, visit_id, requirement_id, task["id"], item["since"], at(days=1), now, now),
-        )
+        snooze_row(c, BEN, item, at(days=1))
         assert W.needs(c, BEN) == []
         # never_stuck only checks: rule 3 expects the person's Needs you to list each of their waits once, and leaves
         # out the asks they snoozed. The ask is still Ben's turn, the bot's own waits are checked as before, and no
@@ -240,3 +241,50 @@ def test_deleting_the_task_deletes_its_snoozes(api):
         task_delete.delete_tasks(c, [task["id"]], apply=True, actor=ANA)
         assert c.execute("SELECT count(*) FROM ask_snoozes WHERE task_id=?", (task["id"],)).fetchone()[0] == 0
     assert get(api, "needs-you/snoozed", token="ben-test")["items"] == []
+
+
+def test_a_new_version_of_a_page_the_ask_shows_unpinned_ends_the_snooze(api):
+    """An ask that shows `page:<id>` (no version) shows whatever version the page has: once there is a new one, it
+    asks something else, and it is back."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        X.bot(c, "writer")
+        task = H.task_create(c, ANA, "Write the price page", "", ANA, lint=False)
+        fid, _ = _page(c, store, "<h1>Approve 10 dollars</h1>")
+        c.execute("UPDATE bot_files SET scope=?, task_id=? WHERE id=?", ("task:" + task["id"], task["id"], fid))
+        asked = H.task_ask(
+            c, ANA, task["id"], BEN, "OK the price page?", kind="ok", shows=[f"page:{fid}"],
+            seen_version=H.task(c, task["id"])["version"],
+        )  # fmt: skip
+    item = next(i["id"] for i in get(api, "needs-you", token="ben-test")["items"] if i.get("requirement_id") == asked["requirement_id"])  # fmt: skip
+    post(api, "needs-you/snooze", {"id": item, "until": at(days=7)}, token="ben-test")
+    assert item not in ids(api, "ben-test")
+    with store.transaction() as c:
+        _page(c, store, "<h1>Approve 100000 dollars</h1>", fid=fid)
+    assert item in ids(api, "ben-test"), "the page it shows is not the one snoozed"
+    assert get(api, "needs-you/snoozed", token="ben-test")["items"] == []
+
+
+def test_a_changed_question_ends_the_snooze(api):
+    """A stage's OK whose words change in the pipeline's settings (same requirement, same visit) asks something
+    else: it is back. So do new choices."""
+    from backend import pipeline_settings as PS
+
+    with api.app.state.store.transaction() as c:
+        stage = {"name": "Review", "owner": "assignee", "requirements": [{"kind": "ok", "line": "Approve 10 dollars?", "person": BEN, "who_oks": "people_only"}]}  # fmt: skip
+        X.pipeline(c, "approval", "Approval", (stage,), manager=ANA)
+        task = X.new_task(c, ANA, "Budget", "approval", assignee=ANA)
+    item = next(i["id"] for i in get(api, "needs-you", token="ben-test")["items"] if i.get("task_id") == task["id"])
+    post(api, "needs-you/snooze", {"id": item, "until": at(days=7)}, token="ben-test")
+    assert item not in ids(api, "ben-test")
+    with api.app.state.store.transaction() as c:
+        config = PS.read(c, "approval")
+        config["stages"][0]["requirements"][0]["line"] = "Approve 100000 dollars?"
+        PS.save(c, ANA, config, seen_version=config["settings_version"])
+    assert item in ids(api, "ben-test"), "a new question is not hidden"
+    # Snoozed again, the same words keep it out; it is the question that ends it, not the save.
+    post(api, "needs-you/snooze", {"id": item, "until": at(days=7)}, token="ben-test")
+    with api.app.state.store.transaction() as c:
+        config = PS.read(c, "approval")
+        PS.save(c, ANA, config, seen_version=config["settings_version"])
+    assert item not in ids(api, "ben-test")

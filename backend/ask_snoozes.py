@@ -3,8 +3,9 @@
 
 The ask (its visit and requirement, `waiting_on.ask_id`) leaves that person's Needs you, its count, Flow and the Tasks
 badge until the time they picked, and comes back then with nothing run: the list leaves out a snooze only while its
-time is to come (`waiting_on.ask_snoozes`). It also comes back when the ask is asked again (a new page version, a new
-question): a snooze holds only while the ask was asked at the moment it was snoozed (`asked_at`, the ask's `since`).
+time is to come (`waiting_on.ask_snoozes`). It also comes back when the ask is asked again or asks something else: a
+snooze holds only while the ask was asked at the moment it was snoozed (`asked_at`, the ask's `since`) and asks the
+same (`ask_version`: its words, choices and each page it shows at the same version, as Flow's opinion names it).
 
 Nobody else's list changes, and the task does not: its bot is not told, not woken and not held, and the whole-task
 snooze (`POST /api/v2/tasks/{tid}/snooze`) stays what it is. Only a person the ask waits on snoozes it, for themselves
@@ -75,6 +76,16 @@ def _ask(c: Any, auth: Any, who: Any, ask_id: str) -> dict[str, Any]:
     raise Problem("not_found", "No such ask waits on you", 404)
 
 
+def _version(c: Any, item: Item) -> str:
+    """What the ask asks as the snooze is made (waiting_on.ask_version): once it asks something else, it is back."""
+    from . import task_engine, waiting_on
+
+    row = cast(Callable[..., Item | None], task_engine.task)(c, item["task_id"])
+    waits: list[waiting_on.Wait] = waiting_on.of(c, row) if row else []
+    wait = next((w for w in waits if w.ask and str(w.requirement_id) == str(item["requirement_id"])), None)
+    return waiting_on.ask_version(c, row, wait) if row and wait else ""
+
+
 def snooze(c: Any, auth: Any, who: Any, ask_id: str, until: str) -> dict[str, Any]:
     """The ask leaves the caller's Needs you until `until`. Snoozing it again moves the end."""
     me = person(who)
@@ -82,11 +93,12 @@ def snooze(c: Any, auth: Any, who: Any, ask_id: str, until: str) -> dict[str, An
     visit_id, _, requirement_id = ask_id.partition(":")
     now = H.now()
     c.execute(
-        "INSERT INTO ask_snoozes (person_id, visit_id, requirement_id, task_id, asked_at, snoozed_until, created_at, "
-        "updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(person_id, visit_id, requirement_id) DO UPDATE SET "
-        "task_id=excluded.task_id, asked_at=excluded.asked_at, snoozed_until=excluded.snoozed_until, "
-        "updated_at=excluded.updated_at",
-        (me, visit_id, requirement_id, str(item["task_id"]), str(item.get("since") or ""), until, now, now),
+        "INSERT INTO ask_snoozes (person_id, visit_id, requirement_id, task_id, asked_at, ask_version, snoozed_until, "
+        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(person_id, visit_id, requirement_id) DO UPDATE "
+        "SET task_id=excluded.task_id, asked_at=excluded.asked_at, ask_version=excluded.ask_version, "
+        "snoozed_until=excluded.snoozed_until, updated_at=excluded.updated_at",
+        (me, visit_id, requirement_id, str(item["task_id"]), str(item.get("since") or ""), _version(c, item), until)
+        + (now, now),
     )
     return {"id": ask_id, "snoozed_until": until}
 
@@ -107,7 +119,7 @@ def next_end(c: Any, who: Any) -> str | None:
 
     if not _is_human(getattr(who, "actor", "")):
         return None
-    ends = [end for _asked, end in waiting_on.ask_snoozes(c, str(who.actor)).values()]
+    ends = [end for _asked, _version, end in waiting_on.ask_snoozes(c, str(who.actor)).values()]
     return min(ends) if ends else None
 
 

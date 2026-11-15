@@ -1169,12 +1169,14 @@ class _Everyone:
 # An ask a person snoozed for themselves (backend/ask_snoozes.py), while its time is to come: who, the ask's visit and
 # requirement, when it was asked as the snooze saw it, and until when.
 _ASK_SNOOZES = (
-    "SELECT person_id, visit_id, requirement_id, asked_at, snoozed_until FROM ask_snoozes WHERE snoozed_until > ?"
+    "SELECT person_id, visit_id, requirement_id, asked_at, ask_version, snoozed_until FROM ask_snoozes "
+    "WHERE snoozed_until > ?"
 )
 
 
-def ask_snoozes(conn: "sqlite3.Connection", *people: str) -> dict[tuple[str, str], tuple[str, str]]:
-    """The asks people snoozed for themselves that are still snoozed, {(person, ask id): (asked_at, snoozed_until)}, of
+def ask_snoozes(conn: "sqlite3.Connection", *people: str) -> dict[tuple[str, str], tuple[str, str, str]]:
+    """The asks people snoozed for themselves that are still snoozed, {(person, ask id): (asked_at, ask_version,
+    snoozed_until)}, of
     `people` (everyone's with none). A snooze whose time has come is not read: the ask is back with nothing to clear."""
     from . import hubdb
 
@@ -1183,18 +1185,46 @@ def ask_snoozes(conn: "sqlite3.Connection", *people: str) -> dict[tuple[str, str
         sql += " AND person_id IN (%s)" % ",".join("?" * len(people))
         args += list(people)
     rows = conn.execute(sql, args).fetchall()
-    return {(str(r[0]), f"{r[1]}:{r[2]}"): (str(r[3]), str(r[4])) for r in rows}
+    return {(str(r[0]), f"{r[1]}:{r[2]}"): (str(r[3]), str(r[4]), str(r[5])) for r in rows}
+
+
+def ask_version(conn: "sqlite3.Connection", row: Row, wait: "Wait", requirement: Row | None = None) -> str:
+    """What `wait`'s ask asks now, as Flow's opinion names it (flow_opinions.ask_version, the one definition of "the
+    ask changed"): its sentence, the requirement's line, choices, typed question, brief and title, and what it shows,
+    each page at its current version. The same for everyone it asks. `requirement` is the ask's, when the caller has
+    it; "" when the task's open visit has no such requirement."""
+    from . import flow_opinions, task_calls
+
+    if requirement is None:
+        requirement = next(
+            (s.requirement for s in R.standings(conn, row) if str(s.requirement["id"]) == str(wait.requirement_id)),
+            None,
+        )
+    if requirement is None or not _visit_id(row):
+        return ""
+    asked = task_calls.ask_shown(conn, row, requirement)
+    refs = flow_opinions.pinned(conn, asked)
+    return flow_opinions.ask_version({"ask": asked, "line": wait.line}, list(asked["shows"]) if refs is None else refs)
 
 
 def snoozed_until(
-    snoozes: Mapping[tuple[str, str], tuple[str, str]], person: str, visit_id: object, wait: "Wait"
+    conn: "sqlite3.Connection",
+    snoozes: Mapping[tuple[str, str], tuple[str, str, str]],
+    person: str,
+    row: Row,
+    wait: "Wait",
+    requirement: Row | None = None,
 ) -> str | None:
     """When the person's snooze of this ask ends, or None when it is not snoozed for them: a snooze holds only while
-    the ask is the one they snoozed (asked at the same moment), so a new version from its bot is never hidden."""
+    the ask is the one they snoozed, asked at the same moment and asking the same (`ask_version`: its words, its
+    choices, each page it shows at the same version), so a new question or a new page version is never hidden."""
+    visit_id = _visit_id(row)
     if not wait.ask or not visit_id:
         return None
     found = snoozes.get((person, f"{visit_id}:{wait.requirement_id}"))
-    return found[1] if found and found[0] == str(wait.since or "") else None
+    if not found or found[0] != str(wait.since or ""):
+        return None
+    return found[2] if found[1] == ask_version(conn, row, wait, requirement) else None
 
 
 def _lists(
@@ -1220,6 +1250,7 @@ def _lists(
         waits = listed(of(conn, row, seen, standings), row)
         held = next((s for s in standings if pr_conflicts.held(s)), None)
         kinds = {str(s.requirement["id"]): str(s.requirement.get("kind")) for s in standings}
+        asks: dict[str, Row] = {str(s.requirement["id"]): s.requirement for s in standings}
         people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who and wait.who in only})
         for person in people:
             mine = [wait for wait in waits if wait.state == PERSON and wait.who == person]
@@ -1228,7 +1259,8 @@ def _lists(
                 mine = [unnamed(wait, shown) for wait in mine]
             work = [wait for wait in mine if not wait.ask]
             for wait in [wait for wait in mine if wait.ask] + work[:1]:
-                until = snoozed_until(snoozes, person, _visit_id(row), wait) if snoozes else None
+                asked = asks.get(str(wait.requirement_id))
+                until = snoozed_until(conn, snoozes, person, row, wait, asked) if snoozes else None
                 if (snoozed == "hide" and until) or (snoozed == "only" and not until):
                     continue
                 line = wait.line
