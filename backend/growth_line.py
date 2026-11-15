@@ -1,3 +1,4 @@
+# pyright: strict
 """The Growth line: one month of Growth read left to right, source to KPI, joined (docs/growth.md "The Growth line").
 
 `line(c, month, hidden)` is what the Growth page draws above its cards and what `GET /api/v2/growth/numbers` returns as
@@ -21,14 +22,22 @@ due), `too_few` (a cohort under the minimum). Never 0. The maths is growth.py's 
 module explains it and changes none of it. None when there is no channel: Get started has the page.
 """
 
+from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
+from typing import Any, cast
 
 from . import growth as G
 from . import hubdb as H
 
+Row = dict[str, Any]
+# growth.py is not strictly typed yet: its reads are taken as the shapes this module names (Row, list[Row]).
+_G: Any = G
+
 TYPED = "typed"  # the line's source for numbers typed by hand
 UPLOAD = "upload"  # the line's source for customers loaded as a CSV in Growth
 ALL = "all"
+UNKNOWN = cast(str, _G.UNKNOWN)
+UPLOAD_NAME = cast(str, _G.UPLOAD_NAME)
 NUMBERS = ("spend", "bot_cost", "new_customers", "kept_d30")
 ECONOMICS = ("cac", "ltv_cac", "payback_months")
 BAD = ("stale", "failing")
@@ -61,18 +70,18 @@ MONTH_NAMES = (
 
 
 # ----------------------------------------------------------------------------- words
-def _num(v, digits=1):
+def _num(v: float, digits: int = 1) -> str:
     """A count or ratio as people write it: 1,234 or 2.5 (no trailing .0)."""
     text = f"{round(float(v), digits):,.{digits}f}"
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-def money(v):
-    v = float(v)
+def money(v: float | None) -> str:
+    v = float(v or 0)
     return ("-$" if v < 0 else "$") + _num(abs(v), 2 if abs(v) < 10 else 0)
 
 
-def _fmt(field, v):
+def _fmt(field: str, v: float | None) -> str | None:
     if v is None:
         return None
     if field in ("spend", "bot_cost", "cac"):
@@ -86,7 +95,7 @@ def _fmt(field, v):
     return _num(v, 0)
 
 
-def kpi_value(v, unit):
+def kpi_value(v: float | None, unit: str | None) -> str | None:
     """A KPI's value in its own unit: money with its sign, a share with %, else the number then the unit."""
     if v is None:
         return None
@@ -98,7 +107,7 @@ def kpi_value(v, unit):
     return f"{_num(v)} {unit}".strip()
 
 
-def day(at):
+def day(at: object) -> str | None:
     """An ISO time or date as "11 Oct" (the line's one way to say when)."""
     if not at:
         return None
@@ -106,22 +115,22 @@ def day(at):
     return f"{d.day} {MONTHS[d.month - 1]}"
 
 
-def counted(n, one, many):
+def counted(n: int, one: str, many: str) -> str:
     """A count that may open a sentence: spelled out up to ten ("One channel"), else written ("12 channels")."""
     word = SPELLED[n] if n <= 10 else str(n)
     return f"{word} {one if n == 1 else many}"
 
 
-def _month_name(month):
+def _month_name(month: str) -> str:
     return MONTH_NAMES[int(month[5:7]) - 1]
 
 
-def _prev_month(month):
+def _prev_month(month: str) -> str:
     y, m = int(month[:4]), int(month[5:7])
     return f"{y - 1}-12" if m == 1 else f"{y}-{m - 1:02d}"
 
 
-def _not_yet(month, today=None):
+def _not_yet(month: str, today: date | None = None) -> bool:
     """A month's day-30 window has not come due while its last customers are under 30 days old."""
     y, m = int(month[:4]), int(month[5:7])
     last = (date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)) - timedelta(days=1)
@@ -129,10 +138,11 @@ def _not_yet(month, today=None):
 
 
 # ----------------------------------------------------------------------------- the stations
-def _sources(c):
+def _sources(c: Any) -> dict[str, Row]:
     """{id: the line's view of a live source}, in growth.sources' order."""
-    out = {}
-    for s in G.sources(c)["sources"]:
+    out: dict[str, Row] = {}
+    listed = cast(list[Row], _G.sources(c)["sources"])
+    for s in listed:
         if s.get("retired_at"):
             continue
         bad = s.get("health") in BAD
@@ -151,16 +161,20 @@ def _sources(c):
     return out
 
 
-def _cell(row, field, sources, month):
+def _cell(row: Row, field: str, sources: dict[str, Row], month: str) -> Row:
     """One month number of a channel: its value and where it came from."""
     value = row.get(field)
-    origin = (row.get("origins") or {}).get(field) or {}
+    origins: Row = row.get("origins") or {}
+    origin: Row = origins.get(field) or {}
     kind = origin.get("origin") or (TYPED if value is not None else None)
-    refs, names, at = [], [], origin.get("at")
+    refs: list[str] = []
+    names: list[str] = []
+    at = origin.get("at")
     if kind == "synced" and origin.get("source_id"):
         refs.append(origin["source_id"])
     elif kind == "computed":
-        for s in origin.get("sources") or ():
+        computed: list[Row] = origin.get("sources") or []
+        for s in computed:
             refs.append(s.get("source_id") or UPLOAD)
     elif kind == TYPED:
         refs.append(TYPED)
@@ -168,12 +182,13 @@ def _cell(row, field, sources, month):
         names.append(
             "Typed by hand"
             if ref == TYPED
-            else G.UPLOAD_NAME
+            else UPLOAD_NAME
             if ref == UPLOAD
             else (sources.get(ref) or {}).get("name") or "a retired source"
         )
     stale = any((sources.get(r) or {}).get("health") in BAD for r in refs)
-    status = (row.get("status") or {}).get(field)
+    statuses: Row = row.get("status") or {}
+    status = statuses.get(field)
     if value is None and status is None and field == "kept_d30" and _not_yet(month):
         status = "not_yet"
     return {
@@ -192,7 +207,7 @@ def _cell(row, field, sources, month):
     }
 
 
-def _from(cell, word):
+def _from(cell: Row, word: str) -> str:
     """A number as it enters a sentence: its value, its name and where it came from."""
     where = ", ".join(cell["source_names"]) or "no source"
     when = ""
@@ -204,7 +219,7 @@ def _from(cell, word):
     return f"{cell['says']} {word} ({where}{when}{stale})"
 
 
-def _economics(row, numbers, guard):
+def _economics(row: Row, numbers: dict[str, Row], guard: Row | None) -> dict[str, Row]:
     """CAC, LTV:CAC and payback for one row, each with how it was made."""
     new, kept = numbers["new_customers"], numbers["kept_d30"]
     inputs_cac = [k for k in ("spend", "bot_cost") if numbers[k]["value"] is not None]
@@ -218,7 +233,7 @@ def _economics(row, numbers, guard):
     ltv_said = payback_said = None
     if ltv_cac is not None:
         ltv_said = (
-            f"LTV {money(ltv)} ({_num(months)} expected months from {_from(kept, 'kept to day 30')}) "
+            f"LTV {money(ltv)} ({_num(months or 0)} expected months from {_from(kept, 'kept to day 30')}) "
             f"÷ CAC {money(cac)} = {_num(ltv_cac)}x"
         )
     if payback is not None:
@@ -226,7 +241,7 @@ def _economics(row, numbers, guard):
         payback_said = f"CAC {money(cac)} ÷ {money(per_month)} profit per customer per month = {_num(payback)} months"
     not_yet = "not_yet" if kept["status"] == "not_yet" else None
     stale_cac = any(numbers[k]["stale"] for k in (*inputs_cac, "new_customers"))
-    out = {
+    out: dict[str, Row] = {
         "cac": {
             "value": cac,
             "says": _fmt("cac", cac),
@@ -266,7 +281,7 @@ def _economics(row, numbers, guard):
     return out
 
 
-def _guard(g, units):
+def _guard(g: Row | None, units: dict[str, str]) -> Row | None:
     if not g:
         return None
     over = round(g["value"] - g["max"], 2) if g["breached"] else None
@@ -283,7 +298,16 @@ def _guard(g, units):
     }
 
 
-def _channel(slug, name, ch, row, sources, month, guard, kpis_by_id):
+def _channel(
+    slug: str,
+    name: str,
+    ch: Row | None,
+    row: Row,
+    sources: dict[str, Row],
+    month: str,
+    guard: Row | None,
+    kpis_by_id: dict[str, Row],
+) -> Row:
     numbers = {k: _cell(row, k, sources, month) for k in NUMBERS}
     budget = ch.get("budget_month") if ch else None
     spend = numbers["spend"]
@@ -294,7 +318,7 @@ def _channel(slug, name, ch, row, sources, month, guard, kpis_by_id):
     input_kpi = (ch or {}).get("input_kpi_id")
     if input_kpi and input_kpi not in kpis_by_id:
         input_kpi = None  # a KPI the reader may not see, or archived: not linked on their line
-    refs = list(dict.fromkeys(r for cell in numbers.values() for r in cell["sources"]))
+    refs: list[str] = list(dict.fromkeys(r for cell in numbers.values() for r in cast(list[str], cell["sources"])))
     return {
         "slug": slug,
         "name": name,
@@ -310,13 +334,13 @@ def _channel(slug, name, ch, row, sources, month, guard, kpis_by_id):
     }
 
 
-def _headline(month, total, prev, channels, sources, conf):
+def _headline(month: str, total: Row, prev: Row | None, channels: list[Row], sources: list[Row], conf: Row) -> Row:
     """The month in one sentence, from the All channels row, the guardrails breached and the stale sources."""
     new, cac, payback = total["new_customers"], total["cac"], total["payback_months"]
     change = None
     if new is not None and prev is not None and prev.get("new_customers"):
         change = round((new - prev["new_customers"]) / prev["new_customers"] * 100)
-    over = sorted({ch["slug"] for ch in channels if (ch.get("guardrail") or {}).get("over") is not None})
+    over = sorted({ch["slug"] for ch in channels if ch.get("guardrail") and ch["guardrail"]["over"] is not None})
     bad = [s for s in sources if s["health"] in BAD]
     stale_numbers = sum(
         1
@@ -327,7 +351,7 @@ def _headline(month, total, prev, channels, sources, conf):
         if cell["stale"]
     )
     since = min((s["since"] for s in bad if s["since"]), default=None)
-    said = []
+    said: list[str] = []
     if new is not None:
         unit = conf.get("unit") or "customers"
         first = f"{_month_name(month)} brought {_num(new, 0)} new {unit}"
@@ -364,25 +388,25 @@ def _headline(month, total, prev, channels, sources, conf):
     }
 
 
-def line(c, month=None, hidden=()):
+def line(c: Any, month: str | None = None, hidden: Iterable[str] = ()) -> Row | None:
     """The Growth line for `month` (YYYY-MM; default the newest with numbers, else this month), as the reader may see it."""
-    live = [ch for ch in G.channels(c) if not ch.get("retired_at")]
+    live = [ch for ch in cast(list[Row], _G.channels(c)) if not ch.get("retired_at")]
     if not live:
         return None
-    months = G.cohort_months(c)
+    months = cast(list[str], _G.cohort_months(c))
     month = month or (months[0] if months else datetime.now(timezone.utc).strftime("%Y-%m"))
-    conf = G.settings(c)
-    econ = G.economics(c, month, hidden)
+    conf = cast(Row, _G.settings(c))
+    econ = cast(Row, _G.economics(c, month, hidden))
     prev_month = _prev_month(month)
-    prev = G.economics(c, prev_month, hidden)["total"] if prev_month in months else None
-    tree = G.kpis(c, hidden)["kpis"]
+    prev = cast(Row, _G.economics(c, prev_month, hidden)["total"]) if prev_month in months else None
+    tree = cast(list[Row], _G.kpis(c, hidden)["kpis"])
     kpis_by_id = {k["id"]: k for k in tree}
-    units = {k["id"]: k["unit"] for k in tree}
-    guards = {g["channel"]: _guard(g, units) for g in econ["guardrails"]}
-    rows = {r["channel"]: r for r in econ["rows"]}
+    units: dict[str, str] = {k["id"]: k["unit"] for k in tree}
+    guards: dict[str, Row | None] = {g["channel"]: _guard(g, units) for g in cast(list[Row], econ["guardrails"])}
+    rows: dict[str, Row] = {r["channel"]: r for r in cast(list[Row], econ["rows"])}
     sources = _sources(c)
-    blank = {"origins": {}, "status": {}}
-    channels = []
+    blank: Row = {"origins": {}, "status": {}}
+    channels: list[Row] = []
     for ch in live:
         channels.append(
             _channel(
@@ -396,10 +420,10 @@ def line(c, month=None, hidden=()):
                 kpis_by_id,
             )
         )
-    unknown = rows.get(G.UNKNOWN)
+    unknown = rows.get(UNKNOWN)
     if unknown and unknown.get("new_customers") is not None:
-        channels.append(_channel(G.UNKNOWN, "Unknown", None, unknown, sources, month, None, kpis_by_id))
-    total = econ["total"]
+        channels.append(_channel(UNKNOWN, "Unknown", None, unknown, sources, month, None, kpis_by_id))
+    total = cast(Row, econ["total"])
     every = _channel(ALL, "All channels", None, {**total, "origins": {}}, sources, month, None, kpis_by_id)
     for field in NUMBERS:  # every channel together: from the channels above, so no source of its own
         every["numbers"][field].update(origin=None, sources=[], source_names=[], synced_at=None, typed_at=None)
@@ -413,7 +437,7 @@ def line(c, month=None, hidden=()):
         )
     channels.append(every)
     # What each source fills on this line, and the two sources that are not systems: typed, and a CSV upload.
-    extra = {}
+    extra: dict[str, Row] = {}
     for ch in channels:
         if ch["slug"] == ALL:
             continue
@@ -422,7 +446,7 @@ def line(c, month=None, hidden=()):
                 if ref in (TYPED, UPLOAD) and ref not in extra:
                     extra[ref] = {
                         "id": ref,
-                        "name": "Typed by hand" if ref == TYPED else G.UPLOAD_NAME,
+                        "name": "Typed by hand" if ref == TYPED else UPLOAD_NAME,
                         "truth_for": None,
                         "kind": ref,
                         "health": None,
@@ -449,13 +473,14 @@ def line(c, month=None, hidden=()):
         }
     listed = [*sources.values(), *(extra[k] for k in (TYPED, UPLOAD) if k in extra)]
     # Station 5: the North Star, then each input KPI and guardrail a channel links to.
-    moved, held = {}, {}
+    moved: dict[str, list[str]] = {}
+    held: dict[str, list[str]] = {}
     for ch in channels:
         if ch["input_kpi"]:
             moved.setdefault(ch["input_kpi"], []).append(ch["slug"])
         if ch["guardrail"]:
             held.setdefault(ch["guardrail"]["kpi_id"], []).append(ch["slug"])
-    kpis = []
+    kpis: list[Row] = []
     for k in tree:
         role = k.get("growth_role")
         if role != "north_star" and k["id"] not in moved and k["id"] not in held:
@@ -486,7 +511,7 @@ def line(c, month=None, hidden=()):
     }
 
 
-def used(c, actor, use, at=None):
+def used(c: Any, actor: str, use: str, at: str | None = None) -> None:
     """A person or bot opened a number's trace or selected a source on the line: counted once per day each."""
     at = at or H.now()
     c.execute("INSERT OR IGNORE INTO growth_line_uses (day, actor, use) VALUES (?,?,?)", (at[:10], actor, use))
