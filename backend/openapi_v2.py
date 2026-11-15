@@ -1233,12 +1233,39 @@ STABLE = [
         "NeedsYou",
     ),
     (
+        "/api/v2/needs-you/snooze",
+        "post",
+        "Needs you",
+        "snoozeNeedsYouAsk",
+        "Snooze one ask for yourself (`id`: its Needs-you id, `until`: a date-time to come, at most a year on): it "
+        "leaves your Needs you, its count and Flow until then, or until it is asked again, and stays in everyone else's. "
+        "The task and its bot are not changed or told. Only a person the ask waits on, or their own Assistant",
+        None,
+    ),
+    (
+        "/api/v2/needs-you/unsnooze",
+        "post",
+        "Needs you",
+        "unsnoozeNeedsYouAsk",
+        "Bring an ask you snoozed (`id`) back into your Needs you now",
+        None,
+    ),
+    (
+        "/api/v2/needs-you/snoozed",
+        "get",
+        "Needs you",
+        "getNeedsYouSnoozed",
+        "The asks you snoozed for yourself that are still snoozed, as Needs you lists them, each with `snoozed_until`, "
+        "and `next`, when the first comes back",
+        None,
+    ),
+    (
         "/api/v2/flow/opinions",
         "post",
         "Needs you",
         "getFlowOpinions",
         "Tico's opinion on each ask in Flow's set (`items`: the Needs-you ids of asks, at most 30), one entry per id in "
-        "order: `ready` with `pick` (an OK: approve, send_back or snooze; a question: one of its choices, or empty), "
+        "order: `ready` with `pick` (an OK: approve or send_back, never a snooze; a question: one of its choices, or empty), "
         "`line` (80 characters at most), `note` (for a send back) and `score` (0-100, to sort by, never shown); "
         "`pending` while it is worked out: ask again for those; `none` when there is none, including any id that is "
         "not an ask on the caller's own Needs you. Answers at once, never waits on a model and changes no task. One "
@@ -2476,6 +2503,10 @@ NEEDS_ITEM = obj(
     conversation_id={"type": "string", "description": "The thread a mention was written in"},
     root_id={"type": "string", "description": "A mention's root thread: the rail row it moves"},
     href={"type": "string", "description": "A paused cause a person fixes in the app: where (Connect GitHub)"},
+    snoozed_until={
+        "type": "string",
+        "description": "In GET /api/v2/needs-you/snoozed: when this snoozed ask comes back",
+    },
 )
 
 # Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.
@@ -3814,6 +3845,11 @@ SCHEMAS = {
                 restart={
                     "type": "boolean",
                     "description": "The cursor was from an older version: this page is the first",
+                },
+                snoozed_until={
+                    "type": ["string", "null"],
+                    "description": "When the first ask the caller snoozed for themselves comes back: read the list again "
+                    "then (POST /api/v2/needs-you/snooze)",
                 },
             ),
             obj({"actor": "s", "count": "i"}),

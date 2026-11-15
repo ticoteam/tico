@@ -153,6 +153,27 @@
 .dc-acts.dc-fixed{flex-wrap:nowrap;align-items:center;padding-top:12px;border-top:1px solid var(--line)}
 .dc-acts.dc-fixed button{white-space:nowrap}
 .dc-acts.dc-fixed [data-dc="skip"]{margin-left:auto}
+/* Snooze (#3769): on an ask, a quiet clock at the far end of the answer row, clear of Approve and Send back; its menu
+   (1 hour … 1 month, Other) opens from it, upward (down from a row near the top: .dc-snz-down), at the row's end, over
+   the page above and never over the row's own buttons. The open menu's row sits over the pinned meta line on a phone. */
+.dc-snzw{position:relative;display:inline-flex;align-items:center}
+.dc-snzw:has(>.dc-snz-b){margin-left:auto}
+.dc-acts .dc-snz-b{width:40px;min-width:40px;height:40px;min-height:40px;padding:0;border-radius:8px;color:var(--muted)}
+.dc-acts .dc-snz-b:hover:not(:disabled),.dc-acts .dc-snz-b[aria-expanded="true"]{color:var(--ink)}
+.dc-snz{position:absolute;right:0;bottom:calc(100% + 6px);z-index:6;display:flex;flex-direction:column;min-width:180px;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);box-shadow:0 12px 30px rgba(0,0,0,.35)}
+.dc-snz.dc-snz-down{top:calc(100% + 6px);bottom:auto}
+.dc-snz .dc-mi{min-height:36px;padding:0 10px;border-radius:6px;font-weight:500;white-space:nowrap}
+.dc-snz .dc-mi:focus-visible{background:var(--g3,var(--line))}
+.dc-snz-at{display:flex;align-items:center;gap:4px;padding:2px 0 0}
+.dc-snz-at input{flex:1;min-width:0;min-height:36px;font:inherit}
+.dc-acts .dc-snz-at .dc-icon{width:36px;min-width:36px;height:36px;min-height:36px;padding:0;border-radius:8px}
+.dc-acts:has(.dc-snz){z-index:3}
+/* the end screen's snoozed asks: each by its task, ↩ brings it back */
+.dc-snzd{color:var(--muted)}
+.dc-snzl{display:flex;flex-direction:column;gap:2px;width:min(360px,100%);margin:0;padding:0;list-style:none;text-align:left}
+.dc-snzl li{display:flex;align-items:center;gap:8px;min-height:40px;border-bottom:1px solid var(--line)}
+.dc-snzl-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-snzl .dc-icon{flex:none;color:var(--muted)}
 /* What was just done, with ↩ to take it back: in the top bar left of ‹ ›, laid over the bar's own end (the faint
    next-up line) so nothing moves, never over the page or the buttons (decide.ts decideBar). */
 .dc-nav{position:relative}
@@ -318,6 +339,10 @@ button.dc-jev{cursor:pointer}
   .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-reply-row button,.dc-acts .dc-skip{min-height:44px}
   /* one row at 390 px: I don't know, explain · Give it back · Skip */
   .dc-acts.dc-fixed{gap:6px}
+  .dc-acts .dc-snz-b{width:44px;min-width:44px;height:44px;min-height:44px}
+  .dc-snz .dc-mi,.dc-snz-at input{min-height:44px}
+  .dc-acts .dc-snz-at .dc-icon{width:44px;min-width:44px;height:44px;min-height:44px}
+  .dc-snzl li{min-height:44px}
   .dc-acts.dc-fixed button{padding:0 12px}
   .dc-jev,.dc-more-btn{min-height:44px}
   .dc-open-task{margin:-12px 0 -8px;display:inline-flex;align-items:center}

@@ -3,7 +3,7 @@ import type {Page, Route} from 'playwright';
 // new routes:
 // - the screen scrolls as one: the thing asked about, then the question and Notes; nothing else scrolls, and at the end
 //   of the scroll no text is under the button bar, which is pinned to the bottom with a solid background;
-// - Approve, Send back and Skip stay fully visible, at least 44 px tall and tappable while "Approved · Undo" shows: the
+// - Approve, Send back and Snooze stay fully visible, at least 44 px tall and tappable while "Approved · Undo" shows: the
 //   message sits above the bar;
 // - ‹ › show on the phone, 8 px clear of ✕: next opens the next item and previous comes back;
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
@@ -114,7 +114,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await page.locator('[data-need="r1"]').click();
     const dialog = page.locator('#need-card');
     const at = async (q: number) => { await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor(); };
-    const approve = '#need-card [data-dc="approve"]', sendback = '#need-card [data-dc="sendback"]', skip = '#need-card [data-dc="skip"]';
+    const approve = '#need-card [data-dc="approve"]', sendback = '#need-card [data-dc="sendback"]', snooze = '#need-card [data-dc="snooze"]';
     await at(1);
     await page.locator(`${approve}:not([disabled])`).waitFor();
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-open.png')});
@@ -134,7 +134,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(Math.abs(bar.y + bar.height - VIEW.height) <= 1, `the bar ends at the bottom of the screen (${bar.y + bar.height})`);
     const barBg = await page.locator(`${approve} >> xpath=..`).evaluate(el => getComputedStyle(el).backgroundColor);
     check(!/rgba\(.*,\s*0\)$|transparent/.test(barBg), `the bar has a solid background (${barBg})`);
-    for (const sel of [approve, sendback, skip]) {
+    for (const sel of [approve, sendback, snooze]) {
       const b = (await box(page, sel))!;
       check(b.height >= 44, `${sel} is 44 px tall (${b.height})`);
     }
@@ -189,11 +189,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       // Leaving the item clears the hint: back on it, Notes is plain again.
       check(await page.locator('#dc-notes').getAttribute('placeholder') === 'Notes', 'the hint is gone after leaving the item');
     } else {
-      // The old way to read items 2 and 4 first, so each is ready the moment it comes back: Skip through them, round
-      // the question and on to item 1.
-      for (const n of [2, 4]) { await page.locator(skip).click(); await at(n); await page.locator(`${approve}:not([disabled])`).waitFor(); }
-      await page.locator(skip).click(); await at(3);
-      await page.locator(skip).click(); await at(1);
+      check(false, '‹ › are needed to walk on a phone');
     }
     await page.locator(`${approve}:not([disabled])`).waitFor();
 
@@ -224,7 +220,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       return [!!under?.closest('.dc-bar'), others.length];
     });
     check(covers[0] === true && covers[1] === 0, `the undo overlaps no control, the page or the buttons (${JSON.stringify(covers)})`);
-    for (const sel of [approve, sendback, skip]) {
+    for (const sel of [approve, sendback, snooze]) {
       const b = (await box(page, sel))!, reached = await hit(page, sel);
       check(b.height >= 44 && b.y + b.height <= VIEW.height && reached === 'self', `${sel} is visible and tappable while the message shows (${b.height} px, tap reaches ${reached})`);
     }
@@ -250,8 +246,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(JSON.stringify(writes) === JSON.stringify(['POST /api/v2/tasks/t1/asks/r1/ok', 'POST /api/v2/tasks/t2/asks/r2/ok']),
       `a second tap within 400 ms approves nothing (${JSON.stringify(writes)})`);
 
-    // An ask with nothing to show opens on its question, right under the header (Skip from the last wraps to it).
-    if (!await dialog.locator('.dc-q', {hasText: Q[2]!}).count()) await page.locator(skip).click();
+    // An ask with nothing to show opens on its question, right under the header (‹ or › to it).
+    if (!await dialog.locator('.dc-q', {hasText: Q[2]!}).count()) await page.locator(await page.locator(prev).isEnabled() ? prev : next).click();
     await at(3);
     await dialog.locator('.dc-thing .dc-doc').waitFor({state: 'attached'});
     await page.waitForTimeout(100);

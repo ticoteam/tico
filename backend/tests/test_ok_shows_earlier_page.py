@@ -243,3 +243,24 @@ def test_product_ok_release_shows_the_qa_page_through_the_fallback(company):
         view = TC.task_view(c, row["id"], ANA)
         entry = next(e for e in view["to_leave"] if e["kind"] == "ok")
         assert entry["earlier"]["ref"] == "page:f-qa@2" and entry["earlier"]["stage"] == "QA"
+
+
+def _listed(api):
+    return [i["id"] for i in get(api, "needs-you", token="ben-test")["items"]]
+
+
+def test_a_new_version_of_the_earlier_page_ends_a_snooze_of_the_ok(api):
+    """The page the OK shows from an earlier stage is part of what it asks (flow_opinions.ask_refs): a person's snooze
+    of it (backend/ask_snoozes.py) holds only while that page is the version they snoozed."""
+    from datetime import datetime, timedelta, timezone
+
+    task_id, fid = _released(api)
+    item = _ask(api, task_id)["id"]
+    until = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+    post(api, "needs-you/snooze", {"id": item, "until": until}, token="ben-test")
+    assert item not in _listed(api)
+    with api.app.state.store.transaction() as c:
+        _, v2 = _page(c, api.app.state.store, "<p>QA, again: the cart is kept after a restart too.</p>", fid=fid)
+        c.execute("UPDATE requirement_pages SET version=? WHERE file_id=? AND replaced_at IS NULL", (v2, fid))
+    assert _ask(api, task_id)["ask"]["earlier"]["version"] == v2
+    assert item in _listed(api), "the QA page it shows is not the one snoozed"

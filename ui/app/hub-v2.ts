@@ -78,6 +78,8 @@ interface NeedsRead {
   went_away?: WentAway | null;
   unchanged?: boolean;
   restart?: boolean;
+  /** When the first ask this person snoozed for themselves comes back (backend/ask_snoozes.py): read again then. */
+  snoozed_until?: string | null;
   /** An `ids=` read: each item's place in the list at `version`. */
   positions?: Record<string, number>;
 }
@@ -306,7 +308,20 @@ async function v2NeedsRead() {
   if (!needs.unchanged) needsTake(needs);
   else if (needs.plate_count != null) { S.v2.needsPlateCount = needs.plate_count; needsListsRedraw(); }
   S.v2.wentAway = needs.went_away || null;
+  needsWakeAt(needs.snoozed_until || null);
   return needs;
+}
+// A snoozed ask comes back with nothing run on the server (the list leaves it out only until its time): the page reads
+// Needs you again when the first one ends.
+let NEEDS_WAKE = 0, NEEDS_WAKE_AT = 0;
+/** Reads Needs you again at `until` (an ISO moment), or sooner when an earlier end is already set. */
+function needsWakeAt(until: string | null) {
+  const at = until ? Date.parse(until) : NaN;
+  if (Number.isNaN(at) || (NEEDS_WAKE && NEEDS_WAKE_AT <= at && NEEDS_WAKE_AT > Date.now())) return;
+  clearTimeout(NEEDS_WAKE);
+  NEEDS_WAKE_AT = at;
+  // A browser timer holds at most ~24.8 days; a later end is set again when that one fires and reads the list.
+  NEEDS_WAKE = window.setTimeout(() => { NEEDS_WAKE = 0; void v2Refresh(); }, Math.min(Math.max(at - Date.now(), 0) + 1000, 2 ** 31 - 1));
 }
 // The next page, one read at a time. Resolves true when the list grew (or was read again because it moved).
 let NEEDS_MORE: Promise<boolean> | null = null;

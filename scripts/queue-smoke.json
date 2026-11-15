@@ -209,7 +209,12 @@
     },
     {
       "script": "parts-first-visit",
-      "seconds": 63.0,
+      "seconds": 31.4,
+      "reason": "A cold Home, Tasks or Threads downloads the shell only; a page part that cannot load leaves Retry, and an old tab reloads"
+    },
+    {
+      "script": "parts-every-page",
+      "seconds": 54.9,
       "reason": "Every page opens on its first visit through its page part's stand-ins; a missed one breaks only that page, cold"
     }
   ]

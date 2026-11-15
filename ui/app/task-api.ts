@@ -317,6 +317,11 @@ const taskReassign = (id: string, owner: string, version: number | null, why?: s
 const taskSnooze = (id: string, until: string | null, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/snooze`, withVersion(version, {...(until ? {until} : {}), ...(why ? {why} : {})}), newRequestId());
 const taskUnsnooze = (id: string, why?: string): Promise<TaskMoved> => post(`${taskPath(id)}/unsnooze`, why ? {why} : {}, newRequestId());
+/** One ask leaves your own Needs you until `until` (an ISO moment, at most a year on); it stays in everyone else's, and
+    its bot is not told. `id` is the ask's Needs-you id. */
+const askSnooze = (id: string, until: string): Promise<{id: string; snoozed_until: string}> =>
+  post('/v2/needs-you/snooze', {id, until}, newRequestId());
+const askUnsnooze = (id: string): Promise<{id: string}> => post('/v2/needs-you/unsnooze', {id}, newRequestId());
 /** A person hands a task back to its owner to try again. */
 const taskTryAgain = (id: string, why?: string): Promise<TaskMoved> => post(`${taskPath(id)}/try-again`, why ? {why} : {}, newRequestId());
 
