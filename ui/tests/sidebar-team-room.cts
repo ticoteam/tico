@@ -227,7 +227,9 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
             wordLines: new Set([...r.getClientRects()].map(x => Math.round(x.top))).size,
             cut: word.scrollWidth > word.clientWidth + 0.5 || a.scrollWidth > a.clientWidth + 0.5};
         });
-        assert.ok(box.wordTop >= box.nameBottom - 0.5, `${id}: the state word is on its own line under the name`);
+        // The two line boxes may share a pixel (the name's box is taller than its letters); a word beside the name would be a
+        // whole line higher.
+        assert.ok(box.wordTop >= box.nameBottom - 2, `${id}: the state word is on its own line under the name`);
         assert.equal(box.cut, false, `${id}: the state word and row are whole at 200px`);
         assert.equal(box.wordLines, 1, `${id}: the state word is never split (the count drops a line instead)`);
         assert.equal(box.word, id === 's-cloud' ? ' · Connecting' : ' · Recruiting');

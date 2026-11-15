@@ -20,8 +20,8 @@ BOTOPS = "botops"
 LIBRARIAN = "librarian"
 MARKET_TASK = "Set up the market map"
 ONLINE_SECONDS = 120
-# The checklist items a person may skip.
-OPTIONAL = ("github", "subscription")
+# The checklist items a person may skip. GitHub is not one: without it a bot's repository cannot be made.
+OPTIONAL = ("subscription",)
 
 
 def _person(who):
@@ -275,10 +275,8 @@ def checklist(c, who, settings, github):
             "github",
             "GitHub is connected",
             installed,
-            "Lets bots keep their work in your GitHub.",
-            "#/settings",
-            "cloud",
-            optional=True,
+            "Bots keep their work in your GitHub.",
+            "#/tools/github",
         ),
         _item(
             "botops",

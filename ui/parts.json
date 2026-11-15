@@ -537,6 +537,7 @@
   ],
   "calls": [
    "githubNudgeBot",
+   "githubNudgeTools",
    "openPipelineEditor",
    "roadmapSettingsMount",
    "taskChatLive",

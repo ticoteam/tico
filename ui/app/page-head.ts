@@ -355,6 +355,9 @@ function pageHeadFitSoon(): void {
 // these fits the headers again. A change to a header fits it at once, before the frame is drawn (a mutation observer
 // runs then), so a redrawn tab row never shows its sixth tab, or a tool that does not fit, for a frame.
 addEventListener('resize', pageHeadFitSoon);
+// A font that arrives after the first fit changes every width without changing the header's: an icon drawn as its name
+// until then is far wider, and tools folded for it would stay in ⋯.
+document.fonts?.addEventListener?.('loadingdone', pageHeadFitSoon);
 const PAGE_HEAD_CHANGES = new MutationObserver(records => {
   // pageHeadFit's own class change on the header is not a change to fit again for
   if (!records.some(r => r.target instanceof Element && !(r.type === 'attributes' && r.target.matches('header.ph')) && (r.target.closest('header.ph') || [...r.addedNodes].some(n => n instanceof Element && (n.matches('header.ph') || !!n.querySelector('header.ph')))))) return;

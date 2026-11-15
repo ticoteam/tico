@@ -252,7 +252,7 @@ async function pageTools() {
       more: `<a href="#/tools/settings" data-tl-settings>Settings</a>`})}
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters"><div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="Search tools" autocomplete="off" spellcheck="false" data-tl-q></div><div class="au-facets"></div></aside>
-      <section class="au-c" aria-label="Tools"><div class="au-tbl tt-tbl" data-tl-table>${state.items ? '' : skelRows(6)}</div></section>
+      <section class="au-c" aria-label="Tools"><div data-tl-github></div><div class="au-tbl tt-tbl" data-tl-table>${state.items ? '' : skelRows(6)}</div></section>
     </div>
     <dialog class="bot-editor" id="credential-dialog" aria-label="Key"></dialog></div>`;
   const root: HTMLElement = $('#tools-root')!;   // drawn just above
@@ -261,6 +261,8 @@ async function pageTools() {
   search.oninput = () => { if (TL !== state) return; state.q = search.value; toolsChanged(); };
   toolsPlace(root);
   toolsWire(root, state);
+  // While GitHub is not connected, one card above the list says so (ui/app/github-nudge.ts).
+  void githubNudgeTools(root.querySelector<HTMLElement>('[data-tl-github]'));
   // The Tools owner's chat (page-chat.ts, mounted by the router), which takes keys without a model seeing them
   // (tools-key-drop.ts).
   pageChatUse('tools', {empty: toolsChatEmpty, keyDrop: toolsInProblem});

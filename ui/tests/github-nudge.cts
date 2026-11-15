@@ -1,8 +1,9 @@
 // The GitHub nudge (ui/app/github-nudge.ts): while GitHub is not connected and installed, a bot someone made and a
 // live "Build a bot" task say their work is backed up nowhere. The owner gets Connect GitHub, a link to Tools; anyone
 // else gets the ask to the owner, with no link. Built-in bots, other tasks, done tasks and a connected, installed team
-// get no card. The team's answer is read once per page, and visiting Tools › GitHub asks again. Fixtures only, no
-// network. TICO_SCREENSHOT_DIR keeps the bot page and the task at desktop and phone width, light and dark.
+// get no card. Tools carries the same card above its list. The team's answer is read once per page, and visiting
+// Tools › GitHub asks again. GitHub is a required setup row: while it is open, Finish setup stays in the owner's
+// sidebar even after Don't remind me, which hides only the optional subscription row. Fixtures only, no network. TICO_SCREENSHOT_DIR keeps the bot page and the task at desktop and phone width, light and dark.
 import type {Browser, Page, LaunchOptions, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
 import type * as RouteSupport from './support/routes.cts';
@@ -29,7 +30,9 @@ const BOTS = [
 ];
 
 // ownerName is the owner's name the config carries ('' for none): a non-owner's card names the owner, or says "the owner".
-async function open(browser: Browser, {viewport = {width: 1280, height: 900}, colorScheme = 'light', owner = true, connected = false, ownerName = 'Ana'}: {viewport?: {width: number; height: number}; colorScheme?: string; owner?: boolean; connected?: boolean; ownerName?: string}) {
+// started is Getting started's answer (backend/getting_started.py view), which decides Finish setup in the sidebar.
+type Started = {items: {id: string; done: boolean; optional: boolean; skipped?: boolean}[]; dismissed: boolean};
+async function open(browser: Browser, {viewport = {width: 1280, height: 900}, colorScheme = 'light', owner = true, connected = false, ownerName = 'Ana', started}: {viewport?: {width: number; height: number}; colorScheme?: string; owner?: boolean; connected?: boolean; ownerName?: string; started?: Started}) {
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760, isMobile: viewport.width < 760});
   await context.addInitScript((theme: string) => { try { localStorage.setItem('tico.theme', theme); } catch {} }, colorScheme);
   const page = await context.newPage();
@@ -55,6 +58,13 @@ async function open(browser: Browser, {viewport = {width: 1280, height: 900}, co
     if (p === '/api/v2/status') return json({bots: BOTS.map(b => ({bot: b.name, state: 'idle'}))});
     if (p === '/api/v2/repositories') return json({repositories: [], new_bot_default: null, github_connected: connected, github_installed: connected});
     if (p === '/api/v2/needs-you') return json({items: [], went_away: null});
+    // Tools › GitHub, the page the card and the setup row link to: a whole tool page, as the server sends it.
+    if (p === '/api/v2/tools/github') return json({service: 'github', title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true});
+    if (p === '/api/v2/tool-index') return json({rows: [{id: 'api:crm', kind: 'api', name: 'CRM', href: '#/tools/api/crm', status: {tone: 'ok', text: 'Working'}}], counts: null});
+    if (p === '/api/v2/setup') return json({names: {company_name: 'Acme'}, answers: {}, selected: {}, completed: '2026-11-01T10:00:00Z',
+      needed: false, home: 'human:ana', bots: [], machine: {runners: [{id: 'r1', label: "Ana's Mac", online: true}], enrolled: true}});
+    if (p === '/api/v2/templates') return json({cards: []});
+    if (p === '/api/v2/setup/getting-started') return json({tour_seen: true, can_build: true, items: [], dismissed: false, ...started});
     if (p === '/api/v2/tasks') return json({tasks: []});
     const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/), found = one && TASKS.find(t => t.id === one[1]);
     if (found) return json({task: found, children: []});
@@ -80,6 +90,16 @@ const host = (inTask = false) => (inTask ? '[data-gh-nudge-task]' : '#bot-github
 const card = (page: Page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge`);
 const sentence = (page: Page, inTask = false) => card(page, inTask).locator('span').first().textContent();
 const link = (page: Page, inTask = false) => page.locator(`${host(inTask)} .gh-nudge a[data-gh-connect]`);
+// Tools: the card in its host above the filters and the list.
+const toolsCard = (page: Page) => page.locator('#tools-root [data-tl-github] .gh-nudge');
+async function tools(page: Page) {
+  const seen = page.waitForResponse((r: {url(): string}) => r.url().endsWith('/api/v2/repositories'));
+  await page.goto('https://tico-ui.test/#/tools');
+  await seen;
+  await page.locator('#tools-root [data-tl-row]').first().waitFor();
+  await page.waitForTimeout(200);
+}
+const finishSetup = (page: Page) => page.locator('#nav-welcome').evaluate((el: HTMLElement) => !el.hidden);
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as LaunchOptions);
@@ -179,6 +199,68 @@ const link = (page: Page, inTask = false) => page.locator(`${host(inTask)} .gh-n
       assert.equal(await card(page, true).count(), 0);
       await context.close();
     }
+    {
+      // Tools: the owner's card sits above the filters with the one button to Tools › GitHub; the list is still there.
+      const {page, context, errors} = await open(browser, {});
+      await tools(page);
+      assert.equal(await toolsCard(page).count(), 1);
+      assert.equal(await toolsCard(page).locator('span').first().textContent(), 'Bots need GitHub.');
+      const button = toolsCard(page).locator('a.primary[data-gh-connect]');
+      assert.equal(await button.getAttribute('href'), '#/tools/github');
+      assert.equal(await button.textContent(), 'Connect GitHub');
+      assert.equal(await page.locator('#tools-root [data-tl-github] + [data-tl-table]').count(), 1, 'the card is above the list');
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+    {
+      // Anyone else is asked to ask the owner, with nothing to press; a connected team sees no card.
+      const other = await open(browser, {owner: false});
+      await tools(other.page);
+      assert.equal(await toolsCard(other.page).locator('span').first().textContent(), 'Ask Ana to connect GitHub.');
+      assert.equal(await toolsCard(other.page).locator('a').count(), 0);
+      assert.deepEqual(other.errors, []);
+      await other.context.close();
+      const done = await open(browser, {connected: true});
+      await tools(done.page);
+      assert.equal(await toolsCard(done.page).count(), 0);
+      assert.equal(await done.page.locator('#tools-root [data-tl-github]').count(), 1);
+      assert.deepEqual(done.errors, []);
+      await done.context.close();
+    }
+    {
+      // Finish setup: hidden for good, it still comes back while GitHub (required) is open; once GitHub is installed the
+      // hide holds over the subscription row, which is optional. Not hidden, the subscription row keeps it.
+      const row = (id: string, done: boolean, optional: boolean) => ({id, done, optional});
+      const cases: [Started, boolean][] = [
+        [{items: [row('github', false, false), row('subscription', false, true)], dismissed: true}, true],
+        [{items: [row('github', true, false), row('subscription', false, true)], dismissed: true}, false],
+        [{items: [row('github', true, false), row('subscription', false, true)], dismissed: false}, true],
+      ];
+      for (const [started, shown] of cases) {
+        const {page, context, errors} = await open(browser, {started, connected: started.items[0]!.done});
+        const read = page.waitForResponse((r: {url(): string}) => r.url().endsWith('/api/v2/setup/getting-started'));
+        await page.goto('https://tico-ui.test/#/tasks');
+        await read;
+        await page.waitForTimeout(200);
+        assert.equal(await finishSetup(page), shown, JSON.stringify(started));
+        // Opened again, the step it lands on has the GitHub row while GitHub is open, and its link goes to Tools › GitHub.
+        if (shown) {
+          await page.locator('#nav-welcome').click();
+          await page.locator('dialog#onb[open] #onb-run-lines').waitFor();
+          const github = page.locator('#onb-github a');
+          if (started.items[0]!.done) assert.equal(await github.count(), 0);
+          else {
+            await github.waitFor();
+            assert.equal(await github.getAttribute('href'), '#/tools/github');
+            await github.click();
+            await page.locator('dialog#onb').waitFor({state: 'detached'});
+            assert.equal(await page.evaluate(() => location.hash), '#/tools/github');
+          }
+        }
+        assert.deepEqual(errors, []);
+        await context.close();
+      }
+    }
     if (shots) {
       // The card at both widths, in both themes; the phone pass also checks the page does not scroll sideways.
       for (const colorScheme of ['light', 'dark']) {
@@ -194,6 +276,14 @@ const link = (page: Page, inTask = false) => page.locator(`${host(inTask)} .gh-n
           await card(page, true).waitFor({state: 'attached'});
           await page.waitForTimeout(200);
           await page.screenshot({path: path.join(shots, `github-nudge-task-${label}-${colorScheme}.png`)});
+          await page.evaluate(() => { location.hash = '#/tools'; });
+          await toolsCard(page).waitFor({state: 'attached'});
+          await page.waitForTimeout(200);
+          if (label === 'phone') {
+            const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+            assert.ok(overflow <= 0, `Tools scrolls sideways by ${overflow}px at phone width`);
+          }
+          await page.screenshot({path: path.join(shots, `github-nudge-tools-${label}-${colorScheme}.png`)});
           assert.deepEqual(errors, []);
           await context.close();
         }

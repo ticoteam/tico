@@ -105,11 +105,12 @@ it on:
 
 Until the app is connected and installed, Tico says so where a bot's work would go: the Health check is an
 informational note while the team has only the built-in bots, and a warning once a bot someone made exists,
-since that bot's files and memory live on its computer with no backup. A bot's page and a **Build a bot** task
-show a card with **Connect GitHub** for the owner; anyone else who sees it is asked to ask the owner. The card
-goes away once the app is connected and installed.
+since that bot's files and memory live on its computer with no backup. A bot's page, a **Build a bot** task and
+Tools (above its list) show a card with **Connect GitHub** for the owner; anyone else who sees it is asked to ask the
+owner. The card goes away once the app is connected and installed. GitHub is a required row of setup's last step:
+**Finish setup** stays in the owner's sidebar until it is installed, even after **Don't remind me**.
 
-Nothing asks at setup. The first task that reaches a stage reading its PRs (Engineering's Build, Merge and Release)
+Beyond setup, the first task that reaches a stage reading its PRs (Engineering's Build, Merge and Release)
 puts one **Connect GitHub** row in the company owner's Needs you, linked to this page. Every other such task waits on
 the same row: its bot shows Paused on "Connect GitHub", and no bot is woken or asked to snooze it meanwhile. Once the
 app is installed the row goes by itself, and each task's bot is woken once to carry on. Installed with no product

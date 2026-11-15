@@ -57,7 +57,9 @@ async function serverNotice(browser: import('playwright').Browser) {
     await page.locator('#conv-thread .chat-goal-line').waitFor();
     const thread = page.locator('#conv-thread');
     assert.equal(await thread.locator('.chat-goal-line').count(), 1, 'one line, not the notice and a line');
-    // The objective's second line is not taken for the note.
+    // The objective's second line is not taken for the note. The line is redrawn once the chat's goal has loaded
+    // (until then the notice's own text is all there is to read), so wait for that drawing.
+    await thread.locator('.chat-goal-line .cg-line-note', {hasText: /^· The condition holds\.$/}).waitFor();
     assert.match(await thread.locator('.chat-goal-line').innerText(), /Goal met:\s*Produce the revised Acme summary\s+with the Q3 numbers\s*· The condition holds\./);
     assert.doesNotMatch(await thread.innerText(), /\bTask\b/);
     assert.doesNotMatch(await thread.innerText(), /\/goal/, 'no raw /goal bubbles');

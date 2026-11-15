@@ -25,12 +25,17 @@ const isLensesRoute = (r: string): boolean => r === LENSES_ROUTE || r.startsWith
 
 // getting-started.ts
 // Setup's last step (ui/app/welcome.ts) still has a row open: the computer (a hosted company's Tico Cloud computers
-// count, as the step shows them ticked) or the subscription line, not done or skipped. Finish setup stays in the
-// sidebar for the owner until both are, or until they hide it for good from that step (the checklist's own `dismissed`).
+// count, as the step shows them ticked), GitHub, or the subscription line, not done or skipped. Finish setup stays in
+// the sidebar for the owner until they are. Hiding it for good from that step (the checklist's own `dismissed`) hides
+// only optional rows (the subscription, except on Tico Cloud): a required row brings it back until it is done.
 function gsSetupOpen(): boolean {
-  if (!GS || GS.dismissed || S.me?.role !== 'owner') return false;
-  const computer = GS.items.find(item => item.id === 'computer'), sub = GS.items.find(item => item.id === 'subscription');
-  return (!!computer && !computer.done && !S.config?.hosted) || (!!sub && !sub.done && !sub.skipped);
+  const gs = GS;
+  if (!gs || S.me?.role !== 'owner') return false;
+  const open = (id: string): boolean => {
+    const item = gs.items.find(row => row.id === id);
+    return !!item && !item.done && !item.skipped && (!gs.dismissed || item.optional === false);
+  };
+  return (open('computer') && !S.config?.hosted) || open('github') || open('subscription');
 }
 
 // first-run.ts

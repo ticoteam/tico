@@ -282,7 +282,7 @@ class Builder:
                     ),
                 ),
             )
-            # The tour is over; the checklist stays because GitHub, its one optional step, is not connected.
+            # The tour is over; the checklist stays because GitHub is not connected.
             c.execute(
                 "INSERT INTO preferences VALUES('human:ana','onboarding.progress',?,?)",
                 (encode({"tour": True, "checklist": False, "skipped": []}), H.now()),
