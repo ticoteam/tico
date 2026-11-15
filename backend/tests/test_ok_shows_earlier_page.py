@@ -15,7 +15,7 @@ from backend import task_engine as E
 from backend import updates
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import get, post
+from backend.tests.helpers.api import get, headers, post, unrelated_task_managers
 from backend.tests.helpers.page_requirement import _page
 from backend.tests.helpers.product_engineering_presets import _answers, _team
 
@@ -108,8 +108,44 @@ def test_a_reader_who_may_not_open_the_page_gets_the_ok_without_it(api):
     assert item["ask"]["line"] == "OK the release" and "earlier" not in item["ask"], "the ask stays, the page goes"
     entry = _entry(api, task_id, "cara-test")
     assert entry["line"] == "OK the release"
-    assert entry.get("earlier") in (None, {"removed": True, "label": "A page you can't open"})
+    assert "earlier" not in entry, "no reference to it at all"
     assert _entry(api, task_id, "ana-test")["earlier"]["stage"] == "QA", "Ana, in its audience, still reads it"
+
+
+def _private_home(api, fid):
+    """The page now lives on another task of Ana's, a private one, and has no audience of its own: who may open it is
+    who may read that task."""
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c, "writer")
+        home = H.task_create(c, ANA, "Salary review", "Private.", ANA, private=True, lint=False)
+        c.execute("UPDATE bot_files SET scope=?, task_id=? WHERE id=?", ("task:" + home["id"], home["id"], fid))
+
+
+def test_a_page_another_private_task_holds_reaches_no_one_who_may_not_open_it(api):
+    """Not only a page's own audience: a page read as another, private task is checked through the file's own read,
+    in Needs you and in the task's read, and the OK shows the task's text."""
+    task_id, fid = _released(api, person=CARA)
+    _private_home(api, fid)
+    assert api.get(f"/api/v2/files/{fid}?v=1", headers=headers("cara-test")).status_code in (403, 404)
+    assert "earlier" not in _ask(api, task_id, token="cara-test")["ask"]
+    assert "earlier" not in _entry(api, task_id, "cara-test")
+    assert _entry(api, task_id, "ana-test")["earlier"]["file_id"] == fid, "Ana reads that task, and the page"
+
+
+def test_attached_through_the_route_from_another_private_task_it_still_reaches_no_one_who_may_not_open_it(api):
+    """The same page attached in QA through POST /api/v2/tasks/{id}/pages, as a person would."""
+    task_id, fid = _released(api, person=CARA, qa=False)
+    _private_home(api, fid)
+    with api.app.state.store.transaction() as c:
+        E.move(c, task_id, "rel-qa", ANA, "Attach the QA page")
+        row = E.task(c, task_id)
+        rid = c.execute("SELECT id FROM requirements WHERE stage_id='rel-qa' AND kind='page'").fetchone()[0]
+    post(api, f"tasks/{task_id}/pages", {"page": f"page:{fid}@1", "requirement": rid, "version": row["version"]})
+    with api.app.state.store.transaction() as c:
+        E.move(c, task_id, "rel-ok-release", ANA, "QA done")
+    assert api.get(f"/api/v2/files/{fid}?v=1", headers=headers("cara-test")).status_code in (403, 404)
+    assert "earlier" not in _entry(api, task_id, "cara-test")
+    assert "earlier" not in _ask(api, task_id, token="cara-test")["ask"]
 
 
 def test_a_bots_ask_and_a_page_ok_never_borrow_an_earlier_page(api):

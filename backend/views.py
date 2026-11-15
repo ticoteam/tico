@@ -2161,7 +2161,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
         # that entry alone (task_calls.ask_entry), not the whole view of its task.
         from . import task_calls
-        from .files import page_ref_denials
+        from .files import readable_earlier
 
         # Every ask's task read together: the list costs what one task's view does.
         task_calls.prime_views(c, {item["task_id"] for item in items if item["kind"] == "ask"}, who.actor)
@@ -2169,11 +2169,9 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             if item["kind"] != "ask":
                 continue
             item["ask"] = task_calls.ask_entry(c, item["task_id"], item["requirement_id"], who.actor)
-            # The page an OK shows from an earlier stage, only to a reader who may open it (the task's own read takes it
-            # out the same way, files.readable_page_refs); without it the OK shows the task's text.
-            earlier = (item["ask"] or {}).get("earlier")
-            if earlier and page_ref_denials(c, auth, who, earlier["source"]):
-                del item["ask"]["earlier"]
+            # The page an OK shows from an earlier stage, only to a reader who may open it through the file's own read
+            # check (the task's read takes it out the same way); without it the OK shows the task's text.
+            readable_earlier(c, auth, who, item["ask"])
             # What the task waits on says only "a person's OK" for a bound OK (waiting_on); its own line is this
             # person's to read when they are one of its parties, as their read of the task gives it.
             if item["ask"] and item["ask"]["kind"] == "ok":

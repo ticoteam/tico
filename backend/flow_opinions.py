@@ -137,6 +137,15 @@ def earlier(c: Any, item: Row) -> Row | None:
     return found
 
 
+def ask_refs(c: Any, item: Row) -> list[str] | None:
+    """Everything a Needs-you ask shows, each page pinned to its version (`pinned`), and the page an OK that names
+    nothing shows from an earlier stage (`earlier`): what its `ask_version` holds, so a new version of any of them is a
+    new ask, for the opinion and for a person's snooze of it (waiting_on.ask_version). None as `pinned` gives it."""
+    refs = pinned(c, item.get("ask") or {})
+    shown_before = earlier(c, item) if refs is not None else None
+    return refs + [str(shown_before["ref"])] if refs is not None and shown_before else refs
+
+
 def ask_version(item: Row, refs: list[str]) -> str:
     """The ask as its parties read it, as a short hash: its sentence, what it shows (`refs`, each page at its pinned
     version), its choices, brief, title and typed question. A comment on the task, or anything else about the task, is
@@ -149,27 +158,8 @@ def ask_version(item: Row, refs: list[str]) -> str:
 
 
 def _reads(c: Any, auth: Any, who: Any, refs: list[str]) -> bool:
-    """Whether `who` may read every file `refs` name, each at the version named (else its current one), through the
-    read check the file's own route makes (files.version_refusal): a page's audience, the task, chat or bot it lives
-    on, its blob and the run that made it. A page ref that names no stored version is refused."""
-    if files.page_ref_denials(c, auth, who, refs):
-        return False
-    at: dict[str, int | None] = {}
-    for ref in refs:
-        if ref.startswith("page:"):
-            file_id, _, version = ref[len("page:") :].partition("@")
-            at[file_id] = int(version)
-    named: set[str] = files.page_references(refs, c)
-    for file_id in named - set(at):
-        at[file_id] = None
-    for file_id, version in at.items():
-        row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
-        if row is None:
-            return False
-        number = row["current_version"] if version is None else version
-        if files.version_refusal(c, auth, who, row, number, files.stored_version(c, file_id, number)):
-            return False
-    return True
+    """Whether `who` may read every file `refs` name, at the version named (files.page_refs_readable)."""
+    return bool(files.page_refs_readable(c, auth, who, refs))
 
 
 def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
@@ -181,19 +171,15 @@ def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
     ask: Row | None = item.get("ask")
     if item.get("kind") != "ask" or not ask or ask.get("line") == task_asks.PRIVATE_LINE:
         return None
-    refs = pinned(c, ask)
-    if refs is None:
-        return None
-    shown_before = earlier(c, item)
-    if shown_before:
-        refs.append(str(shown_before["ref"]))
-    if not _reads(c, auth, who, refs):
+    refs = ask_refs(c, item)
+    if refs is None or not _reads(c, auth, who, refs):
         return None
     rid = item["requirement_id"]
     if task_asks.grant(c, rid) and not task_asks.may_see(c, auth, who, rid):
         return None
     visit_id, _, _ = str(item["id"]).partition(":")
     task: Row = item.get("task") or {}
+    shown_before = earlier(c, item)
     return {
         "id": str(item["id"]),
         "visit_id": visit_id,
