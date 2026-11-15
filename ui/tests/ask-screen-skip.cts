@@ -51,6 +51,7 @@ const Q = ['Which plan do new signups get?', 'Which region first?', 'Ship on Mon
         if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
+        if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
         if (r.method() !== 'GET' && p.startsWith('/api/')) {
           writes.push(`${r.method()} ${p}`);
           const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);

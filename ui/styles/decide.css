@@ -35,6 +35,9 @@
 @keyframes dc-wv{0%,100%{transform:scaleY(.22)}20%{transform:scaleY(.95)}45%{transform:scaleY(.4)}70%{transform:scaleY(.75)}}
 /* Tico's line: one line, cut at the end */
 .dc-say{flex:1;min-width:0;margin:0;font-size:var(--t-base);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The next ask Tico is still thinking about, faint, before ‹ ›; none on a phone. */
+.dc-up{flex:0 1 auto;max-width:28%;min-width:0;color:var(--muted);opacity:.7;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-up:empty{display:none}
 .dc-nav{display:flex;align-items:center;gap:2px;margin-left:auto;flex:none}
 .dc-icon{display:grid;place-items:center;width:40px;height:40px;padding:0;border:0;border-radius:8px;background:none;color:var(--ink);font-size:18px;line-height:var(--lh-none);cursor:pointer}
 .dc-icon:hover:not(:disabled),.dc-icon[aria-pressed="true"]{background:var(--surface2)}
@@ -200,6 +203,7 @@ button.dc-jev{cursor:pointer}
   .dc-head{flex-wrap:wrap;gap:0 6px;padding-left:8px}
   .dc-say{order:9;flex-basis:100%;padding:0 8px 10px}
   .dc-say:empty{display:none}
+  .dc-up{display:none}
   .dc-where{flex:0 1 auto;max-width:calc(100% - 236px)}
   .dc-crumb{min-height:44px;overflow:hidden}
   .dc-crumb>span{flex:none;min-width:0;overflow:hidden;text-overflow:ellipsis}

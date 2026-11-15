@@ -56,6 +56,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
       if (p === '/api/v2/oks/r1') return json({requirement_id: 'r1', subject: 'spec:1', content: content(), shown_hash: hash(), standing: 'waiting', task_id: 't1'});
+      if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
         writes.push({p, body});

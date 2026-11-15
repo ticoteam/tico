@@ -1,7 +1,7 @@
 /* ui/app/decide.ts — Flow, the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A
    modal on a wide screen, the whole screen on a phone. The top bar is where you are (All mine / a pipeline / a stage, a
-   menu), Flow's mark, the mic, Tico's line, then ‹ › ✕ (‹ › on a wide screen only; Skip, in the answer row, steps on at
-   every width). The thing asked about is on the left, shown in full (the page, the email, what an OK is for); the
+   menu), Flow's mark, the mic, Tico's line, the next ask Tico is still thinking about, then ‹ › ✕ (‹ › on a wide screen
+   only; in the answer row, Snooze sets the task aside where the person may, else Skip steps on, at every width). The thing asked about is on the left, shown in full (the page, the email, what an OK is for); the
    sentence asked, who asks, Notes and the buttons are on the right. A stage's typed answer asks its question: a choice is its buttons, a number a whole-number box
    with its range, text a box; a value the server refuses stays typed, under the server's line.
    An OK bound to what was shown: the content on screen is the preview GET /v2/oks/{id} (or the email's own preview)
@@ -82,6 +82,8 @@ interface DecState {
   pipeline: string;
   /** Snoozed here this visit, for "All done · 2 snoozed". */
   snoozed: number;
+  /** The items shown this visit: they keep their place when Tico's scores reorder the rest (decideScoreOrder). */
+  seen: Set<string>;
   /** Screenshots and files added to the note of the item on screen (pasted, dropped or picked with 📎). */
   files: DecFile[];
   /** What was opened on the right side, per item: `<item id>:jev` (Jev's reason), `<item id>:more:<part>` (a part
@@ -165,6 +167,7 @@ function decideSync(st: DecState, items: NeedsEntry[]) {
     order.splice(prev ? order.indexOf(prev.id) + 1 : 0, 0, it.id);
   });
   for (const k of [...st.gone]) if (!keys.has(k)) st.gone.delete(k);
+  for (const k of [...st.seen]) if (!keys.has(k)) st.seen.delete(k);
   // The item on screen left the list (answered elsewhere): the same ask asked again (a letter quoted again) takes its
   // place, else the next one.
   if (st.at && !keys.has(st.at)) {
@@ -175,6 +178,7 @@ function decideSync(st: DecState, items: NeedsEntry[]) {
       || before.slice(0, Math.max(i, 0)).reverse().find(k => keys.has(k) && !st.gone.has(k)) || null;
   }
   st.order = order;
+  decideScoreOrder(st);
 }
 
 // ---- the count, and the lists that show Needs you
@@ -207,10 +211,11 @@ function decideDialog(): HTMLDialogElement {
     <header class="dc-head">
       <span class="dc-where"><button type="button" class="dc-crumb" data-dc="where" aria-haspopup="menu" aria-expanded="false"></button>
         <span class="dc-menu" role="menu" hidden></span></span>
-      <span class="dc-flow">${flowMarkHTML(24, true)}</span>
+      <span class="dc-flow">${flowMarkHTML(24)}</span>
       <button type="button" class="dc-wave" data-dc="voice" aria-label="Voice" aria-pressed="true" title="Voice" hidden><i></i><i></i><i></i><i></i><i></i></button>
       <button type="button" class="dc-mic" data-dc="voice" aria-label="Voice" aria-pressed="false" title="Voice">${DEC_MIC}</button>
       <p class="dc-say" aria-live="polite"></p>
+      <span class="dc-up"></span>
       <span class="dc-nav">
         <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
         <button type="button" class="dc-icon dc-wide" data-dc="next" aria-label="Next" title="Next (→)">›</button>
@@ -226,6 +231,8 @@ function decideDialog(): HTMLDialogElement {
     const box = eventElement(ev) as HTMLTextAreaElement | HTMLInputElement | null;
     if (!DEC || !box?.matches('textarea, input')) return;
     if (box instanceof HTMLTextAreaElement && box.matches('[data-dc-grow]')) decideGrow(box);
+    // The person's own typing in Notes: Tico's note never fills it after that (decidePaintSide).
+    if (ev.isTrusted && box.id === 'dc-notes' && DEC.at) DEC_OP.typed.add(DEC.at);
     decideNeedsText(root);
   });
   // A screenshot pasted into the note, or a file dropped on the answer side, joins the note (copied text pastes as text).
@@ -268,7 +275,8 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   if (S.me?.role === 'bot') return false;
   const fresh = !DEC;
   const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), more: '', busy: false, error: '',
-    barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, pipeline, snoozed: 0, files: [], open: new Set()};
+    barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, pipeline, snoozed: 0, files: [], open: new Set(),
+    seen: new Set()};
   const to0 = (s: string, p: string) => { st.stage = s; st.pipeline = p; st.order = []; st.gone.clear(); st.at = null; };
   // Opening one item from a list walks the list it is in; Flow on a stage or a pipeline walks it, from its first item.
   if ((st.stage !== stage || st.pipeline !== pipeline) && (stage || pipeline || !id)) to0(stage, pipeline);
@@ -280,6 +288,7 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   const d = decideDialog();
   decideGo(st, to);
   if (!d.open) { d.showModal(); decideStart(d); }
+  decideOpinions(st);
   return true;
 }
 /** "Getting ready to flow" with the mark, for well under a second over the first item, which is drawn and takes input
@@ -360,6 +369,7 @@ function decideStop() {
   const st = DEC;
   if (!st) return;
   DEC = null; DEC_VOICE = false;
+  decideOpinionsEnd();
   DEC_ABOUT.clear(); DEC_SENT = ''; DEC_HELD.clear(); DEC_SENDING.clear();
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
@@ -384,11 +394,13 @@ function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefin
   const before = st.at;
   decideSync(st, needsAsEntries(items));
   if (st.at !== before) decideRender(st); else decidePaintHead(st);
+  decideOpinions(st);   // asks that joined
 }
 
 // ---- moving through
 function decideGo(st: DecState, id: string | null) {
   st.at = id; st.more = ''; st.error = ''; st.busy = false; st.files = []; DEC_SENT = ''; DEC_ASK_NOTE = '';
+  if (id) st.seen.add(id);
   decideRender(st);
 }
 function decideStep(st: DecState, dir: number) {
@@ -499,6 +511,13 @@ function decidePaintHead(st: DecState) {
   const say = DEC_VOICE ? 'Voice is coming soon' : it ? DEC_LINES.get(it.id)?.line || '' : '';
   const line = $('.dc-say', root)!;
   if (line.textContent !== say) line.textContent = say;
+  // Tico thinking: the mark moves while the item on screen waits on its opinion, and the next ask still waiting is
+  // named, faint, before ‹ › (none on a phone, decide.css).
+  const thinking = (k: string) => DEC_OP.state.get(k) === 'pending';
+  $('.dc-flow .flow-mark', root)?.classList.toggle('live', !!it && thinking(it.id));
+  const next = live.find(k => k !== st.at && thinking(k)), upItem = next ? st.items.get(next) : undefined;
+  const up = upItem ? upItem.task?.title || upItem.line : '', upEl = $('.dc-up', root)!;
+  if (upEl.textContent !== up) upEl.textContent = up;
 }
 /** Tico's line for the item `itemId` (a Needs you id) and the answer it would press: the line fills the top bar and
     that answer's button becomes the main one while the item is on screen. `pick` is a button's `data-dc` (approve,
@@ -520,6 +539,102 @@ function decideLinePick(it: NeedsEntry, host: HTMLElement) {
     if (b.classList.contains('dc-choice')) b.classList.toggle('dc-rec', b === to);
     else { b.classList.toggle('primary', b === to); b.classList.toggle('ghost', b !== to); }
   }
+}
+/** Snooze is offered on the person's own task, and on an ask whose task they may set aside (`may_snooze`, the snooze
+    route's own right; it sets the task aside for everyone, and Needs you leaves it out until then). A mention keeps
+    Skip: a snooze would not take the @ out of the list. */
+const decideSnoozes = (it: NeedsEntry, kind: AskKind) => kind === 'yours'
+  || (kind === 'ok' || kind === 'question') && !!decideTaskId(it) && it.may_snooze === true;
+
+// ---- Tico's opinions (POST /v2/flow/opinions, backend/flow_opinions.py): its line and pick on each ask, and a score
+// the walk is ordered by and never shown. Tico only advises: nothing here answers anything.
+/** One ask's opinion as the route answers it. Typed here by hand: the generated api types on this branch do not have
+    the route yet. */
+interface FlowOpinion {id: string; state: 'ready' | 'pending' | 'none'; pick: string; line: string; note: string; score: number | null}
+const DEC_OP_MAX = 30;            // ids in one request
+const DEC_OP_POLL_MS = 2000;      // asked again while some are pending
+const DEC_OP_FOR_MS = 60_000;     // then given up on, for this visit
+const DEC_OP_ORDER_MIN = 6;       // a set this big has its unseen items ordered by score
+/** An OK's pick as the screen's buttons name it; a question's pick is its choice as written. */
+const DEC_OP_PICK: Record<string, string> = {approve: 'approve', send_back: 'sendback', snooze: 'snooze'};
+/** This visit's opinions: each ask's state and score, the note a send back would carry, the items whose Notes the
+    person typed in, the poll's timer, the visit whose request is out (one at a time), when the asking began, and `off`
+    once the route failed or is missing (nothing is asked again this visit, and the screen is as it was without it). */
+const DEC_OP = {state: new Map<string, FlowOpinion['state']>(), score: new Map<string, number>(), note: new Map<string, string>(),
+  typed: new Set<string>(), timer: 0, out: null as DecState | null, since: 0, off: false};
+function decideOpinionsEnd() {
+  clearTimeout(DEC_OP.timer);
+  DEC_OP.timer = 0; DEC_OP.out = null; DEC_OP.since = 0; DEC_OP.off = false;
+  DEC_OP.state.clear(); DEC_OP.score.clear(); DEC_OP.note.clear(); DEC_OP.typed.clear(); DEC_LINES.clear();
+}
+/** Asks for the opinions of the set's asks not yet asked about (the item on screen first, DEC_OP_MAX at a time), and,
+    with `poll`, of those still pending. Pending ones are asked again every DEC_OP_POLL_MS for DEC_OP_FOR_MS, then left. */
+function decideOpinions(st: DecState, poll = false) {
+  if (DEC !== st || DEC_OP.off || DEC_OP.out === st || S.me?.read_only_view) return;
+  const asks = () => [...st.items.values()].filter(it => it.kind === 'ask');
+  const fresh = asks().filter(it => !DEC_OP.state.has(it.id));
+  if (!fresh.length && !poll) return;
+  clearTimeout(DEC_OP.timer); DEC_OP.timer = 0;
+  if (fresh.length) DEC_OP.since = Date.now();
+  else if (Date.now() - DEC_OP.since > DEC_OP_FOR_MS) {
+    for (const it of asks()) if (DEC_OP.state.get(it.id) === 'pending') DEC_OP.state.set(it.id, 'none');
+    decidePaintHead(st);
+    return;
+  }
+  const want = asks().filter(it => DEC_OP.state.get(it.id) !== 'ready' && DEC_OP.state.get(it.id) !== 'none')
+    .sort((a, b) => Number(b.id === st.at) - Number(a.id === st.at)).map(it => it.id);
+  DEC_OP.out = st;
+  void (async () => {
+    try {
+      for (let i = 0; i < want.length; i += DEC_OP_MAX) {
+        const ids = want.slice(i, i + DEC_OP_MAX), got = await decideOpinionsRead(ids);
+        if (DEC !== st) return;
+        decideOpinionsTake(st, ids, got);
+      }
+    } catch {
+      DEC_OP.off = true;   // missing (404), refused or failing: no line this visit, and no more asking
+    } finally {
+      if (DEC_OP.out === st) DEC_OP.out = null;
+    }
+    if (DEC !== st || DEC_OP.off) { if (DEC === st) decidePaintHead(st); return; }
+    if (asks().some(it => !DEC_OP.state.has(it.id))) decideOpinions(st);
+    else if (asks().some(it => DEC_OP.state.get(it.id) === 'pending')) DEC_OP.timer = window.setTimeout(() => decideOpinions(st, true), DEC_OP_POLL_MS);
+  })();
+}
+async function decideOpinionsRead(ids: string[]): Promise<FlowOpinion[]> {
+  // A read that changes nothing: no retries and no pressed-button state (not post()); any failure ends the asking.
+  const r = await fetch(`${API}/v2/flow/opinions`, {method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15_000),
+    headers: {'Content-Type': 'application/json', 'Idempotency-Key': newRequestId()}, body: JSON.stringify({items: ids})});
+  if (!r.ok) throw new Error(`Opinions: ${r.status}`);
+  const body: unknown = await r.json();
+  const list = body && typeof body === 'object' && 'opinions' in body && Array.isArray(body.opinions) ? body.opinions as unknown[] : [];
+  return list.filter((o): o is FlowOpinion => !!o && typeof o === 'object' && typeof (o as FlowOpinion).id === 'string');
+}
+/** What came back: a ready opinion's line and pick go on the screen (decideLineSet), with its note when it would send
+    back; an id the answer left out counts as none. */
+function decideOpinionsTake(st: DecState, ids: string[], got: FlowOpinion[]) {
+  for (const id of ids) if (!got.some(o => o.id === id)) DEC_OP.state.set(id, 'none');
+  for (const o of got) {
+    const state = o.state === 'ready' || o.state === 'pending' ? o.state : 'none';
+    DEC_OP.state.set(o.id, state);
+    if (typeof o.score === 'number') DEC_OP.score.set(o.id, o.score);
+    const it = st.items.get(o.id);
+    if (state !== 'ready' || !o.line || !it) continue;
+    const pick = decideKind(it) === 'ok' ? DEC_OP_PICK[o.pick] || '' : String(o.pick || '');
+    if (pick === 'sendback' && o.note) DEC_OP.note.set(o.id, o.note);
+    decideLineSet(o.id, {line: String(o.line), pick});
+  }
+  decideScoreOrder(st);
+  decidePaintHead(st);
+}
+/** A set of more than 5: the items not yet seen this visit go highest score first, those with none after them in the
+    list's order; the item on screen and every one seen (or answered) keep their place, so ‹ goes back to what was just
+    seen. 5 or fewer keep the list's order. */
+function decideScoreOrder(st: DecState) {
+  if (decideLive(st).length < DEC_OP_ORDER_MIN || !DEC_OP.score.size) return;
+  const free = st.order.map((k, i) => ({k, i})).filter(x => x.k !== st.at && !st.seen.has(x.k) && !st.gone.has(x.k));
+  const ranked = free.map((x, n) => ({k: x.k, n, s: DEC_OP.score.get(x.k) ?? -1})).sort((a, b) => b.s - a.s || a.n - b.n);
+  free.forEach((x, n) => { st.order[x.i] = ranked[n]!.k; });
 }
 function decideRender(st: DecState) {
   const root = $('.decide');
@@ -684,16 +799,26 @@ function decidePaintSide(st: DecState) {
   const caret = same && typing instanceof HTMLTextAreaElement && host.contains(typing) && typing.id
     ? {id: typing.id, from: typing.selectionStart, to: typing.selectionEnd, dir: typing.selectionDirection ?? undefined} : null;
   host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
-  // Skip sits in the answer row, on every width; an item with no row of its own (a typed choice) gets one.
-  if (decideLive(st).length > 1) {
-    const card = host.firstElementChild!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
-    const skip = `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
-    if (row) row.insertAdjacentHTML('beforeend', skip); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${skip}</div>`);
+  // Snooze, where the person may set the task aside, else Skip, sits in the answer row on every width; an item with no
+  // row of its own (a typed choice) gets one. An ask's snooze choices open above the row, which stays last (pinned on a
+  // phone).
+  const snoozes = decideSnoozes(it, kind);
+  if (kind !== 'yours' && (snoozes || decideLive(st).length > 1)) {
+    const card = host.firstElementChild!;
+    let row = card.querySelector<HTMLElement>(':scope > .dc-acts');
+    if (!row) { card.insertAdjacentHTML('beforeend', '<div class="dc-acts"></div>'); row = card.lastElementChild as HTMLElement; }
+    if (snoozes) {
+      row.insertAdjacentHTML('afterbegin', decideBtn('snooze', 'Snooze', false, busy));
+      row.insertAdjacentHTML('beforebegin', decideMoreHTML(st, it));
+    } else row.insertAdjacentHTML('beforeend', `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`);
   }
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
+  // Tico would send it back: its note fills an empty Notes the person has not typed in, never over their words.
+  const ticoNote = DEC_OP.note.get(it.id);
+  if (note && !note.value && ticoNote && DEC_LINES.get(it.id)?.pick === 'sendback' && !DEC_OP.typed.has(it.id)) note.value = ticoNote;
   const reply = host.querySelector<HTMLTextAreaElement>('#dc-reply');
   if (reply && heldReply) reply.value = heldReply;
   host.querySelectorAll<HTMLTextAreaElement>('textarea[data-dc-grow]').forEach(decideGrow);
@@ -1316,9 +1441,12 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'snooze': case 'give': case 'back':
       st.more = st.more === what ? '' : what; decidePaintSide(st); return;
     case 'snooze-hour': case 'snooze-day': case 'snooze-week': {
-      // An hour is a moment (a date-time); a day or a week is a date.
-      const hour = what === 'snooze-hour', at = new Date(Date.now() + (hour ? 3600_000 : (what === 'snooze-day' ? 1 : 7) * 86400_000)).toISOString();
-      const until = hour ? at : at.slice(0, 10);
+      // An hour is a moment (a date-time, kept to the minute); a day or a week is a date on this calendar, which the
+      // server reads as that day's start in the team's zone (task_moves_routes.parse_until).
+      const day = new Date(), add = what === 'snooze-day' ? 1 : 7;
+      day.setDate(day.getDate() + add);
+      const until = what === 'snooze-hour' ? new Date(Date.now() + 3600_000).toISOString()
+        : `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
       await decideDo(st, it, 'Snoozed', async () => { const r = await taskSnooze(taskId, until, ver); st.snoozed++; return r; },
         () => async () => { await taskUnsnooze(taskId); st.snoozed = Math.max(0, st.snoozed - 1); });
       return;

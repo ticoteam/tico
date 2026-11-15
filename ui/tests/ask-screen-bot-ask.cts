@@ -67,6 +67,7 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
         if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
+        if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
         if (r.method() !== 'GET' && p.startsWith('/api/')) {
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
           const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);

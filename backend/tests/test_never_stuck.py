@@ -617,6 +617,15 @@ def test_a_bot_named_for_an_ok_is_on_the_same_ladder(c, general, later):
     assert [(n["kind"], n["task_id"]) for n in W.needs(c, ANA)] == [("task", task_id)]
 
 
+def test_a_persons_hour_long_snooze_ends_at_the_hour(c, general, later):
+    """Flow's Snooze, 1 hour, sends a time, not a date: the task is back once the hour is up, not the next day."""
+    task_id = X.new_task(c, ANA, "Chase the vendor", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    E.snooze(c, task_id, ANA, until=H.shift(H.now(), hours=1))
+    assert later(minutes=59) == {}
+    assert later(minutes=1) == {"snoozes_ended": 1}
+
+
 def test_a_snooze_is_not_a_change_its_end_is_due_at_once_and_snoozed_time_is_not_late(c, general, later):
     task_id = X.new_task(c, ANA, "Chase the vendor", assignee=BUILDER)["id"]
     X.ran(c, task_id, BUILDER)  # its start: it stopped early

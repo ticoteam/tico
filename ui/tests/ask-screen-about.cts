@@ -8,8 +8,8 @@
 // - a long question: a short heading cut under 60 characters with "…", the full question once under it and never on
 //   the left; an ask's own short title is the heading when it has one; Ask back posts a comment and keeps the question;
 // - the text shows a skeleton until its one read comes, and the next item's text is read ahead;
-// - at 1040 px Done · Snooze · Give to… and Skip sit on one line in light and dark; at 390 px the buttons are 44 px tall
-//   and Skip is reachable.
+// - at 1040 px Done · Snooze · Give to… sit on one line in light and dark (Snooze, so no Skip); at 390 px the buttons
+//   are 44 px tall and Snooze is reachable.
 // Fixtures only (tasks-page.cts).
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -79,15 +79,15 @@ function world(over: {title?: string} = {}) {
         // The next item that shows a task's text (t-8) is read ahead.
         assert.ok(reads.some(r => r.endsWith('/t-8')), `the next item is read ahead: ${reads.join(', ')}`);
 
-        // The action row: one line, 36 px, Skip after the buttons.
+        // The action row: one line, 36 px; your own task has Snooze, so no Skip.
         const row = card(page).locator('.dc-acts-row');
         const boxes = await row.locator('button').evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return {t: e.textContent, y: r.top + r.height / 2, h: r.height}; }));
-        assert.deepEqual(boxes.map(b => b.t), ['Done', 'Snooze', 'Give to…', 'Skip']);
+        assert.deepEqual(boxes.map(b => b.t), ['Done', 'Snooze', 'Give to…']);
         assert.ok(boxes.every(b => Math.abs(b.y - boxes[0]!.y) < 2), `one line: ${JSON.stringify(boxes)}`);
         assert.ok(boxes.slice(0, 3).every(b => Math.abs(b.h - 36) < 1), `36 px buttons: ${JSON.stringify(boxes)}`);
         assert.ok(await row.evaluate(el => el.scrollWidth <= el.clientWidth), 'the row does not overflow');
-        const side = (await card(page).locator('.dc-side').boundingBox())!, skipAt = (await row.locator('[data-dc="skip"]').boundingBox())!;
-        assert.ok(skipAt.x + skipAt.width <= side.x + side.width, 'Skip ends inside the side pane');
+        const side = (await card(page).locator('.dc-side').boundingBox())!, lastAt = (await row.locator('button').last().boundingBox())!;
+        assert.ok(lastAt.x + lastAt.width <= side.x + side.width, 'the row ends inside the side pane');
 
         // Reply to PM: a comment that names PM; the item stays; the box clears and says Sent.
         assert.equal(await card(page).locator('.dc-reply .dc-notes span').innerText(), 'Reply to PM');
@@ -257,19 +257,19 @@ function world(over: {title?: string} = {}) {
       } finally { await page.close(); }
     }
 
-    // A phone: the buttons are 44 px tall, Skip is reachable.
+    // A phone: the buttons are 44 px tall, Snooze is reachable.
     {
       const {tasks, needs} = world();
       const {page, errors} = await open(browser, {tasks, needs, viewport: {width: 390, height: 844}});
       try {
         await page.evaluate(() => { decideOpen('task:t-3'); });
         await card(page).locator('.dc-md').waitFor({timeout: 5000});
-        for (const sel of ['[data-dc="done"]', '[data-dc="snooze"]', '[data-dc="give"]', '[data-dc="skip"]', '[data-dc="reply"]', '[data-dc="go"]']) {
+        for (const sel of ['[data-dc="done"]', '[data-dc="snooze"]', '[data-dc="give"]', '[data-dc="reply"]', '[data-dc="go"]']) {
           const box = (await card(page).locator(sel).boundingBox())!;
           assert.ok(box.height >= 44, `${sel} is ${box.height} px tall on a phone`);
         }
-        const skip = (await card(page).locator('[data-dc="skip"]').boundingBox())!;
-        assert.ok(skip.y + skip.height <= 844, 'Skip is in view');
+        const snooze = (await card(page).locator('[data-dc="snooze"]').boundingBox())!;
+        assert.ok(snooze.y + snooze.height <= 844, 'Snooze is in view');
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth) <= 1, 'nothing scrolls sideways');
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
