@@ -9,9 +9,9 @@ import type {Page, Route} from 'playwright';
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
 // - Send back is on with an empty note: a tap focuses Notes with "Say what to change" and sends nothing; Notes starts one
 //   line tall;
-// - an ask with nothing to show opens on its question, right under the header: a question whose task has no text, and an
-//   OK with nothing attached (no grant, no shows: an empty .dc-doc, task #472); an OK whose only show is a page keeps
-//   its pane, page and all;
+// - an ask with nothing to show opens on its question, right under the header: a question whose task has no text;
+// - an OK with nothing attached (no grant, no shows: a pitch is the task itself) shows its task's title once and text
+//   above the question, not a blank pane; an OK whose only show is a page shows the page and not the task's text;
 // - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it;
 // - at 1440 px the screen is as before: two columns, ‹ ›, Notes 7 lines, Send back off until there is a note, no tap guard.
 // Each check is collected, so a run on the old code lists every one that fails.
@@ -90,6 +90,9 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
         shown_hash: okRead[1]!.slice(1).repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
       // The question's task has no text of its own: nothing to show.
       if (p === '/api/v2/tasks/t3') return json({task: {...brief('t3', 'Task 3'), body: ''}});
+      // The bare OK's task: the pitch is its text.
+      if (p === '/api/v2/tasks/t5') return json({task: {...brief('t5', 'Pitch: a weekly digest'), body: 'Send each person one email on Monday with what changed.'}});
+      if (p === '/api/v2/tasks/t6') return json({task: {...brief('t6', 'Task 6'), body: 'Task six text.'}});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
       if (r.method() !== 'GET' && p.startsWith('/api/')) {
         writes.push(`${r.method()} ${p}`);
@@ -238,7 +241,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-question.png')});
     await page.close();
 
-    // An OK with nothing attached (no grant, no shows) opens on its question too: no blank pane, no hairline (task #472).
+    // An OK with nothing attached (no grant, no shows): its task's title and text above the question, the title once.
     needs = [ok(5, 'OK to go ahead?')];
     const bare = await browser.newPage({viewport: VIEW, serviceWorkers: 'block', hasTouch: true});
     bare.on('pageerror', (error: Error) => errors.push(error.message));
@@ -247,14 +250,16 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await bare.locator('[data-need="r5"]').click();
     await bare.locator('#need-card .dc-q', {hasText: 'OK to go ahead?'}).waitFor();
     await bare.locator(`${approve}:not([disabled])`).waitFor();
-    await bare.locator('#need-card .dc-thing .dc-doc').waitFor({state: 'attached'});
-    await bare.waitForTimeout(100);
-    const head5 = (await box(bare, '#need-card .dc-head'))!, q5 = (await box(bare, '#need-card .dc-q'))!;
-    check(q5.y - (head5.y + head5.height) <= 24, `an empty OK opens on its question (${q5.y - (head5.y + head5.height)} px under the header)`);
-    check(!await bare.locator('#need-card .dc-thing').isVisible(), 'an empty OK shows no blank pane');
-    const rule = await bare.locator('#need-card .dc-side').evaluate(el => getComputedStyle(el).borderTopWidth);
-    check(rule === '0px', `an empty OK has no hairline above its question (${rule})`);
+    const pitch = bare.locator('#need-card .dc-thing .dc-md', {hasText: 'one email on Monday'});
+    await pitch.waitFor();
+    const title5 = bare.locator('#need-card .dc-thing .dc-title');
+    check(await title5.textContent() === 'Pitch: a weekly digest', `a bare OK shows its task's title (${await title5.textContent()})`);
+    check(await bare.locator('#need-card .dc-thing').getByText('Pitch: a weekly digest').count() === 1, 'a bare OK shows the title once');
+    const t5 = (await title5.boundingBox())!, p5 = (await pitch.boundingBox())!, q5 = (await box(bare, '#need-card .dc-q'))!;
+    check(t5.y < p5.y && p5.y + p5.height <= q5.y, `the title, then the text, then the question (${t5.y}, ${p5.y}, ${q5.y})`);
+    check(await bare.locator('#need-card .dc-thing').isVisible(), 'a bare OK shows its pane');
     if (shots) await bare.screenshot({path: path.join(shots, 'ask-phone-390-empty-ok.png')});
+    if (process.env.FLOW_SHOTS) await bare.locator('#need-card .dc-start').waitFor({state: 'detached'}).then(() => bare.screenshot({path: path.join(process.env.FLOW_SHOTS, 'phone-bare-ok.png')}));
     await bare.close();
 
     // An OK whose only show is a page has no text, yet its pane shows the page: it is not bare.
@@ -269,6 +274,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(await paged.locator('#need-card .dc-thing').isVisible(), 'an OK showing only a page keeps its pane');
     check(await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().isVisible(),
       'an OK showing only a page shows the page');
+    await paged.waitForTimeout(200);
+    check(!await paged.locator('#need-card .dc-thing').getByText('Task six text.').count(), 'an OK showing a page shows only the page');
     await paged.close();
 
     // 1440 px: as before.
@@ -294,6 +301,6 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
 
     assert.deepEqual(errors, []);
     assert.deepEqual(fails, [], `\n- ${fails.join('\n- ')}`);
-    console.log('PASS: on a phone the ask screen scrolls as one, its bar stays tappable under "Approved · Undo", ‹ › step, a second tap is ignored, Send back asks for a note and an empty ask opens on its question.');
+    console.log('PASS: on a phone the ask screen scrolls as one, its bar stays tappable under "Approved · Undo", ‹ › step, a second tap is ignored, Send back asks for a note, an empty question opens on itself and a bare OK shows its task.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

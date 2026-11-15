@@ -717,7 +717,7 @@ const DEC_OP_POLL_MS = 2000;      // the next round, while some are pending or n
 const DEC_OP_FOR_MS = 60_000;     // pending ones are given up on this long after the last new ask was sent
 const DEC_OP_ORDER_MIN = 6;       // a set this big has its unseen items ordered by score
 /** An OK's pick as the screen's buttons name it; a question's pick is its choice as written. */
-const DEC_OP_PICK: Record<string, string> = {approve: 'approve', send_back: 'sendback', snooze: 'snooze'};
+const DEC_OP_PICK: Record<string, string> = {approve: 'approve', send_back: 'sendback'};
 /** This visit's opinions: each asked ask's state, the fingerprint of the ask it is for (decideOpPrint), its score, the
     note a send back would carry, the items whose Notes the person typed in; the next round's timer, whether a round is
     out (one at a time) and its abort, when the last new ask was sent, `off` once the route failed or is missing
@@ -870,7 +870,13 @@ function decidePaintBody(st: DecState) {
   let html = '';
   if (kind === 'ok') {
     const v = st.ok.get(decideOkKey(it));
-    html = !v || v.state === 'loading' ? skelRows(4)
+    // An OK with nothing attached (a pitch is the task itself): the task's title and text, so there is something to OK.
+    const bare = !!v && decideOkBare(v) && !!decideTaskId(it);
+    if (bare) decideAboutLoad(decideTaskId(it));
+    const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
+    html = bare ? (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + decideSinceHTML(v)
+        + decideAboutHTML(it, kind, title ? `<h3 class="dc-title">${esc(title)}</h3>` : '')
+      : !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + decideSinceHTML(v)
         + (v.since?.on && !v.since.same ? `<div class="dc-doc dc-diff">${v.since.diff}</div>`
@@ -893,6 +899,9 @@ function decidePaintBody(st: DecState) {
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
 }
+/** An OK whose view, as read, shows nothing: no grant's content, no page, no diff. Its task's text stands in. */
+const decideOkBare = (v: AskOkView): boolean => (v.state === 'ready' || v.state === 'none') && !v.html && !v.pages.length && !v.missing
+  && !(v.since?.on && !v.since.same);
 /** "Changes since vK" over a page that comes back: on, the line diff from vK; off, the page with its changed blocks
     marked. "No text changes" when the text is the same. */
 function decideSinceHTML(v: AskOkView): string {
