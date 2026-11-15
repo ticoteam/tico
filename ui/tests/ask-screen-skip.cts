@@ -66,7 +66,8 @@ const Q = ['Which plan do new signups get?', 'Which region first?', 'Ship on Mon
       // Question `q` is on screen, as item `n` of `of`.
       const at = async (q: number, of: number, n = q) => {
         await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor();
-        assert.equal(await dialog.locator('.dc-count').innerText(), `${n} of ${of}`, label);
+        assert.equal(await dialog.locator('[data-dc="prev"]').isDisabled(), n === 1, `${label}: ‹ at ${n} of ${of}`);
+        assert.equal(await dialog.locator('[data-dc="next"]').isDisabled(), n === of, `${label}: › at ${n} of ${of}`);
       };
       const skip = dialog.locator('[data-dc="skip"]');
       const skipBox = async () => {
@@ -107,7 +108,7 @@ const Q = ['Which plan do new signups get?', 'Which region first?', 'Ship on Mon
         await at(3, 2, 2);
         await dialog.locator('[data-dc="prev"]').click();
         await at(2, 2, 1);
-        await dialog.locator('.dc-count').click();
+        await dialog.locator('.dc-q').click();
         await page.keyboard.press('ArrowRight');
         await at(3, 2, 2);
         await page.keyboard.press('ArrowLeft');

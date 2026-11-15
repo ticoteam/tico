@@ -67,7 +67,7 @@ body.board-holding .pv-cols{align-items:stretch}
 
 /* ▶ n beside a stage's header: the stage's review (decide.ts), with how many of its items wait on the person. */
 .pv-col-head,.pv-group-head{display:flex;align-items:center;gap:8px}
-.pv-play{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;min-width:40px;height:24px;margin-left:auto;padding:0 8px;border:0;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font:600 var(--t-sm)/var(--lh-none) var(--sans);cursor:pointer}
+.pv-play{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;min-width:44px;height:24px;margin-left:auto;padding:0 8px;border:0;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font:600 var(--t-sm)/var(--lh-none) var(--sans);cursor:pointer}
 .pv-play:hover{filter:brightness(1.08)}
 .pv-play:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .pv-play-none{visibility:hidden}

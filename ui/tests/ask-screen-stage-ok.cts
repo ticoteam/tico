@@ -85,7 +85,6 @@ const pages: Record<string, string> = {
       await dialog.locator('.dc-q', {hasText: 'Talk to the right bot from a pipeline board'}).waitFor();
       await frame.waitFor();
       assert.match(await frame.getAttribute('srcdoc') ?? '', /Board chat proposals/);
-      assert.match(await dialog.locator('.dc-sub').innerText(), /Spec · Version 1/);
       assert.equal(await dialog.locator('.dc-said').count(), 0, 'the line names only the task and the decision: nothing to add');
       const pane = (await dialog.locator('.dc-thing').boundingBox())!, box = (await frame.boundingBox())!;
       assert.ok(box.height >= pane.height - 60, `${label}: the page fills the pane (${box.height} of ${pane.height})`);
@@ -100,7 +99,6 @@ const pages: Record<string, string> = {
       assert.equal(await frame.count(), 1);
       assert.match(await frame.getAttribute('srcdoc') ?? '', /Paste images spec/);
       assert.doesNotMatch(await frame.getAttribute('srcdoc') ?? '', /Board chat proposals/);
-      assert.match(await dialog.locator('.dc-sub').innerText(), /Version 3/);
       assert.equal(await dialog.locator('.dc-said').innerText(), 'Jev is unsure: no mobile layout.');
       if (shots) await page.screenshot({path: path.join(shots, `stage-ok-${label}-2.png`)});
 

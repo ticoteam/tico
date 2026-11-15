@@ -155,7 +155,7 @@
   <nav class="side-scroll" aria-label="Pages and bots">
     <div id="side-update" class="side-rec finishing" role="status" hidden title="Tico is installing an update. Bots finish what they are doing; new work waits a few minutes, then starts on its own."><span class="dot" aria-hidden="true"></span><span class="side-rec-time">Updating</span><span class="side-rec-title">Tico · new bot work starts after</span></div>
     <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome"><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
-    <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks<span class="nav-badge" data-needs-badge hidden></span></a>
+    <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks<span class="nav-flow" data-needs-badge hidden></span></a>
     <!-- Calendar: the link, then the next event with ‹ › to step through the week (ui/app/calendar-row.ts fills the text; a
          server without calendars leaves just the link). -->
     <div class="nav-row cal-row" id="nav-calendar"><a class="nav-link" href="#/calendar" data-nav="calendar"><span class="nav-icon" aria-hidden="true">calendar_month</span>Calendar</a><span class="cal-next" data-cal-next></span></div>
@@ -265,7 +265,7 @@
   <a class="mobile-nav-item" id="mobile-threads" href="#/threads" data-nav="threads"><span class="mobile-nav-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg></span><span class="mobile-nav-label">Threads</span><span class="nav-badge" hidden></span></a>
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog" hidden><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
   <button class="mobile-nav-item mobile-ask" id="mobile-ask" type="button" aria-controls="ask-panel" aria-expanded="false"><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="26" style="width:26px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="mobile-nav-icon ask-x" aria-hidden="true">close</span></span><span class="mobile-nav-label ask-label">Assistant</span></button>
-  <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span><span class="nav-badge" data-needs-badge hidden></span></a>
+  <a class="mobile-nav-item" href="#/tasks" data-nav="tasks"><span class="mobile-nav-icon" aria-hidden="true">task_alt</span><span class="mobile-nav-label">Tasks</span><span class="nav-flow" data-needs-badge hidden></span></a>
   <!-- Five slots (the style guide's "Bottom bar, phone"): Updates is in More, and More carries its count. -->
   <button class="mobile-nav-item" id="mobile-more" type="button" data-nav="more" aria-label="Open more navigation" aria-controls="side" aria-expanded="false"><span class="mobile-nav-icon" aria-hidden="true">menu</span><span class="mobile-nav-label">More</span><span class="nav-badge" data-upd-badge hidden></span></button>
 </nav>

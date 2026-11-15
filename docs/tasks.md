@@ -154,7 +154,7 @@ cause they can fix (one row per cause, not per task), every task the ladder or L
 them by a person until they reply. A bot's @ only marks the task unread. No chat, email or push goes to a person about
 a task.
 
-`GET /api/v2/needs-you` returns the list; `?count=true` returns the one number on the Tasks badge.
+`GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0).
 
 ## Sub-tasks
 

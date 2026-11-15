@@ -102,9 +102,8 @@ const pipeline = {id: 'eng', name: 'Engineering', goal: '', prefix: 'E', manager
     assert.equal(await dialog.locator('textarea#dc-other').count(), 1);
     await dialog.locator('textarea#dc-other').fill('Revert the PR and redeploy');
     await dialog.locator('[data-dc="other"]').click();
-    await dialog.getByText('All caught up').waitFor();
+    await dialog.getByText('All done').waitFor();
     assert.deepEqual(writes[3], {p: '/api/v2/tasks/t3/asks/r3/answer', body: {value: 'Revert the PR and redeploy', version: 4}});
-    assert.equal(await dialog.locator('[data-dc="up"]').isHidden(), true, 'a stage answer takes no thumb');
 
     assert.deepEqual(errors, []);
     console.log('PASS: a number, a choice and text are asked as typed; a refused number shows the server line and stays typed.');

@@ -330,10 +330,6 @@ const taskWithdrawAsk = (id: string, rid: string, why?: string): Promise<TaskMov
     page the person was shown (`<file id>@<version>`): refused when another is attached now. */
 const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string): Promise<TaskMoved> =>
   post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {})}), newRequestId());
-const taskGiveAsk = (id: string, rid: string, to: string, version: number | null): Promise<TaskMoved> =>
-  post(`${askPath(id, rid)}/give`, withVersion(version, {to}), newRequestId());
-const taskThumbs = (id: string, rid: string, up: boolean, note?: string): Promise<TaskMoved> =>
-  post(`${askPath(id, rid)}/thumbs`, note ? {up, note} : {up}, newRequestId());
 const answerUndo = (answerId: string): Promise<TaskMoved> => post(`/v2/answers/${encodeURIComponent(answerId)}/undo`, {}, newRequestId());
 
 // ---- an OK bound to what was shown

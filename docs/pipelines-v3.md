@@ -33,8 +33,7 @@ architecture) and C (the screens).
 - **One read.** `waiting_on()` says whose turn it is and what is missing. Every screen, every bot and the health page
   read it.
 - **A never-stuck check.** Every 10 seconds: what is missing, who has it, and are they on it? If not, it acts.
-- **One ask.** Anything you are asked is one sentence in Needs you, with the thing to look at, the buttons to answer,
-  and a 👎 that can make a rule.
+- **One ask.** Anything you are asked is one sentence in Needs you, with the thing to look at and the buttons to answer.
 - **One hold.** Snooze. There is no Blocked.
 
 > **The promise the build is tested against.** No open task is ever waiting on nothing. A task whose bot stops early
@@ -688,7 +687,7 @@ Three ways, by weight. A task waits on the last two and never on the first.
 - A task in General, owned by you, linked to the task that needs it.
 - The parent waits on it through Linked work done.
 
-You don't have to tell the last two apart. Both are one sentence in your list, and both have 👍 and 👎. It can't be
+You don't have to tell the last two apart. Both are one sentence in your list. It can't be
 snoozed by itself: snoozing it snoozes the task. Talk about it is the task's conversation.
 
 ### What lands in your list
@@ -719,7 +718,6 @@ stage), Do (from the bot's state), Yours (from the task's owner), Stuck (from th
 - **The thing:** the page, email, PR or picture, shown on the screen. Never only a link.
 - **The answer:** buttons, never a status menu.
 - **Notes:** optional on Approve, required on Send back. They go to the bot word for word.
-- **👍 and 👎.**
 
 ### What your answer does
 
@@ -737,7 +735,8 @@ The screen, in all five kinds, is [S3](#s3-the-ask-screen).
 ### Thumbs down, and rules
 
 Thumbs exist today on bot messages, on tasks a bot filed and on approvals, and a 👎 can already make a rule. v3 puts them
-on every ask and makes the rule stop the next one.
+on every ask and makes the rule stop the next one. *Since Nov 14 Flow (the ask screen, S3) shows no 👍 or 👎, so the sheet
+below is not reachable from it; the server routes stay.*
 
 - **👍** is one tap. It goes on the bot's record.
 - **👎** opens a small sheet: what was wrong, in a tap or a few words. Then two buttons.
@@ -762,7 +761,7 @@ on every ask and makes the rule stop the next one.
 
 ### What this replaces
 
-- **The requirement review queue.** Gone. Those reviews are in Needs you. Its play button stays, as Catch up.
+- **The requirement review queue.** Gone. Those reviews are in Needs you. Its play button stays, as Flow.
 - **Question tasks.** Today a bot's question is a separate task that holds the first one. Now it is a requirement on the
   same task.
 - **Approvals** (send, spend, publish, merge and the rest). Today they are their own objects. Now each is an Approve ask
@@ -1374,7 +1373,7 @@ These words are used in every screen below.
 - **Age:** a short, dimmed time at the far right of a row: how long, such as "58m", "2d", "30h".
 - **Main button:** filled green. Other buttons are outlined. Where a list below names the main button, it says "(main)".
 - **Icons** (no words beside them): search (a magnifier), filter (the shared filter icon), list view, columns view,
-  archive (opens Snoozed, Done and Closed), play (Catch up), + (new task, filled green), edit (a pencil; opens the
+  archive (opens Snoozed, Done and Closed), Flow, + (new task, filled green), edit (a pencil; opens the
   pipeline editor).
 
 ### S1. A task row: every look
@@ -1407,7 +1406,7 @@ Today: the Tasks page, You view, with the groups Answer, Review and Do.
 New:
 
 - **Header,** left to right: the title "Tasks"; a view button "You 7 ▾", with the 7 in amber; then, at the right, icons
-  for search, filter, archive, play (Catch up) and + (new task).
+  for search, filter, archive, Flow and + (new task).
 - **Group "Answer", count 3:**
   - "Raise Home Pro to $479 for December?" · "Yes" (main) · "No" · avatar · "1d"
   - "Which plan do new signups get?" · avatar · "2h"
@@ -1424,20 +1423,26 @@ Rules:
 
 - Today's layout and its three groups stay: Answer, Review, Do.
 - New in the list: specs and review pages to approve, and stuck tasks. Today they live in a separate queue or not at all.
-- The play button is Catch up: it opens the first one and steps through them.
+- Flow's mark (two play shapes) opens the first one and steps through them (Flow, S3).
 
 ### S3. The ask screen
 
 Today: the requirement review queue. Today the page to review is a link. New: the page is on the screen. Today: Approve,
 Mark met, Message Product Owner twice. New: Approve and Send back.
 
+This screen is **Flow**. It opens from Flow's mark: beside Tasks in the sidebar while something waits on you, in the
+Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and on each stage with items.
+
 **New, desktop.** An approval of a page:
 
-- **Top bar:** "2 of 7" at the left. At the right: 👍, 👎, ‹ (previous), › (next), ✕ (close).
+- **Top bar,** one line: where you are ("All mine", "All mine / Product" or "All mine / Product / Spec"), a menu of the
+  pipelines and stages where something waits on you (and Other, for items in no stage), each opening that walk; Flow's
+  mark; a quiet mic (voice is not built: pressing it shows a wave and "Voice is coming soon"); Tico's line on the item,
+  one line, whose pick is the main button; then ‹ (previous), › (next), ✕ (close). No count.
 - **Left, the page itself,** shown in full: the heading "Checkout flow: spec", then "Guests can pay without making an
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
-- **Right:** the sentence "Approve the spec for Checkout flow" as the heading; under it "Product Owner · version 2"; a
+- **Right:** the sentence "Approve the spec for Checkout flow" as the heading, with "Product Owner" beside it; a
   "Open task #80 ↗" link; a "Notes" box; buttons "Approve" (main) and "Send back".
 
 **Opening a task opens its ask.** A task waiting on your own answer (any of its waits, not only the first) opens on this screen from anywhere (the board, a
@@ -1470,27 +1475,10 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 - **A stuck task:** heading "Export retries is stuck". Line "Checks fail: lint, unit. Builder and Eng Manager each tried 3
   times." Buttons "Try again" (main), "Reassign", "Move back", "Close".
 - **After an answer:** a bar "Approved" with an "Undo" button at the right.
+- **Your own task:** Snooze offers 1 hour, Tomorrow and Next week; the task leaves Flow until then, with Undo.
+- **The end:** "All done", and "2 snoozed" when any were snoozed on this visit.
 
-**Thumbs down,** in three steps:
-
-1. You tap 👎 on an ask. The sheet: heading "Archive 14 newsletters from the support inbox?". Three choice chips:
-   "Shouldn't exist" (picked, in amber), "Wrong person", "Badly written". A text box holding "Just archive these. Don't
-   ask." Buttons "Send back" (main) and "Make a rule".
-2. Make a rule drafts the sentence from your words. The sheet: heading "New rule". An editable box: "Scout archives
-   newsletters in the support inbox without asking." A picker "Scout ▾" (this bot or all bots). Button "Add rule"
-   (main).
-3. What Scout gets the next time it asks:
-
-```text
-$ tico task ask G-41 --to chris \
-    "Archive 9 newsletters?"
-Not asked. A rule covers this:
-  "Scout archives newsletters in the
-   support inbox without asking."
-Go ahead without asking.
-```
-
-The rules are in [Thumbs down, and rules](#thumbs-down-and-rules).
+Flow has no 👍 or 👎; the rules are in [Thumbs down, and rules](#thumbs-down-and-rules).
 
 ### S4. The task
 
@@ -1798,7 +1786,7 @@ Four phone screens:
    Home Pro to $479 for December?" · "1d"; "Which plan do new signups get?" · "2h". Group "Review", 2: "Approve the spec
    for Checkout flow" · "2h"; "Send this email to Dana about her replacement?" · "3m". Rows show the title and age only:
    no buttons, no avatar.
-2. **An ask.** Top bar: "2 of 7"; at the right 👍, 👎, ‹, ›, ✕. The heading "Approve the spec for Checkout flow". The page:
+2. **An ask.** Top bar: "All mine", Flow's mark, the mic, ‹, ›, ✕; Tico's line under it. The heading "Approve the spec for Checkout flow". The page:
    "Checkout flow: spec", "Guests can pay without making an account. The order summary stays visible." with the second
    sentence highlighted. A "Notes" box. Buttons "Approve" (main) and "Send back".
 3. **A pipeline.** Header: "Tasks"; "Engineering ▾"; at the right, search and +. A row of stage tabs: "On deck 2",

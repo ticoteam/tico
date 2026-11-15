@@ -146,7 +146,6 @@ const DETAILS = ['Builder adds the notice on hosted. About half a day; the PR wa
       assert.deepEqual(writes.slice(1), [{p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}], label);
       writes.splice(0, 1);
       assert.equal(await dialog.locator('.dc-q').innerText(), Q[0], `${label}: the question stays`);
-      assert.equal(await dialog.locator('.dc-count').innerText(), '1 of 3', label);
       assert.equal(await dialog.locator('#dc-other').inputValue(), '', `${label}: the box is emptied`);
 
       // AC-4: I don't know, explain answers it with those words, and the next one comes.
