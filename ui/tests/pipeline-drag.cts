@@ -77,7 +77,14 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
 
   // Search typed and cleared: two redraws, one with fewer cards.
   await page.locator('#task-q').fill('Rounding');
-  await page.waitForFunction(() => document.querySelectorAll('#task-body .tk-card').length === 1);
+  await page.waitForFunction(() => document.querySelectorAll('#task-body .tk-card').length === 1).catch(async (e: Error) => {
+    // Say what the page shows instead, so a failure here can be read from the log alone.
+    const seen = await page.evaluate(() => { const q = document.querySelector<HTMLInputElement>('#task-q'); return {
+      hash: location.hash, cards: document.querySelectorAll('#task-body .tk-card').length, q: q?.value, qIn: q?.parentElement?.parentElement?.className,
+      open: [...document.querySelectorAll('dialog[open], :popover-open')].map(d => d.id || d.className), drag: document.body.className,
+      focus: document.activeElement?.id || document.activeElement?.tagName}; });
+    throw new Error(`the search did not narrow the board: ${JSON.stringify(seen)} (${e.message.split('\n')[0]})`);
+  });
   await settled(300, 'a search');
   await page.locator('#task-q').fill('');
   await page.waitForFunction(() => document.querySelectorAll('#task-body .tk-card').length > 1);
