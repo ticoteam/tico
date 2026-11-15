@@ -159,6 +159,12 @@ def read_parts(ui_dir, js_names):
                     need.add(dep)
                     todo.append(dep)
         part["load"] = sorted(need, key=rank.__getitem__)
+    # So a part's scripts never run before a part it needs (only two that need each other share one order): a part's
+    # functions replace their stand-ins the moment its script runs, and a caller then would find its needs missing.
+    for name, part in parts.items():
+        for dep in part["load"]:
+            if rank[dep] > rank[name] and name not in parts[dep]["load"]:
+                raise BundleError(f"ui/parts.json: {name} needs {dep}, so {dep} must be listed before it")
     return parts
 
 

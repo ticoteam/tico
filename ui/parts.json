@@ -222,6 +222,91 @@
    "onbStop"
   ]
  },
+ "task-files": {
+  "files": [
+   "app/task-files.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "decide": {
+  "files": [
+   "app/decide.ts",
+   "app/decide-about.ts"
+  ],
+  "deps": [
+   "browser-view"
+  ],
+  "pages": [],
+  "calls": [
+   "decideStageOpen",
+   "decideWanted",
+   "decideStageWanted",
+   "decideGoThrough",
+   "decideOpen",
+   "decideFlow"
+  ],
+  "idle": [
+   "decideStop",
+   "decideRefresh",
+   "decidePaintBody"
+  ]
+ },
+ "stage-rules": {
+  "files": [
+   "app/stage-rules.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "task": {
+  "files": [
+   "app/github-nudge.ts",
+   "app/pipeline-editor.ts",
+   "app/task-requirements.ts",
+   "app/task-meetings.ts",
+   "app/task-modal.ts",
+   "app/roadmaps.ts",
+   "app/task-code.ts",
+   "app/task-runs.ts",
+   "app/task-props.ts",
+   "app/task-live-form.ts",
+   "app/task-pages.ts",
+   "app/task-status-text.ts"
+  ],
+  "deps": [
+   "task-files",
+   "decide",
+   "tags",
+   "stage-rules"
+  ],
+  "pages": [
+   "pageRoadmap"
+  ],
+  "calls": [
+   "githubNudgeBot",
+   "githubNudgeTools",
+   "openPipelineEditor",
+   "roadmapSettingsMount",
+   "taskChatLive",
+   "taskChatRead",
+   "taskCommentsRender",
+   "taskModalOpen",
+   "taskModalShow",
+   "taskPropsMsgPaint",
+   "taskRunCatalog",
+   "taskThreadOpen"
+  ],
+  "idle": [
+   "taskAskSettled",
+   "taskChatStop",
+   "taskModalRouteClose"
+  ]
+ },
  "bot": {
   "files": [
    "bot-tools.ts",
@@ -394,6 +479,42 @@
    "goalsFollowRoster"
   ]
  },
+ "finance": {
+  "files": [
+   "app/finance-pnl.ts",
+   "app/finance-budgets.ts",
+   "app/finance-books.ts",
+   "app/finance-docs.ts",
+   "app/finance-admin.ts",
+   "app/finance-tax.ts",
+   "app/finance-attribution.ts",
+   "app/finance-campaigns.ts",
+   "app/finance-receipts.ts",
+   "app/finance-subscriptions.ts",
+   "app/finance-brief.ts",
+   "app/finance-statement-upload.ts",
+   "app/finance-shared.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "finAccessPage",
+   "finAttrPage",
+   "finBalancePage",
+   "finBudgetsPage",
+   "finCardsPage",
+   "finDocPage",
+   "finLinePage",
+   "finPnlPage",
+   "finSourcesPage",
+   "finTaxPage",
+   "finTxPage"
+  ],
+  "calls": [
+   "finBriefLoad",
+   "finCampaignOwnerChange"
+  ],
+  "idle": []
+ },
  "library": {
   "files": [
    "docs-page.ts",
@@ -438,42 +559,6 @@
    "skillsStop",
    "toolsStop"
   ]
- },
- "finance": {
-  "files": [
-   "app/finance-pnl.ts",
-   "app/finance-budgets.ts",
-   "app/finance-books.ts",
-   "app/finance-docs.ts",
-   "app/finance-admin.ts",
-   "app/finance-tax.ts",
-   "app/finance-attribution.ts",
-   "app/finance-campaigns.ts",
-   "app/finance-receipts.ts",
-   "app/finance-subscriptions.ts",
-   "app/finance-brief.ts",
-   "app/finance-statement-upload.ts",
-   "app/finance-shared.ts"
-  ],
-  "deps": [],
-  "pages": [
-   "finAccessPage",
-   "finAttrPage",
-   "finBalancePage",
-   "finBudgetsPage",
-   "finCardsPage",
-   "finDocPage",
-   "finLinePage",
-   "finPnlPage",
-   "finSourcesPage",
-   "finTaxPage",
-   "finTxPage"
-  ],
-  "calls": [
-   "finBriefLoad",
-   "finCampaignOwnerChange"
-  ],
-  "idle": []
  },
  "automations": {
   "files": [
@@ -581,50 +666,6 @@
    "mailForget"
   ]
  },
- "task": {
-  "files": [
-   "app/github-nudge.ts",
-   "app/pipeline-editor.ts",
-   "app/task-requirements.ts",
-   "app/task-meetings.ts",
-   "app/task-modal.ts",
-   "app/roadmaps.ts",
-   "app/task-code.ts",
-   "app/task-runs.ts",
-   "app/task-props.ts",
-   "app/task-live-form.ts",
-   "app/task-pages.ts",
-   "app/task-status-text.ts"
-  ],
-  "deps": [
-   "task-files",
-   "decide",
-   "tags",
-   "stage-rules"
-  ],
-  "pages": [
-   "pageRoadmap"
-  ],
-  "calls": [
-   "githubNudgeBot",
-   "githubNudgeTools",
-   "openPipelineEditor",
-   "roadmapSettingsMount",
-   "taskChatLive",
-   "taskChatRead",
-   "taskCommentsRender",
-   "taskModalOpen",
-   "taskModalShow",
-   "taskPropsMsgPaint",
-   "taskRunCatalog",
-   "taskThreadOpen"
-  ],
-  "idle": [
-   "taskAskSettled",
-   "taskChatStop",
-   "taskModalRouteClose"
-  ]
- },
  "assistant": {
   "files": [
    "assistant.ts"
@@ -646,47 +687,6 @@
   "pages": [
    "pageChangelog"
   ],
-  "calls": [],
-  "idle": []
- },
- "task-files": {
-  "files": [
-   "app/task-files.ts"
-  ],
-  "deps": [],
-  "pages": [],
-  "calls": [],
-  "idle": []
- },
- "decide": {
-  "files": [
-   "app/decide.ts",
-   "app/decide-about.ts"
-  ],
-  "deps": [
-   "browser-view"
-  ],
-  "pages": [],
-  "calls": [
-   "decideStageOpen",
-   "decideWanted",
-   "decideStageWanted",
-   "decideGoThrough",
-   "decideOpen",
-   "decideFlow"
-  ],
-  "idle": [
-   "decideStop",
-   "decideRefresh",
-   "decidePaintBody"
-  ]
- },
- "stage-rules": {
-  "files": [
-   "app/stage-rules.ts"
-  ],
-  "deps": [],
-  "pages": [],
   "calls": [],
   "idle": []
  },
