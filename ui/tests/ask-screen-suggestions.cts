@@ -6,6 +6,8 @@ import type {Route} from 'playwright';
 // - Add mutes the row, says Added and leaves only ↩; ↩ puts it back;
 // - ✎ opens one box with Send; sending dims the row with "Tico is rewriting it" until the new text comes;
 // - ✕ takes the row away; with nothing to show there is no list and no heading;
+// - a read sent before an action never puts back what the action changed, one read is out at a time, and the list is
+//   read once more after each action; a refused Add says why on its row;
 // - someone who may change no pipeline is never asked for any;
 // - on a phone the page does not scroll sideways and a long rule wraps.
 // FLOW_SHOTS=<folder> saves All done with suggestions, desktop and phone.
@@ -46,6 +48,9 @@ const REWRITTEN = 'Lists every test run, with its result.';
     const errors: string[] = [], writes: string[] = [], reads: number[] = [];
     let needs: Item[] = [], may = true, rows: Suggestion[] = [], states: string[] = [];
     let rewrite: Suggestion | null = null;
+    // `hold`: the next read answers (with the rows as they were when it was asked) only once `release` is called.
+    let hold: {release: () => void; gate: Promise<void>} | null = null, out = 0, mostOut = 0, full = '';
+    const holdNext = () => { let release = () => {}; const gate = new Promise<void>(r => { release = r; }); hold = {release, gate}; return hold; };
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     page.on('pageerror', (error: Error) => errors.push(error.message));
     await page.route('**/*', async (route: Route) => {
@@ -68,10 +73,20 @@ const REWRITTEN = 'Lists every test run, with its result.';
         reads.push(Date.now());
         // A rewrite under way lands on the read after the next one.
         if (rewrite && states.length === 0) { rows = rows.map(x => x.id === rewrite!.id ? rewrite! : x); rewrite = null; }
-        const state = states.shift() || 'ready';
-        return json({state, suggestions: rows});
+        const state = states.shift() || 'ready', held = hold, now = rows.map(x => ({...x}));
+        hold = null;
+        out++; mostOut = Math.max(mostOut, out);
+        try {
+          if (held) await held.gate;
+          await json({state, suggestions: now});
+        } catch { /* closed */ } finally { out--; }
+        return;
       }
       const acted = p.match(/^\/api\/v2\/flow\/suggestions\/([^/]+)\/(add|undo|dismiss|feedback)$/);
+      if (acted && acted[2] === 'add' && acted[1] === full) {
+        writes.push(`add ${acted[1]}`);
+        return json({error: {code: 'conflict', detail: 'This check already has 20 added rules. Undo one first.'}}, 409);
+      }
       if (acted) {
         writes.push(`${acted[2]} ${acted[1]}${acted[2] === 'feedback' ? ' ' + (JSON.parse(r.postData() || '{}') as {text: string}).text : ''}`);
         const at = rows.findIndex(x => x.id === acted[1]), was = rows[at]!;
@@ -100,6 +115,12 @@ const REWRITTEN = 'Lists every test run, with its result.';
       await page.locator('#task-play').click();
       await dialog.locator('[data-dc-choice="Yes"]').click();
       await dialog.getByText('All done').waitFor();
+    };
+    const until = async (ok: () => boolean, what: string) => {
+      for (const end = Date.now() + 6000; !ok();) {
+        assert.ok(Date.now() < end, what);
+        await page.waitForTimeout(50);
+      }
     };
     const shot = async (name: string) => {
       if (!process.env.FLOW_SHOTS) return;
@@ -189,7 +210,36 @@ const REWRITTEN = 'Lists every test run, with its result.';
     assert.equal(await dialog.getByText('Suggested rules').count(), 0);
     assert.deepEqual(writes, ['add s1', 'undo s1', 'feedback s2 Say every test', 'add s1', 'undo s1', 'dismiss s1', 'dismiss s2']);
 
-    // ---- 6. Nothing to show: no list and no heading.
+    // ---- 6. A read sent before an Add answers after it: dropped, so the row stays added; then one fresh read.
+    rows = [row('s1', TESTS, 4, 6), row('s2', 'Names the PR it is about.', 3, 6)]; states = ['pending'];
+    mostOut = 0; writes.length = 0;
+    await done();
+    await until(() => reads.length >= 1, 'asked');
+    const held = holdNext();   // the poll 2 s on is held, answering with s1 still open
+    await until(() => reads.length >= 2, 'read again while pending');
+    await sr(0).getByRole('button', {name: 'Add'}).click();
+    await list.locator('.dc-sr.on').waitFor();
+    await page.waitForTimeout(300);
+    held.release();
+    await page.waitForTimeout(300);
+    assert.equal(await sr(0).locator('.tx span').innerText(), 'Added', 'the older read did not flip it back');
+    await until(() => reads.length >= 3, 'read once more after the Add');
+    assert.equal(await sr(0).getByRole('button', {name: 'Undo'}).count(), 1);
+    assert.equal(mostOut, 1, 'one read at a time');
+    await page.waitForTimeout(2400);
+    assert.equal(reads.length, 3, 'ready: no more reads');
+
+    // A refused Add says why on its row, and the row stays as it was.
+    full = 's2';
+    await sr(1).getByRole('button', {name: 'Add'}).click();
+    await sr(1).locator('.tx span', {hasText: 'already has 20 added rules'}).waitFor();
+    assert.equal(await sr(1).locator('.tx span').innerText(), 'This check already has 20 added rules. Undo one first.');
+    assert.equal(await sr(1).getByRole('button', {name: 'Add'}).count(), 1);
+    assert.deepEqual(writes, ['add s1', 'add s2']);
+    full = '';
+    await dialog.locator('[data-dc="close"]').first().click();
+
+    // ---- 7. Nothing to show: no list and no heading.
     rows = []; states = [];
     await done();
     await page.waitForTimeout(300);
@@ -197,7 +247,7 @@ const REWRITTEN = 'Lists every test run, with its result.';
     assert.equal(await list.count(), 0);
     assert.equal(await dialog.getByText('Suggested rules').count(), 0);
 
-    // ---- 7. Someone who may change no pipeline: never asked.
+    // ---- 8. Someone who may change no pipeline: never asked.
     may = false;
     rows = [row('s1', TESTS, 4, 6)];
     await done();
@@ -205,7 +255,7 @@ const REWRITTEN = 'Lists every test run, with its result.';
     assert.equal(reads.length, 0, 'not asked');
     assert.equal(await list.count(), 0);
 
-    // ---- 8. An empty answer (another server) or a failing one: nothing, no more reads.
+    // ---- 9. An empty answer (another server) or a failing one: nothing, no more reads.
     may = true;
     let failed = 0;
     await page.route('**/api/v2/flow/suggestions', route => { failed++; return route.fulfill({status: 500, contentType: 'application/json', body: '{}'}); });

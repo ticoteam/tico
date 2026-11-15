@@ -495,13 +495,16 @@ interface FlowSuggestion {id: string; text: string; state: 'open' | 'added' | 'd
 const DEC_SUG_POLL_MS = 2000;     // the next read while one is being worked out or rewritten
 const DEC_SUG_FOR_MS = 60_000;    // given up on this long after the last ask
 /** This visit's suggested rules: the rows as last read, whether they were asked for, the next read's timer, when the
-    last ask was sent, the row whose ✎ box is open and what is typed in it, and the visit, which closing moves on so a
-    read from an earlier visit lands nowhere. */
-const DEC_SUG = {rows: [] as FlowSuggestion[], asked: false, timer: 0, since: 0, edit: '', draft: '', visit: 0};
+    last ask was sent, the row whose ✎ box is open and what is typed in it, why a row's last action was refused, and the
+    visit, which closing moves on so a read from an earlier visit lands nowhere. `version` moves on with every action,
+    so a read sent before one never puts back what the action changed; one read is out at a time (`reading`), and
+    `again` asks for one more once it is back. */
+const DEC_SUG = {rows: [] as FlowSuggestion[], asked: false, timer: 0, since: 0, edit: '', draft: '', visit: 0,
+  version: 0, reading: false, again: false, said: {} as Record<string, string>};
 function decideSugEnd() {
   DEC_SUG.visit++;
   clearTimeout(DEC_SUG.timer);
-  Object.assign(DEC_SUG, {rows: [], asked: false, timer: 0, since: 0, edit: '', draft: ''});
+  Object.assign(DEC_SUG, {rows: [], asked: false, timer: 0, since: 0, edit: '', draft: '', reading: false, again: false, said: {}});
 }
 /** All done, the first time this visit: the suggestions for the stages the person may change, if any. */
 function decideSugStart(st: DecState) {
@@ -512,11 +515,14 @@ function decideSugStart(st: DecState) {
 /** Read again every DEC_SUG_POLL_MS while something is pending, for DEC_SUG_FOR_MS at most; any failure ends it. */
 function decideSugPoll(st: DecState) {
   DEC_SUG.since = Date.now();
-  if (!DEC_SUG.timer) void decideSugRound(st);
+  if (DEC_SUG.reading) DEC_SUG.again = true;
+  else if (!DEC_SUG.timer) void decideSugRound(st);
 }
 async function decideSugRound(st: DecState) {
   DEC_SUG.timer = 0;
-  const visit = DEC_SUG.visit, abort = new AbortController(), late = window.setTimeout(() => abort.abort(), 15_000);
+  DEC_SUG.reading = true;
+  const visit = DEC_SUG.visit, version = DEC_SUG.version;
+  const abort = new AbortController(), late = window.setTimeout(() => abort.abort(), 15_000);
   let got: {state: string; suggestions: FlowSuggestion[]} | null = null;
   try {
     // A read that changes nothing: no retries and no pressed-button state (not post()).
@@ -524,7 +530,15 @@ async function decideSugRound(st: DecState) {
       headers: {'Content-Type': 'application/json', 'Idempotency-Key': newRequestId()}, body: '{}'});
     if (r.ok) got = decideSugRead(await r.json());
   } catch { got = null; } finally { clearTimeout(late); }
-  if (visit !== DEC_SUG.visit || DEC !== st || !got) return;
+  if (visit !== DEC_SUG.visit || DEC !== st) return;
+  DEC_SUG.reading = false;
+  if (DEC_SUG.again) {   // an action since, or one more asked for: read again now, this answer is older than it
+    DEC_SUG.again = false;
+    clearTimeout(DEC_SUG.timer);
+    void decideSugRound(st);
+    return;
+  }
+  if (!got || version !== DEC_SUG.version) return;
   DEC_SUG.rows = got.suggestions;
   decideSugPaint(st);
   if (got.state === 'pending' && Date.now() - DEC_SUG.since < DEC_SUG_FOR_MS) {
@@ -546,7 +560,8 @@ function decideSugHTML(): string {
     `<button type="button" class="dc-icon" data-dc="${dc}" title="${label}" aria-label="${label}"${off ? ' disabled' : ''}>${mark}</button>`;
   return '<section class="dc-sug" aria-label="Suggested rules"><h3>Suggested rules</h3>' + DEC_SUG.rows.map(r => {
     const on = r.state === 'added', id = esc(r.id);
-    const why = on ? 'Added' : r.pending ? 'Tico is rewriting it'
+    const said = DEC_SUG.said[r.id];
+    const why = said ? esc(said) : on ? 'Added' : r.pending ? 'Tico is rewriting it'
       : `${esc(r.pipeline)} / ${esc(r.stage)} · ${r.notes_used} of ${r.notes_of} send backs`;
     const acts = on ? icon('sug-undo', 'Undo', '↩')
       : `<button type="button" class="ghost" data-dc="sug-add"${r.pending ? ' disabled' : ''}>Add</button>`
@@ -577,7 +592,11 @@ async function decideSugAct(st: DecState, what: string, id: string) {
   }
   const text = DEC_SUG.draft.trim();
   if (what === 'send' && !text) return;
-  if (what === 'send') { DEC_SUG.edit = ''; DEC_SUG.draft = ''; row.pending = true; decideSugPaint(st); }
+  // Any read out now was sent before this: it is dropped, and the list read once more after it is saved.
+  DEC_SUG.version++;
+  delete DEC_SUG.said[id];
+  if (what === 'send') { DEC_SUG.edit = ''; DEC_SUG.draft = ''; row.pending = true; }
+  decideSugPaint(st);
   const visit = DEC_SUG.visit, path = `/v2/flow/suggestions/${encodeURIComponent(id)}/${what === 'send' ? 'feedback' : what}`;
   try {
     const got = await post(path, what === 'send' ? {text} : {});
@@ -588,11 +607,12 @@ async function decideSugAct(st: DecState, what: string, id: string) {
       if (what === 'dismiss') DEC_SUG.rows.splice(now, 1);
       else if (back) DEC_SUG.rows[now] = back;
     }
-    if (back?.pending) decideSugPoll(st);
+    DEC_SUG.version++;
+    decideSugPoll(st);   // read once more after it is saved; on, every DEC_SUG_POLL_MS, while it is pending
   } catch (e) {
     if (visit !== DEC_SUG.visit) return;
     row.pending = false;
-    toast(errorMessage(e, 'Not saved.'));
+    DEC_SUG.said[id] = errorMessage(e, 'Not saved.');   // why, on the row itself: a check that is full says so
   }
   decideSugPaint(st);
 }

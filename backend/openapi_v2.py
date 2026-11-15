@@ -1263,7 +1263,8 @@ STABLE = [
         "Needs you",
         "addFlowSuggestion",
         "Add a suggested rule: Jev asks it of the next page attached at its check, as one more yes/no part beside the "
-        "check's own. 403 when the caller may not change the pipeline, 409 unless it is open and not being rewritten",
+        "check's own. 403 when the caller may not change the pipeline, 409 unless it is open and not being rewritten, "
+        "or when its check already has 20 added rules",
         "FlowSuggestion",
     ),
     (
