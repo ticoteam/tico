@@ -1176,18 +1176,13 @@ _ASK_SNOOZES = (
 def ask_snoozes(conn: "sqlite3.Connection", *people: str) -> dict[tuple[str, str], tuple[str, str]]:
     """The asks people snoozed for themselves that are still snoozed, {(person, ask id): (asked_at, snoozed_until)}, of
     `people` (everyone's with none). A snooze whose time has come is not read: the ask is back with nothing to clear."""
-    import sqlite3
-
     from . import hubdb
 
     sql, args = _ASK_SNOOZES, [hubdb.now()]
     if people:
         sql += " AND person_id IN (%s)" % ",".join("?" * len(people))
         args += list(people)
-    try:
-        rows = conn.execute(sql, args).fetchall()
-    except sqlite3.OperationalError:  # a database made before the table
-        return {}
+    rows = conn.execute(sql, args).fetchall()
     return {(str(r[0]), f"{r[1]}:{r[2]}"): (str(r[3]), str(r[4])) for r in rows}
 
 

@@ -55,6 +55,8 @@ def test_a_snoozed_ask_leaves_only_that_persons_list_and_count_and_undo_brings_i
     assert (ids(api, "ana-test"), count(api, "ana-test")) == ana_before, "nobody else's list moves"
     read = get(api, "needs-you", token="ben-test")
     assert read["snoozed_until"] == until, "the page reads the list again when it comes back"
+    held = get(api, f"needs-you?version={read['version']}", token="ben-test")
+    assert held["unchanged"] and held["snoozed_until"] == until, "a list it still holds says when to read again too"
     snoozed = get(api, "needs-you/snoozed", token="ben-test")
     assert [(i["id"], i["snoozed_until"]) for i in snoozed["items"]] == [(item, until)] and snoozed["next"] == until
     assert get(api, "needs-you/snoozed", token="ana-test")["items"] == [], "nobody reads another person's snoozes"
@@ -220,4 +222,21 @@ def test_never_stuck_counts_a_snoozed_ask_as_listed(store):
             (BEN, visit_id, requirement_id, task["id"], item["since"], at(days=1), now, now),
         )
         assert W.needs(c, BEN) == []
-        assert not [b for b in never_stuck.rules_hold(c) if b.startswith("3:")]
+        # never_stuck only checks: rule 3 expects the person's Needs you to list each of their waits once, and leaves
+        # out the asks they snoozed. The ask is still Ben's turn, the bot's own waits are checked as before, and no
+        # rule breaks, so nothing is retried, woken or held over it.
+        assert [(w.state, w.who) for w in W.of(c, E.task(c, task["id"])) if w.ask] == [(W.PERSON, BEN)]
+        assert [b for b in never_stuck.rules_hold(c) if task["id"] in b] == []
+        c.execute("DELETE FROM ask_snoozes")
+        assert [b for b in never_stuck.rules_hold(c) if task["id"] in b] == [], "the same with the snooze gone"
+
+
+def test_deleting_the_task_deletes_its_snoozes(api):
+    from backend import task_delete
+
+    task, item = ask_ben(api)
+    post(api, "needs-you/snooze", {"id": item, "until": at(days=1)}, token="ben-test")
+    with api.app.state.store.transaction() as c:
+        task_delete.delete_tasks(c, [task["id"]], apply=True, actor=ANA)
+        assert c.execute("SELECT count(*) FROM ask_snoozes WHERE task_id=?", (task["id"],)).fetchone()[0] == 0
+    assert get(api, "needs-you/snoozed", token="ben-test")["items"] == []
