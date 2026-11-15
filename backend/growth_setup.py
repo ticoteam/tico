@@ -152,7 +152,8 @@ def _next(c: Any, st: dict[str, Any]) -> dict[str, Any] | None:
         month = last_full_month()
         return {
             "step": step,
-            "says": f"Add {name}'s first month: spend and new customers.",
+            "says": f"Add {name}'s first month: spend and new customers. It is saved as an estimate; add "
+            "--quality actual when the numbers come from your books.",
             "command": f"tico growth cohort set --channel {slug} --month {month} --spend <spend> --new <new customers>",
             "tool": "tico_growth_cohort_set",
             "month": month,
