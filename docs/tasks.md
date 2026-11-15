@@ -156,6 +156,14 @@ a task.
 
 `GET /api/v2/needs-you` returns the list; `?count=true` returns the one number on the Tasks badge.
 
+When Flow (the screen that walks the list one ask at a time) opens, Tico gives its opinion on each ask: the button it
+would press and one line of 80 characters or fewer saying why, with a note ready when it would send back, plus a
+hidden score the screen sorts by. It is worked out then, not on a timer, with the same model as the daily update
+drafts, from the task alone, never from who is looking. So one opinion per ask is shared by everyone the ask waits
+on, for 24 hours or until the ask's words, choices or shown page change. Tico only advises: a person presses the
+button. With no model, the ask shows plain buttons. `POST /api/v2/flow/opinions` takes up to 30 Needs-you ids and
+answers at once: `ready`, `pending` (ask again) or `none`.
+
 ## Sub-tasks
 
 A task waits on the tasks it files. File one with `tico task file --parent <id> "title"` (yours unless `--owner`), or
