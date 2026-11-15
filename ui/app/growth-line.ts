@@ -26,6 +26,7 @@ interface GrlNumbers { line: GrlLine | null; channels?: Array<{slug: string; ser
 interface GrlState { dash: DashState; seq: number; view: unknown; line: GrlLine | null; history: GrlNumbers | null; pick: string; open: string }
 
 let GRL: GrlState | null = null;
+let GRL_RESIZE = false;   // the one window listener that redraws a selection's links
 const GRL_USED = new Set<string>();   // a use is told to the server once per page load (it counts once a day)
 const GRL_NUMBERS: Array<[string, string]> = [['spend', 'Spend'], ['new_customers', 'New'], ['kept_d30', 'Kept 30d']];
 const GRL_ECON: Array<[string, string]> = [['cac', 'CAC'], ['ltv_cac', 'LTV:CAC'], ['payback_months', 'Payback']];
@@ -56,7 +57,7 @@ function grLineMount(dash: DashState, root: HTMLElement) {
     const who = t?.closest<HTMLElement>('[data-grl-customers]');
     if (who) grlCustomers(who.dataset.grlCustomers || '');
   });
-  window.addEventListener('resize', () => { if (GRL?.pick) grlLinks(); });
+  if (!GRL_RESIZE) { GRL_RESIZE = true; window.addEventListener('resize', () => { if (GRL?.pick) grlLinks(); }); }   // once a session
 }
 
 // Each time the cards draw (a month picked, a save): the line for that month, with six months behind it for the trace.

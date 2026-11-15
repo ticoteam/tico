@@ -208,6 +208,16 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
     assert.equal(await line.locator('[data-grl-row="flyers"].grl-on').count(), 1, `${tag}: a source picks the rows it fills`);
     assert.ok(await line.locator('svg.grl-links path').count() > 0, `${tag}: and links them`);
   }
+  // Nothing past the line's right edge at this width, the chat pane open or not (the columns stack to fit).
+  const edge = await line.evaluate(el => { const box = el.getBoundingClientRect(); return Math.max(...[...el.querySelectorAll('.grl-c-kpi, .grl-c-eco, .grl-headline')].map(c => c.getBoundingClientRect().right)) - box.right; });
+  assert.ok(edge <= 1, `${tag}: the line's columns end inside it (${edge}px past)`);
+  if (!phone) {
+    const was = page.viewportSize()!;
+    await page.setViewportSize({width: 1100, height: was.height});
+    const narrow = await line.evaluate(el => { const box = el.getBoundingClientRect(); return Math.max(...[...el.querySelectorAll('.grl-c-kpi')].map(c => c.getBoundingClientRect().right)) - box.right; });
+    assert.ok(narrow <= 1, `${tag}: at 1100 px the KPIs stay inside the line (${narrow}px past)`);
+    await page.setViewportSize(was);
+  }
   await themed(page, `growth-${width}-line`);
   noErrors('the Growth line');
   // Settings: the channel's Edit retires it after asking once more on the same button.

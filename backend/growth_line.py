@@ -28,10 +28,12 @@ from typing import Any, cast
 
 from . import growth as G
 from . import hubdb as H
+from . import kpis as K
 
 Row = dict[str, Any]
 # growth.py is not strictly typed yet: its reads are taken as the shapes this module names (Row, list[Row]).
 _G: Any = G
+_K: Any = K
 
 TYPED = "typed"  # the line's source for numbers typed by hand
 UPLOAD = "upload"  # the line's source for customers loaded as a CSV in Growth
@@ -338,7 +340,9 @@ def _headline(month: str, total: Row, prev: Row | None, channels: list[Row], sou
     """The month in one sentence, from the All channels row, the guardrails breached and the stale sources."""
     new, cac, payback = total["new_customers"], total["cac"], total["payback_months"]
     change = None
-    if new is not None and prev is not None and prev.get("new_customers"):
+    # A month still in progress is half a month: no change against a whole one.
+    running = month >= datetime.now(timezone.utc).strftime("%Y-%m")
+    if new is not None and prev is not None and prev.get("new_customers") and not running:
         change = round((new - prev["new_customers"]) / prev["new_customers"] * 100)
     over = sorted({ch["slug"] for ch in channels if ch.get("guardrail") and ch["guardrail"]["over"] is not None})
     bad = [s for s in sources if s["health"] in BAD]
@@ -388,6 +392,26 @@ def _headline(month: str, total: Row, prev: Row | None, channels: list[Row], sou
     }
 
 
+def _as_of(c: Any, tree: list[Row], month: str) -> list[Row]:
+    """Each KPI as of the end of `month`: its newest reading up to then (the Funnel's kpi_upto, from the readings), so
+    an earlier month's line never shows today's value or today's guardrail breach."""
+    readings = cast(dict[str, list[Row]], _K.effective_many(c, [k["id"] for k in tree]))
+    out: list[Row] = []
+    for k in tree:
+        upto = [
+            r for r in readings.get(k["id"], []) if str(r.get("period_end") or r.get("collected_at") or "")[:7] <= month
+        ]
+        newest = cast(Row | None, _K.latest(upto))
+        out.append({**k, "latest": newest["value"] if newest else None})
+    return out
+
+
+def _held_as_of(g: Row, values: dict[str, Any]) -> Row:
+    """A guardrail with its KPI's value as of the line's month (growth.guardrails reads the newest)."""
+    value = values.get(g["kpi_id"])
+    return {**g, "value": value, "breached": value is not None and value > g["max"]}
+
+
 def line(c: Any, month: str | None = None, hidden: Iterable[str] = ()) -> Row | None:
     """The Growth line for `month` (YYYY-MM; default the newest with numbers, else this month), as the reader may see it."""
     live = [ch for ch in cast(list[Row], _G.channels(c)) if not ch.get("retired_at")]
@@ -399,10 +423,13 @@ def line(c: Any, month: str | None = None, hidden: Iterable[str] = ()) -> Row | 
     econ = cast(Row, _G.economics(c, month, hidden))
     prev_month = _prev_month(month)
     prev = cast(Row, _G.economics(c, prev_month, hidden)["total"]) if prev_month in months else None
-    tree = cast(list[Row], _G.kpis(c, hidden)["kpis"])
+    tree = _as_of(c, cast(list[Row], _G.kpis(c, hidden)["kpis"]), month)
     kpis_by_id = {k["id"]: k for k in tree}
     units: dict[str, str] = {k["id"]: k["unit"] for k in tree}
-    guards: dict[str, Row | None] = {g["channel"]: _guard(g, units) for g in cast(list[Row], econ["guardrails"])}
+    values: dict[str, Any] = {k["id"]: k["latest"] for k in tree}
+    guards: dict[str, Row | None] = {
+        g["channel"]: _guard(_held_as_of(g, values), units) for g in cast(list[Row], econ["guardrails"])
+    }
     rows: dict[str, Row] = {r["channel"]: r for r in cast(list[Row], econ["rows"])}
     sources = _sources(c)
     blank: Row = {"origins": {}, "status": {}}
@@ -458,7 +485,7 @@ def line(c: Any, month: str | None = None, hidden: Iterable[str] = ()) -> Row | 
                 target = sources.get(ref) or extra.get(ref)
                 if target is not None:
                     target["fills"].append({"channel": ch["slug"], "number": field})
-    if not any(r == TYPED for r in extra) and not any(s["fills"] for s in sources.values()):
+    if TYPED not in extra and UPLOAD not in extra and not any(s["fills"] for s in sources.values()):
         # Channels and nothing filled yet: every number will be typed until a source fills it.
         extra[TYPED] = {
             "id": TYPED,

@@ -3,10 +3,12 @@
 (an ad spend sheet, a customers query that went stale, and Stripe, which syncs nothing), a CAC guardrail on Search Ads
 and an input KPI that Search Ads moves."""
 
+from backend import growth_computed as GX
 from backend import growth_sync as GS
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, put
 from backend.tests.helpers.company import bot
+from backend.tests.helpers.growth_computed import TODAY, as_csv, september
 
 M = GS._month(GS._index(GS.this_month()) - 1)  # last month: inside a synced source's window
 OLD = "2026-01-10T08:00:00.000000Z"  # a good sync long before twice its refresh time
@@ -157,6 +159,23 @@ def test_over_budget_and_over_guardrail_say_by_how_much_and_the_trace_writes_the
     assert guard["breached"] and guard["over"] == 22
 
 
+def test_an_earlier_month_reads_the_guardrail_kpi_as_it_was_then(api):
+    """AC-5, AC-15 for a picked month: the guardrail KPI was $300 in the month before, under its $350 max, so that
+    month's line, CAC trace and headline say nothing is over, while last month's still says $22 over."""
+    ids = acme(api)
+    before = GS._month(GS._index(M) - 1)
+    post(api, f"kpis/{ids['cac']}/readings", {"value": 300, "period_end": f"{before}-28T00:00:00Z"})
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": before, "new_customers": 40, "spend": 8000})
+    view = line(api, month=before)
+    ads = row(view, "search-ads")
+    assert ads["guardrail"]["value"] == 300 and not ads["guardrail"]["breached"] and ads["guardrail"]["over"] is None
+    assert "over guardrail" not in ads["economics"]["cac"]["trace"]
+    assert "guardrail" not in view["headline"]["sentence"] and view["headline"]["over_guardrail"] == []
+    guard = next(k for k in view["kpis"] if k["id"] == ids["cac"])
+    assert guard["value"] == 300 and not guard["breached"]
+    assert row(line(api), "search-ads")["guardrail"]["says"] == "$22 over guardrail"
+
+
 def test_every_channel_together_counts_spend_from_named_channels_and_unknowns_customers(api):
     """AC-7: All channels' CAC is named channels' spend over all new customers, Unknown's among them."""
     acme(api)
@@ -244,3 +263,15 @@ def test_the_funnel_shows_no_share_between_kpis_of_unlike_units(api):
     funnel = next(p["card"]["data"] for p in view["pins"] if p["card"]["template"] == "growth_funnel")
     conv = {s["stage"]: s["conv"] for s in funnel["stages"]}
     assert conv["acquire"] is None and conv["activate"] == 25.0 and conv["retain"] == 80.0
+
+
+def test_a_number_computed_from_uploaded_customers_says_how_many_and_lists_no_typed_source(api, monkeypatch):
+    """AC-8, AC-12: kept day 30 computed from 40 uploaded customers names the upload and the count; with nothing typed
+    and no source, the line lists the upload alone, not "Typed by hand"."""
+    monkeypatch.setattr(GX, "today", lambda conf: TODAY)
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
+    post(api, "growth/customers", {"csv": as_csv(september())})
+    view = line(api, month="2026-09")
+    kept = row(view, "search-ads")["numbers"]["kept_d30"]
+    assert (kept["origin"], kept["computed_from"], kept["sources"]) == ("computed", 40, ["upload"])
+    assert [s["id"] for s in view["sources"]] == ["upload"]

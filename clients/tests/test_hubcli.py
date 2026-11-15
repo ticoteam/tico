@@ -1754,6 +1754,11 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
         "growth/channels/door",
         {"stage": "paused", "owner_ref": None},
     )  # "" clears
+    assert run("growth", "channel", "update", "door", "--input-kpi", "kpi_new") == (
+        "PATCH",
+        "growth/channels/door",
+        {"input_kpi_id": "kpi_new"},
+    )
     assert run("growth", "channel", "retire", "door") == ("POST", "growth/channels/door/retire", {})
     assert run(
         "growth",
