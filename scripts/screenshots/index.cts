@@ -136,6 +136,7 @@ const PAGES: PageSpec[] = [
     await page.click('#task-filter-pop [data-task-type="general"]');
     await page.getByText('Draft replies for the open support tickets').first().waitFor();
   }},
+  {name: 'board', route: '#/tasks?pipeline=product&layout=columns&who=all', ready: 'Schedule shows from the app', ui: TASKS_UI},
   {name: 'needs-you', route: '#/tasks', ready: 'Raise Home Pro from $449 to $479 for December?',
     ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/decide-content.ts', 'ui/app/decide-about.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',

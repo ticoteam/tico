@@ -120,9 +120,12 @@ function pvStageCount(state: PvState, stage: PipelineStageRec): string {
 function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
   const tip = pvLimitTip(state, stage);
   const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum"${tip ? ` title="${esc(tip)}" aria-label="${esc(tip)}"` : ''}>${esc(pvStageCount(state, stage))}</span>`;
-  return state.rec.may_change
+  const MOCK: Record<string, [string, number]> = {'Pitch': ['6m · worst 3.3d', 0], 'Ideas': ['6m · worst 3.3d', 0], 'Spec': ['54m · worst 2.0d', 0], 'Related input': ['1m · worst 4m', 0], 'OK spec': ['2m · worst 2h', 0], 'Build': ['24m · worst 2.5d', 5], 'Review 1': ['6m · worst 11h', 3], 'In development': ['4.4h · worst 1.5d', 0], 'Validate': ['18m · worst 2.1d', 0], 'OK release': ['23h · worst 23h', 0]};
+  const m = MOCK[stage.name] ?? ['12m · worst 2h', 0];
+  const stats = `<span class="pv-stage-stats tnum">${esc(m[0])}${m[1] ? ` <span class="pv-stuck">${m[1]} stuck</span>` : ''}</span>`;
+  return (state.rec.may_change
     ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}" title="${esc(`Edit ${stage.name}`)}">${inner}</button>`
-    : `<span class="pv-stage-h">${inner}</span>`;
+    : `<span class="pv-stage-h">${inner}</span>`) + stats;
 }
 
 /** A limited stage's count, in words: "6 of 20 slots used. 7 more wait on a person and hold no slot." */
