@@ -275,3 +275,14 @@ def test_a_number_computed_from_uploaded_customers_says_how_many_and_lists_no_ty
     kept = row(view, "search-ads")["numbers"]["kept_d30"]
     assert (kept["origin"], kept["computed_from"], kept["sources"]) == ("computed", 40, ["upload"])
     assert [s["id"] for s in view["sources"]] == ["upload"]
+
+
+def test_a_month_in_progress_is_not_compared_with_a_whole_month(api):
+    """AC-15: half of this month against all of last month is no change; last month against the one before still is."""
+    acme(api)
+    now = GS.this_month()
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": now, "new_customers": 20, "quality": "actual"})
+    assert line(api, month=now)["headline"]["change_pct"] is None
+    before = GS._month(GS._index(M) - 1)
+    put(api, "growth/cohorts", {"channel": "search-ads", "month": before, "new_customers": 71, "quality": "actual"})
+    assert line(api)["headline"]["change_pct"] == 100  # 142 against 71
