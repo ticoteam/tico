@@ -71,7 +71,7 @@ NOTE_MAX = 400
 SHOWN_MAX = 6000  # what the ask shows, all of it together
 BODY_MAX = 1500  # the task's description
 READY, PENDING, NONE = "ready", "pending", "none"
-OK_PICKS = ("approve", "send_back")  # an ask has no Snooze until a person can snooze their own ask (#3769)
+OK_PICKS = ("approve", "send_back")  # never a snooze: snoozing an ask is the person's own call (#3769)
 LABEL = "flow-opinion"  # the spend row's label: an opinion's model call under the decisions cap (`judge.spend`)
 
 SYSTEM = (
@@ -114,6 +114,13 @@ def pinned(c: Any, ask: Row) -> list[str] | None:
             version = str(found[0])
         out.append(f"page:{file_id}@{int(version)}")
     return out
+
+
+def ask_refs(c: Any, item: Row) -> list[str] | None:
+    """Everything a Needs-you ask shows, each page pinned to its version (`pinned`): what its `ask_version` holds, so
+    a new version of any of them is a new ask, for the opinion and for a person's snooze of it (waiting_on.ask_version).
+    None as `pinned` gives it."""
+    return pinned(c, item.get("ask") or {})
 
 
 def ask_version(item: Row, refs: list[str]) -> str:
@@ -160,7 +167,7 @@ def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
     ask: Row | None = item.get("ask")
     if item.get("kind") != "ask" or not ask or ask.get("line") == task_asks.PRIVATE_LINE:
         return None
-    refs = pinned(c, ask)
+    refs = ask_refs(c, item)
     if refs is None or not _reads(c, auth, who, refs):
         return None
     rid = item["requirement_id"]
