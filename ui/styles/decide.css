@@ -117,8 +117,29 @@
 .dc-refs{display:flex;flex-wrap:wrap;gap:6px}
 .dc-ref-chip{display:inline-flex;align-items:center;max-width:100%;min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:999px;color:var(--ink);font-size:var(--t-sm);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dc-ref-chip:hover{background:var(--surface2)}
-.dc-q.dc-q-short{font-size:var(--t-lg)}
-.dc-full{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+/* a question (#3786): itself once, in full, its meta line under it; then its choices, the box and one row:
+   Send · Snooze · ⋯. Its task is the background: one line that opens (decideBgHTML), on the left on a wide screen. */
+.dc-ask{display:flex;flex-direction:column;gap:4px}
+.dc-q.dc-q-short,.dc-q.dc-q-ask{font-size:var(--t-lg)}
+.dc-q.dc-q-ask{white-space:pre-wrap}
+.dc-ask-meta{min-height:28px}
+.dc-ask-meta .dc-meta-who{flex:0 1 auto;min-width:24px;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.dc-ask-meta .dc-task-link{min-height:28px;padding:0 4px;margin:0 -4px}
+.dc-ask-acts{flex-wrap:nowrap;align-items:center}
+.dc-ask-acts>button{white-space:nowrap}
+.dc-acts .dc-more-b{font-size:var(--t-lg);line-height:1}
+.dc-askw{flex:none}
+.dc-acts .dc-snzw+.dc-askw{margin-left:0}
+.dc-bg{min-width:0}
+.dc-bg>summary{display:flex;align-items:center;gap:8px;min-height:44px;color:var(--muted);cursor:pointer;list-style:none}
+.dc-bg>summary::-webkit-details-marker{display:none}
+.dc-bg>summary::after{content:"";flex:none;width:6px;height:6px;margin:0 4px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg) translateY(-2px);transition:transform .15s}
+.dc-bg[open]>summary::after{transform:rotate(-135deg) translateY(-1px)}
+.dc-bg>summary:hover{color:var(--ink)}
+.dc-bg-t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.dc-bg[open] .dc-bg-t{white-space:normal;color:var(--ink)}
+.dc-bg-only{display:flex;align-items:center;min-height:44px;color:var(--muted)}
+.dc-bg-body{display:flex;flex-direction:column;gap:12px;padding-top:4px}
 .dc-links{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
 .dc-links .dc-open-task{margin:0}
 .dc-go{min-height:36px;padding:0 12px;border-radius:10px;font-weight:600}
@@ -136,8 +157,7 @@
   .dc-acts-row button{min-height:36px;padding:0 14px;border-radius:10px;white-space:nowrap}
 }
 .dc-more{padding-top:4px}
-/* a bot's question (decideBotAskHTML): why it matters, a card per choice with its line, the recommended one outlined;
-   Send under the box at its right edge; then a hairline and one row: I don't know, Give it back, and Skip at the end */
+/* a bot's question: why it matters, a card per choice with its line, the recommended one outlined */
 .dc-why{margin:0;overflow-wrap:anywhere}
 .dc-choice-list{display:flex;flex-direction:column;gap:8px}
 .dc-choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
@@ -148,11 +168,6 @@
 .dc-choice-name{font-weight:600;overflow-wrap:anywhere}
 .dc-rec-tag{padding:2px 8px;border-radius:999px;background:var(--line);font-size:var(--t-sm);font-weight:600}
 .dc-choice-line{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
-.dc-send{display:flex;align-items:center;justify-content:flex-end;gap:10px}
-.dc-send button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
-.dc-acts.dc-fixed{flex-wrap:nowrap;align-items:center;padding-top:12px;border-top:1px solid var(--line)}
-.dc-acts.dc-fixed button{white-space:nowrap}
-.dc-acts.dc-fixed [data-dc="skip"]{margin-left:auto}
 /* Snooze (#3769): on an ask, a quiet clock at the far end of the answer row, clear of Approve and Send back; its menu
    (1 hour … 1 month, Other) opens from it, upward (down from a row near the top: .dc-snz-down), at the row's end, over
    the page above and never over the row's own buttons. The open menu's row sits over the pinned meta line on a phone. */
@@ -322,6 +337,12 @@ button.dc-jev{cursor:pointer}
   .dc-thing:empty,.dc-thing:has(>.dc-bare:only-child){display:none}
   .dc-side{overflow:visible;border-left:0;border-top:1px solid var(--line);padding:12px 16px}
   .dc-thing:empty+.dc-side,.dc-thing:has(>.dc-bare:only-child)+.dc-side{border-top:0}
+  /* a question: the question and its answer first, its task's one line under them */
+  .dc-main.dc-qmain{display:flex;flex-direction:column}
+  .dc-qmain>.dc-side{order:1;flex:none;border-top:0}
+  .dc-qmain>.dc-thing{order:2;flex:none;padding:0 16px 16px}
+  .dc-qmain>.dc-thing>.dc-bg{border-top:1px solid var(--line)}
+  .dc-qmain>.dc-thing>.dc-bg>summary,.dc-qmain>.dc-thing>.dc-bg-only{min-height:48px}
   /* Notes starts one line tall (rows in decide.ts) and grows with its text */
   .dc-side textarea[data-dc-grow]{min-height:44px}
   .dc-q{font-size:var(--t-lg)}
@@ -337,13 +358,10 @@ button.dc-jev{cursor:pointer}
   /* Notes starts one row, the clip inside it, and opens up when it is focused */
   .dc-note-row textarea:focus{min-height:88px}
   .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-reply-row button,.dc-acts .dc-skip{min-height:44px}
-  /* one row at 390 px: I don't know, explain · Give it back · Skip */
-  .dc-acts.dc-fixed{gap:6px}
   .dc-acts .dc-snz-b{width:44px;min-width:44px;height:44px;min-height:44px}
   .dc-snz .dc-mi,.dc-snz-at input{min-height:44px}
   .dc-acts .dc-snz-at .dc-icon{width:44px;min-width:44px;height:44px;min-height:44px}
   .dc-snzl li{min-height:44px}
-  .dc-acts.dc-fixed button{padding:0 12px}
   .dc-jev,.dc-more-btn{min-height:44px}
   .dc-open-task{margin:-12px 0 -8px;display:inline-flex;align-items:center}
   .dc-file-x{width:44px}

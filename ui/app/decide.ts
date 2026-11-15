@@ -71,7 +71,7 @@ interface DecState {
   items: Map<string, NeedsEntry>;
   ok: Map<string, AskOkView>;
   gone: Set<string>;
-  more: '' | 'snooze' | 'give' | 'back';
+  more: '' | 'snooze' | 'give' | 'back' | 'ask';
   busy: boolean;
   error: string;
   barTimer: number;
@@ -296,10 +296,13 @@ function decideDialog(): HTMLDialogElement {
     if (snz && ev.key === 'Enter' && eventElement(ev)?.matches('input#dc-snz-at')) {
       ev.preventDefault(); snz.querySelector<HTMLButtonElement>('[data-dc="snooze-at"]')?.click(); return;
     }
-    if (snz && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && eventElement(ev)?.matches('[role="menuitem"], [data-dc="snooze"]')) {
+    // Snooze's and a question's ⋯ menu: ↑ ↓ move between their choices (from the button: the first, or the last).
+    const menu = snz || (DEC?.more === 'ask' ? eventElement(ev)?.closest('.dc-askw') : null);
+    if (menu && (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && eventElement(ev)?.matches('[role="menuitem"], [aria-haspopup="menu"]')) {
       ev.preventDefault();
-      const all = [...snz.querySelectorAll<HTMLElement>('.dc-snz [role="menuitem"], #dc-snz-at')], i = all.indexOf(document.activeElement as HTMLElement);
-      all[(i + (ev.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus();
+      const all = [...menu.querySelectorAll<HTMLElement>('.dc-snz [role="menuitem"], #dc-snz-at')], down = ev.key === 'ArrowDown';
+      const i = all.indexOf(document.activeElement as HTMLElement);
+      all[i < 0 ? (down ? 0 : all.length - 1) : (i + (down ? 1 : all.length - 1)) % all.length]?.focus();
       return;
     }
     if (!DEC || ev.metaKey || ev.ctrlKey || ev.altKey || eventElement(ev)?.closest('input, textarea, select')) return;
@@ -309,7 +312,7 @@ function decideDialog(): HTMLDialogElement {
   // The pinned row's height changes with the width (a row that wraps) and the safe area.
   window.addEventListener('resize', () => { if (d?.open) decideBarRoom(); });
   // Esc with the menu open closes the menu only.
-  d.addEventListener('cancel', ev => { ev.preventDefault(); if (!decideMenu(false) && !(DEC && decideSnoozeClose(DEC))) decideStop(); });
+  d.addEventListener('cancel', ev => { ev.preventDefault(); if (!decideMenu(false) && !(DEC && (decideSnoozeClose(DEC) || decideAskMoreClose(DEC)))) decideStop(); });
   d.addEventListener('close', () => { if (!d.open) decideStop(); });
   document.body.appendChild(d);
   return d;
@@ -759,10 +762,12 @@ function decideLineSet(itemId: string, o: {line: string; pick: string} | null): 
   if (DEC && DEC.at === itemId) { decidePaintHead(DEC); decidePaintSide(DEC); }
 }
 /** The pick of Tico's line, as the main button (a bot's choice card, outlined as its recommendation is): the others go
-    plain. While the ask waits on Tico (decideOpWaits) no answer is the main button; with no pick, they are as drawn. */
+    plain. While an OK waits on Tico (decideOpWaits) no answer is the main button; with no pick, they are as drawn. A
+    question's only pick is one of its choices: until Tico names one, Send stays the main button (#3786). */
 function decideLinePick(it: NeedsEntry, host: HTMLElement) {
   const pick = DEC_LINES.get(it.id)?.pick;
   const btns = [...host.querySelectorAll<HTMLButtonElement>('.dc-acts button[data-dc]:not(.linkish), button[data-dc-choice]')];
+  if (decideKind(it) === 'question' && !(it.ask?.choices || []).includes(pick || '')) return;
   if (!pick && decideOpWaits(it)) {
     for (const b of btns) if (b.classList.contains('primary')) { b.classList.remove('primary'); b.classList.add('ghost'); }
     return;
@@ -952,6 +957,10 @@ function decidePaintBody(st: DecState) {
       // Changes since vK on (the version menu): the same page with its changed blocks marked.
       : changed + `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}">${v.since?.on && v.since.marked ? v.since.html : v.html}`
         + `${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
+  } else if (kind === 'question' && decideTaskId(it)) {
+    // A question's background: its task, one line that opens (open as it was left on this item, through a redraw).
+    const was = host.dataset.key === it.id ? host.querySelector<HTMLDetailsElement>('details.dc-bg')?.open : undefined;
+    html = decideBgHTML(it, was);
   } else if (decideTaskId(it)) {
     // Who asked and when, then the task's own text, its links, files and pages; the heading is on the right only.
     html = decideAboutHTML(it, kind);
@@ -960,6 +969,8 @@ function decidePaintBody(st: DecState) {
   }
   // A website's browser the ask shows (`browser:<tool>/<account>`): the live view; an OK's comes in its shows.
   if (kind !== 'ok') html += (it.ask?.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
+  // A question: on a phone the question and its answer come first, the background under them (decide.css).
+  host.parentElement?.classList.toggle('dc-qmain', kind === 'question');
   if (host.dataset.html === html && host.dataset.key === it.id) return;
   host.dataset.html = html; host.dataset.key = it.id;
   browserView.stopIn(host);
@@ -1023,15 +1034,16 @@ function decidePaintSide(st: DecState) {
   const earlier = kind === 'ok' && !parts ? decideEarlier(it) : null, dot = '<span class="dc-dot" aria-hidden="true">·</span>';
   const earlierMeta = earlier ? `<div class="dc-meta">${[by ? `<span class="dc-meta-who">${esc(actorLabel(by))}</span>` : '',
     earlier.stage ? `<span>${esc(earlier.stage)}</span>` : '', `<span>v${earlier.version}</span>`, tag].filter(Boolean).join(dot)}</div>` : '';
-  // A person's own task and a question: a short heading in the task's own words, the full question once under it.
-  const short = parts ? null : decideHeadOf(it, kind), go = short ? decideGoOf(decideAboutText(decideAboutOf(it)?.task)) : null;
+  // A person's own task: its title. A question: itself, once, in full (#3786).
+  const question = kind === 'question', short = parts || question ? null : decideHeadOf(it, kind);
+  const go = short || question ? decideGoOf(decideAboutText(decideAboutOf(it)?.task)) : null;
   const goBtn = go ? `<button type="button" class="ghost dc-go" data-dc="go" data-dc-href="${esc(go[1])}">${esc(go[0])}</button>` : '';
   const links = goBtn || open ? `<div class="dc-links">${goBtn}${open}</div>` : '';
   // The task's title heads a page's OK on a wide screen; a phone drops it, the page has its own heading (decide.css).
   const head = parts ? `<h3 class="dc-q dc-q-page">${esc(title)}</h3>${parts.sub}${parts.body}`
+    : question ? decideQuestionHeadHTML(it, tag) + (goBtn ? `<div class="dc-links">${goBtn}</div>` : '')
     : earlier ? `<h3 class="dc-q">${esc(it.line)}</h3>${earlierMeta}`
     : short ? q('dc-q dc-q-short', short.head) + links
-      + (short.full ? `<p class="dc-full">${esc(short.full)}</p>` : '')
     : q('dc-q', title || typed?.question || it.line) + open
       + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
@@ -1051,17 +1063,8 @@ function decidePaintSide(st: DecState) {
       ${decideFilesHTML(st, true)}<div class="dc-acts">${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false,
         // On a phone Send back is always on; with no note it asks for one (decideClick). A wide screen keeps it off until then.
         decidePhone() ? busy : ` data-dc-needs="#dc-notes" disabled`)}${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}</div>`;
-  } else if (typed) {
-    body = decideTypedHTML(typed, it.ask?.choices || [], st.busy);
-  } else if (kind === 'question' && asker.startsWith('bot:')) {
-    body = decideBotAskHTML(st, it, asker);
-  } else if (kind === 'question') {
-    const choices = it.ask?.choices || [];
-    body = `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${busy}>${esc(c)}</button>`).join('')}</div>
-      <label class="dc-notes"><span>${choices.length ? 'Something else' : 'Your answer'}</span><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000"></textarea></label>
-      ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('other', 'Send answer', !choices.length, ' data-dc-needs="#dc-other" disabled')}${
-        // Ask back only to someone it reaches: a question no bot or person asked (a stage's) has no one to ask.
-        decideReplyTo(it) ? decideBtn('askback', 'Ask back', false, ' data-dc-needs="#dc-other" disabled title="Ask what they mean; the question stays open"') : ''}</div>${decideHeldHTML(it, '#dc-other')}`;
+  } else if (question) {
+    body = decideQuestionHTML(st, it, typed);
   } else if (kind === 'yours') {
     body = `${decideReplyHTML(st, it)}<div class="dc-acts dc-acts-row">${decideBtn('done', 'Done', true, busy)}${decideSnoozeHTML(st, 'Snooze')}${decideBtn('give', 'Give to…', false, busy)}</div>${decideMoreHTML(st, it)}`;
   } else if (kind === 'stuck') {
@@ -1094,6 +1097,9 @@ function decidePaintSide(st: DecState) {
     const end = ask ? decideSnoozeHTML(st) : `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
     if (row) row.insertAdjacentHTML('beforeend', end); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${end}</div>`);
   }
+  // A question's other answers (I don't know, Give it back, Ask back) wait in ⋯, last on the row, after Snooze.
+  const more = question ? decideAskMoreHTML(st, it) : '';
+  if (more) host.querySelector<HTMLElement>('[data-key] > .dc-acts')?.insertAdjacentHTML('beforeend', more);
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
@@ -1112,7 +1118,7 @@ function decidePaintSide(st: DecState) {
   const back = caret ? host.querySelector<HTMLTextAreaElement>(`#${caret.id}`) : null;
   if (caret && back && !back.disabled) { back.focus({preventScroll: true}); back.setSelectionRange(caret.from, caret.to, caret.dir); }
   decideHeldWire(st, host);
-  decideSnoozePlace(host);
+  decideMenuPlace(host);
   decideLinePick(it, host);
   decideNeedsText($('.decide')!);
   decideBarRoom();
@@ -1203,25 +1209,65 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
   }
   return {sub, body: parts.join('')};
 }
-/** A bot's question (Tasks spec "Bots ask people a question with choices", picture 2): why it matters, each choice
-    with its line and "Recommended" on the one the bot recommends, then "Write to <bot>" and Send, which reaches the bot
-    on the task and leaves the question open (AC-13), then the two answers Tico adds to every bot's question, on the
-    row Skip joins: "I don't know, explain" and "Give it back" (AC-4, AC-5; answers.DONT_KNOW and GIVE_BACK). */
-function decideBotAskHTML(st: DecState, it: NeedsEntry, asker: string): string {
-  const busy = st.busy ? ' disabled' : '', brief = it.ask?.brief || null;
+/** A question's head (#3786): the question once, in full, then one dense meta line: who asked, when, the task (#N ↗).
+    In a box of its own, so a phone never pins this line as it pins a page's (decide.css). */
+function decideQuestionHeadHTML(it: NeedsEntry, tag: string): string {
+  const by = it.ask?.asked_by || '', who = by ? actorLabel(by) : 'Tico', date = it.since ? shortDate(it.since) : '';
+  const dot = '<span class="dc-dot" aria-hidden="true">·</span>';
+  const meta = [`<span class="dc-meta-who">${esc(who)}</span>`, date ? `<span>${esc(date)}</span>` : '', tag].filter(Boolean).join(dot);
+  return `<div class="dc-ask"><h3 class="dc-q dc-q-ask">${esc(decideQuestionOf(it))}</h3><p class="dc-meta dc-ask-meta">${meta}</p></div>`;
+}
+/** A question's answer (#3786): a bot's why line and its choices (a card each, with its line and Recommended on the
+    one it recommends), a person's or a stage's as buttons; then the answer box and Send, which answers it. A stage's
+    typed choice is its buttons alone; its number a whole-number box with its range (Enter sends). */
+function decideQuestionHTML(st: DecState, it: NeedsEntry, typed: TaskReq['typed'] | undefined): string {
+  const busy = st.busy ? ' disabled' : '', brief = it.ask?.brief || null, bot = decideAsker(it).startsWith('bot:');
   const choices = it.ask?.choices || [], details = brief?.details || [];
   const why = brief?.why ? `<p class="dc-why">Why it matters: ${esc(brief.why)}</p>` : '';
-  const choice = (c: string, i: number) => {
+  const card = (c: string, i: number) => {
     const rec = brief?.recommend === c, line = details[i] || '';
     return `<button type="button" class="dc-choice${rec ? ' dc-rec' : ''}" data-dc-choice="${esc(c)}"${busy}>`
       + `<span class="dc-choice-head"><span class="dc-choice-name">${esc(c)}</span>${rec ? '<span class="dc-rec-tag">Recommended</span>' : ''}</span>`
       + (line ? `<span class="dc-choice-line">${esc(line)}</span>` : '') + '</button>';
   };
-  return `${why}${choices.length ? `<div class="dc-choice-list">${choices.map(choice).join('')}</div>` : ''}
-    <label class="dc-notes"><span>Write to ${esc(actorLabel(asker))}</span><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" placeholder="Something else, or tell it what's wrong"></textarea></label>
-    ${decideFilesHTML(st)}<div class="dc-send">${DEC_SENT === it.id ? `<span class="dc-sent" role="status">Sent to ${esc(actorLabel(asker))}</span>` : ''}${
-      decideBtn('write', 'Send', false, ' data-dc-needs="#dc-other" disabled')}</div>${decideHeldHTML(it, '#dc-other')}
-    <div class="dc-acts dc-fixed">${decideBtn('dont-know', DEC_DONT_KNOW, false, busy)}${decideBtn('give-back', DEC_GIVE_BACK, false, busy)}</div>`;
+  const list = !choices.length ? '' : bot || details.length ? `<div class="dc-choice-list">${choices.map(card).join('')}</div>`
+    : `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${busy}>${esc(c)}</button>`).join('')}</div>`;
+  if (typed?.type === 'choice') return why + list;
+  const label = esc(typed?.question || typed?.name || 'Answer');
+  let box: string;
+  if (typed?.type === 'number') {
+    const {min, max} = typed;
+    const range = min != null && max != null ? `${min}–${max}` : min != null ? `≥ ${min}` : max != null ? `≤ ${max}` : '';
+    const bounds = (min != null ? ` min="${min}"` : '') + (max != null ? ` max="${max}"` : '');
+    const input = `<input id="dc-other" type="number" step="1" inputmode="numeric"${bounds} aria-label="${label}" placeholder="Answer" autocomplete="off">`;
+    box = range ? `<label class="dc-notes"><span>${esc(range)}</span>${input}</label>` : input;
+  } else {
+    box = `<div class="dc-note-row"><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" aria-label="${label}" placeholder="Answer"></textarea>${typed ? '' : decideAttachHTML(st)}</div>`
+      + (typed ? '' : decideFilesHTML(st, true));
+  }
+  const sent = DEC_SENT === it.id ? '<p class="dc-sent" role="status">Sent</p>' : '';
+  return `${why}${list}${box}${sent}${decideHeldHTML(it, '#dc-other')}<div class="dc-acts dc-ask-acts">${decideBtn('other', 'Send', true, ' data-dc-needs="#dc-other" disabled')}</div>`;
+}
+/** ⋯ at the end of a question's row: a bot's "I don't know, explain" and "Give it back" (answers.DONT_KNOW and
+    GIVE_BACK, which Tico adds to every bot's question), and Ask back, which sends the box's words to whoever asked as a
+    comment and leaves the question open. '' when it would hold nothing (a stage's question: no one to ask back). */
+function decideAskMoreHTML(st: DecState, it: NeedsEntry): string {
+  const busy = st.busy ? ' disabled' : '', open = st.more === 'ask', bot = decideAsker(it).startsWith('bot:');
+  const items: [string, string][] = [...(bot ? [['dont-know', DEC_DONT_KNOW], ['give-back', DEC_GIVE_BACK]] as [string, string][] : []),
+    ...(decideReplyTo(it) ? [['askback', 'Ask back']] as [string, string][] : [])];
+  if (!items.length) return '';
+  const btn = `<button type="button" class="dc-icon dc-snz-b dc-more-b" data-dc="ask-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded="${open}"${busy}>⋯</button>`;
+  const menu = open ? `<span class="dc-snz" role="menu" aria-label="More">${items.map(([k, l]) =>
+    `<button type="button" role="menuitem" class="dc-mi" data-dc="${k}"${busy}>${esc(l)}</button>`).join('')}</span>` : '';
+  return `<span class="dc-snzw dc-askw">${btn}${menu}</span>`;
+}
+/** Closes a question's ⋯ menu, focus back on ⋯; true when it was open. */
+function decideAskMoreClose(st: DecState): boolean {
+  if (st.more !== 'ask') return false;
+  st.more = '';
+  decidePaintSide(st);
+  ($('.decide [data-dc="ask-more"]') as HTMLElement | null)?.focus({preventScroll: true});
+  return true;
 }
 /** A file added or finished redraws only the files row, so the note keeps its focus, caret and text. */
 function decideFilesPaint(st: DecState) {
@@ -1316,20 +1362,6 @@ function decideWithFiles(text: string, files: DecFile[]): string {
   if (!files.length) return text;
   return `${text}\n\nFiles:\n${files.map(f => `- ${f.file.name} (${f.id})`).join('\n')}`;
 }
-/** A stage's typed answer: a choice is its buttons; a number a whole-number box with its range; text a box. */
-function decideTypedHTML(typed: NonNullable<TaskReq['typed']>, choices: string[], busy: boolean): string {
-  const off = busy ? ' disabled' : '';
-  if (typed.type === 'choice')
-    return `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${off}>${esc(c)}</button>`).join('')}</div>`;
-  const send = `<div class="dc-acts">${decideBtn('other', 'Send', true, ' data-dc-needs="#dc-other" disabled')}</div>`;
-  if (typed.type === 'number') {
-    const {min, max} = typed;
-    const range = min != null && max != null ? `${min}–${max}` : min != null ? `≥ ${min}` : max != null ? `≤ ${max}` : '';
-    const bounds = (min != null ? ` min="${min}"` : '') + (max != null ? ` max="${max}"` : '');
-    return `<label class="dc-notes"><span>${esc(range)}</span><input id="dc-other" type="number" step="1" inputmode="numeric"${bounds} aria-label="${esc(typed.question || typed.name)}" autocomplete="off"></label>${send}`;
-  }
-  return `<textarea id="dc-other" rows="3" maxlength="4000" aria-label="${esc(typed.question || typed.name)}"></textarea>${send}`;
-}
 /** What Give to…'s suggestions read: the whole task the screen loads (its body and area tags), else the item's brief
     while that read is on its way or failed. */
 const decideGiveTask = (it: NeedsEntry): GiveToTask | null => decideAboutOf(it)?.task || it.task || null;
@@ -1347,7 +1379,7 @@ function decidePaintSideKeepGive(st: DecState, it: NeedsEntry) {
 }
 /** Snooze and its menu, at the end of an ask's answer row (an icon, no word) or in your own task's row (`word`): 1 hour,
     1 day, 1 week, 1 month, then Other, a time of your own in the same menu. One menu for both. It opens upward from a
-    row at the bottom and downward from one near the top (decideSnoozePlace), at the row's end, off the other buttons. */
+    row at the bottom and downward from one near the top (decideMenuPlace), at the row's end, off the other buttons. */
 function decideSnoozeHTML(st: DecState, word = ''): string {
   const busy = st.busy ? ' disabled' : '', open = st.more === 'snooze';
   const btn = word
@@ -1364,9 +1396,9 @@ function decideSnoozeHTML(st: DecState, word = ''): string {
     : item('other', 'Other');
   return `<span class="dc-snzw">${btn}<span class="dc-snz" role="menu" aria-label="Snooze">${DEC_SNOOZE.map(([k, l]) => item(k, l)).join('')}${other}</span></span>`;
 }
-/** The open Snooze menu goes up from its button, unless there is no room above it (a row near the top): then down. */
-function decideSnoozePlace(host: HTMLElement) {
-  const menu = host.querySelector<HTMLElement>('.dc-snz'), btn = menu?.parentElement?.querySelector<HTMLElement>('[data-dc="snooze"]');
+/** An open Snooze or ⋯ menu goes up from its button, unless there is no room above it (a row near the top): then down. */
+function decideMenuPlace(host: HTMLElement) {
+  const menu = host.querySelector<HTMLElement>('.dc-snz'), btn = menu?.parentElement?.querySelector<HTMLElement>('[aria-haspopup="menu"]');
   if (!menu || !btn) return;
   const top = btn.getBoundingClientRect().top, room = (host.closest('.decide')?.querySelector('.dc-head')?.getBoundingClientRect().bottom || 0);
   menu.classList.toggle('dc-snz-down', top - room < menu.offsetHeight + 8);
@@ -1722,6 +1754,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   if (!el?.closest('.dc-where')) decideMenu(false);
   // A click off Snooze's open menu only closes it: never an answer under it by a tap that meant to dismiss.
   if (st.more === 'snooze' && !el?.closest('.dc-snzw')) { decideSnoozeClose(st); return; }
+  if (st.more === 'ask' && !el?.closest('.dc-askw')) { decideAskMoreClose(st); return; }
   const at = decideCurrent(st);
   // The version menu closes on any click but its control's own.
   const vmenu = at ? `${at.id}:vmenu` : '';
@@ -1813,8 +1846,24 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       return;
     }
     case 'reply': await decideReplySend(st, it, '#dc-reply'); return;
-    case 'askback': await decideReplySend(st, it, '#dc-other'); return;
-    case 'write': await decideReplySend(st, it, '#dc-other', decideRid(it)); return;
+    case 'ask-more':
+      if (decideAskMoreClose(st)) return;
+      st.more = 'ask'; decidePaintSide(st);
+      ($('.decide .dc-askw [role="menuitem"]') as HTMLElement | null)?.focus({preventScroll: true});
+      return;
+    case 'askback': {
+      // Ask back sends what is in the box; with nothing there it asks for the words first, and sends nothing.
+      st.more = '';
+      if (!decideNote('#dc-other')) {
+        decidePaintSide(st);
+        const box = $('#dc-other') as HTMLTextAreaElement | null;
+        if (box) { box.placeholder = 'Ask what they mean'; box.focus({preventScroll: true}); box.scrollIntoView({block: 'nearest'}); }
+        return;
+      }
+      // A bot's question: the comment names it, and the server writes it to the bot (answers stay its own).
+      await decideReplySend(st, it, '#dc-other', decideAsker(it).startsWith('bot:') ? decideRid(it) : '');
+      return;
+    }
     case 'dont-know': await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, DEC_DONT_KNOW, ver), decideUndoAnswer); return;
     case 'give-back': await decideDo(st, it, 'Given back', () => taskAnswer(taskId, rid, DEC_GIVE_BACK, ver), decideUndoAnswer); return;
     case 'task': decideStop(); void taskModalOpen(taskId, undefined, {direct: true}); return;

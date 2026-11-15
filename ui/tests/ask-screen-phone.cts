@@ -9,7 +9,7 @@ import type {Page, Route} from 'playwright';
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
 // - Send back is on with an empty note: a tap focuses Notes with "Say what to change" and sends nothing; Notes starts one
 //   line tall, its placeholder Notes again once the item is left;
-// - an ask with nothing to show opens on its question, right under the header: a question whose task has no text;
+// - a question opens on itself, right under the header, its task's line under it;
 // - an OK with nothing attached (no grant, no shows: a pitch is the task itself) shows its task's title once and text
 //   above the question, not a blank pane; an OK whose only show is a page shows the page and not the task's text;
 // - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it;
@@ -249,7 +249,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     // An ask with nothing to show opens on its question, right under the header (‹ or › to it).
     if (!await dialog.locator('.dc-q', {hasText: Q[2]!}).count()) await page.locator(await page.locator(prev).isEnabled() ? prev : next).click();
     await at(3);
-    await dialog.locator('.dc-thing .dc-doc').waitFor({state: 'attached'});
+    await dialog.locator('.dc-thing .dc-bg').waitFor({state: 'attached'});   // its task: one line under it (#3786)
     await page.waitForTimeout(100);
     const head = (await box(page, '#need-card .dc-head'))!, q = (await box(page, '#need-card .dc-q'))!;
     check(q.y - (head.y + head.height) <= 24, `the question opens the screen (${q.y - (head.y + head.height)} px under the header)`);
