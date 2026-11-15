@@ -24,10 +24,11 @@ class Model:
     """A writer that answers in turn from `answers` (the last one again once they run out) and keeps each prompt."""
 
     def __init__(self, *answers):
-        self.answers, self.prompts, self.model = list(answers), [], "acme-opinion-model"
+        self.answers, self.prompts, self.systems, self.model = list(answers), [], [], "acme-opinion-model"
 
     def __call__(self, system, user):
         self.prompts.append(user)
+        self.systems.append(system)
         answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
         if isinstance(answer, Exception):
             raise answer
@@ -290,6 +291,56 @@ def test_an_ok_picks_a_button_and_a_question_one_of_its_choices_or_nothing(api, 
     _, item = ask_ben(api, line="OK the third note?", kind="ok")
     opinions(api, [item])
     assert opinions(api, [item])[item]["state"] == "none"
+
+
+CHANNELS = "Which channels do you sell on, and where do your spend and customer numbers live?"
+
+
+def test_a_question_is_asked_as_a_question_for_the_person_and_never_judged_as_a_page(api, monkeypatch):
+    """Tico Team, Nov 15 (#3786): a bot's "which channels" got "Can't answer yet. Page names no channels or systems"."""
+    wants = {"pick": "", "line": "Wants a list: your channels, and where spend and customer numbers live", "score": 60}
+    found = model(monkeypatch, wants)
+    _, item = ask_ben(api, line=CHANNELS)
+    opinions(api, [item])
+    assert opinions(api, [item])[item] == {"id": item, "state": "ready", "note": "", **wants}
+    system, prompt = found.systems[0], found.prompts[0]
+    assert system == F.QUESTION_SYSTEM != F.SYSTEM
+    assert "send_back" not in system and "Unanswerable as written" in system and "empty" in system
+    assert "Kind: a question for the person to answer, in their own words" in prompt
+    assert "What the ask shows" not in prompt, "a question shows no page, so none is named to it"
+    assert CHANNELS in prompt and "PO 1182" in prompt, "the task's own text, where the answer may be"
+    found = model(monkeypatch, {"pick": "OK", "line": "Approve. It looks right."})
+    _, item = ask_ben(api, line="OK the pitch?", kind="ok")
+    opinions(api, [item])
+    assert found.systems == [F.SYSTEM], "an OK keeps its own instructions"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Can't answer yet. Page names no channels or systems.",
+        "Send back. The ask is too vague.",
+        "Approve. It looks fine.",
+        "Cannot answer: the task holds no list.",
+    ],
+)
+def test_a_question_line_that_judges_it_as_an_ok_is_no_line(api, monkeypatch, line):
+    model(monkeypatch, {"pick": "send_back", "line": line, "note": "Name the channels.", "score": 70})
+    _, item = ask_ben(api, line=CHANNELS)
+    opinions(api, [item])
+    assert opinions(api, [item])[item] == {"id": item, **NONE}
+
+
+def test_a_question_line_saved_before_its_own_instructions_is_worked_out_again(api, monkeypatch):
+    writer = model(monkeypatch, {"pick": "", "line": "Wants a list: your channels, and where the numbers live"})
+    _, item = ask_ben(api, line=CHANNELS)
+    opinions(api, [item])
+    with api.app.state.store.transaction() as c:  # what Tico Team saved under the OK's instructions
+        c.execute("UPDATE ask_opinions SET line=?", ("Can't answer yet. Page names no channels or systems.",))
+    assert opinions(api, [item])[item]["state"] == "pending"
+    assert opinions(api, [item])[item]["line"] == "Wants a list: your channels, and where the numbers live"
+    assert len(writer.prompts) == 2
+    assert opinions(api, [item])[item]["state"] == "ready" and len(writer.prompts) == 2, "then saved, as any other"
 
 
 def test_an_ok_has_no_snooze_so_the_model_is_not_offered_it_and_a_snooze_pick_saves_nothing(api, monkeypatch):
