@@ -155,3 +155,71 @@ function taskLiveStart(d: TaskDialog, after: number | null = null) {
     present: (words: string) => { const el = $('[data-task-presence]', d); if (d.taskLive === live && el) el.textContent = words; }
   });
 }
+
+function taskLiveStop(d: TaskDialog) {
+  const live = d.taskLive;
+  if (!live) return;
+  sharedPlaceStop(live);
+  clearTimeout(live.draft.timer); live.draft.timer = 0;
+  // A blur starts the last save before a dialog leaves. Keep a failed draft for reopening this task.
+  if (!live.draft.error) void taskLiveSave(d, live);
+  taskLivePersist(live);
+  if (live.draft.owner === live.owner && !live.draft.flight && !Object.keys(live.draft.patch).length) TASK_EDIT_DRAFTS.delete(live.id);
+  d.taskLive = null;
+}
+function taskLiveDraft(id: string): TaskLiveDraft {
+  const draft: TaskLiveDraft = Object.assign(sharedDraft(), {bases: {}});
+  if (!sessionIdentity()) return draft;
+  for (const key of TASK_EDIT_FIELDS) {
+    try {
+      const kept = JSON.parse(localStorage.getItem(taskLiveStorageKey(id, key)) || 'null');
+      const value = (v: unknown) => typeof v === 'string' || key === 'size' && (v === null || Number.isFinite(v));
+      if (!value(kept?.value) || !value(kept?.base?.value) || !Number.isFinite(kept.base?.version)) continue;
+      draft.patch[key] = kept.value; draft.dirty[key] = kept.base.value; draft.bases[key] = kept.base;
+      draft.error = typeof kept.error === 'string' ? kept.error : '';
+    } catch {}
+  }
+  return draft;
+}
+// Capture immediately before replacing HTML: async reads must not snapshot text before the person finishes typing.
+function taskFormKey(el: Element, root: Element): string {
+  const path: string[] = [];
+  for (let node: Element | null = el; node && node !== root; node = node.parentElement) {
+    const here: Element = node;
+    const attr = ['id', 'data-task-field', 'name', 'aria-label', ...here.getAttributeNames().filter(k => k.startsWith('data-') && !['data-busy', 'data-loaded'].includes(k))]
+      .find(key => here.hasAttribute(key));
+    path.unshift(here.tagName.toLowerCase() + (attr ? `[${attr}="${CSS.escape(String(here.getAttribute(attr)))}"]`
+      : `:nth-of-type(${[...(here.parentElement?.children ?? [])].filter(n => n.tagName === here.tagName).indexOf(here) + 1})`));
+    // A unique semantic key survives inserted sections.
+    if (attr && root.querySelectorAll(path.join(' > ')).length === 1) return path.join(' > ');
+  }
+  return path.join(' > ');
+}
+function taskLiveWireField(d: TaskDialog, live: TaskLive, field: TaskField) {
+  if (field.readOnly || field.disabled) { field.oninput = field.onblur = null; return; }
+  const draft = live.draft, key = String(field.dataset.taskField), immediate = ['due', 'size'].includes(key);
+  const edit = () => {
+    const text = (field.hasAttribute('contenteditable') ? field.textContent : field.value) ?? '';
+    let value: TaskFieldValue = text;
+    if (key === 'due') {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+      if (!m) return;
+      const y = Number(m[1]), mo = Number(m[2]), day = Number(m[3]), when = new Date(y, mo - 1, day, 17, 0);
+      if (y < 2000 || y > 2200 || when.getMonth() !== mo - 1 || when.getDate() !== day) {
+        if (d.propsErrs?.id !== live.id) d.propsErrs = {id: live.id, map: new Map()};
+        d.propsErrs.map.set('due', 'That date is not valid.'); taskPropsMsgPaint(d); return;
+      }
+      value = when.toISOString();
+    }
+    if (key === 'size') { if (!field.checkValidity()) return; value = value === '' ? null : Number(value); }
+    if (value === live.fields[key]?.value && !(key in draft.dirty)) return;
+    if (!(key in draft.dirty)) draft.bases[key] = taskBaseCopy(live.fields, key);
+    sharedDraftPatch(draft, key, value);
+    draft.dirty[key] = taskBaseAt(draft.bases, key).value;
+    taskLivePersist(live);
+    if (!immediate) taskLiveSchedule(d, live);
+  };
+  field.oninput = edit;
+  field.onblur = () => { if (!draft.error) void taskLiveSave(d, live); taskLivePaint(d, live); };
+  if (immediate) field.onchange = () => { edit(); if (!draft.error) void taskLiveSave(d, live); };
+}

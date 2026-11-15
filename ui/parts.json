@@ -235,7 +235,8 @@
    "app/bot-details.ts",
    "app/bot-conversation.ts",
    "app/recruit.ts",
-   "app/bot-issues.ts"
+   "app/bot-issues.ts",
+   "app/bot-history.ts"
   ],
   "deps": [
    "settings",
@@ -346,7 +347,9 @@
    "app/company-page.ts",
    "app/redesign-org.ts",
    "app/redesign-market.ts",
-   "app/org-rules.ts"
+   "app/org-rules.ts",
+   "app/org-chart-shape.ts",
+   "app/drag-pan.ts"
   ],
   "deps": [
    "computers",
@@ -590,7 +593,8 @@
    "app/task-runs.ts",
    "app/task-props.ts",
    "app/task-live-form.ts",
-   "app/task-pages.ts"
+   "app/task-pages.ts",
+   "app/task-status-text.ts"
   ],
   "deps": [
    "task-files",

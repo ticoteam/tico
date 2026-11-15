@@ -31,10 +31,6 @@ const taskFinished = (t: Partial<Pick<TaskRow, 'status'>> | null | undefined) =>
 // task's own side: its parent, what it blocks, what it duplicates or follows up; `in` the other; related is `both`.
 const taskRels = (t: PartialTaskRow | null | undefined, kind: string, direction?: string) => ((t?.relations || {})[kind] || []).filter(r => !direction || r.direction === direction);
 const taskParent = (t: TaskRow | null | undefined) => taskRels(t, 'parent', 'out')[0] || null;
-function clipLine(s: string | null | undefined, n: number) {
-  s = String(s || '').replace(/\s+/g, ' ').trim();
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
-}
 const searchWords = (value: unknown) => String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
 const searchIncludes = (fields: unknown[], query: string) => {
   const haystack = searchWords(fields.filter(Boolean).join(' '));
@@ -46,9 +42,6 @@ function taskStatusLabel(t: {status?: string | null; stage?: unknown} | null | u
   if (!t) return '';
   const stage = t.status === 'open' && t.stage && typeof t.stage === 'object' ? String((t.stage as {name?: unknown}).name || '') : '';
   return stage || TASK_STATE_WORDS[String(t.status)] || String(t.status || '');
-}
-function taskStatusText(t: {status?: string | null; stage?: unknown}, label = taskStatusLabel(t)) {
-  return `<span class="task-status" data-status="${esc(t.status || 'open')}" aria-label="${esc(label)}" title="${esc(label)}">${esc(label)}</span>`;
 }
 
 // ---- the small things a row and a card carry
@@ -95,30 +88,6 @@ function occurrenceDay(t: {occurrence?: string | null; due_at?: string | null} |
   if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
   const [y, mo, d] = m[1]!.split('-').map(Number);
   return new Date(y!, mo! - 1, d!);
-}
-function taskDueInfo(t: (Partial<Pick<TaskRow, 'due_at' | 'occurrence' | 'status'>> & {owner_id?: string | null}) | null | undefined) {
-  if (!t?.due_at || taskFinished(t)) return null;
-  const at = parseServerTime(t.due_at); if (!at) return null;
-  const shown = occurrenceDay(t) || new Date(at);
-  const day = shortDay(shown);
-  if (actorSlug(t.owner_id) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
-  const late = at < Date.now();
-  // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
-  const start = (d: Date | number) => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(shown) - start(Date.now())) / 864e5);
-  const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days > 1 && days < 7
-    ? shown.toLocaleDateString(undefined, {weekday: 'short'}) : day;
-  return {at, day, kind: 'deadline', late, soon: !late && at - Date.now() < 2 * 864e5, words: late ? `Overdue ${day}` : `Due ${when}`};
-}
-// Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then. A task that depends on an
-// open task is blocked, never Snoozed, even under a snooze left open (backend/task_depends.py): no chip, no Unsnooze.
-function taskSnoozed(t: Pick<TaskV3, 'status' | 'snoozed' | 'snooze'> & PartialTaskRow | null | undefined) {
-  if (!t || taskFinished(t)) return false;
-  if (taskRels(t, 'depends_on', 'out').some(r => r.status === 'open')) return false;
-  return !!t.snoozed || !!t.snooze;
-}
-function snoozeDay(t: Pick<TaskV3, 'snooze'> | null | undefined) {
-  const until = parseServerTime(t?.snooze?.until);
-  return until ? shortDay(new Date(until)) : '';
 }
 // A face for an actor: a bot's avatar, a person's photo or initials.
 function actorFace(actor: string | null | undefined, size = 18) {
