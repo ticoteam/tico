@@ -35,6 +35,13 @@ async function drawn(page: Page, what: string) {
 }
 
 const down = (route: import('playwright').Route) => route.abort('internetdisconnected');
+// The Tools owner's chat (page-chat.ts): docked open at first where it fits, else the tab on the right edge opens it.
+async function openChat(page: Page) {
+  const tab = page.locator('body > .pgc-edge:not([hidden]) .pgc-tab');
+  await tab.or(page.locator('aside.pgc:not([hidden]) .pgc-name')).first().waitFor({timeout: t(20000)});
+  if (await tab.isVisible()) await tab.click();
+  await page.locator('aside.pgc .p-text').waitFor({timeout: t(15000)});
+}
 
 async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, thread: string, task: string) {
   const browser = await engine.launch({headless: true});
@@ -84,9 +91,8 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       const open = await cold(browser, hub);
       const {page} = open;
       await page.goto(hub.url + '/#/tools');
-      await page.locator('[data-pgc-open]').first().waitFor({timeout: t(20000)});
-      if (await page.locator('.pgc-chat').count() === 0) await page.locator('[data-pgc-open]').first().click();
-      await page.locator('.pgc-chat [data-kd-mark]').waitFor({timeout: t(15000)});
+      await openChat(page);
+      await page.locator('aside.pgc [data-kd-mark]').waitFor({timeout: t(15000)});
       assert.ok(open.parts.includes('key-drop'), name + ': the Tools chat downloaded its key drop');
       assert.deepEqual(open.errors, [], name + ': errors in the Tools chat');
       await open.close();
@@ -138,36 +144,31 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
     {
       const open = await cold(browser, hub);
       const {page} = open;
+      const KEY_DROP = /\/tico\/ui\/app\.bundle\.key-drop\.js/;
+      await page.route(KEY_DROP, down);
       await page.goto(hub.url + '/#/tools');
-      await page.locator('[data-pgc-open]').first().waitFor({timeout: t(20000)});
-      if (await page.locator('.pgc-chat').count()) await page.locator('[data-pgc-open]').first().click();
-      await page.waitForFunction(() => !document.querySelector('.pgc-chat'), null, {timeout: t(10000)});
-      await page.route(PART, down);
-      await page.route('**/api/v2/config', down);
-      await page.locator('[data-pgc-open]').first().click();
-      const box = page.locator('.pgc-chat .p-text');
-      await box.waitFor({timeout: t(15000)});
+      await openChat(page);
+      const box = page.locator('aside.pgc .p-text');
       await page.locator('.toast.err', {hasText: "Couldn't load this part of Tico. Check your connection and try again."}).first().waitFor({timeout: t(15000)});
-      assert.equal(await page.locator('.pgc-chat [data-kd-mark]').count(), 0, name + ': no key drop without its code');
+      assert.equal(await page.locator('aside.pgc [data-kd-mark]').count(), 0, name + ': no key drop without its code');
       const key = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
       // What reached the hub, not only what stayed in the box: no request but a save to Credentials carries the key.
       const leaks: string[] = [];
       page.on('request', r => { if (r.method() !== 'GET' && !r.url().includes('/v2/credentials') && (r.postData() || '').includes(key)) leaks.push(r.method() + ' ' + r.url()); });
       await box.fill('Here is the key ' + key);
       const tried = page.waitForEvent('requestfailed', {predicate: r => /\.key-drop\.js/.test(r.url()), timeout: t(15000)});
-      await page.locator('.pgc-chat .p-send').click();
+      await page.locator('aside.pgc .p-send').click();
       await tried;
       assert.ok((await box.inputValue()).includes(key), name + ': nothing is sent while the key drop cannot load');
-      await page.unroute(PART, down);
-      await page.unroute('**/api/v2/config', down);
-      await page.locator('.pgc-chat .p-send').click();
-      await page.waitForFunction(k => !(document.querySelector<HTMLTextAreaElement>('.pgc-chat .p-text')?.value || '').includes(k), key, {timeout: t(15000)});
+      await page.unroute(KEY_DROP, down);
+      await page.locator('aside.pgc .p-send').click();
+      await page.waitForFunction(k => !(document.querySelector<HTMLTextAreaElement>('aside.pgc .p-text')?.value || '').includes(k), key, {timeout: t(15000)});
       assert.match(await box.inputValue(), /\[key:[A-Z0-9_]+\]/, name + ': the key is locked before anything is sent');
-      await page.locator('.pgc-chat [data-kd-mark]').waitFor({timeout: t(10000)});
+      await page.locator('aside.pgc [data-kd-mark]').waitFor({timeout: t(10000)});
       await box.fill('Hello once the network is back');
-      await page.locator('.pgc-chat .p-send').click();
-      await page.locator('.pgc-chat').getByText('Hello once the network is back').first().waitFor({timeout: t(15000)});
-      await page.waitForFunction(() => (document.querySelector<HTMLTextAreaElement>('.pgc-chat .p-text')?.value || '') === '', null, {timeout: t(15000)});
+      await page.locator('aside.pgc .p-send').click();
+      await page.locator('aside.pgc').getByText('Hello once the network is back').first().waitFor({timeout: t(15000)});
+      await page.waitForFunction(() => (document.querySelector<HTMLTextAreaElement>('aside.pgc .p-text')?.value || '') === '', null, {timeout: t(15000)});
       assert.deepEqual(leaks, [], name + ': the key never went out in a message');
       assert.deepEqual(open.errors, [], name + ': errors in the Tools chat after the network came back');
       await open.close();
