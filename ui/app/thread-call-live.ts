@@ -47,7 +47,7 @@ async function callJoinNow(threadId: string, call: CallRecord, title: string, ge
           token: j.token, url: j.url, muted: false, sharing: false, leaving: false, timer: 0, gen};
   const here = CALL;
   room.on(LK.RoomEvent.TrackSubscribed, (track: CallTrack, _pub: unknown, who: CallParticipant | undefined) => { if (CALL === here) callTrackOn(track, who); });
-  room.on(LK.RoomEvent.TrackUnsubscribed, (track: CallTrack) => { track.detach().forEach(el => el.remove()); callScreenSync(); });
+  room.on(LK.RoomEvent.TrackUnsubscribed, (track: CallTrack) => { for (const el of track.detach()) el.remove(); callScreenSync(); });
   room.on(LK.RoomEvent.ParticipantConnected, callBarDraw);
   room.on(LK.RoomEvent.ParticipantDisconnected, callBarDraw);
   room.on(LK.RoomEvent.LocalTrackUnpublished, (pub: CallPublication) => { if (pub.source === LK.Track.Source.ScreenShare && CALL === here) { here.sharing = false; callBarDraw(); } });
