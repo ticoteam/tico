@@ -69,7 +69,7 @@ function decideAboutAhead(st: DecState) {
   const text = (it: NeedsEntry) => {
     if (decideKind(it) !== 'ok') return true;
     const v = st.ok.get(decideOkKey(it));
-    return v ? decideOkBare(v) : !(it.ask?.shows || []).length && !it.ask?.page;
+    return v ? decideOkBare(v) : !decideShowRefs(it).length && !it.ask?.page;
   };
   const shows = (k: string | undefined) => { const it = k ? st.items.get(k) : undefined; return it && decideTaskId(it) && text(it) ? it : null; };
   const now = shows(live[i]), next = live.slice(i + 1).map(shows).find(Boolean);

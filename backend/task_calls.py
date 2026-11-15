@@ -744,6 +744,33 @@ def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row
     return {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
 
 
+def earlier_page(conn: "sqlite3.Connection", task_id: str, visit_id: str, requirement: Row) -> Row | None:
+    """What a stage's OK that names nothing to show shows instead (#3784): the page that counted last on an earlier
+    visit of its task (the QA page at OK release), {file_id, version, ref, stage_id, stage, source}, or None. Only for
+    a stage's own OK with no `shows` and nothing bound to it; a bot's ask says what it shows. `source` is the page:
+    files.readable_page_refs takes this alone out of the entry for a reader who may not open it, never the ask."""
+    from . import task_asks
+    from . import task_engine as E
+    from . import task_pages
+
+    if requirement.get("kind") != "ok" or requirement.get("visit_id") or requirement.get("shows"):
+        return None
+    found = task_pages.earlier(conn, task_id, visit_id)
+    if not found or task_asks.grant(conn, str(requirement["id"])):
+        return None
+    ref = f"page:{found['file_id']}@{int(found['version'])}"
+    stage_id = str(found["stage_id"])
+    stage = str((E.stage(conn, stage_id) or {}).get("name") or stage_id)
+    return {
+        "file_id": found["file_id"],
+        "version": int(found["version"]),
+        "ref": ref,
+        "stage_id": stage_id,
+        "stage": stage,
+        "source": [ref],
+    }
+
+
 # The viewer of what is kept on record (the audit of a refusal, a stored response): anyone may come to read it, so a
 # private task it names is hidden as from someone who may not read that task.
 ON_RECORD = "*"
@@ -1020,6 +1047,8 @@ def _leave_entry(
     asked = ask_shown(conn, row, requirement)
     page: Row | None = asked.get("page")
     shows: list[Any] = [page["ref"]] if page else [] if private else asked["shows"]
+    # An OK that names nothing to show: the task's page from an earlier stage, for its parties alone.
+    earlier = None if private else earlier_page(conn, task_id, row["visit"]["id"], requirement)
     return {
         "requirement_id": requirement["id"],
         "kind": requirement["kind"],
@@ -1037,6 +1066,7 @@ def _leave_entry(
         # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
         **({"source": shows} if shows else {}),
         **({"page": page} if page else {}),
+        **({"earlier": earlier} if earlier else {}),
         "answer": _answer_view(conn, task_id, answer, private) if answer else None,
         "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
     }

@@ -207,6 +207,7 @@
 .dc-meta .dc-dot{color:var(--g5,var(--muted))}
 /* the line is one control: who asked gives way first */
 .dc-meta>.dc-vwrap{flex:0 1 auto;min-width:0}
+.dc-meta>.dc-meta-who{flex:0 1 auto;min-width:24px;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
 .dc-vwrap{position:relative;display:inline-flex}
 .dc-vbtn{display:inline-flex;align-items:center;gap:0 6px;min-width:0;max-width:100%;min-height:28px;margin:0 -6px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
 .dc-vbtn>*{flex:none}

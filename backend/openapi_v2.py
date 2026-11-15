@@ -2939,6 +2939,21 @@ SCHEMAS = {
             "shows": items({"type": "string"}),
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
+            # A stage's OK that names nothing to show: the page that counted last on an earlier visit of the task (the
+            # QA page at OK release), to a reader who may open it; to anyone else {removed, label} or absent.
+            "earlier": obj(
+                {
+                    "file_id": "s",
+                    "version": "i",
+                    "ref": "s",
+                    "stage_id": "s",
+                    "stage": "s",
+                    "source": items({"type": "string"}),
+                    "removed": "b",
+                    "label": "s",
+                },
+                required=[],
+            ),
             "answer": {"oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]},
             # A stage's answer: how it is named and what it takes. Absent on every other requirement.
             "typed": obj(

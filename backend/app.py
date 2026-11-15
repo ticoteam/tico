@@ -1703,8 +1703,11 @@ def create_app(settings=None):
         ).fetchone()
         value["parts"] = {"total": counts[0] or 0, "done": counts[1] or 0}
         if who is not None:
-            from .files import readable_page_refs
+            from .files import readable_earlier, readable_page_refs
 
+            # An OK's page from an earlier stage may live on another task: the file's own read check decides it.
+            for entry in value.get("to_leave") or []:
+                readable_earlier(c, auth, who, entry)
             value = readable_page_refs(c, auth, who, value)
             value = teammate_access.Known(c, who, auth).task(value)  # people the reader may not see
         return value

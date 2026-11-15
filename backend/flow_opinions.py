@@ -42,6 +42,8 @@ from . import judge as judge_
 from . import needs_lane as needs_lane_
 from . import pipeline_judges as PJ_
 from . import task_asks as task_asks_
+from . import task_calls as task_calls_
+from . import task_requirements as R_
 from . import updates as updates_
 from . import views as views_
 from .call_slots import NEUTRAL, Calls
@@ -56,6 +58,8 @@ judge: Any = judge_
 needs_lane: Any = needs_lane_
 PJ: Any = PJ_
 task_asks: Any = task_asks_
+task_calls: Any = task_calls_
+R: Any = R_
 updates: Any = updates_
 views: Any = views_
 
@@ -116,11 +120,30 @@ def pinned(c: Any, ask: Row) -> list[str] | None:
     return out
 
 
+def earlier(c: Any, item: Row) -> Row | None:
+    """The page a stage's OK that names nothing to show shows from an earlier stage (task_calls.earlier_page), when it
+    goes into the shared opinion: only a page with no audience of its own, which reads as its task does, so every
+    reader of the ask may read it. Worked out from the task, never from the reader's entry (which leaves the page out
+    for someone who may not open it), so the opinion's `ask_version` is one for everyone; `_reads` still checks the
+    reader. A page with its own audience stays out of the opinion, which is then read from the task's text."""
+    ask: Row = item.get("ask") or {}
+    if ask.get("kind") != "ok" or ask.get("shows") or ask.get("page"):
+        return None
+    requirement = R.get(c, str(item["requirement_id"]))
+    visit_id, _, _ = str(item["id"]).partition(":")
+    found: Row | None = task_calls.earlier_page(c, str(item["task_id"]), visit_id, requirement) if requirement else None
+    if not found or files.restricted_page_rows(c, [found["file_id"]]):
+        return None
+    return found
+
+
 def ask_refs(c: Any, item: Row) -> list[str] | None:
-    """Everything a Needs-you ask shows, each page pinned to its version (`pinned`): what its `ask_version` holds, so
-    a new version of any of them is a new ask, for the opinion and for a person's snooze of it (waiting_on.ask_version).
-    None as `pinned` gives it."""
-    return pinned(c, item.get("ask") or {})
+    """Everything a Needs-you ask shows, each page pinned to its version (`pinned`), and the page an OK that names
+    nothing shows from an earlier stage (`earlier`): what its `ask_version` holds, so a new version of any of them is a
+    new ask, for the opinion and for a person's snooze of it (waiting_on.ask_version). None as `pinned` gives it."""
+    refs = pinned(c, item.get("ask") or {})
+    shown_before = earlier(c, item) if refs is not None else None
+    return refs + [str(shown_before["ref"])] if refs is not None and shown_before else refs
 
 
 def ask_version(item: Row, refs: list[str]) -> str:
@@ -135,27 +158,8 @@ def ask_version(item: Row, refs: list[str]) -> str:
 
 
 def _reads(c: Any, auth: Any, who: Any, refs: list[str]) -> bool:
-    """Whether `who` may read every file `refs` name, each at the version named (else its current one), through the
-    read check the file's own route makes (files.version_refusal): a page's audience, the task, chat or bot it lives
-    on, its blob and the run that made it. A page ref that names no stored version is refused."""
-    if files.page_ref_denials(c, auth, who, refs):
-        return False
-    at: dict[str, int | None] = {}
-    for ref in refs:
-        if ref.startswith("page:"):
-            file_id, _, version = ref[len("page:") :].partition("@")
-            at[file_id] = int(version)
-    named: set[str] = files.page_references(refs, c)
-    for file_id in named - set(at):
-        at[file_id] = None
-    for file_id, version in at.items():
-        row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
-        if row is None:
-            return False
-        number = row["current_version"] if version is None else version
-        if files.version_refusal(c, auth, who, row, number, files.stored_version(c, file_id, number)):
-            return False
-    return True
+    """Whether `who` may read every file `refs` name, at the version named (files.page_refs_readable)."""
+    return bool(files.page_refs_readable(c, auth, who, refs))
 
 
 def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
@@ -175,6 +179,7 @@ def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
         return None
     visit_id, _, _ = str(item["id"]).partition(":")
     task: Row = item.get("task") or {}
+    shown_before = earlier(c, item)
     return {
         "id": str(item["id"]),
         "visit_id": visit_id,
@@ -186,6 +191,7 @@ def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
         "said": item.get("line") or "",
         "since": item.get("since") or "",
         "stage_id": task.get("stage_id"),
+        "earlier": shown_before["stage"] if shown_before else None,
     }
 
 
@@ -263,6 +269,7 @@ def prompt(c: Any, job: Row) -> str:
         f"The asker recommends: {brief['recommend']}" if brief.get("recommend") else "",
         f"It asks for: {typed.get('question') or typed.get('name')} ({typed.get('type')})" if typed else "",
         f"Task description:\n{(task['body'] or '')[:BODY_MAX]}" if task and task["body"] else "",
+        f"It shows the task's page from an earlier stage, {job['earlier']}" if job.get("earlier") else "",
         f"What the ask shows:\n{shown(c, job)}",
     ]
     return "\n".join(line for line in lines if line)
