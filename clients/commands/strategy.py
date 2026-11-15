@@ -857,7 +857,8 @@ def growth_customers_delete(api, args):
     },
 )
 def growth_numbers(api, args):
-    return api.get("growth/numbers", months=args.get("months"), month=args.get("month"))
+    query = {k: args[k] for k in ("months", "month") if args.get(k) is not None}
+    return api.get("growth/numbers", **query)
 
 
 @tool(

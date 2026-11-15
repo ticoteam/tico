@@ -1836,6 +1836,7 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     )
     assert run("growth", "economics", "--month", "2026-10") == ("GET", "growth/economics", {"month": "2026-10"})
     assert run("growth", "numbers", "--months", "6") == ("GET", "growth/numbers", {"months": 6})
+    assert run("growth", "numbers", "--month", "2026-10") == ("GET", "growth/numbers", {"month": "2026-10"})
     assert run("growth", "kpis") == ("GET", "growth/kpis", {})
     assert run("growth", "settings") == ("GET", "growth/settings", {})
     assert run("growth", "settings", "--set", "margin_pct=40", "--set", "unit=orders") == (
