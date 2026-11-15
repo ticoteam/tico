@@ -363,8 +363,6 @@ function renderSettingsBots() {
     }
     const machine = target.closest<HTMLSelectElement>('[data-bot-machine]');
     if (machine) void settingsMoveBot(machine);
-    const part = target.closest<HTMLSelectElement>('[data-task-row] [data-task-effort]');
-    if (part) void settingsSaveTaskPart(part);
   };
   settingsWireCombos(el);
   const copyAll = $('#copy-setup-prompt');

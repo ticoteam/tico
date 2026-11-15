@@ -62,7 +62,6 @@ function settingsBotEditorRows(e: BotEditRow) {
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
-    ${settingsTaskParts(e)}
     <div class="sb-row"><span>Computer</span>${settingsMachineSelect(e)}<span></span></div>
     ${settingsBrowserExitRow(e)}
     ${cloudMachineRowHTML(e)}`}`;
@@ -251,8 +250,7 @@ function settingsEditBot(slug = '', inline = false) {
   const pending = new Map<string, {label: string; run: BotRun}>();   // key → {label, run: async revision => next revision}
   const choiceKinds: ChoiceKind[] = ['model', 'fallback', 'task'];
   const pendingNames = () => [...[...pending.values()].map(item => item.label), ...(machinePick ? ['computer'] : []),
-    ...choiceKinds.filter(kind => settingsEditorPendingChoice(rows, kind)).map(kind => SETTINGS_CHOICE_KINDS[kind].name.toLowerCase()),
-    ...settingsEditorTaskParts(rows).map(([, name]) => name)];
+    ...choiceKinds.filter(kind => settingsEditorPendingChoice(rows, kind)).map(kind => SETTINGS_CHOICE_KINDS[kind].name.toLowerCase())];
   const paintPending = () => {
     if (!pendingLine) return;
     const names = pendingNames();
@@ -345,25 +343,12 @@ function settingsEditBot(slug = '', inline = false) {
       }
       const managesReports = eventElement(event)?.closest<HTMLInputElement>('[data-bot-manages-reports]');
       if (managesReports) stage('manages', 'manages its reports', managesReports.checked !== (managesReports.dataset.current === 'true') && settingsManagesReportsRun(managesReports));
-      const taskEffort = eventElement(event);
-      if (taskEffort instanceof HTMLElement && taskEffort.matches('[data-task-effort]')) taskEffort.dataset.touched = '1';
       const delivery = eventElement(event)?.closest<HTMLSelectElement>('[data-bot-app-delivery]');
       if (delivery) stage('delivery', 'app delivery', changed(delivery) && settingsAppDeliveryRun(delivery));
       paintPending();
     });
-    // A task model picked here changes the Task effort choices: the efforts of the model that would run tasks.
-    rows.addEventListener('tico:choice', (event: Event) => {
-      const box = eventElement(event)?.closest<HTMLElement & {picker?: {valid(): boolean; value(): string; changed(): boolean}}>('[data-bot-choice][data-kind=task]'), select: HTMLSelectElement | null | undefined = rows.querySelector('[data-task-effort]');
-      if (!box?.picker?.valid() || !select) { paintPending(); return; }
-      // Only settingsBotEditorRows(e) draws a Task model picker, so e (and bot) is a bot here.
-      const bot = S.emps.find(row => row.id === slug) || e, value = box.picker.value();
-      const choice = value ? settingsChoiceFromValue(value) : null, efforts = settingsModelEfforts(settingsTaskRunsOn(bot!, choice?.model || ''));
-      // Picking the task model back as it was shows its effort as it was, unless Task effort itself was changed.
-      const held = box.picker.changed() || select.dataset.touched ? select.value : select.dataset.current || '';
-      const effort = efforts.includes(held) ? held : choice?.effort || '';
-      settingsTaskEffortPaint(select, efforts, effort, !choice);
-      paintPending();
-    });
+    // A pick Applied in a picker is held until Save bot: the pending line names it.
+    rows.addEventListener('tico:choice', () => paintPending());
     rows.addEventListener('input', () => paintPending());
   }
   void botReposMount(dialog.querySelector('[data-bot-repos]'), slug);   // ui/app/settings-repositories.ts
@@ -446,7 +431,7 @@ function settingsEditBot(slug = '', inline = false) {
     try {
       if (editing) {
         const model = settingsEditorPendingChoice(rows, 'model'), fallback = settingsEditorPendingChoice(rows, 'fallback');
-        const task = settingsEditorPendingChoice(rows, 'task'), taskParts = settingsEditorTaskParts(rows);
+        const task = settingsEditorPendingChoice(rows, 'task');
         // A model change or a move starts a fresh session, so Save asks first; saying no saves nothing. A window
         // alone keeps the session.
         const bot = S.emps.find(row => row.id === slug) || e, target = model?.moved ? settingsChoiceFromValue(model.value) : null;
@@ -462,16 +447,12 @@ function settingsEditBot(slug = '', inline = false) {
           // Saved now: if the definition fails below, pressing Save again does not send it twice.
           settingsChoiceMarkSaved(fallback.box, fallback.value, fallback.compact);
         }
-        if (task || taskParts.length) {
-          // The task model, its window and Task effort in one save, each part not changed kept as it is.
+        if (task) {
+          // The task model, its effort and its window in one save, as the Task model picker holds them.
           // The bot's own model, and so its sessions, stay as they are.
-          const change: SettingsTaskChange = Object.fromEntries(taskParts.map(([select]) => ['effort', select.value]));
-          if (task?.moved) change.choice = task.value ? settingsChoiceFromValue(task.value) : null;
-          if (task?.resized) change.compact_at = task.compact;
-          rev = await settingsSaveTaskModel(bot, change, rev, true);
+          rev = await settingsSaveTaskModel(bot, settingsTaskChangeOf(task.value, task.compact), rev, true);
           saved = true;
-          if (task) settingsChoiceMarkSaved(task.box, task.value, task.compact);
-          taskParts.forEach(([select]) => { select.dataset.current = select.value; });
+          settingsChoiceMarkSaved(task.box, task.value, task.compact);
         }
         rev = (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
           display_name: form.elements.display_name.value, description: form.elements.description.value,
@@ -555,13 +536,6 @@ function settingsEditorPendingChoice(rows: ParentNode | null | undefined, kind: 
 function settingsChoiceMarkSaved(box: ChoiceBox, value: string, compact: number | null = Number(box.dataset.compactCurrent) || null) {
   box.dataset.current = value;
   box.dataset.compactCurrent = compact ? String(compact) : '';
-}
-// Task effort changed in the editor and not saved yet: [[select, name]].
-function settingsEditorTaskParts(rows: ParentNode | null | undefined): [HTMLInputElement | HTMLSelectElement, string][] {
-  const parts: [string, string][] = [['[data-task-effort]', 'task effort']];
-  return parts
-    .map(([selector, name]): [HTMLInputElement | HTMLSelectElement | null | undefined, string] => [rows?.querySelector<HTMLInputElement | HTMLSelectElement>(selector), name])
-    .filter((pair): pair is [HTMLInputElement | HTMLSelectElement, string] => !!pair[0] && pair[0].value !== (pair[0].dataset.current || ''));
 }
 function settingsEditOwners(slug: string, {stage}: {stage?: (run: BotRun, people: BriefPerson[]) => void} = {}) {
   const e = S.emps.find(row => row.id === slug);

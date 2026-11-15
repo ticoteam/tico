@@ -177,19 +177,18 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .sb-task-mark.on{opacity:1;color:var(--ink)}
 .sb-task-mark:disabled{cursor:default}
 .settings-bots-table tr.sb-task-row td{padding:4px 0 12px;background:var(--bg)}
-.sb-task-under{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,150px) minmax(0,1.4fr) auto;align-items:end;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.sb-task-under{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) auto;align-items:end;gap:8px 16px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .sb-task-under .settings-choice{display:block;min-width:0}
 .sb-task-under .settings-choice>.sb-pick{width:100%;justify-content:space-between}
 .sb-task-l{display:block}
 .sb-task-x{align-self:end}
-/* Task effort: labelled and drawn beside the Task model picker. */
+/* Task model and Fallback, each under its small label. */
 .sb-task-part{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:var(--t-sm);color:var(--muted)}
-.sb-task-part select{width:100%;min-width:0;max-width:100%;height:var(--ctl);padding:0 8px;font-size:var(--t-base);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}
 .sb-task-warning{margin:8px 0 0;padding:8px 10px;border-radius:6px;background:color-mix(in srgb,var(--warn,#b7791f) 12%,transparent);color:var(--ink);font-size:var(--t-sm)}
 @media (max-width:760px){
   .settings-bots-table tr.sb-task-row{display:block;padding:0 0 10px}
   .settings-bots-table tr.sb-task-row td{display:block}
-  .sb-task-under{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .sb-task-under{grid-template-columns:minmax(0,1fr)}
   .sb-task-under .sb-task-model{grid-column:1/-1}
   .sb-task-x{grid-column:1/-1;justify-self:end;width:44px;height:44px}
   .settings-bots-table td.sb-cell-model .sb-task-mark{min-height:44px}
