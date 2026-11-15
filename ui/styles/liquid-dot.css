@@ -59,7 +59,7 @@
 .flow-mark.live .f1{animation-delay:-.75s}
 @keyframes fl-ride{0%,100%{transform:translateY(-3.2px)}50%{transform:translateY(3.2px)}}
 @media (prefers-reduced-motion:reduce){.flow-mark g{animation:none!important}}
-/* The phone bar's Flow tab (decide.ts flowTabPaint): the tabs' grey, jade only while something needs you. */
+/* The phone bar's Flow tab (tasks.ts flowTabPaint): the tabs' grey, jade only while something needs you. */
 .mobile-flow .flow-mark{width:24px}
 .mobile-flow .flow-mark svg{fill:currentColor}
 .mobile-flow[data-waiting] .flow-mark svg{fill:var(--dot)}

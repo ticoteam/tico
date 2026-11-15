@@ -321,7 +321,7 @@ function threadsSideRender() {
   // Shown from the first paint, before the first read lands: only a server without threads (THREADS.on false) hides it.
   const on = THREADS.on !== false;
   const link = $('#nav-threads'); if (link) link.hidden = !on;
-  // On a phone the bar's slot is Flow, and Threads is in More (a bot keeps the Threads tab: decide.ts flowTabPaint).
+  // On a phone the bar's slot is Flow, and Threads is in More (a bot keeps the Threads tab: tasks.ts flowTabPaint).
   flowTabPaint();
   const more = $('#mobile-more [data-threads-badge]');
   if (THREADS.on !== true) { if (more) more.hidden = true; return; }

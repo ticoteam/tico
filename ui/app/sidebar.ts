@@ -989,7 +989,7 @@ function renderTree() {
   };
   document.querySelectorAll<HTMLElement>('[data-nav]').forEach(a => {
     // More is current only for pages the bottom bar does not have its own button for (Updates is in More, and so is
-    // Threads but for a bot, whose bar keeps its tab: decide.ts flowTabPaint).
+    // Threads but for a bot, whose bar keeps its tab: tasks.ts flowTabPaint).
     const inOverview = S.route === HOME || rdUnder(S.route, OVERVIEW) || rdUnder(S.route, CP_ROUTE);   // Company's tabs, Graph included
     const mobilePrimary = inOverview || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
       || ((S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE)) && document.querySelector<HTMLElement>('#mobile-threads')?.hidden === false);
