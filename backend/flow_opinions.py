@@ -6,7 +6,9 @@ a score (0-100, how much the ask needs doing now) that the screen sorts by and n
 `POST /api/v2/flow/opinions` takes the Needs-you ids of the asks in the screen's set (at most MAX_ITEMS) and answers at
 once with what is saved: `ready` with the opinion, `pending` while it is being worked out (ask again), `none` when there
 is none to give. Nothing waits on a model. An id that is not an ask on the caller's own Needs you (another kind, someone
-else's ask, a task they may not read, a bound OK or a page they may not open) is `none`, as an unknown id is.
+else's ask, a task they may not read, a bound OK, or a page or file they may not read at the version shown, by the
+check the file's own route makes) is `none`, as an unknown id is. That check is made for every caller, the one an
+opinion is worked out for and each one a saved opinion is served to, on the same pinned refs (`job_for`).
 
 Worked out on demand, never on a timer or a trigger: the call claims each ask with no fresh opinion (one `ask_opinions`
 row per ask, claimed inside a write transaction, so two callers never work out one ask twice) and starts it on a thread
@@ -20,9 +22,9 @@ was (`ask_version`: its sentence, what it shows and at which page version, its c
 task changes none of that. An opinion that could not be had (no line within LINE_MAX after one retry, a model error or a
 timeout) is `none` for NONE_MINUTES, then asked again.
 
-The model is the server's writer (the daily-update drafts' model, backend/updates.py `writer_for`), held to Decide's
-monthly spend cap as the rule drafts are (backend/feedback.py): the decision engine answers typed questions and writes
-no sentence. No writer, demo mode or rehearsal: every ask is `none`. Tico only advises: nothing here answers, sends back
+The model is the server's writer (the daily-update drafts' model, backend/updates.py `writer_for`), each attempt
+metered into Decide's monthly spend as LABEL, as the drafts are (`metered`): the decision engine answers typed
+questions and writes no sentence. No writer, demo mode or rehearsal: every ask is `none`. Tico only advises: nothing here answers, sends back
 or changes a task. What the person pressed in the end is the ask's own answers row (same visit and requirement).
 """
 
@@ -70,6 +72,7 @@ SHOWN_MAX = 6000  # what the ask shows, all of it together
 BODY_MAX = 1500  # the task's description
 READY, PENDING, NONE = "ready", "pending", "none"
 OK_PICKS = ("approve", "send_back", "snooze")
+LABEL = "flow-opinion"  # the spend row's label: an opinion's model call under the decisions cap (`judge.spend`)
 
 SYSTEM = (
     "You advise a person on one ask waiting on them in a work app where bots and people work tasks. Say which button "
@@ -88,40 +91,91 @@ RETRY = "\n\nYour line had {n} characters. Write the whole answer again with a l
 
 
 # ---- who may read an opinion ------------------------------------------------------------------------------------
-def ask_version(item: Row) -> str:
-    """The ask as its parties read it, as a short hash: its sentence, what it shows and at which page version, its
-    choices, brief, title and typed question. A comment on the task, or anything else about the task, is not in it.
-    Nothing in it depends on who reads it (the reader only changes `standing`, `may` and `answer`, which stay out, and
-    turns a bound OK's line private, which `sees` refuses), so everyone the ask reaches shares one row."""
-    ask: Row = item.get("ask") or {}
-    shown: Row = {key: ask.get(key) for key in ("kind", "line", "choices", "brief", "title", "typed", "shows")}
+def pinned(c: Any, ask: Row) -> list[str] | None:
+    """What the ask shows, its page first, with every page ref pinned to a version (`page:<file id>@<n>`): an
+    unversioned one at the page's current version, read in the caller's snapshot. These are the refs an opinion is
+    authorized on, hashed into its `ask_version` and read for its prompt, so all three name the same bytes. None when
+    a page ref names no page with a version."""
+    shows: list[Any] = ask.get("shows") or []
+    refs = [str(ref) for ref in shows]
     page: Row = ask.get("page") or {}
-    shown.update(page=page.get("ref"), said=item.get("line"))
+    if page.get("ref") and str(page["ref"]) not in refs:
+        refs.insert(0, str(page["ref"]))
+    out: list[str] = []
+    for ref in refs:
+        if not ref.startswith("page:"):
+            out.append(ref)
+            continue
+        file_id, _, version = ref[len("page:") :].partition("@")
+        if not version.isdigit():
+            found = c.execute("SELECT current_version FROM bot_files WHERE id=?", (file_id,)).fetchone()
+            if not found or not found[0]:
+                return None
+            version = str(found[0])
+        out.append(f"page:{file_id}@{int(version)}")
+    return out
+
+
+def ask_version(item: Row, refs: list[str]) -> str:
+    """The ask as its parties read it, as a short hash: its sentence, what it shows (`refs`, each page at its pinned
+    version), its choices, brief, title and typed question. A comment on the task, or anything else about the task, is
+    not in it. Nothing in it depends on who reads it (the reader only changes `standing`, `may` and `answer`, which
+    stay out, and turns a bound OK's line private, which `job_for` refuses), so everyone the ask reaches shares one row."""
+    ask: Row = item.get("ask") or {}
+    shown: Row = {key: ask.get(key) for key in ("kind", "line", "choices", "brief", "title", "typed")}
+    shown.update(refs=refs, said=item.get("line"))
     return hashlib.sha1(json.dumps(shown, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
-def sees(c: Any, auth: Any, who: Any, item: Row) -> bool:
-    """Whether the opinion on this Needs-you item may go to `who`: an ask whose entry they read in full (not a bound OK
-    they are no party to), whose pages they may open, and whose bound content, if any, they may preview."""
+def _reads(c: Any, auth: Any, who: Any, refs: list[str]) -> bool:
+    """Whether `who` may read every file `refs` name, each at the version named (else its current one), through the
+    read check the file's own route makes (files.version_refusal): a page's audience, the task, chat or bot it lives
+    on, its blob and the run that made it. A page ref that names no stored version is refused."""
+    if files.page_ref_denials(c, auth, who, refs):
+        return False
+    at: dict[str, int | None] = {}
+    for ref in refs:
+        if ref.startswith("page:"):
+            file_id, _, version = ref[len("page:") :].partition("@")
+            at[file_id] = int(version)
+    named: set[str] = files.page_references(refs, c)
+    for file_id in named - set(at):
+        at[file_id] = None
+    for file_id, version in at.items():
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
+        if row is None:
+            return False
+        number = row["current_version"] if version is None else version
+        if files.version_refusal(c, auth, who, row, number, files.stored_version(c, file_id, number)):
+            return False
+    return True
+
+
+def job_for(c: Any, auth: Any, who: Any, item: Row) -> Row | None:
+    """The work of an opinion on this Needs-you item, when it may go to `who`, else None. It may when it is an ask whose
+    entry they read in full (not a bound OK they are no party to), every file it shows is one they may read at the
+    version it is pinned to, and its bound content, if any, is one they may preview. Checked for every caller, the one
+    an opinion is worked out for and each one a saved opinion is served to, on the refs its `ask_version` holds: a
+    saved opinion reaches only a reader who may read everything its prompt was read from."""
     ask: Row | None = item.get("ask")
     if item.get("kind") != "ask" or not ask or ask.get("line") == task_asks.PRIVATE_LINE:
-        return False
-    if files.page_ref_denials(c, auth, who, list(ask.get("shows") or [])):
-        return False
+        return None
+    refs = pinned(c, ask)
+    if refs is None or not _reads(c, auth, who, refs):
+        return None
     rid = item["requirement_id"]
-    return not task_asks.grant(c, rid) or bool(task_asks.may_see(c, auth, who, rid))
-
-
-def _job(item: Row) -> Row:
+    if task_asks.grant(c, rid) and not task_asks.may_see(c, auth, who, rid):
+        return None
     visit_id, _, _ = str(item["id"]).partition(":")
     task: Row = item.get("task") or {}
     return {
         "id": str(item["id"]),
         "visit_id": visit_id,
-        "requirement_id": item["requirement_id"],
+        "requirement_id": rid,
         "task_id": item["task_id"],
-        "version": ask_version(item),
-        "ask": item["ask"],
+        "version": ask_version(item, refs),
+        "refs": refs,
+        "ask": ask,
         "said": item.get("line") or "",
         "since": item.get("since") or "",
         "stage_id": task.get("stage_id"),
@@ -150,34 +204,23 @@ def calls_for(store: Any) -> Any:
 
 
 def _page_text(c: Any, ref: str) -> str | None:
-    """The text of a page an ask shows (`page:<file id>[@<version>]`), at that version, else its newest."""
+    """The text of a page an ask shows, at the version its pinned ref (`page:<file id>@<n>`) names."""
     file_id, _, version = ref[len("page:") :].partition("@")
-    if version.isdigit():
-        found = c.execute(
-            "SELECT mime, digest, size FROM bot_file_versions WHERE file_id=? AND version=?", (file_id, int(version))
-        ).fetchone()
-    else:
-        found = c.execute(
-            "SELECT mime, digest, size FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT 1", (file_id,)
-        ).fetchone()
+    found = c.execute(
+        "SELECT mime, digest, size FROM bot_file_versions WHERE file_id=? AND version=?", (file_id, int(version))
+    ).fetchone()
     if not found:
         return None
     return PJ.text_of(c, {"mime": found[0], "blob_digest": found[1], "blob_size": found[2]})[0]
 
 
 def shown(c: Any, job: Row) -> str:
-    """What the ask shows, as a person opening it reads it, cut to SHOWN_MAX in all: each page at its version, any
-    other reference as written, and a bound OK's content."""
-    ask: Row = job["ask"]
+    """What the ask shows, as a person opening it reads it, cut to SHOWN_MAX in all: each page at the version its ref
+    is pinned to (`pinned`, the refs the opinion was authorized on), any other reference as written, and a bound OK's
+    content."""
     parts: list[str] = []
     left = SHOWN_MAX
-    shows: list[Any] = ask.get("shows") or []
-    refs = [str(ref) for ref in shows]
-    page_of: Row = ask.get("page") or {}
-    page: str | None = page_of.get("ref")
-    if page and page not in refs:
-        refs.insert(0, page)
-    for ref in refs:
+    for ref in job["refs"]:
         text = _page_text(c, ref) if ref.startswith("page:") else None
         parts.append((f"{ref}:\n{text}" if text else ref)[:left])
         left -= len(parts[-1])
@@ -243,12 +286,24 @@ def read(answer: Any, job: Row) -> Row | None:
     return {"pick": pick, "line": line, "note": note, "score": score}
 
 
-def ask(write: Writer, job: Row, user: str) -> tuple[Row | None, str | None]:
+def metered(store: Any, write: Writer, user: str) -> Any:
+    """One paid attempt, under the team's monthly decision cap and recorded in its spend (`judge.metered`) as LABEL, as
+    the daily-update drafts are (updates._draft_call): its spend row holds the label, the model and the cost, never the
+    prompt. A writer returns no usage, so it is charged at its ceiling. Over the cap it raises `spend_cap`, uncalled."""
+    model = str(getattr(write, "model", "") or "")
+
+    def call() -> Row:
+        return {"answers": True, "model": model, "answer": write(SYSTEM, user)}
+
+    return judge.metered(store, [model], user, SYSTEM, LABEL, call)["answer"]
+
+
+def ask(store: Any, write: Writer, job: Row, user: str) -> tuple[Row | None, str | None]:
     """(opinion, None), or (None, why): `shape` for an answer that holds none, `too_long` for a line over LINE_MAX
-    twice. A model failure raises."""
-    opinion = read(write(SYSTEM, user), job)
+    twice. Each attempt is metered. A model failure, or the cap, raises."""
+    opinion = read(metered(store, write, user), job)
     if opinion and len(opinion["line"]) > LINE_MAX:
-        opinion = read(write(SYSTEM, user + RETRY.format(n=len(opinion["line"]))), job)
+        opinion = read(metered(store, write, user + RETRY.format(n=len(opinion["line"]))), job)
         if opinion and len(opinion["line"]) > LINE_MAX:
             return None, "too_long"
     return (opinion, None) if opinion else (None, "shape")
@@ -268,7 +323,7 @@ def work(store: Any, calls: Any, write: Writer, job: Row, probe: Any) -> None:
         with J.within(DEADLINE):
             with store.read() as c:
                 user = prompt(c, job)
-            opinion, error = ask(write, job, user)
+            opinion, error = ask(store, write, job, user)
             answered = True
     except J.JudgeError as exc:
         error = exc.code or "error"
@@ -350,7 +405,8 @@ def opinions(store: Any, auth: Any, who: Any, ids: list[str]) -> Row:
     with store.read_transaction() as c:
         listed: list[Row] = views.needs_items(c, auth, who)
         items = {str(x["id"]): x for x in listed}
-        jobs = [_job(items[i]) for i in wanted if i in items and sees(c, auth, who, items[i])]
+        found = [job_for(c, auth, who, items[i]) for i in wanted if i in items]
+        jobs = [job for job in found if job is not None]
         write = writer(c, store) if jobs else None
     if not jobs:
         return {"opinions": list(out.values())}
