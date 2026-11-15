@@ -593,6 +593,8 @@ KEEP = (
             "idea_checks",
             # Jev's related bots for a task at a Related input stage (backend/related_input.py): kept with its tasks.
             "related_inputs",
+            # Flow's opinion on each ask (backend/flow_opinions.py): kept with its tasks.
+            "ask_opinions",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
             "run_starts",
             "turns",

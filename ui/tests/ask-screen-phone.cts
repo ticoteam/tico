@@ -90,6 +90,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
         shown_hash: okRead[1]!.slice(1).repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
       // The question's task has no text of its own: nothing to show.
       if (p === '/api/v2/tasks/t3') return json({task: {...brief('t3', 'Task 3'), body: ''}});
+      if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
       if (r.method() !== 'GET' && p.startsWith('/api/')) {
         writes.push(`${r.method()} ${p}`);
         const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/(?:answer|ok)$/);

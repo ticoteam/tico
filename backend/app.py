@@ -5554,6 +5554,9 @@ def create_app(settings=None):
     from . import thread_catchup
 
     thread_catchup.install(app, store, auth, mutate)
+    from . import flow_opinions
+
+    flow_opinions.install(app, store, auth)
     from . import maintenance, system_routines
 
     system_routines.install(app, store, auth, mutate)

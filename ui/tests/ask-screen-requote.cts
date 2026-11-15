@@ -55,6 +55,7 @@ const letter = (id: string, rid: string, blob: string) => ({id, approval_id: rid
       if (p === '/api/v2/oks/r9') return json({requirement_id: 'r9', subject: 'spec:1', content: {title: 'Plan', body: 'The plan.'}, shown_hash: '3'.repeat(64), standing: 'waiting', task_id: 't-r9'});
       if (p === '/api/v2/letters/L1') return json(current);
       if (p === '/api/v2/files/b1' || p === '/api/v2/files/b2') return route.fulfill({contentType: 'application/pdf', body: pdf});
+      if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
         if (p === '/api/v2/tasks/t-r1/asks/r1/ok')

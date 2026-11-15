@@ -90,6 +90,10 @@
 .nav-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--g4);color:var(--ink);font-size:var(--t-xs);font-weight:600;display:inline-flex;align-items:center;justify-content:center;margin-left:auto}
 .mobile-nav-item{position:relative}
 .mobile-nav-item .nav-badge{position:absolute;top:2px;left:calc(50% + 6px);margin:0}
+/* Flow's mark beside Tasks while something waits on you (decide.ts needsBadgePaint), in place of a number */
+.nav-flow{display:inline-flex;margin-left:auto}
+.nav-flow[hidden]{display:none}
+.mobile-nav-item .nav-flow{position:absolute;top:4px;left:calc(50% + 8px);margin:0}
 .upd-switch{display:flex;align-items:center;gap:8px;padding:4px 0}
 .bot-history{display:flex;flex-direction:column}
 .bot-history-item{padding:10px 0;border-top:1px solid var(--line)}.bot-history-item:first-child{border-top:0;padding-top:0}

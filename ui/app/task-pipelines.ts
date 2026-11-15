@@ -7,8 +7,8 @@
    before the snoozed ones; it holds no slot either. A task others depend on says "Blocks #307".
    A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
    for whoever may change the pipeline. Beside it, the quiet rules mark (a gavel, struck through when none apply) opens
-   the stage's rules (stage-rules.ts); then ▶ and how many items in the stage wait on the person opens the stage's review
-   (decide.ts decideStageOpen); there is no ▶ where none wait. On a phone the rules mark sits at the end of the stage
+   the stage's rules (stage-rules.ts); then Flow's mark and how many items in the stage wait on the person opens Flow on
+   the stage (decide.ts decideStageOpen); there is no mark where none wait. On a phone the rules mark sits at the end of the stage
    tabs. The columns scroll sideways in their own box, a fade on each edge that has more beyond it; a stage with no
    tasks is as tall as its header. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
    search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
@@ -133,13 +133,13 @@ function pvLimitTip(state: PvState, stage: PipelineStageRec): string {
   return `${n} of ${stage.task_limit} slots used.` + (person ? ` ${person} more ${person === 1 ? 'waits' : 'wait'} on a person and ${person === 1 ? 'holds' : 'hold'} no slot.` : '');
 }
 
-/** ▶ n: the stage's review, with how many of its items wait on the person; '' when none do. */
+/** Flow n: Flow on the stage, with how many of its items wait on the person; '' when none do. */
 function pvPlayHTML(stage: PipelineStageRec): string {
   const n = stage.id ? needsStageCount(stage.id) : 0;
   // Its slot is kept when none wait, so nothing moves when the count arrives.
   if (!n) return '<span class="pv-play pv-play-none" aria-hidden="true"></span>';
-  return `<button type="button" class="pv-play" data-pv-play="${esc(stage.id ?? '')}" aria-label="${esc(`Review ${stage.name}: ${n} ${n === 1 ? 'waits' : 'wait'} on you`)}" title="Review ${esc(stage.name)}">`
-    + `<svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tnum">${n}</span></button>`;
+  return `<button type="button" class="pv-play" data-pv-play="${esc(stage.id ?? '')}" aria-label="${esc(`Flow, ${stage.name}, ${n}`)}" title="Flow">`
+    + `${flowMarkHTML(13)}<span class="tnum">${n}</span></button>`;
 }
 
 /** The tasks of one stage that the search and the filters let through, in the order the page gave them: the awake

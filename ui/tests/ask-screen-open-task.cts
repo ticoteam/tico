@@ -40,7 +40,7 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
       try {
         await card(page).waitFor({timeout: 5000});
         assert.equal(await card(page).locator('.dc-q').innerText(), 'Approve the spec for Checkout flow');
-        assert.match(await card(page).locator('.dc-count').innerText(), /^\d of 3$/, 'walks the whole of Needs you, as from Needs you');
+        assert.equal(await card(page).locator('.dc-crumb').textContent(), 'All mine', 'walks the whole of Needs you, as from Needs you');
         assert.equal(await page.locator('#task-modal[open]').count(), 0, 'the task page does not open under it');
         assert.deepEqual(errors, []);
       } finally { await page.close(); }

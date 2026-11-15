@@ -1,11 +1,11 @@
 import type {Route} from 'playwright';
 // Offline browser check of Tasks › You and the ask screen (docs/pipelines-v3.md S2, S3), against a fake of the new routes:
-// - You lists each item as the sentence asked, under Answer and Review; play opens the first, "1 of 2";
+// - You lists each item as the sentence asked, under Answer and Review; Flow opens the first;
 // - an OK shows exactly what GET /api/v2/oks/{id} returned, and Approve sends that preview's hash;
 // - when the engine says it changed (409 task_changed), the new content is shown with "It changed. Look again." and
 //   nothing is sent again until a new click, which sends the new hash;
 // - after Approve the bar says "Approved" with Undo (POST /api/v2/answers/{id}/undo) and the next item shows;
-// - a question answers with its choice; then All caught up.
+// - a question answers with its choice; then All done.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -56,6 +56,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
       if (p === '/api/v2/oks/r1') return json({requirement_id: 'r1', subject: 'spec:1', content: content(), shown_hash: hash(), standing: 'waiting', task_id: 't1'});
+      if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
         writes.push({p, body});
@@ -84,7 +85,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await page.locator('#task-play').click();
     const dialog = page.locator('#need-card');
     await dialog.locator('.dc-q').waitFor();
-    assert.equal(await dialog.locator('.dc-count').innerText(), '1 of 2');
+    assert.equal(await dialog.locator('[data-dc="prev"]').isDisabled(), true, 'the first of the walk');
     assert.equal(await dialog.locator('.dc-q').innerText(), 'Which plan do new signups get?');
     await dialog.locator('[data-dc="next"]').click();
 
@@ -106,7 +107,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     // The question is next: its choice answers it.
     assert.equal(await dialog.locator('.dc-q').innerText(), 'Which plan do new signups get?');
     await dialog.locator('[data-dc-choice="Pro trial"]').click();
-    await dialog.getByText('All caught up').waitFor();
+    await dialog.getByText('All done').waitFor();
     assert.deepEqual(writes[2], {p: '/api/v2/tasks/t2/asks/r2/answer', body: {value: 'Pro trial', version: 3}});
 
     // Undo on the bar takes the last answer back.
