@@ -33,7 +33,9 @@ const HARNESSES = [
 const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '700K', '800K', '900K', '1M'];
 
 // `canSet` is the server's answer for this reader (`can_set_run_model`), whatever their role in the roster says.
-async function run(viewport: {width: number; height: number}, shot: string, me: unknown, canSet: boolean) {
+// `taskModel` is the bot's own task model: a run on Same as bot runs on it, so Compact offers only the sizes it holds.
+async function run(viewport: {width: number; height: number}, shot: string, me: unknown, canSet: boolean,
+  taskModel: {model: string; harness: string; runtime: string} | null = null) {
   const browser = await launch();
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
@@ -50,7 +52,7 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json(me);
       if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true, schedules: [], users: [{id: 'ana'}],
-        model: 'claude-sonnet-5-5', harness: 'claude', runtime: 'claude', reasoning_effort: 'high'}]);
+        model: 'claude-sonnet-5-5', harness: 'claude', runtime: 'claude', reasoning_effort: 'high', task_model: taskModel}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -81,6 +83,14 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     assert.equal(await sec.locator('select').count(), 0);
     const panel = await openPicker(box);
 
+    if (taskModel) {
+      // Same as bot means the bot's task model (500K), not its own model (1M).
+      assert.deepEqual(await panel.locator('[data-choice-compact] option').allInnerTexts(), ['Same as bot', ...SIZES.slice(0, 7)]);
+      await panel.locator('[data-choice-cancel]').click();
+      assert.deepEqual(posted, []);
+      assert.deepEqual(errors, []);
+      return;
+    }
     if (!canSet) {
       // Someone the server does not let set the model reads what the task runs on, with nothing to apply, whatever
       // their role: the owner too, when the answer for this task is no.
@@ -149,5 +159,6 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
   await run({width: 1200, height: 800}, '', member, false);
   // Someone who manages the branch's original but not the branch gets the form too.
   await run({width: 1200, height: 800}, '', manager, true);
+  await run({width: 1200, height: 800}, '', owner, true, {model: 'gpt-small', harness: 'codex', runtime: 'codex'});
   console.log('task run model ok');
 })().catch(e => { console.error(e); process.exit(1); });
