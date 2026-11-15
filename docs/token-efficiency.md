@@ -37,7 +37,10 @@ larger runs are the point.
 - `model`, `billing`, `est_cost_usd`;
 - `session_kind`, `session_why`, `did_nothing`, `purpose`, `trigger_kind`, `task_id`.
 
-It returns at most 200 rows per call, so page by `since`. Count merged PRs with
+It returns only each bot's newest 200 rows after `since` (there is no `until` or `before`), so it cannot be paged
+back by `since`. Busy bots fill 200 rows in about 18 hours, so the Performance Owner collects turns three times a day
+and the weekly review reads that store. A bot sees about half the turns that the baseline below counts, so post-change
+reads are compared with a same-source baseline, not with that table. Count merged PRs with
 `gh search prs --repo <repo> --merged-at <from>..<to>` or the search API. Compare the same hours of the day across
 days, since night load is much lighter, and use at least three days for per-PR numbers. Codex runs report no
 `prompt_tokens`.
@@ -110,13 +113,42 @@ hard-coded; delete our own machinery before adding more; when unsure, run the mo
 
 Tracked as Tico tasks:
 
-- **37d4ed7b** (Models Owner): Gateway (pi) turns should load Tico tools on demand.
-- **729e445c** (Performance Owner): the usage-limit fallback inside a turn should resume its side session.
-- **c99a4b8c** (UI Owner): custom bots (UI Owner, Code Hygiene Owner) need the read-once rule and the subagents line in
-  their own AGENTS.md.
+- **b62349cb** (Tasks Product Owner): keep-warm pings mostly land on sessions that are not resumed; skip stages whose
+  turn is a person's (see "First post-change read").
+- Done since Nov 14: **37d4ed7b** (Models Owner, Gateway turns load Tico tools on demand), **729e445c** (Performance
+  Owner, the usage-limit fallback resumes its side session). Closed: **c99a4b8c** (UI Owner, read-once rule and
+  subagents line in custom bots' AGENTS.md).
 - **28434211** (Performance Owner): owns this page and the weekly review routine.
 - **Keep-warm pings on Codex** rely on wording alone, because Codex has no per-turn limit.
 - **Cache audit:** measure cache writes on back-to-back warm resumes, including an effort change.
+
+## First post-change read: Nov 14 09:30Z to Nov 15 02:13Z
+
+Same hours of day as a same-source baseline, Nov 13 09:30Z to Nov 14 02:13Z (16.7 h each), from the bot turns feed.
+**Not a fair whole-team comparison:** Builder and Builder 2 were paused from Nov 14 08:09Z and Nov 14 was a Saturday,
+so only 4 PRs merged (91 in the baseline). Tokens per merged PR waits for a full working week. The rows below leave the
+two Builders out of both windows.
+
+| | Before (no Builders) | After (no Builders) |
+|---|---|---|
+| Runs | 510 | 327 |
+| Input-equivalent tokens per hour | 6.7M | 2.6M |
+| Input-equivalent tokens per run | 219k | 132k |
+| Context per call, median / p90 | 76k / 148k | 58k / 172k |
+| Cost split: cache reads / writes / output / fresh | 50% / 28% / 13% / 9% | 50% / 38% / 12% / 0% |
+| New sessions | 78% of runs | 39% |
+| Did nothing | 12.9% of runs | 0.3% |
+| Fallback runs (Codex) | 153 | 1 |
+| Costliest 10% of tasks, share of spend | 30% | 67% |
+| Runs over the compact limit +10% | 15 (all bots, max 554k) | 0 (max 245k) |
+
+- Holding: compaction, skip-no-model runs, warm resumes (median cache write 14.9k vs 18.8k), fallback.
+- Cache-write share rose because reads fell faster; writes per run fell about 20% (62k to 50k).
+- **Keep warm is over its cap:** 165 pings, 5.6% of spend. 25 of the 28 pinged sessions had no real run within an hour
+  of their last ping (97% of ping spend); 46% of ping spend was on tasks at OK release, waiting on a person. Filed as
+  b62349cb.
+- Too early: tokens per merged PR, the code-bot tool list, reviews from the diff (Reviewer 1 median 552k per run on 8
+  runs).
 
 ## Weekly review (Performance Owner)
 
