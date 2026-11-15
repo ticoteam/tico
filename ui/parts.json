@@ -132,7 +132,8 @@
    "app/settings-people.ts",
    "app/cloud-agents.ts",
    "model-login.ts",
-   "app/catalog.ts"
+   "app/catalog.ts",
+   "app/settings-access-edit.ts"
   ],
   "deps": [
    "tags"
@@ -233,7 +234,8 @@
    "app/bot-page-view.ts",
    "app/bot-details.ts",
    "app/bot-conversation.ts",
-   "app/recruit.ts"
+   "app/recruit.ts",
+   "app/bot-issues.ts"
   ],
   "deps": [
    "settings",
@@ -447,7 +449,8 @@
    "app/finance-receipts.ts",
    "app/finance-subscriptions.ts",
    "app/finance-brief.ts",
-   "app/finance-statement-upload.ts"
+   "app/finance-statement-upload.ts",
+   "app/finance-shared.ts"
   ],
   "deps": [],
   "pages": [
@@ -585,7 +588,9 @@
    "app/roadmaps.ts",
    "app/task-code.ts",
    "app/task-runs.ts",
-   "app/task-props.ts"
+   "app/task-props.ts",
+   "app/task-live-form.ts",
+   "app/task-pages.ts"
   ],
   "deps": [
    "task-files",
