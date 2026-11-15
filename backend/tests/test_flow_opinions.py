@@ -292,6 +292,16 @@ def test_an_ok_picks_a_button_and_a_question_one_of_its_choices_or_nothing(api, 
     assert opinions(api, [item])[item]["state"] == "none"
 
 
+def test_an_ok_has_no_snooze_so_the_model_is_not_offered_it_and_a_snooze_pick_saves_nothing(api, monkeypatch):
+    found = model(monkeypatch, {"pick": "snooze", "line": "Snooze. It is not due until Friday.", "score": 20})
+    _, item = ask_ben(api, line="OK the pitch?", kind="ok")
+    opinions(api, [item])
+    assert opinions(api, [item])[item] == {"id": item, **NONE}
+    assert [(r["state"], r["pick"], r["line"], r["error"]) for r in rows(api)] == [("none", "", "", "shape")]
+    assert "snooze" not in (F.SYSTEM + found.prompts[0]).casefold()
+    assert "Kind: an OK (approve or send_back)" in found.prompts[0]
+
+
 def test_a_failure_or_no_model_is_none_and_nothing_waits(api, monkeypatch):
     model(monkeypatch, RuntimeError("provider down"))
     _, item = ask_ben(api, kind="ok")

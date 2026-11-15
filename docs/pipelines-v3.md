@@ -1430,7 +1430,8 @@ Rules:
 Today: the requirement review queue. Today the page to review is a link. New: the page is on the screen. Today: Approve,
 Mark met, Message Product Owner twice. New: Approve and Send back.
 
-This screen is **Flow**. It opens from Flow's mark: beside Tasks in the sidebar while something waits on you, in the
+This screen is **Flow**. It opens from Flow's mark: beside Tasks in the sidebar while something waits on you, the Flow
+tab in a phone's bottom bar (grey, jade while something waits; with nothing waiting it opens on All done), in the
 Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and on each stage with items.
 
 **New, desktop.** An approval of a page:

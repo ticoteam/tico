@@ -6,7 +6,7 @@ import type {Route} from 'playwright';
 //   in Los Angeles too (a clock and zone faked here), and 1 hour an hour on; Undo unsnoozes; the end counts it;
 // - the mic turns the mark into the wave and back, and nothing is sent;
 // - decideLineSet puts Tico's line in the bar and makes its pick the main button; null puts it back.
-// FLOW_SHOTS=<folder> saves the screen with a line on it, and your own task's snooze choices.
+// FLOW_SHOTS=<folder> saves the screen with a line on it, your own task's snooze choices and the undo after one.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -49,6 +49,8 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
       const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      // The icon font, so the shots show icons, not their names.
+      if (p.startsWith('/vendor/fonts/')) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/api/me') return json({...me, config});
@@ -131,6 +133,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
       if (what === 'snooze-day') await shot('flow-snooze');
       await dialog.locator(`[data-dc="${what}"]`).click();
       await dialog.locator('.dc-bar:not([hidden])').waitFor();
+      if (what === 'snooze-day') await shot('undo');
       assert.deepEqual(writes, [{p: '/api/v2/tasks/t3/snooze', body: {until, version: 3}}], what);
       await dialog.locator('.dc-q', {hasText: Q[1]!}).waitFor();
       assert.equal(await left(), 1, 'the snoozed task is out of the walk');

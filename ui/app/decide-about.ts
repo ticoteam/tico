@@ -56,16 +56,21 @@ function decideAboutLoad(taskId: string) {
     if (DEC_ABOUT.get(taskId) !== v) return;
     const st = DEC, it = st ? decideCurrent(st) : null;
     if (!st || !it || decideTaskId(it) !== taskId) return;
-    // An OK shows its own content, not the task's text.
-    if (decideKind(it) === 'ok') return;
+    // An OK shows its own content; one with nothing attached shows the task's text (decidePaintBody), and its side stays.
     decidePaintBody(st);
-    decidePaintSideKeepGive(st, it);
+    if (decideKind(it) !== 'ok') decidePaintSideKeepGive(st, it);
   })();
 }
-/** The item on screen, and ahead of it the next item that shows a task's text (an OK shows its own content). */
+/** The item on screen, and ahead of it the next item that shows a task's text. An OK shows its own content; one that
+    shows nothing (decideOkBare), or whose ask names nothing to show and is not read yet, shows its task's text. */
 function decideAboutAhead(st: DecState) {
   const live = decideLive(st), i = live.indexOf(st.at || '');
-  const shows = (k: string | undefined) => { const it = k ? st.items.get(k) : undefined; return it && decideKind(it) !== 'ok' && decideTaskId(it) ? it : null; };
+  const text = (it: NeedsEntry) => {
+    if (decideKind(it) !== 'ok') return true;
+    const v = st.ok.get(decideOkKey(it));
+    return v ? decideOkBare(v) : !(it.ask?.shows || []).length && !it.ask?.page;
+  };
+  const shows = (k: string | undefined) => { const it = k ? st.items.get(k) : undefined; return it && decideTaskId(it) && text(it) ? it : null; };
   const now = shows(live[i]), next = live.slice(i + 1).map(shows).find(Boolean);
   for (const it of [now, next]) if (it) decideAboutLoad(decideTaskId(it));
 }
@@ -95,7 +100,8 @@ function decideHandle(actor: string): string {
 /** "From Strategy Owner · 2h ago" (a task) or "Asked by Performance Owner · 5m ago · on Perf I31" (a question). */
 function decideAboutWho(it: NeedsEntry, kind: AskKind, t: DecAboutTask | null): string {
   const title = t?.title || it.task?.title || '';
-  const on = kind !== 'yours' && title ? ` · on <b>${esc(title)}</b>` : '';
+  // A person's own task and a bare OK carry the title as their heading already.
+  const on = kind !== 'yours' && kind !== 'ok' && title ? ` · on <b>${esc(title)}</b>` : '';
   if (kind === 'question') {
     const by = it.ask?.asked_by || '';
     return `<p class="dc-who">Asked by ${esc(by ? actorLabel(by) : 'Tico')}${it.since ? ` · ${esc(ago(it.since))}` : ''}${on}</p>`;
@@ -107,17 +113,18 @@ function decideAboutWho(it: NeedsEntry, kind: AskKind, t: DecAboutTask | null): 
 }
 
 // ---- the left side
-/** The left side of an item on a task: who asked and when, then the task's text, its links, files and pages. */
-function decideAboutHTML(it: NeedsEntry, kind: AskKind): string {
+/** The left side of an item on a task: who asked and when, then the task's text, its links, files and pages. `head`:
+    a heading over it (a bare OK's task title), and then no "No details." when the task has no text. */
+function decideAboutHTML(it: NeedsEntry, kind: AskKind, head = ''): string {
   const v = decideAboutOf(it), t = v?.task || null;
   const quote = kind === 'mention' && it.line ? `<blockquote class="dc-quote">${esc(it.line)}</blockquote>` : '';
-  if (!v || v.state === 'loading') return `<div class="dc-doc">${decideAboutWho(it, kind, null)}${quote}${skelRows(4)}</div>`;
-  if (v.state === 'failed') return `<div class="dc-doc">${decideAboutWho(it, kind, null)}${quote}<p class="muted">${esc(v.error)}</p></div>`;
+  if (!v || v.state === 'loading') return `<div class="dc-doc">${head}${decideAboutWho(it, kind, null)}${quote}${skelRows(4)}</div>`;
+  if (v.state === 'failed') return `<div class="dc-doc">${head}${decideAboutWho(it, kind, null)}${quote}<p class="muted">${esc(v.error)}</p></div>`;
   const text = decideAboutText(t);
-  const body = text ? `<div class="md dc-md">${md(text)}</div>` : '<p class="muted">No details.</p>';
-  // Nothing to show (no text, links or files): marked, so a phone opens on the question instead (decide.css).
-  const chips = decideAboutChips(t!, text), bare = !text && !chips && !quote ? ' dc-bare' : '';
-  return `<div class="dc-doc${bare}">${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
+  const body = text ? `<div class="md dc-md">${md(text)}</div>` : head ? '' : '<p class="muted">No details.</p>';
+  // Nothing to show (no heading, text, links or files): marked, so a phone opens on the question instead (decide.css).
+  const chips = decideAboutChips(t!, text), bare = !head && !text && !chips && !quote ? ' dc-bare' : '';
+  return `<div class="dc-doc${bare}">${head}${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
 }
 /** The task's links, files and the pages its text names (`page:<id>@<n>`), as chips: a file opens in the viewer, a page
     at its version. */

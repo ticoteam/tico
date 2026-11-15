@@ -103,7 +103,9 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('[data-dc="approve"]:not([disabled])').click();
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
     assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/asks/r1/ok', body: {shown_hash: 'b'.repeat(64)}});
-    assert.equal(await dialog.locator('.dc-bar span').innerText(), 'Approved');
+    assert.equal(await dialog.locator('.dc-bar .dc-bar-w').innerText(), 'Approved');
+    assert.equal(await dialog.locator('.dc-bar [data-dc="undo"]').getAttribute('aria-label'), 'Undo: Approved');
+    assert.ok(await dialog.locator('.dc-head .dc-bar').count() === 1, 'the undo is in the top bar');
 
     // The question is next: its choice answers it.
     assert.equal(await dialog.locator('.dc-q').innerText(), 'Which plan do new signups get?');
@@ -112,7 +114,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     assert.deepEqual(writes[2], {p: '/api/v2/tasks/t2/asks/r2/answer', body: {value: 'Pro trial', version: 3}});
 
     // Undo on the bar takes the last answer back.
-    assert.equal(await dialog.locator('.dc-bar span').innerText(), 'Answered');
+    assert.equal(await dialog.locator('.dc-bar .dc-bar-w').innerText(), 'Answered');
     await dialog.locator('[data-dc="undo"]').click();
     await dialog.locator('.dc-bar[hidden]').waitFor({state: 'attached'});
     assert.deepEqual(writes[3], {p: '/api/v2/answers/a2/undo', body: {}});
