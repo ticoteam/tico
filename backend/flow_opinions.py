@@ -90,7 +90,9 @@ RETRY = "\n\nYour line had {n} characters. Write the whole answer again with a l
 # ---- who may read an opinion ------------------------------------------------------------------------------------
 def ask_version(item: Row) -> str:
     """The ask as its parties read it, as a short hash: its sentence, what it shows and at which page version, its
-    choices, brief, title and typed question. A comment on the task, or anything else about the task, is not in it."""
+    choices, brief, title and typed question. A comment on the task, or anything else about the task, is not in it.
+    Nothing in it depends on who reads it (the reader only changes `standing`, `may` and `answer`, which stay out, and
+    turns a bound OK's line private, which `sees` refuses), so everyone the ask reaches shares one row."""
     ask: Row = item.get("ask") or {}
     shown: Row = {key: ask.get(key) for key in ("kind", "line", "choices", "brief", "title", "typed", "shows")}
     page: Row = ask.get("page") or {}

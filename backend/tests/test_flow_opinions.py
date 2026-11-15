@@ -2,6 +2,7 @@
 it must reach only someone the ask waits on, hold for 24 hours and only while the ask is as it was, keep its line to 80
 characters, never be worked out twice at once, and fail to `none` without ever holding the screen up."""
 
+import json
 import threading
 
 import pytest
@@ -9,7 +10,9 @@ import pytest
 from backend import flow_opinions as F
 from backend import updates
 from backend.store import H
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, post
+from backend.tests.helpers.page_requirement import _page
 
 ANA, BEN = "human:ana", "human:ben"
 GOOD = {"pick": "approve", "line": "Approve. It matches PO 1182, and it is due Friday.", "note": "", "score": 70}
@@ -57,6 +60,32 @@ def ask_ben(api, line="OK the launch note?", **more):
         asked = H.task_ask(c, ANA, task["id"], BEN, line, seen_version=H.task(c, task["id"])["version"], **more)
     items = get(api, "needs-you", token="ben-test")["items"]
     return task, next(i["id"] for i in items if i.get("requirement_id") == asked["requirement_id"])
+
+
+def page_ask(api, text, people=None):
+    """Ana asks Ben to OK a page (a Tico file) at its first version; `people`, when given, are the only ones who may
+    open it. (task, Needs-you id, file id)."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        X.bot(c, "writer")
+        fid, version = _page(c, store, text)
+        if people:
+            c.execute(
+                "INSERT INTO pages(file_id, audience, created_at, updated_at) VALUES (?,?,?,?)",
+                (fid, json.dumps({"people": people}), H.now(), H.now()),
+            )
+    task, item = ask_ben(api, line="OK the price page?", kind="ok", shows=[f"page:{fid}@{version}"])
+    return task, item, fid
+
+
+def give_cara(api, task, item):
+    with api.app.state.store.transaction() as c:
+        H.task_give(c, BEN, task["id"], item.partition(":")[2], "human:cara", H.task(c, task["id"])["version"])
+
+
+def rows(api):
+    with api.app.state.store.read() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM ask_opinions")]
 
 
 def opinions(api, ids, token="ben-test", expected=200, wait=True):
@@ -111,6 +140,51 @@ def test_an_opinion_runs_out_after_a_day_and_when_the_ask_changes_but_not_on_a_c
         c.execute("UPDATE requirements SET line='OK the launch note and the price?' WHERE id=?", (rid,))
     assert opinions(api, [item])[item]["state"] == "pending"
     assert len(writer.prompts) == 3 and "the price?" in writer.prompts[-1]
+
+
+def test_a_page_ok_is_read_at_the_version_it_asks_about_and_only_moving_that_ref_makes_a_new_ask(api, monkeypatch):
+    writer = model(monkeypatch, GOOD)
+    _, item, fid = page_ask(api, "<p>Version one says 40 dollars.</p>")
+    opinions(api, [item])
+    assert opinions(api, [item])[item]["state"] == "ready"
+    assert "40 dollars" in writer.prompts[0]
+    store = api.app.state.store
+    with store.transaction() as c:  # a newer version of the page: the ask is still about version 1
+        _page(c, store, "<p>Version two says 90 dollars.</p>", fid=fid)
+    assert opinions(api, [item])[item]["state"] == "ready" and len(writer.prompts) == 1
+    visit, _, rid = item.partition(":")
+    with store.transaction() as c:  # worked out again (a day on), it still reads version 1
+        c.execute(
+            "UPDATE ask_opinions SET written_at=? WHERE visit_id=? AND requirement_id=?",
+            (H.shift(H.now(), hours=-25), visit, rid),
+        )
+    opinions(api, [item])
+    assert "40 dollars" in writer.prompts[1] and "90 dollars" not in writer.prompts[1]
+    with store.transaction() as c:  # the ask moves to version 2: a new ask, read at version 2
+        c.execute("UPDATE requirements SET shows=? WHERE id=?", (json.dumps([f"page:{fid}@2"]), rid))
+    assert opinions(api, [item])[item]["state"] == "pending"
+    assert "90 dollars" in writer.prompts[2] and "40 dollars" not in writer.prompts[2]
+
+
+def test_a_reader_who_may_not_open_the_page_gets_none_even_with_an_opinion_saved(api, monkeypatch):
+    writer = model(monkeypatch, GOOD)
+    task, item, _ = page_ask(api, "<p>Salaries: 40 dollars an hour.</p>", people=["ana", "ben"])
+    opinions(api, [item])
+    assert opinions(api, [item])[item]["state"] == "ready"
+    give_cara(api, task, item)  # on Cara's Needs you now, but she may not open the page
+    assert item in {i["id"] for i in get(api, "needs-you", token="cara-test")["items"]}
+    assert opinions(api, [item], token="cara-test")[item] == {"id": item, **NONE}
+    assert len(writer.prompts) == 1 and [r["state"] for r in rows(api)] == ["ready"]
+
+
+def test_two_readers_of_one_ask_share_one_opinion(api, monkeypatch):
+    writer = model(monkeypatch, GOOD)
+    task, item, _ = page_ask(api, "<p>Version one says 40 dollars.</p>")
+    opinions(api, [item])
+    ben = opinions(api, [item])[item]
+    give_cara(api, task, item)
+    assert opinions(api, [item], token="cara-test")[item] == ben
+    assert len(writer.prompts) == 1 and len(rows(api)) == 1
 
 
 def test_a_line_over_80_characters_is_asked_for_once_more_then_given_up(api, monkeypatch):
