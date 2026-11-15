@@ -181,6 +181,24 @@ button.dc-jev{cursor:pointer}
 .decide.dc-empty .dc-side{border:0}
 .dc-done{display:grid;place-content:center;justify-items:center;gap:14px;min-height:240px;text-align:center}
 .dc-done h2{margin:0;font-size:var(--t-xl)}
+/* Suggested rules under All done (decideSugHTML): one line of rule each (it wraps on a phone), where it is from muted
+   under it; an added one muted with only Undo; one being rewritten dimmed. */
+/* .dc-side>div makes it a column: centred, the mark and Close at their own size; with suggestions, from the top. */
+.dc-side>.dc-done{align-items:center;justify-content:center}
+.dc-side>.dc-done.has{justify-content:flex-start;padding-top:56px}
+.dc-sug{display:flex;flex-direction:column;width:min(680px,100%);margin-top:18px;text-align:left}
+.dc-sug h3{margin:0 0 6px;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
+.dc-sr{display:flex;align-items:center;gap:10px;min-height:48px;padding:6px 0;border-top:1px solid var(--line)}
+.dc-sr .tx{flex:1;min-width:0}
+.dc-sr .tx b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-sr .tx span{color:var(--muted);font-size:var(--t-xs)}
+.dc-sr.on .tx b{color:var(--muted)}
+.dc-sr.busy .tx b{opacity:.45}
+.dc-sr .dc-icon{flex:none;width:32px;height:32px;font-size:var(--t-card);color:var(--muted)}
+.dc-sr .dc-icon:hover:not(:disabled){color:var(--ink)}
+.dc-sr button.ghost{flex:none}
+.dc-sf{display:flex;gap:8px;padding:0 0 10px}
+.dc-sf input{flex:1;min-width:0}
 /* "Getting ready to flow": over the first item for well under a second; the item under it is drawn and takes every
    tap and key (no pointer events here). None with reduced motion (decideStart). */
 .dc-start{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--bg);color:var(--muted);pointer-events:none;animation:dc-start .6s ease-in forwards}
@@ -193,6 +211,9 @@ button.dc-jev{cursor:pointer}
   /* The visible rectangle (viewport.ts): with the keyboard up, Approve and Send back stay above it. */
   .dc-dialog{inset:var(--chat-viewport-top,0) 0 auto;width:100%;height:var(--chat-viewport-height,100dvh);margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
   .dc-icon{width:44px;height:44px}
+  .dc-sr .tx b{white-space:normal}
+  .dc-sr .dc-icon{width:44px;height:44px}
+  .dc-side>.dc-done.has{padding-top:24px}
   /* ‹ › on a phone too, › kept 8 px clear of ✕ */
   .dc-nav [data-dc="next"]{margin-right:6px}         /* 6 px + .dc-nav's 2 px gap = 8 px */
   /* For 400 ms after an answer or Skip the next item's buttons take no taps, so a second tap on the same spot does not

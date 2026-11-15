@@ -5557,6 +5557,9 @@ def create_app(settings=None):
     from . import flow_opinions
 
     flow_opinions.install(app, store, auth)
+    from . import flow_suggestions
+
+    flow_suggestions.install(app, store, auth, mutate)  # Flow's suggested rules, drawn from send-back notes
     from . import maintenance, system_routines
 
     system_routines.install(app, store, auth, mutate)
