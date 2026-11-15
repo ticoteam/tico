@@ -54,13 +54,14 @@ interface DecRound {
   jev: {verdict: 'met' | 'not_met' | 'unsure' | 'failed' | null; reason: string};
   answers: {by: string; answer: 'ok' | 'no'; note: string; at: string}[];
 }
-/** "Changes since vK": K, whether the switch is on (on by default when the viewer sent vK back), the line diff from vK
-    (the page viewer's own, tfDiffHTML), and how many blocks the page marks with the switch off. */
+/** "Changes since vK", in the version menu (decideRoundsHTML): K, whether it is on (off when the page opens: it opens
+    clean), whether the text is the same, and what the pane shows when it is on: the page with each block not in vK
+    marked in its margin (pageMarkChanged), and how many blocks that marks. */
 interface DecSince {
   version: number;
   on: boolean;
   same: boolean;
-  diff: string;
+  html: string;
   marked: number;
 }
 /** The open screen: the walk's order, the item on screen, what each OK showed, what was answered here. */
@@ -86,8 +87,8 @@ interface DecState {
   seen: Set<string>;
   /** Screenshots and files added to the note of the item on screen (pasted, dropped or picked with 📎). */
   files: DecFile[];
-  /** What was opened on the right side, per item: `<item id>:jev` (Jev's reason), `<item id>:more:<part>` (a part
-      cut to 2 lines, shown in full). */
+  /** What was opened on the right side, per item: `<item id>:vmenu` (the version menu), `<item id>:more:<part>` (a
+      part cut to 2 lines, shown in full). */
   open: Set<string>;
 }
 /** A file added to a note: uploaded to the task's Files at once; its name and id end the note that is sent. */
@@ -228,7 +229,7 @@ function decideDialog(): HTMLDialogElement {
       <span class="dc-flow">${flowMarkHTML(24)}</span>
       <button type="button" class="dc-wave" data-dc="voice" aria-label="Voice" aria-pressed="true" title="Voice" hidden><i></i><i></i><i></i><i></i><i></i></button>
       <button type="button" class="dc-mic" data-dc="voice" aria-label="Voice" aria-pressed="false" title="Voice">${DEC_MIC}</button>
-      <p class="dc-say" aria-live="polite"></p>
+      <div class="dc-sayw"><button type="button" class="dc-say" data-dc-say aria-expanded="false"></button><span class="dc-vh" aria-live="polite"></span></div>
       <span class="dc-up"></span>
       <span class="dc-nav">
         <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
@@ -672,9 +673,25 @@ function decidePaintHead(st: DecState) {
   $('.dc-flow', root)!.hidden = DEC_VOICE;
   $('.dc-mic', root)!.hidden = DEC_VOICE;
   $('.dc-wave', root)!.hidden = !DEC_VOICE;
-  const say = DEC_VOICE ? 'Voice is coming soon' : it ? DEC_LINES.get(it.id)?.line || '' : '';
-  const line = $('.dc-say', root)!;
-  if (line.textContent !== say) line.textContent = say;
+  const said = !DEC_VOICE && it ? DEC_LINES.get(it.id) : undefined;
+  const say = DEC_VOICE ? 'Voice is coming soon' : said?.line || '';
+  const line = $('.dc-say', root)!, heard = line.nextElementSibling as HTMLElement;
+  if ((line.getAttribute('aria-label') || '') !== say) {
+    // What Tico would press is its icon, and the line gives its leading word to the fact; the name keeps the line whole.
+    const icon = said && it && decideKind(it) === 'ok' ? DEC_SAY_ICON[said.pick] : undefined;
+    const rest = icon ? say.replace(icon[2], '') || say : say;
+    line.innerHTML = say ? (icon ? `<span class="nav-icon dc-say-i" aria-hidden="true" title="${icon[1]}">${icon[0]}</span>` : '')
+      + `<span class="dc-say-t">${esc(rest)}</span>` : '';
+    if (say) line.setAttribute('aria-label', say); else line.removeAttribute('aria-label');
+    line.setAttribute('aria-expanded', 'false');
+    heard.textContent = say;
+  }
+  // On a phone the line is a callout under the bar, its caret at the mark (decide.css).
+  const wrap = line.parentElement, mark = $(DEC_VOICE ? '.dc-wave' : '.dc-flow', root);
+  if (say && wrap && mark && decidePhone()) {
+    const m = mark.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+    wrap.style.setProperty('--dc-caret-x', `${Math.round(m.left + m.width / 2 - w.left)}px`);
+  }
   // Tico thinking: the mark moves while the item on screen waits on its opinion, and the next ask still waiting is
   // named, faint, before ‹ › (none on a phone, decide.css).
   const thinking = (k: string) => DEC_OP.state.get(k) === 'pending';
@@ -716,6 +733,9 @@ const DEC_OP_MAX = 30;            // ids in one request, the one request of a ro
 const DEC_OP_POLL_MS = 2000;      // the next round, while some are pending or not yet asked
 const DEC_OP_FOR_MS = 60_000;     // pending ones are given up on this long after the last new ask was sent
 const DEC_OP_ORDER_MIN = 6;       // a set this big has its unseen items ordered by score
+/** What Tico would press on an OK, as the line shows it: the icon, its name, the leading word it stands for. */
+const DEC_SAY_ICON: Record<string, [string, string, RegExp]> = {
+  approve: ['thumb_up', 'Approve', /^approve\.\s*/i], sendback: ['thumb_down', 'Send back', /^send back\.\s*/i]};
 /** An OK's pick as the screen's buttons name it; a question's pick is its choice as written. */
 const DEC_OP_PICK: Record<string, string> = {approve: 'approve', send_back: 'sendback'};
 /** This visit's opinions: each asked ask's state, the fingerprint of the ask it is for (decideOpPrint), its score, the
@@ -874,14 +894,13 @@ function decidePaintBody(st: DecState) {
     const bare = !!v && decideOkBare(v) && !!decideTaskId(it);
     if (bare) decideAboutLoad(decideTaskId(it));
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
-    html = bare ? (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + decideSinceHTML(v)
-        + decideAboutHTML(it, kind, title ? `<h3 class="dc-title">${esc(title)}</h3>` : '')
+    const changed = v?.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '';
+    html = bare ? changed + decideAboutHTML(it, kind, title ? `<h3 class="dc-title">${esc(title)}</h3>` : '')
       : !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
-      : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + decideSinceHTML(v)
-        + (v.since?.on && !v.since.same ? `<div class="dc-doc dc-diff">${v.since.diff}</div>`
-          // Nothing attached (no grant, no shows): marked bare, so a phone opens on the question (decide.css).
-          : `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`);
+      // Changes since vK on (the version menu): the same page with its changed blocks marked.
+      : changed + `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}">${v.since?.on && v.since.marked ? v.since.html : v.html}`
+        + `${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
   } else if (decideTaskId(it)) {
     // Who asked and when, then the task's own text, its links, files and pages; the heading is on the right only.
     html = decideAboutHTML(it, kind);
@@ -900,16 +919,7 @@ function decidePaintBody(st: DecState) {
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
 }
 /** An OK whose view, as read, shows nothing: no grant's content, no page, no diff. Its task's text stands in. */
-const decideOkBare = (v: AskOkView): boolean => (v.state === 'ready' || v.state === 'none') && !v.html && !v.pages.length && !v.missing
-  && !(v.since?.on && !v.since.same);
-/** "Changes since vK" over a page that comes back: on, the line diff from vK; off, the page with its changed blocks
-    marked. "No text changes" when the text is the same. */
-function decideSinceHTML(v: AskOkView): string {
-  const s = v.since;
-  if (!s) return '';
-  return `<div class="dc-since"><label class="dc-switch"><input type="checkbox" role="switch" data-dc-since${s.on ? ' checked' : ''}>`
-    + `<span>Changes since v${s.version}</span></label>${s.same ? '<span class="dc-since-none">No text changes</span>' : ''}</div>`;
-}
+const decideOkBare = (v: AskOkView): boolean => (v.state === 'ready' || v.state === 'none') && !v.html && !v.pages.length && !v.missing;
 const decideBrowserSlot = (ref: string) => ref.includes('/') ? `<div class="dc-browser" data-dc-browser="${esc(ref)}"></div>` : '';
 /** The live view of the browser an ask shows. Its Done answers the ask "Done" when that is one of its choices (a bot's
     "sign in for me"), else it only closes the view, which leaves an Open browser button. */
@@ -952,12 +962,17 @@ function decidePaintSide(st: DecState) {
   const open = taskId && kind !== 'mention' ? `<button type="button" class="linkish dc-open-task" data-dc="task">Open task${num ? ` #${num}` : ''} ↗</button>` : '';
   // A page with its rounds read: the right side in parts (decideRoundsHTML), and the stage's paragraph is gone.
   const okView = kind === 'ok' && page ? st.ok.get(decideOkKey(it)) : undefined;
-  const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version, okView.notices) : null;
+  // There the task is "#N ↗" at the end of the one meta line, not a row of its own.
+  const tag = taskId ? `<button type="button" class="linkish dc-task-link" data-dc="task">${num ? `#${num}` : 'Task'} ↗</button>` : '';
+  // Who asked opens it, as beside an ask's heading: the asker, else the task's requester.
+  const by = it.ask?.asked_by || it.task?.requester_id || asker;
+  const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version, okView.notices, tag, okView.since, by) : null;
   // A person's own task and a question: a short heading in the task's own words, the full question once under it.
   const short = parts ? null : decideHeadOf(it, kind), go = short ? decideGoOf(decideAboutText(decideAboutOf(it)?.task)) : null;
   const goBtn = go ? `<button type="button" class="ghost dc-go" data-dc="go" data-dc-href="${esc(go[1])}">${esc(go[0])}</button>` : '';
   const links = goBtn || open ? `<div class="dc-links">${goBtn}${open}</div>` : '';
-  const head = parts ? `<h3 class="dc-q">${esc(title)}</h3>${parts.sub}${open}${parts.body}`
+  // The task's title heads a page's OK on a wide screen; a phone drops it, the page has its own heading (decide.css).
+  const head = parts ? `<h3 class="dc-q dc-q-page">${esc(title)}</h3>${parts.sub}${parts.body}`
     : short ? q('dc-q dc-q-short', short.head) + links
       + (short.full ? `<p class="dc-full">${esc(short.full)}</p>` : '')
     : q('dc-q', title || typed?.question || it.line) + open
@@ -973,9 +988,10 @@ function decidePaintSide(st: DecState) {
     // Approve and Send back. `product-validate-2`: Product added beside the pair it replaced (validate_gate.STAGES).
     const checked = !page && /^product-validate(-\d+)?$/.test(it.task?.stage_id || '') && decideAsker(it).startsWith('bot:')
       && /^page:/.test(it.ask?.shows?.[0] || '');
-    const ask = DEC_ASK_NOTE === it.id ? ' placeholder="Say what to change"' : '';
-    body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" data-dc-grow rows="${decideNoteRows()}" maxlength="4000"${ask}></textarea></label>
-      ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false,
+    // Notes and Attach are one row: the box says Notes, the clip sits inside it at the right; the files go under it.
+    const hint = DEC_ASK_NOTE === it.id ? 'Say what to change' : 'Notes';
+    body = `<div class="dc-note-row"><textarea id="dc-notes" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" aria-label="Notes" placeholder="${hint}"></textarea>${decideAttachHTML(st)}</div>
+      ${decideFilesHTML(st, true)}<div class="dc-acts">${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false,
         // On a phone Send back is always on; with no note it asks for one (decideClick). A wide screen keeps it off until then.
         decidePhone() ? busy : ` data-dc-needs="#dc-notes" disabled`)}${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}</div>`;
   } else if (typed) {
@@ -1058,18 +1074,6 @@ function decideBarSet(): HTMLElement | null {
 const DEC_BAR_WATCH = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { decideBarSet(); });
 // ---- a page that comes back: the right side in parts
 const DEC_JEV: Record<string, [string, string]> = {met: ['✓', 'Meets'], unsure: ['?', 'Unsure'], failed: ['?', 'Unsure'], not_met: ['✗', "Doesn't"]};
-/** Jev's verdict as a chip: ✓ Meets, ? Unsure or ✗ Doesn't, never a p-value; "Jev checking", muted, while it has none.
-    `open`: a button that shows the reason under it; otherwise the reason is the chip's title. */
-function decideJevChip(jev: DecRound['jev'], open: boolean | null): string {
-  const said = jev.verdict ? DEC_JEV[jev.verdict] : undefined;
-  if (!said) return open === null ? '<span class="dc-jev dc-jev-wait dc-jev-mark" role="img" aria-label="Jev checking" title="Jev checking">…</span>'
-    : '<span class="dc-jev dc-jev-wait">Jev checking</span>';
-  const label = `<span aria-hidden="true">${said[0]}</span> ${esc(said[1])}`;
-  // In a step of the history: the mark alone, its word and reason in its label and title.
-  if (open === null) return `<span class="dc-jev dc-jev-mark" data-v="${esc(jev.verdict || '')}" role="img" aria-label="Jev: ${esc(said[1])}"`
-    + ` title="${esc(`Jev: ${said[1]}${jev.reason ? ` · ${jev.reason}` : ''}`)}">${said[0]}</span>`;
-  return `<button type="button" class="dc-jev" data-v="${esc(jev.verdict || '')}" data-dc-jev aria-expanded="${open}" aria-label="Jev: ${esc(said[1])}">${label}</button>`;
-}
 /** A person's own words, cut to 2 lines, with "more" (shown in full once opened). */
 function decideClampHTML(st: DecState, it: NeedsEntry, part: string, text: string): string {
   const open = st.open.has(`${it.id}:more:${part}`);
@@ -1083,28 +1087,42 @@ function decideRoundAnswer(r: DecRound, last: boolean): string {
   if (a) return a.answer === 'no' ? 'Sent back' : "OK'd";
   return last ? '' : 'Replaced';
 }
-/** The right side of a page's OK, in parts: "Version N · date" with Jev's chip, the review history, What changed in vN,
-    Your note on vN−1, Your points. Each part is left out when it has nothing to say. */
-function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], version: number, notices: string[] = []): {sub: string; body: string} {
+/** The right side of a page's OK, in parts. First one meta line, one control: who asked (`by`), the stage, the
+    version, its date and Jev's word (a phone keeps the mark and leaves the date and the word to the menu), then the
+    task (`tag`, "#N ↗"). Its menu says it all in full (who, stage, version, date; Jev's word and reason), lists each
+    version on one line (date, Jev's mark, the answer it got), which opens that version in the page viewer, and
+    "Changes since vK", which marks the page's changed blocks (a dot on the control while on). Then What changed in vN,
+    Your note on vN−1, Your points; each part is left out when it has nothing to say. */
+function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], version: number, notices: string[] = [], tag = '',
+  since: DecSince | null = null, by = ''): {sub: string; body: string} {
   let at = decideRoundAt(rounds, version);
   if (at < 0) at = rounds.length - 1;
-  const now = rounds[at]!, me = myActor(), jevOpen = st.open.has(`${it.id}:jev`);
-  const stage = decideStageName(it.task?.stage_id), date = shortDate(now.at);
-  const sub = `<div class="dc-ver"><p class="dc-sub">${[esc(stage), `Version ${now.version}${date ? ` · ${esc(date)}` : ''}`].filter(Boolean).join(' · ')}</p>`
-    + `${decideJevChip(now.jev, jevOpen)}</div>`
-    + (jevOpen && now.jev.reason ? `<p class="dc-jev-why">${esc(now.jev.reason)}</p>` : '')
+  const now = rounds[at]!, me = myActor(), menu = st.open.has(`${it.id}:vmenu`);
+  const stage = decideStageName(it.task?.stage_id), date = shortDate(now.at), who = by ? actorLabel(by) : '';
+  const said = now.jev.verdict ? DEC_JEV[now.jev.verdict] : undefined;
+  const dot = '<span class="dc-dot" aria-hidden="true">·</span>', wide = (h: string) => `<span class="dc-m-wide">${h}</span>`;
+  const jev = said ? `<span class="dc-jev" data-v="${esc(now.jev.verdict || '')}">${said[0]}${wide(` ${esc(said[1])}`)}</span>`
+    : `<span class="dc-jev dc-jev-wait"><span class="dc-m-narrow">…</span>${wide('Jev checking')}</span>`;
+  // The line: who asked first, cut first when the line is too long (decide.css); the date and Jev's word only when wide.
+  const line = [who ? `<span class="dc-meta-who">${esc(who)}</span>` : '', stage ? `<span>${esc(stage)}</span>` : '', `<span>v${now.version}</span>`,
+    date ? wide(esc(date)) : '', jev].filter(Boolean).map((h, i) => (i ? h.startsWith('<span class="dc-m-wide"') ? wide(dot) : dot : '') + h).join('');
+  const row = (r: DecRound, i: number) => {
+    const j = r.jev.verdict ? DEC_JEV[r.jev.verdict] : undefined, answer = decideRoundAnswer(r, i === rounds.length - 1);
+    const bits = [`<b>v${r.version}</b>`, esc(shortDate(r.at)), j ? `<span class="dc-vjev" data-v="${esc(r.jev.verdict || '')}" title="${esc(`Jev: ${j[1]}${r.jev.reason ? ` · ${r.jev.reason}` : ''}`)}">${j[0]}</span>` : '',
+      answer ? `<span class="dc-step-ans" data-a="${esc(answer)}">${esc(answer)}</span>` : ''].filter(Boolean);
+    return `<button type="button" role="menuitem" class="dc-mi dc-vrow" data-dc-ver="${esc(r.file_id)}@${r.version}"${i === at ? ' aria-current="true"' : ''}>${bits.join(' · ')}</button>`;
+  };
+  const change = since ? `<button type="button" role="menuitemcheckbox" class="dc-mi dc-vrow" aria-checked="${since.on}" data-dc-since${since.same ? ' disabled' : ''}>`
+    + `Changes since v${since.version}${since.same ? '<span class="dc-since-none"> · No text changes</span>' : ''}</button>` : '';
+  const info = [[who, stage, `v${now.version}`, date].filter(Boolean).join(' · '),
+    said ? `Jev: ${said[1]}${now.jev.reason ? ` · ${now.jev.reason}` : ''}` : 'Jev checking'];
+  const sheet = info.map(t => `<p class="dc-vinfo" role="presentation">${esc(t)}</p>`).join('')
+    + (rounds.length > 1 ? rounds.map(row).join('') : '') + change;
+  const sub = `<div class="dc-meta"><span class="dc-vwrap"><button type="button" class="dc-vbtn${since?.on ? ' on' : ''}" data-dc-vmenu aria-haspopup="menu" aria-expanded="${menu}">`
+    + `${line}${TL_ICON.caret}</button><span class="dc-menu dc-vmenu" role="menu"${menu ? '' : ' hidden'}>${sheet}</span></span>${tag ? dot + tag : ''}</div>`
     // Why they are asked again, and a conflict their OK hands to the Builder: said before anything else is read.
     + notices.map(n => `<p class="dc-notice" role="note">${esc(n)}</p>`).join('');
   const parts: string[] = [];
-  if (rounds.length > 1) {
-    // One step per version: its date, Jev's chip and the answer it got. A click opens that version in the page viewer.
-    parts.push(`<nav class="dc-hist" aria-label="Review history"><ol>${rounds.map((r, i) => {
-      const answer = decideRoundAnswer(r, i === rounds.length - 1);
-      return `<li><button type="button" class="dc-step${i === at ? ' now' : ''}" data-dc-ver="${esc(r.file_id)}@${r.version}"${i === at ? ' aria-current="step"' : ''}>`
-        + `<b>v${r.version}</b><span class="dc-step-date">${esc(shortDate(r.at))}</span>${decideJevChip(r.jev, null)}`
-        + (answer ? `<span class="dc-step-ans" data-a="${esc(answer)}">${esc(answer)}</span>` : '') + '</button></li>';
-    }).join('')}</ol></nav>`);
-  }
   if (now.changed.length) {
     parts.push(`<section class="dc-part"><h4>What changed in v${now.version}</h4><ul class="dc-changed-list">${now.changed.slice(0, 5).map(l => `<li>${esc(l)}</li>`).join('')}</ul></section>`);
   } else if (now.note) {
@@ -1142,8 +1160,10 @@ function decideBotAskHTML(st: DecState, it: NeedsEntry, asker: string): string {
 }
 /** A file added or finished redraws only the files row, so the note keeps its focus, caret and text. */
 function decideFilesPaint(st: DecState) {
-  const row = $('.decide .dc-side [data-dc-attach]');
-  if (row) row.outerHTML = decideFilesHTML(st); else decidePaintSide(st);
+  const row = $('.decide .dc-side [data-dc-attach]') as HTMLElement | null, list = row?.dataset.dcAttach === 'list';
+  if (row) row.outerHTML = decideFilesHTML(st, list); else decidePaintSide(st);
+  const clip = list ? $('.decide .dc-side .dc-attach-in') : null;
+  if (clip) clip.outerHTML = decideAttachHTML(st);
 }
 // ---- the note: its size, and the screenshots and files that go with it
 const decidePhone = () => matchMedia('(max-width:760px)').matches;
@@ -1160,7 +1180,7 @@ function decideGrow(box: HTMLTextAreaElement) {
 /** A paste counts for the note only while a note box has the focus. */
 const eventInNote = (root: HTMLElement) => !!root.querySelector('[data-dc-attach]') && !!document.activeElement?.matches('#dc-notes, #dc-other, #dc-reply');
 /** The files row under the note: each file with its state and ✕ (Retry when it failed), then 📎 Attach. */
-function decideFilesHTML(st: DecState): string {
+function decideFilesHTML(st: DecState, list = false): string {
   const rows = st.files.map(f => `<li class="dc-file" data-dc-file="${f.key}" data-state="${f.state}"><span class="dc-file-name">${esc(f.file.name)}</span>`
     + `<span class="muted dc-file-state">${f.state === 'up' ? 'Uploading…' : f.state === 'failed' ? esc(f.error || 'Did not upload') : ''}</span>`
     + (f.state === 'failed' ? `<button type="button" class="linkish" data-dc="file-retry" data-dc-key="${f.key}">Retry</button>` : '')
@@ -1169,8 +1189,17 @@ function decideFilesHTML(st: DecState): string {
   // An OK of exactly what was shown (okGive) carries only that OK: the files go with Send back, and the row says so.
   const bound = rows && it && decideKind(it) === 'ok' && st.ok.get(decideOkKey(it))?.state === 'ready'
     ? '<p class="muted dc-file-note">Approve sends no note or files; Send back sends both.</p>' : '';
+  // `list`: the files alone, their Attach in the note's own row (decideAttachHTML).
+  if (list) return `<div class="dc-files" data-dc-attach="list">${rows ? `<ul>${rows}</ul>` : ''}${bound}</div>`;
   return `<div class="dc-files" data-dc-attach>${rows ? `<ul>${rows}</ul>` : ''}${bound}`
     + `<label class="dc-attach${full ? ' disabled' : ''}" title="Paste a screenshot, drop a file, or pick one"><input type="file" multiple data-dc-pick${full ? ' disabled' : ''} hidden>📎 Attach</label></div>`;
+}
+const DEC_CLIP = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+/** Attach as the clip inside the note's row: its word for a screen reader and in its title. */
+function decideAttachHTML(st: DecState): string {
+  const full = st.files.length >= DEC_FILES_MAX;
+  return `<label class="dc-attach dc-attach-in${full ? ' disabled' : ''}" title="Attach: paste a screenshot, drop a file, or pick one">`
+    + `<input type="file" multiple data-dc-pick${full ? ' disabled' : ''} hidden>${DEC_CLIP}<span class="dc-vh">Attach</span></label>`;
 }
 /** Files join the note on screen: each one uploads to the task's Files at once (the same upload as the task page). */
 function decideFilesAdd(st: DecState, files: File[]) {
@@ -1390,17 +1419,18 @@ async function decideSupportHTML(content: unknown): Promise<string> {
 }
 /** A page at the exact version an OK of it is for (`page:<id>@<n>`, a page requirement): its HTML read from that version
     and drawn sandboxed, as the page viewer draws it. A version that is not HTML (one attached before pages for an OK had
-    to be, often Markdown) is drawn as Markdown, so it reads as a document rather than one run-on paragraph. */
-async function decidePageHTML(fid: string, version: number, mark?: (html: string) => string): Promise<string> {
+    to be, often Markdown) is drawn as Markdown, so it reads as a document rather than one run-on paragraph. With
+    `before` (an earlier version's lines), also the same page with its blocks not in them marked, and how many. */
+async function decidePageHTML(fid: string, version: number, before: string[] | null = null): Promise<{html: string; marked: string; count: number}> {
   const file = await viewFile(fid, 'page.html', version);
   const text = await file.blob.text();
-  if (!text.replace(/^[\uFEFF\s]+/, '').startsWith('<')) return `<div class="md dc-page-md">${md(text)}</div>`;
-  const doc = htmlPreviewDoc(mark ? mark(text) : text);
-  return `<iframe class="html-view dc-page" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Version ${version}" srcdoc="${esc(doc)}"></iframe>`;
+  if (!text.replace(/^[\uFEFF\s]+/, '').startsWith('<')) return {html: `<div class="md dc-page-md">${md(text)}</div>`, marked: '', count: 0};
+  const frame = (raw: string) => `<iframe class="html-view dc-page" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Version ${version}" srcdoc="${esc(htmlPreviewDoc(raw))}"></iframe>`;
+  const out = before ? pageMarkChanged(text, before) : null;
+  return {html: frame(text), marked: out?.marked ? frame(out.html) : '', count: out?.marked || 0};
 }
 /** A page that comes back: its rounds, and, when the viewer answered an earlier version, "Changes since vK" (K the
-    last version they answered; on when they sent it back) with the page viewer's own line diff from vK. Returns vK's
-    lines, for the margin marks, or null. Rounds that do not load leave the right side as it was (the stage's line). */
+    last version they answered), off. Returns vK's lines, for the margin marks, or null. Rounds that do not load leave the right side as it was (the stage's line). */
 async function decideRoundsRead(v: AskOkView, it: NeedsEntry): Promise<string[] | null> {
   const taskId = decideTaskId(it), rid = decideRid(it), page = it.ask?.page;
   if (!taskId || !page) return null;
@@ -1417,8 +1447,7 @@ async function decideRoundsRead(v: AskOkView, it: NeedsEntry): Promise<string[] 
   try {
     const [a, b] = await Promise.all([[base.file_id, base.version], [page.file_id, page.version]].map(async ([f, n]) =>
       pageText(await (await viewFile(String(f), 'page.html', Number(n))).blob.text())));
-    v.since = {version: base.version, on: decideAnswerOf(base, me)?.answer === 'no', same: a === b,
-      diff: a === b ? '' : tfDiffHTML(a ?? '', b ?? ''), marked: 0};
+    v.since = {version: base.version, on: false, same: a === b, html: '', marked: 0};
     return (a ?? '').split('\n');
   } catch { return null; }
 }
@@ -1432,18 +1461,17 @@ function decideAnswerOf(r: DecRound, who: string, anyPerson = false) {
 /** A stage's OK shows what the requirement names: pages in full (a page requirement's at its pinned version), an email
     as frozen, a file at its version, the rest by name. One that does not load leaves Approve off (`missing`). */
 async function decideShowsRead(v: AskOkView, shows: string[], before: string[] | null = null) {
-  const parts: string[] = [];
+  const parts: string[] = [], marked: string[] = [];
   for (const ref of shows) {
+    const at = parts.length;
     const [kind, ...rest] = ref.split(':'), id = rest.join(':'), pinned = /^([^@]+)@(\d+)$/.exec(id);
     try {
       if (kind === 'page' && pinned) {
-        // The page asked about, with the blocks not in the version the viewer last answered marked in its margin.
+        // The page asked about, clean; with Changes since vK on, the blocks not in vK marked in its margin.
         const asked = `${pinned[1]}@${pinned[2]}` === v.page && before && v.since;
-        parts.push(await decidePageHTML(pinned[1]!, Number(pinned[2]), asked ? (html => {
-          const out = pageMarkChanged(html, before);
-          v.since!.marked = out.marked;
-          return out.html;
-        }) : undefined));
+        const page = await decidePageHTML(pinned[1]!, Number(pinned[2]), asked ? before : null);
+        parts.push(page.html);
+        if (asked && page.marked) { marked[at] = page.marked; v.since!.marked = page.count; }
         continue;
       }
       if (kind === 'page') { v.pages.push((await get<import('../types/api').GetPageResponse>('/v2/pages/' + encodeURIComponent(id), {fresh: true})).page); continue; }
@@ -1454,6 +1482,7 @@ async function decideShowsRead(v: AskOkView, shows: string[], before: string[] |
     parts.push(`<p class="dc-ref"><code>${esc(ref)}</code></p>`);
   }
   v.html = parts.join('');
+  if (v.since) v.since.html = parts.map((h, i) => marked[i] ?? h).join('');
 }
 
 // ---- acting
@@ -1542,29 +1571,43 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
   }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
-  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-walk], [data-dc-jev], [data-dc-more], [data-dc-ver], [data-dc-since]');
+  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-walk], [data-dc-more], [data-dc-ver], [data-dc-since], [data-dc-vmenu], [data-dc-say]');
   // A link in the task's text to a place in the app: there, as Go to goes (the item stays in Needs you).
   const link = el?.closest<HTMLAnchorElement>('.dc-thing a[href]'), there = link ? decideAppHref(link.getAttribute('href') || '') : '';
   if (there && !ev.defaultPrevented && ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey) { ev.preventDefault(); decideGoThere(st, there); return; }
   if (!el?.closest('.dc-where')) decideMenu(false);
-  if (!b || (b as HTMLButtonElement).disabled) return;
   const at = decideCurrent(st);
-  if (at && (b.dataset.dcMore != null || b.hasAttribute('data-dc-jev'))) {
-    // Jev's reason, or a part cut to 2 lines: shown on the right side of this item until it is left.
-    const key = b.dataset.dcMore != null ? `${at.id}:more:${b.dataset.dcMore}` : `${at.id}:jev`;
-    if (st.open.has(key) && b.dataset.dcMore == null) st.open.delete(key); else st.open.add(key);
+  // The version menu closes on any click but its control's own.
+  const vmenu = at ? `${at.id}:vmenu` : '';
+  if (vmenu && st.open.has(vmenu) && !el?.closest('[data-dc-vmenu]')) { st.open.delete(vmenu); decidePaintSide(st); }
+  if (!b || (b as HTMLButtonElement).disabled) return;
+  if (b.hasAttribute('data-dc-say')) {
+    // Tico's line is one line; a tap shows it whole, another cuts it again.
+    b.setAttribute('aria-expanded', String(b.getAttribute('aria-expanded') !== 'true'));
+    return;
+  }
+  if (at && b.hasAttribute('data-dc-vmenu')) {
+    if (st.open.has(vmenu)) st.open.delete(vmenu); else st.open.add(vmenu);
     decidePaintSide(st);
-    ($(b.dataset.dcMore != null ? '.decide .dc-side .dc-clamp.open' : '.decide .dc-side [data-dc-jev]') as HTMLElement | null)?.focus?.({preventScroll: true});
+    ($(st.open.has(vmenu) ? '.decide .dc-vmenu .dc-mi' : '.decide [data-dc-vmenu]') as HTMLElement | null)?.focus({preventScroll: true});
+    return;
+  }
+  if (at && b.dataset.dcMore != null) {
+    // A part cut to 2 lines: shown in full on the right side of this item until it is left.
+    st.open.add(`${at.id}:more:${b.dataset.dcMore}`);
+    decidePaintSide(st);
+    ($('.decide .dc-side .dc-clamp.open') as HTMLElement | null)?.focus?.({preventScroll: true});
     return;
   }
   if (b.dataset.dcVer) {
-    // A step of the review history opens that version in the page viewer.
+    // A version in the version menu opens in the page viewer.
     const [fid = '', n = ''] = b.dataset.dcVer.split('@');
     decideStop(); location.hash = `${pageHref(fid)}?v=${n}`; return;
   }
   if (at && b.hasAttribute('data-dc-since')) {
     const v = st.ok.get(decideOkKey(at));
-    if (v?.since) { v.since.on = (b as HTMLInputElement).checked; decidePaintBody(st); }
+    if (v?.since) { v.since.on = !v.since.on; decidePaintBody(st); decidePaintSide(st); }
+    ($('.decide [data-dc-vmenu]') as HTMLElement | null)?.focus({preventScroll: true});
     return;
   }
   // A row of the crumb's menu: that place's walk.

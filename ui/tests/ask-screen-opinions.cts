@@ -101,7 +101,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     const at = (n: number) => dialog.locator('.dc-q', {hasText: title(n)}).waitFor();
     const main = (sel: string) => dialog.locator(sel).evaluate(b => b.classList.contains('primary'));
     const mains = () => dialog.locator('.dc-side .primary').count();
-    const said = () => dialog.locator('.dc-say').textContent();
+    const said = async () => await dialog.locator('.dc-say').getAttribute('aria-label') ?? '';
     const open = async (first: string) => {
       await page.goto('about:blank');   // a fresh load each time, so the list is read again
       asked.length = 0; times.length = 0;
@@ -160,7 +160,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     // The OK: Send back is the main button, and its note fills the empty Notes.
     await dialog.locator('[data-dc="next"]').click();
     await dialog.locator('[data-dc="next"]').click();
-    await dialog.locator('.dc-say', {hasText: 'Send back. The price is missing.'}).waitFor();
+    await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor();
     assert.equal(await dialog.locator('#dc-notes').inputValue(), 'Add the price.');
     assert.equal(await main('[data-dc="sendback"]'), true);
     assert.equal(await main('[data-dc="approve"]'), false);
@@ -177,7 +177,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     assert.equal(await mains(), 0, 'while Tico thinks, no answer is the main one');
     await dialog.locator('#dc-notes').fill('My own words');
     ops['r1'] = {state: 'ready', pick: 'send_back', line: 'Send back. The price is missing.', note: 'Add the price.', score: 80};
-    await dialog.locator('.dc-say', {hasText: 'Send back. The price is missing.'}).waitFor({timeout: 8000});
+    await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor({timeout: 8000});
     assert.equal(await dialog.locator('#dc-notes').inputValue(), 'My own words', 'never over their typing');
     assert.equal(await main('[data-dc="sendback"]'), true, 'ready: the pick is the main one');
     assert.equal(await dialog.locator('.dc-flow .flow-mark.live').count(), 0, 'the mark rests once it is ready');
@@ -193,8 +193,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     ops = {r2: {state: 'pending'}};
     await open('r2');
     await at(2);
-    await page.evaluate(`window.__said = []; new MutationObserver(() => window.__said.push(document.querySelector('.decide .dc-say').textContent))
-      .observe(document.querySelector('.decide .dc-say'), {childList: true, characterData: true, subtree: true})`);
+    await page.evaluate(`window.__said = []; new MutationObserver(() => window.__said.push(document.querySelector('.decide .dc-say').getAttribute('aria-label') || ''))
+      .observe(document.querySelector('.decide .dc-say'), {attributes: true, attributeFilter: ['aria-label']})`);
     // The next poll is answered about the ask as it was asked, but only after the ask changed.
     ops['r2'] = {state: 'ready', pick: 'No', line: 'Old line', score: 10};
     const polls = asked.length, late = holdNext();
@@ -233,7 +233,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await page.locator('#task-play').click();
     await at(1);
     stale.release();
-    await dialog.locator('.dc-say', {hasText: 'Send back. The price is missing.'}).waitFor({timeout: 8000});
+    await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor({timeout: 8000});
     assert.equal(await main('[data-dc="sendback"]'), true);
     await close();
 

@@ -1,15 +1,16 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of a page that comes back on the ask screen (spec #263, backend/page_rounds.py). The OK of a
 // page at version 3, which Ana sent back at versions 1 and 2:
-// - the right side is in parts, not one paragraph: "Version 3 · date" with Jev as a chip (✓ Meets, its reason on a
-//   click, never a p-value), the review history (v1 · v2 · v3, each with its date, chip and answer), What changed in v3
-//   (the bot's lines), Your note on v2 (cut to 2 lines, with more) and Your points (✓ done / ✗ not done, with why);
-// - a step of the history opens that version in the page viewer;
-// - "Changes since v2" sits over the page, on because Ana sent v2 back: the page viewer's line diff; off, the page with
-//   each block not in v2 marked in its margin;
-// - a page Jev has not judged yet, at version 1: "Jev checking", no history, no switch;
-// - at 390 px the parts stack, nothing runs off the side, the history scrolls sideways and Approve is reachable.
+// - the right side is in parts, not one paragraph: one meta line (who asked · Spec · v3 · date · Jev's word · #80 ↗; the
+//   line opens a menu with it all in full and Jev's reason, never a p-value), What changed in v3 (the bot's lines), Your note on v2 (cut to 2 lines, with more) and
+//   Your points (✓ done / ✗ not done, with why);
+// - the version in the meta line is a menu: each version on one line (date, Jev's mark, the answer), which opens that
+//   version in the page viewer, and "Changes since v2";
+// - the page opens clean, even though Ana sent v2 back; Changes since v2 marks each block not in v2 in its margin;
+// - a page Jev has not judged yet, at version 1: "Jev checking", no versions in the menu;
+// - at 390 px the parts stack, nothing runs off the side and Approve is reachable.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each (light and dark at 1040, and 390).
+declare function actorLabel(actor: string): string;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -96,7 +97,7 @@ async function open(page: Page, errors: string[]) {
   await page.goto('http://tico-ui.test/#/tasks');
   await page.locator('#task-play').click();
   const dialog = page.locator('#need-card');
-  await dialog.locator('.dc-hist').waitFor();
+  await dialog.locator('.dc-meta').waitFor();
   return dialog;
 }
 
@@ -112,31 +113,33 @@ async function open(page: Page, errors: string[]) {
     assert.equal(await side.locator('.dc-said').count(), 0, "the paragraph of today is gone");
     // Why Ana is asked again, and the conflict her OK hands to the Builder, stay on the face, before the history.
     assert.deepEqual(await side.locator('.dc-notice').allInnerTexts(), ["New commits since Ana's OK.", CONFLICT]);
-    assert.ok(await side.locator('.dc-notice + * .dc-step, .dc-notice ~ .dc-hist').count() > 0, 'the notices come before the history');
+    assert.ok(await side.locator('.dc-meta ~ .dc-notice + .dc-part').count() > 0, 'the notices come after the meta line, before the parts');
     assert.doesNotMatch(await side.innerText(), /p 0\.73|between 0\.2/, 'no p-value on the face');
     assert.doesNotMatch(await side.innerText(), /Version 3, after the send back/, "their note is not quoted back in the heading");
-    assert.match(await side.locator('.dc-ver .dc-sub').innerText(), /^Spec · Version 3 · Nov 13$/);
-    const order = await side.locator('.dc-q, .dc-ver, .dc-open-task, .dc-hist, .dc-part h4, .dc-notes, [data-dc="approve"]').evaluateAll(
+    const asker = await page.evaluate(() => actorLabel('bot:pm'));
+    assert.equal((await side.locator('.dc-meta').innerText()).replace(/\s+/g, ' ').trim(), `${asker} · Spec · v3 · Nov 13 · ✓ Meets · #80 ↗`);
+    const order = await side.locator('.dc-q, .dc-meta, .dc-open-task, .dc-part h4, .dc-note-row, [data-dc="approve"]').evaluateAll(
       els => els.map(e => e.matches('.dc-part h4') ? (e.textContent || '').replace(/\s+\S+ \d+$/, '').trim() : e.className.split(' ')[0] || e.getAttribute('data-dc')));
-    assert.deepEqual(order, ['dc-q', 'dc-ver', 'linkish', 'dc-hist', 'What changed in v3', 'Your note on v2', 'Your points', 'dc-notes', 'primary']);
+    assert.deepEqual(order, ['dc-q', 'dc-meta', 'What changed in v3', 'Your note on v2', 'Your points', 'dc-note-row', 'primary']);
 
-    // Jev's chip: the verdict on its face, the reason on a click, no "(p …)".
-    const chip = side.locator('.dc-ver [data-dc-jev]');
-    assert.equal((await chip.textContent())?.replace(/\s+/g, ' ').trim(), '✓ Meets');
-    assert.equal(await side.locator('.dc-jev-why').count(), 0);
-    await chip.click();
-    assert.equal(await side.locator('.dc-jev-why').innerText(), 'Clear and complete; the counts cite their queries');
-    assert.equal(await side.locator('.dc-ver [data-dc-jev]').getAttribute('aria-expanded'), 'true');
+    // The line is one control; its menu says it in full: who, stage, version and date, then Jev's word and reason.
+    const ctl = side.locator('[data-dc-vmenu]');
+    await ctl.click();
+    assert.deepEqual(await side.locator('.dc-vmenu .dc-vinfo').allInnerTexts(), [`${asker} · Spec · v3 · Nov 13`,
+      'Jev: Meets · Clear and complete; the counts cite their queries']);
+    await side.locator('.dc-q').click();
 
-    // The review history: one step per version, its date, Jev's chip and Ana's answer.
-    const steps = side.locator('.dc-hist .dc-step');
-    assert.deepEqual(await steps.evaluateAll(els => els.map(b => [...b.children].map(c => (c.textContent || '').trim()).join(' '))), [
-      'v1 Nov 11 ? Sent back', 'v2 Nov 12 ✗ Sent back', 'v3 Nov 13 ✓']);
-    assert.deepEqual(await steps.locator('.dc-jev').evaluateAll(els => els.map(e => e.getAttribute('title'))), [
+    // The version menu: one line per version, its date, Jev's mark and Ana's answer, then Changes since v2.
+    await ctl.click();
+    const steps = side.locator('.dc-vmenu [data-dc-ver]');
+    assert.deepEqual((await steps.allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()), [
+      'v1 · Nov 11 · ? · Sent back', 'v2 · Nov 12 · ✗ · Sent back', 'v3 · Nov 13 · ✓']);
+    assert.deepEqual(await steps.locator('.dc-vjev').evaluateAll(els => els.map(e => e.getAttribute('title'))), [
       'Jev: Unsure · Cannot tell who uses it', "Jev: Doesn't · No sources on the counts", 'Jev: Meets · Clear and complete; the counts cite their queries']);
-    const fits = await steps.evaluateAll(els => els.every(b => [...b.children].every(c => c.getBoundingClientRect().right <= b.getBoundingClientRect().right)));
-    assert.ok(fits, 'each step holds its date, chip and answer');
-    assert.equal(await steps.nth(2).getAttribute('aria-current'), 'step');
+    assert.equal(await steps.nth(2).getAttribute('aria-current'), 'true');
+    assert.equal(await side.locator('.dc-vmenu [data-dc-since]').innerText(), 'Changes since v2');
+    await side.locator('.dc-q').click();
+    assert.equal(await side.locator('.dc-vmenu:not([hidden])').count(), 0, 'a click elsewhere closes the menu');
 
     // What changed, Your note (2 lines, then more), Your points.
     assert.deepEqual(await side.locator('.dc-changed-list li').allInnerTexts(), ['Sources on every evidence row', 'Cut the repeated second section']);
@@ -151,14 +154,12 @@ async function open(page: Page, errors: string[]) {
       ['true', '✓ Sources on the evidence table each row links its query'],
       ['false', "✗ Phone picture it needs a person's phone; the 390 px render is attached"]]);
 
-    // Changes since v2: on, because Ana sent v2 back; the line diff of the page viewer.
+    // The page opens clean, though Ana sent v2 back: no marks, no diff.
     const thing = dialog.locator('.dc-thing');
-    const sw = thing.locator('[data-dc-since]');
-    assert.equal(await thing.locator('.dc-switch').innerText(), 'Changes since v2');
-    assert.equal(await sw.isChecked(), true);
-    assert.deepEqual(await thing.locator('.dc-diff .tf-diff-lines .add').allInnerTexts(), ['+ The evidence has counts and sources.', '+ Decide: OK this page.']);
-    assert.deepEqual(await thing.locator('.dc-diff .tf-diff-lines .del').allInnerTexts(), ['- The evidence has counts.']);
-    assert.equal(await thing.locator('iframe.dc-page').count(), 0);
+    const frame = thing.locator('iframe.dc-page');
+    await frame.waitFor();
+    assert.doesNotMatch(await frame.getAttribute('srcdoc') ?? '', /data-tico-changed/);
+    assert.equal(await thing.locator('.dc-diff, .dc-since').count(), 0);
     if (shots) await page.screenshot({path: path.join(shots, 'page-rounds-1040-light.png')});
     await page.emulateMedia({colorScheme: 'dark'});
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
@@ -166,10 +167,10 @@ async function open(page: Page, errors: string[]) {
     await page.emulateMedia({colorScheme: 'light'});
     await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
 
-    // Off: the page, with each block not in v2 marked in its margin, and nothing else.
-    await sw.click();
-    const frame = thing.locator('iframe.dc-page');
-    await frame.waitFor();
+    // Changes since v2 on: the page, with each block not in v2 marked in its margin, and a dot on the control.
+    await ctl.click();
+    await side.locator('.dc-vmenu [data-dc-since]').click();
+    await page.waitForFunction(() => /data-tico-changed/.test(document.querySelector('#need-card iframe.dc-page')?.getAttribute('srcdoc') || ''));
     const doc = await frame.getAttribute('srcdoc') ?? '';
     const marked = [...doc.matchAll(/<(\w+) data-tico-changed="">([^<]*)/g)].map(m => `${m[1]}:${m[2]}`);
     assert.deepEqual(marked, ['p:The evidence has counts and sources.', 'p:Decide: OK this page.']);
@@ -178,10 +179,13 @@ async function open(page: Page, errors: string[]) {
       return [s.width, s.backgroundColor, s.position];
     });
     assert.deepEqual(bar, ['3px', 'rgb(217, 119, 6)', 'absolute']);
+    assert.equal(await side.locator('[data-dc-vmenu].on').count(), 1, 'the control shows changes are on');
+    assert.equal(await side.locator('.dc-vmenu [data-dc-since]').getAttribute('aria-checked'), 'true');
     if (shots) await page.screenshot({path: path.join(shots, 'page-rounds-1040-marks.png')});
 
     // A step opens that version in the page viewer.
     fetched.length = 0;
+    await ctl.click();
     await steps.nth(0).click();
     await page.waitForFunction(() => location.hash === '#/page/pa?v=1');
     await page.locator('#pg-view').waitFor();
@@ -191,17 +195,17 @@ async function open(page: Page, errors: string[]) {
     // ---- A page Jev has not judged, at version 1: Jev checking, no history, no switch, no parts with nothing to say.
     await page.goto('http://tico-ui.test/#/tasks');
     await page.locator('#task-play').click();
-    await dialog.locator('.dc-hist').waitFor();
+    await dialog.locator('.dc-meta').waitFor();
     await dialog.locator('[data-dc="next"]').click();
     await dialog.locator('.dc-q', {hasText: 'Paste images'}).waitFor();
     await dialog.locator('.dc-jev-wait').waitFor();
     assert.equal(await dialog.locator('.dc-jev-wait').innerText(), 'Jev checking');
-    assert.equal(await dialog.locator('.dc-hist').count(), 0);
+    assert.equal(await dialog.locator('.dc-vmenu [data-dc-ver]').count(), 0);
     assert.equal(await dialog.locator('.dc-part').count(), 0);
-    assert.equal(await dialog.locator('.dc-since').count(), 0);
+    assert.equal(await dialog.locator('[data-dc-since]').count(), 0);
     await page.close();
 
-    // ---- 390 px: stacked, nothing off the side, the history scrolls sideways, Approve reachable.
+    // ---- 390 px: stacked, nothing off the side, Approve reachable.
     const phone = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block'});
     const small = await open(phone, errors);
     const sideBox = small.locator('.dc-side');
@@ -215,6 +219,6 @@ async function open(page: Page, errors: string[]) {
     await phone.close();
 
     assert.deepEqual(errors, []);
-    console.log('PASS: a page that comes back shows its version and Jev chip, the review history, what changed, the note sent back and each point answered; Changes since vK shows the diff or marks the page; a step opens that version.');
+    console.log('PASS: a page that comes back shows one meta line with its version menu and Jev, what changed, the note sent back and each point answered; the page opens clean, Changes since vK marks it; a version in the menu opens that version.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

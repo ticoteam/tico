@@ -8,7 +8,7 @@ import type {Page, Route} from 'playwright';
 // - ‹ › show on the phone, 8 px clear of ✕: next opens the next item and previous comes back;
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
 // - Send back is on with an empty note: a tap focuses Notes with "Say what to change" and sends nothing; Notes starts one
-//   line tall;
+//   line tall, its placeholder Notes again once the item is left;
 // - an ask with nothing to show opens on its question, right under the header: a question whose task has no text;
 // - an OK with nothing attached (no grant, no shows: a pitch is the task itself) shows its task's title once and text
 //   above the question, not a blank pane; an OK whose only show is a page shows the page and not the task's text;
@@ -185,7 +185,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       await page.locator(prev).click();
       await at(1);
       // Leaving the item clears the hint: back on it, Notes is plain again.
-      check(await page.locator('#dc-notes').getAttribute('placeholder') === null, 'the hint is gone after leaving the item');
+      check(await page.locator('#dc-notes').getAttribute('placeholder') === 'Notes', 'the hint is gone after leaving the item');
     } else {
       // The old way to read items 2 and 4 first, so each is ready the moment it comes back: Skip through them, round
       // the question and on to item 1.
