@@ -11403,9 +11403,10 @@ STABLE.append(
         "get",
         "KPIs",
         "getGrowthNumbers",
-        "The Growth page's numbers: the newest months (1 to 24, default 12), every channel's and the total's CAC, LTV "
-        "and retention, revenue and margin per month (null where not recorded), the KPI tree with each KPI's last 24 "
-        "readings, and the marketing tests that started or finished, newest first",
+        "The Growth page's numbers: the newest months (1 to 24, default 12) up to `month` (YYYY-MM, default the newest "
+        "with numbers), every channel's and the total's CAC, LTV and retention, revenue and margin per month (null "
+        "where not recorded), the KPI tree with each KPI's last 24 readings, the marketing tests that started or "
+        "finished, newest first, and `line`: that month joined source to KPI as the page draws it (null with no channel)",
         "GrowthNumbers",
     )
 )
@@ -11478,6 +11479,99 @@ SCHEMAS.update(
                 ),
                 "markers": items(ref("GrowthMarker")),
                 "may_edit": {"type": "boolean"},
+                "line": {"oneOf": [ref("GrowthLine"), {"type": "null"}]},
+            }
+        ),
+        # One number on the Growth line (backend/growth_line.py): its value, how the page writes it, where it came
+        # from, and a `status` (not_yet, too_few) when it has no value for a reason.
+        "GrowthLineCell": obj(
+            {
+                "value": NUM_N,
+                "says": "n",
+                "origin": {"enum": ["synced", "typed", "computed", None]},
+                "quality": "n",
+                "sources": items({"type": "string"}),
+                "source_names": items({"type": "string"}),
+                "synced_at": "n",
+                "typed_at": "n",
+                "stale": "b",
+                "status": "n",
+                "computed_from": NUM_N_INT,
+                "conflict": "b",
+            }
+        ),
+        "GrowthLineEconomics": obj(
+            {
+                "value": NUM_N,
+                "says": "n",
+                "formula": "s",
+                "from": items({"type": "string"}),
+                "trace": "n",
+                "stale": "b",
+                "status": "n",
+            }
+        ),
+        "GrowthLine": obj(
+            {
+                "month": "s",
+                "sources": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "kind": "n",
+                            "health": "n",
+                            "since": "n",
+                            "last_good": "n",
+                            "error": "n",
+                            "fills": items(obj({"channel": "s", "number": "s"})),
+                        }
+                    )
+                ),
+                "channels": items(
+                    obj(
+                        {
+                            "slug": "s",
+                            "name": "s",
+                            "sources": items({"type": "string"}),
+                            "numbers": {"type": "object", "additionalProperties": ref("GrowthLineCell")},
+                            "economics": {"type": "object", "additionalProperties": ref("GrowthLineEconomics")},
+                            "input_kpi": "n",
+                            "guardrail": {"type": ["object", "null"]},
+                        }
+                    )
+                ),
+                "kpis": items(
+                    obj(
+                        {
+                            "id": "s",
+                            "name": "s",
+                            "unit": "s",
+                            "role": "n",
+                            "value": NUM_N,
+                            "says": "n",
+                            "target": NUM_N,
+                            "moved_by": items({"type": "string"}),
+                            "held_by": items({"type": "string"}),
+                            "breached": "b",
+                            "over": NUM_N,
+                        }
+                    )
+                ),
+                "headline": obj(
+                    {
+                        "month": "s",
+                        "new_customers": NUM_N_INT,
+                        "change_pct": NUM_N_INT,
+                        "cac": NUM_N,
+                        "payback_months": NUM_N,
+                        "over_guardrail": items({"type": "string"}),
+                        "stale_sources": items({"type": "string"}),
+                        "stale_since": "n",
+                        "stale_numbers": "i",
+                        "sentence": "s",
+                    }
+                ),
             }
         ),
     }

@@ -842,18 +842,22 @@ def growth_customers_delete(api, args):
 @tool(
     "tico_growth_numbers",
     "The growth numbers over the last months: each month's total, each channel's economics, "
-    "the KPI tree with its series, and the markers. may_edit: you may record months." + SETUP_NOTE,
+    "the KPI tree with its series, and the markers. line: the month joined source to KPI as the Growth page draws it: "
+    "each source with its health and what it fills, each channel's numbers (value, source, quality, synced_at, stale), "
+    "its CAC, LTV:CAC and payback with formula, inputs and a sentence saying how each was made, the KPIs it moves and "
+    "is held to, and the headline sentence. may_edit: you may record months." + SETUP_NOTE,
     {
         "months": {
             "type": "integer",
             "minimum": 1,
             "maximum": 24,
-            "description": "How many months back, ending now; default 12",
-        }
+            "description": "How many months back, ending at month; default 12",
+        },
+        "month": _s("The last month read and the line's month, YYYY-MM; default the newest with numbers"),
     },
 )
 def growth_numbers(api, args):
-    return api.get("growth/numbers", months=args.get("months"))
+    return api.get("growth/numbers", months=args.get("months"), month=args.get("month"))
 
 
 @tool(
@@ -1104,9 +1108,9 @@ CLI = (
     Command(
         "growth numbers",
         "the monthly series, each channel's economics, the KPI tree, markers",
-        args=(Arg("months", metavar="N"),),
+        args=(Arg("months", metavar="N"), Arg("month", metavar="YYYY-MM")),
         render=lambda args, result: json.dumps(result, indent=2),
-        example="tico growth numbers --months 6",
+        example="tico growth numbers --months 6 --month 2026-10",
     ),
     Command(
         "growth kpis", "the KPI tree: North Star, inputs, guardrails", render=_growth_text, example="tico growth kpis"

@@ -905,6 +905,23 @@ def growth_number(ctx, s):
     }
 
 
+MONEY_UNITS = {"usd", "$", "eur", "€", "gbp", "£", "dollars"}
+
+
+def _unit_kind(unit):
+    """A KPI unit's kind, for the Funnel's share: money, a percent, a time or a ratio, else a count ("", "visits")."""
+    u = (unit or "").strip().lower()
+    if u in MONEY_UNITS:
+        return "money"
+    if u in ("%", "pct", "percent"):
+        return "percent"
+    if u in ("months", "mo", "days", "weeks", "hours"):
+        return "time"
+    if u in ("ratio", "x", "×"):
+        return "ratio"
+    return "count"
+
+
 def growth_funnel(ctx, s):
     """The five stages, each with the KPI the growth tree names for it (the first with that stage, the North Star
     included), its reading, and the share of the stage before; the North Star on its own."""
@@ -913,7 +930,8 @@ def growth_funnel(ctx, s):
     upto = (lambda v: kpi_upto(v, ctx.asked_month)) if ctx.asked_month else (lambda v: v)
     north = upto(kpis["north_star"]) if kpis["north_star"] else None
     views = ([north] if north else []) + [upto(v) for v in kpis["inputs"] + kpis["guardrails"] + kpis["other"]]
-    # A share of the stage before only between two KPIs in the same unit: customers over dollars means nothing.
+    # A share of the stage before only between two KPIs of the same kind of unit (_unit_kind): visits to bookings is a
+    # conversion, customers over dollars means nothing.
     stages, last, last_unit = [], None, None
     for key, label in (
         ("reach", "Reach"),
@@ -934,7 +952,7 @@ def growth_funnel(ctx, s):
                 "value": value,
                 "prev": prev,
                 "conv": round(value / last * 100, 1)
-                if value is not None and last and view and (view["unit"] or "") == (last_unit or "")
+                if value is not None and last and view and _unit_kind(view["unit"]) == _unit_kind(last_unit)
                 else None,
                 "north_star": bool(view and north and view["id"] == north["id"]),
                 "series": [p["value"] for p in view["series"]] if view else [],

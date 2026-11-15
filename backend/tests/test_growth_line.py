@@ -231,15 +231,16 @@ def test_a_trace_opened_or_a_source_picked_is_counted_once_a_day_per_reader(api)
 
 
 def test_the_funnel_shows_no_share_between_kpis_of_unlike_units(api):
-    """AC-18: customers over dollars is no share; two stages in one unit still show theirs."""
+    """AC-18: customers over dollars is no share; two counts still show theirs, whatever they count."""
     for name, unit, stage, value in (
         ("Ad spend", "$", "reach", 20000),
         ("Sign-ups", "", "acquire", 200),
         ("Activated", "", "activate", 50),
+        ("Kept homes", "homes", "retain", 40),
     ):
         found = kpi(api, name, unit=unit, value=value)
         post(api, f"kpis/{found}", {"stage": stage})
     view = get(api, f"places/growth?month={M}")
     funnel = next(p["card"]["data"] for p in view["pins"] if p["card"]["template"] == "growth_funnel")
     conv = {s["stage"]: s["conv"] for s in funnel["stages"]}
-    assert conv["acquire"] is None and conv["activate"] == 25.0
+    assert conv["acquire"] is None and conv["activate"] == 25.0 and conv["retain"] == 80.0
