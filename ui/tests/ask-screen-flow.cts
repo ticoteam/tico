@@ -1,12 +1,12 @@
 import type {Route} from 'playwright';
 // Offline browser check of Flow's top bar and end (ui/app/decide.ts), against a fake of the new routes, on a desktop:
 // - the crumb's menu lists only the places where something waits, and a row switches the walk to that place;
-// - Snooze on an ask whose task the person may set aside (may_snooze) stands where Skip was: Tomorrow sends tomorrow's
-//   date, the ask leaves the walk, and Undo unsnoozes it and brings it back; an ask they may not snooze keeps Skip;
-// - Snooze on your own task (1 hour) sends a moment, takes the item out of the walk, and the end counts it; no Skip;
+// - an ask has Skip and no Snooze;
+// - Snooze on your own task sends a moment: Tomorrow and Next week are 8:00 by the person's clock, late in the evening
+//   in Los Angeles too (a clock and zone faked here), and 1 hour an hour on; Undo unsnoozes; the end counts it;
 // - the mic turns the mark into the wave and back, and nothing is sent;
 // - decideLineSet puts Tico's line in the bar and makes its pick the main button; null puts it back.
-// FLOW_SHOTS=<folder> saves the screen with a line on it.
+// FLOW_SHOTS=<folder> saves the screen with a line on it, and your own task's snooze choices.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -20,8 +20,8 @@ const brief = (id: string, stage: string, ask = true) => ({id, title: `Task ${id
   owner_id: ask ? 'bot:pm' : 'human:ana', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask, requirement_id: null},
   version: 3});
-const question = (n: number, stage: string, line: string, snooze = false) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
-  since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, stage), may_snooze: snooze,
+const question = (n: number, stage: string, line: string) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
+  since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, stage),
   ask: {requirement_id: `r${n}`, kind: 'answer', line, who: 'human:ana', asked_by: 'bot:pm', choices: ['Yes', 'No'], may: ['answer'],
     met: false, shows: [], standing: 'waiting', answer: null}});
 const mine = (n: number, stage: string, line: string) => ({kind: 'task', id: `t${n}`, task_id: `t${n}`, line, since: `2026-11-09T1${n}:00:00Z`,
@@ -38,9 +38,11 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
   try {
     const errors: string[] = [], writes: {p: string; body: Record<string, unknown>}[] = [];
-    const first = question(1, 'spec', Q[0]!, true);
-    let needs: Record<string, unknown>[] = [first, question(2, 'build', Q[1]!), mine(3, 'build', Q[2]!)];
-    const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
+    const own = mine(3, 'build', Q[2]!);
+    let needs: Record<string, unknown>[] = [question(1, 'spec', Q[0]!), question(2, 'build', Q[1]!), own];
+    // 23:30 on Nov 13 in Los Angeles: a bare date for tomorrow would be a midnight the team's zone may already be past.
+    const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block', timezoneId: 'America/Los_Angeles'});
+    await page.clock.setFixedTime(new Date('2026-11-14T07:30:00Z'));
     page.on('pageerror', (error: Error) => errors.push(error.message));
     await page.route('**/*', (route: Route) => {
       const r = route.request(), url = new URL(r.url()), p = url.pathname;
@@ -56,6 +58,9 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: the screen is as without it
+      const read = r.method() === 'GET' ? p.match(/^\/api\/v2\/tasks\/(t\d)$/) : null;
+      if (read) return json({task: {...brief(read[1]!, 'build', read[1] !== 't3'), created_at: '2026-11-09T09:00:00Z', attachments: [], links: [],
+        body: 'The release goes out Friday. The note lists what changed for customers.'}});
       if (r.method() !== 'GET' && p.startsWith('/api/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
         const snooze = p.match(/^\/api\/v2\/tasks\/(t\d)\/snooze$/);
@@ -63,7 +68,7 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
           needs = needs.filter(n => n['task_id'] !== snooze[1]);
           return json({task: {...brief(snooze[1]!, 'build', false), snoozed: true}});
         }
-        if (p === '/api/v2/tasks/t1/unsnooze') { needs = [first, ...needs]; return json({task: brief('t1', 'spec')}); }
+        if (p === '/api/v2/tasks/t3/unsnooze') { needs = [...needs, own]; return json({task: brief('t3', 'build', false)}); }
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
@@ -73,26 +78,19 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     await page.locator('#task-play').click();
     const dialog = page.locator('#need-card');
     const left = () => page.evaluate('decideLive(DEC).length') as Promise<number>;
+    const shot = async (name: string) => {
+      if (!process.env.FLOW_SHOTS) return;
+      await page.waitForTimeout(700);
+      await page.screenshot({path: path.join(process.env.FLOW_SHOTS, `${name}-desktop.png`)});
+      await page.setViewportSize({width: 390, height: 844});
+      await page.waitForTimeout(300);
+      await page.screenshot({path: path.join(process.env.FLOW_SHOTS, `${name}-phone.png`)});
+      await page.setViewportSize({width: 1200, height: 900});
+    };
     await dialog.locator('.dc-q', {hasText: Q[0]!}).waitFor();
     assert.equal(await left(), 3, 'All mine walks everything');
-
-    // Snooze on an ask the person may set aside, where Skip was: Tomorrow is tomorrow's date here. Undo brings it back.
-    assert.equal(await dialog.locator('[data-dc="skip"]').count(), 0, 'no Skip where Snooze is offered');
-    await dialog.locator('[data-dc="snooze"]').click();
-    assert.deepEqual(await dialog.locator('.dc-more button').allTextContents(), ['1 hour', 'Tomorrow', 'Next week']);
-    await dialog.locator('[data-dc="snooze-day"]').click();
-    await dialog.locator('.dc-bar:not([hidden])').waitFor();
-    const tomorrow = await page.evaluate(() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toLocaleDateString('en-CA'); });
-    assert.deepEqual(writes, [{p: '/api/v2/tasks/t1/snooze', body: {until: tomorrow, version: 3}}]);
-    await dialog.locator('.dc-q', {hasText: Q[1]!}).waitFor();
-    assert.equal(await left(), 2, 'the snoozed ask is out of the walk');
-    // An ask whose task they may not snooze keeps Skip.
-    assert.equal(await dialog.locator('[data-dc="snooze"]').count(), 0);
-    assert.equal(await dialog.locator('[data-dc="skip"]').count(), 1);
-    await dialog.locator('.dc-bar [data-dc="undo"]').click();
-    await page.waitForFunction('decideLive(DEC).length === 3');
-    assert.equal(writes[1]!.p, '/api/v2/tasks/t1/unsnooze', 'Undo unsnoozes');
-    writes.length = 0;
+    assert.equal(await dialog.locator('[data-dc="snooze"]').count(), 0, 'an ask: no Snooze');
+    assert.equal(await dialog.locator('[data-dc="skip"]').count(), 1, 'an ask: Skip');
 
     // The menu: All mine, the pipeline, then only its stages where something waits (no Ship). Build walks Build's two.
     await dialog.locator('.dc-crumb').click();
@@ -120,30 +118,38 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     const main = (choice: string) => dialog.locator(`[data-dc-choice="${choice}"]`).evaluate(b => b.matches('.primary, .dc-rec'));
     assert.equal(await main('No'), true);
     assert.equal(await main('Yes'), false);
-    if (process.env.FLOW_SHOTS) {
-      await page.waitForTimeout(700);
-      await page.screenshot({path: path.join(process.env.FLOW_SHOTS, 'flow-desktop.png')});
-      await page.setViewportSize({width: 390, height: 844});
-      await page.waitForTimeout(300);
-      await page.screenshot({path: path.join(process.env.FLOW_SHOTS, 'flow-phone.png')});
-      await page.setViewportSize({width: 1200, height: 900});
-    }
+    await shot('flow');
     await page.evaluate(`decideLineSet('r2', null)`);
     assert.equal(await dialog.locator('.dc-say').textContent(), '');
     assert.equal(await main('No'), false);
 
-    // Snooze on your own task: 1 hour sends a moment about an hour out; the item leaves the walk; the end counts it.
+    // Snooze on your own task. Tomorrow and Next week: 8:00 on Nov 14 and Nov 20 in Los Angeles (16:00Z), each undone.
+    const snooze = async (what: string, until: string) => {
+      await dialog.locator('.dc-q', {hasText: 'Task t3'}).waitFor();   // your own task's heading is its title
+      await dialog.locator('[data-dc="snooze"]').click();
+      assert.deepEqual(await dialog.locator('.dc-more button').allTextContents(), ['1 hour', 'Tomorrow', 'Next week']);
+      if (what === 'snooze-day') await shot('flow-snooze');
+      await dialog.locator(`[data-dc="${what}"]`).click();
+      await dialog.locator('.dc-bar:not([hidden])').waitFor();
+      assert.deepEqual(writes, [{p: '/api/v2/tasks/t3/snooze', body: {until, version: 3}}], what);
+      await dialog.locator('.dc-q', {hasText: Q[1]!}).waitFor();
+      assert.equal(await left(), 1, 'the snoozed task is out of the walk');
+      writes.length = 0;
+    };
+    const undo = async () => {
+      await dialog.locator('.dc-bar [data-dc="undo"]').click();
+      await page.waitForFunction('decideLive(DEC).length === 2');
+      assert.deepEqual(writes.map(w => w.p), ['/api/v2/tasks/t3/unsnooze'], 'Undo unsnoozes');
+      writes.length = 0;
+      await dialog.locator('[data-dc="next"]').click();
+    };
     await dialog.locator('[data-dc="next"]').click();
-    assert.equal(await dialog.locator('[data-dc="skip"]').count(), 0, 'your own task: Snooze, no Skip');
-    await dialog.locator('[data-dc="snooze"]').click();
-    const t0 = Date.now();
-    await dialog.locator('[data-dc="snooze-hour"]').click();
-    await dialog.locator('.dc-bar:not([hidden])').waitFor();
-    assert.equal(writes.length, 1);
-    assert.equal(writes[0]!.p, '/api/v2/tasks/t3/snooze');
-    const until = Date.parse(String(writes[0]!.body['until']));
-    assert.ok(Math.abs(until - t0 - 3600_000) < 60_000, `an hour out: ${String(writes[0]!.body['until'])}`);
-    await dialog.locator('.dc-q', {hasText: Q[1]!}).waitFor();
+    await snooze('snooze-day', '2026-11-14T16:00:00.000Z');
+    await undo();
+    await snooze('snooze-week', '2026-11-20T16:00:00.000Z');
+    await undo();
+    // 1 hour: an hour on; the end counts it.
+    await snooze('snooze-hour', '2026-11-14T08:30:00.000Z');
     assert.equal(await left(), 1, 'the snoozed task is out of the walk');
     await dialog.locator('[data-dc-choice="Yes"]').click();
     await dialog.locator('.dc-done').waitFor();

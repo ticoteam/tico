@@ -201,7 +201,8 @@ button.dc-jev{cursor:pointer}
   /* One row: where you are, the mark, the mic, ‹ › ✕; the crumb gives way (its first parts first), never the buttons.
      Tico's line goes under that row, when there is one. */
   .dc-head{flex-wrap:wrap;gap:0 6px;padding-left:8px}
-  .dc-say{order:9;flex-basis:100%;padding:0 8px 10px}
+  /* Tico's line under the bar: up to two lines, not cut in half. */
+  .dc-say{order:9;flex-basis:100%;padding:0 8px;margin-bottom:10px;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
   .dc-say:empty{display:none}
   .dc-up{display:none}
   .dc-where{flex:0 1 auto;max-width:calc(100% - 236px)}

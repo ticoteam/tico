@@ -2164,14 +2164,9 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
 
         # Every ask's task read together: the list costs what one task's view does.
         task_calls.prime_views(c, {item["task_id"] for item in items if item["kind"] == "ask"}, who.actor)
-        # Whether this person may snooze the task an ask is on, as the snooze route decides it (task_calls.can_work,
-        # with the route's mover): Flow offers Snooze on the ask only then, and Skip otherwise. A hint.
-        mover = who.role == "owner" or (who.role == "human" and H.can_move(c, who.actor))
         for item in items:
             if item["kind"] != "ask":
                 continue
-            row = H.task(c, item["task_id"])
-            item["may_snooze"] = bool(row) and task_calls.can_work(c, who.actor, row, mover or None)
             item["ask"] = task_calls.ask_entry(c, item["task_id"], item["requirement_id"], who.actor)
             # What the task waits on says only "a person's OK" for a bound OK (waiting_on); its own line is this
             # person's to read when they are one of its parties, as their read of the task gives it.

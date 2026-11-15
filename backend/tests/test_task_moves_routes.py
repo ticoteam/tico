@@ -135,19 +135,6 @@ def test_an_ask_is_answered_given_and_withdrawn_on_the_task(api):
     item = next(i for i in items if i["kind"] == "ask")
     assert item["line"] == "Which month suits the team?" and item["task"]["id"] == made["id"]
     assert item["requirement_id"] == rid and item["ask"]["choices"] == ["May", "June"]
-    # Flow's Snooze hint is the snooze route's own right: Ben, asked on Ana's task, may not set it aside.
-    assert item["may_snooze"] is False
-    assert refused(api, f"tasks/{made['id']}/snooze", {"until": "2099-01-01"}, token="ben-test", status=403)
-    # Ana, asked on Ben's task, may (she is the company's owner, who moves any task).
-    mine = task(api, owner="ben")
-    post(
-        api,
-        f"tasks/{mine['id']}/asks",
-        {"to": "ana", "line": "Which barn?", "choices": ["North", "South"]},
-        token="ben-test",
-    )
-    theirs = next(i for i in get(api, "needs-you")["items"] if i["kind"] == "ask" and i["task_id"] == mine["id"])
-    assert theirs["may_snooze"] is True
     given = post(api, f"tasks/{made['id']}/asks/{rid}/give", {"to": "cara"}, token="ben-test")
     assert next(r for r in given["to_leave"] if r["requirement_id"] == rid)["who"] == "human:cara"
     answered = api.post(

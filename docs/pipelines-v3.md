@@ -1438,11 +1438,14 @@ Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and 
 - **Top bar,** one line: where you are ("All mine", "All mine / Product" or "All mine / Product / Spec"), a menu of the
   pipelines and stages where something waits on you (and Other, for items in no stage), each opening that walk; Flow's
   mark, which moves while Tico is still thinking about the item on screen; a quiet mic (voice is not built: pressing it
-  shows a wave and "Voice is coming soon"); Tico's line on the item, one line, whose pick is the main button (a send
-  back's note fills Notes only when it is empty and untouched); while Tico still thinks about another ask, that ask's
-  short title, faint (not on a phone); then ‹ (previous), › (next), ✕ (close). No count, and no score. Tico's lines come
-  from `POST /api/v2/flow/opinions`; without them the screen is the same with no line. In a walk of more than 5, items
-  not yet seen this visit come highest score first; the one on screen and the ones seen keep their place.
+  shows a wave and "Voice is coming soon"); Tico's line on the item, one line (two on a phone), whose pick is the main
+  button (a send back's note fills Notes only when it is empty and untouched); while Tico still thinks about another
+  ask, that ask's short title, faint (not on a phone); then ‹ (previous), › (next), ✕ (close). No count, and no score.
+  While Tico still thinks about an ask, none of its answers is the main button, so the main one never changes under the
+  person; with no line (none, or Tico not there) the buttons are as they always were. Tico's lines come from
+  `POST /api/v2/flow/opinions`, one request of at most 30 asks every 2 seconds or so; an ask that changes is asked
+  again. In a walk of more than 5, items not yet seen this visit come highest score first; the one on screen and the
+  ones seen keep their place.
 - **Left, the page itself,** shown in full: the heading "Checkout flow: spec", then "Guests can pay without making an
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
@@ -1479,10 +1482,8 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 - **A stuck task:** heading "Export retries is stuck". Line "Checks fail: lint, unit. Builder and Eng Manager each tried 3
   times." Buttons "Try again" (main), "Reassign", "Move back", "Close".
 - **After an answer:** a bar "Approved" with an "Undo" button at the right.
-- **Snooze:** 1 hour, Tomorrow and Next week; the task leaves Flow until then, with Undo (which unsnoozes it). On your
-  own task, and on an OK or a question whose task you may snooze (`may_snooze` on the item, the snooze route's rule):
-  that sets the task aside for everyone, and the bot is not told. Snooze stands where Skip would be; a mention, a stuck
-  task, a one-tap fix and an ask on a task you may not snooze keep Skip.
+- **Your own task:** Snooze offers 1 hour, Tomorrow (8:00 tomorrow, your time) and Next week (8:00 seven days on); the
+  task leaves Flow until then, with Undo, which unsnoozes it. Asks, mentions and the other kinds keep Skip.
 - **The end:** "All done", and "2 snoozed" when any were snoozed on this visit.
 
 Flow has no 👍 or 👎; the rules are in [Thumbs down, and rules](#thumbs-down-and-rules).

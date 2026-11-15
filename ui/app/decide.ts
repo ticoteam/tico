@@ -1,7 +1,7 @@
 /* ui/app/decide.ts — Flow, the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A
    modal on a wide screen, the whole screen on a phone. The top bar is where you are (All mine / a pipeline / a stage, a
    menu), Flow's mark, the mic, Tico's line, the next ask Tico is still thinking about, then ‹ › ✕ (‹ › on a wide screen
-   only; in the answer row, Snooze sets the task aside where the person may, else Skip steps on, at every width). The thing asked about is on the left, shown in full (the page, the email, what an OK is for); the
+   only; Skip, in the answer row, steps on at every width). The thing asked about is on the left, shown in full (the page, the email, what an OK is for); the
    sentence asked, who asks, Notes and the buttons are on the right. A stage's typed answer asks its question: a choice is its buttons, a number a whole-number box
    with its range, text a box; a value the server refuses stays typed, under the server's line.
    An OK bound to what was shown: the content on screen is the preview GET /v2/oks/{id} (or the email's own preview)
@@ -514,7 +514,7 @@ function decidePaintHead(st: DecState) {
   // Tico thinking: the mark moves while the item on screen waits on its opinion, and the next ask still waiting is
   // named, faint, before ‹ › (none on a phone, decide.css).
   const thinking = (k: string) => DEC_OP.state.get(k) === 'pending';
-  $('.dc-flow .flow-mark', root)?.classList.toggle('live', !!it && thinking(it.id));
+  $('.dc-flow .flow-mark', root)?.classList.toggle('live', decideOpWaits(it));
   const next = live.find(k => k !== st.at && thinking(k)), upItem = next ? st.items.get(next) : undefined;
   const up = upItem ? upItem.task?.title || upItem.line : '', upEl = $('.dc-up', root)!;
   if (upEl.textContent !== up) upEl.textContent = up;
@@ -528,104 +528,144 @@ function decideLineSet(itemId: string, o: {line: string; pick: string} | null): 
   if (DEC && DEC.at === itemId) { decidePaintHead(DEC); decidePaintSide(DEC); }
 }
 /** The pick of Tico's line, as the main button (a bot's choice card, outlined as its recommendation is): the others go
-    plain. */
+    plain. While the ask waits on Tico (decideOpWaits) no answer is the main button; with no pick, they are as drawn. */
 function decideLinePick(it: NeedsEntry, host: HTMLElement) {
   const pick = DEC_LINES.get(it.id)?.pick;
-  if (!pick) return;
   const btns = [...host.querySelectorAll<HTMLButtonElement>('.dc-acts button[data-dc]:not(.linkish), button[data-dc-choice]')];
-  const to = btns.find(b => b.dataset.dc === pick || b.dataset.dcChoice === pick);
+  if (!pick && decideOpWaits(it)) {
+    for (const b of btns) if (b.classList.contains('primary')) { b.classList.remove('primary'); b.classList.add('ghost'); }
+    return;
+  }
+  const to = pick ? btns.find(b => b.dataset.dc === pick || b.dataset.dcChoice === pick) : undefined;
   if (!to) return;
   for (const b of btns) {
     if (b.classList.contains('dc-choice')) b.classList.toggle('dc-rec', b === to);
     else { b.classList.toggle('primary', b === to); b.classList.toggle('ghost', b !== to); }
   }
 }
-/** Snooze is offered on the person's own task, and on an ask whose task they may set aside (`may_snooze`, the snooze
-    route's own right; it sets the task aside for everyone, and Needs you leaves it out until then). A mention keeps
-    Skip: a snooze would not take the @ out of the list. */
-const decideSnoozes = (it: NeedsEntry, kind: AskKind) => kind === 'yours'
-  || (kind === 'ok' || kind === 'question') && !!decideTaskId(it) && it.may_snooze === true;
-
 // ---- Tico's opinions (POST /v2/flow/opinions, backend/flow_opinions.py): its line and pick on each ask, and a score
 // the walk is ordered by and never shown. Tico only advises: nothing here answers anything.
 /** One ask's opinion as the route answers it. Typed here by hand: the generated api types on this branch do not have
     the route yet. */
 interface FlowOpinion {id: string; state: 'ready' | 'pending' | 'none'; pick: string; line: string; note: string; score: number | null}
-const DEC_OP_MAX = 30;            // ids in one request
-const DEC_OP_POLL_MS = 2000;      // asked again while some are pending
-const DEC_OP_FOR_MS = 60_000;     // then given up on, for this visit
+const DEC_OP_MAX = 30;            // ids in one request, the one request of a round
+const DEC_OP_POLL_MS = 2000;      // the next round, while some are pending or not yet asked
+const DEC_OP_FOR_MS = 60_000;     // pending ones are given up on this long after the last new ask was sent
 const DEC_OP_ORDER_MIN = 6;       // a set this big has its unseen items ordered by score
 /** An OK's pick as the screen's buttons name it; a question's pick is its choice as written. */
 const DEC_OP_PICK: Record<string, string> = {approve: 'approve', send_back: 'sendback', snooze: 'snooze'};
-/** This visit's opinions: each ask's state and score, the note a send back would carry, the items whose Notes the
-    person typed in, the poll's timer, the visit whose request is out (one at a time), when the asking began, and `off`
-    once the route failed or is missing (nothing is asked again this visit, and the screen is as it was without it). */
-const DEC_OP = {state: new Map<string, FlowOpinion['state']>(), score: new Map<string, number>(), note: new Map<string, string>(),
-  typed: new Set<string>(), timer: 0, out: null as DecState | null, since: 0, off: false};
+/** This visit's opinions: each asked ask's state, the fingerprint of the ask it is for (decideOpPrint), its score, the
+    note a send back would carry, the items whose Notes the person typed in; the next round's timer, whether a round is
+    out (one at a time) and its abort, when the last new ask was sent, `off` once the route failed or is missing
+    (nothing is asked again this visit, and the screen is as it was without it), and the visit, which closing moves on
+    so nothing from an earlier visit lands in this one. */
+const DEC_OP = {state: new Map<string, FlowOpinion['state']>(), print: new Map<string, string>(), score: new Map<string, number>(),
+  note: new Map<string, string>(), typed: new Set<string>(), timer: 0, busy: false, abort: null as AbortController | null,
+  since: 0, off: false, visit: 0};
 function decideOpinionsEnd() {
+  DEC_OP.visit++;
+  DEC_OP.abort?.abort();
   clearTimeout(DEC_OP.timer);
-  DEC_OP.timer = 0; DEC_OP.out = null; DEC_OP.since = 0; DEC_OP.off = false;
-  DEC_OP.state.clear(); DEC_OP.score.clear(); DEC_OP.note.clear(); DEC_OP.typed.clear(); DEC_LINES.clear();
+  DEC_OP.timer = 0; DEC_OP.busy = false; DEC_OP.abort = null; DEC_OP.since = 0; DEC_OP.off = false;
+  DEC_OP.state.clear(); DEC_OP.print.clear(); DEC_OP.score.clear(); DEC_OP.note.clear(); DEC_OP.typed.clear(); DEC_LINES.clear();
 }
-/** Asks for the opinions of the set's asks not yet asked about (the item on screen first, DEC_OP_MAX at a time), and,
-    with `poll`, of those still pending. Pending ones are asked again every DEC_OP_POLL_MS for DEC_OP_FOR_MS, then left. */
-function decideOpinions(st: DecState, poll = false) {
-  if (DEC !== st || DEC_OP.off || DEC_OP.out === st || S.me?.read_only_view) return;
-  const asks = () => [...st.items.values()].filter(it => it.kind === 'ask');
-  const fresh = asks().filter(it => !DEC_OP.state.has(it.id));
-  if (!fresh.length && !poll) return;
-  clearTimeout(DEC_OP.timer); DEC_OP.timer = 0;
-  if (fresh.length) DEC_OP.since = Date.now();
-  else if (Date.now() - DEC_OP.since > DEC_OP_FOR_MS) {
-    for (const it of asks()) if (DEC_OP.state.get(it.id) === 'pending') DEC_OP.state.set(it.id, 'none');
+/** What an opinion is about: the ask's sentence, choices, what it shows and its page's version. A bot that edits the
+    ask or puts up a new page under the same id changes it. */
+const decideOpPrint = (it: NeedsEntry): string =>
+  JSON.stringify([it.line, it.ask?.line ?? '', it.ask?.choices ?? null, it.ask?.shows ?? [], decidePage(it)]);
+/** An ask still waiting on its opinion: asked (or about to be) with none back yet. Its answers have no main button
+    meanwhile, so the main one never changes under the person. Not while the route is off. */
+const decideOpWaits = (it: NeedsEntry | null | undefined): boolean => !!it && it.kind === 'ask' && !DEC_OP.off
+  && !S.me?.read_only_view && DEC_OP.state.get(it.id) !== 'ready' && DEC_OP.state.get(it.id) !== 'none';
+/** The asks of the walk from the item on screen on (it first), then round to those before it. */
+function decideOpAsks(st: DecState): NeedsEntry[] {
+  const live = decideLive(st), at = Math.max(0, st.at ? live.indexOf(st.at) : 0);
+  return [...live.slice(at), ...live.slice(0, at)].map(k => st.items.get(k)).filter((it): it is NeedsEntry => it?.kind === 'ask');
+}
+/** On opening, on a new set and on each refresh: an ask that changed since its opinion was asked loses its line, pick,
+    note and score and is asked again; then a round starts unless one is out or due (it takes in what joined). */
+function decideOpinions(st: DecState) {
+  if (DEC !== st || DEC_OP.off || S.me?.read_only_view) return;
+  let mine = false;
+  for (const it of st.items.values()) {
+    const was = DEC_OP.print.get(it.id);
+    if (was === undefined || was === decideOpPrint(it)) continue;
+    DEC_OP.state.delete(it.id); DEC_OP.print.delete(it.id); DEC_OP.score.delete(it.id); DEC_OP.note.delete(it.id);
+    DEC_LINES.delete(it.id);
+    mine ||= it.id === st.at;
+  }
+  if (mine) { decidePaintHead(st); decidePaintSide(st); }
+  if (!DEC_OP.busy && !DEC_OP.timer) decideOpRound(st);
+}
+/** One round: ONE request of at most DEC_OP_MAX asks, the pending ones first, then those not yet asked nearest after
+    the item on screen. The next comes DEC_OP_POLL_MS after it answers, while any is pending or not yet asked. */
+function decideOpRound(st: DecState) {
+  DEC_OP.timer = 0;
+  if (DEC !== st || DEC_OP.off) return;
+  const asks = decideOpAsks(st);
+  const pending = asks.filter(it => DEC_OP.state.get(it.id) === 'pending'), fresh = asks.filter(it => !DEC_OP.state.has(it.id));
+  if (!fresh.length && pending.length && Date.now() - DEC_OP.since > DEC_OP_FOR_MS) {
+    for (const it of pending) DEC_OP.state.set(it.id, 'none');
     decidePaintHead(st);
+    if (pending.some(it => it.id === st.at)) decidePaintSide(st);
     return;
   }
-  const want = asks().filter(it => DEC_OP.state.get(it.id) !== 'ready' && DEC_OP.state.get(it.id) !== 'none')
-    .sort((a, b) => Number(b.id === st.at) - Number(a.id === st.at)).map(it => it.id);
-  DEC_OP.out = st;
-  void (async () => {
-    try {
-      for (let i = 0; i < want.length; i += DEC_OP_MAX) {
-        const ids = want.slice(i, i + DEC_OP_MAX), got = await decideOpinionsRead(ids);
-        if (DEC !== st) return;
-        decideOpinionsTake(st, ids, got);
-      }
-    } catch {
-      DEC_OP.off = true;   // missing (404), refused or failing: no line this visit, and no more asking
-    } finally {
-      if (DEC_OP.out === st) DEC_OP.out = null;
+  const want = [...pending, ...fresh].slice(0, DEC_OP_MAX);
+  if (!want.length) return;
+  if (want.some(it => !DEC_OP.state.has(it.id))) DEC_OP.since = Date.now();
+  const visit = DEC_OP.visit, sent = new Map(want.map(it => [it.id, decideOpPrint(it)])), abort = new AbortController();
+  DEC_OP.busy = true; DEC_OP.abort = abort;
+  const now = () => visit === DEC_OP.visit && DEC === st;
+  void decideOpinionsRead([...sent.keys()], abort).then(got => {
+    if (now()) decideOpinionsTake(st, sent, got);
+  }, () => {
+    if (!now()) return;
+    DEC_OP.off = true;   // missing (404), refused or failing: no line this visit, no more asking, buttons as they were
+    decidePaintHead(st);
+    decidePaintSide(st);
+  }).finally(() => {
+    if (visit !== DEC_OP.visit) return;
+    DEC_OP.busy = false; DEC_OP.abort = null;
+    if (!now() || DEC_OP.off) return;
+    if (decideOpAsks(st).some(it => !DEC_OP.state.has(it.id) || DEC_OP.state.get(it.id) === 'pending')) {
+      DEC_OP.timer = window.setTimeout(() => decideOpRound(st), DEC_OP_POLL_MS);
     }
-    if (DEC !== st || DEC_OP.off) { if (DEC === st) decidePaintHead(st); return; }
-    if (asks().some(it => !DEC_OP.state.has(it.id))) decideOpinions(st);
-    else if (asks().some(it => DEC_OP.state.get(it.id) === 'pending')) DEC_OP.timer = window.setTimeout(() => decideOpinions(st, true), DEC_OP_POLL_MS);
-  })();
+  });
 }
-async function decideOpinionsRead(ids: string[]): Promise<FlowOpinion[]> {
+/** One request, which `abort` (closing the screen, or 15 s) stops. */
+async function decideOpinionsRead(ids: string[], abort: AbortController): Promise<FlowOpinion[]> {
   // A read that changes nothing: no retries and no pressed-button state (not post()); any failure ends the asking.
-  const r = await fetch(`${API}/v2/flow/opinions`, {method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15_000),
-    headers: {'Content-Type': 'application/json', 'Idempotency-Key': newRequestId()}, body: JSON.stringify({items: ids})});
-  if (!r.ok) throw new Error(`Opinions: ${r.status}`);
-  const body: unknown = await r.json();
-  const list = body && typeof body === 'object' && 'opinions' in body && Array.isArray(body.opinions) ? body.opinions as unknown[] : [];
-  return list.filter((o): o is FlowOpinion => !!o && typeof o === 'object' && typeof (o as FlowOpinion).id === 'string');
+  const late = window.setTimeout(() => abort.abort(), 15_000);
+  try {
+    const r = await fetch(`${API}/v2/flow/opinions`, {method: 'POST', redirect: 'error', signal: abort.signal,
+      headers: {'Content-Type': 'application/json', 'Idempotency-Key': newRequestId()}, body: JSON.stringify({items: ids})});
+    if (!r.ok) throw new Error(`Opinions: ${r.status}`);
+    const body: unknown = await r.json();
+    const list = body && typeof body === 'object' && 'opinions' in body && Array.isArray(body.opinions) ? body.opinions as unknown[] : [];
+    return list.filter((o): o is FlowOpinion => !!o && typeof o === 'object' && typeof (o as FlowOpinion).id === 'string');
+  } finally { clearTimeout(late); }
 }
-/** What came back: a ready opinion's line and pick go on the screen (decideLineSet), with its note when it would send
-    back; an id the answer left out counts as none. */
-function decideOpinionsTake(st: DecState, ids: string[], got: FlowOpinion[]) {
-  for (const id of ids) if (!got.some(o => o.id === id)) DEC_OP.state.set(id, 'none');
-  for (const o of got) {
-    const state = o.state === 'ready' || o.state === 'pending' ? o.state : 'none';
-    DEC_OP.state.set(o.id, state);
-    if (typeof o.score === 'number') DEC_OP.score.set(o.id, o.score);
-    const it = st.items.get(o.id);
-    if (state !== 'ready' || !o.line || !it) continue;
+/** What came back for the asks `sent` (id → fingerprint when asked): a ready opinion's line and pick go on the screen,
+    with its note when it would send back; an id the answer left out counts as none. An answer for an ask that changed
+    since it was asked is dropped, and the ask is asked again. */
+function decideOpinionsTake(st: DecState, sent: Map<string, string>, got: FlowOpinion[]) {
+  const byId = new Map(got.map(o => [o.id, o]));
+  let mine = false;
+  for (const [id, print] of sent) {
+    const it = st.items.get(id);
+    if (!it || decideOpPrint(it) !== print) continue;
+    const o = byId.get(id), state = o?.state === 'ready' || o?.state === 'pending' ? o.state : 'none';
+    if (id === st.at && (DEC_OP.state.get(id) !== state || state === 'ready')) mine = true;
+    DEC_OP.state.set(id, state); DEC_OP.print.set(id, print);
+    if (typeof o?.score === 'number') DEC_OP.score.set(id, o.score);
+    if (state !== 'ready' || !o?.line) continue;
     const pick = decideKind(it) === 'ok' ? DEC_OP_PICK[o.pick] || '' : String(o.pick || '');
-    if (pick === 'sendback' && o.note) DEC_OP.note.set(o.id, o.note);
-    decideLineSet(o.id, {line: String(o.line), pick});
+    if (pick === 'sendback' && o.note) DEC_OP.note.set(id, String(o.note));
+    DEC_LINES.set(id, {line: String(o.line), pick});
   }
   decideScoreOrder(st);
   decidePaintHead(st);
+  if (mine) decidePaintSide(st);
 }
 /** A set of more than 5: the items not yet seen this visit go highest score first, those with none after them in the
     list's order; the item on screen and every one seen (or answered) keep their place, so ‹ goes back to what was just
@@ -799,18 +839,11 @@ function decidePaintSide(st: DecState) {
   const caret = same && typing instanceof HTMLTextAreaElement && host.contains(typing) && typing.id
     ? {id: typing.id, from: typing.selectionStart, to: typing.selectionEnd, dir: typing.selectionDirection ?? undefined} : null;
   host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
-  // Snooze, where the person may set the task aside, else Skip, sits in the answer row on every width; an item with no
-  // row of its own (a typed choice) gets one. An ask's snooze choices open above the row, which stays last (pinned on a
-  // phone).
-  const snoozes = decideSnoozes(it, kind);
-  if (kind !== 'yours' && (snoozes || decideLive(st).length > 1)) {
-    const card = host.firstElementChild!;
-    let row = card.querySelector<HTMLElement>(':scope > .dc-acts');
-    if (!row) { card.insertAdjacentHTML('beforeend', '<div class="dc-acts"></div>'); row = card.lastElementChild as HTMLElement; }
-    if (snoozes) {
-      row.insertAdjacentHTML('afterbegin', decideBtn('snooze', 'Snooze', false, busy));
-      row.insertAdjacentHTML('beforebegin', decideMoreHTML(st, it));
-    } else row.insertAdjacentHTML('beforeend', `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`);
+  // Skip sits in the answer row, on every width; an item with no row of its own (a typed choice) gets one.
+  if (decideLive(st).length > 1) {
+    const card = host.firstElementChild!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
+    const skip = `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
+    if (row) row.insertAdjacentHTML('beforeend', skip); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${skip}</div>`);
   }
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
@@ -1441,12 +1474,13 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'snooze': case 'give': case 'back':
       st.more = st.more === what ? '' : what; decidePaintSide(st); return;
     case 'snooze-hour': case 'snooze-day': case 'snooze-week': {
-      // An hour is a moment (a date-time, kept to the minute); a day or a week is a date on this calendar, which the
-      // server reads as that day's start in the team's zone (task_moves_routes.parse_until).
-      const day = new Date(), add = what === 'snooze-day' ? 1 : 7;
-      day.setDate(day.getDate() + add);
-      const until = what === 'snooze-hour' ? new Date(Date.now() + 3600_000).toISOString()
-        : `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+      // Every choice is a moment (the server keeps a date-time to the minute): an hour on, or 8:00 tomorrow or seven
+      // days on by this person's clock. Not a bare date, which the server reads as midnight in the team's zone: late in
+      // the evening west of that zone, that midnight has already passed.
+      const day = new Date();
+      day.setDate(day.getDate() + (what === 'snooze-day' ? 1 : 7));
+      day.setHours(8, 0, 0, 0);
+      const until = what === 'snooze-hour' ? new Date(Date.now() + 3600_000).toISOString() : day.toISOString();
       await decideDo(st, it, 'Snoozed', async () => { const r = await taskSnooze(taskId, until, ver); st.snoozed++; return r; },
         () => async () => { await taskUnsnooze(taskId); st.snoozed = Math.max(0, st.snoozed - 1); });
       return;
