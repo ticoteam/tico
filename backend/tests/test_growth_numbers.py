@@ -89,7 +89,8 @@ def test_a_figure_not_recorded_is_null_never_zero(api):
     add_channel(api)
     put(api, "growth/cohorts", {"channel": "google-search", "month": "2026-10", "new_customers": 12})
     total = get(api, "growth/numbers")["series"][0]
-    assert total["new_customers"] == 12 and total["quality"] == "actual"
+    # Typed with no mark, the month is an estimate (#292).
+    assert total["new_customers"] == 12 and total["quality"] == "estimate"
     assert all(total[key] is None for key in FIGURES if key not in ("new_customers", "quality"))
 
 

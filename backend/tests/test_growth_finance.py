@@ -461,7 +461,7 @@ def _weekly_setup(
     _finance_with_spend(store, SEPT_DAYS)
     post(api, "growth/channels", {"slug": "search-ads", "name": "Search Ads"})
     if typed is not None:
-        put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "spend": typed})
+        put(api, "growth/cohorts", {"channel": "search-ads", "month": "2026-09", "spend": typed, "quality": "actual"})
     put(api, "growth/settings", {"revenue_month": 50, "margin_pct": 80})
     post(api, "growth/customers", {"csv": as_csv(september(), HEADER)})
     src = post(
