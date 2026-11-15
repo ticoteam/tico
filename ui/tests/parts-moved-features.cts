@@ -120,6 +120,15 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       await page.waitForFunction(() => ['tfTileHTML', 'tfFromAttachments', 'decideGoThrough', 'bvMount']
         .every(f => typeof (window as unknown as Record<string, unknown>)[f] === 'function'), null, {timeout: t(15000)});
       for (const part of ['task-files', 'decide', 'browser-view', 'stage-rules']) assert.ok(open.parts.includes(part), `${name}: a task's page downloaded ${part}`);
+      // Its Owner, on the Details tab, opens the Give to… picker, whose code comes with that first click. Before Needs
+      // you's walk below, whose window then covers the task.
+      assert.ok(!open.parts.includes('give-to'), name + ': a task\'s page does not download the Give to… picker');
+      await page.locator('[data-task-tab="details"]:visible').first().click();
+      await page.locator('[data-prop="owner"]:visible').first().click();
+      await page.locator('.gv-pop:popover-open .gv-q').waitFor({timeout: t(15000)});
+      assert.ok(open.parts.includes('give-to'), name + ': the Owner\'s first click downloaded the picker');
+      await page.keyboard.press('Escape');
+      await page.locator('.gv-pop').waitFor({state: 'detached', timeout: t(10000)});
       const ran = await page.evaluate(async () => {
         const w = window as unknown as {
           tfTileHTML: (f: unknown, open: boolean) => string; tfFromAttachments: (list: unknown[]) => unknown[];
@@ -137,14 +146,6 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
         return {tile, through, browserView};
       });
       assert.deepEqual(ran, {tile: true, through: 'boolean', browserView: true}, name + ': a task\'s files, Needs you and the browser view run');
-      // Its Owner, on the Details tab, opens the Give to… picker, whose code comes with that first click.
-      assert.ok(!open.parts.includes('give-to'), name + ': a task\'s page does not download the Give to… picker');
-      await page.locator('[data-task-tab="details"]:visible').first().click();
-      await page.locator('[data-prop="owner"]:visible').first().click();
-      await page.locator('.gv-pop:popover-open .gv-q').waitFor({timeout: t(15000)});
-      assert.ok(open.parts.includes('give-to'), name + ': the Owner\'s first click downloaded the picker');
-      await page.keyboard.press('Escape');
-      await page.locator('.gv-pop').waitFor({state: 'detached', timeout: t(10000)});
       assert.deepEqual(open.errors, [], name + ': errors on a task\'s page');
       await open.close();
     }
