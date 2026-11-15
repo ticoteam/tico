@@ -550,8 +550,10 @@ function decideSugRead(body: unknown): {state: string; suggestions: FlowSuggesti
   const o = body && typeof body === 'object' ? body as {state?: unknown; suggestions?: unknown} : {};
   const list = Array.isArray(o.suggestions) ? o.suggestions as unknown[] : [];
   return {state: o.state === 'pending' ? 'pending' : 'ready',
-    suggestions: list.filter((x): x is FlowSuggestion => !!x && typeof x === 'object' && typeof (x as FlowSuggestion).id === 'string'
-      && typeof (x as FlowSuggestion).text === 'string' && (x as FlowSuggestion).state !== 'dismissed')};
+    suggestions: list.filter((x): x is FlowSuggestion => {
+      const row = x && typeof x === 'object' ? x as Partial<FlowSuggestion> : null;
+      return !!row && typeof row.id === 'string' && typeof row.text === 'string' && row.state !== 'dismissed';
+    })};
 }
 /** The list under All done: none at all with nothing to show. */
 function decideSugHTML(): string {
