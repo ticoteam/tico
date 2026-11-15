@@ -1,3 +1,5 @@
+/* ui/changelog.ts — Changelog (#/changelog): Tico's product updates and releases, the Beta features and the known
+   issues in this version; the sidebar's version row and badge. */
 'use strict';
 
 // The changelog's answers as the server sends them (ui/types/api.d.ts).
@@ -34,27 +36,54 @@ function changelogKnownIssuesHTML() {
   const u: ConfigUpdate = S.config.update || {}, v = S.config.version ? ' ' + nvVersion(S.config.version) : '';
   const issue = (i: ConfigKnownIssue) => `<li>${/^https:\/\//.test(i.url || '') ? `<a href="${esc(i.url)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}${i.fixed_in ? ` <span class="changelog-ki-fixed">Fixed in ${esc(nvVersion(i.fixed_in))}</span>` : ''}</li>`;
   const issues = u.known_issues || [];
-  const body = !u.known_issues_checked ? '<p class="changelog-ki-none">Could not check: this server\'s update check goes to GitHub, not Tico HQ.</p>'
+  // A server whose update check goes to GitHub gets no list from Tico HQ: say so once and lead to where issues are kept.
+  const body = !u.known_issues_checked ? `<p class="changelog-ki-none">This server checks for updates on GitHub, so known issues are not listed here. <a href="${GH}/issues" target="_blank" rel="noopener noreferrer">Issues on GitHub</a></p>`
     : issues.length ? `<ul>${issues.map(issue).join('')}</ul>` : `<p class="changelog-ki-none">None known in${esc(v)}.</p>`;
   return `<section class="changelog-top changelog-known-issues" id="changelog-known-issues" aria-labelledby="changelog-ki-h"><h2 id="changelog-ki-h">Known issues in your version</h2>${body}</section>`;
 }
 
+// What the Changelog shows: the product updates since the last look, all of them, or every change with the bots' activity.
+const CL_VIEWS: [string, string][] = [['unread', 'Since last look'], ['product', 'All product updates'], ['', 'All activity']];
+// The shared popover's host (task-list-menus.ts tasksMenu keeps its anchor here).
+const CL_MENU: TasksMenuHost = {};
+
 window.pageChangelog = async function () {
   const root = document.querySelector<HTMLElement>('#main');
   if (!root) return;
-  root.innerHTML = `<div class="release-page"><header class="release-header"><div><h1>Changelog</h1><p class="muted release-summary" role="status"></p></div></header>${changelogBetaHTML()}${changelogKnownIssuesHTML()}<div class="release-filters"><input type="search" aria-label="Search changes" autocomplete="off" placeholder="Search changes…"><select aria-label="Filter changes"><option value="unread">Since last look</option><option value="product">All product updates</option><option value="">All activity</option></select><button class="primary add-ctl" type="button" aria-label="Add product update" title="Add product update" hidden data-add-update>${TL_ICON.plus}</button></div><div class="release-list" aria-live="polite">Loading changes…</div><button class="ghost" type="button" data-more-changes hidden>Load older changes</button></div>`;
+  // The one page header (ui/app/page-head.ts): search and the shared filter icon as its tools, a quiet + for a product
+  // update where this person may add one, ⋯ last. The filter's menu is the shared popover, outside the header, so it
+  // opens even when a phone folds the tools into ⋯.
+  const head = pageHead({title: 'Changelog', hook: 'cl-head',
+    tools: '<input type="search" aria-label="Search changes" autocomplete="off" placeholder="Search">'
+      + `<button type="button" class="tl-ib" data-cl-filter aria-haspopup="true" aria-expanded="false" aria-label="Filter changes" title="Filter changes">${filterIcon(13)}<span class="ph-fold-word" aria-hidden="true">Filter</span><span class="tl-fbadge tnum" aria-hidden="true" hidden>1</span></button>`});
+  root.innerHTML = `<div class="release-page">${head}${changelogBetaHTML()}${changelogKnownIssuesHTML()}<div class="release-list" aria-live="polite">${skelRows(3)}</div><button class="ghost" type="button" data-more-changes hidden>Load older changes</button></div><div id="task-filter-pop" class="tl-pop" popover></div>`;
   const page = root.firstElementChild;
   if (!(page instanceof HTMLElement)) return;
-  const search = page.querySelector<HTMLInputElement>('input'), filter = page.querySelector<HTMLSelectElement>('select'), list = page.querySelector<HTMLElement>('.release-list');
-  const summary = page.querySelector<HTMLElement>('.release-summary'), add = page.querySelector<HTMLButtonElement>('[data-add-update]');
+  const search = page.querySelector<HTMLInputElement>('input[type=search]'), filterBtn = page.querySelector<HTMLButtonElement>('[data-cl-filter]'), list = page.querySelector<HTMLElement>('.release-list');
+  const headEl = page.querySelector<HTMLElement>('header.cl-head'), pop = root.querySelector<HTMLElement>('#task-filter-pop');
   const more = page.querySelector<HTMLButtonElement>('[data-more-changes]');
-  if (!search || !filter || !list || !summary || !add || !more) return;
+  if (!search || !filterBtn || !list || !headEl || !pop || !more) return;
   let data: ClList, shown: ClEntry[] = [], generation = 0;
+  // The view in force (CL_VIEWS); the filter icon carries a badge whenever it is not the plain product list.
+  const filter = {value: 'product'};
+  const paintFilter = () => {
+    const word = CL_VIEWS.find(([v]) => v === filter.value)?.[1] || '', on = filter.value !== 'product';
+    const badge = filterBtn.querySelector<HTMLElement>('.tl-fbadge');
+    if (badge) badge.hidden = !on;
+    filterBtn.classList.toggle('active', on);
+    filterBtn.setAttribute('aria-label', on ? `Filter changes, ${word}` : 'Filter changes');
+  };
+  const setView = (value: string) => { filter.value = value; paintFilter(); if (data) render(); void load(); };
+  // The filter icon and its menu (the shell's phFilterWire): a choice of one view.
+  phFilterWire(CL_MENU, filterBtn, pop, anchor => tasksMenu(CL_MENU, anchor, `<div class="tl-menu" role="group" aria-label="Show"><div class="tl-menu-list">${CL_VIEWS.map(([v, label]) =>
+      `<label class="tl-opt"><input type="radio" name="cl-view" value="${v}"${filter.value === v ? ' checked' : ''}><span>${esc(label)}</span></label>`).join('')}</div></div>`,
+    p => { p.onchange = ev => { const t = eventElement(ev); if (t instanceof HTMLInputElement) { tasksMenuClose(); setView(t.value); } }; }));
   // Entries this visit has marked read stay listed and labelled New until the person leaves, so nothing
   // vanishes mid-read; a later visit starts from the server's read state.
   const visit = new Map<string, ClEntry>(), saving = new Set<string>();
   const isNew = (r: ClEntry) => r.unread || visit.has(r.id);
   filter.value = Number(S.config.changelog?.unread_count) ? 'unread' : 'product';
+  paintFilter();
   const query = () => {
     const params = new URLSearchParams({kind: filter.value ? 'product' : 'all'});
     if (filter.value === 'unread') params.set('unread', 'true');
@@ -66,19 +95,24 @@ window.pageChangelog = async function () {
     window.renderChangelogNotice();
   };
   const bullet = (b: string) => esc(typeof plainMd === 'function' ? plainMd(b) : b);
-  const renderSummary = () => {
-    summary.textContent = data.unread_count ? `${data.unread_count} product ${data.unread_count === 1 ? 'update' : 'updates'} you haven't read.` : 'You’re caught up on product updates.';
+  // The quiet + (style guide: "A page whose adding is rare has a quiet + there instead"), only for who may add.
+  const paintAdd = () => {
+    const can = !!data?.can_add, has = !!headEl.querySelector('[data-add-update]');
+    if (can === has) return;
+    pageHeadSet(headEl, 'primary', can ? pageHeadAdd('Add product update', 'data-add-update') : '');
+    const add = headEl.querySelector<HTMLButtonElement>('[data-add-update]');
+    if (add) add.onclick = addUpdate;
   };
   // A release with its GitHub publish time shows that day and time in the viewer's own zone. Without one (no time
   // known, or not a release) it shows the day of shipped_at in UTC, as before, and no time.
+  // A release with its GitHub publish time shows that day and time in the viewer's own zone (format.ts: month first,
+  // 12-hour, the year only when it is not this one). Without one (no time known, or not a release) it shows the day of
+  // shipped_at in UTC and no time.
   const releaseWhen = (r: ClEntry) => {
     const published = r.published_at ? new Date(r.published_at) : null;
-    if (published && !Number.isNaN(published.getTime())) return {
-      day: published.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'}),
-      time: new Intl.DateTimeFormat(undefined, {hour:'numeric', minute:'2-digit', timeZoneName:'short'}).format(published),
-    };
+    if (published && !Number.isNaN(published.getTime())) return {day: dayWords(published), time: clockWords(published)};
     const date = r.shipped_at ? new Date(r.shipped_at) : null;
-    return {day: date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric', timeZone:'UTC'}) : '', time: ''};
+    return {day: date && !Number.isNaN(date.getTime()) ? dayWords(new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())) : '', time: ''};
   };
   const render = () => {
     if (!page.isConnected) return;
@@ -89,8 +123,7 @@ window.pageChangelog = async function () {
       : data.entries;
     shown = pool.filter(r => (!filter.value || (r.kind === 'product' && (filter.value !== 'unread' || isNew(r))))
       && (!q || words.every(word => (r.title + ' ' + r.bullets.join(' ')).toLowerCase().includes(word))));
-    renderSummary();
-    add.hidden = !data.can_add;
+    paintAdd();
     more.hidden = data.next_offset == null;
     list.innerHTML = shown.map(r => {
       const when = releaseWhen(r);
@@ -105,7 +138,7 @@ window.pageChangelog = async function () {
       if (!page.isConnected || request !== generation) return;
       data = result;
       data.unread_count = Number(data.unread_count) || 0;
-      if (initial) filter.value = data.unread_count ? 'unread' : 'product';
+      if (initial) { filter.value = data.unread_count ? 'unread' : 'product'; paintFilter(); }
       notice(data.unread_count);
       render();
       void markShown();
@@ -120,7 +153,6 @@ window.pageChangelog = async function () {
   };
   let typing = 0;     // the server's search runs once typing pauses, not per keystroke
   search.oninput = () => { if (data) render(); clearTimeout(typing); typing = setTimeout(() => void load(), 200); };
-  filter.onchange = () => { if (data) render(); void load(); };
   // Opening the page is reading it: the product entries it shows are acknowledged without a click.
   let saved = Promise.resolve();
   const markShown = () => {
@@ -138,8 +170,8 @@ window.pageChangelog = async function () {
           notice(result.unread_count);
         }
       } catch { /* post() has already retried; the badge stays and the next load tries again. */ }
-      // The cards look the same either way, so only the summary changes; a rebuild would close what is being read.
-      finally { items.forEach(r => saving.delete(r.id)); if (page.isConnected) renderSummary(); }
+      // The cards look the same either way: no rebuild, which would close what is being read.
+      finally { items.forEach(r => saving.delete(r.id)); }
     });
     return saved;
   };
@@ -151,7 +183,7 @@ window.pageChangelog = async function () {
       const result = await get('/v2/tasks/' + encodeURIComponent(String(button.dataset.activityTask)));
       if (!page.isConnected) return;
       const dialog = document.createElement('dialog'); dialog.className = 'tmodal docs-proposals';
-      dialog.innerHTML = `<div class="tmodal-head"><h2>Reported task outcome</h2><span class="spacer"></span><button aria-label="Close">✕</button></div><div class="docs-proposals-body"><h3>${esc(result.task.title)}</h3>${safeMd(result.task.note || 'No outcome recorded.')}</div>`;
+      dialog.innerHTML = `<div class="tmodal-head"><h2>Reported task outcome</h2><span class="spacer"></span><button type="button" class="ghost tmodal-x" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div><div class="docs-proposals-body"><h3>${esc(result.task.title)}</h3>${safeMd(result.task.note || 'No outcome recorded.')}</div>`;
       document.body.append(dialog); dialog.showModal();
       const close = dialog.querySelector<HTMLButtonElement>('button');
       if (close) close.onclick = () => dialog.close();
@@ -177,10 +209,12 @@ window.pageChangelog = async function () {
     } catch (e) { toast(errorMessage(e, ''), true); }
     finally { more.disabled = false; }
   };
-  add.onclick = () => {
+  // The product update dialog: ✕ dismisses it; Cancel left, Publish right and last.
+  function addUpdate() {
     const dialog = document.createElement('dialog'); dialog.className = 'tmodal docs-proposals';
-    dialog.innerHTML = '<div class="tmodal-head"><h2>Product update</h2><span class="spacer"></span><button aria-label="Close">✕</button></div><div class="docs-proposals-body"><p class="muted">Share a team update.</p><label>Title<input class="draft-title" style="width:100%" maxlength="90"></label><label>Bullets — one per line<textarea class="draft-bullets" style="width:100%" rows="4"></textarea></label><p class="row"><button class="primary" data-publish>Publish</button></p><p class="draft-status" role="status"></p></div>';
+    dialog.innerHTML = `<div class="tmodal-head"><h2>Product update</h2><span class="spacer"></span><button type="button" class="ghost tmodal-x" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div><div class="docs-proposals-body"><label>Title<input class="draft-title" style="width:100%" maxlength="90"></label><label>Bullets, one per line<textarea class="draft-bullets" style="width:100%" rows="4"></textarea></label><p class="draft-status err" role="status"></p><div class="row cl-dialog-btns"><span class="spacer"></span><button type="button" class="ghost" data-cancel>Cancel</button><button type="button" class="primary" data-publish>Publish</button></div></div>`;
     document.body.append(dialog); dialog.showModal();
+    dialog.querySelector<HTMLButtonElement>('[data-cancel]')?.addEventListener('click', () => dialog.close());
     const close = dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]'), publish = dialog.querySelector<HTMLButtonElement>('[data-publish]');
     const titleField = dialog.querySelector<HTMLInputElement>('.draft-title'), bulletsField = dialog.querySelector<HTMLTextAreaElement>('.draft-bullets');
     const status = dialog.querySelector<HTMLElement>('.draft-status');
@@ -194,6 +228,6 @@ window.pageChangelog = async function () {
       catch (e) { status.textContent = errorMessage(e, ''); }
       finally { publish.disabled = false; }
     };
-  };
+  }
   await load(true);
 };

@@ -18,7 +18,8 @@ const LEARN_SECTIONS: [LearnKind, string, string][] = [['bots', 'Bots', 'smart_t
 const LEARN_SRC_ICONS: Record<string, string> = {chat: 'forum', task: 'task_alt', slack: 'tag', mail: 'mail', meeting: 'groups', doc: 'description', commit: 'history'};
 let LEARN_LOAD = 0;
 
-const learnNight = (night: string): string => new Date(night + 'T12:00:00').toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
+// A night (YYYY-MM-DD) in the guide's words, month first whatever the browser's locale: "Thu, Nov 12" (format.ts).
+const learnNight = (night: string): string => dayWords(night, {weekday: true});
 
 async function pageLearnings(): Promise<void> {
   const load = ++LEARN_LOAD;
@@ -64,9 +65,9 @@ async function learnShowNight(n: LearnNightSummary, load: number): Promise<void>
   if (load !== LEARN_LOAD) return;
   const s: Partial<Record<LearnKind, LearnSubject[]>> = night.sections || {};
   const groups = LEARN_SECTIONS.map(([k, label, icon]) => ({k, label, icon, subs: s[k] || []})).filter(g => g.subs.length);
+  // The rail already counts the night's updates and the sections name what changed: no count caption under the date.
   const total = groups.reduce((a, g) => a + g.subs.reduce((b, x) => b + x.entries.length, 0), 0);
-  const parts = groups.map(g => `${g.subs.length} ${g.label.toLowerCase()}`);
-  box.innerHTML = head(total ? `${total} update${total === 1 ? '' : 's'} across ${parts.join(', ')}` : 'Nothing changed.')
+  box.innerHTML = head(total ? '' : 'Nothing changed.')
     + groups.map(g => `<section class="lrn-grp"><h3><span class="nav-icon" aria-hidden="true">${g.icon}</span>${g.label}</h3>${g.subs.map(x => learnSubject(g.k, x)).join('')}</section>`).join('');
   learnFitNames(box);
   void document.fonts.ready.then(() => { if (load === LEARN_LOAD) learnFitNames(box); });

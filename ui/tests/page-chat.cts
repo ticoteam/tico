@@ -1,15 +1,22 @@
-// Chat with a page's owner, from the page (ui/app/page-chat.ts, spec page-owner-chat), on Listening against the fake
-// hub in support/automations-fake.cts and the threads fake:
-//  - AC-1 desktop, 1440 px: Chat at the top right opens the Automations Owner's chat in the shared column, floating
-//    over the right of the window (spec chat-on-every-page AC-3); the list keeps its place and width and stays usable;
+// Chat with a page's owner, from the page (ui/app/page-chat.ts, spec page-owner-chat, style guide "Where chat lives"),
+// on Listening against the fake hub in support/automations-fake.cts and the threads fake. Listening calls no page chat
+// code of its own for the column: the router mounts it (pageChatRoute).
+//  - AC-1 a computer too narrow to dock (1150 px): no chat button in the header; a slim tab on the right edge, the owner's
+//    face in a gutter of its own (clear of the header's ⋯), before the column in the page's order, opens the Automations
+//    Owner's chat in the shared column over the right of the window with the cursor in its composer; the list keeps its
+//    place and width and stays usable; the column's close is a quiet icon (no border, a hover fill, 32 px);
 //  - AC-2 a message sent with a listening open carries refs.from_page {page, label, item} and the chat shows
 //    "From Listening › <name>"; the chat is the direct one with the bot (GET /threads/dm?with=bot:...);
-//  - AC-3 the column's left edge drags it, 260-560 px; dragged to 400 px and reloaded it opens at 400 px; closed, it
-//    stays closed after a reload;
+//  - AC-3 the column's left edge drags it, 260-560 px; dragged to 400 px and reloaded it opens at 400 px; Esc and its
+//    close close it and give the focus back to the tab;
+//  - wherever the page keeps 680 px beside the column's 260 (#main 940 px wide: 1176 px beside the 236 px sidebar) it is docked
+//    beside the page and open at first, at 1440 too; one pixel less and it folds to its tab; resized across, it docks
+//    or folds; closed while docked, it stays closed after a reload; Esc there gives the focus to the tab;
 //  - a listening's editor takes the column's place while open;
-//  - AC-4 a page with no owner has no Chat;
-//  - AC-5 phone, 390 px: the owner's face opens the chat full screen, ‹ at left, the name in the middle, the composer
-//    at the bottom and no tab bar; ‹ or the phone's back returns to Listening where it was.
+//  - AC-4 a page whose owner a person set to "No owner" has no chat: no column, no tab, no mark;
+//  - AC-5 phone, 390 px: the owner's face is the chat mark in the header's one row just before ⋯ (44 px); it opens the
+//    chat full screen, ‹ at left, the name in the middle, the composer at the bottom and no tab bar; ‹ or the phone's
+//    back (one press) returns to Listening where it was; open, it is a modal dialog and the page behind it is inert.
 // TICO_UI_SHOTS=<dir> keeps the screenshots.
 // Run: node scripts/ui-tests.cts page-chat
 import type {Page} from 'playwright';
@@ -21,7 +28,8 @@ const {openAutomations, PHONE, sideways, shot} = require('./support/automations-
 const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFakeSupport.Api;
 
 const OWNER = 'automations-owner';
-const DESKTOP = {width: 1440, height: 900};
+const NARROW = {width: 1150, height: 900}, DESKTOP = {width: 1440, height: 900};
+const TAB = 'body > .pgc-edge:not([hidden]) .pgc-tab';
 type Sent = {text?: string; refs?: {from_page?: unknown}};
 
 const box = (page: Page, sel: string) => page.locator(sel).first().evaluate(el => {
@@ -51,38 +59,58 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
   BROWSER = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     {
-      // AC-1: closed at first; Chat at the top right opens the owner's chat at the right of the list.
+      // AC-1: too narrow to dock, closed at first; the tab on the right edge opens the owner's chat at the right of the list.
       const sent: Sent[] = [], dmReads: string[] = [];
       const answer = threadsFake({bot: OWNER, me: 'human:dana', sent: sent as ThreadsFakeSupport.ThreadsPost[], messages: [
         {id: 'm-1', sender_id: 'bot:' + OWNER, body: 'Reddit rate-limited it from 14:00.'}]});
-      const {page, errors} = await openAutomationsWith(OWNER, DESKTOP, '#/listening', answer, dmReads);
+      const {page, errors} = await openAutomationsWith(OWNER, NARROW, '#/listening', answer, dmReads);
       await page.evaluate(() => localStorage.clear());
       await page.reload();
       await page.waitForSelector('.lst-row');
-      const chat = page.locator('.au-ph [data-pgc-open]');
+      const chat = page.locator(TAB);
       await chat.waitFor();
-      assert.equal(await chat.locator('.pgc-word').innerText(), 'Chat', 'the button says Chat beside the owner\'s face');
       assert.equal(await chat.getAttribute('aria-label'), 'Chat with Automations Owner');
-      // Chat is one of the header's tools, on the title row, just before New listening (the filled button, last).
-      const head = await box(page, '.au-ph'), btn = await box(page, '.au-ph [data-pgc-open]'), add = await box(page, '.au-ph .au-new');
-      assert.ok(await page.locator('.au-ph > .ph-tools [data-pgc-open]').count() === 1 && btn.right <= add.x && add.x - btn.right < 40
-        && btn.y < head.bottom && Math.abs((btn.y + btn.h / 2) - (add.y + add.h / 2)) < 2, `Chat sits just before New listening: ${JSON.stringify({btn, add, head})}`);
-      assert.equal(await page.locator('aside.pgc').isHidden(), true, 'closed at first');
+      assert.equal(await chat.getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.locator('.au-ph [data-pgc-open]:visible, .au-ph .pgc-btn').count(), 0, 'no chat button in the header');
+      // The tab is the owner's face, on the right edge in a gutter #main leaves for it: it covers none of the page.
+      const tabBox = await box(page, TAB), main = await box(page, '#main'), more = await box(page, '.au-ph > .ph-more');
+      assert.ok(tabBox.right >= NARROW.width - 4 && tabBox.h >= 44, `the tab on the right edge: ${JSON.stringify(tabBox)}`);
+      assert.ok(main.right <= tabBox.x && more.right < tabBox.x, `the page and its ⋯ stop short of the tab: ${JSON.stringify({main, more, tabBox})}`);
+      assert.equal((await box(page, TAB + ' > *')).w, 22, 'the owner\'s face, 22 px');
+      assert.equal(await page.locator('aside.pgc').isHidden(), true, 'too narrow to dock: folded to its tab at first');
+      assert.equal(await page.evaluate(() => {
+        const edge = document.querySelector('body > .pgc-edge')!, aside = document.querySelector('body > aside.pgc')!;
+        return !!(edge.compareDocumentPosition(aside) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }), true, 'the tab comes before the column in the page\'s order');
       assert.deepEqual(dmReads, [], 'the chat loads only when opened');
       const listBefore = await box(page, '.au-c');
       await chat.click();
       await page.locator('aside.pgc .pgc-head .pgc-name').waitFor();
       await page.locator('aside.pgc .th-msg[data-mid="m-1"]').waitFor();
+      await page.waitForFunction(() => document.activeElement?.matches('aside.pgc .p-text'), null, {timeout: 5000});
       assert.deepEqual(dmReads, ['bot:' + OWNER], 'the chat is the direct one with the page\'s owner');
+      // Its close: a quiet icon button, no border or shadow, 32 px, a fill on hover only.
+      const x = page.locator('aside.pgc .pgc-head [data-pgc-close]');
+      const look = () => x.evaluate(el => { const c = getComputedStyle(el); return {border: c.borderTopWidth, shadow: c.boxShadow, bg: c.backgroundColor, w: el.getBoundingClientRect().width, h: el.getBoundingClientRect().height}; });
+      const still = await look();
+      assert.deepEqual([still.border, still.shadow, still.w, still.h], ['0px', 'none', 32, 32], `a quiet 32 px close: ${JSON.stringify(still)}`);
+      assert.ok(/rgba\(0, 0, 0, 0\)|transparent/.test(still.bg), `no fill at rest: ${still.bg}`);
+      await x.hover();
+      await page.waitForTimeout(200);
+      const hover = await look();
+      assert.notEqual(hover.bg, still.bg, 'a fill on hover');
+      assert.equal(hover.border, '0px', 'still no border on hover');
+      await page.mouse.move(10, 10);
       assert.equal(await page.locator('aside.pgc .pgc-name').innerText(), 'Automations Owner');
       const panel = await box(page, 'aside.pgc'), list = await box(page, '.au-c');
       assert.equal(panel.w, 340, 'the column opens 340 px wide');
-      assert.equal(panel.right, DESKTOP.width, `the column is at the right of the window: ${JSON.stringify(panel)}`);
-      assert.deepEqual(list, listBefore, 'below 1600 px it floats over the page: Listening keeps its place and width');
+      assert.equal(panel.right, NARROW.width, `the column is at the right of the window: ${JSON.stringify(panel)}`);
+      assert.equal(await chat.getAttribute('aria-expanded'), 'true');
+      assert.deepEqual(list, listBefore, 'too narrow to dock, it floats over the page: Listening keeps its place and width');
       assert.equal(await page.evaluate(() => document.body.classList.contains('pgc-docked')), false);
       assert.equal(await sideways(page), false, 'no sideways scroll with the chat open');
       // The page stays usable: a listening opens from its row with the chat open.
-      await shot(page, 'page-chat-1440-open');
+      await shot(page, 'page-chat-1150-open');
       await page.locator('.lst-row[data-lst="au_market"]').click();
       await page.waitForSelector('.lst-blk');
       assert.equal(await page.locator('aside.pgc').isVisible(), true, 'the chat stays open beside the listening');
@@ -94,7 +122,7 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       assert.deepEqual(sent.at(-1)?.refs?.from_page, {page: 'listening', label: 'Listening', item: {kind: 'automation', id: 'au_market', name: 'Market listening'}});
       assert.equal(await page.locator('aside.pgc .th-from').innerText(), 'From Listening › Market listening');
       assert.equal(await page.locator('aside.pgc .th-from a').getAttribute('href'), '#/listening/au_market');
-      await shot(page, 'page-chat-1440-sent');
+      await shot(page, 'page-chat-1150-sent');
 
       // A listening's editor takes the column's place while open.
       await page.locator('.lst-blk').click();
@@ -117,14 +145,67 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       await page.mouse.up();
       assert.equal((await box(page, 'aside.pgc')).w, 400);
       await page.reload();
+      await page.locator(TAB).click();
       await page.locator('aside.pgc .pgc-name').waitFor();
       assert.equal((await box(page, 'aside.pgc')).w, 400, 'reloaded, it opens at 400 px');
       await page.locator('aside.pgc [data-pgc-close]').click();
       assert.equal(await page.locator('aside.pgc').isHidden(), true, 'its close button closes it');
-      assert.equal(await page.locator('.au-ph [data-pgc-open]').getAttribute('aria-pressed'), 'false');
+      assert.equal(await page.locator(TAB).getAttribute('aria-expanded'), 'false');
+      assert.equal(await page.evaluate(() => document.activeElement?.matches('.pgc-tab')), true, 'the focus is back on the tab');
+      // Keyboard: Enter on the tab opens it; Esc in the composer closes it and gives the focus back to the tab.
+      await page.keyboard.press('Enter');
+      await page.locator('aside.pgc .p-text').click();
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => document.querySelector<HTMLElement>('aside.pgc')!.hidden);
+      assert.equal(await page.evaluate(() => document.activeElement?.matches('.pgc-tab')), true, 'Esc gives the focus back to the tab');
+      // 1440 px: docked beside the page and open at first; the tab goes (Chris, round 2 A).
+      await page.setViewportSize(DESKTOP);
+      await page.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('tico.page_chat.open')) localStorage.removeItem(k); });
       await page.reload();
-      await page.locator('.au-ph [data-pgc-open]').waitFor();
+      await page.locator('aside.pgc .pgc-name').waitFor();
+      const isDocked = () => page.evaluate(() => document.body.classList.contains('pgc-docked'));
+      assert.equal(await isDocked(), true, 'docked at 1440 px');
+      assert.equal(await page.locator(TAB).count(), 0, 'no tab while it is docked open');
+      const docked = await box(page, 'aside.pgc'), mainDocked = await box(page, '#main');
+      assert.ok(mainDocked.right <= docked.x + 1, `the page sits beside it: ${JSON.stringify({docked, mainDocked})}`);
+      assert.equal(await sideways(page), false, 'nothing sideways, docked');
+      await shot(page, 'page-chat-1440-docked');
+      // Resized across the docking width: narrower, it folds to its tab; wider again, it is docked open again.
+      await page.setViewportSize(NARROW);
+      await page.locator(TAB).waitFor();
+      assert.equal(await page.locator('aside.pgc').isHidden(), true, 'narrowed past the docking width, folded to its tab');
+      await page.setViewportSize(DESKTOP);
+      await page.locator('aside.pgc:not([hidden]) .pgc-name').waitFor();
+      assert.equal(await isDocked(), true, 'widened again, docked open again');
+      // Exactly at the docking width (#main 940 px: 680 for the page beside the column's 260) it docks; a pixel less, not.
+      const extra = await page.evaluate(() => window.innerWidth - document.documentElement.clientWidth
+        + Math.round(document.getElementById('main')!.getBoundingClientRect().left));
+      await page.setViewportSize({width: extra + 940, height: 900});
+      // (still docked from 1440: wait for the resize to narrow the column to the width the page leaves it)
+      await page.waitForFunction(() => document.body.classList.contains('pgc-docked')
+        && Math.round(document.querySelector('aside.pgc')!.getBoundingClientRect().width) === 260, null, {timeout: 5000}).catch(() => {});
+      const atEdge = await box(page, 'aside.pgc'), mainAt = await box(page, '#main');
+      assert.deepEqual([atEdge.w, mainAt.w], [260, 680], `at the docking width: the column 260, the page 680: ${JSON.stringify({atEdge, mainAt})}`);
+      assert.equal(await sideways(page), false, 'nothing sideways at the docking width');
+      await page.setViewportSize({width: extra + 939, height: 900});
+      await page.locator(TAB).waitFor();
+      assert.equal(await page.locator('aside.pgc').isHidden(), true, 'a pixel narrower, folded to its tab');
+      await page.setViewportSize(DESKTOP);
+      await page.locator('aside.pgc:not([hidden]) .pgc-name').waitFor();
+      assert.equal((await box(page, 'aside.pgc')).w, 400, 'docked at the width it was dragged to');
+      // Esc in the docked column closes it and gives the focus to the tab that takes its place.
+      await page.locator('aside.pgc .p-text').click();
+      await page.keyboard.press('Escape');
+      await page.locator(TAB).waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement?.matches('.pgc-tab')), true, 'Esc, docked: the focus on the tab');
+      // Closed while docked, it stays closed after a reload, and the tab opens it again.
+      await page.reload();
+      await page.locator(TAB).waitFor();
+      await page.waitForTimeout(300);
       assert.equal(await page.locator('aside.pgc').isHidden(), true, 'closed, it stays closed after a reload');
+      await page.locator(TAB).click();
+      await page.locator('aside.pgc:not([hidden]) .pgc-name').waitFor();
+      assert.equal(await isDocked(), true, 'opened again, docked');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -133,8 +214,9 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       const {page, errors} = await openAutomationsWith(null, DESKTOP, '#/listening', threadsFake({bot: OWNER}), []);
       await page.waitForSelector('.lst-row');
       await page.waitForLoadState('networkidle');
-      assert.equal(await page.locator('[data-pgc-open]').count(), 0, 'a page with no owner has no Chat');
+      assert.equal(await page.locator('[data-pgc-open]:visible').count(), 0, 'a page with no owner has no tab and no mark');
       assert.equal(await page.locator('aside.pgc').isHidden(), true);
+      assert.equal(await page.evaluate(() => document.body.classList.contains('pgc-tabbed')), false, 'and no gutter for one');
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -145,16 +227,26 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       const answer = threadsFake({bot: OWNER, me: 'human:dana', sent: sent as ThreadsFakeSupport.ThreadsPost[], messages: msgs});
       const {page, errors} = await openAutomationsWith(OWNER, PHONE, '#/listening', answer, []);
       await page.waitForSelector('.lst-row');
-      const face = page.locator('.au-ph [data-pgc-open]');
+      const face = page.locator('.au-ph > .ph-chat > [data-pgc-open]');
       await face.waitFor();
-      assert.equal(await face.locator('.pgc-word').isVisible(), false, 'on a phone the button is the owner\'s face');
+      // The chat mark: the owner's face, 22 px in a 44 px button in the header's one row, just before ⋯.
+      const mark = await box(page, '.au-ph > .ph-chat > [data-pgc-open]'), moreBox = await box(page, '.au-ph > .ph-more');
+      const avatar = await box(page, '.au-ph > .ph-chat > [data-pgc-open] > *');
+      assert.ok(mark.w === 44 && mark.h === 44 && avatar.w === 22, `22 px in a 44 px button: ${JSON.stringify({mark, avatar})}`);
+      assert.ok(mark.right <= moreBox.x && Math.abs(mark.y - moreBox.y) < 2, `just before ⋯, in its row: ${JSON.stringify({mark, moreBox})}`);
+      assert.equal(await page.locator(TAB).count(), 0, 'no tab on a phone');
       assert.equal(await page.locator('#mobile-nav').isVisible(), true);
       await shot(page, 'page-chat-phone-page');
       const hash = await page.evaluate(() => location.hash);
       await face.click();
       await page.locator('aside.pgc.pgc-full .th-msg[data-mid="m-1"]').waitFor();
       const full = await box(page, 'aside.pgc');
-      assert.deepEqual([full.x, full.y, full.w, full.h], [0, 0, PHONE.width, PHONE.height], 'full screen');
+      assert.deepEqual(await page.evaluate(() => {
+        const a = document.querySelector('aside.pgc')!;
+        return [a.getAttribute('role'), a.getAttribute('aria-modal'), ...['#main', '#mobile-nav'].map(s => !!document.querySelector<HTMLElement>(s)?.inert)];
+      }), ['dialog', 'true', true, true], 'full screen: a modal dialog, the page and the tab bar inert behind it');
+      const top = await page.evaluate(() => Math.max(0, Math.round(document.getElementById('main')!.getBoundingClientRect().top)));
+      assert.deepEqual([full.x, full.y, full.w, full.h], [0, top, PHONE.width, PHONE.height - top], 'full screen, under any banner');
       assert.equal(await page.locator('#mobile-nav').isVisible(), false, 'the chat hides the tab bar');
       const back = await box(page, 'aside.pgc [data-pgc-close]'), name = await box(page, 'aside.pgc .pgc-who');
       assert.equal(await page.locator('aside.pgc [data-pgc-close]').getAttribute('aria-label'), 'Back');
@@ -167,8 +259,9 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       await page.waitForFunction(() => document.querySelector('aside.pgc')!.hasAttribute('hidden'));
       assert.equal(await page.evaluate(() => location.hash), hash, '‹ returns to Listening');
       assert.equal(await page.locator('#mobile-nav').isVisible(), true, 'the tab bar comes back');
+      assert.equal(await page.evaluate(() => document.getElementById('main')!.inert), false, 'the page is live again');
       assert.equal(await page.locator('.lst-row').count(), 2, 'Listening as it was');
-      // The phone's back closes it too, and stays on Listening.
+      // The phone's back closes it too, in one press, and stays on Listening.
       await face.click();
       await page.locator('aside.pgc.pgc-full').waitFor();
       await page.goBack();
@@ -180,7 +273,7 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       // A listening open on a phone: the face stays at the right of the ‹ Listening row, and a question names it.
       await page.locator('.lst-row[data-lst="au_market"]').click();
       await page.waitForSelector('.lst-blk');
-      const crumb = await box(page, '.au-crumb'), onItem = await box(page, '.au-ph [data-pgc-open]');
+      const crumb = await box(page, '.au-crumb'), onItem = await box(page, '.au-ph > .ph-chat > [data-pgc-open]');
       assert.ok(onItem.w > 0 && onItem.x + onItem.w <= PHONE.width && onItem.x > PHONE.width / 2, `the face at the right: ${JSON.stringify(onItem)}`);
       assert.ok(onItem.y >= crumb.y - 8 && onItem.bottom <= crumb.bottom + 8, `in the ‹ Listening row: ${JSON.stringify([onItem, crumb])}`);
       await shot(page, 'page-chat-phone-listening');

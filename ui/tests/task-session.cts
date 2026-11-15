@@ -1,5 +1,5 @@
-// Offline browser regression: a task's page shows its session as a chat. People's lines are bubbles under their names
-// (yours without one), the bot's reply opens to the steps behind it, a move to a stage is a one-line marker, and while
+// Offline browser regression: a task's page shows its session as a chat, in the chat's own rows (face, name, time, words;
+// no bubbles; yours named "You"), the bot's reply opens to the steps behind it, a move to a stage is a one-line marker, and while
 // the owner's run works a "Working" line shows its newest step with Stop, which stops that run. Redraws keep an open
 // fold's steps and "Stopping…"; someone who may not read the bot's runs is told why its steps are hidden. On a person's
 // task the bot that asked it answers: your message shows the bot chat's pending line (Sent, Queued, "<Bot> is working",
@@ -92,12 +92,14 @@ async function run(viewport: Viewport, shot: string) {
     const thread = page.locator('#task-modal .task-comments');
     await thread.locator('.tcomment', {hasText: 'Rebuilt the guide.'}).waitFor();
 
-    // People: bubbles on the right; another person's carries their name, yours none. The bot's reads as page text.
-    const ben = thread.locator('.tcomment.tmsg.you', {hasText: 'Include the API page too.'});
-    assert.match(await ben.locator('.tcomment-who').innerText(), /ben/i, 'another person is named');
-    assert.equal(await thread.locator('.tcomment.tmsg.from-me .bubble.you', {hasText: 'Refresh the docs please'}).count(), 1);
-    assert.ok(!(await thread.locator('.tcomment.from-me .tcomment-who').isVisible()), 'your own line needs no name');
-    assert.equal(await thread.locator('.tcomment.tmsg.bot .bubble.bot', {hasText: 'Rebuilt the guide.'}).count(), 1);
+    // Every message is the chat's row (styles/threads.css .th-msg): the face, the name and time, the words; no bubble.
+    const ben = thread.locator('.th-msg', {hasText: 'Include the API page too.'});
+    assert.match(await ben.locator('.th-who').innerText(), /ben/i, 'another person is named');
+    const mine = thread.locator('.th-msg.th-mine', {hasText: 'Refresh the docs please'});
+    assert.equal(await mine.count(), 1);
+    assert.equal(await mine.locator('.th-who').innerText(), 'You', 'your own line is "You"');
+    assert.equal(await thread.locator('.th-msg.bot .th-body', {hasText: 'Rebuilt the guide.'}).count(), 1);
+    assert.equal(await thread.locator('.bubble').count(), 0, 'no bubbles');
 
     // A move is a one-line marker between the messages, in time order; the task's first stage is its creation, no marker.
     const order = await thread.evaluate(t => [...(t.children as HTMLCollection & Iterable<Element>)].map(x => x.textContent!.replace(/\s+/g, ' ').trim()));
@@ -121,7 +123,7 @@ async function run(viewport: Viewport, shot: string) {
     // The live run: "Working" and its newest step, opening to the steps so far.
     const live = thread.locator('.task-live');
     if (shot) await page.screenshot({path: shot});
-    assert.match(await live.innerText(), /BotOps is working…\s*Ran hub task create/);
+    assert.match(await live.innerText(), /BotOps\s*working\s*Ran hub task create/);
     await live.locator('summary').click();
     await live.locator('.steps-list .step', {hasText: 'api page'}).waitFor();
     // Stop stops that run. Until it has ended the run moves on: the redraw shows its new step, keeps the steps read so
@@ -222,10 +224,10 @@ async function answered(viewport: Viewport, shot: string) {
     await live.filter({hasText: 'Sent'}).waitFor();
     phase = 'queued'; release = null; open();
     await live.filter({hasText: 'Queued'}).waitFor();
-    assert.equal(await live.locator('.typing.wait').count(), 1, 'a queued run breathes, as in the bot chat');
+    assert.equal(await live.locator('.th-status-word').innerText(), 'up next', 'a queued run is up next, as in a thread');
     phase = 'running';
     await reread(page);
-    await live.filter({hasText: 'Head of Engineering is working…'}).waitFor();
+    await live.filter({hasText: /Head of Engineering\s*working/}).waitFor();
     assert.match(await live.innerText(), /Ran hub task show/);
     assert.equal(await live.getAttribute('aria-label'), 'Head of Engineering is working: Ran hub task show');
     if (shot) await page.screenshot({path: shot});
@@ -353,7 +355,10 @@ async function deliveryChoice(viewport: Viewport, shot: string, theme = 'light')
     await caret.click();
     assert.deepEqual(await ways(), ['steer', 'queue', 'defer:24h', 'defer:30m', 'defer:1h', 'defer:4h', 'defer:24h', 'defer:2d', 'defer:7d', 'defer:never', 'goal']);
     assert.equal(await menu.locator('.sep + [data-deliver="goal"]').count(), 1, 'Set as goal sits below a separator');
-    assert.equal(await menu.locator('[data-deliver="steer"][aria-checked="true"] .p-way-i svg').count(), 1, 'the kept way is checked, with its icon');
+    // The menu's marks are the style guide's Ways to send: Steer a bolt, Queue its arrow, Set as goal the target.
+    assert.equal(await menu.locator('[data-deliver="steer"][aria-checked="true"] .p-way-i .nav-icon').textContent(), 'bolt', 'the kept way is checked, with its icon');
+    assert.equal(await menu.locator('[data-deliver="queue"] .p-way-i svg path').getAttribute('d'), 'M5 5v8h13M14 9l4 4-4 4');
+    assert.equal(await menu.locator('[data-deliver="goal"] .p-way-i .nav-icon').textContent(), 'target');
     const box = (await menu.boundingBox())!, arrow = (await caret.boundingBox())!;
     assert.ok(box.y + box.height <= arrow.y, 'the menu opens upward, over the thread');
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `the menu fits the ${viewport.width} px width`);
@@ -524,11 +529,9 @@ async function followReach(viewport: Viewport, shot: string, theme: string) {
     await pick('queue');
     await page.waitForFunction(() => document.querySelector('#task-modal .p-reach-pop .p-reach-mode')?.textContent === 'After its turn');
     await pick('defer:never');
-    await reach.filter({hasText: /^To Head of Engineering$/}).waitFor();
-    await reach.click();
-    assert.deepEqual(await rows(), [['Head of Engineering', 'Next turn']]);
-    await page.keyboard.press('Escape');
-    assert.equal(await pop.isHidden(), true);
+    // Only the reader the box already names ("Message Head of Engineering"): the line would say nothing new, so it is empty.
+    await reach.waitFor({state: 'hidden'});
+    assert.equal(await modal.locator('.task-pill textarea').getAttribute('placeholder'), 'Message Head of Engineering');
     // Set as goal is no comment: no reach.
     await pick('goal');
     await reach.waitFor({state: 'hidden'});

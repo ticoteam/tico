@@ -77,6 +77,8 @@ function context(read: () => Promise<unknown> = async () => { throw new Error('t
     orgChartTop: () => ({id: 'ana'}),
     document: {addEventListener() {}},
     window: {addEventListener() {}, matchMedia: () => ({matches: false, addEventListener() {}})},
+    // redesign-org.ts reads the phone width once as it loads (RDO_PHONE_MQ)
+    matchMedia: () => ({matches: false, addEventListener() {}}),
     get, pipelinesAll,
   });
   // pages-shell.ts: the names the shell keeps for every page (the page parts' ui/parts.json) load first, as in the app.

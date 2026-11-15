@@ -50,7 +50,7 @@ interface BudgetNode {
   rollup?: BudgetSpent; count?: number; memo?: BudgetFigure | null;
 }
 // A row's limit figure: the text and bar, the tone, and the chips the list adds (amount, caps, paused).
-interface BudgetFigure { used: string; of: string; pct: number | null; tone: string; hot: boolean; amt?: string; caps?: number; capsFull?: boolean; paused?: boolean }
+interface BudgetFigure { used: string; of: string; share?: string; pct: number | null; tone: string; hot: boolean; amt?: string; caps?: number; capsFull?: boolean; paused?: boolean }
 // One panel scope: a bot's limits, a pool, or the default for each bot.
 interface BudgetScope {
   scope: string; title: string; path: string; row: BudgetRow; spent: BudgetSpent | null | undefined;
@@ -113,7 +113,11 @@ function budgetBinding(row: BudgetRow): BudgetPeriod | null {
   const ratio = ([k, , spent]: BudgetPeriod) => Number(row[k]) > 0 ? (row[spent] || 0) / Number(row[k]) : Infinity;
   return set.reduce((best, p) => ratio(p) > ratio(best) ? p : best);
 }
-// A row's limit: {used ("95%"), of ("$6/30m"), pct (the bar, null: none), tone, hot}, from the window that binds.
+// A window's words after its limit: "$6 per 30 min", "$20 a day".
+const BUDGET_PER: Record<BudgetWindow, string> = {'30m': 'per 30 min', hour: 'an hour', day: 'a day', week: 'a week', month: 'a month'};
+// A row's limit: {used ("$5.70", spent in the window that binds), of ("$6 per 30 min"), share ("95%", said on hover),
+// pct (the bar, null: none), tone, hot}. Spend and limit read on one line, "$5.70 of $6 per 30 min" (style guide,
+// Budget tree).
 function budgetFigure(row: BudgetRow | null | undefined, rollup: BudgetSpent | undefined): BudgetFigure {
   const bind = row ? budgetBinding(row) : null;
   if (!bind) return {used: '', of: '', pct: null, tone: '', hot: !!row?.blocked};
@@ -121,7 +125,7 @@ function budgetFigure(row: BudgetRow | null | undefined, rollup: BudgetSpent | u
   const cap = row[bind[0]], spent = row[bind[2]] ?? rollup?.[bind[3]] ?? 0;
   const used = cap ? Math.round(spent / cap * 100) : 100, pct = Math.min(100, used);
   const tone = row.blocked || pct >= 100 ? 'bad' : pct >= 80 ? 'warn' : '';
-  return {used: `${used}%`, of: `${budgetMoney(cap)}/${bind[3]}`, pct, tone, hot: !!tone};
+  return {used: budgetMoney(spent), of: `${budgetMoney(cap)} ${BUDGET_PER[bind[3]]}`, share: `${used}%`, pct, tone, hot: !!tone};
 }
 
 // ----------------------------------------------------------------- the tree
@@ -241,9 +245,8 @@ function pageBudget() {
       <div class="use-seg bt-seg ph-seg" role="tablist" aria-label="Period">${BUDGET_SPANS.map(([k, label]) =>
         `<button type="button" role="tab" data-bt-span="${k}" aria-selected="${k === span}">${label}</button>`).join('')}</div>
       <input type="search" class="bt-q" id="bt-q" placeholder="Search" aria-label="Search the budget" autocomplete="off" value="${esc(BUDGET.q)}">
-      <button type="button" class="ghost bt-hot" data-bt-hot aria-pressed="${BUDGET.hot}">Near limit<span class="bt-hot-n" id="bt-hot-n"></span></button>
-      <button type="button" class="ghost bt-all" data-bt-all>Expand all</button>
-      ${helpBubble('Spend over the period. The bar is the limit nearest its cap.')}</div>
+      <button type="button" class="tl-ib bt-filter${BUDGET.hot ? ' on' : ''}" id="bt-filter" popovertarget="bt-filter-pop" aria-haspopup="true" aria-expanded="false" aria-label="${BUDGET.hot ? 'Filter, near limit on' : 'Filter'}" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" id="bt-hot-n" aria-hidden="true" hidden></span></button>
+      <div class="tl-pop bt-filter-pop" id="bt-filter-pop" popover role="menu" aria-label="Filter"><button type="button" class="tl-mi" role="menuitemcheckbox" aria-checked="${BUDGET.hot}" data-bt-hot>Near limit<span class="tl-mi-n tnum" id="bt-hot-mi"></span><span class="tl-mi-on" aria-hidden="true"${BUDGET.hot ? '' : ' hidden'}>✓</span></button></div></div>
     <div id="bt-body" class="bt-body">${skelRows(6, {dot: false})}</div>`;
   let typing: number | null = null;
   const q = $('#bt-q') as HTMLInputElement | null;
@@ -252,12 +255,38 @@ function pageBudget() {
     if (!BUDGET) throw new Error('budget is not open');
     BUDGET.q = q.value.trim(); budgetDraw();
   }, 80); };
-  const hot = main.querySelector<HTMLButtonElement>('[data-bt-hot]');
-  if (!hot) throw new Error('Near limit is missing');
-  hot.onclick = ev => {
+  // Near limit is a filter, so it sits behind the shared filter icon (ADOPTION, "Filters go behind the shared filter
+  // icon"): the icon's badge counts the filters on and it looks pressed while Near limit is on; the item counts the rows.
+  const hot = main.querySelector<HTMLButtonElement>('[data-bt-hot]'), filter = main.querySelector<HTMLButtonElement>('#bt-filter');
+  const pop = main.querySelector<HTMLElement>('#bt-filter-pop');
+  if (!hot || !filter || !pop) throw new Error('the Near limit filter is missing');
+  hot.onclick = () => {
     if (!BUDGET) throw new Error('budget is not open');
-    BUDGET.hot = !BUDGET.hot; hot.setAttribute('aria-pressed', String(BUDGET.hot)); budgetDraw();
+    BUDGET.hot = !BUDGET.hot;
+    hot.setAttribute('aria-checked', String(BUDGET.hot));
+    hot.querySelector<HTMLElement>('.tl-mi-on')!.hidden = !BUDGET.hot;
+    filter.classList.toggle('on', BUDGET.hot);
+    filter.setAttribute('aria-label', BUDGET.hot ? 'Filter, near limit on' : 'Filter');
+    pop.hidePopover();
+    budgetDraw();
   };
+  // Under its icon on a computer (a phone's menu rises from the foot, task-list.css); focus goes to the item, and back
+  // to the icon when it closes.
+  // A popover's toggle events say whether it is opening (ToggleEvent).
+  const opening = (ev: Event): boolean => (ev as Event & {newState?: string}).newState === 'open';
+  // Placed as it opens (beforetoggle, in step with the click), so it never shows where it last stood.
+  pop.addEventListener('beforetoggle', (ev: Event) => {
+    const open = opening(ev);
+    filter.setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    const r = filter.getBoundingClientRect(), phone = matchMedia('(max-width:760px)').matches, w = 220;
+    pop.style.top = phone ? '' : `${Math.max(8, r.bottom + 6)}px`;
+    pop.style.left = phone ? '' : `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`;
+  });
+  pop.addEventListener('toggle', (ev: Event) => {
+    if (opening(ev)) hot.focus();
+    else if (pop.contains(document.activeElement) || document.activeElement === document.body) filter.focus();
+  });
   const seg = main.querySelector<HTMLElement>('.bt-seg');
   if (!seg) throw new Error('the period tabs are missing');
   seg.onclick = async ev => {
@@ -272,7 +301,11 @@ function pageBudget() {
     budgetOrder(state.tree.root);
     budgetDraw();
   };
-  const all = main.querySelector<HTMLButtonElement>('[data-bt-all]');
+  // Expand all / Collapse all is rare: it is the header's ⋯ item, last on the bar.
+  const head: HTMLElement | null = main.querySelector('.rd-strat-head');
+  if (!head) throw new Error('the Strategy header is missing');
+  pageHeadSet(head, 'more', '<button type="button" data-bt-all>Expand all</button>');
+  const all = head.querySelector<HTMLButtonElement>('[data-bt-all]');
   if (!all) throw new Error('Expand all is missing');
   all.onclick = () => {
     const open = !budgetAllOpen();
@@ -379,7 +412,11 @@ function budgetDraw() {
   const hotN = [...tree.nodes.values()].filter(n => n.kind !== 'company' && budgetFigureOf(n).hot).length;
   const hotNode = $('#bt-hot-n');
   if (!hotNode) throw new Error('#bt-hot-n is missing');
-  hotNode.textContent = hotN ? ' ' + hotN : '';
+  // The icon's badge says how many filters are on, as on Tasks, Mail and Meetings; how many rows are near a limit is the
+  // Near limit item's own count.
+  hotNode.textContent = BUDGET.hot ? '1' : '';
+  hotNode.hidden = !BUDGET.hot;
+  const hotItem = $('#bt-hot-mi'); if (hotItem) hotItem.textContent = hotN ? String(hotN) : '';
   const all = $('[data-bt-all]'); if (all) all.textContent = budgetAllOpen() ? 'Collapse all' : 'Expand all';
   const rows = budgetRows();
   const note = [BUDGET.limitsError, BUDGET.spendError].filter(Boolean).map(e => `<p class="muted bt-note">${esc(e)}</p>`).join('');
@@ -404,7 +441,7 @@ function budgetRowHtml(node: BudgetNode): string {
     + (fig.caps ? `<span class="pill bt-chip${fig.capsFull ? ' waiting' : ''}" title="Task caps">${fig.caps} ${fig.caps === 1 ? 'cap' : 'caps'}</span>` : '');
   const bar = fig.pct == null ? '' : `<span class="bt-bar" aria-hidden="true"><i style="width:${fig.pct}%"></i></span>`;
   const editable = node.kind !== 'branch';
-  const lim = fig.used ? `<span class="bt-lim">${esc(fig.used)}<span class="bt-of"> · ${esc(fig.of)}</span></span>` : '';
+  const lim = fig.used ? `<span class="bt-lim" title="${esc(fig.share || '')} of the limit">${esc(fig.used)}<span class="bt-of"> of ${esc(fig.of)}</span></span>` : '';
   const inner = `${budgetIcon(node)}<span class="bt-name">${esc(node.name)}</span>${count}${chips}${lim}<span class="bt-amt">${esc(fig.amt)}</span>${bar}`;
   return `<li class="bt-r ${group ? 'is-g ' : ''}${fig.tone}" style="--d:${node.depth}">${fold}${editable
     ? `<button type="button" class="bt-main" data-bt-open="${esc(node.key)}">${inner}</button>`

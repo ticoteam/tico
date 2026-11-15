@@ -90,7 +90,7 @@ async function add(page: Page, words: string, name: string) {
     await shot(page, 'match');
     await page.locator('#nm-q').press('Enter');
     await hashIs(page, '#/thread/' + plan.id);
-    await page.getByText('Tuesday').waitFor({timeout: WAIT});
+    await page.getByText('Tuesday', {exact: true}).waitFor({timeout: WAIT});   // the message, not its day line
 
     // Backspace takes the last chip off; Esc closes the pane.
     await openPane(page);

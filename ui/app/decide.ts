@@ -584,9 +584,9 @@ function decidePaintSide(st: DecState) {
       && /^page:/.test(it.ask?.shows?.[0] || '');
     const ask = DEC_ASK_NOTE === it.id ? ' placeholder="Say what to change"' : '';
     body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" data-dc-grow rows="${decideNoteRows()}" maxlength="4000"${ask}></textarea></label>
-      ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false,
+      ${decideFilesHTML(st)}<div class="dc-acts">${decideBtn('sendback', checked ? 'Not validated' : 'Send back', false,
         // On a phone Send back is always on; with no note it asks for one (decideClick). A wide screen keeps it off until then.
-        decidePhone() ? busy : ` data-dc-needs="#dc-notes" disabled`)}</div>`;
+        decidePhone() ? busy : ` data-dc-needs="#dc-notes" disabled`)}${decideBtn('approve', checked ? 'OK' : 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}</div>`;
   } else if (typed) {
     body = decideTypedHTML(typed, it.ask?.choices || [], st.busy);
   } else if (kind === 'question' && asker.startsWith('bot:')) {

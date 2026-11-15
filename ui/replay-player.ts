@@ -1,5 +1,6 @@
-/* ui/replay-player.ts — The history replay player: bot faces, a task board and an activity feed that play a list of
-   history items (GET /api/v2/replay) back at a chosen speed, with play/pause, speeds, skip-quiet and a scrubber.
+/* ui/replay-player.ts — The history replay player: a task board and an activity feed that play a list of history items
+   (GET /api/v2/replay) back at a chosen speed, with play/pause, speeds, skip-quiet and a scrubber. Who is in it is the
+   page's Who filter, not a row of faces here; a card's owner face shows that bot's replayed state.
    It mounts through `window.TicoReplay` and reads no app state: the Replay page (ui/app/replay.ts) passes the app's
    faces and names in through `opts`. */
 'use strict';
@@ -165,13 +166,14 @@ function ticoReplayPlayer(): TicoReplayModule {
     const st: ReplayState = {t: from, next: 0, playing: false, speed: SPEEDS.includes(Number(opts.speed)) ? Number(opts.speed) : 60, skip: opts.skip !== false,
                 tasks: new Map(), bots: new Map(), feed: [], typing: null, raf: 0, last: 0, dirty: {board: true, feed: true, bots: true}, flash: new Set(),
                 idleTimer: 0};
-    const fmtClock = (ms: number): string => new Date(ms).toLocaleString(undefined, {weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'});
-    const fmtTime = (ms: number): string => new Date(ms).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
+    // Month first and a 12-hour clock, whatever the browser's locale (style guide, "Dates and times"): "Sat, Nov 14, 9:05 AM".
+    const fmtClock = (ms: number): string => new Date(ms).toLocaleString('en-US', {weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+    const fmtTime = (ms: number): string => new Date(ms).toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'});
 
     root.classList.add('rp');
     root.innerHTML = `
       <div class="rp-stage">
-        <div class="rp-top"><div class="rp-bots" aria-label="Bots"></div><span class="rp-stamp tnum" aria-hidden="true"></span></div>
+        <div class="rp-top"><span class="rp-stamp tnum" aria-hidden="true"></span></div>
         <div class="rp-main">
           <div class="rp-board" aria-label="Tasks"></div>
           <div class="rp-feed" aria-label="Activity" aria-live="off"></div>
@@ -187,7 +189,7 @@ function ticoReplayPlayer(): TicoReplayModule {
       </div>`;
     // The markup above holds each of these, so the lookup finds it.
     const $q = <E extends Element>(sel: string): E => root.querySelector<E>(sel)!;
-    const els = {stamp: $q<HTMLElement>('.rp-stamp'), bots: $q<HTMLElement>('.rp-bots'), board: $q<HTMLElement>('.rp-board'), feed: $q<HTMLElement>('.rp-feed'),
+    const els = {stamp: $q<HTMLElement>('.rp-stamp'), board: $q<HTMLElement>('.rp-board'), feed: $q<HTMLElement>('.rp-feed'),
                  play: $q<HTMLButtonElement>('.rp-play'), clock: $q<HTMLElement>('.rp-clock'),
                  range: $q<HTMLInputElement>('.rp-range'), ticks: $q<HTMLElement>('.rp-ticks'), speeds: $q<HTMLElement>('.rp-speeds'), skip: $q<HTMLButtonElement>('.rp-skip')};
 
@@ -276,14 +278,6 @@ function ticoReplayPlayer(): TicoReplayModule {
     function faceOf(actor: ReplayActor, size: number, state?: string): string { return `<span class="rp-face" data-state="${escHtml(state || '')}">${face(actor, size, state)}</span>`; }
     // A card's owner face takes the owner bot's live state, when the board knows that bot.
     const liveOf = (owner: string): string => { const bot = st.bots.get(String(owner).replace(/^bot:/, '')); return bot?.state ? live(bot.state) : ''; };
-    function paintBots(): void {
-      const rows = [...st.bots.entries()].sort((a, b) => name('bot:' + a[0]).localeCompare(name('bot:' + b[0])));
-      els.bots.innerHTML = rows.map(([slug, b]) => {
-        const s = live(b.state);
-        return `<div class="rp-bot" data-state="${s}" title="${escHtml(name('bot:' + slug))}${b.focus ? ' · ' + escHtml(b.focus) : ''}">${faceOf('bot:' + slug, 28, s)}<span class="rp-bot-name">${escHtml(name('bot:' + slug))}</span></div>`;
-      }).join('');
-      els.bots.hidden = !rows.length;
-    }
     function paintBoard(animate: boolean): void {
       const before = new Map<string | undefined, DOMRect>();
       if (animate && !reduced()) for (const el of els.board.querySelectorAll<HTMLElement>('[data-rp-task]')) before.set(el.dataset.rpTask, el.getBoundingClientRect());
@@ -317,7 +311,7 @@ function ticoReplayPlayer(): TicoReplayModule {
       let day = '';
       els.feed.innerHTML = st.feed.map((e, i) => {
         const d = dayOf(e.ms), divider = d !== day && (i > 0 || several)
-          ? `<div class="rp-day">${escHtml(new Date(e.ms).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}))}</div>` : '';
+          ? `<div class="rp-day">${escHtml(new Date(e.ms).toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'}))}</div>` : '';
         day = d;
         return divider + entryHTML(e);
       }).join('') || '<p class="rp-empty">Nothing yet</p>';
@@ -339,8 +333,7 @@ function ticoReplayPlayer(): TicoReplayModule {
       root.classList.toggle('playing', st.playing);
     }
     function paint(animate: boolean): void {
-      if (st.dirty.bots) paintBots();
-      if (st.dirty.board) paintBoard(animate);
+      if (st.dirty.board || st.dirty.bots) paintBoard(animate);   // a bot's state shows on the faces of the cards it owns
       if (st.dirty.feed) paintFeed();
       st.dirty = {board: false, feed: false, bots: false};
       paintBar();

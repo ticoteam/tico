@@ -6,8 +6,11 @@
    still open) keeps full colour, with a stop mark and "#304" where a snoozed one shows its day, after the awake tasks and
    before the snoozed ones; it holds no slot either. A task others depend on says "Blocks #307".
    A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
-   for whoever may change the pipeline. Beside it, Rules and its count opens the stage's rules (stage-rules.ts); then ▶ and how many items in the stage wait on the person opens the
-   stage's review (decide.ts decideStageOpen); there is no ▶ where none wait. On a phone it sits beside the stage tabs. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
+   for whoever may change the pipeline. Beside it, the quiet rules mark (a gavel, struck through when none apply) opens
+   the stage's rules (stage-rules.ts); then ▶ and how many items in the stage wait on the person opens the stage's review
+   (decide.ts decideStageOpen); there is no ▶ where none wait. On a phone the rules mark sits at the end of the stage
+   tabs. The columns scroll sideways in their own box, a fade on each edge that has more beyond it; a stage with no
+   tasks is as tall as its header. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
    search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
    file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -111,13 +114,14 @@ function pvStageCount(state: PvState, stage: PipelineStageRec): string {
   return `${held - pvPersonCount(state, stage)}/${stage.task_limit}`;
 }
 
-/** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise.
+/** S8: a stage's header. It opens the stage's editor (its fields, then its Rules) for whoever may change the pipeline,
+ * and is plain text otherwise; the rules mark at the header's right opens the same editor at its Rules, for anyone.
  * Beside a limited stage's number, a person mark and a count keeps the tasks that hold no slot in view. */
 function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
   const tip = pvLimitTip(state, stage);
   const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum"${tip ? ` title="${esc(tip)}" aria-label="${esc(tip)}"` : ''}>${esc(pvStageCount(state, stage))}</span>`;
   return state.rec.may_change
-    ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}">${inner}</button>`
+    ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}" title="${esc(`Edit ${stage.name}`)}">${inner}</button>`
     : `<span class="pv-stage-h">${inner}</span>`;
 }
 
@@ -165,15 +169,16 @@ function pvBlockedTailHTML(t: TaskAny): string {
 const PV_SLEEP_ICON = '<svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true" focusable="false">'
   + '<path d="M11.6 8.9A5 5 0 0 1 5.1 2.4a5 5 0 1 0 6.5 6.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
 
-/** When a snoozed task wakes: "Nov 14", or "Snoozed" when its snooze has no end. Its turn is the snooze (waiting_on). */
+/** When a snoozed task wakes, in the shared day words ("Tomorrow", "Nov 18"), or "Snoozed" when its snooze has no end.
+ * Its turn is the snooze (waiting_on). */
 const pvWake = (t: TaskAny): string => shortDate(t.turn?.state === 'snoozed' ? t.turn.until : null) || 'Snoozed';
 
 /** A snoozed task, dimmed: the title, the moon and the day it wakes. The moon is the card's one button: Unsnooze, in one
- * click (its label and title; a 40 px tap area on a phone). `card` in a column, else a row of the list or the phone's
+ * click (its label and title; a 44 px tap area on a phone, .tap-mark, that stays inside the card's gap). `card` in a column, else a row of the list or the phone's
  * stage. Its tip is the task's line, as an awake one's is: for a snoozed task, the snooze's why. */
 function pvSnoozedHTML(t: TaskAny, card: boolean): string {
   const wake = pvWake(t);
-  const mark = `<button type="button" class="tk-mark pv-sleep" data-pv-unsnooze="${esc(t.id)}" aria-label="Unsnooze" title="Unsnooze">${PV_SLEEP_ICON}</button>`;
+  const mark = `<button type="button" class="tk-mark pv-sleep tap-mark" data-pv-unsnooze="${esc(t.id)}" aria-label="Unsnooze" title="Unsnooze">${PV_SLEEP_ICON}</button>`;
   const title = `<span class="tk-title">${esc(t.title || '')}</span>`, when = `<span class="tk-age pv-wake">${esc(wake)}</span>`;
   const tip = esc(taskLine(t)), attrs = `data-task="${esc(t.id)}" role="button" tabindex="0"${tip ? ` data-tip="${tip}"` : ''}`;
   return card
@@ -191,7 +196,7 @@ function pvColumnsHTML(state: PvState): string {
   const cols = state.rec.stages.map(stage => {
     const id = stage.id ?? '';
     const cards = pvInStage(state, id).map(pvCardHTML).join('');
-    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}${stageRulesButtonHTML(state.rec.id, stage)}${pvPlayHTML(stage)}</header>
+    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}</header>
       <div class="pv-col-body">${cards}</div></section>`;
   }).join('');
   return `<div class="pv-cols" data-pv-drag>${cols}</div>`;
@@ -202,7 +207,7 @@ function pvListHTML(state: PvState): string {
   const groups = state.rec.stages.map(stage => {
     const rows = pvInStage(state, stage.id ?? '');
     if (!rows.length && searching) return '';
-    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}${stageRulesButtonHTML(state.rec.id, stage)}${pvPlayHTML(stage)}</h2>
+    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}</h2>
       <div class="pv-rows">${rows.map(pvRowHTML).join('')}</div></section>`;
   }).join('');
   return groups || '<p class="pv-empty muted">Nothing found</p>';
@@ -227,7 +232,9 @@ function pvPhoneHTML(state: PvState): string {
     return `<button type="button" role="tab" class="pv-tab${on ? ' on' : ''}" data-pv-tab="${esc(stage.id ?? '')}" aria-selected="${on}" aria-label="${esc(label)}">`
       + `${esc(stage.name)} <span class="tnum">${esc(pvStageCount(state, stage))}</span>${pvTabDotHTML(stage)}</button>`;
   }).join('');
-  const rows = pvInStage(state, shown).map(pvCardHTML).join('');   // the column's cards (task #220)
+  // The column's cards (task #220); an empty stage says so in one line (style guide: empty lists say so in one line).
+  const rows = pvInStage(state, shown).map(pvCardHTML).join('')
+    || `<p class="pv-empty muted">${pvSearching(state.opts) ? 'Nothing found' : 'Nothing here'}</p>`;
   // A phone has no tooltip: a limited stage whose tasks wait on a person says so in one muted line above its cards.
   // No ▶ beside the tabs: the header's ▶ Review opens the open stage's items (tasks-page.ts tasksReview).
   const on = stages.find(s => s.id === shown);
@@ -270,6 +277,24 @@ function pvScrollRestore(state: PvState): void {
   if (!cols) return;
   if (cols.scrollLeft !== state.x) cols.scrollLeft = state.x;
   if (cols.scrollTop !== state.y) cols.scrollTop = state.y;
+  pvEdges(cols);
+}
+
+/** The scroll cue of the columns, and of a phone's stage tabs: a fade on each side that has stages beyond it
+ * (task-pipelines.css), none where they end. */
+function pvEdges(cols: HTMLElement): void {
+  const room = cols.scrollWidth - cols.clientWidth;
+  // The room its scrollbars take, kept clear of the fade (0 where scrollbars overlay the content).
+  cols.style.setProperty('--sb-v', `${Math.max(0, cols.offsetWidth - cols.clientWidth)}px`);
+  cols.style.setProperty('--sb-h', `${Math.max(0, cols.offsetHeight - cols.clientHeight)}px`);
+  cols.classList.toggle('fade-l', room > 1 && cols.scrollLeft > 1);
+  cols.classList.toggle('fade-r', room > 1 && cols.scrollLeft < room - 1);
+}
+
+/** A phone's stage tabs drawn in the root, their fades set. */
+function pvTabsEdges(root: HTMLElement): void {
+  const tabs = root.querySelector<HTMLElement>('.pv-tabs');
+  if (tabs) pvEdges(tabs);
 }
 
 /** Draws the view again where the page put it, keeping a why being typed and where the columns were scrolled. */
@@ -281,6 +306,7 @@ function pvDraw(state: PvState): void {
   const text = field?.value ?? '', typing = !!field && document.activeElement === field;
   root.innerHTML = pvHTML(state);
   pvScrollRestore(state);
+  pvTabsEdges(root);
   const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
   if (next) { next.value = text; if (typing) next.focus(); }
   pipelineAskPaint();     // the face's menu and the chat's chip follow the tab
@@ -292,7 +318,8 @@ function pvClick(state: PvState, ev: MouseEvent): void {
   const target = eventElement(ev);
   if (!target) return;
   const rules = target.closest<HTMLElement>('[data-sr-open]');
-  if (rules) { void stageRulesOpen(state.rec.id, rules.dataset['srOpen'] ?? '', rules.dataset['srName'] ?? ''); return; }
+  // the stage's rules mark: its editor, at its Rules (read only for whoever may not change the pipeline)
+  if (rules) { void openPipelineEditor(state.rec.id, rules.dataset['srOpen'] ?? '', 'rules'); return; }
   const settings = target.closest<HTMLElement>('[data-pv-settings]');
   if (settings) { void openPipelineEditor(state.rec.id, settings.dataset['pvSettings'] ?? ''); return; }
   const play = target.closest<HTMLElement>('[data-pv-play]');
@@ -427,6 +454,7 @@ TASK_PAGE_HOOKS.pipeline = {
     // The page calls bind after each draw. The browser clamps a restore to the columns drawn, so this holds only while
     // the first board draw has every stage (it does: columns are drawn from the pipeline, not as tasks arrive).
     pvScrollRestore(state);
+    pvTabsEdges(root);
     if (PV_BOUND.has(root)) return;
     PV_BOUND.add(root);
     // Bound once per element; each event reads the view drawn there now.
@@ -434,17 +462,21 @@ TASK_PAGE_HOOKS.pipeline = {
     // Scroll does not bubble: listen in the capture phase. Sideways is kept for the tab, once a frame.
     let saving = 0;
     root.addEventListener('scroll', ev => {
+      if (ev.target instanceof HTMLElement && ev.target.classList.contains('pv-tabs')) { pvEdges(ev.target); return; }
       const cols = ev.target instanceof HTMLElement && ev.target.classList.contains('pv-cols') ? ev.target : null;
       const state = PV;
       if (!cols || !state || state.root !== root) return;
       state.x = cols.scrollLeft; state.y = cols.scrollTop;
+      pvEdges(cols);
       if (saving) return;
       saving = requestAnimationFrame(() => { saving = 0; pvScrollKeep(state.rec.id, state.x); });
     }, {capture: true, passive: true});
     root.addEventListener('submit', ev => { if (PV?.root === root) pvSubmit(PV, ev); });
+    // The window, or the page's chat docking beside the board, changes how much of the columns shows: the fades follow.
+    new ResizeObserver(() => { const cols = PV?.root === root ? pvColsOf(PV) : null; if (cols) pvEdges(cols); pvTabsEdges(root); }).observe(root);
     taskBoardBind(root);
   },
-  rail(host, rec) { pipelineRailSync(host, rec); },
+  rail(rec, drawn) { pipelineRailSync(rec, drawn); },
   ask(host, rec, phone) { pipelineAskSync(host, rec, phone); },
   edit(rec) { void openPipelineEditor(rec.id); },
 };

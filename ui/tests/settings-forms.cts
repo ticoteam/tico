@@ -136,7 +136,7 @@ declare function settingsEditInstructions(slug: string): void;
     await page.locator('[data-bots-picking]').press('Enter');
     assert.equal(await focused(), 'Select');
     assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.selected.size), 0);
-    assert.equal(await page.locator('tr[data-settings-bot=helper] .sb-cell-access').getAttribute('aria-label'), 'Access: You: See · Read · Write');
+    assert.equal(await page.locator('tr[data-settings-bot=helper] .sb-cell-access').count(), 0, 'full access says nothing; only narrower access is flagged');
     await page.setViewportSize({width: 1440, height: 900});
     // Settings > Models > Defaults: the default fallback is on until the owner turns it off; the save says so and
     // leaves the providers as they are.

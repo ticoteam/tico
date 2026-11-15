@@ -211,14 +211,15 @@ async function finShareUndo(lineId: string): Promise<void> {
 }
 
 // ----------------------------------------------------------------- the Attribution tab
-// Shown to the owner and anyone holding finance.attribution (or finance.admin): the rules, and + Rule for those who may change them.
+// Shown to the owner and anyone holding finance.attribution (or finance.admin): the rules, and the header's quiet + for those
+// who may change them.
 function finAttrPage(): void {
   const state: FinAttrState = {rules: [], can: false, load: 0, dims: []};
   finNeed(FIN, 'the Finance page').attr = state;
   const body = $('#fin-body');
   if (!body) return;
-  body.innerHTML = `<div class="fin-bar"><span class="spacer"></span><button type="button" class="primary" data-fin-rule-add hidden>+ Rule</button></div>
-    <div class="fin-scroll" id="fin-rules">${skelRows(4, {dot: false})}</div>`;
+  body.innerHTML = `<div class="fin-scroll" id="fin-rules">${skelRows(4, {dot: false})}</div>`;
+  finHeadAct('');   // the quiet + shows once the read says this viewer may change the rules (finAttrLoad)
   body.onclick = (ev: MouseEvent) => {
     const t = eventElement(ev);
     if (!t) return;
@@ -232,8 +233,13 @@ function finAttrPage(): void {
     if (del) {
       // The delete is confirmed in the menu itself (no browser dialog).
       const rule = state.rules[Number(del.dataset.finRuleDel)], pop = del.closest('.fin-pop') as HTMLElement;
-      if (rule && pop) pop.innerHTML = `<span class="muted fin-small">Delete ${esc(rule.name)}? Its lines go back to their tags.</span>
-        <div class="fin-confirm"><button type="button" class="ghost" data-fin-rule-keep>Keep</button><button type="button" class="primary" data-fin-rule-yes="${Number(del.dataset.finRuleDel)}">Delete</button></div>`;
+      if (rule && pop) {
+        // A question with two buttons, no longer a menu of items: its role says so while it shows.
+        pop.setAttribute('role', 'group'); pop.setAttribute('aria-label', `Delete ${rule.name}?`);
+        pop.innerHTML = `<span class="muted fin-small">Delete ${esc(rule.name)}? Its lines go back to their tags.</span>
+          <div class="fin-confirm"><button type="button" class="ghost" data-fin-rule-keep>Keep</button><button type="button" class="ghost danger" data-fin-rule-yes="${Number(del.dataset.finRuleDel)}">Delete</button></div>`;
+        pop.querySelector<HTMLElement>('[data-fin-rule-keep]')?.focus();
+      }
       return;
     }
     if (t.closest('[data-fin-rule-keep]')) { finAttrDraw(); return; }
@@ -264,8 +270,8 @@ async function finAttrLoad(): Promise<void> {
   if (FIN?.attr !== state || state.load !== load || !$('#fin-rules')) return;
   state.dims = dims?.dimensions || [];
   for (const r of state.rules) FIN_SHARE.names.set(r.id, r.name);
-  const add = $('[data-fin-rule-add]') as HTMLElement | null;
-  if (add) add.hidden = !state.can;
+  // A new rule is rare: the header's quiet +, for those who may change the rules.
+  finHeadAct(state.can ? pageHeadAdd('New rule', 'data-fin-rule-add') : '');
   finAttrDraw();
 }
 // The Classes table: a row per class, department or project with its 12-month amount and a team picker (the rule dialog's
@@ -275,11 +281,11 @@ function finClassesHtml(dims: FinDim[]): string {
   const rows = dims.map((d, i) => {
     const first = d.splits?.[0];
     const ref = first ? finShareRef(first) : '';
-    return `<tr data-fin-class-row="${i}"><td>${esc(d.name)} <span class="muted">${esc(FIN_DIM_KINDS[d.kind] || '')}</span></td><td>${finUsd(d.amount)}</td>
-      <td><select data-fin-class-team="${i}" data-fin-class-orig="${esc(ref)}" aria-label="Team for ${esc(d.name)}">${finShareOpts(ref)}</select></td></tr>`;
+    return `<tr data-fin-class-row="${i}"><td>${esc(d.name)} <span class="muted">${esc(FIN_DIM_KINDS[d.kind] || '')}</span></td><td class="fin-n fin-amt">${finUsd(d.amount)}</td>
+      <td data-sk="Team"><select data-fin-class-team="${i}" data-fin-class-orig="${esc(ref)}" aria-label="Team for ${esc(d.name)}">${finShareOpts(ref)}</select></td></tr>`;
   }).join('');
   return `<section class="fin-classes" aria-label="Classes"><h3 class="fin-h">Classes</h3>
-    <div class="fin-scroll"><table class="fin-t"><thead><tr><th>Name</th><th>Amount (12 mo)</th><th>Team</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="fin-scroll"><table class="fin-t fin-rows"><thead><tr><th>Name</th><th class="fin-n">Amount (12 mo)</th><th>Team</th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="fin-bar"><span class="spacer"></span><button type="button" class="primary" data-fin-class-save disabled>Save</button></div></section>`;
 }
 // Save is on only when a team changed.
@@ -313,12 +319,13 @@ function finAttrDraw(): void {
   if (!box || !state) return;
   const classes = finClassesHtml(state.dims);
   if (!state.rules.length) { box.innerHTML = classes + finNote('No rules.'); return; }
-  box.innerHTML = classes + `<table class="fin-t"><thead><tr><th>Name</th><th>Applies to</th><th>Split</th><th>On</th><th aria-label="Actions"></th></tr></thead><tbody>${state.rules.map((r, i) => {
+  // A row's ⋯: Edit, then Delete last, in red, after a separator (style guide "Menu").
+  box.innerHTML = classes + `<table class="fin-t fin-rows fin-rule-t"><thead><tr><th>Name</th><th>Applies to</th><th>Split</th><th>On</th><th aria-label="Actions"></th></tr></thead><tbody>${state.rules.map((r, i) => {
     const word = FIN_SHARE_KINDS.find(k => k[0] === r.match.kind)?.[1] || '';
-    const menu = state.can ? `<span class="fin-pop-at"><button type="button" class="ghost" data-fin-rule-menu aria-label="${esc(r.name)}: actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
-        <div class="fin-pop fin-menu" role="menu" hidden><button type="button" role="menuitem" data-fin-rule-edit="${i}">Edit</button><button type="button" role="menuitem" data-fin-rule-del="${i}">Delete</button></div></span>` : '';
-    return `<tr data-fin-rule-row="${i}"><td>${esc(r.name)}</td><td><span class="muted">${esc(word)}</span> ${esc(r.match.label || '')}</td><td>${finShareChips(r.splits)}</td>
-      <td><input type="checkbox" role="switch" class="people-switch" aria-label="${esc(r.name)} on"${r.enabled ? ' checked' : ''}${state.can ? '' : ' disabled'} data-fin-rule-on="${i}"></td><td>${menu}</td></tr>`;
+    const menu = state.can ? `<span class="fin-pop-at"><button type="button" class="ghost fin-row-more" data-fin-rule-menu aria-label="${esc(r.name)}: actions" title="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
+        <div class="fin-pop fin-menu" role="menu" hidden><button type="button" role="menuitem" data-fin-rule-edit="${i}">Edit</button><hr><button type="button" role="menuitem" class="danger" data-fin-rule-del="${i}">Delete</button></div></span>` : '';
+    return `<tr data-fin-rule-row="${i}"><td>${esc(r.name)}</td><td data-k="Applies to"><span class="muted">${esc(word)}</span> ${esc(r.match.label || '')}</td><td data-k="Split">${finShareChips(r.splits)}</td>
+      <td data-sk="On"><input type="checkbox" role="switch" class="people-switch" aria-label="${esc(r.name)} on"${r.enabled ? ' checked' : ''}${state.can ? '' : ' disabled'} data-fin-rule-on="${i}"></td><td data-sk="Actions">${menu}</td></tr>`;
   }).join('')}</tbody></table>`;
 }
 // The rule's splits and match as its set action takes them.
@@ -350,7 +357,7 @@ function finRuleDialog(rule: FinRule | null): void {
     <label>Applies to<select name="kind">${FIN_SHARE_KINDS.map(([v, , l]) => `<option value="${v}"${v === kind0 ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
     <label>Match<select name="match" required></select></label>
     <div class="fin-share-label muted fin-small">Split</div>${finShareRowsHtml(rule?.splits || [])}
-    <label>Apply to lines from<input type="date" name="apply_from" value="${esc(rule?.apply_from || '')}"></label>`,
+    <label>Apply to lines from<input type="date" data-date-field name="apply_from" value="${esc(rule?.apply_from || '')}"></label>`,
   rule ? 'Save' : 'Add', async (form: HTMLFormElement) => {
     const f = (n: string) => form.elements.namedItem(n) as HTMLInputElement;
     const name = f('name').value.trim();

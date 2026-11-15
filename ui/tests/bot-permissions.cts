@@ -94,10 +94,10 @@ async function access(browser: import('playwright').Browser) {
   await page.locator('[data-settings-tab="bots"]').click();
   await page.locator('tr[data-settings-bot=legal]').waitFor();
   assert.equal(await page.locator('[data-settings-tab="bots"]').getAttribute('aria-selected'), 'true');
-  assert.match(await page.locator('#set-bots thead').innerText(), /access/i);
+  assert.doesNotMatch(await page.locator('#set-bots thead').innerText(), /access/i, 'access shows under a restricted bot\'s name, no column');
   assert.doesNotMatch(await page.locator('#set-bots thead').innerText(), /can use/i);
   const summary = (slug: string) => page.locator(`tr[data-settings-bot=${slug}] [data-access-summary]`).innerText();
-  assert.equal(await summary('ops'), 'Open');
+  assert.equal(await page.locator('tr[data-settings-bot=ops] [data-access-summary]').count(), 0, 'an open bot shows no access line');
   assert.equal(await summary('legal'), 'Requests only');
   assert.equal(await summary('intake'), 'You: See · Write', 'someone who may only use a bot sees what they can do');
   assert.equal(await page.locator('tr[data-settings-bot=intake] [data-edit-access]').count(), 0, 'only managers edit access');
@@ -222,7 +222,9 @@ async function access(browser: import('playwright').Browser) {
   await page.goto('https://tico-ui.test/#/bot/intake');
   await page.waitForFunction(() => S.route === '#/bot/intake');   // a page change draws a frame later (its fade)
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['dm', 'tasks', 'info']);
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['dm', 'tasks']);
+  // The details are ⋯'s list, last in the line: Info and Rules for someone who may not read the bot.
+  assert.deepEqual(await page.locator('#bot-more-menu .bot-mgroup [data-bot-mtab]').evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.botMtab)), ['info', 'rules']);
   await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
   assert.equal(await page.locator('#bot-tasks-board, #bot-sidebar-edit').count(), 0, 'no board or edit icon without read access');
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
@@ -238,7 +240,9 @@ async function access(browser: import('playwright').Browser) {
   await page.goto('https://tico-ui.test/#/bot/sales');
   await page.waitForFunction(() => S.route === '#/bot/sales');
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['info'], 'see only: no DM, no tasks');
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), [], 'see only: no DM, no tasks');
+  assert.deepEqual(await page.locator('#bot-more-menu .bot-mgroup [data-bot-mtab]').evaluateAll(ns => ns.map(n => (n as HTMLElement).dataset.botMtab)), ['info', 'rules'], 'see only: Info and Rules in ⋯');
+  assert.equal(await page.locator('#bot-more-menu [data-bot-incognito], #bot-dm-arch').count(), 0, 'see only: no private chat');
   assert.match(await page.locator('#pane-more').innerText(), /See it only/);
   assert.deepEqual(errors, []);
   console.log('PASS: Access column and editor presets, the org filter beside Recent, and bot pages that show no activity to someone who cannot read.');
@@ -319,7 +323,13 @@ async function roles(browser: import('playwright').Browser) {
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();
   await page.locator('tr[data-settings-bot=jira-manager]').waitFor();
-  await page.locator('tr[data-settings-bot=jira-manager] [data-edit-bot]').click();
+  // A bot is edited on its own page: the row's name goes there, and Settings is in its ⋯ (then a tab).
+  await page.locator('tr[data-settings-bot=jira-manager] a.sb-name').click();
+  await page.waitForFunction(() => location.hash === '#/bot/jira-manager');
+  await page.locator('#bot-more-btn').click();
+  await page.locator('#bot-more-menu [data-bot-mtab="settings"]').click();
+  await page.waitForFunction(() => location.hash === '#/bot/jira-manager/settings');
+  assert.equal(await page.locator('#bot-detail-tabs .ph-tab.cur').innerText(), 'Settings');
   const owned = page.locator('#bot-editor [data-bot-owners]');
   assert.match(await owned.innerText(), /Cara/);
   await page.locator('#bot-editor [data-edit-bot-owners=jira-manager]').click();
@@ -343,7 +353,7 @@ async function roles(browser: import('playwright').Browser) {
 
   // ---- A Grok Bot's "Deliver through the app on": its person picks one of their own computers where Grok is ready
   // (the others are listed, disabled); anyone else, an admin included, can only turn it off.
-  await page.locator('tr[data-settings-bot=groky] [data-edit-bot]').click();
+  await page.evaluate(() => { location.hash = '#/bot/groky/settings'; });
   const delivery = page.locator('#bot-editor [data-bot-app-delivery=groky]');
   await delivery.waitFor();
   assert.deepEqual(await delivery.locator('option').evaluateAll(os => os.map(o => [(o as HTMLOptionElement).value, (o as HTMLOptionElement).disabled])), [['', false], ['r1', true], ['r2', false]]);
@@ -353,7 +363,7 @@ async function roles(browser: import('playwright').Browser) {
   assert.deepEqual(posts.shift(), ['definition', {app_delivery: {computer: 'r2', app: 'grok'}, expected_revision: 1}]);
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('[data-settings-tab="bots"]').click();
-  await page.locator('tr[data-settings-bot=cara-grok] [data-edit-bot]').click();
+  await page.evaluate(() => { location.hash = '#/bot/cara-grok/settings'; });
   const theirs = page.locator('#bot-editor [data-bot-app-delivery=cara-grok]');
   await theirs.waitFor();
   assert.deepEqual(await theirs.locator('option').evaluateAll(os => os.map(o => [(o as HTMLOptionElement).value, (o as HTMLOptionElement).selected])), [['', false], ['r9', true]]);

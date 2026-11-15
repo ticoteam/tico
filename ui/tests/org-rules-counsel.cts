@@ -25,6 +25,11 @@ interface Rule { id: string; status: string; who: {bots: {id: string}[]}; cite: 
 type Who = {bots?: string[]; groups?: string[]; all_bots?: boolean};
 interface ReadCtx { source: Source; file: {id: string; version: number}; run: {token: string; who: string} }
 interface PageWin { ticoTheme: {set: (theme: string) => void} }
+// Add document is Outside's second way to add, in the header's ⋯ (the quiet + adds a rule).
+async function addDocOpen(page: Page) {
+  await page.locator('.ru-ph > .ph-more').click();
+  await page.locator('.ru-ph > .ph-menu [data-ru-add-doc]').click();
+}
 const QUOTE = 'Keep a record of each consent for five years.';
 const OPT_OUT = 'Customer messages must include an opt-out line in every send.';
 // One API call as a teammate, by token (or a run's own token, {token}): Counsel's run writes its suggestions this way.
@@ -84,7 +89,7 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
 
     // Add document: the terms from Files, from a new vendor, with a description.
     await go(page, '#/rules/external');
-    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    await addDocOpen(page);
     const modal = page.locator('#ru-doc');
     await modal.locator('.ru-pick', {hasText: 'Northwind Messaging Terms'}).click();
     await modal.locator('select[name=source]').selectOption('new');
@@ -101,7 +106,7 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     await modal.locator('[data-ru-close]').first().click();
 
     // Asked again while that task is open: the same task, and the dialog says it is already being read.
-    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    await addDocOpen(page);
     await modal.locator('.ru-pick', {hasText: 'Northwind Messaging Terms'}).click();
     await modal.locator('select[name=source]').selectOption({label: 'Northwind'});
     await modal.locator('button[type=submit]').click();
@@ -115,7 +120,7 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
       source: {id: northwind.id, name: northwind.name, kind: northwind.kind},
       file: {id: 'file-held', version: 1, title: 'Northwind Messaging Terms'}, suggested_who: {groups: []},
       truncated: true, screening: 'hold', existing: false}}));
-    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    await addDocOpen(page);
     await modal.locator('.ru-pick', {hasText: 'Northwind Messaging Terms'}).click();
     await modal.locator('select[name=source]').selectOption({label: 'Northwind'});
     await modal.locator('button[type=submit]').click();
@@ -129,7 +134,7 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     const link = 'http://127.0.0.1/terms';
     const refused = await send<{error?: {code?: string; detail?: string}}>(hub, 'dana', 'POST', '/v2/rules/read', {url: link, source_id: northwind.id});
     assert.equal(refused.json.error?.code, 'fetch');
-    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    await addDocOpen(page);
     await modal.locator('input[name=find]').fill(link);
     await modal.locator('select[name=source]').selectOption({label: 'Northwind'});
     await modal.locator('button[type=submit]').click();
@@ -259,7 +264,7 @@ async function shots(browser: Browser, hub: RealHubSupport.Hub, read: ReadCtx, r
   const team = (Array.isArray(groups) ? groups : groups.groups || []).find(g => g.name === 'Engineering');
   await suggest(hub, read, 'Every marketing text says how to opt out.', team ? {groups: [team.id]} : {all_bots: true});
   const addDoc = async (page: Page) => {
-    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    await addDocOpen(page);
     const modal = page.locator('#ru-doc');
     await modal.locator('.ru-pick', {hasText: 'Northwind Messaging Terms'}).click();
     await modal.locator('select[name=source]').selectOption('new');
@@ -268,7 +273,7 @@ async function shots(browser: Browser, hub: RealHubSupport.Hub, read: ReadCtx, r
     await modal.locator('textarea[name=note]').fill('Our signed order form with Contoso.');
   };
   const screens: [string, string, string, ((page: Page) => Promise<void>)?, string?][] = [
-    ['p1c-add-document', '#/rules/external', '#ru-doc[open] .ru-doc:not([hidden])', addDoc, '.ru-ph [data-ru-add-doc]'],
+    ['p1c-add-document', '#/rules/external', '#ru-doc[open] .ru-doc:not([hidden])', addDoc, '.ru-ph [data-ru-add]'],
     ['p1c-suggested', '#/rules/suggested', '.ru-sg .ru-prop'],
     ['p1c-external-quote', `#/rules/external?rule=${ruleId}`, `#ru-side form[data-rule="${ruleId}"] .ru-quote`],
   ];

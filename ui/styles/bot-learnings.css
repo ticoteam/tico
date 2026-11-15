@@ -21,7 +21,7 @@
 .learn-panel:not([open]){display:none}
 .learn-panel::backdrop{background:rgba(0,0,0,.35)}
 .learn-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
-.learn-head h2{margin:0;font-size:var(--t-md);font-weight:600;flex:1}
+.learn-head h2{margin:0;font-size:var(--t-card);font-weight:600;flex:1}
 .learn-switch{display:inline-flex;gap:2px;padding:2px;border-radius:7px;background:var(--surface2)}
 .learn-switch button{border:0;background:none;color:var(--muted);font-size:var(--t-sm);padding:3px 8px;border-radius:5px;cursor:pointer}
 .learn-switch button[aria-selected="true"]{background:var(--raised);color:var(--ink)}

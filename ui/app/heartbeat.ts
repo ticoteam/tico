@@ -107,6 +107,10 @@ function renderAccount(): void {
   const who = me.email || (me.read_only_view ? `${me.name || 'Bot'} · read-only view` : '');
   el.title = `Signed in as ${who}${me.local ? ' (local app)' : ''}`;
   if (email) email.textContent = who || 'Not signed in';
+  renderAccountFace();
+  // A read-only view changes nothing, so it is not offered Settings (ui/app/view-only.ts).
+  const settings: HTMLElement | null = $('#account-settings');
+  if (settings && settings.hidden !== !!me.read_only_view) settings.hidden = !!me.read_only_view;
   renderAccountStatus();
   renderInboxNav();
   renderNewVersion();
@@ -115,6 +119,14 @@ function renderAccount(): void {
   // Only a session an identity proxy vouches for has anything to end; a bearer or the local app does not.
   const signOut: HTMLElement | null = $('#sign-out');
   if (signOut) signOut.hidden = !me.proxy_session;
+}
+// The account button's picture: the person's photo, or their initials, once the roster names them (renderTree draws it
+// again when it does); until then the initials of what /me says.
+function renderAccountFace(): void {
+  const face: HTMLElement | null = $('#account .account-face'), me = S.me;
+  if (!face || !me) return;
+  const html = personAvatar(mePerson() || {id: me.id, name: me.name || me.email || ''}, 22);
+  if (face.innerHTML !== html) face.innerHTML = html;
 }
 // Only the company's own app is offered: a menu link and a browser nudge. Neither appears
 // inside the app. Dismissal hides the nudge for a week.

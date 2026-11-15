@@ -77,7 +77,7 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
     // Failed runs: under the count, the newest five failed jobs, each with its bot, when, and why when Health says.
     const failedRows = page.locator('#hl-page [data-hl-check="failed"] [data-hl-failures] li');
     assert.equal(await failedRows.count(), 5);
-    assert.match(await failedRows.nth(0).innerText(), /^ops\b.*\bago\s+couldn't start on Studio Mac after 10 tries$/s);
+    assert.match(await failedRows.nth(0).innerText(), /^ops\b.*(?:\bnow|\d+[mh]|[A-Z][a-z]{2} \d{1,2})\s+couldn't start on Studio Mac after 10 tries$/s);
     assert.equal(await failedRows.nth(1).locator('.hl-why').innerText(), 'Timeout: max_run_minutes (60 minutes)');
     assert.equal(await failedRows.nth(2).locator('.hl-why').count(), 0, 'no why line when Health sends none');
     assert.equal(await page.locator('#hl-page', {hasText: 'the sixth is not shown'}).count(), 0);

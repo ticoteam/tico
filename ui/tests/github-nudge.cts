@@ -58,6 +58,8 @@ async function open(browser: Browser, {viewport = {width: 1280, height: 900}, co
     if (p === '/api/v2/status') return json({bots: BOTS.map(b => ({bot: b.name, state: 'idle'}))});
     if (p === '/api/v2/repositories') return json({repositories: [], new_bot_default: null, github_connected: connected, github_installed: connected});
     if (p === '/api/v2/needs-you') return json({items: [], went_away: null});
+    // Tools › GitHub, the page the card and the setup row link to: a whole tool page, as the server sends it.
+    if (p === '/api/v2/tools/github') return json({service: 'github', title: 'GitHub', access: '', writes: 'read', owner: 'tico', declared_as: '', body: '', queries: [], learnings: [], read_only: true});
     if (p === '/api/v2/tool-index') return json({rows: [{id: 'api:crm', kind: 'api', name: 'CRM', href: '#/tools/api/crm', status: {tone: 'ok', text: 'Working'}}], counts: null});
     if (p === '/api/v2/setup') return json({names: {company_name: 'Acme'}, answers: {}, selected: {}, completed: '2026-11-01T10:00:00Z',
       needed: false, home: 'human:ana', bots: [], machine: {runners: [{id: 'r1', label: "Ana's Mac", online: true}], enrolled: true}});
@@ -78,7 +80,7 @@ async function visit(page: Page, url: string, {read = true}: {read?: boolean} = 
   const seen = read ? page.waitForResponse((r: {url(): string}) => r.url().endsWith('/api/v2/repositories')) : null;
   await page.goto(url);
   if (seen) await seen;
-  await page.locator(url.includes('/task/') ? '.tmodal-main' : '#bot-banners').first().waitFor({state: 'attached'});
+  await page.locator(url.includes('/task/') ? '#task-modal .task-side' : '#bot-banners').first().waitFor({state: 'attached'});
   await page.waitForTimeout(200);   // the card fills in the same tick as the read; this lets the render finish
 }
 
@@ -206,7 +208,7 @@ const finishSetup = (page: Page) => page.locator('#nav-welcome').evaluate((el: H
       const button = toolsCard(page).locator('a.primary[data-gh-connect]');
       assert.equal(await button.getAttribute('href'), '#/tools/github');
       assert.equal(await button.textContent(), 'Connect GitHub');
-      assert.equal(await page.locator('#tools-root [data-tl-github] + .tt-bar').count(), 1, 'the card is above the filters');
+      assert.equal(await page.locator('#tools-root [data-tl-github] + [data-tl-table]').count(), 1, 'the card is above the list');
       assert.deepEqual(errors, []);
       await context.close();
     }

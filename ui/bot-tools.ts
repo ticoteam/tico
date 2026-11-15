@@ -275,6 +275,9 @@ declare var botTools: BtApi;
       const [kind, word] = statusOf(status);
       return `<span class="pill ${kind}">${esc(word)}</span>`;
     };
+    // A line's pill only when something is wrong or under way (style guide: pills only when something is wrong or of
+    // interest); Ready and Not checked say nothing on the line, and the opened tool's Status row still names them.
+    const linePill = (status: unknown): string => status === 'problem' || status === 'pending' ? statusPill(status) : '';
     const repoLink = (tool: BtTool): string => (tool.url ? `<a href="${esc(tool.url)}" target="_blank" rel="noopener noreferrer">${esc(tool.identity)}</a>` : esc(tool.identity));
     // Every fact about a tool; a repository's line already carries its linked name, so its details leave it out.
     function detail(tool: BtTool, named: boolean): string {
@@ -312,9 +315,9 @@ declare var botTools: BtApi;
     const tip = (tool: BtTool): string => [summary(tool), shownDetail(tool)].filter(Boolean).join('. ');
     const icon = (tool: BtTool): string => `<span class="bt-icon-static${tint(tool)}">${icons().markup(tool)}</span>`;
     const line = (tool: BtTool): string => `<details class="bt-item" data-tool="${esc(tool.id)}"><summary title="${esc(tip(tool))}">${icon(tool)}
-        <span class="bt-name">${esc(tool.name)}</span>${meta(tool)}<span class="bt-line-status">${statusPill(tool.status)}</span></summary>${detail(tool, false)}</details>`;
+        <span class="bt-name">${esc(tool.name)}</span>${meta(tool)}<span class="bt-line-status">${linePill(tool.status)}</span></summary>${detail(tool, false)}</details>`;
     const repoLine = (tool: BtTool): string => `<details class="bt-repo" data-tool="${esc(tool.id)}"><summary title="${esc(tip(tool))}">
-        <span class="bt-name">${repoLink(tool)}</span>${meta(tool)}<span class="bt-line-status">${statusPill(tool.status)}</span></summary>${detail(tool, true)}</details>`;
+        <span class="bt-name">${repoLink(tool)}</span>${meta(tool)}<span class="bt-line-status">${linePill(tool.status)}</span></summary>${detail(tool, true)}</details>`;
     // The repositories' line: how many, their access added up, and the most urgent status among them.
     function repoGroup(repos: BtTool[], lead: BtTool): string {
       const count = (test: (tool: BtTool) => boolean, word: string): string => {
@@ -329,7 +332,7 @@ declare var botTools: BtApi;
       const title = `GitHub, ${repos.length} repositories: ${repos.map(tool => `${tool.identity} (${[access(tool), stateWord(tool)].filter(Boolean).join(', ')})`).join('; ')}`;
       return `<details class="bt-item bt-group" data-tool="github-repos"><summary title="${esc(title)}">${icon(lead)}
           <span class="bt-name">GitHub</span><span class="bt-meta">${esc([`${repos.length} repositories`, levels].filter(Boolean).join(' · '))}</span>
-          <span class="bt-line-status" title="${esc(states)}">${statusPill(worst)}</span></summary>
+          <span class="bt-line-status" title="${esc(states)}">${linePill(worst)}</span></summary>
         <div class="bt-repos">${repos.map(repoLine).join('')}</div></details>`;
     }
     // Two or more repositories share one line, where the first of them would be; one stays a tool line.

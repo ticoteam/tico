@@ -20,11 +20,14 @@ interface MakeStatus {
 }
 
 
-// A phone shows a task's pages in its Pages tab, and "+" offers Make page or Link page (task #409).
+// A task's pages are the first part of its Details tab: "+" opens the page search, ⋯ › Make a page… the Describe box.
 async function pagesTab(p: Pick<import('playwright').Page, 'locator'>) {
-    const tab = p.locator('#task-modal[open]').getByRole('tab', {name: /^Pages/});
     await p.locator('#task-modal[open] [data-task-pages]').waitFor({state: 'attached'});
-    if (await tab.isVisible()) await tab.click();
+    await p.locator('#task-modal[open] [data-task-tab="details"]').click();
+}
+async function makePageOpen(p: Pick<import('playwright').Page, 'locator'>) {
+    await p.locator('#task-modal[open] [data-task-more]').click();
+    await p.locator('.prop-pop:popover-open').getByRole('menuitem', {name: 'Make a page…'}).click();
 }
 async function filesPages({hub, browser, phone}: PassContext) {
     const where = phone ? 'phone' : 'desktop';
@@ -42,7 +45,7 @@ async function filesPages({hub, browser, phone}: PassContext) {
       assert.equal((await csv.locator('.lf-kind').innerText()).trim(), 'Data', `${where}: the data file's kind`);
       assert.equal((await csv.locator('.lf-by-n').innerText()).trim(), 'Engineering Lead', `${where}: the bot that made the data file`);
     }
-    const file = await call(hub, 'dana', 'GET', `files/${await csv.getAttribute('data-id')}`);
+    const file = await call(hub, 'dana', 'GET', `files/${await csv.locator('a.lf-open').getAttribute('data-id')}`);
     assert.equal(file.status, 200, `${where}: the hub serves the data file`);
     assert.match(String(file.body), /landing,1200/, `${where}: the data file's rows are served`);
 
@@ -125,13 +128,12 @@ async function filesPages({hub, browser, phone}: PassContext) {
     const section = reader.locator('[data-task-pages]');
     await pagesTab(reader); await pagesTab(page);
     await section.getByRole('button', {name: 'Add a page', exact: true}).click();
-    await section.getByRole('button', {name: 'Link page', exact: true}).click();
     // A later task update in the same batch must not hide the earlier files invalidation.
     const refreshed = reader.waitForResponse(r => decodeURIComponent(new URL(r.url()).pathname) === '/api/v2/places/task:' + id);
     await reader.evaluate(id => liveEmit('tasks', {id, kind: 'update', kinds: ['files', 'update']}), id);
     assert.equal((await refreshed).status(), 200, `${where}: a coalesced files change refreshes the pages`);
     const search = reader.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/files/search');
-    await section.getByRole('searchbox', {name: 'Search pages'}).fill('Engineering weekly');
+    await section.getByRole('searchbox', {name: 'Find a page'}).fill('Engineering weekly');
     assert.equal(new URL((await search).url()).searchParams.get('kind'), 'page', `${where}: the picker searches pages only`);
     const choice = section.getByRole('button', {name: 'Engineering weekly', exact: true});
     const linkedPage = await choice.getAttribute('data-tp-page');
@@ -174,8 +176,7 @@ async function makePage({hub, browser, phone}: PassContext) {
     });
     const section = page.locator('[data-task-pages]'), field = section.getByRole('textbox', {name: 'Describe the page'});
     await pagesTab(page);
-    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
-    await section.getByRole('button', {name: 'Make page', exact: true}).click();
+    await makePageOpen(page);
     await field.fill('The alert flow: three scenarios as tabs.');
     await go(page, '#/tasks');
     await section.waitFor({state: 'hidden', timeout: t(10000)});
@@ -224,9 +225,8 @@ async function makePage({hub, browser, phone}: PassContext) {
     });
     await card.waitFor({state: 'hidden', timeout: t(10000)});
 
-    // Made: the Describe box folds away; a second page starts from "+" › Make page again.
-    await section.getByRole('button', {name: 'Add a page', exact: true}).click();
-    await section.locator('[data-tp-make]').click();
+    // Made: the Describe box folds away; a second page starts from ⋯ › Make a page… again.
+    await makePageOpen(page);
     await field.fill('A second page.');
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});

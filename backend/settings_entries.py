@@ -10,6 +10,7 @@ SETTINGS_FILES make and fails when no entry, ALIASES row or NOT_SETTINGS row cov
 
 from dataclasses import replace
 
+from .page_owners import PAGES as PAGE_OWNER_PAGES
 from .settings_catalog import Setting as S
 
 SETTINGS_FILES = sorted(
@@ -174,47 +175,23 @@ ENTRIES = TEAM_RULES + [
         card=_card("general", "settings-team"),
         why="The team icon is an upload the owner makes in Settings",
     ),
-    S(
-        "pages.listening.owner",
-        "Listening's owner",
-        GENERAL + " > Page owners",
-        "admin",
-        "direct",
-        "PUT",
-        "page-owners/listening",
-        "bot",
-        "text",
-        card=_card("general", "settings-page-owners"),
-        read="page-owners#pages.listening.bot",
-        words="page owner chat listening bot automations",
-    ),
-    S(
-        "pages.goals.owner",
-        "Goals' owner",
-        GENERAL + " > Page owners",
-        "admin",
-        "direct",
-        "PUT",
-        "page-owners/goals",
-        "bot",
-        "text",
-        card=_card("general", "settings-page-owners"),
-        read="page-owners#pages.goals.bot",
-        words="page owner chat goals bot strategy",
-    ),
-    S(
-        "pages.tools.owner",
-        "Tools' owner",
-        GENERAL + " > Page owners",
-        "admin",
-        "direct",
-        "PUT",
-        "page-owners/tools",
-        "bot",
-        "text",
-        card=_card("general", "settings-page-owners"),
-        read="page-owners#pages.tools.bot",
-        words="page owner chat tools keys credentials bot",
+    # Each page's owner (backend/page_owners.py PAGES), one entry per page: Settings > General > Page owners.
+    *(
+        S(
+            "pages." + page + ".owner",
+            spec["name"] + ("'" if spec["name"].endswith("s") else "'s") + " owner",
+            GENERAL + " > Page owners",
+            "admin",
+            "direct",
+            "PUT",
+            "page-owners/" + page,
+            "bot",
+            "text",
+            card=_card("general", "settings-page-owners"),
+            read="page-owners#pages." + page + ".bot",
+            words="page owner chat " + spec["name"].lower() + " bot",
+        )
+        for page, spec in PAGE_OWNER_PAGES.items()
     ),
     S(
         "me.assistant.decides_approvals",
@@ -238,6 +215,19 @@ ENTRIES = TEAM_RULES + [
         "assistant/turn-on",
         value="json",
         card=_card("general", "settings-assistant-pane"),
+    ),
+    S(
+        "app.theme",
+        "Theme",
+        GENERAL + " > App",
+        "self",
+        "person",
+        "PUT",
+        "browser/theme",
+        value="choice:dark|light|system",
+        card=_card("general", "settings-app"),
+        words="dark light system mode appearance colors",
+        why="The theme is each browser's own, chosen in Settings",
     ),
     S(
         "privacy.usage_count",

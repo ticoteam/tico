@@ -6,6 +6,17 @@
 :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select){box-sizing:border-box;width:100%;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-ctl);padding:5px 9px;font:inherit;line-height:20px;accent-color:var(--ink)}
 :where(textarea){resize:vertical;line-height:var(--lh)}
 :where(select){cursor:pointer;text-overflow:ellipsis}
+/* One select look (style guide, Fields > Select). The browser's own arrow is off and the app draws one, 14px from the
+   right edge, so a drop-down reads the same in every browser and both themes: --surface2 behind a firmer edge, the
+   arrow in --g7, muted when disabled (tokens.css --select-arrow). The look itself has no specificity, so a component's
+   own colours win (a table cell's transparent select); the arrow and the room it needs are !important, because a dozen
+   component rules paint the background or padding shorthand and would otherwise drop the arrow or run text under it.
+   A drop-down has no padding above or below its words: its height (--ctl, or a component's own) centres them, where
+   padding pushed them down and cut them off in a short select.
+   A list box (multiple, size) keeps the native look. Long values are cut by the field, before the arrow. */
+:where(select:not([multiple]):not([size])){min-height:var(--ctl-sm);background-color:var(--surface2);border-color:color-mix(in srgb,var(--muted) 55%,var(--line));white-space:nowrap;overflow:hidden}
+select:not([multiple]):not([size]){-webkit-appearance:none;-moz-appearance:none;appearance:none;background-image:var(--select-arrow)!important;background-repeat:no-repeat!important;background-position:right 14px center!important;background-size:10px 6px!important;padding-right:34px!important;padding-top:0!important;padding-bottom:0!important}
+select:not([multiple]):not([size]):disabled{background-image:var(--select-arrow-off)!important}
 /* a drop-down and a date field ignore line-height (Chrome lays out its own line), so they take the buttons' height outright */
 :where(select:not([multiple]):not([size]),input:is([type=date],[type=time],[type=datetime-local],[type=month],[type=week])){height:var(--ctl)}
 :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]):not([type=submit]):not([type=button]):not([type=image]):not([type=reset]),textarea,select):hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line))}
@@ -66,9 +77,42 @@ button:disabled{opacity:.5;cursor:default}
 :is(button.tmodal-x,button.peek-btn,button.tf-x,:is(dialog .tmodal-head,dialog header,.notes-modal-close,.msg-message-head,.co-head,.doc-viewer-head)>button:is([aria-label^="Close"],[aria-label="Back"],[aria-label^="Open in"])):not(.primary,.tmodal-act):hover{background:var(--surface2);color:var(--ink)}
 /* A dialog's heading takes the focus when it opens (core.js), so no control wears a ring before a key is pressed. */
 dialog :is(h1,h2,h3,strong)[tabindex="-1"]:focus,dialog[tabindex="-1"]:focus{outline:0}
-/* a phone: fields 40px tall, their type 16px (layout.css) */
+/* The date field (ui/app/format.ts dateField; style guide, Fields > Date): on a computer a date input marked
+   data-date-field is a text field reading "Nov 13, 2026" with a calendar mark at its right, and opens this calendar
+   under it. The same look in every browser and both themes; a phone keeps the native picker. */
+input.df-input{padding-right:34px;background-image:var(--date-icon);background-repeat:no-repeat;background-position:right 11px center;background-size:14px 14px;cursor:pointer}
+input.df-input:focus{cursor:text}
+input.df-input:disabled{background-image:var(--date-icon-off);cursor:not-allowed}
+.df-pop[popover]{position:fixed;inset:auto;margin:0;box-sizing:border-box;width:max-content;padding:var(--s2);border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);color:var(--ink);box-shadow:0 12px 32px rgba(0,0,0,.3);font-size:var(--t-sm)}
+.df-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s1);padding:0 0 var(--s2)}
+.df-month{font-weight:600;font-size:var(--t-sm)}
+.df-nav{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.df-nav:hover{background:var(--surface2);color:var(--ink)}
+.df-nav .nav-icon{font-size:18px;width:18px;height:18px;color:inherit}
+.df-grid{display:grid;grid-template-columns:repeat(7,32px);gap:2px;text-align:center}
+.df-row{display:contents}
+.df-h{height:24px;line-height:24px;color:var(--muted);font-size:var(--t-xs)}
+.df-d{height:30px;padding:0;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-variant-numeric:tabular-nums;cursor:pointer}
+.df-d:hover{background:var(--surface2)}
+.df-d:focus-visible{outline:var(--focus-ring);outline-offset:0}
+.df-d.out{color:var(--muted);opacity:.5}
+.df-d.today{box-shadow:inset 0 0 0 1px var(--focus)}
+.df-d.sel,.df-d.sel:hover{background:var(--accent);color:var(--accent-ink);font-weight:600}
+.df-d[aria-disabled=true]{color:var(--muted);opacity:.35;cursor:not-allowed;background:none}
+/* A phone: every control is a 44px target (style guide, Platform rules: "Touch targets are 44px on a phone"). --ctl is
+   44px there (tokens.css), so fields, drop-downs and date fields take it from their own rules; buttons, links drawn as
+   buttons, tabs and segments get a 44px floor here. The floor has no specificity: a component that wants a smaller mark
+   (an icon inside a dense row) says min-height:0 in its own rule and gives the mark its 44px hit area another way
+   (padding, or a ::before that reaches past the mark; see .tap-mark below). A button whose face is an avatar keeps the
+   avatar's size (16/22/28/36), so a row of faces stays one row. Field type is 16px (layout.css). */
 @media (max-width:760px){
-  :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]),select){padding-top:9px;padding-bottom:9px}
-  :where(select:not([multiple]):not([size]),input:is([type=date],[type=time],[type=datetime-local],[type=month],[type=week])){height:40px}
-  input[type=search]{padding-top:9px;padding-bottom:9px}
+  :where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=hidden]),select){padding-top:11px;padding-bottom:11px}
+  input[type=search]{padding-top:11px;padding-bottom:11px}
+  :where(button:not(:has(>.av)):not(.linkish,.tap-mark,.cal-card-x,.pin-x,.code-x,.strat-x,.sb-search-clear,.docs-link-edit,.rdm-spk,.rdo-tab,.rr-chip,.mkt-gh,.tf-nav),input:is([type=button],[type=submit],[type=reset]),a.primary,a[class="ghost"],[role=tab],[role=radio],.ph-tab,.ph-seg>:is(button,a),.theme-seg>:is(button,label)){min-height:44px}
+  /* Marks that cannot grow keep their size and take the floor's 44px as a hit area reaching past them: a ✕ placed over a
+     card or chip, a chart's chip, a link-like button inside a sentence (.linkish, which keeps its line's height). A new
+     one says .tap-mark (and is positioned, absolute or relative). The ones listed here are placed absolutely. */
+  :is(.tap-mark,.cal-card-x,.pin-x,.code-x,.strat-tm .strat-x,.sb-search-clear,.rdm-spk,.rdo-g:not(.folded)>.rdo-tab,.rr-chip,.mkt-gh,.tf-nav)::before{content:"";position:absolute;top:min(0px,calc(50% - 22px));bottom:min(0px,calc(50% - 22px));left:min(0px,calc(50% - 22px));right:min(0px,calc(50% - 22px))}
+  /* a link drawn as a button is inline-block; centred like a button's own words once it is taller than its line */
+  :where(a.primary,a[class="ghost"]){display:inline-flex;align-items:center;justify-content:center}
 }

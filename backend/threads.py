@@ -1463,7 +1463,7 @@ def plan(
     author. The same list makes the deliveries (`deliver`) and the "Who it reaches" preview (`reaches`).
 
     Addressed (reached at any level, on any way): the @mentions in `found`, the author of the message it replies to,
-    a DM's members, a Home's bot, a sub-thread's posters. Followers (reason `follower`): `live` rows of the thread; on
+    a DM's members, a Home's owner (a bot or a person), a sub-thread's posters. Followers (reason `follower`): `live` rows of the thread; on
     a chat a person follows by a follow, a mention, a reply or starting it, not by joining (that row is a read mark and a
     sidebar place). `mentions` and `muted` get only what addresses them; a bot on `digest` gets its digest. A system
     line (D10) reaches only the addressed.
@@ -1488,7 +1488,7 @@ def plan(
             wanted.setdefault(actor, "dm")
     if audience == "home":
         owner = home_owner(root)
-        if owner and owner.startswith("bot:"):
+        if owner and owner.startswith(("bot:", "human:")):
             wanted.setdefault(owner, "home")
     if thread.get("parent_id"):
         for actor in _sub_thread_posters(c, thread["id"], exclude or ""):

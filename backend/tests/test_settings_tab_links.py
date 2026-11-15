@@ -30,7 +30,10 @@ ALIASES = {
 
 
 def settings_tabs():
-    tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.ts").read_text()))
+    # The tabs are one list in settingsTabsList: ['id', 'Label', shown] each.
+    source = (ROOT / "ui/app/settings.ts").read_text()
+    listed = source[source.index("function settingsTabsList") :].split("\n}", 1)[0]
+    tabs = set(re.findall(r"\['([a-z]+)', '[^']+', \w+\]", listed))
     assert {"devices", "bots"} <= tabs
     assert 'id="settings-health"' in (ROOT / "ui/app/settings.ts").read_text()
     return tabs | ALIASES

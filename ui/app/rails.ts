@@ -118,7 +118,9 @@ async function railsSync(): Promise<void> {
     const side = railSide(el?.dataset.rail);
     if (!el || !side || e.button !== 0) return;
     e.preventDefault();
-    drag = {side, el, x: e.clientX, w: railsShown[side]};
+    // From the width it shows: the Assistant open in the sidebar makes it wider than the person's own (ask.css).
+    const shown = side === 'left' ? Math.round(document.getElementById('side')?.getBoundingClientRect().width || 0) : 0;
+    drag = {side, el, x: e.clientX, w: Math.max(railsShown[side], shown)};
     el.classList.add('active');
     document.body.classList.add('rail-dragging');
     addEventListener('pointermove', move);

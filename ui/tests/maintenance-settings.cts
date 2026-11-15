@@ -47,24 +47,24 @@ async function themed(page: Page, name: string) {
     // An owner on a computer: the list row, the screen, a save of every control kind, Run now and the run history.
     {
       const {page, errors, writes, db, hold} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true});
-      await page.waitForSelector('tr.au-row[data-row="maintenance"]');
-      const row = page.locator('tr.au-row[data-row="maintenance"]');
+      await page.waitForSelector('.au-row[data-row="maintenance"]');
+      const row = page.locator('.au-row[data-row="maintenance"]');
       assert.match(await row.innerText(), /Maintenance[\s\S]*Every hour/);
-      assert.equal(await page.locator('tr.au-grp[data-agrp="system"]').count(), 1);
-      await page.locator('[data-range="24h"]').click();
+      assert.equal(await page.locator('.au-grp[data-agrp="system"]').count(), 1);
+      await page.locator('.au-range [data-range="24h"]').click();
       await until(async () => (await row.locator('td.au-cf').innerText()).trim() === '1', 'the failed count');
       assert.ok(Number((await row.locator('td.au-cn').innerText()).replace(/\D/g, '')) >= 20, 'runs over 24h');
       // The overview's Runs tab lists Maintenance's runs beside the automations' runs; a tap opens its run history.
       await page.locator('[data-tab="runs"]').click();
-      await page.waitForSelector('tr.au-arow[data-aid="maintenance"]');
-      const first = page.locator('tr.au-arow[data-aid="maintenance"]').first();
+      await page.waitForSelector('.au-arow[data-aid="maintenance"]');
+      const first = page.locator('.au-arow[data-aid="maintenance"]').first();
       assert.match(await first.innerText(), /Maintenance/);
       const tapped = (await first.getAttribute('data-arun'))!.slice(4);
       await first.click();
       await page.waitForSelector(`tr.au-rr.open[data-mt-run="${tapped}"]`);
       await page.goBack();
       await page.locator('[data-tab="list"]').click();
-      await page.waitForSelector('tr.au-row[data-row="maintenance"]');
+      await page.waitForSelector('.au-row[data-row="maintenance"]');
 
       await row.locator('a').click();
       await page.waitForSelector('.mt-step');
@@ -80,10 +80,15 @@ async function themed(page: Page, name: string) {
       assert.match(await step('learn').locator('.pill.beta').innerText(), /Beta/);
       assert.equal(await step('learn').locator('[data-mt-on]').isChecked(), false, 'Learn is off by default');
       const suggest = db.maint!.steps.find(x => x.key === 'suggest')!;
+      // Needing consent is a pill that is not a link; the open step links to where it is given.
+      assert.equal(await step('suggest').locator('.pill[data-mt-needs]').innerText(), 'Needs Privacy consent');
+      assert.equal(await step('suggest').locator('a.pill').count(), 0, 'a pill is never a link');
+      await step('suggest').locator('[data-mt-open]').click();
       assert.equal(await step('suggest').locator('[data-mt-consent]').getAttribute('href'), '#/settings/general/settings-privacy');
+      await step('suggest').locator('[data-mt-open]').click();
       suggest.consent = true;
       await page.evaluate(() => auMaintLoad(AU));
-      assert.equal(await step('suggest').locator('[data-mt-consent]').count(), 0, 'consent granted');
+      assert.equal(await step('suggest').locator('[data-mt-needs]').count(), 0, 'consent granted');
       suggest.consent = false;
       await page.evaluate(() => auMaintLoad(AU));
       assert.match(await step('dream').locator('.mt-when').innerText(), /Every 6 hours/);
@@ -230,8 +235,8 @@ async function themed(page: Page, name: string) {
 
       // Back on the list, the row has the saved schedule.
       await page.locator('.au-crumb .au-up').click();
-      await page.waitForSelector('tr.au-row[data-row="maintenance"]');
-      assert.match(await page.locator('tr.au-row[data-row="maintenance"]').innerText(), /Every 3 hours/);
+      await page.waitForSelector('.au-row[data-row="maintenance"]');
+      assert.match(await page.locator('.au-row[data-row="maintenance"]').innerText(), /Every 3 hours/);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -239,12 +244,12 @@ async function themed(page: Page, name: string) {
     // Opening a scheduled run follows it to the end, keeping older rows, expanded steps and the scroll position.
     {
       const {page, errors, writes, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true});
-      await page.waitForSelector('tr.au-row[data-row="maintenance"]');
+      await page.waitForSelector('.au-row[data-row="maintenance"]');
       const at = new Date().toISOString();
       db.maint!.live = {id: 'mrun_live', occurrence_key: 'schedule:' + at, trigger: 'schedule', step: null,
         started_at: at, finished_at: null, heartbeat_at: at, ok: null, result: '', cost_usd: 0, steps: []};
       db.maint!.runs.unshift(db.maint!.live!);
-      await page.locator('tr.au-row[data-row="maintenance"] a').click();
+      await page.locator('.au-row[data-row="maintenance"] a').click();
       await page.waitForSelector('[data-mt-now][disabled]');
       assert.match(await page.locator('[data-mt-meta]').innerText(), /Running/);
       await page.getByRole('tab', {name: 'Runs'}).click();
@@ -322,14 +327,14 @@ async function themed(page: Page, name: string) {
     // System jobs sits beside Maintenance: a built-in row that opens in place on Tico's own jobs (settings-recurring.js).
     for (const [viewport, size] of [[DESKTOP, 'desktop'], [PHONE, 'phone']] as const) {
       const {page, errors} = await openAutomations(browser, {viewport, maintenance: true});
-      await page.waitForSelector('tr.au-row[data-row="system-jobs"]');
+      await page.waitForSelector('.au-row[data-row="system-jobs"]');
       for (const id of ['maintenance', 'system-jobs'])
-        assert.equal(await page.locator(`tr.au-row[data-row="${id}"] .pill`, {hasText: 'Built-in'}).count(), 1, id + ' says Built-in');
-      assert.equal(await page.locator('tr.au-row[data-row="system-jobs"]').evaluate(r => (r.previousElementSibling as HTMLElement | null)?.dataset.row || (r.previousElementSibling as HTMLElement | null)?.dataset.agrp), 'maintenance');
+        assert.equal(await page.locator(`.au-row[data-row="${id}"] .pill`, {hasText: 'Built-in'}).count(), 1, id + ' says Built-in');
+      assert.equal(await page.locator('.au-row[data-row="system-jobs"]').evaluate(r => (r.previousElementSibling as HTMLElement | null)?.dataset.row || (r.previousElementSibling as HTMLElement | null)?.dataset.agrp), 'maintenance');
       await page.evaluate(() => (window as unknown as MaintPageWin).ticoTheme.set('dark'));
       assert.equal(await sideways(page), false);
       await shot(page, `automations-builtins-${size}-dark`);
-      await page.locator('tr.au-row[data-row="system-jobs"] a').click();
+      await page.locator('.au-row[data-row="system-jobs"] a').click();
       await page.waitForSelector('[data-system-routine="stale_review"]');
       assert.equal(await page.locator('#au-root').getAttribute('data-screen'), 'detail');
       assert.equal(await page.locator('.au-hd .au-name').innerText(), 'System jobs');
@@ -343,8 +348,8 @@ async function themed(page: Page, name: string) {
     // A hub without Maintenance: the list is as it was.
     {
       const {page, errors} = await openAutomations(browser, {viewport: DESKTOP});
-      await page.waitForSelector('tr.au-row');
-      assert.equal(await page.locator('tr.au-row[data-row="maintenance"], tr.au-row[data-row="system-jobs"]').count(), 0);
+      await page.waitForSelector('.au-row');
+      assert.equal(await page.locator('.au-row[data-row="maintenance"], .au-row[data-row="system-jobs"]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }

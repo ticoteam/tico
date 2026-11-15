@@ -1,11 +1,12 @@
-// Tools › Keys (ui/app/redesign-library.ts) against fixtures/redesign-tools.json (the Acme example, shaped as GET
-// /api/v2/tools, /api/v2/tools/{service}, /api/v2/credentials and /api/v2/groups answer): one row per tool with its
-// kind, a red dot when it has an issue and how many teammates have it, grouped In use / Available / Credentials /
-// Removed; search, who has access (a bot, a person, or a team with the teams under it) and Issues narrow the list and
-// ride in the address. A row opens the tool: its issues, who has it (each with what they may change there), its
-// credentials (set or not, when a bot last used it, Rotate / Access / Add), then the page, its queries and learnings.
-// A credential no tool names has its own page. The old addresses (#/library/connections/<tool>, #/integrations, #/credentials)
-// lead to Tools. A member who cannot open the vault never reads it. No secret value is ever on the page.
+// A tool's own page and a key's (ui/app/redesign-library.ts), and the Tools list's rows for them (ui/app/tools.ts),
+// against fixtures/redesign-tools.json (the Acme example, shaped as GET /api/v2/tools, /api/v2/tools/{service},
+// /api/v2/credentials and /api/v2/groups answer). Keys was a page of its own; it is folded into Tools: the list shows
+// the tools bots declare (In use when someone has one, else Available; a pill when one has an issue) and each key no
+// tool holds (Kind › Keys), Who has access narrows by a bot, a person or a team with the teams under it. A row opens
+// the tool: its issues, who has it (by team, each with what they may change there), its keys (set or not, when a bot
+// last used one, Rotate / Access / Reveal / Add), then the page, its queries and learnings. A key no tool names has its
+// own page. The old addresses (#/tools/keys…, #/library/connections/<tool>, #/integrations, #/credentials) lead to
+// Tools. A member who cannot open the vault never reads it. No secret value is ever on the page.
 // Phone first (390×844), then a computer. TICO_UI_SHOTS=<dir> saves screenshots.
 import type {Browser, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -26,7 +27,7 @@ const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(__dirname
 const FX = fixture('redesign-tools.json');
 const roster = fixture('redesign-roster.json');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
-const LIST = '#/tools/keys';
+const LIST = '#/tools';
 const SECRET = 'ghp-secret-value-5c4b3a';
 const OWNER: Me = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, credential_access: true, bot_admin: true};
 const MEMBER: Me = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true, credential_access: false};
@@ -52,6 +53,7 @@ async function open(browser: Browser, {viewport = PHONE, hash = LIST, me = OWNER
     if (p === '/api/status') return json({active: [], employees: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/groups') return json(groups);
+    if (p === '/api/v2/tool-index') return json({rows: [], counts: {}, next: null});
     const m = p.match(/^\/api\/v2\/(?:tools|integrations)(?:\/([^/]+))?$/);
     if (m && !m[1]) { await listGate; return json({label: 'Available tools', integrations: tools}); }
     if (m) {
@@ -90,72 +92,76 @@ async function shot(page: Page, name: string) {
   fs.mkdirSync(dir, {recursive: true});
   await page.screenshot({animations: 'disabled', path: path.join(dir, name + '.png')});
 }
-// [key, icon, name · kind, issue dot, how many have it]
-const rows = (page: Page) => page.locator('.lc-row').evaluateAll(els => els.map(el => [el.dataset.key,
-  el.querySelector('.nav-icon')!.textContent, el.querySelector<HTMLElement>('.lc-nm')!.innerText.trim(), !!el.querySelector('.lc-dot'), el.querySelector<HTMLElement>('.lc-n')!.innerText.trim()]));
-const keys = (page: Page) => page.locator('.lc-row').evaluateAll(els => els.map(el => el.dataset.key));
+// [key, name, pill, how many faces]
+const rows = (page: Page) => page.locator('tr[data-tl-row]').evaluateAll(els => els.map(el => [(el as HTMLElement).dataset.tlRow,
+  el.querySelector<HTMLElement>('.au-nm')!.innerText.trim(), el.querySelector('.tt-pill')?.textContent || '', el.querySelectorAll('.tt-face').length]));
+const keys = (page: Page) => page.locator('tr[data-tl-row]').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.tlRow));
 const ROWS = [
-  ['close-crm', 'api', 'Close CRM · API', true, '3'],
-  ['postgres', 'inventory_2', 'Acme Postgres · SQL', false, '1'],
-  ['acme-ops', 'link', 'Acme Ops MCP · MCP', false, '1'],
-  ['aside', 'travel_explore', 'Aside browser · Browser', false, '0'],
-  ['mail', 'mail', 'Mail · Email', true, '0'],
-  ['github', 'code', 'GitHub · CLI', false, '0'],
-  ['credentials/c3', 'key_vertical', 'OpenAI key · API key', false, '1'],
-  ['old-wiki', 'api', 'old-wiki · API', false, '0'],
+  ['service:close-crm', 'Close CRM', 'Problem', 3],
+  ['service:acme-ops', 'Acme Ops MCP', '', 1],
+  ['service:postgres', 'Acme Postgres', '', 1],
+  ['credentials/c3', 'OpenAI key', '', 1],
+  ['service:mail', 'Mail', 'No key', 0],
+  ['service:aside', 'Aside browser', '', 0],
+  ['service:github', 'GitHub', '', 0],
 ];
 const noSecret = async (page: Page, tag: string) => assert.ok(!(await page.content()).includes(SECRET), tag + ': no secret value on the page');
+// A filter in the rail; a phone opens the filters and the section first.
+async function pick(page: Page, sec: string, sel: string) {
+  if (!(await page.locator(sel).isVisible().catch(() => false))) {
+    if (!(await page.locator('#tools-root.filters-open').count())) await page.locator('[data-tl-filters]').click();
+    if (!(await page.locator(sel).count())) await page.locator(`[data-tl-fsec="${sec}"]`).click();
+  }
+  await page.locator(sel).click();
+}
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // A phone: the list, the filters, a tool, its access and credentials, back.
+    // A phone: the list, the filters, a tool, its access and keys, back.
     {
       const tag = 'phone';
       const {page, seen} = await open(browser);
-      await page.locator('.lc-row').first().waitFor();
-      assert.deepEqual(await rows(page), ROWS, tag + ': one row each: kind, issue dot, how many have it');
-      assert.deepEqual(await page.locator('.lc-gh').allInnerTexts(), ['IN USE\n3', 'AVAILABLE\n3', 'CREDENTIALS\n1', 'REMOVED\n1'], tag + ': grouped');
+      await page.locator('tr[data-tl-row]').first().waitFor();
+      assert.deepEqual(await rows(page), ROWS, tag + ': the declared tools and the loose key, each with its pill and faces');
+      assert.deepEqual(await page.locator('tr[data-tl-grp]').evaluateAll(g => g.map(x => (x as HTMLElement).dataset.tlGrp)), ['In use', 'Available'], tag + ': grouped');
+      assert.equal(await page.locator('tr[data-tl-row="service:old-wiki"]').count(), 0, tag + ': a removed tool is not listed');
       assert.equal(await page.locator('#side a[data-nav="tools"].cur').count(), 1, tag + ': Tools is current');
       assert.match(await page.locator('#side a[data-nav="tools"]').innerText(), /^(api\s*)?Tools$/, tag + ': the nav says Tools');
       assert.equal(await page.locator('#account-menu [href="#/integrations"]').count(), 0, tag + ': no second Tools in the account menu');
-      assert.equal(await page.locator('.rd-help').count(), 1, tag + ': one help bubble');
-      assert.equal(await page.locator('.lc-pane').isVisible(), false, tag + ': the list alone');
       assert.equal(await sideways(page), false, tag + ': no sideways scroll');
       await shot(page, 'phone-tools');
 
-      // Who has access: the picker lists teams (nested ones indented), people and bots.
-      const options = await page.locator('.lc-who optgroup').evaluateAll(gs => gs.map(g => [(g as HTMLOptGroupElement).label, [...(g.children as unknown as Iterable<Element>)].map(o => o.textContent!.trim())]));
-      assert.deepEqual(options.map(([label]) => label), ['Teams', 'People', 'Bots'], tag + ': teams, people, bots');
-      assert.deepEqual(options[0]![1], ['Engineering', 'Platform', 'Operations'], tag + ': the teams in order');
-      await page.locator('.lc-who').selectOption('group:eng');
-      assert.deepEqual(await keys(page), ['close-crm', 'postgres', 'acme-ops'], tag + ': a team counts the teams under it');
+      // Who has access: a team counts the teams under it; a bot; a person, by a key granted to her; a team's keys too.
+      await pick(page, 'who', '[data-tl-who="group:eng"]');
+      assert.deepEqual(await keys(page), ['service:close-crm', 'service:acme-ops', 'service:postgres'], tag + ': a team counts the teams under it');
       assert.ok(await hashSoon(page, LIST + '?who=group%3Aeng'), tag + ': the filter is in the address');
-      await page.locator('.lc-who').selectOption('bot:builder');
-      assert.deepEqual(await keys(page), ['postgres'], tag + ': one bot');
-      await page.locator('.lc-who').selectOption('human:ana');
-      assert.deepEqual(await keys(page), ['close-crm'], tag + ': a person, by a credential granted to her');
-      await page.locator('.lc-who').selectOption('group:ops');
-      assert.deepEqual(await keys(page), ['close-crm', 'credentials/c3'], tag + ': a team, its credentials too');
-      await page.locator('.lc-who').selectOption('');
-      assert.equal(await page.locator('.lc-in').innerText(), '2', tag + ': two tools have issues');
-      await page.locator('.lc-issues').click();
-      assert.deepEqual(await keys(page), ['close-crm', 'mail'], tag + ': Issues only');
-      await page.locator('.lc-q').fill('mail');
-      assert.deepEqual(await keys(page), ['mail'], tag + ': search within them');
-      await page.locator('.lc-q').fill('nothing-like-it');
-      await page.locator('.lc-scroll .lc-pad').filter({hasText: 'Nothing matches.'}).waitFor();
-      await page.locator('.lc-q').fill('');
-      await page.locator('.lc-issues').click();
-      assert.equal(await page.locator('.lc-row').count(), ROWS.length, tag + ': all again');
+      await pick(page, 'who', '[data-tl-who="bot:builder"]');
+      assert.deepEqual(await keys(page), ['service:postgres'], tag + ': one bot');
+      await pick(page, 'who', '[data-tl-who="human:ana"]');
+      assert.deepEqual(await keys(page), ['service:close-crm'], tag + ': a person, by a key granted to her');
+      await pick(page, 'who', '[data-tl-who="group:ops"]');
+      assert.deepEqual(await keys(page), ['service:close-crm', 'credentials/c3'], tag + ': a team, its keys too');
+      await pick(page, 'who', '[data-tl-who="group:ops"]');
+      await pick(page, 'needs', '[data-tl-fneeds]');
+      assert.deepEqual(await keys(page), ['service:close-crm', 'service:mail'], tag + ': Needs you');
+      await page.locator('[data-tl-q]').fill('mail');
+      assert.deepEqual(await keys(page), ['service:mail'], tag + ': search within them');
+      await page.locator('[data-tl-q]').fill('');
+      await pick(page, 'needs', '[data-tl-fneeds]');
+      await pick(page, 'kind', '[data-tl-show="keys"]');
+      assert.deepEqual(await keys(page), ['credentials/c3'], tag + ': Keys');
+      await pick(page, 'kind', '[data-tl-show=""]');
+      assert.equal(await page.locator('tr[data-tl-row]').count(), ROWS.length, tag + ': all again');
+      await page.locator('[data-tl-filters]').click();
 
-      await page.locator('.lc-row[data-key="close-crm"]').click();
+      await page.locator('tr[data-tl-row="service:close-crm"] .au-nm').click();
       assert.ok(await hashSoon(page, LIST + '/close-crm'), tag + ': its own address');
       await page.locator('#int-detail h1').filter({hasText: 'Close CRM'}).waitFor();
-      assert.equal(await page.locator('.lc-list').isVisible(), false, tag + ': the page alone');
-      // In order: issues, access, credentials, then the page.
+      // In order: issues, access, keys, then the page.
       const order = await page.locator('#int-detail .card').evaluateAll(cs => cs.map(c => (c as HTMLElement).className.split(' ').find(x => x.startsWith('lc-')) || c.id || 'meta'));
-      assert.deepEqual(order.slice(0, 4), ['lc-issues-card', 'lc-access', 'lc-creds', 'meta'], tag + ': issues, access, credentials, then the page');
+      assert.deepEqual(order.slice(0, 4), ['lc-issues-card', 'lc-access', 'lc-creds', 'meta'], tag + ': issues, access, keys, then the page');
+      assert.equal(await page.locator('.lc-creds h2').innerText(), 'Keys', tag + ': the keys are the tool\'s');
       assert.match(await page.locator('.lc-issues-card').innerText(), /Credential missing on Test Mac · Release Owner/);
       const access = await page.locator('.lc-access .lc-team').evaluateAll((ts: Element[]) => ts.map(t => [t.querySelector('summary span')!.textContent,
         [...(t.querySelectorAll('.lc-who-row') as unknown as Iterable<Element>)].map(r => [r.querySelector('.lc-wn')!.textContent, r.querySelector('.pill')?.textContent || ''])]));
@@ -169,20 +175,20 @@ const noSecret = async (page: Page, tag: string) => assert.ok(!(await page.conte
       assert.deepEqual(await page.locator('.lc-creds .lc-acts button').allInnerTexts(), ['Rotate', 'Access', 'Reveal'], tag + ': the vault\'s actions');
       assert.equal(await page.locator('[data-learning-count]').innerText(), '2', tag + ': the learnings counted');
       assert.equal(await page.locator('#int-learn-add').count(), 1, tag + ': a learning can be added');
-      assert.equal(await page.getAttribute('#int-body a[href^="#/"]', 'href'), LIST + '/postgres', tag + ': a sibling page stays in Keys');
+      assert.equal(await page.getAttribute('#int-body a[href^="#/"]', 'href'), LIST + '/postgres', tag + ': a sibling page stays in Tools');
       assert.equal(await sideways(page), false, tag + ': the page fits');
       await shot(page, 'phone-tool');
 
-      await page.locator('.lc-back').click();
+      await page.locator('.tt-crumb a[href="#/tools"]').click();
       assert.ok(await hashSoon(page, LIST), tag + ': back to the list');
-      await page.locator('.lc-list').waitFor();
+      await page.locator('tr[data-tl-row]').first().waitFor();
       await noSecret(page, tag);
       assert.deepEqual(seen.writes, [], tag + ': nothing written');
       assert.deepEqual(seen.errors, [], tag + ': no page errors');
       await page.close();
     }
 
-    // A phone: a tool whose credential has no value, and one whose variable the vault does not hold: Add, prefilled.
+    // A phone: a tool whose key has no value, and one whose variable the vault does not hold: Add, prefilled.
     {
       const tag = 'phone add';
       const {page, seen} = await open(browser, {hash: LIST + '/mail'});
@@ -217,26 +223,19 @@ const noSecret = async (page: Page, tag: string) => assert.ok(!(await page.conte
       await page.close();
     }
 
-    // A computer: the first row opens beside the list; a credential no tool names has its own page, and its access is
-    // granted from there; the filters stay in each row's address.
+    // A computer: a key no tool names has its own page, its access is granted from there and the list follows; a new
+    // key is added from + on Tools.
     {
       const tag = 'desktop';
       const {page, seen} = await open(browser, {viewport: DESKTOP});
-      assert.ok(await hashSoon(page, LIST + '/close-crm'), tag + ': opens on the first row');
-      await page.locator('#int-detail h1').filter({hasText: 'Close CRM'}).waitFor();
-      await page.locator('.lc-access .lc-who-row').first().waitFor();
-      assert.equal(await page.locator('.lc-back').isVisible(), false, tag + ': no back link beside the list');
-      assert.equal(await page.locator('.lc-row.sel').getAttribute('data-key'), 'close-crm', tag + ': the row is selected');
-      const list = await page.locator('.lc-list').boundingBox(), pane = await page.locator('.lc-pane').boundingBox();
-      assert.ok(list!.x + list!.width <= pane!.x + 1, tag + ': list | page');
-      assert.equal(await page.locator('.lc-add button').innerText(), 'Add credential');
-      await shot(page, 'desktop-tool');
-
-      await page.locator('.lc-issues').click();
-      assert.equal(await page.getAttribute('.lc-row[data-key="mail"]', 'href'), LIST + '/mail?issues=1', tag + ': rows keep the filter');
-      await page.locator('.lc-issues').click();
-      await page.locator('.lc-row[data-key="credentials/c3"]').click();
+      await page.locator('tr[data-tl-row]').first().waitFor();
+      const rail = await page.locator('.au-rail').boundingBox(), list = await page.locator('.au-c').boundingBox();
+      assert.ok(rail!.x + rail!.width <= list!.x + 1, tag + ': rail | list');
+      await shot(page, 'desktop-tools');
+      await page.locator('tr[data-tl-row="credentials/c3"] .au-nm').click();
+      assert.ok(await hashSoon(page, LIST + '/key/c3'), tag + ': the key\'s own address');
       await page.locator('#int-detail h1').filter({hasText: 'OpenAI key'}).waitFor();
+      assert.equal(await page.locator('[data-tl-crumb]').innerText(), 'OpenAI key', tag + ': named in the breadcrumb');
       assert.match(await page.locator('#int-detail .lc-creds').innerText(), /OPENAI_API_KEY[\s\S]*Type\s+API key[\s\S]*Value\s+sk-/);
       assert.deepEqual(await page.locator('.lc-access .lc-wn').allInnerTexts(), ['Assistant'], tag + ': who it is granted to');
       await shot(page, 'desktop-credential');
@@ -244,56 +243,87 @@ const noSecret = async (page: Page, tag: string) => assert.ok(!(await page.conte
       await page.locator('#vault-grant-form select').selectOption('bot:eng-lead');
       await page.locator('#vault-grant-form [type=submit]').click();
       await page.locator('.lc-access .lc-wn').filter({hasText: 'Engineering Lead'}).waitFor();
-      assert.equal(await page.locator('.lc-row[data-key="credentials/c3"] .lc-n').innerText(), '2', tag + ': the list follows');
       assert.deepEqual(seen.writes.map(w => [w.path, JSON.parse(w.body)]), [['/api/v2/credentials/c3/grants', {subject: 'bot:eng-lead'}]]);
-
-      await page.locator('.lc-row[data-key="aside"]').click();
-      await page.locator('#int-detail .empty').filter({hasText: 'No tool named'}).waitFor();
-      assert.ok(await page.locator('.lc-list').isVisible(), tag + ': a page that will not load leaves the list');
+      await page.locator('.tt-crumb a[href="#/tools"]').click();
+      await page.locator('tr[data-tl-row="credentials/c3"]').waitFor();
+      assert.equal(await page.locator('tr[data-tl-row="credentials/c3"] .tt-face').count(), 2, tag + ': the list follows');
+      // + › Key: the vault's own Add.
+      await page.locator('[data-tl-add]').click();
+      assert.deepEqual(await page.locator('[data-tl-add-item]').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.tlAddItem)).then(k => k.slice(-1)), ['key'], tag + ': Key last');
+      await page.locator('[data-tl-add-item="key"]').click();
+      await page.locator('#vault-form [name=name]').waitFor();
       assert.deepEqual(seen.errors, [], tag + ': no page errors');
       await page.close();
     }
 
-    // The list is slow and the address moves to another tool meanwhile: the later address wins, no errors.
+    // A tool page that will not load says so; a key that is gone says so.
+    {
+      const tag = 'desktop missing';
+      const {page, seen} = await open(browser, {viewport: DESKTOP, hash: LIST + '/aside'});
+      await page.locator('#int-detail .empty').filter({hasText: 'No tool named'}).waitFor();
+      await page.evaluate(h => { location.hash = h; }, LIST + '/key/nope');
+      await page.locator('[data-lc-gone]').waitFor();
+      assert.deepEqual(seen.errors, [], tag + ': no page errors');
+      await page.close();
+    }
+
+    // The list is slow and the reader moves to a tool meanwhile: the tool's page stays, no errors.
     {
       const tag = 'desktop slow list';
       let release!: (value?: unknown) => void;
       const listGate = new Promise(r => { release = r; });
-      const {page, seen} = await open(browser, {viewport: DESKTOP, hash: LIST + '/close-crm', listGate});
-      await page.evaluate(h => { location.hash = h; }, LIST + '/postgres');
-      await page.waitForFunction(() => location.hash.endsWith('/postgres'));
+      const {page, seen} = await open(browser, {viewport: DESKTOP, hash: LIST, listGate});
+      await page.evaluate(h => { location.hash = h; }, LIST + '/key/c3');
+      await page.locator('#int-detail h1').filter({hasText: 'OpenAI key'}).waitFor();
       release();
-      await page.locator('#int-detail h1').filter({hasText: 'Acme Postgres'}).waitFor();
-      assert.equal(await page.locator('.lc-row.sel').getAttribute('data-key'), 'postgres', tag + ': the later address is selected');
-      assert.ok(await hashSoon(page, LIST + '/postgres'), tag + ': and stays');
+      await page.waitForTimeout(300);
+      assert.ok(await hashSoon(page, LIST + '/key/c3'), tag + ': the later address stays');
+      assert.equal(await page.locator('#tools-root').count(), 0, tag + ': the list did not draw over it');
       assert.deepEqual(seen.errors, [], tag + ': no page errors');
       await page.close();
     }
 
-    // The old addresses lead to Tools: Connections and the old Tools page to the tool's own page, the old Credentials page here.
+    // The old addresses lead to Tools: Keys and its rows, Connections and the old Tools page to the tool's own page,
+    // the old Credentials page to the keys.
     for (const [from, want] of [['#/library/connections/postgres', '#/tools/postgres'], ['#/integrations/postgres', '#/tools/postgres'],
-                                ['#/credentials', LIST + '/credentials/c3']] as const) {
+                                ['#/credentials', LIST + '?show=keys'], ['#/tools/keys', LIST], ['#/tools/keys/close-crm', LIST + '/close-crm'],
+                                ['#/tools/keys/credentials/c3', LIST + '/key/c3'], ['#/tools/keys?who=group:eng&issues=1', LIST + '?needs=1&who=group%3Aeng']] as const) {
       const {page, seen} = await open(browser, {viewport: DESKTOP, hash: from});
       assert.ok(await hashSoon(page, want), `${from} leads to ${want}`);
       assert.deepEqual(seen.errors, [], from + ': no page errors');
       await page.close();
     }
+    // An old Keys link narrowed to a team and Issues opens the list that way.
+    {
+      const {page, seen} = await open(browser, {viewport: DESKTOP, hash: '#/tools/keys?who=group:eng&issues=1'});
+      await page.locator('tr[data-tl-row]').first().waitFor();
+      assert.deepEqual(await keys(page), ['service:close-crm'], 'old Keys filters: Engineering, with issues');
+      assert.equal(await page.locator('[data-tl-who="group:eng"]').getAttribute('aria-pressed'), 'true');
+      assert.equal(await page.locator('[data-tl-fneeds]').getAttribute('aria-pressed'), 'true');
+      assert.deepEqual(seen.errors, [], 'old Keys filters: no page errors');
+      await page.close();
+    }
 
-    // A member who cannot open the vault: the list from what bots declare, no credentials read, nothing to add.
+    // A member who cannot open the vault: the tools from what bots declare, no keys read, nothing to add to the vault.
     {
       const tag = 'member';
       const {page, seen} = await open(browser, {me: MEMBER, hash: LIST + '/close-crm'});
       await page.locator('#int-detail h1').filter({hasText: 'Close CRM'}).waitFor();
       assert.equal(seen.vaultReads, 0, tag + ': the vault is not read');
-      assert.equal(await page.locator('.lc-add button, [data-vault-edit], [data-lc-add-env]').count(), 0, tag + ': nothing to add');
+      assert.equal(await page.locator('[data-vault-edit], [data-lc-add-env]').count(), 0, tag + ': nothing to add');
       assert.equal(await page.locator('.lc-access .lc-who-row').count(), 2, tag + ': the bots that have it');
-      await page.locator('.lc-back').click();
-      assert.equal(await page.locator('.lc-gh[data-group="Credentials"]').count(), 0, tag + ': no credentials group');
+      await page.locator('.tt-crumb a[href="#/tools"]').click();
+      await page.locator('tr[data-tl-row]').first().waitFor();
+      assert.equal(await page.locator('tr[data-tl-row="credentials/c3"]').count(), 0, tag + ': no keys listed');
+      await page.locator('[data-tl-add]').click();
+      assert.equal(await page.locator('[data-tl-add-item="key"], [data-tl-add-item="api"]').count(), 0, tag + ': no key or API to add');
+      assert.equal(seen.vaultReads, 0, tag + ': still not read');
       assert.deepEqual(seen.errors, [], tag + ': no page errors');
       await page.close();
     }
 
-    // 200 bots in ten teams share a tool: one row, the count; on its page each team folds, the first open.
+    // 200 bots in ten teams share a tool: one row, four faces and the rest counted; on its page each team folds, the
+    // first open, or the team Tools was narrowed to.
     {
       const tag = 'desktop 200 bots';
       const slugs = Array.from({length: 200}, (_, i) => 'bot-' + String(i + 1).padStart(3, '0'));
@@ -302,17 +332,24 @@ const noSecret = async (page: Page, tag: string) => assert.ok(!(await page.conte
       const tools = FX.tools.integrations.map((t: Record<string, unknown>) => t.service !== 'close-crm' ? t : {...t, bots: slugs,
         connections: slugs.map((bot, i) => ({bot, status: i === 7 ? 'problem' : 'ready', identity: '', can: ['read'], write: 'never',
           ...(i === 7 ? {problem: 'Credential missing on Test Mac'} : {})}))});
-      const {page, seen} = await open(browser, {viewport: DESKTOP, hash: LIST + '/close-crm', tools, emps, groups});
+      const {page, seen} = await open(browser, {viewport: DESKTOP, hash: LIST, tools, emps, groups});
+      const row = page.locator('tr[data-tl-row="service:close-crm"]');
+      await row.waitFor();
+      assert.equal(await row.locator('.tt-face').count(), 4, tag + ': four faces');
+      assert.match(await row.locator('.tt-more').innerText(), /\+198/, tag + ': 200 bots, the vault\'s grantee and Ana');
+      await page.locator('[data-tl-who="group:team-3"]').click();
+      assert.deepEqual(await keys(page), ['service:close-crm'], tag + ': a team narrows the list');
+      await row.locator('.au-nm').click();
       await page.locator('.lc-access .lc-team').first().waitFor();
-      assert.equal(await page.locator('.lc-row[data-key="close-crm"] .lc-n').innerText(), '202', tag + ': 200 bots, the vault\'s grantee and Ana');
       assert.equal(await page.locator('.lc-access .lc-team').count(), 11, tag + ': ten teams, then No team');
-      assert.equal(await page.locator('.lc-access .lc-team[open]').count(), 1, tag + ': folded, the first open');
-      assert.equal(await page.locator('.lc-who optgroup[label="Bots"] option').count(), emps.length, tag + ': every bot in the picker');
-      await page.locator('.lc-who').selectOption('group:team-3');
-      assert.deepEqual(await keys(page), ['close-crm'], tag + ': a team narrows the list');
       assert.deepEqual(await page.locator('.lc-access .lc-team[open] summary span:first-child').allInnerTexts(), ['Team 4'], tag + ': the team picked is the one open');
       assert.equal(await sideways(page), false, tag + ': no sideways scroll');
       await shot(page, 'desktop-tool-200-bots');
+      await page.evaluate(h => { location.hash = h; }, LIST + '/postgres');
+      await page.locator('#int-detail h1').filter({hasText: 'Acme Postgres'}).waitFor();
+      await page.evaluate(h => { location.hash = h; }, LIST + '/close-crm');
+      await page.locator('.lc-access .lc-team').first().waitFor();
+      assert.equal(await page.locator('.lc-access .lc-team[open]').count(), 1, tag + ': folded, one open');
       assert.deepEqual(seen.errors, [], tag + ': no page errors');
       await page.close();
     }
@@ -321,8 +358,8 @@ const noSecret = async (page: Page, tag: string) => assert.ok(!(await page.conte
     {
       const tag = 'phone empty';
       const {page, seen} = await open(browser, {tools: [], me: MEMBER});
-      await page.locator('.lc-scroll .lc-pad').filter({hasText: 'No tools yet.'}).waitFor();
-      assert.equal(await page.locator('.lc-row, .lc-gh').count(), 0, tag + ': no rows');
+      await page.locator('[data-tl-empty]').filter({hasText: 'No tools yet.'}).waitFor();
+      assert.equal(await page.locator('tr[data-tl-row], tr[data-tl-grp]').count(), 0, tag + ': no rows');
       assert.deepEqual(seen.errors, [], tag + ': no page errors');
       await page.close();
     }

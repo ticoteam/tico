@@ -14,7 +14,6 @@
   --upd-cx:calc(1px + var(--upd-pad) + var(--upd-av) / 2);--upd-in:calc(var(--tree-r) + var(--s1))}
 .upd-card{display:grid;grid-template-columns:minmax(0,1fr);padding:var(--upd-pad-y) var(--upd-pad);background:var(--surface);border:1px solid var(--line);border-radius:14px;position:relative;outline:none;transition:border-color var(--dur-fast) var(--ease)}
 .upd-card.unread{border-color:color-mix(in srgb,var(--ink) 45%,var(--line))}
-.upd-card.unread::before{content:"";position:absolute;z-index:2;left:-1px;top:14px;bottom:14px;width:3px;border-radius:3px;background:var(--ink)}
 .upd-card.sel{box-shadow:0 0 0 2px color-mix(in srgb,var(--ink) 40%,transparent)}
 .upd-card.swipeable{touch-action:pan-y}
 .upd-av{display:flex;flex:none;width:var(--upd-av);height:var(--upd-av)}
@@ -52,11 +51,14 @@
 .upd-deck-dot[aria-current]::after{background:var(--ink);width:16px;border-radius:3px}
 .upd-actions{display:flex;flex-wrap:nowrap;align-items:center;gap:2px;margin:6px 0 0 -8px}
 .upd-actions:not(:has(*)){display:none}
+/* the editor's row: the reports' toggle (if any) at its start, then Cancel and Post at its end, Post last */
+.upd-actions>.spacer{flex:1}
 /* One worded action (Reply, Edit or New update) and ⋯ at the card's top right, never faded (#282). */
 .upd-corner{display:inline-flex;align-items:center;gap:2px;margin:-6px -8px -6px auto}
 .upd-corner .upd-act{min-width:30px;height:30px;padding:0 6px}
-/* the reports' toggle ("8 reports >") follows the corner on the name's line */
-.upd-meta>.upd-corner:not(:last-child){margin-right:0}
+/* a phone: the corner's marks (and the reports' toggle) stay their size, so the card's first row (and the elbow level with its avatar) keeps its height;
+   each is still a 44px target, its hit area reaching 7px past the mark (forms.css's 44px floor, opted out here) */
+@media (max-width:760px){:is(.upd-corner .upd-act,.upd-act.upd-kids){min-height:0}:is(.upd-corner .upd-act,.upd-act.upd-kids)::before{content:"";position:absolute;inset:-7px 0}}
 .upd-meta>.upd-kids{height:30px;margin:-6px -8px -6px 0}
 /* A nested card is narrow on a phone: the top line does not wrap, and the name and time give way (ellipsis) so the corner stays on it.
    The line is the avatar's height, so the avatar's middle is the line's (the thread's elbows turn into it). */
@@ -94,10 +96,11 @@
 .bot-history-item .upd-meta{font-size:var(--t-sm)}
 @media (prefers-reduced-motion:reduce){.upd-deck-dot::after{transition:none}}
 @media (max-width:760px){:root{--upd-pad:12px;--upd-pad-y:12px}.upd-card{border-radius:12px}.upd-slide{padding:12px 12px 4px;min-height:150px}
-  .upd-deck-btn{display:none}.upd-slide ul.upd-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.upd-allread{display:none}
-  /* Whole org, my bots and list are icons on a phone, on the header's tools row */
-  .upd-chip .nav-icon{display:inline-flex}.upd-lbl{display:none}
-  .upd-chip{padding:6px 8px}}
+  .upd-deck-btn{display:none}.upd-slide ul.upd-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* Whole org, My bots and List give way as every header's tools do (page-head.ts): their icons when the row is short,
+   then into ⋯, where each reads its words and a choice that is on reads as the menu's current row. */
+.ph.ph-icons>.ph-tools>.upd-chip .nav-icon{display:inline-flex}
+.ph-menu .upd-chip[aria-pressed=true]{background:var(--surface2);color:var(--ink);font-weight:600}
 /* Updates nested by the org chart: each report's card hangs under its manager's, opened by the "8 v" toggle at the
    right of the manager's card. The lines (tree-lines.css): a rail under the middle of the manager's avatar, from the
    bottom of its card (the update runs under the avatar, so the line does not cross it), and an elbow to each report's
@@ -166,4 +169,8 @@
 @media (prefers-reduced-motion:reduce){.upd-card.upd-flash{animation:none;box-shadow:0 0 0 3px var(--ink)}}
 
 .upd-corner .upd-word{min-width:0;padding:0 8px;font-size:var(--t-sm);color:var(--muted)}
-@media (max-width:760px){.upd-n-w{display:none}}
+/* The reports' toggle has a line of its own under the update ("8 reports >", at the right where ⋯ is above it); in a
+   "No update yet" row it ends that row, and a phone keeps only its count there so the name keeps its room. */
+.upd-kids-row{margin-top:2px}
+.upd-kids-row>.upd-kids{margin:-6px 0 -6px -10px}   /* its count starts where the update's text does */
+@media (max-width:760px){.upd-none .upd-n-w{display:none}}

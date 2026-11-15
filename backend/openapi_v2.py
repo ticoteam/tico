@@ -10643,11 +10643,11 @@ SCHEMAS.update(
 )
 
 
-# Feedback on bot work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot made.
+# Feedback on work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot or a person made.
 TAGS["Feedback"] = (
-    "A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell "
-    "the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves "
-    "out feedback on what the caller cannot read."
+    "A person's 👍 or 👎 on a message, task or approval a bot or another person made, with an optional reason: "
+    "a 👎 on a bot's work can tell the bot (a note for its next run in that conversation) or become an org rule. "
+    "Every answer leaves out feedback on what the caller cannot read."
 )
 STABLE.extend(
     [
@@ -10656,7 +10656,8 @@ STABLE.extend(
             "post",
             "Feedback",
             "giveFeedback",
-            "Rate a message, task or approval a bot made; rating again replaces it. tell_bot (a 👎 only) leaves the bot a note",
+            "Rate a message, task or approval a bot or another person made; rating again replaces it. tell_bot (a 👎 on a "
+            "bot's work only) leaves the bot a note",
             "Feedback",
         ),
         (

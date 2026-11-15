@@ -4,8 +4,8 @@
 //    goals"); × drops a row (it stays, struck, with ↺ to bring it back) and the button counts 3; Cancel is on the left;
 //  - with every row dropped the button is off; ↺ brings a row back;
 //  - Confirm sends the dropped rows' indexes (`drop`) and the card then shows what ran, worded for it, with no buttons.
-//  - at 1680 the chat with its card sits beside the page.
-// TICO_UI_SHOTS=<dir> keeps the screenshots (1440 and 1680, light and dark).
+//  - at 1440 the chat with its card sits beside the page (docked); at 1150 it floats over it.
+// TICO_UI_SHOTS=<dir> keeps the screenshots (1150 and 1440, light and dark).
 // Run: node scripts/ui-tests.cts page-chat-goals-card
 import type {Page} from 'playwright';
 import type * as StrategyFakeSupport from './support/strategy-fake.cts';
@@ -30,7 +30,7 @@ function action(status = 'pending', kept = TITLES) {
 }
 
 let BROWSER: import('playwright').Browser;
-async function openCard(theme: 'light' | 'dark', confirms: unknown[], viewport = {width: 1440, height: 900}) {
+async function openCard(theme: 'light' | 'dark', confirms: unknown[], viewport = {width: 1150, height: 900}) {
   const opened = await openStrategy(BROWSER, {viewport, hash: '#/strategy/org'});
   const {page} = opened;
   let state = action();
@@ -55,7 +55,9 @@ async function openCard(theme: 'light' | 'dark', confirms: unknown[], viewport =
   await page.reload();
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   await page.evaluate(h => { location.hash = h; }, GOALS);
-  await page.locator('.goal-chat [data-pgc-open]').click();
+  // Too narrow to dock (under 1176 px beside the default sidebar) the chat is the tab on the right edge (page-chat.ts);
+  // where it docks it is open at first.
+  if (viewport.width < 1176) await page.locator('body > .pgc-edge:not([hidden]) .pgc-tab').click();
   await page.locator('aside.pgc .pgk[data-action="act-1"]').waitFor();
   return opened;
 }
@@ -87,7 +89,7 @@ const add = (page: Page) => page.locator('aside.pgc .pgk [data-confirm]');
       assert.equal(await page.evaluate(() => document.activeElement?.closest('.pgk-row')?.querySelector('.pgk-t')?.textContent), TITLES[2]);
       // A quiet × / ↺: no box drawn around it.
       assert.equal(await card.locator('.pgk-row button').first().evaluate(el => getComputedStyle(el).borderTopWidth), '0px');
-      await shot(page, `page-chat-goals-card-1440-${theme}`);
+      await shot(page, `page-chat-goals-card-1150-${theme}`);
       if (theme === 'light') {
         // Every row dropped: the button is off. ↺ brings one back.
         for (const i of [0, 1, 3]) await card.locator('.pgk-row').nth(i).locator('button').click();
@@ -108,11 +110,11 @@ const add = (page: Page) => page.locator('aside.pgc .pgk [data-confirm]');
       await page.close();
     }
     for (const theme of ['light', 'dark'] as const) {
-      // 1680: the column docks beside the page and the card reads the same.
-      const {page, errors} = await openCard(theme, [], {width: 1680, height: 1050});
+      // 1440: the column docks beside the page and the card reads the same.
+      const {page, errors} = await openCard(theme, [], {width: 1440, height: 900});
       assert.equal(await page.evaluate(() => document.body.classList.contains('pgc-docked')), true);
       assert.equal(await add(page).innerText(), 'Add 4 goals');
-      await shot(page, `page-chat-goals-card-1680-${theme}`);
+      await shot(page, `page-chat-goals-card-1440-${theme}`);
       assert.deepEqual(errors, []);
       await page.close();
     }

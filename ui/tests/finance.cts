@@ -23,6 +23,8 @@ declare const FIN: {
   line?: {id: string};
   tx: {busy: boolean; sel: string; rows: {id: string; lines: {account_id: string}[]}[]; chart?: unknown[] | false | undefined};
   src: {groups: {rows: {id: string; sync: Record<string, unknown>}[]}[]};
+  bs: {data: {totals: {asset: number}}};
+  doc: {email: string};
 };
 declare const FIN_TX: {q: string; account: string; source: string};
 declare const FIN_SRC: {sel: string};
@@ -31,6 +33,8 @@ declare const FIN_PNL: {period: string};
 declare function finPnlEdit(td: HTMLElement): void;
 declare function finTxRail(): void;
 declare function finSrcRail(): void;
+declare function finBsDraw(): void;
+declare function viewIsRead(el: Element): boolean;
 declare function finSyncWhy(s: string): string;
 declare function finToday(): string;
 const uiDir = path.join(__dirname, '..');
@@ -190,7 +194,7 @@ const CARDS = [
 const TRANSFERS = [{id: 'xf-1', status: 'queued', amount: 500000, currency: 'USD', memo: 'to savings', from: {id: 'm1', name: 'Checking', last4: '0001'},
   to: {id: 'm2', name: 'Savings', last4: '0002'}, created_by: 'human:ana', created_at: '2026-10-29T10:00:00Z', settled_at: null, last_error: null}];
 const SALES_TAX = {year: 2026, currency: 'USD', rows: [{period: '2026-Q3', code: 'CA', jurisdiction: 'California', taxable_sales: 1200000, exempt_sales: 300000,
-  tax_collected: 87000, tax_remitted: 60000, due_at: 27000, due_on: '2026-10-31'}]};
+  tax_collected: 87000, tax_remitted: 60000, due: 27000, due_on: '2026-10-31'}]};
 const F1099 = {year: 2026, currency: 'USD', threshold: 60000, due_on: '2027-01-31', rows: [{vendor_id: 'v-northwind', vendor: 'Northwind Design', tin_on_file: false,
   cash_paid: 610000, card_paid_excluded: 0, threshold: 60000, reportable: true}]};
 const TX = [
@@ -415,7 +419,19 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const tag = 'owner';
       const {page, errors, writes, reads, hub} = await open(browser);
       await page.locator('.fin-pl').waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Budgets', 'Attribution', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Tax', 'Sources', 'Access'], tag + ': every tab, in order');
+      assert.deepEqual(await tabs(page), ['P&L', 'Budgets', 'Transactions', 'Payables', 'Receivables', 'Balance sheet', 'Tax', 'Attribution', 'Cards', 'Sources', 'Access'], tag + ': every tab, in order');
+      // The shared header keeps five tabs on its row; the rest are ⋯ items, and one picked there opens its tab.
+      assert.deepEqual(await page.locator('#fin-head > .ph-tabs > .ph-tab:not(.ph-over)').allInnerTexts(), ['P&L', 'Budgets', 'Transactions', 'Payables', 'Receivables'], tag + ': five tabs on the row, the daily ones');
+      await page.locator('#fin-head > .ph-more').click();
+      assert.deepEqual(await page.locator('#fin-head .ph-menu .ph-mtab').allInnerTexts(), ['Balance sheet', 'Tax', 'Attribution', 'Cards', 'Sources', 'Access'], tag + ': the rest in ⋯');
+      await page.locator('#fin-head .ph-menu .ph-mtab', {hasText: 'Cards'}).click();
+      await page.locator(READY.cards).first().waitFor();
+      assert.equal(await page.evaluate(() => location.hash), '#/finance/cards', tag + ': a folded tab opens its pane');
+      assert.equal(await page.locator('#fin-head > .ph-tabs > .ph-tab.cur').innerText(), 'Cards', tag + ': and stands on the row while it is open');
+      // What changed is the P&L's alone: no other tab draws it.
+      assert.equal(await page.locator('#fin-brief .fin-brief').count(), 0, tag + ': no What changed off the P&L');
+      await page.goBack();
+      await page.locator('.fin-pl').waitFor();
       await page.locator('#side a[data-nav="finance"]').waitFor({state: 'visible'});   // Finance in the sidebar once its access read lands
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
@@ -526,7 +542,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await page.locator('input[data-fin-vb="GitHub"]').count(), 1, tag + ': this month\'s vendor budget takes an edit');
       assert.equal(await page.locator('input[data-fin-vb="Notion"]').count(), 0, tag + ': this month takes no new vendor budget');
       const next = cols[future]!.start.slice(0, 7);
-      await page.locator('[data-fin-month]').fill(next);
+      await page.locator('[data-fin-month]').selectOption(next);   // the month picker is a select (month first, the year always said)
       await page.locator('input[data-fin-vb="GitHub"]').waitFor();
       assert.equal(await page.locator('input[data-fin-vb="Figma"]').count(), 0, tag + ': a quarterly vendor budget is not edited as a month');
       assert.equal(await page.locator('input[data-fin-vb=" unattributed"], input[data-fin-vb=" other"]').count(), 0, tag + ': No vendor and Other take no budget');
@@ -611,6 +627,26 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await go(page, '#/finance/transactions', READY.transactions);
       await page.waitForTimeout(100);
       assert.ok(!txRead().includes('teams=') && !(await page.locator('[data-fin-org-clear]').count()), tag + ': the bare tab is unfiltered');
+      // Status and Line sit behind the shared filter icon: a field, then its values; the icon's badge counts the filters
+      // on, each is a chip, and its ✕ takes it off with the focus back on the icon.
+      const filterIcon = page.locator('#fin-tx-filter'), badge = filterIcon.locator('.tl-fbadge');
+      // The line the GitHub link filtered to is kept for the visit: its chip and a count of one, until its ✕.
+      assert.equal(await badge.innerText(), '1', tag + ': the kept Line filter is counted');
+      assert.match(await page.locator('#fin-tx-chips .tl-chip').innerText(), /^Line\s/, tag + ': and is a chip');
+      await page.locator('#fin-tx-chips [data-fin-chip-drop="account"]').click();
+      await settled(() => !txRead().includes('account_id='));
+      assert.equal(await badge.isVisible(), false, tag + ': no filter, no badge');
+      await filterIcon.click();
+      await page.locator('#task-filter-pop [data-fin-field="status"]').click();
+      await page.locator('#task-filter-pop input[name="fin-tx-status"][value="posted"]').check();
+      await settled(() => txRead().includes('status=posted'));
+      assert.equal(await badge.innerText(), '1', tag + ': the badge counts one filter');
+      assert.equal(await filterIcon.getAttribute('aria-label'), 'Filter, 1 on', tag + ': and the icon says so');
+      assert.equal(await page.locator('#fin-tx-chips .tl-chip').innerText().then(t => t.replace(/\s+/g, ' ').trim()), 'Status Posted', tag + ': a chip for it');
+      await page.locator('#fin-tx-chips [data-fin-chip-drop="status"]').click();
+      await settled(() => !txRead().includes('status='));
+      assert.equal(await badge.isVisible(), false, tag + ': taken off, no badge');
+      assert.equal(await page.evaluate(() => document.activeElement?.id), 'fin-tx-filter', tag + ': the focus is back on the icon');
       // A tab Finance does not have goes to the P&L, not a page that never draws.
       await page.evaluate(() => { location.hash = '#/finance/balance-sheet'; });
       await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
@@ -618,7 +654,11 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await go(page, '#/finance/balance', READY.balance);
       const bsFirst = await page.locator('.fin-bs tbody td:first-child').allInnerTexts();
       for (const want of ['Total assets', 'Total liabilities', 'Total equity', 'Liabilities + equity']) assert.ok(bsFirst.includes(want), `${tag}: balance sheet has ${want}`);
-      assert.equal(await page.locator('#fin-balanced .pill').innerText(), 'Balanced', tag + ': balanced');
+      // Balanced is the normal state and says nothing; books that do not balance are marked, in red.
+      assert.equal(await page.locator('#fin-balanced .pill').count(), 0, tag + ': balanced books say nothing');
+      assert.equal(await page.evaluate(() => { const t = FIN.bs.data.totals; t.asset += 100; finBsDraw(); const said = document.querySelector('#fin-balanced .pill.blocked')?.textContent; t.asset -= 100; finBsDraw(); return said; }),
+        'Out of balance', tag + ': books out of balance say so');
+      assert.equal(await page.locator('#fin-balanced .pill').count(), 0, tag + ': balanced again, nothing');
       await page.locator('[data-fin-line="a-1010"]').click();
       const bsRail = await page.locator('#fin-rail').innerText();
       assert.match(bsRail.toLowerCase(), /due out\s+checking ••0001 · 2\s+\$4,300/, tag + ': due out by money account');
@@ -801,23 +841,25 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await shot(page, 'tax-desktop');
       await page.locator('[data-fin-seg="tax"] button[data-v="1099"]').click();
       await page.locator('tr[data-fin-tax="v-northwind"]').waitFor();
-      assert.match(await page.locator('tr[data-fin-tax="v-northwind"]').innerText(), /Northwind Design\s+Missing\s+6,100/, tag + ': a 1099 vendor without a TIN');
+      assert.match(await page.locator('tr[data-fin-tax="v-northwind"]').innerText(), /Northwind Design\s+TIN missing\s+6,100/, tag + ': a 1099 vendor without a TIN');
       await go(page, '#/finance/sources', READY.sources);
-      // Groups start collapsed, so the button expands them all; once any is open it collapses them all.
-      const fold = page.locator('[data-fin-collapse]');
+      // Groups start collapsed, so the button expands them all; once any is open it collapses them all. It is a ⋯ item
+      // (rarer than daily, style guide "Top bars: one line"): a plain button there, not a menu item.
+      const fold = page.locator('#fin-head .ph-menu [data-fin-collapse]'), more = page.locator('#fin-head > .ph-more');
+      assert.equal(await fold.evaluate(b => b.tagName + ':' + (b.getAttribute('type') || '') + ':' + (b.getAttribute('role') || '')), 'BUTTON:button:', tag + ': a plain button in ⋯');
       assert.equal((await fold.innerText()).trim(), 'Expand all', tag + ': all collapsed, Expand all');
-      await fold.click();
+      await more.click(); await fold.click();
       assert.equal(await page.locator('[data-fin-group][aria-expanded="false"]').count(), 0, tag + ': Expand all opens every group');
       assert.equal((await fold.innerText()).trim(), 'Collapse all', tag + ': open, Collapse all');
-      await fold.click();
+      await more.click(); await fold.click();
       assert.equal(await page.locator('[data-fin-group][aria-expanded="true"]').count(), 0, tag + ': Collapse all shuts every group');
       assert.equal((await fold.innerText()).trim(), 'Expand all', tag + ': shut again, Expand all');
       await page.locator('[data-fin-group="banks"]').click();
       assert.equal((await fold.innerText()).trim(), 'Collapse all', tag + ': one group open, Collapse all');
       await page.locator('[data-fin-q]').fill('mercury');
-      assert.equal(await fold.isVisible(), false, tag + ': no toggle while searching');
+      assert.equal(await fold.evaluate(b => (b as HTMLElement).hidden), true, tag + ': no toggle while searching');
       await page.locator('[data-fin-q]').fill('');
-      assert.equal(await fold.isVisible(), true, tag + ': toggle back once the search clears');
+      assert.equal(await fold.evaluate(b => (b as HTMLElement).hidden), false, tag + ': toggle back once the search clears');
       await page.locator('[data-fin-src="bank:m1"]').click();
       await page.locator('#fin-rail select[data-fin-map="m1"]').waitFor();
       const mapTo = await page.locator('#fin-rail select[data-fin-map="m1"] option').evaluateAll(o => o.map(x => (x as HTMLOptionElement).value));
@@ -840,13 +882,13 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
         r.sync = {...r.sync, ...s}; FIN_SRC.sel = 'bank:m1'; finSrcRail();
         const kv = [...(document.querySelectorAll<HTMLElement>('#fin-rail .fin-kv') as unknown as Iterable<HTMLElement>)].find(e => /^(Error|Note)$/.test(e.firstElementChild!.textContent!))!;
         return {text: kv.innerText.replace(/\s+/g, ' ').trim(), title: kv.querySelector('[title]')?.getAttribute('title') ?? null,
-          pill: document.querySelector('#fin-rail .fin-rail-title .pill')!.textContent!.trim()};
+          pill: document.querySelector('#fin-rail .fin-rail-title .pill')?.textContent?.trim() ?? null};
       }, sync);
       assert.deepEqual(await railError({status: 'error', last_error: 'Mercury said 502: Bad Gateway'}),
         {text: 'Error Provider down', title: 'Mercury said 502: Bad Gateway', pill: 'Error'}, tag + ': a failed sync, in words');
       assert.deepEqual(await railError({status: 'error', last_error: 'odd_code'}), {text: 'Error Sync failed', title: 'odd_code', pill: 'Error'}, tag + ': an unknown code');
       const note = 'Brex card transactions of type REFUND are not mapped';
-      assert.deepEqual(await railError({provider: 'brex', status: 'active', last_error: note}), {text: 'Note ' + note, title: null, pill: 'OK'}, tag + ': a Brex note');
+      assert.deepEqual(await railError({provider: 'brex', status: 'active', last_error: note}), {text: 'Note ' + note, title: null, pill: null}, tag + ': a Brex note: OK is the normal state, no pill');
       await go(page, '#/finance/access', READY.access);
       // The owner first, then teams in org chart order, those on no team under their own heading, then the helpers;
       // the rail opens on the owner.
@@ -877,7 +919,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.waitForFunction(() => !document.querySelector<HTMLSelectElement>('[data-fin-approver]')!.disabled);
       assert.deepEqual(actions(writes).at(-1), {kind: 'finance_approver_set', payload: {approver: 'human:cara'}}, tag + ': names one person');
       assert.equal(await page.locator('[data-fin-approver] option[value="bot:finance-owner"]').count(), 0, tag + ': never a bot');
-      await page.locator('[data-fin-defaults]').click();
+      await page.locator('#fin-head > .ph-more').click();   // Edit defaults is a ⋯ item (rarer than daily)
+      await page.locator('#fin-head .ph-menu [data-fin-defaults]').click();
       await page.locator('dialog.fin-dlg[open]').waitFor();
       await shot(page, 'access-defaults-desktop');
       assert.deepEqual(await page.locator('dialog.fin-dlg select[name="manager"] option').evaluateAll(o => o.map(x => (x as HTMLOptionElement).value)), ['none', 'team_expenses', 'own_expenses'], tag + ': managers see what everyone else does, or expenses');
@@ -896,17 +939,45 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const today = await page.evaluate(() => finToday());
       const heads = async () => (await page.locator('.fin-doc-t').first().locator('thead th').allInnerTexts()).map(t => t.toUpperCase());
       await page.locator(READY.payables).waitFor();
-      assert.deepEqual(await heads(), ['VENDOR', 'BILL', 'DUE', 'AMOUNT', 'ACCOUNT', 'TEAM', 'STATUS', 'CAME IN'], tag + ': the bill columns');
+      // A column no bill fills (Account, Team) and one that says the same on every bill (Came in: all by hand) is left out.
+      assert.deepEqual(await heads(), ['VENDOR', 'BILL', 'DUE', 'AMOUNT', 'STATUS'], tag + ': the bill columns, only those with something to say');
       const unpaid = BILLS.filter(r => r.status !== 'paid');
       assert.equal(await page.locator('.fin-doc-t').first().locator('tbody tr').count(), unpaid.length, tag + ': one row per open bill, no totals row');
-      const statusOf = async (id: string) => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(7)`).innerText()).replace(/\s+/g, ' ').trim();
-      assert.equal(await statusOf('bill-4'), 'Open Pay canceled 1–30 late', tag + ': a rejected payment shows beside Open, with its aging');
-      assert.equal(await statusOf('bill-5'), 'Open Pay denied', tag + ': a declined approval shows beside Open');
+      const statusOf = async (id: string) => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(5)`).innerText()).replace(/\s+/g, ' ').trim();
+      // Open is the normal state and says nothing; what went wrong, and how late, does.
+      assert.equal(await statusOf('bill-4'), 'Pay canceled 1–30 late', tag + ': a rejected payment shows, with its aging');
+      assert.equal(await statusOf('bill-5'), 'Pay denied', tag + ': a declined approval shows');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
-      assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
+      // The bills address is a ⋯ item (set rarely); its words name the address, so a touch screen reads it too.
+      const emailItem = page.locator('#fin-head .ph-menu [data-fin-email-set]');
+      assert.equal((await emailItem.evaluate(b => b.firstChild!.textContent))!.trim(), 'Bills address', tag + ': the owner\'s bills address control');
+      assert.equal((await emailItem.locator('.muted').textContent())!.trim(), 'bills@acme.example', tag + ': it names the address in its own words');
+      // Direct send is a choice in ⋯: its check mark shows only while it is on (the shared .au-mi look).
+      const direct = page.locator('#fin-head .ph-menu [data-fin-direct]'), mark = direct.locator('.nav-icon');
+      await direct.waitFor({state: 'attached'});
+      assert.deepEqual([await direct.getAttribute('aria-pressed'), await mark.evaluate(m => getComputedStyle(m).visibility)], ['false', 'hidden'], tag + ': Direct send off: no mark');
+      await page.locator('#fin-head > .ph-more').click();
+      await direct.click();
+      await settled(() => actions(writes).some(a => a.kind === 'payment_settings'));
+      await page.waitForFunction(() => document.querySelector('#fin-head [data-fin-direct]')?.getAttribute('aria-pressed') === 'true');
+      assert.equal(await page.locator('#fin-head .ph-menu [data-fin-direct] .nav-icon').evaluate(m => getComputedStyle(m).visibility), 'visible', tag + ': Direct send on: the mark shows');
+      assert.deepEqual(actions(writes).filter(a => a.kind === 'payment_settings').at(-1)!.payload, {direct_send: true}, tag + ': payment_settings direct_send');
+      // Under All, a paid bill says Paid and an open one says nothing: the two never read the same.
+      await page.locator('[data-fin-seg="status"] button[data-v=""]').click();
+      await page.locator('table.fin-doc-open tr[data-fin-doc="bill-7"]').waitFor();   // in the list itself, not Recently paid
+      const allHeads = (await page.locator('table.fin-doc-open thead th').allInnerTexts()).map(t => t.toUpperCase());
+      const statusAt = allHeads.indexOf('STATUS') + 1;
+      assert.ok(statusAt > 0, tag + ': under All the Status column shows');
+      const statusAll = (id: string) => page.locator(`table.fin-doc-open tr[data-fin-doc="${id}"] td:nth-child(${statusAt})`).innerText().then(t => t.trim());
+      assert.equal(await statusAll('bill-7'), 'Paid', tag + ': a paid bill says Paid');
+      assert.equal(await statusAll('bill-2'), '', tag + ': an open one says nothing');
+      await page.locator('[data-fin-seg="status"] button[data-v="unpaid"]').click();
+      await page.locator('table.fin-doc-open tr[data-fin-doc="bill-7"]').waitFor({state: 'detached'});
       // The owner sets the address: an inbox address saves; any other saves but says it is not an inbox's; empty clears it.
       const setEmail = async (value: string) => {
-        await page.locator('[data-fin-email-set]').click();
+        await page.locator('#fin-head > .ph-more').click();
+        await page.locator('#fin-head .ph-menu [data-fin-email-set]').click();
+        assert.equal(await page.locator('dialog.fin-dlg[open] input[name="address"]').inputValue(), await page.evaluate(() => FIN.doc.email), tag + ': the dialog holds the address');
         await page.locator('dialog.fin-dlg[open] input[name="address"]').fill(value);
         await page.locator('dialog.fin-dlg[open] [type=submit]').click();
       };
@@ -925,7 +996,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await setEmail('');
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       assert.deepEqual(writes.at(-1)!.slice(0, 3), ['PUT', '/api/v2/finance/bills-address', {address: null}], tag + ': empty clears it');
-      assert.equal((await page.locator('[data-fin-email-set]').innerText()).trim(), 'Bills address', tag + ': no address: a Bills address button');
+      assert.equal((await page.locator('#fin-head .ph-menu [data-fin-email-set] .muted').textContent())!.trim(), 'None', tag + ': no address: Bills address says so');
       await setEmail('bills@acme.example');
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       await page.locator('#fin-rail [data-fin-do="approve"]').waitFor();
@@ -943,7 +1014,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('#fin-rail [data-fin-do="schedule"]').click();
       await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
       assert.deepEqual(await page.locator('dialog.fin-dlg select[name="from"] option').allInnerTexts(), ['Checking ••0001', 'Savings ••0002'], tag + ': the accounts to pay from');
-      const payOn = await page.locator('dialog.fin-dlg input[name="on"]').inputValue();
+      // The day is the shared date field (format.ts): its value stays YYYY-MM-DD while it shows "Nov 14, 2026".
+      const payOn = await page.locator('dialog.fin-dlg input[name="on"]').evaluate(e => (e as HTMLInputElement).value);
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.locator('dialog.fin-dlg [data-ask]:not([hidden])').waitFor();
       assert.equal(await page.locator('dialog.fin-dlg [data-ask]').innerText(), 'Approval from Ana Silva', tag + ': the approver is named before sending');
@@ -971,7 +1043,9 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid', 'Reschedule'], tag + ': a scheduled bill with no payment yet moves');
       await page.locator('#fin-rail [data-fin-do="schedule"]').click();
       await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
-      assert.equal(await page.locator('dialog.fin-dlg input[name="on"]').inputValue(), '2099-12-18', tag + ': Reschedule starts at its day');
+      assert.equal(await page.locator('dialog.fin-dlg input[name="on"]').evaluate(e => (e as HTMLInputElement).value), '2099-12-18', tag + ': Reschedule starts at its day');
+      await page.locator('dialog.fin-dlg input[name="on"].df-input').waitFor();   // the shared date field, drawn as the dialog opens
+      assert.equal(await page.locator('dialog.fin-dlg input[name="on"]').inputValue(), 'Dec 18, 2099', tag + ': the date field shows the day in words');
       assert.equal(await page.locator('dialog.fin-dlg select[name="from"]').inputValue(), 'm2', tag + ': Reschedule keeps its bank account');
       await page.locator('dialog.fin-dlg input[name="on"]').fill('2099-12-20');
       await page.locator('dialog.fin-dlg [type=submit]').click();
@@ -1070,7 +1144,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const tag = 'payables grant';
       const {page, errors, writes, reads} = await open(browser, {viewer: 'cara', apGrant: true, hash: '#/finance/payables'});
       await page.locator(READY.payables).waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Payables', 'Cards', 'Transactions', 'Access'], tag + ': Payables, not Receivables');
+      assert.deepEqual(await tabs(page), ['P&L', 'Transactions', 'Payables', 'Cards', 'Access'], tag + ': Payables, not Receivables');
       await page.locator('#fin-rail .fin-h').first().waitFor();
       assert.equal(await page.locator('[data-fin-do], [data-fin-doc-add], [data-fin-email-set]').count(), 0, tag + ': no decisions without finance.ap');
       assert.equal(await page.locator('[data-fin-copy]').getAttribute('data-fin-copy'), 'bills@acme.example', tag + ': the bills address, copyable');
@@ -1176,6 +1250,38 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await go(page, '#/finance/line/a-6100', '[data-fin-key]');
       assert.equal(await sideways(page), false, tag + ': the line page fits');
       await shot(page, 'line-phone');
+      // A list table on a phone is rows (finance.css .fin-rows): no head, the description and the amount on the first
+      // line, then the facts under them; every cell the table fills still shows (nothing a computer shows is dropped).
+      await go(page, '#/finance/transactions', READY.transactions);
+      const phoneRow = await page.locator('tr[data-fin-tx]').first().evaluate(tr => {
+        const top = (el: Element | null) => { if (!el) return -1; const r = el.getBoundingClientRect(); return Math.round((r.top + r.bottom) / 2); };   // a cell's middle
+        const table = tr.closest('table') as HTMLTableElement;
+        return {head: Math.round(table.tHead!.getBoundingClientRect().height), roles: [table.getAttribute('role'), tr.getAttribute('role'), tr.children[0]!.getAttribute('role'), table.tHead!.querySelector('th')!.getAttribute('role')],
+          unnamed: [...tr.children].filter(td => td.textContent!.trim() && !td.matches('.fin-tt, .fin-amt') && !td.hasAttribute('data-k') && !td.hasAttribute('data-sk')).map(td => td.textContent!.trim()),
+          cells: [...tr.children].filter(td => td.textContent!.trim()).map(td => getComputedStyle(td).display),
+          texts: [...tr.children].map(td => td.textContent!.trim()).filter(Boolean),
+          title: top(tr.querySelector('.fin-tt')), amount: top(tr.querySelector('.fin-amt')), date: top(tr.children[0]!)};
+      });
+      // The head is clipped, not gone: a screen reader still names each cell's column, and the table keeps its roles.
+      assert.ok(phoneRow.head <= 1, tag + ': no table head to see on a phone');
+      assert.deepEqual(phoneRow.roles, ['table', 'row', 'cell', 'columnheader'], tag + ': a table to a screen reader');
+      assert.deepEqual(phoneRow.unnamed, [], tag + ': every fact carries its column\'s name');
+      assert.ok(phoneRow.cells.length >= 3 && phoneRow.cells.every(d => d !== 'none'), tag + ': every filled cell shows: ' + phoneRow.texts.join(' | '));
+      assert.ok(Math.abs(phoneRow.title - phoneRow.amount) < 8 && phoneRow.date > phoneRow.title, tag + ': the title and amount first, the facts under them');
+      // Try again only reads: a bot's read-only view (view-only.ts) leaves it working, as it does the dashboard's.
+      assert.deepEqual(await page.evaluate(() => ['finRetry', 'grRetry'].map(k => { const b = document.createElement('button'); b.dataset[k] = ''; return viewIsRead(b); })), [true, true],
+        tag + ': Try again is a read in a view');
+      // A read that fails says so on a phone too, with the fix: Try again reads it again.
+      await page.route('**/api/v2/finance/transactions?*', r => r.fulfill({status: 500, contentType: 'application/json', body: JSON.stringify({error: {code: 'down', detail: 'The books did not answer.'}})}));
+      await page.locator('[data-fin-seg="source"] button[data-v="feed"]').click();
+      const retry = page.locator('#fin-tx [data-fin-retry]');
+      await retry.waitFor();
+      assert.match(await page.locator('#fin-tx').innerText(), /The books did not answer\.\s+Try again/, tag + ': the error, and its fix');
+      assert.equal(await sideways(page), false, tag + ': the error fits');
+      await page.unroute('**/api/v2/finance/transactions?*');
+      await retry.click();
+      await page.locator(READY.transactions).first().waitFor();
+      assert.equal(await page.locator('#fin-tx [data-fin-retry]').count(), 0, tag + ': read again, the rows are back');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
@@ -1224,13 +1330,13 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const {page, errors, writes} = await open(browser, {viewer: 'cara', hash: '#/finance'});
       await page.waitForFunction(() => location.hash === '#/finance/pnl?view=expenses');
       await page.locator('.fin-pl').waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions', 'Access'], tag + ': only the tabs in view');
+      assert.deepEqual(await tabs(page), ['P&L', 'Transactions', 'Cards', 'Access'], tag + ': only the tabs in view');
       assert.deepEqual(await page.locator('[data-fin-seg="view"] button').allInnerTexts(), ['Expenses'], tag + ': no Company view');
       assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': no budget editing without the right');
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count() > 0, true, tag + ': lines drill down');
       const priv = page.locator('.fin-ln:has-text("Payroll (private)")');
       assert.equal(await priv.locator('a').count(), 0, tag + ': a private line does not drill down');
-      assert.deepEqual((await priv.locator('td[data-fin-cell]').allInnerTexts()).filter(t => t !== '—'), [], tag + ': a private line shows no figures');
+      assert.deepEqual((await priv.locator('td[data-fin-cell]').allInnerTexts()).filter(t => t !== ''), [], tag + ': a private line shows no figures (its cells empty)');
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
       assert.ok(firsts.includes('Total expenses excl. payroll · Your view'), tag + ': totals without payroll say so');
       for (const hidden of ['balance', 'sources', 'payables', 'receivables']) {
@@ -1265,21 +1371,22 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
     {
       const tag = 'view as';
       const {page, errors} = await open(browser, {hash: '#/finance/access'});
-      await page.locator('[data-fin-viewas]').click();
+      await page.locator('#fin-head > .ph-more').click();   // View as is a ⋯ item
+      await page.locator('#fin-head .ph-menu [data-fin-viewas]').click();
       await page.locator('dialog.fin-dlg select[name="who"]').selectOption('human:cara');
       const read = page.waitForRequest((r: {url(): string}) => r.url().includes('/api/v2/finance/pnl') && r.url().includes('view_as=human%3Acara'));
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await read;
       await page.locator('.fin-as').waitFor();
       await page.locator('.fin-pl').waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': the manager\'s tabs (Access is the owner\'s own)');
+      assert.deepEqual(await tabs(page), ['P&L', 'Transactions', 'Cards'], tag + ': the manager\'s tabs (Access is the owner\'s own)');
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count(), 0, tag + ': no drill-down while viewing as');
       assert.match(await page.evaluate(() => location.hash), /view_as=human%3Acara/, tag + ': View as lives in the address');
       await page.goBack();
       await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 11);
       await page.goForward();
       await page.locator('.fin-as').waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': Forward views as again');
+      assert.deepEqual(await tabs(page), ['P&L', 'Transactions', 'Cards'], tag + ': Forward views as again');
       await page.locator('.fin-as button').click();
       await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 11);
       assert.deepEqual(errors, [], tag + ': no page errors');
@@ -1292,18 +1399,25 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('.fin-pl').waitFor();
       const now = new Date(), a = iso(new Date(now.getFullYear(), now.getMonth() - 1, 3)), z = iso(now);
       const short = (v: string) => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][day(v).getMonth()]} ${day(v).getDate()}`;
-      await page.locator('[data-fin-range]').click();
-      await page.fill('#fin-range input[name=start]', a); await page.fill('#fin-range input[name=end]', z);
-      await page.locator('#fin-range [type=submit]').click();
+      // On a phone the period, range, basis and Compare sit behind the filter icon (one bar row: the view and the icon);
+      // nothing is changed yet, so its badge is hidden.
+      const setIcon = page.locator('#fin-pl-set');
+      assert.equal(await page.locator('.fin-bar [data-fin-seg="period"]').isVisible(), false, 'phone: no period segment on the bar');
+      assert.equal(await setIcon.locator('.tl-fbadge').isVisible(), false, 'phone: all defaults, no badge');
+      await setIcon.click();
+      await page.fill('#task-filter-pop [data-fin-pl-range] input[name=start]', a); await page.fill('#task-filter-pop [data-fin-pl-range] input[name=end]', z);
+      await page.locator('#task-filter-pop [data-fin-pl-range] [type=submit]').click();
       await page.waitForFunction(s => FIN.pnl.data?.start === s, a);
+      assert.equal(await page.locator('#fin-pl-set .tl-fbadge').innerText(), '1', 'phone: a picked range counts on the badge');
       const span = () => page.evaluate(() => {
         const box = document.querySelector<HTMLElement>('#fin-pl')!, ths = [...(box.querySelectorAll('thead tr:first-child th') as unknown as Iterable<Element>)], cols = FIN.pnl.data.columns;
         const at = ths[cols.filter(c => c.state !== 'future').length]!.getBoundingClientRect(), r = box.getBoundingClientRect();
-        return {n: cols.length, first: ths[1]!.textContent!, label: document.querySelector('[data-fin-range]')!.textContent!.trim(), left: box.scrollLeft,
+        return {n: cols.length, first: ths[1]!.textContent!, label: document.querySelector('[data-fin-range]')!.textContent!.trim(), left: box.scrollLeft,   // the bar's range label, kept though hidden on a phone
           inView: at.left >= ths[0]!.getBoundingClientRect().right - 1 && at.right <= r.right + 1, names: ths[0]!.getBoundingClientRect().left - r.left};
       });
       for (const period of ['day', 'week']) {
-        await page.locator(`[data-fin-seg=period] button[data-v=${period}]`).click();
+        await page.locator('#fin-pl-set').click();
+        await page.locator(`#task-filter-pop input[name="fin-pl-period"][value="${period}"]`).click();   // the page redraws on the pick
         await page.waitForFunction(p => FIN_PNL.period === p && FIN.pnl.data && !FIN.pnl.busy && FIN.pnl.data.columns.length > 2, period);
         const v = await span();
         assert.ok(v.first.startsWith(short(a)), `${period}: the first column is the range's first day (${v.first})`);

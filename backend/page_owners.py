@@ -7,13 +7,19 @@ the bot's page; a message sent from the page carries `refs.from_page` (`check_fr
 One owner per page, changeable in Settings > General > Page owners or with `tico settings set pages.<page>.owner`
 by the owner or an admin. A page follows its owner at the next load, with no release. The choices are kept in
 registry_metadata under `page_owners` ({page: bot id, or null for "no owner"}); a page with no choice kept has its
-default. A page with no owner, or whose owner is gone or archived, has no Chat button.
+default ("default" in a save drops the choice). Every page has an owner (style guide "Where chat lives"): a chosen
+owner or default that is missing, planned or archived gives way to the next in line (the page's default, then the
+General Manager, which every company has), so a page has no owner only when a person chose "No owner". That page has
+no chat at all. The General Manager stands in only to chat: what a page's owner may do beyond that (the Tools owner's
+key guard and key-grant cards, secret_drop.py and key_grants.py) asks for the page's own owner (`fallback=False`).
 
   PAGES                    the pages that have an owner, with their name and default bot
-  read(c)                  {page: {"bot": "bot:<id>" or None, "name": the page's name}}
-  owner(c, page)           the page's owner as an actor id, or None
-  save(c, actor, page, bot)  sets or clears one page's owner (bot None: no owner); the saved row
-  check_from(refs)         a 422 unless refs.from_page, when present, is {page, label[, item {kind, id, name}]}
+  read(c)                  {page: {"bot": the owner now ("bot:<id>" or None), "name": the page's name,
+                                  "choice": "default", "none" or the chosen "bot:<id>", "default": who Default gives}}
+  owner(c, page[, fallback])  the page's owner as an actor id, or None
+  save(c, actor, page, bot)  sets or clears one page's owner (bot None: no owner; "default": its default); the saved row
+  check_from(refs)         a 422 unless refs.from_page, when present, is {page, label[, item {kind, id, name}]}; an
+                           item's name longer than its limit is shortened in place
 """
 
 from typing import TYPE_CHECKING, Any, cast
@@ -25,12 +31,51 @@ if TYPE_CHECKING:
     import sqlite3
 
 KEY = "page_owners"
-# The bot that does each page's work (spec chat-on-every-page): Listening and Goals so far; the other pages follow.
+# The bot that does each page's work (spec chat-on-every-page), one per page the sidebar and the router reach, in the
+# sidebar's order (Settings lists them so). ui/app/page-chat.ts maps each address to its key. A default names a bot a new
+# company has where one fits (the built-ins: general-manager, strategy-owner, finance-owner, rules-owner, librarian,
+# botops); a few name the catalogue's bot for the work (automations-owner, updates-owner, growth-manager,
+# it-support-specialist), which a company may not have installed: their page falls back to the General Manager.
+# Pages with no key have no page chat because the chat IS the page (a bot's or person's page, a thread, a task, the
+# Assistant) or it is setup or the style guide. Calendar and Meetings have none of their own either: the Assistant owns
+# them, and their chat is Ask itself, in the sidebar (page-chat.ts PGC_ASK), never a second Assistant chat.
 PAGES: dict[str, dict[str, str]] = {
-    "listening": {"name": "Listening", "default": "automations-owner"},
-    "tools": {"name": "Tools", "default": "tools-feature-owner"},
+    "tasks": {"name": "Tasks", "default": "general-manager"},  # a pipeline's manager answers while one is shown
+    "updates": {"name": "Updates", "default": "updates-owner"},
+    "company": {"name": "Company", "default": "general-manager"},  # Company's dashboards, its teams', the Company page
+    "strategy": {
+        "name": "Strategy",
+        "default": "strategy-owner",
+    },  # Strategy's other tabs: Market, Org, Budget, Lenses, Brand
     "goals": {"name": "Goals", "default": "strategy-owner"},
+    "finance": {"name": "Finance", "default": "finance-owner"},  # with Bills (Payables)
+    "growth": {"name": "Growth", "default": "growth-manager"},
+    "automations": {"name": "Automations", "default": "automations-owner"},
+    "listening": {"name": "Listening", "default": "automations-owner"},
+    "rules": {"name": "Rules", "default": "rules-owner"},
+    "docs": {"name": "Docs", "default": "librarian"},  # Docs and Library > Files
+    "skills": {"name": "Skills", "default": "botops"},
+    "contacts": {"name": "Contacts", "default": "librarian"},
+    "tools": {
+        "name": "Tools",
+        "default": "it-support-specialist",
+    },  # with its keys and inboxes: who sets up tools and access
+    "mail": {"name": "Mail", "default": "general-manager"},
+    "messaging": {"name": "Messaging", "default": "general-manager"},
+    "settings": {"name": "Settings", "default": "botops"},
+    "learnings": {"name": "Learnings", "default": "botops"},
+    "usage": {"name": "Usage", "default": "botops"},
+    "changelog": {"name": "Changelog", "default": "updates-owner"},
+    "replay": {"name": "Replay", "default": "botops"},
+    "roadmap": {"name": "Roadmap", "default": "general-manager"},
+    "tags": {"name": "Tags", "default": "general-manager"},
+    "computers": {"name": "Computers", "default": "botops"},  # a computer's screen and performance pages
+    "sql": {"name": "SQL", "default": "botops"},
+    "seat": {"name": "Hiring", "default": "botops"},  # a seat being filled (recruit.ts)
 }
+# Every company has the General Manager (onboarding.complete_company): the owner of last resort, to chat with only.
+FALLBACK = "general-manager"
+DEFAULT = "default"  # a save's bot that drops the page's choice: the page has its default again
 FROM_LIMITS = {"page": 40, "label": 80, "kind": 40, "id": 200, "name": 200}
 
 
@@ -46,31 +91,76 @@ def _live(c: "sqlite3.Connection", ref: str | None) -> str | None:
     return "bot:" + str(row["id"])
 
 
-def owner(c: "sqlite3.Connection", page: str) -> str | None:
-    spec = PAGES.get(page)
-    if not spec:
+def _owner(
+    c: "sqlite3.Connection",
+    page: str,
+    kept: dict[str, str | None],
+    seen: dict[str, str | None],
+    *,
+    chosen: bool = True,
+    fallback: bool = True,
+) -> str | None:
+    """The page's owner: the chosen bot, else its default, else the General Manager, the first that is live. None only
+    when a person chose no owner (or, with `fallback` False, when neither the choice nor the default is live).
+    `chosen` False: who the page's default gives, whatever is chosen. `seen` keeps each bot looked up once per read."""
+    if chosen and page in kept and kept[page] is None:
         return None
-    kept = _kept(c)
-    return _live(c, kept[page] if page in kept else spec["default"])
+    line = (kept.get(page) if chosen else None, PAGES[page]["default"], FALLBACK if fallback else None)
+    for ref in line:
+        if ref and ref not in seen:
+            seen[ref] = _live(c, ref)
+        if ref and seen[ref]:
+            return seen[ref]
+    return None
+
+
+def owner(c: "sqlite3.Connection", page: str, *, fallback: bool = True) -> str | None:
+    """The page's owner as an actor id. `fallback` False: the page's own owner only (its choice or its default), never
+    the General Manager standing in: what the page's owner may do beyond chatting asks for this one."""
+    if page not in PAGES:
+        return None
+    return _owner(c, page, _kept(c), {}, fallback=fallback)
+
+
+def _choice(kept: dict[str, str | None], page: str) -> str:
+    if page not in kept:
+        return DEFAULT
+    bot = kept[page]
+    return "bot:" + bot if bot else "none"
 
 
 def read(c: "sqlite3.Connection") -> dict[str, dict[str, str | None]]:
-    return {page: {"bot": owner(c, page), "name": spec["name"]} for page, spec in PAGES.items()}
+    kept: dict[str, str | None] = _kept(c)
+    seen: dict[str, str | None] = {}
+    return {
+        page: {
+            "bot": _owner(c, page, kept, seen),
+            "name": spec["name"],
+            "choice": _choice(kept, page),
+            "default": _owner(c, page, kept, seen, chosen=False),
+        }
+        for page, spec in PAGES.items()
+    }
 
 
 def save(c: "sqlite3.Connection", actor: str, page: str, bot: str | None) -> dict[str, str | None]:
     if page not in PAGES:
         raise Problem("not_found", "No page " + repr(page) + "; pages with an owner: " + ", ".join(PAGES), 404)
+    kept = _kept(c)
+    before = owner(c, page)
+    if bot == DEFAULT:
+        Access._store(c, KEY, {k: v for k, v in kept.items() if k != page})  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
+        after = owner(c, page)
+        H.event(c, actor, "page_owner.updated", page, {"before": before, "after": after, "default": True})  # pyright: ignore[reportUnknownMemberType]
+        return {"page": page, "bot": after, "name": PAGES[page]["name"], "choice": DEFAULT}
     chosen = None
     if bot:
         chosen = _live(c, bot)
         if not chosen:
             raise Problem("not_found", "No active bot " + repr(bot), 404)
-    kept = _kept(c)
-    before = owner(c, page)
     Access._store(c, KEY, {**kept, page: chosen[4:] if chosen else None})  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]
     H.event(c, actor, "page_owner.updated", page, {"before": before, "after": chosen})  # pyright: ignore[reportUnknownMemberType]
-    return {"page": page, "bot": chosen, "name": PAGES[page]["name"]}
+    return {"page": page, "bot": chosen, "name": PAGES[page]["name"], "choice": chosen or "none"}
 
 
 def _text(value: object, key: str) -> bool:
@@ -83,6 +173,10 @@ def _item_ok(item: object) -> bool:
     if not isinstance(item, dict):
         return False
     fields = cast("dict[str, object]", item)
+    name = fields.get("name")
+    if isinstance(name, str) and len(name.strip()) > FROM_LIMITS["name"]:
+        # A long title (a doc's, a goal's) is only what the chat shows: shortened, never refused.
+        fields["name"] = name.strip()[: FROM_LIMITS["name"] - 1].rstrip() + "…"
     return set(fields) <= {"kind", "id", "name"} and all(_text(fields.get(k), k) for k in ("kind", "id", "name"))
 
 

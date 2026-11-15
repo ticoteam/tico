@@ -73,7 +73,8 @@ TEMPLATES = {
     "kpi": {"name": "KPI", "fields": {"kpi": "kpi"}},
     "automation_runs": {"name": "Automation runs", "fields": {"team": "team"}},
     "latest_pages": {"name": "Latest pages", "fields": {"team": "team", "count": (1, 10, 5)}},
-    "needs_attention": {"name": "Needs attention", "fields": {}},
+    # The reader's own Needs you list on My dashboard: the product's one name for it (Overview's card is needs_you).
+    "needs_attention": {"name": "Needs you", "fields": {}},
     "unread_threads": {"name": "Unread threads", "fields": {"count": (1, 10, 5)}},
     "my_tasks": {"name": "My tasks", "fields": {"count": (1, 10, 5)}},
     "updates": {"name": "Updates", "fields": {"count": (1, 10, 5)}},

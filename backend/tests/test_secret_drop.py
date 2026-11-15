@@ -49,6 +49,29 @@ def _bodies(api, thread_id):
     return [m['body'] for m in get(api, f'threads/{thread_id}/timeline?limit=50&flat=1')['messages']]
 
 
+def test_the_general_manager_standing_in_as_tools_owner_keeps_an_ordinary_chat(api):
+    # The General Manager answers on Tools in a company with no Tools owner (page_owners fallback), but only to chat:
+    # its direct chat is not the Tools owner's, so no key guard and no key-grant cards there.
+    from backend import key_grants, page_owners, threads
+
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('general-manager','general-manager','General Manager','active')"
+        )
+    assert get(api, 'page-owners')['pages']['tools']['bot'] == 'bot:general-manager'
+    dm = post(api, 'threads/dm', {'members': ['bot:general-manager']})
+    post(api, f"threads/{dm['id']}/messages", {'text': 'for github ' + KEY})  # not refused: not the Tools owner's chat
+    with api.app.state.store.read() as c:
+        assert page_owners.owner(c, 'tools', fallback=False) is None
+        assert key_grants._owner(c) is None  # pyright: ignore[reportPrivateUsage]
+        assert secret_drop.guarded(c, threads.thread_row(c, dm['id'])) is False
+    # Once the company names a Tools owner, that bot's chat is guarded again.
+    put(api, 'page-owners/tools', {'bot': 'ops'})
+    ops = post(api, 'threads/dm', {'members': ['bot:ops']})
+    post(api, f"threads/{ops['id']}/messages", {'text': 'for github ' + KEY}, expected=422)
+
+
 def test_a_key_in_a_message_to_the_tools_owner_is_refused_before_it_is_kept_or_wakes_the_bot(api):
     # AC-15 (web and API): refused before anything is stored, no run starts, the refusal does not repeat the value.
     machine, dm = _tools_dm(api)

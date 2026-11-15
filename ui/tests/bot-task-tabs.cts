@@ -181,33 +181,51 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       const order = () => rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w') as unknown as HTMLElement[])].map(w => w.dataset.widget));
       const widget = (id: string) => rail.locator(`.bot-w[data-widget="${id}"]`);
       const pill = (name: string) => rail.locator('[data-bot-task-tab]', {hasText: name});
+      // A tab past the rail's width waits behind the bar's ⋯ (bot-tasks.ts botTaskTabsFit); picked there it joins the line.
+      const pick = async (name: string) => {
+        const more = rail.locator('.bot-task-tabline > .bot-tab-more');
+        await rail.locator('[data-bot-task-tab]:visible', {hasText: name}).or(rail.locator('.bot-task-tabline > .bot-tab-more:visible')).first().waitFor();
+        if (await pill(name).isVisible()) return pill(name).click();
+        await more.click();
+        await page.locator('#task-filter-pop [data-bot-tab-pick]', {hasText: name}).click();
+        await pill(name).waitFor({state: 'visible'});
+      };
       const dialog = page.locator('#bot-filter-dialog');
       const shows = () => rail.evaluate(el => [...(el.querySelectorAll(':scope>.bot-w') as unknown as HTMLElement[])].filter(w => w.offsetParent).map(w => w.dataset.widget));
+      // On a phone Tasks is the top line's mark, or the first item of ⋯ when the bot's long name needs the room.
+      const phoneTasks = async () => {
+        await page.locator('#bot-more-btn').waitFor();
+        await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));   // the line has fitted
+        const mark = page.locator('.bot-switch button[aria-label="Tasks"]');
+        if (await mark.isVisible()) await mark.click();
+        else { await page.locator('#bot-more-btn').click(); await page.locator('#bot-more-menu .bot-mi-tasks').click(); }
+      };
       const goto = async (hash: string) => {
         await page.goto('https://tico-ui.test/' + hash);
-        if (phone) await page.locator('.bot-switch button[aria-label="Tasks"]').click().catch(() => {});
+        if (phone) await phoneTasks();
       };
 
       // Loading until the layout arrives: no widget is drawn and then moved.
       await goto('#/bot/lead');
       await page.waitForFunction(() => document.querySelector('#pane-tasks')?.hasAttribute('data-loading'));
-      if (phone) await page.locator('.bot-switch button[aria-label="Tasks"]').click();
+      if (phone) await phoneTasks();
       await rail.locator('.bot-rail-loading').waitFor();
       assert.deepEqual(await shows(), [], at + ': nothing drawn while the layout loads');
       release();
       await page.waitForFunction(() => document.querySelector('#cnt-c3')?.textContent!.trim() === '1');
       assert.equal(await rail.locator('.bot-rail-loading').isHidden(), true);
       assert.deepEqual(await tabTexts(), ['Needs you 1', 'Open 4', 'Waiting 1', 'Assigned to others 1'], at);
-      await pill('Waiting').click();
-      // S14: a row is its title and, dimmed at the right, its stage; no Blocked or Waiting words.
+      await pick('Waiting');
+      // A rail row is its mark, title, owner and age (style guide, Bot page parts): no stage word, no Blocked or Waiting.
       assert.deepEqual(await rail.locator('#t-blocked .tk-title').allInnerTexts(), ['Wait for QA']);
-      assert.equal(await rail.locator('#t-blocked .tk-after').innerText(), 'Build');
+      assert.equal(await rail.locator('#t-blocked .tk-after').count(), 0, at + ': no stage word on a rail row');
+      assert.equal(await rail.locator('#t-blocked .tk-row').evaluate(r => [...r.children].map(c => c.classList[0]).join(' ')), 'tk-mark tk-title tk-who tk-age');
       assert.doesNotMatch(await rail.locator('#t-blocked').innerText(), /Blocked|Waiting on/);
-      await pill('Open').click();
+      await pick('Open');
       // Rows come a page (here one) at a time.
       assert.deepEqual(await rail.locator('#t-open .tk-title').allInnerTexts(), ['Ship the release notes'], at);
       assert.deepEqual(await order(), ['tasks', 'updates', 'files']);
-      await pill('Assigned to others').click();
+      await pick('Assigned to others');
       assert.deepEqual(await rail.locator('#t-c3 .tk-row .tk-title').allInnerTexts(), ['Run the release check']);
       // One pencil, no gear or board icon.
       await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
@@ -225,7 +243,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       await rail.locator('#bot-sidebar-done').waitFor();
       assert.equal(await rail.locator('#bot-sidebar-edit').isHidden(), true);
       await widget('files').locator('[data-w-eye]').click();
-      await pill('Open').click();
+      await pick('Open');
       await dialog.waitFor();
       await dialog.locator('[data-filter-name]').fill('Busy');
       await dialog.getByRole('button', {name: 'Save'}).click();
@@ -272,7 +290,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       assert.ok(Math.abs(updatesHeight - Math.max(80, Math.round(before + 300))) <= 2, `${before} -> ${updatesHeight}`);
 
       // A default tab has ordinary editable conditions and Reset. Turn Open’s count off.
-      await pill('Open').click();
+      await pick('Open');
       await dialog.waitFor();
       assert.deepEqual(await dialog.locator('[data-cond-field]').evaluateAll<string[], unknown, HTMLSelectElement>(els => els.map(el => el.value)), ['assigned_to', 'status']);
       assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'this_bot');
@@ -321,7 +339,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       await page.keyboard.press('ArrowLeft');
       assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs you', 'Open', 'Waiting', 'Assigned to others']);
       // Delete removes a tab.
-      await pill('Assigned to others').click();
+      await pick('Assigned to others');
       await dialog.locator('[data-filter-delete]').click();
       await dialog.waitFor({state: 'hidden'});
 
@@ -364,7 +382,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), false);
       await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent!.trim() === '2');
       assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs you 1', 'Open', 'Waiting 1']);
-      await pill('product tasks').click();
+      await pick('product tasks');
       // A page at a time: Show more reads the next, and a refresh keeps as many as were read, also a refresh that
       // starts while Show more is on its way.
       assert.deepEqual(await rail.locator('#t-c0 .tk-row .tk-title').allInnerTexts(), ['Plan the import page']);
@@ -383,7 +401,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       assert.equal(await rail.locator('#t-c0 [data-bot-filter-more]').count(), 0);
       // A default tab uses exactly its edited conditions after Done and reload; Reset restores its full default.
       await rail.locator('#bot-sidebar-edit').click();
-      await pill('Waiting').click();
+      await pick('Waiting');
       await dialog.waitFor();
       assert.equal(await dialog.locator('[data-cond-field]').count(), 2);
       assert.equal(await dialog.locator('[data-cond-value="1"]').inputValue(), 'not_me');
@@ -393,15 +411,15 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
       await goto('#/bot/lead');
       await page.waitForFunction(() => document.querySelector('#t-blocked .tk-title')?.textContent === 'Turn on the screen default');
-      await pill('Waiting').click();
+      await pick('Waiting');
       assert.deepEqual(await rail.locator('#t-blocked .tk-row .tk-title').allInnerTexts(), ['Turn on the screen default']);
       await rail.locator('#bot-sidebar-edit').click();
-      await pill('Waiting').click();
+      await pick('Waiting');
       await dialog.waitFor();
       await dialog.getByRole('button', {name: 'Reset to default'}).click();
       assert.equal(await dialog.locator('[data-cond-value="1"]').inputValue(), 'not_me');
       await dialog.getByRole('button', {name: 'Save'}).click();
-      await pill('Needs you').click();
+      await pick('Needs you');
       await dialog.waitFor();
       assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'needs');
       assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'you');
@@ -459,7 +477,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
     await filtered.page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent === '2');
     await filtered.page.locator('#bot-tab-t-c0').click();
     assert.deepEqual(await filtered.page.locator('#t-c0 .tk-title').allInnerTexts(), ['Wait for QA', 'Run the release check']);
-    assert.equal(await filtered.page.locator('#t-c0 .tk-after').first().innerText(), 'Build');
+    assert.equal(await filtered.page.locator('#t-c0 .tk-after').count(), 0, 'a filter tab\'s rows have no stage word either');
     await filtered.page.locator('#bot-tab-t-c1').click();
     assert.deepEqual(await filtered.page.locator('#t-c1 .tk-title').allInnerTexts(), ['Turn on the screen default']);
     assert.deepEqual(filtered.errors, []);

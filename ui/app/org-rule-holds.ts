@@ -213,15 +213,36 @@ async function ruleChecksOn() {
   RH_ON = {at: Date.now(), on};
   return on;
 }
-// Called by pageRules once it has drawn its header.
-async function ruleChecksMount(head: Element | null) {
-  if (!head || head.querySelector('.ru-checks')) return;
-  const line = document.createElement('span');
-  line.className = 'ru-checks muted tnum';
-  head.querySelector('h1')?.after(line);
+// Called by pageRules once it has drawn its header. The line is a status, read rarely, so it heads the header's ⋯ menu
+// (style guide, "Top bars: one line": what is used less than daily goes in ⋯); the header keeps the read on itself
+// (data-checks) so each tab's new ⋯ shows it again (ruleChecksPaint, from ruDrawHead).
+async function ruleChecksMount(head: HTMLElement | null) {
+  if (!head || head.dataset.checks !== undefined) return;
+  head.dataset.checks = '';
   try {
     const stats = await get<RuleStats>('/v2/rules/stats', {fresh: true});
-    line.textContent = ruleChecksLineText(stats);
-    line.classList.toggle('warn', !!stats.on && stats.unchecked_today > 0 && stats.unchecked_today >= stats.checks_today / 4);
-  } catch { line.remove(); }
+    head.dataset.checks = ruleChecksLineText(stats);
+    // A quarter or more of today's outputs went unchecked: that needs someone, so it is amber in ⋯ and ⋯ carries a dot.
+    head.dataset.checksWarn = String(!!stats.on && stats.unchecked_today > 0 && stats.unchecked_today >= stats.checks_today / 4);
+  } catch { head.dataset.checks = ''; head.dataset.checksWarn = 'false'; }
+  ruleChecksPaint(head);
+}
+// The checks line at the top of ⋯, or none while it is unread or not readable.
+function ruleChecksPaint(head: HTMLElement) {
+  const menu = head.querySelector<HTMLElement>(':scope > .ph-menu'), text = head.dataset.checks || '', warn = !!text && head.dataset.checksWarn === 'true';
+  // The dot on ⋯ (its own class: the header's .ph-held dot is page-head.ts's, for a folded search).
+  const more = head.querySelector<HTMLElement>(':scope > .ph-more');
+  more?.classList.toggle('ru-checks-warn', warn);
+  if (warn) more?.setAttribute('aria-description', 'Rule checks need attention'); else more?.removeAttribute('aria-description');
+  if (!menu) return;
+  let line = menu.querySelector<HTMLElement>(':scope > .ru-checks');
+  if (!text) { line?.remove(); return; }
+  if (!line) {
+    line = document.createElement('p');
+    line.className = 'ru-checks muted tnum';
+    const after = menu.querySelector(':scope > :is(.ph-mtabs, .ph-tools):last-of-type');
+    if (after) after.after(line); else menu.prepend(line);
+  }
+  line.textContent = text;
+  line.classList.toggle('warn', warn);
 }

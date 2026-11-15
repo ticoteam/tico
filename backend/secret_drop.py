@@ -307,12 +307,13 @@ def digest(value: str) -> str:
 
 def guarded(c: "sqlite3.Connection", thread: dict[str, Any] | None) -> bool:
     """A person's conversation with the Tools page's owner: a DM root whose one other member is that bot, or its
-    Home (page-owner chat: one chat per bot). Sub-threads under it are guarded with it."""
+    Home (page-owner chat: one chat per bot). Sub-threads under it are guarded with it. The page's own owner only: the
+    General Manager standing in for a company with no Tools owner keeps its ordinary chat (page_owners fallback)."""
     from . import page_owners, threads
 
     if not thread:
         return False
-    bot = page_owners.owner(c, TOOLS_PAGE)
+    bot = page_owners.owner(c, TOOLS_PAGE, fallback=False)
     if not bot:
         return False
     root = cast("dict[str, Any]", threads.root_of(c, thread))  # pyright: ignore[reportUnknownMemberType]
@@ -377,7 +378,7 @@ def refuse_start(
 
     if not str(author).startswith("human:") or not text:
         return
-    bot = page_owners.owner(c, TOOLS_PAGE)
+    bot = page_owners.owner(c, TOOLS_PAGE, fallback=False)
     others = {str(H.resolve_actor(c, m) or m) for m in members} - {author}  # pyright: ignore[reportUnknownMemberType]
     if bot and others == {bot}:
         refuse_found(c, scan(text), author, "", None, unmarked, audit=False)

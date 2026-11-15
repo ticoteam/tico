@@ -44,13 +44,13 @@ put(task('t3', 'Pick the release day', 'spec', {owner_id: 'bot:pm', requester_id
 // What backend/events.py _tasks sends for one task: its id, the change's kind(s) and the task as the viewer reads it, or
 // `gone` when it was deleted.
 const event = (x: Task, kind = 'update') => ({id: x.id, kind, kinds: [kind], task: put(x)});
-// My dashboard as backend/cards.py draws it for Ana: My tasks (all of hers shown), Needs attention, Unread threads.
+// My dashboard as backend/cards.py draws it for Ana: My tasks (all of hers shown), Needs you, Unread threads.
 const dashCard = (template: string, heading: string, data: unknown, settings = {}) => ({id: null, item: null, size: 'medium', made_by: null,
   card: {id: null, template, title: '', heading, name: heading, settings: {team: '', ...settings}, team_name: '', hidden: false, made_by: null, data}});
 const HOME_PLACE = {place: 'person:ana', kind: 'person', saved: false, can_edit: true, pins: [
   dashCard('my_tasks', 'My tasks', {count: 2, tasks: [{id: 't10', title: 'Sign the lease', status: 'open', due_at: '2026-11-20', updated_at: '2026-11-09T10:00:00Z'},
     {id: 't11', title: 'Plan the offsite', status: 'open', due_at: null, updated_at: '2026-11-09T09:00:00Z'}]}, {count: 5}),
-  dashCard('needs_attention', 'Needs attention', {count: 0, items: []}),
+  dashCard('needs_attention', 'Needs you', {count: 0, items: []}),
   dashCard('unread_threads', 'Unread threads', {count: 2, threads: [{id: 'th1', title: 'Launch', unread: 1, activity: true, updated_at: '2026-11-09T10:00:00Z', audience: 'everyone'},
     {id: 'th2', title: 'Hiring', unread: 2, activity: true, updated_at: '2026-11-09T09:00:00Z', audience: 'everyone'}]}, {count: 5}),
 ]};
@@ -225,12 +225,12 @@ const holdNext = (match: Held['match']): Held => {
       {id: 'p3', kind: 'paused', line: 'Connect Google', task: {id: 'n3', title: 'Sync the calendar'}}] as unknown as typeof S.v2.needs;
     S.v2.needsCount = 3; liveEmit('needs-list', S.v2.needs);
   });
-  await pin('Needs attention').locator('li', {hasText: 'Approve the budget'}).waitFor();
-  assert.deepEqual(await pin('Needs attention').locator('.dash-needs-t').allTextContents(), ['Approve the budget', 'Print the flyers', 'Connect Google']);
-  assert.deepEqual(await pin('Needs attention').locator('.dash-needs li > a > .muted').allTextContents(), ['Done', 'OK', 'Fix']);
-  assert.equal(await pin('Needs attention').locator('.dash-needs li > a').first().getAttribute('title'), 'Say when the work is done');
-  assert.equal((await pin('Needs attention').locator('.dash-head-n').textContent())?.trim(), '3', 'the header count follows the needs list');
-  assert.equal(await pin('Needs attention').locator('.dash-big').count(), 0);
+  await pin('Needs you').locator('li', {hasText: 'Approve the budget'}).waitFor();
+  assert.deepEqual(await pin('Needs you').locator('.dash-needs-t').allTextContents(), ['Approve the budget', 'Print the flyers', 'Connect Google']);
+  assert.deepEqual(await pin('Needs you').locator('.dash-needs li > a > .dash-act').evaluateAll(els => els.map(el => el.getAttribute('aria-label'))), ['Done', 'OK', 'Fix']);
+  assert.equal(await pin('Needs you').locator('.dash-needs li > a').first().getAttribute('title'), 'Say when the work is done');
+  assert.equal((await pin('Needs you').locator('.dash-head-n').textContent())?.trim(), '3', 'the header count follows the needs list');
+  assert.equal(await pin('Needs you').locator('.dash-big').count(), 0);
   // Threads holds Launch: unread to 7, read to 5.
   await page.evaluate(() => {
     THREADS.threads = [{id: 'th1', title: 'Launch', audience: 'company', last_seq: 7, last_unread_seq: 7, activity_seq: 7, me: {member: true, unread: 1, activity: true, last_read_seq: 5}}];

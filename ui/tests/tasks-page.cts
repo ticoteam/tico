@@ -162,6 +162,8 @@ export interface WindowMarks {
 declare var TASKS_ST: Globals['TASKS_ST'];
 declare function tasksTaskPut(state: unknown, t: unknown): boolean;
 declare function tasksLiveApply(events: {id: string; task?: unknown; gone?: boolean}[]): void;
+/** The app's shared day words (ui/app/format.ts): "Today", "Tomorrow", "Nov 12". */
+declare function dayWords(value: string | number | Date | null | undefined, opts?: {weekday?: boolean}): string;
 
 const NOW = Date.now();
 const at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
@@ -192,7 +194,9 @@ function task(id: string, title: string, at_: string, over: Partial<Task> = {}):
 function brief(t: Task) {
   return {id: t.id, title: t.title, number: t.number ?? null, status: t.status ?? 'open', pipeline_id: t.pipeline_id ?? null, stage_id: t.stage_id ?? null,
     owner_id: t.owner_id ?? null, requester_id: t.requester_id ?? null, assignee_id: t.assignee_id ?? null, due_at: t.due_at ?? null,
-    late: t.late ?? null, snoozed: !!t.snoozed, turn: t.turn ?? null, version: t.version, created_at: t.created_at, updated_at: t.updated_at};
+    late: t.late ?? null, snoozed: !!t.snoozed, turn: t.turn ?? null, version: t.version, created_at: t.created_at, updated_at: t.updated_at,
+    // a finished task's own time, as the server's list rows carry it
+    ...(t['done_at'] ? {done_at: t['done_at']} : {}), ...(t['closed_at'] ? {closed_at: t['closed_at']} : {})};
 }
 const ask = (rid: string, kind: 'ok' | 'answer', line: string, choices: string[] | null = null): Requirement => ({requirement_id: rid, kind, line,
   who: 'human:ana', asked_by: 'bot:pm', choices, may: kind === 'ok' ? ['ok', 'no', 'thumbs'] : ['answer', 'thumbs'], met: false, shows: [],
@@ -205,8 +209,9 @@ function fixtures(): Task[] {
     task('t-4', 'Rounding in the API', 'build', {owner_id: 'bot:eng'}),
     task('t-5', 'Renew the domain', 'todo', {owner_id: 'bot:ops', snoozed: true, snooze: {by: 'human:ana', until: new Date(NOW + 3 * 86400e3).toISOString(), why: null},
       turn: turn('snoozed', null, 'Snoozed', {until: new Date(NOW + 3 * 86400e3).toISOString()})}),
-    task('t-6', 'Ship the receipt email', 'done', {updated_at: at(240)}),
-    task('t-7', 'Old pricing test', 'closed', {updated_at: at(60 * 70)}),
+    // Finished at another time than last changed: a row's age is when it finished (done_at, closed_at).
+    task('t-6', 'Ship the receipt email', 'done', {updated_at: at(10), done_at: at(240)}),
+    task('t-7', 'Old pricing test', 'closed', {updated_at: at(5), closed_at: at(60 * 70)}),
   ];
 }
 /** Needs you for these tasks: an OK, a question with two choices, and a task Ana owns. */
@@ -455,8 +460,15 @@ async function archive(browser: Browser) {
   assert.deepEqual(await rowTitles(page), ['Renew the domain name']);
   await page.locator('#task-archives [data-archive="done"]').click();
   await shows('done', {status: 'done', sort: 'finished'}, ['Ship the receipt email']);
+  // A finished row's age is how long ago it finished (done_at, not its later updated_at), in the shared words (format.ts
+  // ago), as an open row's is: done 4 hours ago reads "4h", never the day's date nor "10m".
+  assert.equal((await page.locator('#task-body [data-task="t-6"] .tk-age').innerText()).trim(), '4h');
   await page.locator('#task-archives [data-archive="closed"]').click();
   await shows('closed', {status: 'closed', sort: 'finished'}, ['Old pricing test']);
+  // Closed over two days ago (closed_at; it changed 5 minutes ago): the day, month first ("Nov 12"), from the same words.
+  assert.equal((await page.locator('#task-body [data-task="t-7"] .tk-age').innerText()).trim(),
+    await page.evaluate(() => dayWords((TASKS_ST.tasks.find(t => t.id === 't-7') as {closed_at?: string} | undefined)?.closed_at)));
+  assert.match((await page.locator('#task-body [data-task="t-7"] .tk-age').innerText()).trim(), /^[A-Z][a-z]{2} \d{1,2}(, \d{4})?$/);
   // A row opens the task in its window.
   await page.locator('#task-body [data-task="t-7"]').click();
   await page.locator('#task-modal[open] .tmodal-title', {hasText: 'Old pricing test'}).waitFor();

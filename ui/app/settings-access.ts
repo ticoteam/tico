@@ -96,10 +96,10 @@ async function settingsEditBotOwners(slug: string, {stage}: {stage?: SaOwnersSta
   }
   const listed = new Set((e.bot_owners || []).map(o => o.id));
   const people: SettingsPerson[] = SETTINGS_DATA.people?.length ? SETTINGS_DATA.people : (S.people || []).filter(p => !p.hidden);
-  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-owners-title">Who owns ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-owners-close aria-label="Close">✕</button></div>
+  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-owners-title">Who owns ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-owners-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <div class="owner-picker-body">${e.owner_id ? `<p class="muted">${esc(settingsPersonName(e.owner_id))} is responsible for this bot and always stays an owner.</p>` : ''}
       <div class="owner-options">${people.map(person => `<label class="owner-option"><input type="checkbox" name="owner" value="${esc(person.id)}" ${listed.has(person.id) || person.id === e.owner_id ? 'checked' : ''} ${person.id === e.owner_id ? 'disabled' : ''}>${personAvatar(person, 22)}<span>${esc(person.name || person.id)}</span></label>`).join('')}</div>
-      <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-owners-close>Cancel</button><span class="muted" data-owners-status role="status"></span></div></div></form>`;
+      <div class="row"><button class="ghost" type="button" data-owners-close>Cancel</button><span class="muted" data-owners-status role="status"></span><button class="primary settings-go" type="submit">${stage ? 'Done' : 'Save'}</button></div></div></form>`;
   dialog.querySelectorAll('[data-owners-close]').forEach((button: HTMLElement) => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async (event: SubmitEvent) => {
     event.preventDefault();
@@ -150,11 +150,11 @@ async function settingsEditMail(slug: string, after?: (() => unknown) | null, {s
   }
   let m: SaMailSettings;
   try { m = await get<SaMailSettings>(`/v2/bots/${encodeURIComponent(slug)}/mail-settings`); } catch (error) { toast(errorMessage(error, ''), true); return; }
-  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-mail-title">Mail sending for ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-mail-close aria-label="Close">✕</button></div>
+  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-mail-title">Mail sending for ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-mail-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <div class="owner-picker-body">
       <p class="muted">Each mailbox's Limits still apply.</p>
       <label class="owner-option"><input type="checkbox" name="outbound_send" ${m.outbound_send ? 'checked' : ''}><span>Send without a per-message approval</span></label>
-      <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-mail-close>Cancel</button><span class="muted" data-mail-status role="status"></span></div></div></form>`;
+      <div class="row"><button class="ghost" type="button" data-mail-close>Cancel</button><span class="muted" data-mail-status role="status"></span><button class="primary settings-go" type="submit">${stage ? 'Done' : 'Save'}</button></div></div></form>`;
   dialog.querySelectorAll('[data-mail-close]').forEach((button: HTMLElement) => button.onclick = () => settingsPanelClose(dialog));
   dialog.querySelector('form').onsubmit = async (event: SubmitEvent) => {
     event.preventDefault();
@@ -241,12 +241,12 @@ async function accessEditor({path, name, levels, presets = [], skipBot = '', ski
       : preset === 'private' ? picker(['see', 'read', 'write'], 'Who can use it', '', false)
       : (levels ?? []).map(([key, label, what]) => picker([key], label, what, true)).join('');
   };
-  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="access-editor-title">${singleAudience ? 'Who can see it' : 'Access to ' + esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-access-close aria-label="Close">✕</button></div>
+  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="access-editor-title">${singleAudience ? 'Who can see it' : 'Access to ' + esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-access-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <div class="access-body">
       <fieldset class="access-presets" ${singleAudience ? 'hidden' : ''}><legend>Access</legend>${presets.map(([value, label, hint]) =>
         `<label><input type="radio" name="preset" value="${value}" ${value === preset ? 'checked' : ''}><span>${esc(label)}<small>${esc(hint)}</small></span></label>`).join('')}</fieldset>
       <div data-access-pickers></div></div>
-    <div class="row access-foot"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span></div></form>`;
+    <div class="row access-foot"><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span><button class="primary settings-go" type="submit">${stage ? 'Done' : 'Save'}</button></div></form>`;
   paintPickers();
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-access-status]');
   dialog.querySelectorAll('[data-access-close]').forEach((button: HTMLElement) => button.onclick = () => settingsPanelClose(dialog));

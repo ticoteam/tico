@@ -204,7 +204,7 @@ const scenarios: Record<string, (browser: Browser) => Promise<void>> = {
     assert.equal(await pill(page).textContent(), 'Sign-in expired');
     assert.equal(await pill(page).getAttribute('data-ib-status'), 'attention');
     assert.equal(await page.locator('[data-mb-sync-error]').textContent(), 'Google refused the sign-in (invalid_grant)');
-    assert.match((await page.locator('[data-mb-status]').textContent())!, /^Shared inbox · Last sync 3h ago · Tico may/);
+    assert.match((await page.locator('[data-mb-status]').textContent())!, /^Shared inbox · Last sync 3h · Tico may/);
     assert.equal(await page.locator('[data-mb-signin] a').getAttribute('href'), '#/tools/settings/email');
     assert.deepEqual(seen.errors, []);
     await page.close();

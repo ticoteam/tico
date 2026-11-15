@@ -238,12 +238,13 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
       {
         const {page, errors, f} = await start(browser, '#/tools', width, frame);
         await page.locator('tr[data-tl-row="website:w1"]').waitFor();
+        if (!(await page.locator('[data-tl-show="websites"]').isVisible())) { await page.locator('[data-tl-filters]').click(); await page.locator('[data-tl-fsec="kind"]').click(); }
         await page.locator('[data-tl-show="websites"]').click();
         assert.deepEqual(await page.locator('tr[data-tl-row]').evaluateAll(r => r.map(x => x.dataset.tlRow)), ['website:w1'], `${tag}: Websites`);
         assert.equal(await sideways(page), false, `${tag}: the list has no sideways scroll`);
         await shot(page, `list-${tag}`);
         // Add tool › Website. The account is refused once: the tool made first is kept, so Add again only adds the account.
-        await page.locator('[data-tl-add] summary').click();
+        await page.locator('[data-tl-add]').click();
         await page.locator('[data-tl-add-item="website"]').click();
         const add = dialogNamed(page, 'Add website');
         await add.waitFor();

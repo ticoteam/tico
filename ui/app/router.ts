@@ -52,7 +52,7 @@ function route(hash: string = location.hash): void {
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
   if (!isLensesRoute(S.route)) window.lensesStop?.();
   if (!isAutomationsRoute(S.route)) automationsStop();
-  pageChatRoute(S.route);   // a page's owner's chat closes with its page (ui/app/page-chat.ts)
+  pageChatRoute(S.route);   // each page's owner's chat, mounted here for every page (ui/app/page-chat.ts)
   taskChatStop(); taskModalRouteClose();
   if (!S.route.startsWith(DOCS)) DOC_LOAD++;
   // Leaving Mail abandons its fetches, its debounced search (which would set the hash back) and
@@ -179,7 +179,8 @@ function route(hash: string = location.hash): void {
   else if (/^#\/computers\/[^/?]+\/screen$/.test(S.route)) pageComputerScreen(decodeURIComponent(S.route.split('/')[2] ?? ''), from);
   else if (/^#\/computers\/[^/?]+\/performance$/.test(S.route)) pageComputerPerformance(decodeURIComponent(S.route.split('/')[2] ?? ''));
   else if (isAutomationsRoute(S.route)) pageAutomations();
-  else location.hash = HOME;            // unknown or empty routes land on My dashboard, home
+  else if (styleGuideRoute(S.route)) { /* the style guide, out of the navigation (ui/app/style-guide.ts) */ }
+  else location.hash = HOME;           // unknown or empty routes land on My dashboard, home
   redesignAfterRoute();
   thvSweep();         // a thread view the new page replaced stops following
   // A new page starts at its top; a query change (a filter, an open row) or a redraw keeps the reader's place.

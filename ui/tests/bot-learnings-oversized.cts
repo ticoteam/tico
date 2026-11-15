@@ -24,6 +24,9 @@ declare const window: Window & typeof globalThis & {
   toast: (message: string) => void;
   reads: string[];
   ago: () => string;
+  // The app's date words (ui/app/format.ts), stood in for: the panel says when in them.
+  fmt: (iso: string) => string;
+  timeSaid: (iso: string) => string;
   get: (url: string) => Promise<unknown>;
 };
 
@@ -38,6 +41,8 @@ declare const window: Window & typeof globalThis & {
       Object.assign(window, {$: (selector: string, root: ParentNode = document) => root.querySelector(selector)});
       window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
+      window.fmt = () => 'Mon, Oct 26, 10:00 AM';
+      window.timeSaid = () => 'Mon, Oct 26, 10:00 AM';
       window.BOT = {slug: 'ops'};
       window.post = async () => ({});
       window.toast = () => {};
@@ -53,7 +58,7 @@ declare const window: Window & typeof globalThis & {
         }), file);
         await page.locator(tab).click();
         assert.equal(await page.locator('.learn-warning').count(), 1);
-        assert.ok((await page.locator('.learn-warning').innerText()).includes('2026'));
+        assert.ok((await page.locator('.learn-warning').innerText()).includes('showing the copy from Mon, Oct 26, 10:00 AM.'), 'the date in the app\'s words');
         assert.equal(await page.locator('.learn-body .md').innerText(), 'The saved copy');
         assert.ok(await page.locator('.learn-warning').evaluate(el => Boolean(el.compareDocumentPosition(el.nextElementSibling!) & Node.DOCUMENT_POSITION_FOLLOWING)));
         await page.locator('[data-learn-close]').click();

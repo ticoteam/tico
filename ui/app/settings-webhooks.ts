@@ -545,7 +545,7 @@ function whHeaderRowHTML(x: WhHeader = {}) {
     <input data-hdr-name maxlength="64" autocomplete="off" spellcheck="false" placeholder="Name" aria-label="Header name" value="${esc(x.name || '')}">
     <input data-hdr-value type="${x.secret ? 'password' : 'text'}" maxlength="1000" autocomplete="new-password" spellcheck="false" aria-label="Value" placeholder="${x.needs_value ? 'needs value' : kept ? 'set' : 'Value'}" value="${kept ? '' : esc(x.value || '')}">
     <label class="wh-hdr-secret"><input type="checkbox" data-hdr-secret${x.secret ? ' checked' : ''}> Secret</label>
-    <button type="button" class="ghost" data-hdr-remove aria-label="Remove header">✕</button></div>`;
+    <button type="button" class="ghost settings-remove" data-hdr-remove aria-label="Remove header" title="Remove"><span class="nav-icon" aria-hidden="true">delete</span></button></div>`;
 }
 function whHeadersHTML(list: WhHeader[] | undefined) {
   return `<div class="wh-sum" data-wh-headers><span class="wh-sum-k">Headers</span>
@@ -633,7 +633,7 @@ async function whHookDetail(el: HTMLElement, run: number) {
       ${h.headers?.length ? `<dt>Headers</dt><dd data-wh-header-facts>${h.headers.map(x => `<code>${esc(x.name)}</code>${x.secret ? ' <span class="muted">secret</span>' : ''}`).join(', ')}</dd>` : ''}
       <dt>7 days</dt><dd><span class="tnum">${h.last_7_days.delivered} sent</span> · <span class="tnum${h.last_7_days.failed ? ' wh-bad' : ''}">${h.last_7_days.failed} failed</span>${h.last_7_days.pending ? ` · <span class="tnum">${h.last_7_days.pending} waiting</span>` : ''}</dd>
       ${h.enabled ? '' : `<dt>Paused</dt><dd>${esc(h.paused_reason || 'Yes')}</dd>`}
-      ${h.old_secret_until ? `<dt>Old secret</dt><dd>Works until ${esc(fmt(h.old_secret_until))}</dd>` : ''}
+      ${h.old_secret_until ? `<dt>Old secret</dt><dd>Works until ${esc(timeSaid(h.old_secret_until))}</dd>` : ''}
     </dl>
     <h4 class="wr-sub">Sends</h4>
     ${may && names.length ? `<div class="settings-bots-filters"><select class="settings-inline-select" data-wh-example-type aria-label="Event type">${names.map(n => whOpt(n, n, '')).join('')}</select>
@@ -695,7 +695,7 @@ async function whGateway(el: HTMLElement, run: number) {
   if (run !== WH_RUN) return;
   if (relay.key === 'none') { el.innerHTML = `<div class="empty" data-wh-no-key>Connect the Gateway first.</div>`; return; }
   const rows = list.filter(t => !t.builtin);
-  const status = [relay.last_pull ? `Last pull ${esc(ago(relay.last_pull))}` : 'Not pulled yet',
+  const status = [relay.last_pull ? `Last pull ${esc(agoSaid(relay.last_pull))}` : 'Not pulled yet',
     Number.isFinite(relay.pending) ? `<span class="tnum">${relay.pending}</span> waiting` : ''].filter(Boolean).join(' · ');
   el.innerHTML = `${relay.key === 'revoked' ? `<p class="err">The Gateway refused this server's key.</p>` : ''}
     <p class="settings-cell-note" data-wh-relay-status>${status}${relay.last_error ? ` · <span class="wh-bad">${esc(relay.last_error)}</span>` : ''}</p>
@@ -740,10 +740,10 @@ function whWakeUrl(el: HTMLElement, wake: WhWake, {editing = false, error = '', 
   const row = editing ? `<form class="wh-row wh-gw" data-wh-wake-form novalidate>
       <span class="wh-name"><strong>Wake address</strong></span>
       <span class="wh-meta"><input type="url" name="url" value="${esc(draft)}" placeholder="https://" aria-label="Wake address" required data-wh-wake-input></span>
-      <span class="wh-call-ctl">${how}<button type="submit" class="primary">Save</button><button class="ghost" type="button" data-wh-wake-do="cancel">Cancel</button></span></form>`
+      <span class="wh-call-ctl">${how}<button class="ghost" type="button" data-wh-wake-do="cancel">Cancel</button><button type="submit" class="primary settings-go">Save</button></span></form>`
     : `<div class="wh-row wh-gw">
       <span class="wh-name"><strong>Wake address</strong></span>
-      <span class="wh-meta" data-wh-wake-value>${wake.url ? `<code${wake.set_at ? ` title="Set ${esc(ago(wake.set_at))}"` : ''}>${esc(wake.url)}</code>` : '<span class="muted">Off</span>'}</span>
+      <span class="wh-meta" data-wh-wake-value>${wake.url ? `<code${wake.set_at ? ` title="Set ${esc(agoSaid(wake.set_at))}"` : ''}>${esc(wake.url)}</code>` : '<span class="muted">Off</span>'}</span>
       <span class="wh-call-ctl">${how}<button class="ghost" type="button" data-wh-wake-do="edit">${wake.url ? 'Change' : 'Set'}</button>${wake.url ? '<button class="ghost danger" type="button" data-wh-wake-do="off">Turn off</button>' : ''}</span></div>`;
   el.innerHTML = secret + row + (error ? `<p class="err" role="status" data-wh-wake-error>${esc(error)}</p>` : '');
   const save = async (url: string | null, button: HTMLButtonElement | null) => {

@@ -82,8 +82,11 @@ declare function settingsShow(tab: string): void;
     const host = page.locator('#set-billing');
 
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-more > summary').click();
-    await page.locator('[data-settings-tab=billing]').click();
+    // Billing is past the header's fifth tab, so it is reached through ⋯ (the shared page header's overflow).
+    await page.locator('#settings-tabs').waitFor();
+    await page.locator('header.ph > .ph-more').click();
+    await page.locator('header.ph > .ph-menu .ph-mtab', {hasText: 'Billing'}).click();
+    await page.locator('[data-settings-tab=billing][aria-selected=true]').waitFor();
     await host.locator('.billing-balance').waitFor();
     assert.equal(await host.locator('.billing-balance').innerText(), '$19.75');
     assert.equal(await host.locator('.billing-status').innerText(), 'Low balance: Tico models stop when your balance reaches $0.00');
@@ -96,7 +99,7 @@ declare function settingsShow(tab: string): void;
     assert.match((await host.locator('.billing-table').first().innerText()).replace(/\s+/g, ' '), /Grant \$20\.00 \$19\.75 Never/);
     // a day opens into hours; under a cent says so, the day's total is to the cent
     const day = host.locator('[data-billing-day="2026-11-02"]');
-    assert.match((await day.locator('summary').innerText()).replace(/\s+/g, ' '), /2026-11-02 \$1\.25/);
+    assert.match((await day.locator('summary').innerText()).replace(/\s+/g, ' '), /^Mon, Nov 2 \$1\.25$/, 'a UTC day, month first');
     // HQ not answering says so, and the day asks again when it is opened again
     await day.locator('summary').click();
     await day.getByText('Tico HQ did not answer. Try again in a minute.').waitFor();
@@ -104,12 +107,15 @@ declare function settingsShow(tab: string): void;
     await day.locator('summary').click();
     await day.locator('.billing-hour').waitFor();
     assert.match((await day.innerText()).replace(/\s+/g, ' '), /Tico models tico-low-1\.0 <\$0\.01/);
-    assert.match((await day.locator('.billing-hour-head').innerText()).replace(/\s+/g, ' '), /^09:00 UTC \$1\.25$/);
+    assert.match((await day.locator('.billing-hour-head').innerText()).replace(/\s+/g, ' '), /^9 AM UTC \$1\.25$/, '12-hour');
     assert(asked.includes('/api/v2/billing/usage?day=2026-11-02'), asked.join());
     // the statement: opening + credits - debits - expired = closing, and its CSV
     assert.match((await host.locator('.billing-statement').innerText()).replace(/\s+/g, ' '),
       /^Opening balance \$0\.00 Credits: Grant \$25\.00 Debits: Tico models -\$1\.25 Debits: Hosting \$0\.00 Debits: Support \$0\.00 Expired credit -\$4\.00 Closing balance \$19\.75$/);
     assert.equal(await host.locator('[data-billing-csv]').getAttribute('href'), '/api/v2/billing/statements/2026-11.csv');
+    // months read month first, in words: the picker and the statement's heading
+    assert.deepEqual(await host.locator('[data-billing-month] option').allInnerTexts(), ['November 2026', 'October 2026']);
+    assert.match(await host.locator('h3', {hasText: 'Statement for'}).innerText(), /^Statement for November 2026$/);
     // "Talk to us to add credit" opens the booking link in a new tab; no card form anywhere
     const talk = host.locator('[data-billing-talk]');
     assert.equal(await talk.innerText(), 'Talk to us to add credit');
@@ -126,7 +132,7 @@ declare function settingsShow(tab: string): void;
     assert.equal(await status('active'), 'Active');
     assert.equal(await status('paused', {min_balance_micros: 1_000_000}), 'Tico models paused: balance reached $1.00. Your bots are using their other models.');
     assert.equal(await status('grace', {grace_until: '2026-11-04T09:00:00.000000Z'}),
-      'Hosting grace period: servers stop on November 4, 2026 at 09:00 UTC unless credit is added.');
+      'Hosting grace period: servers stop on November 4, 2026 at 9:00 AM UTC unless credit is added.');
     // a phone: nothing scrolls sideways
     await page.setViewportSize({width: 390, height: 844});
     await page.waitForTimeout(300);

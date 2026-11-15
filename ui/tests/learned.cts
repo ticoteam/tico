@@ -84,24 +84,54 @@ const chat = (over: Record<string, unknown>) => ({available: true, state: 'activ
       await page.locator('#main .asst-learned').click();
       await page.locator('#learned-company').waitFor();
       assert.equal(new URL(page.url()).hash, '#/assistant/learned', 'owner: the link opens the page');
-      assert.match(await page.locator('.learned-head').innerText(), /Assistant reads this before every reply/, 'owner: names their Assistant');
+      // The shared header: "Assistant › What it has learned", the back link naming their Assistant; no caption.
+      assert.equal(await page.locator('header.learned-head .ph-back').innerText(), 'Assistant ›', 'owner: names their Assistant');
+      assert.equal(await page.locator('header.learned-head .ph-back').getAttribute('href'), '#/assistant');
+      assert.equal(await page.locator('header.learned-head h1').innerText(), 'What it has learned');
+      assert.equal(await page.locator('.learned-page > p').count(), 0, 'owner: no caption under the title');
       const personal = page.locator('#learned-personal'), company = page.locator('#learned-company');
       assert.match(await personal.innerText(), /Short summaries, numbers first[\s\S]*Taught in chat/, 'owner: their own layer');
       assert.match(await company.innerText(), /Every team runs on bots[\s\S]*Ship the desktop app[\s\S]*Launches matter more than hiring news[\s\S]*Partners before press/,
         'owner: vision, priorities and what they taught it');
+      // Each entry: its words, then where it came from and ⋯ last; ⋯ holds Edit, then Delete in red after a line.
+      assert.equal(await personal.locator('[data-learned="p1"] .learned-meta > :last-child').getAttribute('aria-label'), 'More', 'owner: ⋯ last on the line');
+      assert.equal(await personal.locator('[data-learned="p1"] .learned-meta button').count(), 1, 'owner: no word buttons on the entry');
+      assert.doesNotMatch(await personal.innerText(), /edited/, 'owner: no "edited" mark');
+      await personal.locator('[data-learned="p1"] [data-learned-more]').click();
+      const menu = page.locator('#task-filter-pop');
+      assert.deepEqual(await menu.locator('.tl-mi').allInnerTexts(), ['Edit', 'Delete']);
+      assert.equal(await menu.locator('.tl-menu-sep + .tl-mi.danger').innerText(), 'Delete', 'owner: Delete last, red, after a line');
       // Edit: Enter saves exactly that entry's new words.
-      await personal.locator('[data-learned="p1"] [data-learned-edit]').click();
+      await menu.locator('[data-learned-edit]').click();
       await personal.locator('.learned-input').fill('Numbers first, then one line');
       await personal.locator('.learned-input').press('Enter');
       await personal.getByText('Numbers first, then one line').waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement?.closest('[data-learned]')?.getAttribute('data-learned') + '|' + document.activeElement?.hasAttribute('data-learned-more')), 'p1|true',
+        'owner: after Save the focus is on that entry\'s ⋯');
+      // Escape leaves the edit and puts the focus back on that entry's ⋯ too.
+      await personal.locator('[data-learned="p1"] [data-learned-more]').click();
+      await menu.locator('[data-learned-edit]').click();
+      await personal.locator('.learned-input').press('Escape');
+      assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-learned="p1"] [data-learned-more]')), true, 'owner: after Escape too');
+      // Opening another entry's ⋯ while one is open: the first says it is closed.
+      await company.locator('[data-learned="c1"] [data-learned-more]').click();
+      await company.locator('[data-learned="c2"] [data-learned-more]').evaluate(b => (b as HTMLElement).click());   // the open menu covers it: a keyboard user's press
+      assert.equal(await company.locator('[data-learned="c1"] [data-learned-more]').getAttribute('aria-expanded'), 'false', 'owner: one ⋯ open at a time');
+      await page.keyboard.press('Escape');
       assert.deepEqual(writes, [['PATCH', 'p1', {text: 'Numbers first, then one line'}]], 'owner: one PATCH for that entry');
-      // Delete asks once more on the same button, then that entry is gone and only it.
-      const del = company.locator('[data-learned="c1"] [data-learned-delete]');
-      await del.click();
-      assert.equal(await del.innerText(), 'Delete for good?', 'owner: delete asks once more');
-      assert.equal(writes.length, 1, 'owner: nothing deleted on the first press');
-      await del.click();
+      // Delete asks once more (a no deletes nothing), then that entry is gone and only it.
+      const asked: string[] = [];
+      page.once('dialog', d => { asked.push(d.message()); void d.dismiss(); });
+      await company.locator('[data-learned="c1"] [data-learned-more]').click();
+      await menu.locator('[data-learned-delete]').click();
+      for (let i = 0; i < 50 && !asked.length; i++) await page.waitForTimeout(50);
+      assert.match(asked[0] || '', /^Delete this for good\?/, 'owner: delete asks once more');
+      assert.equal(writes.length, 1, 'owner: nothing deleted on a no');
+      page.once('dialog', d => void d.accept());
+      await company.locator('[data-learned="c1"] [data-learned-more]').click();
+      await menu.locator('[data-learned-delete]').click();
       await company.locator('[data-learned="c1"]').waitFor({state: 'detached'});
+      assert.equal(await page.evaluate(() => document.activeElement?.matches('[data-learned="c2"] [data-learned-more]')), true, 'owner: after a delete the focus is on the next entry\'s ⋯');
       assert.deepEqual(writes[1]!.slice(0, 2), ['DELETE', 'c1'], 'owner: one DELETE for that entry');
       assert.equal(await company.locator('[data-learned="c2"]').count(), 1, 'owner: the other entry stays');
       assert.deepEqual(errors, [], 'owner: no page errors');

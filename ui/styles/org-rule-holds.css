@@ -32,7 +32,10 @@
 .rh-note{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .rh-note-dot{width:7px;height:7px;border-radius:50%;background:var(--fail);flex:none;align-self:center}
 .rh-note .chat-meta{margin-left:auto}
-/* The Rules header line. */
-.ru-checks{font-size:var(--t-sm);margin-left:12px;white-space:nowrap}
-.ru-checks.warn{color:var(--wait-ink)}
-@media (max-width:760px){.ru-checks{display:block;margin:4px 0 0;white-space:normal}}
+/* The Rules checks line, at the top of the header's ⋯ (org-rule-holds.ts ruleChecksPaint): a muted status over the
+   menu's items, never a hue. */
+.ph-menu>.ru-checks{max-width:280px;margin:0 0 4px;padding:6px 10px 8px;border-bottom:1px solid var(--line);font-size:var(--t-sm);white-space:normal}
+/* a quarter or more of today's outputs unchecked: that needs someone, so the line is amber and ⋯ carries a dot */
+.ph-menu>.ru-checks.warn{color:var(--wait-ink)}
+.ph>.ph-more.ru-checks-warn{position:relative}
+.ph>.ph-more.ru-checks-warn::after{content:"";position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--wait)}

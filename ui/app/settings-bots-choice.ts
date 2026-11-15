@@ -105,13 +105,16 @@ function settingsChoiceBox(spec: SettingsChoiceSpec) {
   </div>`;
 }
 // What each bot picker kind is drawn with (SETTINGS_CHOICE_KINDS names it).
-function settingsChoiceCombo(e: SettingsBot, kind: SettingsChoiceKind) {
+function settingsChoiceSpecOf(e: SettingsBot, kind: SettingsChoiceKind): SettingsChoiceSpec {
   const spec = SETTINGS_CHOICE_KINDS[kind], selected = spec.of(e);
   const current = selected?.model ? settingsChoiceValue(selected.harness || selected.runtime, selected.model,
     selected.reasoning_effort || selected.effort) : '';
   const compact = kind === 'model' ? Number(e.compact_at) || null : kind === 'task' ? e.task_model?.compact_at || null : e.fallback?.compact_at || null;
-  return settingsChoiceBox({bot: e, kind, name: spec.name, current, compact, readonly: !settingsCanManageBot(e),
-    none: spec.none === true ? 'None' : spec.none || '', noEffort: kind === 'task', mode: kind === 'model' ? 'bot' : kind});
+  return {bot: e, kind, name: spec.name, current, compact, readonly: !settingsCanManageBot(e),
+    none: spec.none === true ? 'None' : spec.none || '', noEffort: kind === 'task', mode: kind === 'model' ? 'bot' : kind};
+}
+function settingsChoiceCombo(e: SettingsBot, kind: SettingsChoiceKind) {
+  return settingsChoiceBox(settingsChoiceSpecOf(e, kind));
 }
 // In the bots table a model or fallback is its picker's closed button.
 const settingsChoiceCell = (e: SettingsBot, kind: SettingsChoiceKind) => settingsChoiceCombo(e, kind);
@@ -345,8 +348,8 @@ function settingsChoicePanelHTML(spec: SettingsChoiceSpec) {
     <label class="mp-row mp-compact" data-choice-compact-row hidden><span>Compact</span><select data-choice-compact aria-label="Compact"></select></label>
     <p class="mp-note" data-choice-note role="status"></p>
     <div class="settings-choice-blocks" data-choice-blocks></div>
-    <div class="mp-foot">${spec.readonly ? '<button type="button" class="ghost" data-choice-cancel>Close</button>'
-      : '<button type="submit" class="primary" data-choice-apply disabled>Apply</button><button type="button" class="ghost" data-choice-cancel>Cancel</button>'}</div>
+    <div class="mp-foot">${spec.readonly ? '<button type="button" class="ghost" data-choice-cancel>Done</button>'
+      : '<button type="button" class="ghost" data-choice-cancel>Cancel</button><button type="submit" class="primary" data-choice-apply disabled>Apply</button>'}</div>
   </form>`;
 }
 // Open a box's panel in a popover under its button (a sheet on a phone). In a modal dialog it opens inside it, so

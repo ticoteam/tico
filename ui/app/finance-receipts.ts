@@ -19,7 +19,13 @@ interface FinReceiptsRead {rows: FinReceipt[]; next: string | null; as_of: strin
 
 const FIN_RC: {rows: FinReceipt[]} = {rows: []};
 const FIN_RC_LABEL: Record<string, string> = {unread: 'To read', suggested: 'Suggested match', unmatched: 'No match yet', attached: 'Matched', rejected: 'Refused'};
-const FIN_RC_PILL: Record<string, string> = {suggested: 'waiting', unread: 'idle', unmatched: 'idle', attached: 'ok', rejected: 'idle'};
+// Only a suggested match waits on someone, so only it is a pill; every other state is a plain muted word (style guide
+// pills). Each carries .fin-rc-state, so its words are found the same way whichever it is.
+const FIN_RC_PILL: Record<string, string> = {suggested: 'waiting'};
+const finRcState = (status: string) => {
+  const label = esc(FIN_RC_LABEL[status] || status);
+  return FIN_RC_PILL[status] ? `<span class="pill ${FIN_RC_PILL[status]} fin-rc-state">${label}</span>` : `<span class="fin-rc-state">${label}</span>`;
+};
 
 // The first page of receipts. A failed read shows nothing: the Transactions list below it is the page.
 async function finReceiptsLoad(): Promise<void> {
@@ -55,9 +61,10 @@ function finReceiptRow(r: FinReceipt): string {
     ? `<div class="muted">${r.status === 'attached' ? 'Filed to' : 'Suggested on'}: ${esc(r.match.feed.description || 'a bank or card row')} · ${finCents(Math.abs(r.match.feed.amount))} · ${esc(finDayLabel(r.match.feed.date))}</div>`
     : '';
   let acts = '';
-  if (r.status === 'suggested') acts = `<button type="button" data-fin-rc-act="accept" data-fin-rc="${esc(r.id)}">Attach</button><button type="button" class="ghost" data-fin-rc-act="reject" data-fin-rc="${esc(r.id)}">Refuse</button>`;
+  // Refuse, then Attach: the step back on the left, the one that moves on last (style guide "Button order").
+  if (r.status === 'suggested') acts = `<button type="button" class="ghost" data-fin-rc-act="reject" data-fin-rc="${esc(r.id)}">Refuse</button><button type="button" class="ghost" data-fin-rc-act="accept" data-fin-rc="${esc(r.id)}">Attach</button>`;
   else if (r.status === 'attached' && r.match) acts = `<button type="button" class="ghost" data-fin-rc-act="undo" data-fin-rc="${esc(r.id)}">Undo</button>`;
-  return `<li class="fin-receipt" data-fin-receipt="${esc(r.id)}"><div class="fin-receipt-head"><strong>${esc(r.file.name || 'Receipt')}</strong><span class="pill ${FIN_RC_PILL[r.status] || 'idle'}">${esc(FIN_RC_LABEL[r.status] || r.status)}</span></div><div class="muted">${esc(read)}</div>${feed}${acts ? `<div class="fin-receipt-acts">${acts}</div>` : ''}</li>`;
+  return `<li class="fin-receipt" data-fin-receipt="${esc(r.id)}"><div class="fin-receipt-head"><strong>${esc(r.file.name || 'Receipt')}</strong>${finRcState(r.status)}</div><div class="muted">${esc(read)}</div>${feed}${acts ? `<div class="fin-receipt-acts">${acts}</div>` : ''}</li>`;
 }
 
 // Attach or refuse a suggestion, or undo an attach; the list then reads again so it shows what was saved.

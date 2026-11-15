@@ -9,6 +9,13 @@
 #app-update a.primary{padding:5px 12px;border-radius:6px;text-decoration:none}
 #app-update .ghost{color:var(--bg);opacity:.75}
 #stale-banner:not([hidden])~#app-update{bottom:72px}
+/* A phone: the bars at the window's foot sit above the tab bar, as a toast does (layout.css), never on it. Where the
+   tab bar is hidden (setup, a bot's page, a focused composer) they keep their 16px. */
+@media (max-width:760px){
+  html:not(.in-setup) body:not(.bot-page):not(.mobile-composer-focus) :is(#stale-banner,#app-update,#usage-notice,#feedback-ask){bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
+  html:not(.in-setup) body:not(.bot-page):not(.mobile-composer-focus) #stale-banner:not([hidden])~#app-update{bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 68px)}
+  html:not(.in-setup) body:not(.bot-page):not(.mobile-composer-focus) #version-message{bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 68px)}
+}
 /* Signed out (ui/app/session.ts): over the top of every page until the person signs in again. */
 #signed-out{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:3200;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 32px);padding:8px 8px 8px 14px;background:var(--ink);color:var(--bg);border-radius:8px;font-size:var(--t-base);box-shadow:0 6px 20px rgba(0,0,0,.2)}
 #signed-out[hidden]{display:none}
@@ -79,19 +86,25 @@ body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background
 a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}
 /* no specificity of its own, so forms.css's one line-height (20px: every field and button 32px tall) is not reset by it */
 :where(button,input,select,textarea){font:inherit;color:inherit}
+/* iPhone and iPad zoom the page in when a field whose text is under 16px takes focus, and do not zoom back out, so
+   the page ends up cut off at the right. Fields there are 16px: tapping one leaves the page as it was. Only iOS
+   matches this @supports; every other screen keeps the type scale. */
+@supports (-webkit-touch-callout:none){
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,textarea,[contenteditable]:not([contenteditable="false"]){font-size:var(--t-lg) !important}
+}
 h1,h2,h3{margin:0;font-weight:600;text-wrap:balance}
 /* The type scale (tokens.css): 13px text, page titles 16px, card headings 13-14px, one 11px uppercase label. Three
    weights: 400 text, 500 emphasis and controls, 600 names, titles and labels (bold text is 600 too). Set apart from
    the body's grid rule so the layout and the type change independently. Inter's own kerning, ligatures and contextual
    alternates stay on (its defaults). */
-body{font-size:var(--t-base);text-rendering:optimizeLegibility;font-optical-sizing:auto;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{font-size:var(--t-base);font-feature-settings:"ss09" 1;text-rendering:optimizeLegibility;font-optical-sizing:auto;-webkit-text-size-adjust:100%;text-size-adjust:100%}
 b,strong{font-weight:600}
 /* light glyphs on a dark page bloom under subpixel-style smoothing; grayscale keeps them crisp */
 :root:not([data-theme="light"]) body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 @media (prefers-color-scheme:light){:root[data-theme="system"] body{-webkit-font-smoothing:auto;-moz-osx-font-smoothing:auto}}
 /* Inter tightens as it grows: 16px and up --track-tight, 14px --track-snug, 13px and under none (tokens.css) */
-h1{font-size:var(--t-lg);line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
-h2{font-size:var(--t-md);line-height:var(--lh-tight);letter-spacing:var(--track-snug);color:var(--ink)}
+h1{font-size:var(--t-page);line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
+h2{font-size:var(--t-card);line-height:var(--lh-tight);letter-spacing:var(--track-snug);color:var(--ink)}
 h3{font-size:var(--t-base);line-height:var(--lh-tight);letter-spacing:var(--track-normal)}
 /* the one uppercase label, for markup that wants it without a rule of its own */
 .label{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}

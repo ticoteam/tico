@@ -54,7 +54,7 @@
 .gs-tour{position:fixed;inset:0;z-index:2000}
 .gs-tour-hole{position:fixed;border-radius:8px;box-shadow:0 0 0 100vmax rgba(0,0,0,.55);outline:var(--focus-ring);pointer-events:none}
 .gs-tour-card{position:fixed;width:min(320px,calc(100vw - 24px));padding:var(--s4);border-radius:12px;background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:0 12px 40px rgba(0,0,0,.35)}
-.gs-tour-card h2{font-size:var(--t-md)}
+.gs-tour-card h2{font-size:var(--t-card)}
 .gs-tour-count{margin:0 0 2px;font-size:var(--t-sm)}
 .gs-tour-text{margin:6px 0 var(--s3)}
 .gs-tour-actions{display:flex;justify-content:flex-end;gap:var(--s2)}

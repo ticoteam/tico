@@ -37,7 +37,9 @@ function taskMeetingsRender(d: TmDialog) {
     let row = held.get(meeting.meeting_id);
     held.delete(meeting.meeting_id);
     if (!row) { row = document.createElement('li'); row.dataset.meetingId = meeting.meeting_id; }
-    const html = `<span class="title">${esc(meeting.title)}</span><time>${esc(String(meeting.started_at || '').slice(0, 10))}</time><a href="#/meetings?meeting=${encodeURIComponent(meeting.meeting_id)}">Open</a>`;
+    // The meeting's title opens it; its day reads month first ("Fri, Nov 13").
+    const at = Date.parse(meeting.started_at || ''), day = at ? new Date(at).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
+    const html = `<a class="title" href="#/meetings?meeting=${encodeURIComponent(meeting.meeting_id)}">${esc(meeting.title)}</a><time datetime="${esc(meeting.started_at || '')}">${esc(day)}</time>`;
     if (row.innerHTML !== html) row.innerHTML = html;
     list.append(row);
   }

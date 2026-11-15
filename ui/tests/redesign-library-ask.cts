@@ -1,6 +1,8 @@
-// Library on a real hub: Docs, Meetings and Tools › Keys each have an Ask button that opens the Ask panel
-// (ui/app/ask-panel.ts), which sees the page; no Librarian rail, sidebar row or settings link. The Library and Company sidebar
-// groups fold behind a chevron (kept per browser, open again on their own pages).
+// Library on a real hub: Docs and Meetings have no Ask button (the style guide has no chat button in a top bar). The
+// Assistant still sees each page: Meetings' chat is Ask itself, opened from its tab on the right edge (page-chat.ts),
+// and on Docs the sidebar's Assistant row opens it (Docs' own chat is its owner's, page-chat-pages.cts); no Librarian
+// rail, sidebar row or settings link. The Library and Company sidebar groups fold behind a chevron (kept per browser,
+// open again on their own pages).
 // Desktop only: the folds are the desktop sidebar's, and the phone's Ask is the same panel (ask-panel.cts).
 import type {Page} from 'playwright';
 import type * as RE from './support/redesign-e2e.cts';
@@ -12,11 +14,12 @@ const at = (page: Page, hash: string) => go(page, hash).then(() => page.waitForF
 
 run('redesign-library-ask', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/docs'});
-  for (const [hash, button] of [['#/docs', '#docs-ask'], ['#/meetings', '#meet-ask'], ['#/tools/keys', '#lc-ask']] as const) {
+  for (const [hash, button] of [['#/docs', '#ask-row'], ['#/meetings', 'body > .pgc-edge:not([hidden]) .pgc-tab']] as const) {
     await at(page, hash);
     const ask = page.locator(button), panel = page.locator('#ask-panel');
+    await page.locator('#main header.ph').waitFor({timeout: t(10000)});
+    assert.equal(await page.locator('#docs-ask, #meet-ask, #main [data-ask-open]').count(), 0, `${tag} ${hash}: no Ask button`);
     await ask.waitFor({timeout: t(10000)});
-    assert.equal(await ask.getAttribute('aria-label'), 'Ask', `${tag} ${hash}: Ask`);
     await ask.click();
     await panel.waitFor({timeout: t(5000)});
     // It sees the page whether or not this person's Assistant is on yet (the hub's may still be off).

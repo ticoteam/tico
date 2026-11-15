@@ -246,7 +246,8 @@ what it posts and logs. `tico message redact <id>` does the same for one message
 
 ## Keys dropped in the Tools chat
 
-Tools has its owner's chat at the right (the Tools Product Owner by default; Settings > General > Page owners). In that
+Tools has its owner's chat at the right (the IT Support Specialist by default; Settings > General > Page owners). A company with
+neither has the General Manager's chat there, which stays an ordinary chat: no key guard and no key cards. In that
 chat's composer, and no other, a paste, dropped text or typed words are scanned in the browser before they reach the
 text box, with the rules in `backend/secret_rules.json` (vendor prefixes, PEM blocks, logins in addresses, values after
 words like password or token, `.env`, JSON and YAML lines, Bearer and Basic headers, JWTs, and long random strings as a

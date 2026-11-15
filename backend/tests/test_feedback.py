@@ -1,6 +1,7 @@
-"""Feedback on bot work (backend/feedback.py): one row per person and subject, only for a subject a bot made and the
-rater reads, a private Assistant chat's feedback seen by its person alone, and the two ways a 👎 goes on: a note that
-stays in its conversation's session, and an org rule added with the person's own rights.
+"""Feedback on work (backend/feedback.py): one row per person and subject, only for a subject a bot or another person
+made and the rater reads, a private Assistant chat's feedback seen by its person alone, and the two ways a 👎 on a bot's
+work goes on: a note that stays in its conversation's session, and an org rule added with the person's own rights. A
+person's work takes the rating and the reason only.
 Fictional people only: ana (owner), ben (admin, made a member where his own rights matter), cara (member)."""
 
 import json
@@ -78,10 +79,10 @@ def test_markers_carry_only_the_callers_own_rows_and_everyones_counts(api):
     assert answer["counts"] == [{"subject_id": mid, "up": 1, "down": 2}]
 
 
-def test_only_a_bots_work_that_the_rater_reads_takes_feedback_and_only_from_a_person(api):
+def test_only_work_the_rater_reads_and_did_not_make_takes_feedback_and_only_from_a_person(api):
     thread = new_thread(api)
     own = say(api, thread, "My own words")["id"]
-    give(api, own, expected=422)  # a person's message
+    give(api, own, expected=422)  # your own message
     mid = bot_message(api, thread)
     give(api, mid, token="cara-test", expected=404)  # cara is not in the thread: never confirmed
     give(api, mid, "up", tell_bot=True, expected=422)  # telling the bot goes with a 👎
@@ -96,7 +97,7 @@ def test_only_a_bots_work_that_the_rater_reads_takes_feedback_and_only_from_a_pe
                 {"subject_type": "message", "subject_id": mid, "rating": "down", "reason": "", "tell_bot": False},
             )
         assert refused.value.status == 403
-    give(api, mine["id"], subject_type="task", expected=422)  # a task a person filed
+    give(api, mine["id"], subject_type="task", expected=422)  # a task you filed yourself
     rated = give(api, filed["id"], subject_type="task", reason="Wrong venue")
     assert rated["bot_id"] == "bot:cpo"
     assert rows(api, "SELECT subject_revision FROM feedbacks WHERE id=?", rated["id"])[0]["subject_revision"] == 1
@@ -235,3 +236,44 @@ def test_the_mcp_tools_give_list_and_remove_feedback_as_the_caller(api):
     assert call(api, "tico_feedback_reasons")[1]["reasons"] == [{"text": "Wrong date", "count": 1}]
     assert call(api, "tico_feedback_remove", {"id": rated["id"]})[1]["ok"] is True
     assert markers(api, [mid]) == []
+
+
+def test_a_persons_message_and_task_take_a_rating_and_a_reason_and_nothing_tells_them(api, monkeypatch):
+    thread = new_thread(api, members=("bot:cpo", "human:ben", "human:cara"))
+    words = say(api, thread, "The launch is on Friday", token="ben-test")["id"]
+    up = give(api, words, "up", reason="Clear")
+    assert (up["bot_id"], up["rating"], up["outcome"]) == ("human:ben", "up", "none")
+    down = give(api, words, "down", token="cara-test", reason="Wrong date")
+    assert down["bot_id"] == "human:ben" and down["note_id"] is None
+    assert give(api, words, token="ben-test", expected=422)["error"]["code"] == "own_work"  # ben's own words
+    # A 👎 on a person's work has no bot to tell and no bot to make a rule for.
+    told = post(
+        api,
+        "feedback",
+        {"subject_type": "message", "subject_id": words, "rating": "down", "reason": "Wrong date", "tell_bot": True},
+        token="cara-test",
+        expected=422,
+    )
+    assert told["error"]["code"] == "not_bot"
+    monkeypatch.setattr(feedback, "WRITER", lambda system, user: {"rule": "Check dates."})
+    for route in ("rule-draft", "rule"):
+        refused = post(api, f"feedback/{down['id']}/{route}", {"text": "Check dates."}, token="cara-test", expected=422)
+        assert refused["error"]["code"] == "not_bot"
+    with api.app.state.store.transaction() as c:
+        filed = H.task_create(c, "human:ben", "Book the venue", "Book the hall for Friday.", "bot:ops")
+    rated = give(api, filed["id"], subject_type="task", reason="Wrong venue")
+    assert rated["bot_id"] == "human:ben"
+    give(api, filed["id"], subject_type="task", token="ben-test", expected=422)  # ben filed it
+    assert [m["id"] for m in markers(api, [filed["id"]], subject_type="task")] == [rated["id"]]
+    # Nothing reaches ben about it: no note, no message, no mail.
+    assert rows(api, "SELECT count(*) AS n FROM notes")[0]["n"] == 0
+    assert rows(api, "SELECT count(*) AS n FROM messages WHERE recipient_id='human:ben'")[0]["n"] == 0
+    # Readers are as before: cara's row on a members thread is cara's; ben, the rated person, sees only counts.
+    answer = api.get(
+        "/api/v2/feedback", params={"subject_type": "message", "subject_ids": words}, headers=headers("ben-test")
+    ).json()
+    assert answer["items"] == [] and answer["counts"] == [{"subject_id": words, "up": 1, "down": 1}]
+    # Work with no bot or person behind it (the keeper's) still takes none.
+    with api.app.state.store.transaction() as c:
+        keepers = H.task_create(c, "keeper", "Nightly check", "", "bot:ops")
+    assert give(api, keepers["id"], subject_type="task", expected=422)["error"]["code"] == "not_rateable"

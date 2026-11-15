@@ -5,7 +5,7 @@
 // moves to it) and Check now; and Ledger export, a key on computers. Here a shared mailbox is added through the API.
 // The hub's answers: who sees which tool (Omar only the one he holds, and only his own row on it; Priya none), and no
 // key value in any answer. The page: the old Library › Connections address lands on Tools; the list, its Needs you
-// and Mail filters; Close CRM's levels, keys, check squares and recent calls; its Activity tab and Refused filter;
+// and Mail filters (in the phone's folded rail); Close CRM's levels, keys, check squares and recent calls; its Activity tab and Refused filter;
 // Ledger export's Move to proxy; the mailbox's page. Phone only; TICO_UI_SHOTS=<dir> saves each in dark and light.
 import type {Page} from 'playwright';
 import type * as E2E from './support/e2e.cts';
@@ -61,6 +61,14 @@ async function shots(page: Page, name: string) {
   await page.evaluate(() => window.ticoTheme.set('dark'));
 }
 const rowIds = (page: Page) => page.locator('tr[data-tl-row]').evaluateAll(rows => rows.map(r => (r as HTMLElement).dataset.tlRow!));
+// A filter in the rail: on a phone the filters fold behind a button, one section at a time.
+async function pick(page: Page, sec: string, sel: string) {
+  if (!(await page.locator(sel).isVisible().catch(() => false))) {
+    if (!(await page.locator('#tools-root.filters-open').count())) await page.locator('[data-tl-filters]').click();
+    if (!(await page.locator(sel).count())) await page.locator(`[data-tl-fsec="${sec}"]`).click();
+  }
+  await page.locator(sel).click();
+}
 
 journey('e2e-tools', async ({hub, browser, phone}) => {
   const where = phone ? 'phone' : 'desktop';
@@ -114,23 +122,26 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   const skip = page.locator('#feedback-ask:not([hidden]) [data-skip]');
   if (await skip.count()) await skip.click();
   const crmRow = page.locator('tr[data-tl-row="api:close-crm"]');
-  assert.match(await crmRow.innerText(), /Close CRM[\s\S]*Proxy[\s\S]*Working/, `${where}: the Close CRM row`);
+  assert.match(await crmRow.innerText(), /Close CRM/, `${where}: the Close CRM row`);
+  assert.equal(await crmRow.locator('.tt-pill').count(), 0, `${where}: working, so no pill`);
   assert.equal(await crmRow.locator('.tt-face').count(), 2, `${where}: two faces`);
   assert.equal(await sideways(page), false, `${where}: the list has no sideways scroll`);
   assertClean(page, `${where}: list`);
   await shots(page, `list-${where}`);
-  await page.locator('[data-tl-show="needs"]').click();
-  await page.waitForFunction(() => location.hash === '#/tools?show=needs');
+  await pick(page, 'needs', '[data-tl-fneeds]');
+  await page.waitForFunction(() => location.hash === '#/tools?needs=1');
   const needs = await rowIds(page);
   assert.ok(needs.includes('api:ledger-export') && !needs.includes('api:close-crm'), `${where}: Needs you: ${needs}`);
   await shots(page, `needs-${where}`);
-  await page.locator('[data-tl-show="mail"]').click();
-  assert.ok((await rowIds(page)).includes('mailbox:' + MAILBOX), `${where}: Mail and numbers lists the mailbox`);
-  await page.locator('[data-tl-show=""]').click();
+  await pick(page, 'needs', '[data-tl-fneeds]');
+  await pick(page, 'kind', '[data-tl-show="mail"]');
+  assert.ok((await rowIds(page)).includes('mailbox:' + MAILBOX), `${where}: Mail lists the mailbox`);
+  await pick(page, 'kind', '[data-tl-show=""]');
+  if (await page.locator('#tools-root.filters-open').count()) await page.locator('[data-tl-filters]').click();
 
   // Close CRM: who can use it at which level, its keys, its checks and its calls.
-  // The whole row opens the tool (a working tool's Status cell is blank, so click Way in).
-  await crmRow.locator('.tt-way').click();
+  // The whole row opens the tool (click its faces).
+  await crmRow.locator('.tt-who').click();
   await page.waitForFunction(() => location.hash === '#/tools/api/close-crm');
   await page.locator('#tool-access tr[data-ta-subject-row]').first().waitFor({timeout: t(10000)});
   const checked = (sel: string) => page.locator(`${sel}[aria-checked="true"]`).count();

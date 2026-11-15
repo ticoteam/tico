@@ -19,7 +19,8 @@
 .tl-status:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 
 /* ---- the header is the shared page header (ui/app/page-head.ts, hook .tl-head): the title, the scope ▾ after it, the
-   view tools and ⋯ (New task is in it). Below: the scope button, the icon buttons and the search it holds. */
+   view tools (a pipeline's List/Columns switch among them), the quiet + for New task, and ⋯. Below: the scope button, the
+   icon buttons and the search it holds. */
 .tl-scope{flex:0 1 auto;display:inline-flex;align-items:center;gap:6px;min-width:56px;height:var(--ctl);padding:0 8px 0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);color:var(--ink);font:500 var(--t-base)/var(--lh-none) var(--sans);white-space:nowrap;cursor:pointer}
 .tl-scope:hover,.tl-scope[aria-expanded=true]{background:var(--surface2)}
 .tl-scope:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
@@ -46,11 +47,13 @@
 .tl-review:hover{background:var(--surface2);color:var(--ink)}
 .tl-review:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 #task-manager .avatar,#task-manager img{border-radius:50%}
-/* ⋯: New task's key, and List/Columns as a choice under a line */
+/* ⋯: New task (a phone's: a computer's is the + on the row) with its key */
+@media (min-width:761px){.ph-menu #task-mi-new{display:none}}
+@media (max-width:760px){.ph.tl-head>.ph-act{display:none}}
 .ph-menu .tl-mi-k::after{content:attr(data-key);float:right;margin-left:16px;padding:0 5px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font:var(--t-xs)/16px var(--sans)}
 @media (max-width:760px){.ph-menu .tl-mi-k::after{content:none}}
-.ph-menu .tl-mi-layout hr{margin:4px 0;border:0;border-top:1px solid var(--line)}
-.ph-menu .tl-mi-layout [aria-checked=true]::after{content:"✓";float:right;margin-left:16px;color:var(--ink)}
+/* ⋯'s Search is for the narrowest phones only (the end of this file) */
+.ph-menu #task-mi-search{display:none}
 /* the layout pair and the finished views are single-choice filters: .ph-seg (page-head.css) draws them */
 .tl-pair{flex:none}
 .tl-pair button{display:inline-grid;place-items:center;min-width:26px}
@@ -317,7 +320,6 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
   .tl-scope{padding:0 6px 0 8px;gap:4px}
-  .tl-ib{width:30px}
   .tl-who{padding:0 2px 0 4px}
   .tl-bar.more{-webkit-mask-image:linear-gradient(to left,transparent,#000 28px);mask-image:linear-gradient(to left,transparent,#000 28px)}
   .tl-filters{flex-wrap:nowrap;flex:none}
@@ -431,9 +433,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tasks-pane .tl-search{border-width:0;box-shadow:inset 0 0 0 1px var(--line)}
   .tasks-pane .tl-search:focus-within{box-shadow:inset 0 0 0 1px var(--focus)}
   .tasks-pane .tl-search input{height:var(--ctl)}
-  .tl-ib{width:44px}
-  /* Tasks on a phone is one 44 px row: the scope ▾ at the left, then search, filter, ▶ Review and ⋯. No title (the bottom
-     bar says Tasks); the manager's face floats over the board instead (pipeline-ask.ts). */
+  /* Tasks on a phone is one 44 px row of icons (the UI Owner's call; page-head.cts): the scope ▾ at the left, then search,
+     filter, ▶ Review, on a pipeline the board's face (its chat mark, pipeline-ask.ts) and ⋯. The title is kept for screen
+     readers only (the bottom bar says Tasks); a long pipeline name ends in "…". */
   .tasks-pane>.ph.tl-head{position:relative;flex-wrap:nowrap;gap:2px;min-height:44px;padding-bottom:0}
   .tasks-pane>.ph>.ph-t{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);flex:none}
   .tasks-pane>.ph>#task-scope{flex:0 1 auto;min-width:0;margin-right:auto;overflow:hidden;text-overflow:ellipsis}
@@ -444,7 +446,6 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tasks-pane .tl-review.none::before{background:none}
   .tasks-pane .tl-review:hover{background:none}
   .tasks-pane .tl-review:hover::before{background:var(--surface2)}
-  #task-manager{display:none!important}
   /* the search folds to its icon; focused, it opens over the whole row with one ✕; holding words, its line stays */
   .tasks-pane .tl-search:not(:focus-within){flex:none;position:relative;width:44px;min-width:0;padding:0;justify-content:center;background:none;box-shadow:none}
   /* min-width 0 beats the shared header's 160 px search minimum, which spreads the folded field past its icon. The
@@ -463,4 +464,12 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-gtoggle,.tl-gact{height:44px}
   .tl-gact{width:44px}
   .tl-row > .tl-status{height:44px}
+}
+
+/* ---- the narrowest phones (under 340 px): the search's icon folds into ⋯ (its Search item opens it over the row), so the
+   pipeline's name keeps room for about ten letters beside search, filter, ▶, the board's face and ⋯. The field stays in
+   the row, out of sight, so it still takes the focus, and opens over the row once it has it or holds words. */
+@media (max-width:340px){
+  .tasks-pane .ph-tools .tl-search:not(:focus-within):not(:has(input:not(:placeholder-shown))){position:absolute;width:1px;height:1px;margin:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .ph-menu #task-mi-search{display:block}
 }

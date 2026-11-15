@@ -93,19 +93,26 @@ function finPnlPage() {
   FIN.pnl = {view, data: null, budgets: [], load: 0}; p.view = view;
   const views = caps.company ? [['company', 'Company'], ['expenses', 'Expenses']] : [['expenses', 'Expenses']];
   const filters = view === 'expenses' ? `<div class="fin-filters" id="fin-filters"></div>` : '';
-  $('#fin-body').innerHTML = `<div class="fin-bar">${finSeg('view', 'View', views, view)}${finSeg('period', 'Period', FIN_PERIODS, p.period)}
+  // On a phone only the view (Company, Expenses) stays on the bar; the period, range, basis and Compare sit behind the
+  // shared filter icon (finPnlSetMenu), its badge counting what is not the default. A computer shows them on the bar.
+  const changed = finPnlSetCount();
+  $('#fin-body').innerHTML = `<div class="fin-bar">${finSeg('view', 'View', views, view)}
+      <button type="button" class="tl-ib fin-filter fin-pl-narrow${changed ? ' on' : ''}" id="fin-pl-set" aria-haspopup="true" aria-expanded="false" aria-label="${changed ? `Period and basis, ${changed} changed` : 'Period and basis'}" title="Period and basis">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true"${changed ? '' : ' hidden'}>${changed}</span></button>
+      <span class="fin-pl-wide">${finSeg('period', 'Period', FIN_PERIODS, p.period)}
       <span class="fin-pop-at"><button type="button" class="ghost" data-fin-range aria-expanded="false" aria-controls="fin-range">${esc(finRangeLabel(p.start, p.end))}</button>
-        <form class="fin-pop" id="fin-range" hidden><label>From<input type="date" name="start" value="${p.start}" required></label>
-          <label>To<input type="date" name="end" value="${p.end}" required></label><button type="submit" class="primary">Apply</button></form></span>
-      ${finSeg('basis', 'Basis', [['accrual', 'Accrual'], ['cash', 'Cash']], p.basis)}<span id="fin-pl-marks" class="fin-marks"></span>
-      ${view === 'company' ? `<label class="fin-inline"><span class="muted">Compare</span><span class="fin-sel"><span class="fin-sel-v" aria-hidden="true">${esc((finCompareOptions().find(([v]) => v === p.compare) || finCompareOptions()[0])?.[1] || '')}</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
-        `<option value="${v}"${v === p.compare ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></span></label>` : ''}
-      <span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button></div>
+        <form class="fin-pop" id="fin-range" hidden><label>From<input type="date" data-date-field name="start" value="${p.start}" required></label>
+          <label>To<input type="date" data-date-field name="end" value="${p.end}" required></label><button type="submit" class="primary">Apply</button></form></span>
+      ${finSeg('basis', 'Basis', [['accrual', 'Accrual'], ['cash', 'Cash']], p.basis)}</span><span id="fin-pl-marks" class="fin-marks"></span>
+      ${view === 'company' ? `<label class="fin-inline fin-pl-wide"><span class="muted">Compare</span><select data-fin-compare>${finCompareOptions().map(([v, l]) =>
+        `<option value="${v}"${v === p.compare ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>` : ''}</div>
+    <div id="task-filter-pop" class="tl-pop" popover></div>
     ${filters}` + finSplit(view === 'expenses'
       // The org-chart picker: a column beside the table on a wide screen, "+ Filter" on a phone (finance.css).
       ? `<div class="fin-exp"><div class="fin-tree fin-tree-col" id="fin-tree-col" role="group" aria-label="Filter"></div><div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div></div>`
       : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown')
     + '<section class="fin-subs" id="fin-subs" aria-label="Subscriptions" hidden></section>';
+  // Export is rarer than daily: an item in the header's ⋯.
+  finHeadMore('<button type="button" data-fin-export>Export</button>');
   const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
   body.onclick = ev => finPnlClick(ev);
   body.ondblclick = ev => { const td = eventElement(ev)?.closest<HTMLElement>('td[data-fin-budget]'); if (td) finPnlEdit(td); };
@@ -123,12 +130,58 @@ function finPnlPage() {
   body.querySelector('[data-fin-compare]')?.addEventListener('change', ev => {
     const pick = ev.target as HTMLSelectElement;
     p.compare = pick.value;
-    const shown = pick.parentElement?.querySelector('.fin-sel-v'); if (shown) shown.textContent = pick.selectedOptions[0]?.textContent || '';
     void finPnlLoad();
+  });
+  const set = finNeed(body.querySelector<HTMLElement>('#fin-pl-set'), 'the period menu'), pop = finNeed(body.querySelector<HTMLElement>('#task-filter-pop'), 'the period popover');
+  set.onclick = () => finPnlSetMenu(set, view);
+  pop.addEventListener('keydown', tasksMenuKeys);
+  pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
+    set.setAttribute('aria-expanded', String(ev.newState === 'open'));
+    if (ev.newState === 'closed' && (pop.contains(document.activeElement) || document.activeElement === document.body)) set.focus();
   });
   if (view === 'expenses') finFiltersDraw();
   void finPnlLoad();
   void finSubsLoad();
+}
+// How many of the period, range, basis and Compare differ from the P&L's defaults (a month at a time on its own
+// window, cash, today's budget): the phone's icon badge.
+const finPnlSetCount = () => { const p = FIN_PNL; return [p.period !== 'month', p.picked, p.basis !== 'cash', !!p.compare].filter(Boolean).length; };
+const FIN_PNL_MENU: TasksMenuHost = {};
+// The phone's P&L settings in the shared popover (task-list-menus.ts tasksMenu): the period, the range, the basis and,
+// on Company, Compare. A pick acts as the bar's control does on a computer.
+function finPnlSetMenu(anchor: HTMLElement, view: string) {
+  const p = FIN_PNL;
+  const radios = (name: string, opts: readonly (readonly string[])[], cur: string) => `<div class="tl-menu-list">${opts.map(([v = '', l = '']) =>
+    `<label class="tl-opt"><input type="radio" name="${name}" value="${esc(v)}"${v === cur ? ' checked' : ''}><span>${esc(l)}</span></label>`).join('')}</div>`;
+  tasksMenu(FIN_PNL_MENU, anchor, `<div class="tl-menu" role="group" aria-label="Period and basis">
+    <div class="tl-menu-h" aria-hidden="true">Period</div>${radios('fin-pl-period', FIN_PERIODS, p.period)}
+    <div class="tl-menu-sep" role="separator"></div>
+    <form class="fin-form fin-pl-range" data-fin-pl-range><label>From<input type="date" name="start" value="${p.start}" required></label>
+      <label>To<input type="date" name="end" value="${p.end}" required></label><button type="submit" class="ghost">Apply</button></form>
+    <div class="tl-menu-sep" role="separator"></div>
+    <div class="tl-menu-h" aria-hidden="true">Basis</div>${radios('fin-pl-basis', [['accrual', 'Accrual'], ['cash', 'Cash']], p.basis)}
+    ${view === 'company' ? `<div class="tl-menu-sep" role="separator"></div><div class="tl-menu-h" aria-hidden="true">Compare</div>${radios('fin-pl-compare', finCompareOptions().map(([v = '', l = '']) => [v, l]), p.compare)}` : ''}
+  </div>`, pop => {
+    pop.onchange = ev => {
+      const t = eventElement(ev);
+      if (!(t instanceof HTMLInputElement) || t.type !== 'radio') return;
+      pop.hidePopover();
+      if (t.name === 'fin-pl-period' && t.value !== p.period) { p.period = t.value as FinPeriod; p.sel = null; p.budgetCol = -1; finPnlPage(); return; }
+      if (t.name === 'fin-pl-basis') p.basis = t.value;
+      else if (t.name === 'fin-pl-compare') p.compare = t.value;
+      else return;
+      finPnlPage();   // the bar's segments and the badge show the choice
+    };
+    const form = pop.querySelector<FinFormOf<FinRangeControls>>('[data-fin-pl-range]');
+    if (form) form.onsubmit = ev => {
+      ev.preventDefault();
+      const a = form.elements.start.value, z = form.elements.end.value;
+      if (!a || !z || z < a) return;
+      pop.hidePopover();
+      p.start = a; p.end = z; p.picked = true; p.sel = null; p.budgetCol = -1;
+      finPnlPage();
+    };
+  });
 }
 function finPnlClick(ev: Event) {
   const p = FIN_PNL, t = eventElement(ev);
@@ -147,7 +200,7 @@ function finPnlClick(ev: Event) {
   const filter = t.closest<HTMLElement>('[data-fin-filter]');
   if (filter) { finPop(filter, $('#fin-tree')); return; }
   const clear = t.closest<HTMLElement>('[data-fin-clear]');
-  if (clear) { finPickSet(clear.dataset.finClear, false); p.sel = null; finFiltersDraw(); void finPnlLoad(); return; }
+  if (clear) { finPickSet(clear.dataset.finClear, false); p.sel = null; finFiltersDraw(); finFilterBtn()?.focus(); void finPnlLoad(); return; }
   if (t.closest('[data-fin-export]')) { finPnlExport(); return; }
   const cell = t.closest<HTMLElement>('td[data-fin-cell]');
   if (cell && !t.closest('a')) {
@@ -157,7 +210,8 @@ function finPnlClick(ev: Event) {
   }
 }
 const finSegSet = (btn: HTMLElement) => btn.parentElement?.querySelectorAll('button').forEach(b => b.setAttribute('aria-checked', String(b === btn)));
-// A popover under its button; a click outside or Escape closes it.
+// A popover under its button; a click outside or Escape closes it, and Escape puts the focus back on its button. In a
+// menu (role=menu) the arrow keys, Home and End move between its items.
 function finPop(btn: HTMLElement, pop: HTMLElement | null) {
   if (!pop) return;
   const open = pop.hidden;
@@ -167,9 +221,20 @@ function finPop(btn: HTMLElement, pop: HTMLElement | null) {
   if (!open) return;
   pop.querySelector<HTMLElement>('input,button')?.focus();
   const away = (ev: Event) => {
-    const t = eventElement(ev);
-    if (ev.type === 'keydown' ? (ev as KeyboardEvent).key !== 'Escape' : pop.contains(t) || btn.contains(t)) return;
+    // A popover the page took away (another tab drawn by keyboard) leaves no listener behind, and takes no key.
+    if (!pop.isConnected || !btn.isConnected) { document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', away, true); return; }
+    const t = eventElement(ev), key = ev.type === 'keydown' ? (ev as KeyboardEvent).key : '';
+    if (key && pop.matches('[role=menu]') && pop.contains(t) && ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) {
+      const items = [...pop.querySelectorAll<HTMLElement>('[role=menuitem]')], at = items.indexOf(t as HTMLElement);
+      const next = key === 'Home' ? 0 : key === 'End' ? items.length - 1 : key === 'ArrowDown' ? (at + 1) % items.length : (at - 1 + items.length) % items.length;
+      ev.preventDefault(); items[next]?.focus(); return;
+    }
+    if (pop.hidden) { document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', away, true); return; }
+    if (ev.type === 'keydown' ? key !== 'Escape' : pop.contains(t) || btn.contains(t)) return;
+    if (t?.closest('.df-input[aria-expanded="true"]')) return;   // Escape closes a date field's calendar first (format.ts)
+    const inside = pop.contains(document.activeElement);
     pop.hidden = true; btn.setAttribute('aria-expanded', 'false');
+    if (key === 'Escape') { ev.preventDefault(); if (inside || document.activeElement === document.body) btn.focus(); }
     document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', away, true);
   };
   document.addEventListener('pointerdown', away, true); document.addEventListener('keydown', away, true);
@@ -289,9 +354,9 @@ function finPnlDraw() {
     const sel = p.sel?.id === r.account_id ? p.sel.col : -1;
     const edit = editable(r);
     const how = FIN_PROJ[r.projection_method ?? ''] ? ` title="${FIN_PROJ[r.projection_method ?? '']}"` : '';
-    const cells = vals.map((v, i) => `<td data-fin-cell="${esc(r.account_id)}|${i}"${cols[i]?.state === 'future' ? how : ''} class="${cols[i]?.state === 'future' ? 'fin-p' : ''}${i === past && cols[i]?.state === 'future' ? ' fin-b' : ''}${sel === i ? ' fin-on' : ''}">${r.private && v == null ? '<span class="muted">—</span>' : finNum(v)}</td>`).join('');
+    const cells = vals.map((v, i) => `<td data-fin-cell="${esc(r.account_id)}|${i}"${cols[i]?.state === 'future' ? how : ''} class="${cols[i]?.state === 'future' ? 'fin-p' : ''}${i === past && cols[i]?.state === 'future' ? ' fin-b' : ''}${sel === i ? ' fin-on' : ''}">${finNum(v)}</td>`).join('');
     return `<tr class="fin-ln" style="--d:${r.depth}"><td>${name}</td>${cells}<td class="fin-b${edit ? ' fin-edit' : ''}"${edit
-      ? ` data-fin-budget="${esc(r.account_id)}" tabindex="0" aria-label="${esc(r.name)} budget, ${esc(finColLong(finNeed(bcol, 'the budget column')))}"` : ''}>${r.private ? '<span class="muted">—</span>' : finNum(budget)}</td>${toDateCell(finToDateOf(bi)(r))}<td class="${diff.cls}">${diff.text}</td></tr>`;
+      ? ` data-fin-budget="${esc(r.account_id)}" tabindex="0" aria-label="${esc(r.name)} budget, ${esc(finColLong(finNeed(bcol, 'the budget column')))}"` : ''}>${r.private ? '' : finNum(budget)}</td>${toDateCell(finToDateOf(bi)(r))}<td class="${diff.cls}">${diff.text}</td></tr>`;
   };
   const total = (label: string, rows: FinPnlLine[], cls: string, good: number) => {
     const vals = cols.map((c, i) => finSum(rows, r => r.private ? null : finVal(r, cols, i)));
@@ -469,7 +534,8 @@ function finImportedCols(data: FinPnlData, cols: FinPnlCol[]) {
 function finMarksDraw(box: HTMLElement | null, data: FinPnlData | FinBsData | null) {
   if (!box) return;
   const snap = data?.snapshot;
-  box.innerHTML = snap ? `<span class="pill ok">Closed</span>${snap.restatements ? `<span class="pill waiting" title="${esc(snap.month)}">Restated · ${snap.restatements}</span>` : ''}` : '';
+  // Closed is a normal state: a lock mark and a muted word, not a pill; a restatement since is of interest (a pill).
+  box.innerHTML = snap ? `<span class="fin-closed muted"><span class="nav-icon" aria-hidden="true">lock</span>Closed</span>${snap.restatements ? `<span class="pill waiting" title="${esc(snap.month)}">Restated · ${snap.restatements}</span>` : ''}` : '';
 }
 async function finPnlRail() {
   const state = FIN?.pnl, p = FIN_PNL; if (!state?.data) return;
@@ -540,6 +606,16 @@ function finPickSet(k: string | undefined, on: boolean) {
   else if (k.startsWith('mate:')) p.mates = put(p.mates, v);
   else p.unattributed = !!on;
 }
+// The filter icon's badge and name follow what is picked, without redrawing the picker (the focus stays in it).
+const finFilterBtn = () => $('#fin-filters [data-fin-filter]') as HTMLElement | null;
+function finFilterCount() {
+  const btn = finFilterBtn(), n = finPicked(FIN_PNL).length;
+  if (!btn) return;
+  btn.classList.toggle('on', n > 0);
+  btn.setAttribute('aria-label', n ? `Filter, ${n} on` : 'Filter');
+  const badge = btn.querySelector<HTMLElement>('.tl-fbadge');
+  if (badge) { badge.hidden = !n; badge.textContent = String(n); }
+}
 function finChipsDraw() {
   const box = $('#fin-chips'); if (!box) return;
   box.innerHTML = finPicked(FIN_PNL).map(k => { const n = finPickName(k); return `<span class="fin-chip">${esc(n)}<button type="button" data-fin-clear="${esc(k)}" aria-label="Clear ${esc(n)}">✕</button></span>`; }).join('');
@@ -565,7 +641,10 @@ function finFiltersDraw() {
   for (const m of staff.filter(m => !m.team || !teams.some(t => t.id === m.team))) out.push(mate(m, 0));
   if (helpers.length) out.push('<div class="fin-tree-h">Helpers</div>', ...helpers.map(m => mate(m, 0)));
   if (caps?.companyExpenses) out.push(pick('none:', 'Unattributed', 0));
-  box.innerHTML = `<span class="fin-chips" id="fin-chips"></span><span class="fin-pop-at fin-filter-pop"><button type="button" class="ghost fin-pill" data-fin-filter aria-expanded="false" aria-controls="fin-tree">+ Filter</button>
+  // On a phone the org-chart picker sits behind the shared filter icon (its badge counts what is picked); on a wider
+  // screen it is the column beside the table (finance.css).
+  const n = on.size;
+  box.innerHTML = `<span class="fin-chips" id="fin-chips"></span><span class="fin-pop-at fin-filter-pop"><button type="button" class="tl-ib fin-filter${n ? ' on' : ''}" data-fin-filter aria-expanded="false" aria-controls="fin-tree" aria-label="${n ? `Filter, ${n} on` : 'Filter'}" title="Filter">${filterIcon(13)}<span class="tl-fbadge tnum" aria-hidden="true"${n ? '' : ' hidden'}>${n}</span></button>
       <div class="fin-pop fin-tree" id="fin-tree" role="group" aria-label="Filter" hidden>${out.join('')}</div></span>
     ${finSeg('who', 'Who', [['both', 'Bots + people'], ['bots', 'Bots'], ['people', 'People']], p.who)}`;
   const col = $('#fin-tree-col'); if (col) col.innerHTML = out.join('');
@@ -576,7 +655,7 @@ function finFiltersDraw() {
     finPickSet(k, picked.checked);
     const now = new Set(finPicked(p));
     for (const t of trees) t.querySelectorAll<HTMLInputElement>('[data-fin-pick]').forEach(x => { x.checked = x.dataset.finPick ? now.has(x.dataset.finPick) : !now.size; });
-    p.sel = null; finChipsDraw(); void finPnlLoad();
+    p.sel = null; finChipsDraw(); finFilterCount(); void finPnlLoad();
   };
   for (const t of trees) t.onchange = change;
 }
@@ -612,13 +691,14 @@ function finLinePage(accountId: string) {
   const chips = [...finPicked(filter).map(finPickName), ...(filter.who !== 'both' ? [filter.who === 'bots' ? 'Bots' : 'People'] : [])]
     .map(n => `<span class="fin-chip">${esc(n)}</span>`).join('');
   $('#fin-body').innerHTML = `<nav class="fin-crumbs" aria-label="Breadcrumb"><a href="${finHref('/pnl', {view: fq || FIN_PNL.view === 'expenses' ? 'expenses' : ''})}">P&amp;L</a>${parent ? `<span class="muted">›</span><span class="muted">${esc(parent.name)}</span>` : ''}<span class="muted">›</span><h2 id="fin-line-name">${esc(me?.name || '')}</h2></nav>
-    <div class="fin-bar"><label class="fin-inline"><span class="sr-only">Month</span><input type="month" data-fin-month value="${L.month}" aria-label="Month"></label>
+    <div class="fin-bar"><select class="fin-month" data-fin-month aria-label="Month">${finMonthOptions(L.month)}</select>
       <label class="fin-inline"><span class="muted">Rows</span><select data-fin-by>${[['vendor', 'Vendor'], ['team', 'Team'], ['teammate', 'Teammate']].map(([v, l]) =>
         `<option value="${v}"${v === L.by ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      ${chips}<span class="spacer"></span><span id="fin-line-add"></span></div>`
+      ${chips}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-line">${skelRows(6, {dot: false})}</div>`, '', 'Selected row');
+  finHeadAct('');   // the line's quiet + (a vendor's or the line's own budget) once its budgets are read (finLineDraw)
   const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
-  const monthIn = finNeed(body.querySelector<HTMLInputElement>('[data-fin-month]'), 'the month input'), byIn = finNeed(body.querySelector<HTMLSelectElement>('[data-fin-by]'), 'the rows picker');
+  const monthIn = finNeed(body.querySelector<HTMLSelectElement>('[data-fin-month]'), 'the month picker'), byIn = finNeed(body.querySelector<HTMLSelectElement>('[data-fin-by]'), 'the rows picker');
   monthIn.onchange = () => { if (monthIn.value) { L.month = monthIn.value; L.sel = ''; void finLineLoad(); } };
   byIn.onchange = () => { L.by = byIn.value as FinLineBy; L.sel = ''; finLineDraw(); finLineRail(); };
   body.onclick = ev => {
@@ -687,16 +767,20 @@ function finLineLabel(key: string, label: string) {
   if (FIN_LINE.by === 'teammate') return key === FIN_NONE ? 'Unattributed' : finWho(key);
   if (FIN_LINE.by === 'team') return key === FIN_NONE ? 'Unattributed' : key === 'no_team' ? 'No team' : finTeamName(key) || label;
   // A vendor's label is a contact's name or "" (a contact the viewer can't see), never the key: a bill's key is an id.
-  if (FIN_LINE.by === 'vendor') return label || '—';
+  if (FIN_LINE.by === 'vendor') return label || 'No name';
   return label || key;
 }
+// The quiet + last set on a header, so a redraw that keeps it leaves the header (and the focus in it) alone.
+const FIN_LINE_ADD = new WeakMap<HTMLElement, string>();
 function finLineDraw() {
   const state = FIN?.line, box = $('#fin-line'); if (!box || !state?.cur) return;
   const L = FIN_LINE, vendor = L.by === 'vendor', may = finNeed(finCaps(), 'the finance caps').may('finance.budgets');
   const rows = finLineKeys(), parent = finLineParent();
-  const add = $('#fin-line-add');
-  if (add) add.innerHTML = !may ? '' : parent ? '<button type="button" class="primary" data-fin-vendor-add>+ Vendor budget</button>'
-    : finLineBudget(state.id, state.budgets) ? '' : '<button type="button" class="primary" data-fin-line-add>+ Line budget</button>';
+  // A budget is added rarely: the header's quiet + (a vendor's under the line's own, or the line's own when it has none).
+  const add = !may ? '' : parent ? pageHeadAdd('New vendor budget', 'data-fin-vendor-add')
+    : finLineBudget(state.id, state.budgets) ? '' : pageHeadAdd('New line budget', 'data-fin-line-add');
+  const finHead = $('#fin-head') as HTMLElement | null;
+  if (finHead && FIN_LINE_ADD.get(finHead) !== add) { FIN_LINE_ADD.set(finHead, add); finHeadAct(add); }
   if (!L.sel || !rows.some(r => r.key === L.sel)) L.sel = rows[0]?.key || '';
   const [cm, pm] = [finDate(L.month + '-01').getMonth(), finDate(finPrevMonth(L.month) + '-01').getMonth()];
   // Next month's projection for each row (the line's default method on that row's history).
@@ -708,10 +792,10 @@ function finLineDraw() {
     const edit = may && finIsVendor(r.key) && finVendorEditable(b, parent);
     const per = b && b.period !== 'month' ? ` <span class="muted">/ ${FIN_PER[b.period] || b.period}</span>` : '';
     const budgetCell = !vendor ? '' : !finIsVendor(r.key) ? '<td class="fin-n fin-b"></td><td></td>'
-      : `<td class="fin-n fin-b">${edit ? `<input class="fin-in" inputmode="decimal" autocomplete="off" data-fin-vb="${esc(r.key)}" value="${finCentsField(amount)}" aria-label="${esc(r.label)} budget a month from ${esc(FIN_MONTH[cm])}">` : finNum(amount) + per}</td><td${b ? '' : ' class="muted"'}>${b ? esc(FIN_AT_LIMIT[b.at_limit] || b.at_limit) : ''}</td>`;
-    return `<tr data-fin-key="${esc(r.key)}"${L.sel === r.key ? ' class="fin-on"' : ''}><td>${esc(finLineLabel(r.key, r.label))}</td>${vendor ? `<td>${b ? esc(b.team ? finTeamName(b.team) : 'All') : ''}</td>` : ''}<td class="fin-n">${r.prev == null ? '<span class="muted">—</span>' : finNum(r.prev)}</td><td class="fin-n">${r.cur == null ? '<span class="muted">—</span>' : finNum(r.cur)}</td>${nm ? `<td class="fin-n fin-p">${r.proj == null ? '<span class="muted">—</span>' : finNum(r.proj)}</td>` : ''}${budgetCell}</tr>`;
+      : `<td class="fin-n fin-b" data-k="Budget">${edit ? `<input class="fin-in" inputmode="decimal" autocomplete="off" data-fin-vb="${esc(r.key)}" value="${finCentsField(amount)}" aria-label="${esc(r.label)} budget a month from ${esc(FIN_MONTH[cm])}">` : finNum(amount) + per}</td><td${b ? '' : ' class="muted"'} data-k="At limit">${b ? esc(FIN_AT_LIMIT[b.at_limit] || b.at_limit) : ''}</td>`;
+    return `<tr data-fin-key="${esc(r.key)}"${L.sel === r.key ? ' class="fin-on"' : ''}><td>${esc(finLineLabel(r.key, r.label))}</td>${vendor ? `<td data-k="Team">${b ? esc(b.team ? finTeamName(b.team) : 'All') : ''}</td>` : ''}<td class="fin-n" data-k="${FIN_MON[pm]}">${r.prev == null ? '' : finNum(r.prev)}</td><td class="fin-n fin-amt">${r.cur == null ? '' : finNum(r.cur)}</td>${nm ? `<td class="fin-n fin-p" data-k="${FIN_MON[Number(nm.slice(5, 7)) - 1]} proj.">${r.proj == null ? '' : finNum(r.proj)}</td>` : ''}${budgetCell}</tr>`;
   }).join('');
-  box.innerHTML = rows.length ? `<table class="fin-t"><thead>${head}</thead><tbody>${body}</tbody></table>` : finNote('No spend on this line yet.');
+  box.innerHTML = rows.length ? `<table class="fin-t fin-rows fin-line-t"><thead>${head}</thead><tbody>${body}</tbody></table>` : finNote('No spend on this line yet.');
 }
 // Other (the rest, rolled up) and No vendor (spend with none, key unattributed) are not vendors a budget can name.
 const finIsVendor = (k: string) => k !== FIN_OTHER && k !== FIN_NONE;
@@ -780,12 +864,16 @@ const finAtLimitField = (chosen = 'ask') => `<label>At limit<select name="at_lim
   `<option value="${v}"${v === chosen ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
 // The month a new budget starts: `month` when it is open (ahead; or this one, with `now`), else the first open month.
 const finFromMin = (now: boolean) => now ? finToday().slice(0, 7) : finNextMonth(finToday().slice(0, 7));
+// A select of months from the first open one, five years on, "Dec 2026" (one select look, style guide Fields; a month
+// input drew the browser's own field), the month asked for kept in order wherever it is.
 const finFromField = (month = '', now = false) => {
-  const min = finFromMin(now);
-  return `<label>From<input type="month" name="from" required min="${min}" value="${month && month >= min ? month : min}"></label>`;
+  const min = finFromMin(now), pick = month && month >= min ? month : min, [y = 0, m = 0] = min.split('-').map(Number);
+  const months = Array.from({length: 61}, (_, i) => { const d = new Date(y, m - 1 + i, 1); return `${d.getFullYear()}-${finPad(d.getMonth() + 1)}`; });
+  if (!months.includes(pick)) { months.push(pick); months.sort(); }
+  return `<label>From<select name="from" required>${months.map(v => `<option value="${v}"${v === pick ? ' selected' : ''}>${FIN_MON[Number(v.slice(5, 7)) - 1]} ${v.slice(0, 4)}</option>`).join('')}</select></label>`;
 };
 function finFromValue(form: HTMLFormElement, now = false) {
-  const v = (form.elements as HTMLFormControlsCollection & {from: HTMLInputElement}).from.value;
+  const v = (form.elements as HTMLFormControlsCollection & {from: HTMLSelectElement}).from.value;
   if (!v || v < finFromMin(now)) throw new Error(now ? 'Pick this month or one ahead' : 'Pick a month ahead');
   return v + '-01';
 }

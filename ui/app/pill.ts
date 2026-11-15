@@ -150,7 +150,7 @@ const deliveryBody = (mode: string | null | undefined): {delivery?: string; defe
 // the duration the Defer row itself picks. Without `deadlines` (a reader who may not wake the bot) Defer has none.
 function deliveryMenuHTML({steer = true, queue = true, goal = false, deadlines = true, current = 'queue', deferFor = '24h'}:
   {steer?: boolean; queue?: boolean; goal?: boolean; deadlines?: boolean; current?: string; deferFor?: string}) {
-  const row = (val: string, label: string, on: boolean) => `<button type="button" role="menuitemradio" aria-checked="${on}" data-deliver="${esc(val)}"><span class="p-way-i">${SEND_WAY_ICONS[deliveryWay(val)] || ''}</span><span>${esc(label)}</span>${
+  const row = (val: string, label: string, on: boolean) => `<button type="button" role="menuitemradio" aria-checked="${on}" data-deliver="${esc(val)}"><span class="p-way-i">${WAY_MENU_ICONS[deliveryWay(val)] || ''}</span><span>${esc(label)}</span>${
     on ? '<span class="tick" aria-hidden="true">✓</span>' : ''}</button>`;
   const way = deliveryWay(current), f = way === 'defer' ? deliveryFor(current) : '';
   const chips = DELIVERY_FOR.map(d => `<button type="button" role="menuitemradio" aria-checked="${f === d}" aria-label="Defer ${esc(deliveryForWord(d))}" data-deliver="defer:${d}">${esc(deliveryForWord(d))}</button>`).join('');
@@ -182,9 +182,17 @@ const SEND_WAY_PAINT = new Set<() => void>();          // repaint hooks of the c
 const svgIcon = (body: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const SEND_WAY_ICONS: Record<string, string> = {
   steer: ICON_SEND,
-  queue: svgIcon('<path d="M4 6h8M4 18h8M4 12h14M14 8l4 4-4 4"/>'),
+  queue: svgIcon('<path d="M5 5v8h13M14 9l4 4-4 4"/>'),
   defer: svgIcon('<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'),
   goal: svgIcon('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".9" fill="currentColor"/>'),
+};
+// The menu's marks, as the style guide draws Ways to send (#sg-chat): Steer a bolt, Queue the arrow that waits its turn,
+// Defer a clock, Set as goal the target. Send itself keeps its arrow for Steer (SEND_WAY_ICONS).
+const WAY_MENU_ICONS: Record<string, string> = {
+  steer: '<span class="nav-icon" aria-hidden="true">bolt</span>',
+  queue: SEND_WAY_ICONS.queue!,
+  defer: '<span class="nav-icon" aria-hidden="true">schedule</span>',
+  goal: '<span class="nav-icon" aria-hidden="true">target</span>',
 };
 // What Send says it will do, to a screen reader and on hover.
 function sendWayLabel(mode: string | null | undefined) {

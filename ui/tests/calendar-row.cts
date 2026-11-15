@@ -1,7 +1,7 @@
 // The sidebar's Calendar row (ui/app/calendar-row.ts; spec "Next event on Home's Calendar row" v3): one line, "Calendar"
 // then the next event in plain text ("Sales call · in 3 min"), its name opening the event; › steps to the one after and ‹
 // back; a new page resets it to the very next; an event under way reads "now", without a reload; no events in the next 7
-// days read "Nothing scheduled" with no arrows; and at 360px the line stays one line, the name cut with "…".
+// days read "n/a" (named "Nothing scheduled") with no arrows; and at 360px the line stays one line, the name cut with "…".
 // Fixtures only, no network, at a fixed Wednesday 10:00, in a 24-hour locale.
 import type {Browser, LaunchOptions, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -138,19 +138,22 @@ async function oneLine(page: Page) {
       await page.waitForFunction(() => document.querySelector('#nav-calendar .cal-nx')?.textContent?.includes('now'));
       assert.deepEqual(await says(page), {text: 'Sales call · now', back: false, fwd: true}, 'AC-8/AC-11: under way reads "now"');
       assert.equal(await row.locator('a.cal-nx').getAttribute('title'), 'Sales call · now', 'the hover line follows the redraw');
-      // The name is plain ink, not greyed out.
+      // The event line is always subdued: "Calendar" leads the row.
       const ink = await row.locator('.cal-nm').evaluate(el => [getComputedStyle(el).color, getComputedStyle(document.querySelector('#nav-calendar a.nav-link')!).color]);
-      assert.equal(ink[0], ink[1], 'the name is the same ink as "Calendar"');
+      assert.notEqual(ink[0], ink[1], 'the event is quieter than "Calendar"');
       assert.deepEqual(errors, []);
       await context.close();
     }
     {
-      // AC-3: nothing in the next 7 days: "Nothing scheduled", no arrows, and "Clear" nowhere.
+      // AC-3: nothing in the next 7 days: "n/a", no arrows, and "Clear" nowhere.
       const {page, errors, context} = await open(browser, {width: 1360, height: 900}, [event('ev-far', 'Far away', at(20, 10), at(20, 11))]);
       await page.goto('https://tico-ui.test/#/home');
       const row = page.locator('#nav-calendar');
       await row.locator('.cal-nx').waitFor();
-      assert.deepEqual(await says(page), {text: 'Nothing scheduled', back: false, fwd: false}, 'AC-3: Nothing scheduled');
+      const none = page.locator('#nav-calendar .cal-none');
+      assert.equal(await none.locator('[aria-hidden]').innerText(), 'n/a', 'AC-3: the row shows n/a');
+      assert.equal(await none.locator('.sr-only').textContent(), 'Nothing scheduled', 'AC-3: named Nothing scheduled');
+      assert.equal(await page.locator('#nav-calendar .cal-step').count(), 0, 'AC-3: no arrows');
       assert.equal(await row.locator('[data-cal-step]').count(), 0, 'AC-3: no arrows');
       assert.doesNotMatch(await row.innerText(), /Clear/, 'AC-3: no "Clear"');
       assert.equal(await oneLine(page), true, 'AC-3: one line');

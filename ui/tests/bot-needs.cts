@@ -160,6 +160,13 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     const rail = page.locator('#pane-tasks');
     const titles = async (list: string) => (await rail.locator(`${list} .tk-row .tk-title`).allInnerTexts()).map(s => s.trim());
     const tab = (key: string) => rail.locator(`#bot-tab-t-${key}`);
+    // A tab past the rail's width waits behind the tab bar's ⋯ (bot-tasks.ts botTaskTabsFit): picked there, it joins the line.
+    const show = async (key: string) => {
+      if (await tab(key).isVisible()) return tab(key).click();
+      await rail.locator('.bot-task-tabline > .bot-tab-more').click();
+      await page.locator(`#task-filter-pop [data-bot-tab-pick="${key}"]`).click();
+      await tab(key).waitFor({state: 'visible'});
+    };
     await rail.locator('#t-needs .tk-row').first().waitFor();
 
     // One Tasks section with its tabs and their counts, before Updates and Files; no folded section after it.
@@ -232,13 +239,13 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
 
 
     // Doing is the open tasks it holds, newest first.
-    await tab('active').click();
+    await show('active');
     assert.deepEqual(await titles('#t-open'), ['Plan the import page', 'Renew the domain', 'Merge the export fix', 'Plan the weekly summary',
       'Send the announcement', 'Turn on the screen default', 'Ship the release notes']);
     assert.equal(await rail.locator('#bot-needs').isHidden(), true);
 
     // Blocked: its open tasks whose turn is someone else's (not its own, not Ana's); each row's line says what it waits on.
-    await tab('blocked').click();
+    await show('blocked');
     assert.deepEqual(await titles('#t-blocked'), ['Renew the domain', 'Merge the export fix']);
     const tips = await rail.locator('#t-blocked .tk-row').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.tip || ''));
     assert.match(tips[0]!, /Waiting for the vendor's invoice\.$/, tips[0]);
@@ -247,15 +254,15 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     // Done recently: finished in the last 14 days; the one from three weeks ago is not listed. It is drawn only once its
     // tab opens, 50 rows at a time (paging, at the end).
     assert.equal(await rail.locator('#t-done .tk-row').count(), 0, 'Done is drawn when its tab opens');
-    await tab('done').click();
+    await show('done');
     assert.deepEqual(await titles('#t-done'), ['Send the weekly summary']);
 
     // Assigned to others keeps what it asked of another bot; its task for Ana is in Needs you, not here.
-    await tab('c4').click();
+    await show('c4');
     assert.deepEqual(await titles('#t-c4'), ['Support access fixes', 'Run the release check']);
 
     // A redraw keeps the picked tab while Needs you has rows, and leaves the rail scrolled where it was.
-    await tab('done').click();
+    await show('done');
     const scrolled = await page.evaluate(() => {
       const r = document.querySelector<HTMLElement>('#pane-tasks')!;
       r.style.overflowY = 'auto'; r.style.height = '80px'; r.scrollTop = r.scrollHeight; return r.scrollTop;
@@ -330,7 +337,7 @@ const LAYOUT: Layout[] = [{builtin: 'needs', name: 'Needs you'}, {builtin: 'acti
     filterExtras = null;
 
     // Done recently pages 50 rows at a time.
-    await tab('done').click();
+    await show('done');
     await page.evaluate(() => { const d = BOT_DONE.get('lead')!, row = d.rows[0]!; d.rows = Array.from({length: 120}, (_, i) => ({...row, id: 'many-' + i})); botDonePaint('lead'); });
     assert.equal(await rail.locator('#t-done .tk-row').count(), 50);
     await rail.getByRole('button', {name: 'Show 50 more'}).click();

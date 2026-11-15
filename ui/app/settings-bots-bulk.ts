@@ -19,7 +19,7 @@ function settingsBulkModelDialog() {
   const paint = () => {
     const value = choice ? settingsChoiceValue(choice.harness, choice.model, choice.effort) : '';
     const label = settingsBulkWords(choice, compact);
-    dialog.innerHTML = `<div class="tmodal-head"><h2 id="bulk-model-title">Change model · ${bots.length} bot${bots.length === 1 ? '' : 's'}</h2><span class="spacer"></span><button class="ghost" type="button" data-bulk-close aria-label="Close">✕</button></div>
+    dialog.innerHTML = `<div class="tmodal-head"><h2 id="bulk-model-title">Change model · ${bots.length} bot${bots.length === 1 ? '' : 's'}</h2><span class="spacer"></span><button class="ghost" type="button" data-bulk-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
       <div class="transition-body">
         <label>Apply to<select data-bulk-target aria-label="Apply to"><option value="bot">Bot model</option><option value="task">Task model</option><option value="both">Both models</option></select></label>
         <div class="settings-bulk-pick" data-bulk-pick>${settingsChoiceBox({kind: 'bulk', name: 'Change to', current: value, compact, mode: 'bulk', none: "Keep each bot's model"})}</div>
@@ -27,7 +27,7 @@ function settingsBulkModelDialog() {
         <div class="transition-progress" data-bulk-explanation></div>
         <ul class="settings-bulk-list" data-bulk-list>${bots.map(e => `<li data-bulk-bot="${esc(e.id)}" data-state="pending"><span>${esc(e.display_name || e.slug)}</span><span class="settings-cell-note">${esc(settingsChoiceLabel(settingsBotHarness(e), e.model, settingsBotEffort(e)))}</span></li>`).join('')}</ul>
         <p role="status" data-bulk-summary></p>
-        <div class="transition-actions"><button class="primary" type="button" data-bulk-apply ${choice || compact ? '' : 'disabled'}>Change ${bots.length} bot${bots.length === 1 ? '' : 's'}</button><button class="ghost" type="button" data-bulk-close>Cancel</button></div></div>`;
+        <div class="transition-actions"><button class="ghost" type="button" data-bulk-close>Cancel</button><button class="primary settings-go" type="button" data-bulk-apply ${choice || compact ? '' : 'disabled'}>Change ${bots.length} bot${bots.length === 1 ? '' : 's'}</button></div></div>`;
     dialog.querySelectorAll<HTMLButtonElement>('[data-bulk-close]').forEach(button => { button.onclick = () => dialog.close(); });
     const preview = () => {
       part<HTMLElement>('[data-bulk-explanation]').innerHTML = target === 'task'

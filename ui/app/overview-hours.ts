@@ -45,7 +45,7 @@ function overviewHoursChart(weeks: BotHoursPoint[]) {
     <line class="ovh-parity" x1="0" x2="${W}" y1="${y(1).toFixed(1)}" y2="${y(1).toFixed(1)}" vector-effect="non-scaling-stroke"/>
     ${solid.length > 1 ? `<path class="ovh-line" d="${path(solid)}" vector-effect="non-scaling-stroke"/>` : ''}
     ${done < weeks.length && dotted.length > 1 ? `<path class="ovh-line ovh-so-far" d="${path(dotted)}" vector-effect="non-scaling-stroke"/>` : ''}
-    <line class="ovh-cross" y1="0" y2="${H}" x1="-9" x2="-9" vector-effect="non-scaling-stroke"/>
+    <line class="ovh-cross" y1="0" y2="${H}" x1="-9" x2="-9" visibility="hidden" vector-effect="non-scaling-stroke"/>
     ${weeks.map((w, i) => `<rect class="ovh-hit" data-i="${i}" x="${(x(i) - step / 2).toFixed(1)}" y="0" width="${step.toFixed(1)}" height="${H}"/>`).join('')}
   </svg>
   ${pts.map(([px, py], i) => `<i class="ovh-dot${weeks[i]?.so_far ? ' ovh-dot-so-far' : ''}" data-i="${i}"
@@ -54,6 +54,8 @@ function overviewHoursChart(weeks: BotHoursPoint[]) {
   <div class="ovh-tip" role="status" hidden></div>`;
 }
 
+// The card is its name, the week's number and the chart (style guide: no sentence explains the page). How the hours are
+// counted is one click in, under the table (overviewHoursOpen).
 // Before its first answer the card holds a line's place, so the campus below does not jump when it lands; a return
 // visit draws the last answer at once (S.lastRead.hours) and the read that follows redraws it only if it changed.
 function overviewHoursDraw() {
@@ -75,9 +77,7 @@ function overviewHoursDraw() {
   } else {
     const chart = plot = !!(last.full && weeks.length);
     body = `<p class="ovh-head"><strong class="tnum">${last.ratio == null ? '' : hoursTimes(last.ratio)}</strong> bot hours per human hour · last 7 days</p>
-      ${chart ? `<div class="ovh-plot">${overviewHoursChart(weeks)}</div>` : '<p class="ovh-note">Chart fills in as weeks pass</p>'}
-      <p class="ovh-note">Bot hours = time bots spent working (pauses over ${d.gap_minutes || 30} min left out). Human hours =
-        people in your org chart × ${d.hours_per_person || 40} h a week.</p>`;
+      ${chart ? `<div class="ovh-plot">${overviewHoursChart(weeks)}</div>` : '<p class="ovh-note">Chart fills in as weeks pass</p>'}`;
   }
   el.hidden = false;
   el.classList.toggle('has-plot', !!plot);
@@ -100,10 +100,11 @@ function overviewHoursHover(plot: HTMLElement | null, weeks: BotHoursPoint[]) {
     const hit = plot.querySelector(`.ovh-hit[data-i="${i}"]`);
     if (!hit) return;
     const cx = Number(hit.getAttribute('x')) + Number(hit.getAttribute('width')) / 2;
-    cross.setAttribute('x1', String(cx)); cross.setAttribute('x2', String(cx));
+    cross.setAttribute('x1', String(cx)); cross.setAttribute('x2', String(cx)); cross.setAttribute('visibility', 'visible');
     dots.forEach((d, j) => d.classList.toggle('on', j === i));
   };
-  const hide = () => { tip.hidden = true; cross.setAttribute('x1', '-9'); cross.setAttribute('x2', '-9'); dots.forEach(d => d.classList.remove('on')); };
+  // The week's line shows only with its numbers (the chart draws overflow, so a line parked off the left would show).
+  const hide = () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); cross.setAttribute('x1', '-9'); cross.setAttribute('x2', '-9'); dots.forEach(d => d.classList.remove('on')); };
   const at = (ev: MouseEvent) => {
     const box = plot.getBoundingClientRect(), f = (ev.clientX - box.left) / box.width;
     return Math.max(0, Math.min(weeks.length - 1, Math.round(f * (weeks.length - 1))));
@@ -130,8 +131,8 @@ function overviewHoursOpen() {
       <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></div>
     <div class="tmodal-body"><div class="scroll"><table class="ovh-table"><thead><tr><th scope="col">Week</th><th scope="col">Bot hours</th>
       <th scope="col">People</th><th scope="col">Human hours</th><th scope="col">Ratio</th></tr></thead><tbody>${rows}</tbody></table></div>
-      <p class="muted ovh-note">Weeks run Monday to Sunday (${esc(d.zone || '')}). An estimate: pauses over ${d.gap_minutes || 30} min
-        inside a run are left out, and every person counts ${d.hours_per_person || 40} h a week.</p></div>`;
+      <p class="muted ovh-note">Bot hours are the time bots spent working, with pauses over ${d.gap_minutes || 30} min inside a run left
+        out. Human hours are the people in your org chart × ${d.hours_per_person || 40} h a week. Weeks run Monday to Sunday (${esc(d.zone || '')}).</p></div>`;
   dlg.querySelector('[data-close]').onclick = () => dlg.close();
   dlg.showModal();
 }

@@ -180,7 +180,11 @@ window.pageMarket = async function pageMarket() {
     if (MARKET_VIEW) { MARKET_VIEW.stop(); MARKET_VIEW = null; }
     // The section's heading and tabs sit above the shell, and stay while notes open inside it.
     $('#main').innerHTML = (window.strategyHeadHtml?.('market') || '') + `<div id="market-shell" class="${at.kind === 'map' ? 'market-shell' : 'mkt-host mkt-page'}"><p class="market-loading">Opening the market…</p></div>`;
-    if (at.kind === 'map') $('.rd-strat-head > .ph-tools').innerHTML = `<a class="ghost" href="${MARKET_ROUTE}" data-market-close>Close map</a>`;
+    if (at.kind === 'map') {
+      // On the map, Close map is the way back; ⋯ holds no Open map then.
+      pageHeadSet($('.rd-strat-head'), 'tools', `<a class="ghost" href="${MARKET_ROUTE}" data-market-close>Close map</a>`);
+      pageHeadSet($('.rd-strat-head'), 'more', PAGE_HEAD_COPY);
+    }
     const shell = $('#market-shell');
     try {
       const mounted = await (at.kind === 'map' ? mountMarket(shell) : mountMarketPage(shell));
@@ -418,8 +422,17 @@ function marketBlankHtml(row: MarketResearchRow | null, setup: MarketSetupState 
     </div>`;
 }
 
+// Market's header: the one beside `shell` while the shell is still in the page, else null. The page mounts after its reads
+// come back, by when the person may be on another tab whose header shares the class (Strategy, Org, Finance…).
+function marketPageHead(shell: HTMLElement): HTMLElement | null {
+  if (!shell.isConnected) return null;
+  return shell.parentElement?.querySelector<HTMLElement>(':scope > header.rd-strat-head') || null;
+}
 async function mountBlank(shell: HTMLElement): Promise<MarketMounted> {
   let poll = 0, setup: MarketSetupState | null = null;
+  // An empty market has no map to open: the header's ⋯ keeps only its Copy link (Market's own header only).
+  const head = marketPageHead(shell);
+  if (head) pageHeadSet(head, 'more', PAGE_HEAD_COPY);
   if (S.me?.cloud && S.me.role === 'owner') {
     try { setup = (await get<{market: MarketSetupState | null}>('/v2/librarian/setup')).market; } catch { setup = null; }
     if (setup) setup = {...setup, answers: {...setup.answers}};

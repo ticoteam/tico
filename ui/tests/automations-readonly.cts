@@ -6,6 +6,8 @@
 import type {Page} from 'playwright';
 import type * as AutomationsFakeSupport from './support/automations-fake.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
+// An open automation's ⋯: the page header's on a computer (its items join it there), the automation's own on a phone.
+const auMoreOpen = async (page: Page) => { const own = page.locator('.au-hd-more'); if (await own.isVisible()) await own.click(); else await page.locator('.au-ph > .ph-more').click(); };
 const assert = require('node:assert/strict');
 const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
@@ -21,9 +23,9 @@ async function readOnly(page: Page, writes: AutomationsFakeSupport.Write[]) {
   assert.equal(await page.locator('.au-save').count(), 0);
   assert.equal(await page.locator('.au-ed [data-op="add"], .au-ed [data-op="rm"], .au-ed [data-op="del"]').count(), 0);
   await page.locator('.au-ed [data-op="close"]').click();
-  await page.locator('[data-more]').click();
-  assert.deepEqual(await page.locator('.au-menu [data-mi]').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.mi)), ['versions']);
-  await page.locator('.au-menu [data-mi="versions"]').click();
+  await auMoreOpen(page);
+  assert.deepEqual(await page.locator(':is(.au-menu, .au-ph > .ph-menu) [data-mi]:visible').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.mi)), ['versions']);
+  await page.locator(':is(.au-menu, .au-ph > .ph-menu) [data-mi="versions"]:visible').click();
   await page.waitForSelector('.au-vr');
   assert.equal(await page.locator('[data-op="restore"]').count(), 0);
   await page.locator('.au-ed [data-op="close"]').click();
@@ -36,9 +38,9 @@ async function readOnly(page: Page, writes: AutomationsFakeSupport.Write[]) {
     // A phone.
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE, viewer: 'priya'});
-      await page.waitForSelector('tr.au-row');
+      await page.waitForSelector('.au-row');
       assert.equal(await page.locator('.au-sw').count(), 0);
-      await page.locator('tr.au-row[data-row="au_inbox"] a').click();
+      await page.locator('.au-row[data-row="au_inbox"] a').click();
       await readOnly(page, writes);
       assert.equal(await sideways(page), false);
       await shot(page, 'phone-readonly');
@@ -68,15 +70,15 @@ async function readOnly(page: Page, writes: AutomationsFakeSupport.Write[]) {
     {
       const tweak = (fx: AutomationsFakeSupport.AutomationsFixture) => Object.assign(fx.automations.find(a => a.id === 'au_tasks')!, {can_edit: false, can_pause: true, readonly: true});
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE, tweak});
-      await page.waitForSelector('tr.au-row[data-row="au_tasks"]');
-      assert.equal(await page.locator('tr.au-row .au-sw').count(), 0, 'the list has no switches');
-      await page.locator('tr.au-row[data-row="au_tasks"] a').click();
+      await page.waitForSelector('.au-row[data-row="au_tasks"]');
+      assert.equal(await page.locator('.au-row .au-sw').count(), 0, 'the list has no switches');
+      await page.locator('.au-row[data-row="au_tasks"] a').click();
       await page.waitForSelector('.au-hd [data-on-cur]', {state: 'attached'});
       assert.equal(await page.locator('.au-hd .au-lock').count(), 0);
       assert.equal(await page.locator('.au-add').count(), 0, 'no "+"');
       assert.equal(await page.locator('.au-card .au-sw').count(), 0, 'no step switches');
-      await page.locator('[data-more]').click();
-      assert.deepEqual(await page.locator('.au-menu [data-mi]').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.mi)), ['versions'], 'no Test run');
+      await auMoreOpen(page);
+      assert.deepEqual(await page.locator(':is(.au-menu, .au-ph > .ph-menu) [data-mi]:visible').evaluateAll(b => b.map(x => (x as HTMLElement).dataset.mi)), ['versions'], 'no Test run');
       assert.deepEqual(writes, []);
       assert.deepEqual(errors, []);
       await page.close();
@@ -84,11 +86,11 @@ async function readOnly(page: Page, writes: AutomationsFakeSupport.Write[]) {
     // A system job: the top of the org sees what it does, that it is fixed, and its switch; a member sees why there is none.
     for (const viewer of ['dana', 'priya']) {
       const {page, errors, writes} = await openAutomations(browser, {viewport: DESKTOP, viewer, system: true});
-      await page.waitForSelector('tr.au-grp[data-agrp="system"]');
+      await page.waitForSelector('.au-grp[data-agrp="system"]');
       await page.locator('[data-ftrig="system"]').click();
-      assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row)), ['au_sys_still']);
-      assert.match(await page.locator('tr.au-row').innerText(), /Daily at 07:00/);
-      await page.locator('tr.au-row[data-row="au_sys_still"] a').click();
+      assert.deepEqual(await page.locator('.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row)), ['au_sys_still']);
+      assert.match(await page.locator('.au-row').innerText(), /Daily at 07:00/);
+      await page.locator('.au-row[data-row="au_sys_still"] a').click();
       await page.waitForSelector('.au-about');
       assert.match(await page.locator('.au-about').innerText(), /Asks a KPI keeper for a reading when it goes out of date\.[\s\S]*Built-in: can’t be edited or deleted/);
       assert.match(await page.locator('.au-trig').innerText(), /System job[\s\S]*Daily at 07:00/);

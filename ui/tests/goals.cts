@@ -116,7 +116,9 @@ const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, 
     // The tree adds nothing itself: "New goal" heads the Strategy tab, and the rest lives in each owner's panel.
     assert.equal(await page.locator('#goal-body button').filter({hasText: /Goal|KPI/}).count(), 0, 'no + Goal, + Company goal or + KPI');
     assert.doesNotMatch(await page.locator('#goal-body').innerText(), /\+ ?(Goal|Company goal|KPI)/);
-    assert.equal(await page.locator('#strat-actions #goal-new').innerText(), 'New goal');
+    // It is the header's quiet + (adding is not daily, so it is not a filled button), named for a screen reader.
+    assert.equal(await page.locator('#strat-actions #goal-new').getAttribute('aria-label'), 'New goal');
+    assert.equal(await page.locator('#strat-actions #goal-new.ph-add:not(.primary)').count(), 1, 'a quiet +, not a filled button');
     // Three requests draw the page: the tree, Needs you and the KPI views.
     assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree', 'GET /api/v2/growth/kpis']);
 

@@ -124,8 +124,16 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const arrive = (to: string, why: string) => page.waitForFunction((w: string) => location.hash === w, to, {timeout: t(5000)}).catch(async () =>
     assert.fail(`${tag}: ${why} lands on ${to} (${await page.evaluate(() => location.hash)})`));
   const dialog = () => page.locator('dialog.gr-dlg[open]');
+  // A header control wherever the shared header put it: on its row, or in ⋯ (rarer actions, and a phone's folded tools).
+  const headTool = async (sel: string) => {
+    const item = page.locator('#main header.ph').locator(sel).first();
+    if (!(await item.isVisible())) await page.locator('#main header.ph > .ph-more').click();
+    await item.click();
+  };
+  // Settings is a ⋯ item in the header (rarer than daily, style guide "Top bars: one line").
   const settings = async () => {
-    await page.locator('[data-gr-settings]').click();
+    await page.locator('#main header.ph > .ph-more').click();
+    await page.locator('#main header.ph .ph-menu [data-gr-settings]').click();
     await dialog().locator('[data-gs-channel="unknown"]').waitFor({timeout: t(10000)});
     return dialog();
   };
@@ -142,7 +150,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.deepEqual(await headings(), CARDS, `${tag}: the default cards`);
   assert.equal(await page.locator('.dash-head h1').innerText(), 'Growth', `${tag}: the title`);
   assert.equal(await page.locator('#dash-grid .dash-none').count(), CARDS.length, `${tag}: each says it has nothing yet`);
-  assert.equal(await page.locator('.dash-head [data-gr-ns]').isVisible(), false, `${tag}: no North Star line`);
+  assert.equal(await page.locator('[data-gr-ns]').count(), 0, `${tag}: no North Star line`);
   assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker`);
   // The Growth board opens the Growth Experiments pipeline the growth packs file into, never General; none, no link.
   const gx = (await ok<{pipelines: {id: string; preset: string | null; retired_at: string | null}[]}>(page, 'GET', 'pipelines')).pipelines
@@ -152,7 +160,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
     .catch(async () => assert.fail(`${tag}: the Growth board link (${await board.getAttribute('href')})`));
   else await page.waitForFunction(() => (document.querySelector('.dash-head [data-gr-board]') as HTMLElement | null)?.hidden, null, {timeout: t(5000)})
     .catch(async () => assert.fail(`${tag}: no Growth board link without a Growth pipeline (${await board.getAttribute('href')})`));
-  assert.equal(await page.locator('.dash-actions').isVisible(), true, `${tag}: the owner arranges`);
+  assert.equal(await page.locator('#main header.ph .ph-menu [data-dash-mode="edit"]').count(), 1, `${tag}: the owner arranges (Edit in ⋯)`);
   await flat(page, `${tag}: empty`);
   await themed(page, `growth-${width}-empty`);
   await (await settings()).locator('a[data-gr-sources]').click();
@@ -168,7 +176,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await row('flyers').waitFor({timeout: t(10000)});
   assert.equal(await num('New customers').innerText(), '9', `${tag}: the month's new customers`);
   assert.match(await card('CAC').innerText(), new RegExp(`None for ${long(monthsAgo(1))}`), `${tag}: no CAC that month`);
-  assert.deepEqual(await row('flyers').locator('td.grc-n').allInnerTexts(), ['9', '—', '—'], `${tag}: the row's numbers`);
+  assert.deepEqual(await row('flyers').locator('td.grc-n').allInnerTexts(), ['9', '', ''], `${tag}: the row's numbers (an empty cell shows nothing)`);
   assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker with one month`);
   // Settings: the channel's Edit retires it after asking once more on the same button.
   await (await settings()).locator('[data-gs-edit="flyers"]').click();
@@ -185,13 +193,15 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await seedMonths(page);
   const tasks = await seedTasks(page, refs.goalId);
 
-  // The page: the North Star line, then every card with what it reads.
+  // The page: every card with what it reads; the North Star (measured by no stage here) is a line in the Funnel card,
+  // not beside the title: the header is one line (style guide "Top bars: one line").
   await reload();
   await page.locator('#dash-grid .grc-funnel').waitFor({timeout: t(15000)});
   assert.deepEqual(await headings(), CARDS, `${tag}: the order`);
-  const ns = page.locator('.dash-head [data-gr-ns]');
-  assert.match(await ns.innerText(), /North Star[\s\S]*Active homes[\s\S]*648/, `${tag}: the North Star line`);
+  const ns = page.locator('#dash-grid [data-gr-ns]');
+  assert.match(await ns.innerText(), /North Star[\s\S]*Active homes[\s\S]*648[\s\S]*Target 1,000/, `${tag}: the North Star line, with its target`);
   assert.equal(await ns.getAttribute('href'), `#/strategy/goals?kpi=${encodeURIComponent(refs.nsId)}`, `${tag}: the line opens its KPI`);
+  assert.ok(!(await page.locator('#main header.ph').innerText()).includes('North Star'), `${tag}: nothing beside the title`);
   // The Funnel: five stages, each its first KPI; a stage with none says so; Refer loops back.
   const stages = page.locator('#dash-grid .grc-funnel > li');
   assert.deepEqual(await stages.evaluateAll(els => els.map(el => (el as HTMLElement).dataset.stage)), ['reach', 'acquire', 'activate', 'retain', 'refer'], `${tag}: five stages`);
@@ -289,8 +299,9 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal((await ok<{revenue_month: number}>(page, 'GET', 'growth/settings')).revenue_month, 95, `${tag}: the setting saved`);
 
   // A Number for one channel, added from the grid's form, in edit mode.
-  await page.locator('[data-dash-mode="edit"]').click();
-  await page.locator('[data-dash-add="card"]').click();
+  // Edit is a ⋯ item; + Card is a tool, which a phone's header folds into ⋯ (headTool opens ⋯ when it is there).
+  await headTool('[data-dash-mode="edit"]');
+  await headTool('[data-dash-add="card"]');
   const form = page.locator('#dash-dialog[open]');
   assert.equal(await form.locator('[name="template"]').inputValue(), 'growth_number', `${tag}: a Number first`);
   await form.locator('[name="metric"]').selectOption('new_customers');

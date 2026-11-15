@@ -21,12 +21,12 @@ function app() {
   const nothing = () => {};
   const context = vm.createContext({
     S, BOT: null, TASKS_ST: null, PERSON_TASKS: null, Promise, Date,
-    document: {querySelectorAll: () => []}, $: () => null,
+    document: {querySelectorAll: () => [], dispatchEvent: nothing}, CustomEvent: class {}, $: () => null,
     get: (p: string, options: {fresh?: boolean}) => new Promise((resolve, reject) => reads.push({path: p, fresh: !!options?.fresh, resolve, reject})),
     v2Refresh: async () => {}, overviewLoadComputers: async () => {},
     namedRoster: (emps: unknown) => emps, setPeople: (v: {people: unknown; seats?: unknown}) => { S.people = v.people; if (Array.isArray(v.seats)) S.seats = v.seats; },   // as sidebar.ts does
     cloudAccessFromStatus: nothing, overviewRefresh: nothing, renderTree: nothing, renderHeartbeat: nothing, pausedRender: nothing,
-    botAvatarsSync: nothing, goalsFollowRoster: nothing, tipRefresh: nothing, botAlertDraw: nothing, isTasksRoute: () => false,
+    botAvatarsSync: nothing, goalsFollowRoster: nothing, pageChatFollowRoster: nothing, tipRefresh: nothing, botAlertDraw: nothing, isTasksRoute: () => false,
   });
   vm.runInContext(`${source.slice(start, end)};globalThis.refresh = refresh;`, context);
   const refresh = (context as unknown as {refresh(force?: boolean): Promise<void>}).refresh;

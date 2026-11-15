@@ -1,5 +1,5 @@
-/* ui/app/task-code.ts — The task modal's right rail: Code (worktrees and pull requests) and Subtasks (the roll-up),
-   and the one small PR badge a task row shows (the worst state across its pull requests).
+/* ui/app/task-code.ts — In a task's Details: the Code fact (worktrees and pull requests, one line each) and Subtasks
+   (the roll-up), and the one small PR badge a task row shows (the worst state across its pull requests).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -166,8 +166,8 @@ function taskCodeHTML(t: CodeTask): string {
   const mover = canMove();
   // Worktrees first, then pull requests; each in the order they were added.
   const sorted = [...links.filter(l => l.kind === 'worktree'), ...links.filter(l => l.kind === 'pr')];
-  return `<section class="rail-sec task-code" aria-labelledby="task-code-h"><h3 class="rail-h" id="task-code-h">Code</h3>
-    <ul class="code-list">${waits.map(taskWorktreeWaitHTML).join('')}${sorted.map(l => taskCodeLineHTML(l, mover, links)).join('')}${checks.map(taskCheckWaitHTML).join('')}</ul></section>`;
+  // The Code fact's value (task-props.ts labels it): one line per worktree, pull request or wait.
+  return `<ul class="code-list task-code">${waits.map(taskWorktreeWaitHTML).join('')}${sorted.map(l => taskCodeLineHTML(l, mover, links)).join('')}${checks.map(taskCheckWaitHTML).join('')}</ul>`;
 }
 
 // ---- Subtasks: the children (one level shown, each expandable), with the roll-up line
@@ -189,14 +189,20 @@ function taskSubSummary(t: CodeTask, kids: SubRow[]): string {
   if (!c) return '';
   return `${c.done} of ${c.total} done${c.prs != null ? ` · ${c.prs} PR${c.prs === 1 ? '' : 's'} merged` : ''}`;
 }
-// One line per child: the same status words as the list, the title, its PR badge, then the owner's face.
+// A child's state as a mark, as the requirement lines draw theirs: done, closed, or still open; the word is its label.
+function taskSubMarkHTML(k: SubRow): string {
+  const status = String(k.status || 'open'), label = taskStatusLabel(k);
+  const mark = status === 'done' ? 'check_circle' : status === 'open' ? 'radio_button_unchecked' : 'block';
+  return `<span class="task-status sub-mark nav-icon" data-status="${esc(status)}" role="img" aria-label="${esc(label)}" title="${esc(label)}">${mark}</span>`;
+}
+// One line per child: its mark, the title, its PR badge, then the owner's face.
 function taskSubRowHTML(k: SubRow, open: Set<string>): string {
   const kids = k.children || [];
   const who = k.owner_id ? actorFace(k.owner_id, 16) : '';
   const key = String(k.id);
   return `<li class="sub-row${['done', 'closed', 'declined'].includes(String(k.status)) ? ' finished' : ''}" data-sub="${esc(key)}">
     <div class="sub-line">${kids.length ? `<button type="button" class="sub-chev${open.has(key) ? ' open' : ''}" data-sub-toggle="${esc(key)}" aria-expanded="${open.has(key)}" aria-label="${open.has(key) ? 'Hide' : 'Show'} subtasks of ${esc(k.title || '')}">›</button>` : '<span class="sub-chev-pad"></span>'}
-      ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner_id)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span>${
+      ${taskSubMarkHTML(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner_id)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span>${
         k.label ? `<span class="pill sub-chip">${esc(k.label)}</span>` : ''}</button>
       ${prStateBadge(k.pr_state)}<span class="sub-who" title="${esc(actorLabel(k.owner_id))}">${who}</span></div>
     ${kids.length && open.has(key) ? `<ul class="sub-list">${kids.map(c => taskSubRowHTML(c, open)).join('')}</ul>` : ''}</li>`;
@@ -209,7 +215,7 @@ function taskSubtasksHTML(t: CodeTask, kids: SubRow[], open: Set<string>, adding
   const count = t.children_summary?.direct_total ?? kids.length;
   const pick = owner || actorSlug(t.owner_id) || t.owner_id || '';
   const actor = pick.includes(':') ? pick : 'bot:' + pick;
-  return `<section class="rail-sec task-subs" aria-labelledby="task-subs-h"><h3 class="rail-h" id="task-subs-h">Subtasks${count ? ` <span class="cnt">${count}</span>` : ''}${
+  return `<section class="rail-sec task-subs" aria-labelledby="task-subs-h"><h3 class="rail-h tw-h" id="task-subs-h">Subtasks${count ? ` <span class="cnt">${count}</span>` : ''}${
     summary && counts ? `<span class="sub-sum tnum"><span>${esc(summary)}</span><span class="sub-bar" aria-hidden="true"><i style="width:${Math.round(100 * counts.done / counts.total)}%"></i></span></span>` : ''}</h3>
     ${kids.length ? `<ul class="sub-list">${kids.map(k => taskSubRowHTML(k, open)).join('')}</ul>` : ''}
     ${taskSubAdder(t) ? `<form class="sub-add" data-sub-add><input name="title" type="text" maxlength="300" autocomplete="off" placeholder="Add subtask" aria-label="Add subtask">
@@ -226,11 +232,15 @@ function taskRailPaint(d: TaskRailDialog, t: CodeTask): void {
   const old: SubAddForm | null = $('[data-sub-add]', rail);
   if (old) st.owner = old.elements.owner.value;
   const typed = old?.elements.title.value || '', focused = !!old && old.contains(document.activeElement) ? (document.activeElement as HTMLInputElement).name : '';
-  // Code is drawn from the full task only: list rows carry no worktree details (ahead, behind, files, errors).
+  // Code is drawn from the full task only: list rows carry no worktree details (ahead, behind, files, errors). It is one
+  // of the facts (task-props.ts leaves its row for it); its parent is Part of there too.
   const code = st.full && String(st.full.id) === String(t.id) ? taskCodeHTML(st.full) : '';
-  // A subtask: a link to its parent task first, opened like a subtask row (taskRailBind).
-  const parent = t.parent ? `<section class="rail-sec task-parent"><button type="button" class="linkish" data-sub-open="${esc(String(t.parent.id))}" title="${esc(t.parent.title || '')}">from ${esc(t.parent.label || t.parent.title || '')}</button></section>` : '';
-  const html = parent + code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner, st.refused);
+  const codeSlot: HTMLElement | null = $('[data-task-code]', d);
+  if (codeSlot) {
+    codeSlot.innerHTML = code;
+    (codeSlot.closest('[data-prop-row="code"]') as HTMLElement | null)?.toggleAttribute('hidden', !code);
+  }
+  const html = taskSubtasksHTML(t, kids, st.open, st.adding, st.owner, st.refused);
   rail.innerHTML = html;
   rail.hidden = !html;
   d.classList.toggle('has-rail', !!html);
@@ -265,7 +275,7 @@ function taskRailFind(list: SubRow[] | undefined, id: string): SubRow | null {
 }
 function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
   const rail: HTMLElement | null = $('[data-task-rail]', d); if (!rail) return;
-  rail.onclick = async ev => {
+  const click = async (ev: MouseEvent) => {
     const st = d.taskRail;   // taskRailPaint has made it before the rail takes a click
     if (!st) return;
     const who = eventElement(ev)?.closest<HTMLElement>('[data-sub-owner]');
@@ -308,6 +318,10 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
       } catch (e) { toast(errorMessage(e, ''), true); drop.disabled = false; }
     }
   };
+  // The subtasks and the Code fact (its × and Retry) take the same clicks.
+  rail.onclick = click;
+  const codeSlot: HTMLElement | null = $('[data-task-code]', d);
+  if (codeSlot) codeSlot.onclick = click;
   rail.onsubmit = async ev => {
     const form = eventElement(ev)?.closest<SubAddForm>('[data-sub-add]'); if (!form) return;
     ev.preventDefault();

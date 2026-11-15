@@ -22,7 +22,7 @@ const tweak = (fx: AutomationsFakeSupport.AutomationsFixture) => fx.automations.
   {...base, id: 'au_custom', name: 'Deploys', trigger: {type: 'event', name: 'custom.deploy_finished'}},
 );
 const RAW = /tico\.|task\.done|custom\.|status_or_relation|builtin/;
-const rowText = (page: Page, id: string) => page.locator(`tr.au-row[data-row="${id}"] td.au-tt`).innerText();
+const rowText = (page: Page, id: string) => page.locator(`.au-row[data-row="${id}"] .au-tt`).innerText();
 
 (async () => {
   const browser = await chromium.launch();
@@ -30,18 +30,18 @@ const rowText = (page: Page, id: string) => page.locator(`tr.au-row[data-row="${
     // A phone: the list, then a built-in's flow.
     {
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE, tweak});
-      await page.waitForSelector('tr.au-row[data-row="au_wakes"]');
+      await page.waitForSelector('.au-row[data-row="au_wakes"]');
       const want = {au_wakes: 'Every event', au_job: 'System job', au_notice: 'Notice', au_done: 'Task finished',
         au_custom: 'Deploy finished'};
       for (const [id, words] of Object.entries(want)) assert.equal(await rowText(page, id), words, id);
       assert.doesNotMatch(await page.locator('.au-tbl').innerText(), RAW, 'no dotted ids in the list');
       // Search still finds one by its words.
       await page.locator('.au-q').fill('task finished');
-      assert.deepEqual(await page.locator('tr.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row)), ['au_done']);
+      assert.deepEqual(await page.locator('.au-row').evaluateAll(r => r.map(x => (x as HTMLElement).dataset.row)), ['au_done']);
       await page.locator('.au-q').fill('');
       await shot(page, 'phone-events-list');
 
-      await page.locator('tr.au-row[data-row="au_wakes"] a').click();
+      await page.locator('.au-row[data-row="au_wakes"] a').click();
       await page.waitForSelector('.au-card[data-open="b1"]');
       const chip = page.locator('.au-trig .au-c1');
       assert.equal(await chip.innerText(), 'Every event');

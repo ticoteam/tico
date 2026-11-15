@@ -1,17 +1,21 @@
-"""Feedback on bot work: a person's thumbs up or down, with an optional reason, on something a bot made.
+"""Feedback on work: a person's thumbs up or down, with an optional reason, on something a bot or another person made.
 
-- Subjects: a message a bot wrote (Assistant chat, threads, DMs, task comments) and a task a bot filed (its requester
-  is a bot). Anything else is refused (422). An ask (a bot's requirement on a task, an OK among them) is a third
+- Subjects: a message a bot or a person wrote (Assistant chat, threads, DMs, task comments) and a task a bot or a
+  person filed (its requester). Work with no such author (the keeper's, the system's) is refused (422), and so is the
+  rater's own (rating yourself says nothing). An ask (a bot's requirement on a task, an OK among them) is a third
   subject, rated through backend/answers.py and read back here; it is as readable as its task.
-- One row per person and subject (`feedbacks`, migration 0041): rating again replaces it. The row names the bot and,
-  where the work links to a runner attempt, the attempt, its model and harness, for training. It keeps no copy of the
-  rated words: deleting a message erases them, and the reason is the person's own.
+- One row per person and subject (`feedbacks`, migration 0041): rating again replaces it. The row names who made the
+  work in `bot_id` (a bot, or the person's `human:` actor) and, where the work links to a runner attempt, the attempt,
+  its model and harness, for training. It keeps no copy of the rated words: deleting a message erases them, and the
+  reason is the person's own.
 - Privacy: every read, write, count and list asks whether the viewer reads the subject, with the checks the subject's
   own pages use (`threads._reactable` for a message, `Auth.task` for a task and an ask). An unreadable subject answers 404, and its feedback is left out of every answer, so a private Assistant
   chat's feedback is its person's alone. Only people rate; a bot or a computer never does.
-- 👎 can tell the bot (a quiet note for its next run, tied to the rated message so a private conversation's feedback
-  stays in that conversation's session, threads.note_fits_run) or make a rule (an internal org rule drafted from the
-  reason, added as the person through backend/org_rules.py, so it is active or suggested as their rights say).
+- 👎 on a bot's work can tell the bot (a quiet note for its next run, tied to the rated message so a private
+  conversation's feedback stays in that conversation's session, threads.note_fits_run) or make a rule (an internal org
+  rule drafted from the reason, added as the person through backend/org_rules.py, so it is active or suggested as their
+  rights say). A person's work takes the rating and the reason only: nothing tells that person (no chats, mails or
+  pushes to people about their work), and a rule is for bots.
 """
 
 import json
@@ -77,6 +81,19 @@ def _missing(subject_type):
     return Problem("not_found", f"{subject_type.capitalize()} not found", 404)
 
 
+def _author(actor, said):
+    """The actor who made the rated work: a bot or a person. Anything else (the keeper, the system) takes no feedback."""
+    if not (H.is_bot(actor) or H.is_human(actor)):
+        raise Problem("not_rateable", said, 422)
+    return actor
+
+
+def _bots_only(row, said):
+    """What only a 👎 on a bot's work goes on to: telling the bot, and a rule for it."""
+    if not H.is_bot(row["bot_id"]):
+        raise Problem("not_bot", said, 422)
+
+
 def _attempt(c, attempt_id):
     """(attempt id, model, harness) of a run, or Nones; a local hub has no attempts table."""
     if not attempt_id:
@@ -135,14 +152,13 @@ def _latest_message(c, conversation_id):
 
 
 def subject(c, auth, who, subject_type, subject_id):
-    """What feedback on one subject records, when the viewer reads it (404 otherwise) and a bot made it (422 otherwise):
-    {bot_id, conversation_id, attempt_id, model, harness, revision, note_message_id, link, text}. `note_message_id` is
-    the message a note to the bot is tied to; `text` the rated words, for a rule draft only."""
+    """What feedback on one subject records, when the viewer reads it (404 otherwise) and a bot or a person made it (422
+    otherwise): {bot_id, conversation_id, attempt_id, model, harness, revision, note_message_id, link, text}. `bot_id` is
+    who made it, a bot or a person; `note_message_id` the message a note to the bot is tied to; `text` the rated words,
+    for a rule draft only."""
     if subject_type == "message":
         message = _readable_message(c, auth, who, subject_id)
-        bot = message.get("sender_id")
-        if not H.is_bot(bot):
-            raise Problem("not_bot", "Only a bot's message takes feedback", 422)
+        bot = _author(message.get("sender_id"), "Only a bot's or a person's message takes feedback")
         refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs"), {}) or {}
         run = (refs.get("run") or {}) if isinstance(refs.get("run"), dict) else {}
         revision = c.execute("SELECT revision FROM messages WHERE id=?", (message["id"],)).fetchone()
@@ -158,9 +174,7 @@ def subject(c, auth, who, subject_type, subject_id):
         }
     if subject_type == "task":
         task = _readable_task(c, auth, who, subject_id)
-        bot = task.get("requester_id")
-        if not H.is_bot(bot):
-            raise Problem("not_bot", "Only a task a bot filed takes feedback", 422)
+        bot = _author(task.get("requester_id"), "Only a task a bot or a person filed takes feedback")
         return {
             "bot_id": bot,
             "conversation_id": task.get("conversation_id"),
@@ -297,6 +311,10 @@ def give(c, auth, who, body):
     if body["subject_type"] == "ask":
         raise Problem("validation", "Rate an ask on its task", 422)
     subj = subject(c, auth, who, body["subject_type"], body["subject_id"])
+    if subj["bot_id"] == who.actor:
+        raise Problem("own_work", "Your own work takes no feedback", 422)
+    if body["tell_bot"]:
+        _bots_only(subj, "Only a bot is told: a person's work takes the rating and the reason")
     tell = (lambda row: _tell(c, who, row, subj)) if body["tell_bot"] else None
     row = rate(c, who.actor, body["subject_type"], body["subject_id"], subj, body["rating"], body.get("reason"), tell)
     # Kinds only: the reason is the person's words and stays in its row.
@@ -307,7 +325,7 @@ def give(c, auth, who, body):
         "feedback.given",
         row,
         subj,
-        {"rating": row["rating"], "bot": row["bot_id"], "told_bot": bool(body["tell_bot"])},
+        {"rating": row["rating"], **_about(row), "told_bot": bool(body["tell_bot"])},
     )
     return view(c, _row(c, row["id"]))
 
@@ -363,6 +381,11 @@ def rate(c, person, subject_type, subject_id, subj, rating, reason, tell=None):
     return row
 
 
+def _about(row):
+    """Whose work an audit event's feedback is on: {"bot": ...} or {"person": ...}."""
+    return {"bot" if H.is_bot(row["bot_id"]) else "person": row["bot_id"]}
+
+
 def _private(c, subject_type, subject_id, subj):
     """Whether the rated work is narrower than the company: a private thread (an Assistant chat, a members or
     participants thread), a message tied to a private task or meeting, or a private task."""
@@ -390,7 +413,7 @@ def remove(c, auth, who, feedback_id):
     row = own_row(c, auth, who, feedback_id)
     _cancel_waiting(c, who.actor, row["note_id"])
     c.execute("DELETE FROM feedbacks WHERE id=?", (row["id"],))
-    _event(c, auth, who, "feedback.removed", row, None, {"bot": row["bot_id"]})
+    _event(c, auth, who, "feedback.removed", row, None, _about(row))
     return {"ok": True, "id": row["id"]}
 
 
@@ -400,6 +423,7 @@ def make_rule(c, auth, who, feedback_id, body):
     row = own_row(c, auth, who, feedback_id)
     if row["rating"] != "down":
         raise Problem("validation", "A rule comes from a 👎", 422)
+    _bots_only(row, "A rule comes from a 👎 on a bot's work")
     scope = {"all_bots": True} if body.get("all_bots") else {"bots": [row["bot_id"]]}
     rule = O.add_rule(
         c, auth, who, {"kind": "internal", "text": body["text"], "who": scope, "if_broken": RULE_IF_BROKEN}
@@ -535,6 +559,7 @@ def draft_input(c, auth, who, feedback_id):
     row = own_row(c, auth, who, feedback_id)
     if row["rating"] != "down":
         raise Problem("validation", "A rule comes from a 👎", 422)
+    _bots_only(row, "A rule comes from a 👎 on a bot's work")
     subj = subject(c, auth, who, row["subject_type"], row["subject_id"])
     return {
         "reason": row["reason"],
@@ -562,8 +587,8 @@ def draft(write, given):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/feedback")
     def feedback_give(request: Request, body: FeedbackGive):
-        """Rate a message or task a bot made: 👍 or 👎 with an optional reason. Rating again replaces it.
-        `tell_bot` (a 👎 only) leaves the bot a note for its next run in that conversation."""
+        """Rate a message or task a bot or another person made: 👍 or 👎 with an optional reason. Rating again replaces
+        it. `tell_bot` (a 👎 on a bot's work only) leaves the bot a note for its next run in that conversation."""
         who = request.state.identity
         return mutate(request, body, lambda c: give(c, auth, who, body.model_dump()))
 

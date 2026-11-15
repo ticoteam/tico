@@ -86,16 +86,20 @@ function lstListHTML(state: AutomationsState): string {
   const rows = all.filter(a => !q || [a.name, lstLimitsWords(a.trigger?.limits), ...(a.trigger?.sources || []).flatMap(s => [s.site, s.target])]
     .join(' ').toLowerCase().includes(q));
   if (state.list === null) return '';
-  // The header's New listening is the one green action and never moves (the shared page header); this one is plain.
-  if (!all.length) return `<div class="empty-state lst-empty">${EMPTY_ART.listening}<p>Watches the sites and searches you pick, and posts what matters to Updates.</p>
-    <button type="button" class="ghost" data-lst-new>New listening</button></div>`;
+  // Empty is one line and one action (style guide, "A great page"): the header's + steps aside while the empty state
+  // holds New listening, so the page never offers two adds (listening.css .lst-none).
+  state.root?.classList.toggle('lst-none', !all.length);
+  if (!all.length) return `<div class="empty-state lst-empty">${EMPTY_ART.listening}<p>No listening yet</p>
+    <button type="button" class="primary" data-lst-new>New listening</button></div>`;
   if (!rows.length) return `<p class="muted au-pad">No matches</p>`;
+  // A row: the dot and the name, then its facts, the limits and when it last sent (beside the name on a computer,
+  // under it on a phone, listening.css).
   return `<div class="lst-list" role="list">${rows.map(a => {
     const ok = lstOk(a), last = a.last_run?.started_at;
     return `<a class="lst-row${a.enabled === false ? ' off' : ''}" role="listitem" href="${auHref(a.id)}" data-lst="${esc(a.id)}">
       ${lstDot(ok, ok ? 'Reading' : 'Not reading')}<span class="lst-nm">${esc(a.name || 'Untitled')}</span>
       <span class="lst-lim">${esc(lstLimitsWords(a.trigger?.limits))}</span>
-      <span class="lst-last"${last ? ` title="${esc(fmt(last))}"` : ''}>${esc(auAge(last)) || '—'}</span></a>`;
+      <span class="lst-last"${last ? ` title="${esc(fmt(last))}"` : ''}>${esc(auAge(last))}</span></a>`;
   }).join('')}</div>`;
 }
 // +: the viewer's own, off, 10 a day, one step that posts what was sent; then open it.

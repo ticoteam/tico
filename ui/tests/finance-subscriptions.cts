@@ -118,18 +118,21 @@ async function shot(page: Page, name: string) {
       // The heading's total counts the active subscriptions only ($10 a month: Adobe's twelfth). finUsd drops the cents on whole dollars.
       assert.match(await sec.locator('h2').textContent(), /Subscriptions\s*\$10 \/ mo/, `${tag}: monthly total`);
       assert.deepEqual([await cell(page, 'sub-1', 0).innerText(), await cell(page, 'sub-1', 1).innerText(), await cell(page, 'sub-1', 2).innerText(), await cell(page, 'sub-1', 4).innerText()],
-        ['Figma', '$15', 'Monthly', '—'], `${tag}: suggested row figures`);
+        ['Figma', '$15', 'Monthly', ''], `${tag}: suggested row figures (no seats: an empty cell)`);
       assert.deepEqual([await cell(page, 'sub-2', 1).innerText(), await cell(page, 'sub-2', 2).innerText(), await cell(page, 'sub-2', 4).innerText()],
         ['$10', 'Annual', '5'], `${tag}: annual row figures`);
-      // The owner may confirm: the suggestion has Confirm and Ignore; the active one has its pill and no buttons.
+      // The owner may confirm: the suggestion has Ignore and Confirm (the one that moves on last); the active one is the
+      // normal state: no pill and no buttons.
       assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="active"]').count(), 1, `${tag}: Confirm on the suggestion`);
       assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="ignored"]').count(), 1, `${tag}: Ignore on the suggestion`);
       assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-2"] button').count(), 0, `${tag}: no buttons on an active row`);
-      assert.equal((await page.locator('#fin-subs tr[data-fin-sub="sub-2"] .pill').textContent())!.trim(), 'Active', `${tag}: active pill`);
+      assert.deepEqual(await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button').allInnerTexts(), ['Ignore', 'Confirm'], `${tag}: Ignore, then Confirm`);
+      assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-2"] .pill').count(), 0, `${tag}: an active subscription has no pill`);
+      assert.equal(await page.locator('#fin-subs tr[data-fin-sub="sub-2"] td').last().innerText(), '', `${tag}: and says nothing`);
       await shot(page, `${tag}-before`);
       // Confirm posts subscription_confirm, and the section reads again: Figma is active and the total counts it.
       await page.locator('#fin-subs tr[data-fin-sub="sub-1"] button[data-fin-sub-status="active"]').click();
-      await page.waitForFunction(() => document.querySelector('#fin-subs tr[data-fin-sub="sub-1"] .pill')?.textContent?.trim() === 'Active');
+      await page.waitForFunction(() => !!document.querySelector('#fin-subs tr[data-fin-sub="sub-1"]') && !document.querySelector('#fin-subs tr[data-fin-sub="sub-1"] button, #fin-subs tr[data-fin-sub="sub-1"] .pill'));
       assert.deepEqual(writes.at(-1), {kind: 'subscription_confirm', payload: {subscription_id: 'sub-1', status: 'active'}}, `${tag}: confirm write`);
       assert.match(await sec.locator('h2').textContent(), /\$25 \/ mo/, `${tag}: total after confirm`);
       await shot(page, `${tag}-after`);

@@ -35,7 +35,7 @@ function taskBoardPress(state: PvState, ev: PointerEvent): void {
   const up = (e: PointerEvent): void => taskBoardUp(state, e);
   const cancel = (): void => taskBoardEnd(state, false);
   const keys = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && TB_DRAG?.on) { e.preventDefault(); e.stopPropagation(); taskBoardEnd(state, false); }
+    if (e.key === 'Escape' && TB_DRAG?.on) { e.preventDefault(); e.stopPropagation(); taskBoardEnd(state, false, true); }
   };
   document.addEventListener('pointermove', move, true);
   document.addEventListener('pointerup', up, true);
@@ -136,7 +136,7 @@ function taskBoardUp(state: PvState, e: PointerEvent): void {
   taskBoardEnd(state, d.on);
 }
 
-function taskBoardEnd(state: PvState, drop: boolean): void {
+function taskBoardEnd(state: PvState, drop: boolean, held = false): void {
   const d = TB_DRAG;
   if (!d) return;
   TB_DRAG = null;
@@ -148,10 +148,13 @@ function taskBoardEnd(state: PvState, drop: boolean): void {
   document.body.classList.remove('board-holding');
   for (const el of state.root?.querySelectorAll('.pv-col.over') ?? []) el.classList.remove('over');
   for (const el of state.root?.querySelectorAll('.tk-card.drop-on') ?? []) el.classList.remove('drop-on');
-  // The click the carry ends in opens nothing.
+  // The click the carry ends in opens nothing. Ended by Escape the button is still down (held): that click comes when
+  // it is let go, however much later.
   const swallow = (ev: Event): void => { ev.stopPropagation(); ev.preventDefault(); };
   window.addEventListener('click', swallow, {capture: true, once: true});
-  setTimeout(() => window.removeEventListener('click', swallow, true), 0);
+  const after = (): void => { setTimeout(() => window.removeEventListener('click', swallow, true), 0); };
+  if (held) window.addEventListener('pointerup', after, {capture: true, once: true});
+  else after();
   const t = state.tasks.find(x => x.id === d.id);
   const onto = state.tasks.find(x => x.id === d.onto);
   if (drop && t && onto) void taskDropOpen(state, t, onto);

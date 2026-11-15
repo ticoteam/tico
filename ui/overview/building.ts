@@ -225,7 +225,7 @@ function faceTexture(face: Face) {
   };
   if (face.svg) { img = new Image(); img.decoding = 'async'; img.onload = draw; img.src = face.svg; }
   else if (face.glyph) {
-    symbolsFont ||= new FontFace('Tico Symbols', 'url(/vendor/fonts/material-symbols-outlined.woff2?v=0527364c9e59)').load().then(f => { document.fonts.add(f); symbolsReady = true; return f; });
+    symbolsFont ||= new FontFace('Tico Symbols', 'url(/vendor/fonts/material-symbols-outlined.woff2?v=2174c39bc924)').load().then(f => { document.fonts.add(f); symbolsReady = true; return f; });
     symbolsFont.then(draw, () => {});
   }
   draw(); resources.add(tex); faceCache.set(key, tex); return tex;
@@ -583,7 +583,6 @@ function setFloor(id: number | null, instant = false) {
   characters.forEach(c => { if (c.floor !== id) { c.face = 0; c.root.rotation.y = 0; c.head?.rotation.set(0, 0, 0); } });
   $('#floors').hidden = id !== null; $('#floor-heading').hidden = id === null; $('#back').hidden = id === null; $('#people').hidden = id === null;
   document.body.classList.toggle('inside', id !== null); tags();
-  $('#campus-hint').textContent = id === null ? 'Select a floor to look inside' : 'Select a teammate · Drag to turn';
   const f = floorAt(id);
   if (f) {
     const b = f.building;

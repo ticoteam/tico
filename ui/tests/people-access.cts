@@ -138,7 +138,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     await row('ben').waitFor();
     // The Recorder column: the version each person used last, marked when a newer one is out; empty without one.
     assert.equal(await row('ben').locator('[data-recorder-version] .tnum').innerText(), '0.2.0');
-    assert.match((await row('ben').locator('[data-recorder-version]').getAttribute('title'))!, /^Last seen 3d ago · Update available$/);
+    assert.match((await row('ben').locator('[data-recorder-version]').getAttribute('title'))!, /^Last seen [A-Z][a-z]{2} \d{1,2}(, \d{4})? · Update available$/);
     assert.equal(await row('ana').locator('[data-recorder-version]').count(), 0);
     const shots = process.env.TICO_UI_SHOTS, theme = await page.evaluate(() => (window as unknown as PageWin).ticoTheme?.get());
     for (const [width, height] of [[1200, 900], [390, 844]] as [number, number][]) {

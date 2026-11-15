@@ -14,6 +14,9 @@ const assert: typeof import('node:assert/strict') = require('node:assert/strict'
 const {run, open, go, api, ok, automationNamed, sideways, shot, t} = require('./support/redesign-e2e.cts') as R.Api;
 const e2e = require('./support/e2e.cts') as E2E.Api;
 const promoInput = require('./fixtures/redesign-automation-promo.json');
+// An open automation's ⋯: the page header's on a computer (its items join it there), the automation's own on a phone.
+const auMoreOpen = async (page: Page) => { const own = page.locator('.au-hd-more'); if (await own.isVisible()) await own.click(); else await page.locator('.au-ph > .ph-more').click(); };
+const auMenuItem = (page: Page, mi: string) => page.locator(`:is(.au-menu, .au-ph > .ph-menu) [data-mi="${mi}"]:visible`);
 
 // The fields of a hub automation, and of one of its steps, that these journeys read.
 interface Step {
@@ -81,27 +84,27 @@ const automations = (() => {
   const settled = async (page: Page, want: boolean) => { for (let i = 0; i < 20 && await enabled(page) !== want; i++) await page.waitForTimeout(150); return enabled(page); };
   return async ({hub, browser, phone, tag}: PassContext) => {
     const page = await open(browser, hub, 'dana', {phone, hash: '#/automations'});
-    await page.locator('tr.au-row').first().waitFor({timeout: t(15000)});
-    const names = await page.locator('tr.au-row').allInnerTexts();
+    await page.locator('.au-row').first().waitFor({timeout: t(15000)});
+    const names = await page.locator('.au-row').allInnerTexts();
     for (const n of ['What wakes bots', 'Inbox triage', 'Route mail', 'Weekly digest', 'Standup notes'])
       assert.ok(names.some(x => x.includes(n)), `${tag}: ${n} listed: ${names}`);
     const triage = (await automationNamed<Flow>(page, 'Inbox triage'))!;
     const wakes = (await automationNamed<Flow>(page, 'What wakes bots'))!;
-    assert.equal(await page.locator('tr.au-row .au-sw').count(), 0, `${tag}: no switches in the list`);
+    assert.equal(await page.locator('.au-row .au-sw').count(), 0, `${tag}: no switches in the list`);
     assert.equal(await sideways(page), false);
     await shot(page, `${tag}-01-list`);
 
     // The top of the org may pause the read-only built-in: its header has the switch, and says it is fixed.
     assert.equal(wakes.can_edit, false);
     assert.equal(wakes.can_pause, true);
-    await page.locator(`tr.au-row[data-row="${wakes.id}"] a`).click();
+    await page.locator(`.au-row[data-row="${wakes.id}"] a`).click();
     await page.locator('.au-hd .au-name:text("What wakes bots")').waitFor();
     assert.equal(await page.locator('.au-hd [data-on-cur]').count(), 1, `${tag}: the built-in has a switch`);
     assert.match(await page.locator('.au-pane').innerText(), /Built-in: can’t be edited or deleted/);
     await page.locator('.au-crumb .au-up').click();
 
     // Open it, then off and on again from its header: the hub agrees each time.
-    await page.locator(`tr.au-row[data-row="${triage.id}"] a`).click();
+    await page.locator(`.au-row[data-row="${triage.id}"] a`).click();
     await page.locator('.au-hd [data-on-cur]').waitFor();
     const sw = page.locator('.au-hd [data-on-cur]');
     await sw.click();
@@ -128,8 +131,8 @@ const automations = (() => {
     await shot(page, `${tag}-03-flow`);
 
     // ⋯ Test run with a sample message: it runs on the hub and opens in Runs.
-    await page.locator('[data-more]').click();
-    await page.locator('.au-menu [data-mi="run"]').click();
+    await auMoreOpen(page);
+    await auMenuItem(page, 'run').click();
     const box = page.locator('.au-ed textarea[data-b="text"]');
     await box.waitFor();
     assert.match(await box.inputValue(), /sam@acme\.example/, 'a sample shaped like the trigger');
@@ -155,8 +158,8 @@ const automations = (() => {
     // A promo is archived by the Filter's rule.
     await go(page, `#/automations/${triage.id}`);
     await page.locator('.au-card[data-open="trigger"]').waitFor();
-    await page.locator('[data-more]').click();
-    await page.locator('.au-menu [data-mi="run"]').click();
+    await auMoreOpen(page);
+    await auMenuItem(page, 'run').click();
     await box.fill(JSON.stringify(promoInput));
     await page.locator('.au-ed [data-op="save"]').click();
     await page.waitForFunction(() => document.querySelectorAll('.au-rr').length === 2, null, {timeout: t(15000)});
@@ -311,7 +314,7 @@ const build = (() => {
     assert.deepEqual(rows, ['v4', 'v3', 'v2', 'v1']);
     assert.match(await page.locator('.au-vr').first().innerText(), /Current/);
     for (const h of await page.locator('.au-vr').evaluateAll(els => els.map(e => e.getBoundingClientRect().height)))
-      assert.ok(h < 52, `${tag}: a version is one row (${h}px)`);
+      assert.ok(h < (phone ? 64 : 52), `${tag}: a version is one row (${h}px; a phone's Restore is a 44px target)`);
     await shot(page, `${tag}-05-history`);
     await page.locator('.au-vr:has(strong:text-is("v1")) [data-op="restore"]').click();
     await page.waitForFunction(() => document.querySelector('.au-ver')?.textContent === 'v5', null, {timeout: t(10000)});
@@ -333,17 +336,17 @@ const assistantRoutine = (() => {
   return async ({hub, browser, phone, tag}: PassContext) => {
     // The sweep's title comes from the catalog (a template refresh renames it), so the test finds it by its owner.
     const dana = await open(browser, hub, 'dana', {phone, hash: '#/automations'});
-    await dana.locator('tr.au-row').first().waitFor({timeout: t(10000)});
+    await dana.locator('.au-row').first().waitFor({timeout: t(10000)});
     const sweeps = (await ok<{automations: Flow[]}>(dana, 'GET', 'automations?limit=500')).automations.filter(a => a.owner_id === ASSISTANT);
     assert.equal(sweeps.length, 1, `${tag}: the Assistant has one routine on Automations`);
     const sweep = sweeps[0]!;
     assert.equal(sweep.trigger.type, 'schedule', `${tag}: a schedule`);
 
     // The list row: its title, its schedule words, on (not greyed out).
-    const row = dana.locator(`tr.au-row[data-row="${sweep.id}"]`);
+    const row = dana.locator(`.au-row[data-row="${sweep.id}"]`);
     await row.waitFor({timeout: t(10000)});
     assert.equal(await row.locator('.au-nm').innerText(), sweep.name, `${tag}: its title on the row`);
-    assert.match(await row.locator('td.au-tt').innerText(), /\b8\b|08:00|8:00/, `${tag}: its time on the row`);
+    assert.match(await row.locator('.au-tt').innerText(), /\b8\b|08:00|8:00/, `${tag}: its time on the row`);
     assert.doesNotMatch((await row.getAttribute('class'))!, /\boff\b/, `${tag}: on`);
     await shot(dana, `${tag}-assistant-routine-list`);
 
@@ -352,12 +355,12 @@ const assistantRoutine = (() => {
     await dana.locator('.au-hd .au-name').filter({hasText: sweep.name}).waitFor({timeout: t(10000)});
     assert.equal(await dana.locator('.au-hd .au-sw').isChecked(), true, `${tag}: the switch is on`);
     assert.equal(await dana.locator('.au-hd [data-spend]').count(), 1, `${tag}: the spend limit is editable`);
-    assert.equal(await dana.locator('.au-hd [data-more]').count(), 1, `${tag}: the options menu`);
+    assert.equal(await dana.locator('.au-hd [data-more], .au-ph > .ph-more').evaluateAll(b => b.filter(x => (x as HTMLElement).checkVisibility()).length), 1, `${tag}: one options menu`);
     await shot(dana, `${tag}-assistant-routine-open`);
 
     // Test run from the options menu: the editor's Run makes a run, and the routine's Runs list has it.
-    await dana.locator('.au-hd [data-more]').click();
-    await dana.locator('.au-menu [data-mi="run"]').click();
+    await auMoreOpen(dana);
+    await auMenuItem(dana, 'run').click();
     await dana.locator('.au-ed .au-save').click();
     const end = Date.now() + t(20000);
     let runs: unknown[] = [];
@@ -372,7 +375,7 @@ const assistantRoutine = (() => {
     // Omar is a peer of the Engineering Lead, not above the Assistant: no row, and the routine is refused by id.
     const omar = await open(browser, hub, 'omar', {phone, hash: '#/automations'});
     await omar.waitForTimeout(t(1000));
-    assert.equal(await omar.locator(`tr.au-row[data-row="${sweep.id}"]`).count(), 0, `${tag}: Omar does not list it`);
+    assert.equal(await omar.locator(`.au-row[data-row="${sweep.id}"]`).count(), 0, `${tag}: Omar does not list it`);
     assert.ok(!(await ok<{automations: Flow[]}>(omar, 'GET', 'automations?limit=500')).automations.some(a => a.id === sweep.id), `${tag}: nor the API`);
     assert.equal((await api(omar, 'GET', `automations/${sweep.id}`)).status, 403, `${tag}: refused by id`);
     assert.deepEqual(omar.errors, [], `${tag}: no page errors for Omar`);

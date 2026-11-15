@@ -8,7 +8,7 @@
 .tk-ask{color:var(--muted);font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tk-row-dim{color:var(--muted)}
 .tk-after{display:flex;gap:6px;flex:none}
-.tk-who{flex:none;display:inline-flex;width:18px;justify-content:center}
+.tk-who{flex:none;display:inline-flex;width:16px;justify-content:center}
 .tk-age{flex:none;min-width:34px;text-align:right;color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
 
 /* The mark: a spinner (a bot is working), an amber "!" (it needs a person), a red dot (it can't run), or an empty

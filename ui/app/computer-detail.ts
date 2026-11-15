@@ -28,7 +28,7 @@ const machineOnline = (machine: DetailMachine) => !machine.revoked_at && !!machi
 const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESENCE.failed
   || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
 const machinePresenceWords = (machine: DetailMachine) => machine.revoked_at ? 'revoked'
-  : `${machineOnline(machine) ? 'online' : `offline${machine.last_seen_at ? ` · last seen ${ago(machine.last_seen_at)}` : ''}`}${machinePresenceStale() ? ' · checking…' : ''}`;
+  : `${machineOnline(machine) ? 'online' : `offline${machine.last_seen_at ? ` · last seen ${agoSaid(machine.last_seen_at)}` : ''}`}${machinePresenceStale() ? ' · checking…' : ''}`;
 // A presence paint can change the focused row too; restore its control by stable data attributes,
 // keeping positional selectors only for the unkeyed containers between them.
 function computerFocusRestore(root: Element | null | undefined, active: Element | null | undefined = document.activeElement) {
@@ -56,7 +56,8 @@ const machineToolName = (machine: DetailMachine, runtime: string) => Object.valu
 const machineReported = (machine: DetailMachine) => Object.keys(machine.readiness?.runtimes || {}).length > 0 || Object.keys(machine.readiness?.harnesses || {}).length > 0;
 // A computer that has not reported what it has yet, or a sign-in it has not reported back (ui/model-login.ts).
 const machineWaiting = (machine: DetailMachine) => !machine.revoked_at && (!machineReported(machine) || (window.machineLoginPending?.get(machine.id) || 0) > Date.now());
-const machineReset = (reset: number) => new Date(reset).toLocaleString([], {weekday: 'short', hour: 'numeric', minute: '2-digit'});
+// When a usage window resets, in sentence words ("today, 3:00 PM", "Tue, Nov 18, 9:00 AM": ui/app/format.ts).
+const machineReset = (reset: number) => timeSaid(reset);
 const machineEmail = (account?: {email?: string} | null) => String(account?.email || '').trim().toLowerCase();
 const machineNewer = (a?: {reported_at?: string} | null, b?: {reported_at?: string} | null) => (Date.parse(a?.reported_at ?? '') || 0) > (Date.parse(b?.reported_at ?? '') || 0);
 
@@ -149,7 +150,10 @@ function machineChipWords(machine: DetailMachine, conn: DetailConnection) {
 function machineChipHTML(machine: DetailMachine, conn: DetailConnection) {
   const left = machineLeft(conn.state.weekly), warn = machineAttentionWords(conn);
   const title = [`${conn.tool} · ${conn.name}`, conn.shared ? machineSharedWords(conn.shared) : '', warn, machineLeftWords(conn.state.weekly), machineTurnUserWords(conn)].filter(Boolean).join(' · ');
-  return `<button type="button" class="machine-chip${conn.attention ? ' attention' : ''}" data-computer-open="${esc(machine.id)}" data-chip="${esc(conn.key)}" title="${esc(title)}" aria-label="${esc(title)}">`
+  // Signed in with nothing wrong is the normal state: quiet text (with its bar and % left when there is a reading), no
+  // pill. Every other state (Sign in, Expired, Needs fix, No key, Checking) keeps the chip's outline.
+  const quiet = !conn.attention && machineChipWords(machine, conn) === 'Signed in';
+  return `<button type="button" class="machine-chip${conn.attention ? ' attention' : ''}${quiet ? ' quiet' : ''}" data-computer-open="${esc(machine.id)}" data-chip="${esc(conn.key)}" title="${esc(title)}" aria-label="${esc(title)}">`
     + `${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<span class="machine-chip-words">${esc(machineChipWords(machine, conn))}</span>`
     + `${left !== null ? `<meter class="machine-chip-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-hidden="true"></meter><span class="machine-chip-pct">${left}%</span>` : ''}</button>`;
 }
@@ -188,7 +192,7 @@ function machineConnectionHTML(machine: DetailMachine, conn: DetailConnection, o
   if (addKey && !conn.keyCleared) action += machineKeyActions(machine, online, conn.runtime, null, false);
   const value: DetailRuntime = conn.value || {};
   const rejected = conn.auth === 'rejected'
-    ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(ago(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
+    ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(agoSaid(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
   const usage = conn.state.signed_in === false ? '' : machineUsageHTML(conn.runtime, conn.state, `${conn.tool} ${conn.name}`, 'this computer');
   const bots = conn.bots.length ? `Bots: ${conn.bots.map(settingsBotName).join(', ')}` : 'No bots run on it';
   // Bots that take turns on one sign-in say so.
@@ -207,7 +211,7 @@ function machineConnectionHTML(machine: DetailMachine, conn: DetailConnection, o
 function machineTerminalSignInHTML(machine: DetailMachine, runtime: string) {
   const command = machineLoginCommand(machine, runtime);
   if (command) return ` <span class="machine-login-command" title="Run on the computer${command.includes('<container>') ? '; docker ps shows the container name' : ''}"><code>${esc(command)}</code><button class="ghost machine-signin" type="button" data-machine-copy-login="${esc(command)}">Copy</button></span>`;
-  return harnessCaps(runtime).api_keys === 'bot' ? ' <a class="machine-signin-link" href="#/tools/keys?show=credentials">Add key</a>' : '';
+  return harnessCaps(runtime).api_keys === 'bot' ? ' <a class="machine-signin-link" href="#/tools?show=keys">Add key</a>' : '';
 }
 // Add connection: one button at the end of Connections, opening its own pop-up (computerAddOpen).
 function machineAddHTML(machine: DetailMachine, online: boolean, manage: boolean) {
@@ -225,7 +229,7 @@ function computerAddTools(machine: DetailMachine) {
 function computerAddStepHTML(machine: DetailMachine, step: DetailAddStep) {
   const head = (title: string, back?: string) => `<header class="tmodal-head"><h2 id="computer-add-title">${title}</h2>
       ${back ? `<button class="ghost" type="button" data-add-back="${back}">Back</button>` : ''}
-      <button class="ghost tmodal-x" type="button" data-add-close aria-label="Close">✕</button></header>
+      <button class="ghost tmodal-x" type="button" data-add-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     <div class="tmodal-body"><p class="muted computer-add-where">${esc(machine.label)}</p>`;
   if (step.at === 'tool') {
     const tools = computerAddTools(machine).map(tool => `<button class="ghost computer-add-choice" type="button" data-add-tool="${esc(tool.runtime)}">${esc(tool.name)}</button>`).join('');
@@ -250,17 +254,17 @@ function computerAddStepHTML(machine: DetailMachine, step: DetailAddStep) {
   }
   if (step.at === 'api_key') {
     // A key of this computer's own (Dev 97, ui/model-login.ts replaceKey), for a tool that takes one; a login its key
-    // already signs in keeps Replace key on its line. Any other tool's key goes in Credentials.
+    // already signs in keeps Replace key on its line. Any other tool's key goes in Tools, under its Keys.
     const line = machineConnections(machine).find(conn => conn.runtime === runtime && conn.own);
     const keyed = line?.auth === 'ready' && line.value?.key;
     const add = keyed ? '' : machineKeyActions(machine, true, runtime, null, false);
     const body = keyed ? `${esc(tool)} already signs in with a key on ${esc(machine.label)}: Replace key is on its line.`
       : add ? `Add a key that ${esc(machine.label)} uses for ${esc(tool)}.`
-      : `${esc(tool)} takes its key from Credentials; it is used on the computers it is shared with.`;
+      : `${esc(tool)} takes its key from Tools; it is used on the computers it is shared with.`;
     const go = add ? `<span class="computer-add-terminal" data-add-key="${esc(runtime)}">${add}</span>`
-      : keyed ? '' : '<a class="primary" href="#/tools/keys?show=credentials" data-add-credentials>Open Keys</a>';
+      : keyed ? '' : '<a class="primary" href="#/tools?show=keys" data-add-credentials>Add key</a>';
     return `${head(`Add ${esc(tool)} with an API key`, 'kind')}<div data-add-step="api_key"><p class="model-login-body">${body}</p>
-      <div class="model-login-actions"><button class="ghost" type="button" data-add-close>Close</button>${go}</div></div></div>`;
+      <div class="model-login-actions"><button class="ghost" type="button" data-add-close>Cancel</button>${go}</div></div></div>`;
   }
   return '';
 }
@@ -481,7 +485,7 @@ function machineSettingsHTML(machine: DetailMachine) {
     `<button type="button" class="ghost" data-computer-performance="${esc(machine.id)}">Performance${betaPill('replay_performance')}</button>`];
   const revoke = manage ? `<button type="button" class="ghost danger-text computer-detail-revoke" data-computer-remove="${esc(machine.id)}">Revoke computer</button>` : '';
   const body = rows.filter(Boolean).join('') + revoke;
-  return body || `<p class="muted">${machine.revoked_at ? `Revoked ${esc(ago(machine.revoked_at))}.` : 'Nothing to change here.'}</p>`;
+  return body || `<p class="muted">${machine.revoked_at ? `Revoked ${esc(agoSaid(machine.revoked_at))}.` : 'Nothing to change here.'}</p>`;
 }
 // Fall back to Tico Gateway: whether this computer's bots run on the Gateway when its plans run out (off until an admin
 // turns it on; backend/models_preset.py computer_falls_back). Everyone sees it; only an admin changes it.
@@ -527,7 +531,7 @@ function computerNameHTML(machine: DetailMachine) {
   if (COMPUTER_RENAMING !== machine.id) return `<div class="computer-detail-name">${title}<button type="button" class="computer-rename" data-computer-rename="${esc(machine.id)}" title="Rename" aria-label="Rename ${esc(machine.label)}"><span class="nav-icon" aria-hidden="true">edit</span></button></div>`;
   return `${title}<form class="computer-rename-form" data-computer-rename-form="${esc(machine.id)}" novalidate>
     <input type="text" name="label" maxlength="100" value="${esc(machine.label)}" aria-label="Rename" data-computer-rename-input autocomplete="off">
-    <button type="submit" class="primary">Save</button><button type="button" class="ghost" data-computer-rename-cancel>Cancel</button></form>`;
+    <button type="button" class="ghost" data-computer-rename-cancel>Cancel</button><button type="submit" class="primary settings-go">Save</button></form>`;
 }
 function computerRenameShow(id: string) {
   COMPUTER_RENAMING = id;
@@ -551,7 +555,7 @@ function computerDetailHTML(machine: DetailMachine) {
     ? `<p class="computer-detail-empty"><span class="machine-chip-dot" aria-hidden="true"></span>Bots here can't run until a connection is added${manage ? ' · Add connection below' : ''}.</p>` : '';
   const section = (key: string, title: string, body: string) => `<section class="computer-detail-section" data-detail-section="${key}"><h3>${title}</h3>${body}</section>`;
   return `<header class="computer-detail-head"><div>${computerNameHTML(machine)}<span class="muted">${esc(settingsPersonName(machine.owner_id))} · <span data-computer-status>${esc(status)}</span></span></div>
-      <button class="ghost tmodal-x" type="button" data-detail-close aria-label="Close">✕</button></header>
+      <button class="ghost tmodal-x" type="button" data-detail-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
     <div class="computer-detail-body">${notes}
       ${machine.turn_summary ? `<p class="computer-detail-note" data-turn-counts>${esc(machine.turn_summary)}</p><p class="muted">A turn has up to 3 minutes to start. Waiting turns leave room for other work.</p>` : ''}
       ${section('connections', 'Connections', empty + conns.map(conn => machineConnectionHTML(machine, conn, online, manage)).join('') + machineAddHTML(machine, online, manage))}

@@ -28,13 +28,13 @@ const teamOf = (bot: string) => BOTS.find(b => b.name === bot)?.team;
 
 const now = Date.now(), at = (hours: number) => new Date(now - hours * 36e5).toISOString();
 interface FileOpen {type: string; url: string}
-interface FileRow {id: string; name: string; title: string; bot: string; library_kind: string; locator: string; open: FileOpen | null | undefined;
+interface FileRow {id: string; name: string | null; title: string; bot: string; library_kind: string; locator: string; open: FileOpen | null | undefined;
   last_activity_at: string; pins: string[]; archived: boolean; task_id: null}
-interface RowSpec {title: string; bot: string; kind: string; locator?: string; open?: FileOpen | null; h: number; pins?: string[]; archived?: boolean}
+interface RowSpec {title: string; name?: string | null; bot: string; kind: string; locator?: string; open?: FileOpen | null; h: number; pins?: string[]; archived?: boolean}
 interface Viewport {width: number; height: number}
 // What the fixture server was asked for and served: the page's list and search calls, and the file it opened.
 interface FetchState {files: FileRow[]; mode: string; listed: string[]; searched: (string | null)[]; opened: string[]}
-const row = (id: string, o: RowSpec): FileRow => ({id, name: o.title, title: o.title, bot: o.bot, library_kind: o.kind, locator: o.locator || 'tico_blob',
+const row = (id: string, o: RowSpec): FileRow => ({id, name: 'name' in o ? o.name ?? null : o.title, title: o.title, bot: o.bot, library_kind: o.kind, locator: o.locator || 'tico_blob',
   open: 'open' in o ? o.open : {type: 'tico', url: '/api/v2/files/' + id}, last_activity_at: at(o.h), pins: o.pins || [],
   archived: !!o.archived, task_id: null});
 // A search hit carries an excerpt of its text; the list does not.
@@ -44,6 +44,13 @@ const FILES: FileRow[] = [
   row('file-funnel', {title: 'Signup funnel', bot: 'engineer', kind: 'data', h: 2, pins: ['Ana', 'Chris']}),
   row('file-weekly', {title: 'Weekly report', bot: 'cmo', kind: 'page', h: 3, open: null}),
   row('file-budget', {title: 'Budget 2026', bot: 'finance', kind: 'data', h: 5}),
+  // A stored file whose title is its path: the row shows the file's own name, never the folder.
+  row('file-guide', {title: 'guides/holiday-setup.md', name: 'holiday-setup.md', bot: 'writer', kind: 'document', h: 5.5}),
+  // A title with a slash that is not a path: a stored file shows its own name; without one, words with spaces stay whole.
+  row('file-sales', {title: 'Sales 2024/25.xlsx', name: 'Sales 2024-25.xlsx', bot: 'writer', kind: 'document', h: 5.6}),
+  row('file-q3q4', {title: 'Q3/Q4 plan.pdf', name: null, bot: 'writer', kind: 'document', h: 5.7}),
+  // A path with no name (as a search hit has none): its last part.
+  row('file-export', {title: 'exports/traffic-2026.csv', name: null, bot: 'writer', kind: 'document', h: 5.8}),
   row('file-hero', {title: 'Hero image v3', bot: 'writer', kind: 'image', h: 6, pins: ['Chris']}),
   row('file-video', {title: 'Launch video cut', bot: 'writer', kind: 'media', h: 26}),
   row('file-traffic', {title: 'Traffic export', bot: 'data', kind: 'data', h: 30}),
@@ -52,7 +59,7 @@ const FILES: FileRow[] = [
   row('file-rubric', {title: 'Recruiting rubric', bot: 'recruiter', kind: 'document', h: 480}),
   row('file-old', {title: 'Old brief', bot: 'ops', kind: 'document', h: 960, archived: true}),
 ];
-// Forty-six more, so the list pages: 50 a page, and More brings the other six (56 that are not archived).
+// Forty-six more, so the list pages: 50 a page, and More brings the other ten (60 that are not archived).
 const GEN_BOTS = ['cmo', 'writer', 'sales', 'support', 'ops', 'recruiter'], GEN_KINDS = ['document', 'image', 'page', 'other', 'media'];
 for (let i = 0; i < 46; i++) FILES.push(row(`file-n${String(i).padStart(2, '0')}`, {title: `Note ${String(i + 1).padStart(2, '0')}`,
   bot: GEN_BOTS[i % 6]!, kind: GEN_KINDS[i % 5]!, h: 100 + i * 17}));
@@ -144,9 +151,16 @@ async function desktop(browser: Browser) {
   if (shots) await page.screenshot({path: path.join(shots, 'files-desktop-dark.png')});
 
   // A table: the column heads, one line a row, Updated at the right edge, the columns left to right.
-  assert.deepEqual((await page.locator('.lf-cols .lf-h').allInnerTexts()).map(s => s.trim()).filter(Boolean),
+  assert.deepEqual((await page.locator('.lf-tbl thead th').evaluateAll(els => els.map(e => e.textContent || ''))).map(s => s.trim()).filter(Boolean),
     ['Name', 'Kind', 'Made by', 'Team', 'Updated'], 'desktop: column heads');
-  assert(await page.locator('.lf-cols').isVisible(), 'desktop: the heads show');
+  assert(await page.locator('.lf-tbl thead').isVisible(), 'desktop: the heads show');
+  // The shared table look (.tt-list, as Contacts and Skills): small uppercase heads, flat rows, no frame around it.
+  const look = await page.locator('.lf-tbl').evaluate(t => {
+    const th = getComputedStyle(t.querySelector('th')!), frame = t.closest('.lf-list')!;
+    return {shared: t.classList.contains('tt-list'), upper: th.textTransform, radius: getComputedStyle(t).borderRadius + getComputedStyle(frame).borderRadius,
+      border: getComputedStyle(frame).borderTopWidth};
+  });
+  assert.deepEqual(look, {shared: true, upper: 'uppercase', radius: '0px0px', border: '0px'}, 'desktop: the shared table, no frame');
   assert.equal(await page.locator('.lf-meta').first().isVisible(), false, 'desktop: no Kind · Bot line under the name');
   const rows = await page.locator('.lf-row').evaluateAll(els => els.slice(0, 12).map(el => {
     const box = (c: string) => el.querySelector(c)!.getBoundingClientRect(), r = el.getBoundingClientRect();
@@ -156,7 +170,7 @@ async function desktop(browser: Browser) {
   for (const r of rows) {
     assert(r.h >= 36 && r.h <= 44, `desktop: a row is about 40px, got ${r.h}`);
     assert(r.titleH <= 20, `desktop: the name is one line, got ${r.titleH}`);
-    assert(Math.abs(r.whenRight - (r.right - 14)) <= 2, 'desktop: Updated sits at the right edge');
+    assert(Math.abs(r.whenRight - r.right) <= 2, 'desktop: Updated sits at the right edge');
     assert.deepEqual(r.x, [...r.x].sort((a, b) => a - b), 'desktop: the columns run left to right');
   }
   assert.equal(await page.locator('.lf-row').count(), 50, 'desktop: a page of 50');
@@ -164,16 +178,36 @@ async function desktop(browser: Browser) {
   assert.equal((await signup.locator('.lf-kind').innerText()).trim(), 'Data', 'desktop: the kind column');
   assert.equal((await signup.locator('.lf-by-n').innerText()).trim(), 'Engineering Lead', 'desktop: who made it');
   assert.equal((await signup.locator('.lf-team').innerText()).trim(), 'Engineering', 'desktop: the team of the bot');
-  assert.match(await signup.locator('.lf-pins').innerText(), /^Pinned 2$/, 'desktop: pinned count');
+  // Pinned is a mark, not a pill: no words in the row, its name for a screen reader and on hover.
+  assert.equal(await page.locator('.lf-row .pill, .lf-pins').count(), 0, 'desktop: no pills in the rows');
+  assert.equal(await signup.locator('.lf-pin').getAttribute('aria-label'), 'Pinned in 2 places', 'desktop: pinned twice');
+  assert.equal((await signup.locator('.lf-text .lf-line').innerText()).trim(), 'Signup funnel', 'desktop: the mark adds no words');
+  assert.equal(await page.locator('.lf-row').filter({hasText: 'Hero image v3'}).locator('.lf-pin').getAttribute('aria-label'), 'Pinned', 'desktop: pinned once');
+  // A file's name carries its ending and never its folder; the full title is the name's tooltip.
+  const guide = page.locator('.lf-row:has([data-id="file-guide"])');
+  assert.equal((await guide.locator('.lf-title').innerText()).trim(), 'holiday-setup.md', 'desktop: the name without its folder');
+  assert.equal(await guide.locator('.lf-title').getAttribute('title'), 'guides/holiday-setup.md', 'desktop: the folder is in the tooltip');
+  const shown = async (id: string) => (await page.locator(`.lf-row:has([data-id="${id}"]) .lf-title`).innerText()).trim();
+  assert.equal(await shown('file-sales'), 'Sales 2024-25.xlsx', 'desktop: a slash in a title is not a folder when the file has its name');
+  assert.equal(await shown('file-q3q4'), 'Q3/Q4 plan.pdf', 'desktop: words with spaces are not a path');
+  assert.equal(await shown('file-export'), 'traffic-2026.csv', 'desktop: a path without a name shows its last part');
+  assert.equal(await signup.locator('.lf-pin').getAttribute('title'), 'Pinned: Ana, Chris', 'desktop: the pin says where on hover');
+  // The one page header: Files, the search and the filter icon, then ⋯ last.
+  const head = page.locator('#lf-root > header.ph');
+  assert.equal((await head.locator('.ph-t').innerText()).trim(), 'Files', 'desktop: the header title');
+  assert.equal(await head.locator('.ph-tools .lf-q, .ph-tools .lf-fbtn').count(), 2, 'desktop: search and filter are the header tools');
+  assert.equal(await head.evaluate(h => [...h.children].filter(c => !c.matches('[popover]')).at(-1)?.classList.contains('ph-more')), true, 'desktop: ⋯ is last');
   // Links: a Google file opens in a new tab, a page opens its page, a stored file opens in the viewer.
   const q4 = page.locator('.lf-row').filter({hasText: 'Q4 launch plan'});
-  assert.equal(await q4.getAttribute('href'), GDOC, 'desktop: a linked file goes to its provider');
-  assert.equal(await q4.getAttribute('target'), '_blank', 'desktop: and opens in a new tab');
-  assert.equal(await page.locator('.lf-row').filter({hasText: 'Weekly report'}).getAttribute('href'), '#/page/file-weekly', 'desktop: a page opens the page');
+  assert.equal(await q4.locator('a.lf-open').getAttribute('href'), GDOC, 'desktop: a linked file goes to its provider');
+  assert.equal(await q4.locator('a.lf-open').getAttribute('target'), '_blank', 'desktop: and opens in a new tab');
+  assert.equal(await page.locator('.lf-row').filter({hasText: 'Weekly report'}).locator('a.lf-open').getAttribute('href'), '#/page/file-weekly', 'desktop: a page opens the page');
+  // A file whose bot has no team shows nothing there, not a dash.
+  assert.ok((await page.locator('td.lf-team').allInnerTexts()).every(x => x.trim() !== '—'), 'desktop: no dash for no team');
 
   // More: the next page is asked for with its cursor, and the list grows.
   await page.locator('[data-lf-more]').click();
-  await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 56);
+  await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 60);
   assert(state.listed.some(s => /cursor=50/.test(s)), 'desktop: More asks for the next page');
   assert.equal(await page.locator('[data-lf-more]').count(), 0, 'desktop: no More at the end');
 
@@ -240,7 +274,7 @@ async function desktop(browser: Browser) {
   await openPopover(page);
   await page.locator('[data-lf-toggle="archived"]').click();
   await settle(page, ['Old brief']);
-  assert.match(await page.locator('.lf-row .lf-pins').innerText(), /^Archived$/, 'archived: labelled in the row');
+  assert.equal(await page.locator('.lf-row .lf-arch').getAttribute('aria-label'), 'Archived', 'archived: marked in the row');
   await page.locator('.lf-bar [data-lf-clear-all]').click();
   await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 50);
 
@@ -256,7 +290,8 @@ async function desktop(browser: Browser) {
   await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 50);
 
   // A stored file opens in the viewer.
-  await page.locator('.lf-row').filter({hasText: 'Budget 2026'}).click();
+  // A click anywhere on the row (here its Kind cell, not the name) opens the file: the row is one target.
+  await page.locator('.lf-row').filter({hasText: 'Budget 2026'}).locator('td.lf-kind').click();
   await until(() => state.opened.includes('file-budget'));
   assert.deepEqual(errors, [], 'desktop: page errors');
   await page.close();
@@ -281,7 +316,7 @@ async function phone(browser: Browser) {
   if (shots) await page.screenshot({path: path.join(shots, 'files-phone-dark.png')});
 
   // Two lines a row: the name, then Kind · Bot · time; no columns.
-  assert.equal(await page.locator('.lf-cols').isVisible(), false, 'phone: no column heads');
+  assert.equal(await page.locator('.lf-tbl thead').isVisible(), false, 'phone: no column heads');
   for (const hidden of ['.lf-kind', '.lf-by', '.lf-team', '.lf-when']) assert.equal(await page.locator(hidden).first().isVisible(), false, `phone: ${hidden} is a column, not shown`);
   const signup = page.locator('.lf-row').filter({hasText: 'Signup funnel'});
   assert.match((await signup.locator('.lf-meta').innerText()).trim(), /^Data · Engineering Lead · \S/, 'phone: Kind · Bot · time under the name');
@@ -316,7 +351,7 @@ async function states(browser: Browser) {
   const {page: empty, errors: emptyErrors} = await open(browser, DESKTOP, fresh([]), 'dark');
   await empty.goto('https://tico-ui.test/#/library/files');
   await empty.locator('.lf-list').getByText('No files yet.').waitFor();
-  assert.equal(await empty.locator('.lf-cols').isVisible(), false, 'empty: no column heads without rows');
+  assert.equal(await empty.locator('.lf-tbl').count(), 0, 'empty: no table without rows');
   assert.deepEqual(emptyErrors, [], 'empty: page errors');
   await empty.close();
 
@@ -324,7 +359,7 @@ async function states(browser: Browser) {
   await failed.goto('https://tico-ui.test/#/library/files');
   await failed.locator('.lf-list .err').waitFor();
   assert.match(await failed.locator('.lf-list .err').innerText(), /\S/, 'error: a message in place of the rows');
-  assert.equal(await failed.locator('.lf-cols').isVisible(), false, 'error: no column heads');
+  assert.equal(await failed.locator('.lf-tbl').count(), 0, 'error: no table');
   assert.deepEqual(failedErrors, [], 'error: page errors');
   await failed.close();
 

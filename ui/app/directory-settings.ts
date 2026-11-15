@@ -33,12 +33,14 @@ async function directorySettingsShow(box: HTMLElement): Promise<void> {
   const counted = new Map(counts.map(c => [c.type, c]));
   types.sort((a, b) => dirTabOrder(a.key) - dirTabOrder(b.key));
   const switches = dirsMailRows(mail);
+  // Added by only when some type was added by someone: a column that says Built in on every row says nothing.
+  const added = types.some(t => !t.built_in);
   box.innerHTML = `<section class="card" data-dirs-types><header><h2>Types</h2></header>
-      <table class="tt-list dir-kv-table"><thead><tr><th>Type</th><th>Count</th><th>Added by</th></tr></thead><tbody>
+      <table class="tt-list dir-kv-table"><thead><tr><th>Type</th><th>Count</th>${added ? '<th>Added by</th>' : ''}</tr></thead><tbody>
       ${types.map(t => { const n = counted.get(t.key); return `<tr data-dirs-type="${esc(t.key)}">
         <td><a href="${dirListHref(t.key)}">${esc(t.name)}</a></td>
         <td class="tnum" data-label="Count">${n ? esc(dirN(n.count, n.approximate)) : '0'}</td>
-        <td class="muted" data-label="Added by">${t.built_in ? 'Built in' : esc(dirWho(t.created_by_type && t.created_by_id ? `${t.created_by_type}:${t.created_by_id}` : ''))}</td></tr>`; }).join('')}
+        ${added ? `<td class="muted" data-label="Added by">${t.built_in ? 'Built in' : esc(dirWho(t.created_by_type && t.created_by_id ? `${t.created_by_type}:${t.created_by_id}` : ''))}</td>` : ''}</tr>`; }).join('')}
       </tbody></table></section>
     <section class="card" data-dirs-fields><header><h2>Fields</h2><span class="spacer"></span>
       <select data-dirs-field-type aria-label="Type">${types.map(t => `<option value="${esc(t.key)}"${t.key === 'organization' ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select></header>
@@ -46,8 +48,8 @@ async function directorySettingsShow(box: HTMLElement): Promise<void> {
     <section class="card" data-dirs-operate hidden><header><h2>Where we operate</h2></header><div data-dirs-operate-body></div></section>
     ${switches ? `<section class="card" data-dirs-mail><header><h2>Every mail sender</h2></header>${switches}</section>` : ''}
     <section class="card" data-dirs-places><header><h2>Shared places</h2></header>
-      <div class="dir-set-row"><span>Use shared places</span><span class="pill ok" data-dirs-places-on>On</span></div>
-      <p class="muted">People, notes and mail stay here.</p></section>`;
+      <div class="dir-set-row"><span>Use shared places</span><span data-dirs-places-on>On</span></div>
+      <p class="settings-cell-note">People, notes and mail stay here.</p></section>`;
   const select = box.querySelector<HTMLSelectElement>('[data-dirs-field-type]');
   const fields = box.querySelector<HTMLElement>('[data-dirs-field-body]');
   if (select && fields) {
@@ -115,7 +117,7 @@ async function dirsOperate(card: HTMLElement, run: number): Promise<void> {
   const edit = settingsIsAdmin();
   const rows = us.operates_in.map(p => `<li class="dir-set-row" data-dirs-place="${esc(p.id)}">
       <a href="${dirHref(p.id)}">${esc(p.name)}</a>
-      ${edit && p.link_id ? `<button type="button" class="ghost small dir-icon" data-dirs-unplace="${esc(p.link_id)}" aria-label="Remove ${esc(p.name)}"><span class="nav-icon" aria-hidden="true">close</span></button>` : ''}</li>`).join('');
+      ${edit && p.link_id ? `<button type="button" class="ghost dir-icon" data-dirs-unplace="${esc(p.link_id)}" aria-label="Remove ${esc(p.name)}" title="Remove"><span class="nav-icon" aria-hidden="true">delete</span></button>` : ''}</li>`).join('');
   body.innerHTML = `${rows ? `<ul class="dir-plain dir-operate">${rows}</ul>` : '<p class="muted dir-none" data-dirs-operate-empty>None yet.</p>'}
     ${edit ? `<div class="dir-operate-add"><input type="search" class="dir-q" data-dirs-place-q placeholder="Add a place" aria-label="Add a place" autocomplete="off">
       <ul class="dir-plain dir-operate-found" data-dirs-place-found hidden></ul></div>` : ''}`;

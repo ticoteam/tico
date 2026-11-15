@@ -1,12 +1,15 @@
-// 👍 / 👎 on a bot's work (ui/app/feedback.ts), against a fake of the feedback routes (backend/feedback.py). Fixtures only.
+// 👍 / 👎 on a bot's or another person's work (ui/app/feedback.ts), against a fake of the feedback routes
+// (backend/feedback.py). Fixtures only.
 //  - an older server (404 on the batched read) shows no control at all, and nothing asks for reasons;
 //  - one batched read per subject type for what is drawn, never one per message, and never a person's own message;
 //  - 👍 saves in one tap and a second tap removes it; 👎 saves, then its sheet offers recent reasons as chips, says
 //    "You've said this before." for a reason used twice (Make a rule becomes the main button), tells the bot, or drafts a
 //    rule to edit, widen to All bots and save; a 👎 mark shows the reason and what came of it, and removes it;
 //  - on a phone a long press opens 👍, 👎 and Copy, a tap still opens the copy line, and a press that moves is a scroll;
-//  - a task a bot asked for has the pair in its window's header; a person's request has none;
-//  - a thread message keeps its emoji reactions apart from the thumbs, and copies its own words.
+//  - a task a bot or another person asked for has the pair in its window's header; your own request has none; a 👎
+//    on a person's work offers the reason only (no Tell the bot, no rule);
+//  - a thread message keeps its emoji reactions apart from the thumbs, and copies its own words; another person's
+//    message has the same row, your own has none.
 // FEEDBACK_SHOTS=<dir> saves phone and desktop screenshots of each state.
 import type {Browser, Locator, Page} from 'playwright';
 const {chromium}: typeof import('playwright') = require('playwright');
@@ -36,7 +39,8 @@ const shot = async (page: Page, name: string) => {
 };
 
 // The routes, kept in memory: one row per person and subject, as the server's upsert keeps it.
-function feedbackFake(page: Page, {off = false, seed = []}: {off?: boolean; seed?: Row[]} = {}): Promise<Fake> {
+// `authors`: who made a subject (its row's bot_id), by subject id; a bot's when unnamed.
+function feedbackFake(page: Page, {off = false, seed = [], authors = {}}: {off?: boolean; seed?: Row[]; authors?: Record<string, string>} = {}): Promise<Fake> {
   const rows: Row[] = [...seed], reads: Fake['reads'] = [], writes: Write[] = [];
   let n = 0;
   const reasons = [{text: 'Too long', count: 2}, {text: 'Wrong numbers', count: 1}];
@@ -55,7 +59,7 @@ function feedbackFake(page: Page, {off = false, seed = []}: {off?: boolean; seed
     if (p === '/api/v2/feedback' && method === 'POST') {
       let row = rows.find(r => r.subject_type === body.subject_type && r.subject_id === body.subject_id);
       if (!row) rows.push(row = {id: 'fb-' + ++n, person_id: 'human:ana', subject_type: body.subject_type, subject_id: body.subject_id,
-        bot_id: 'bot:assistant', outcome: 'none', note_id: null, note_status: null, org_rule_id: null, rule_status: null, created_at: iso()});
+        bot_id: authors[body.subject_id] || 'bot:assistant', outcome: 'none', note_id: null, note_status: null, org_rule_id: null, rule_status: null, created_at: iso()});
       Object.assign(row, {rating: body.rating, reason: body.reason ?? row.reason ?? '', updated_at: iso()});
       if (body.tell_bot) Object.assign(row, {outcome: 'told_bot', note_id: 'n-' + n, note_status: 'waiting'});
       return json(row);
@@ -291,14 +295,16 @@ async function chatPhone(browser: Browser, theme = 'dark') {
   console.log(`feedback chat phone (${theme}): ok`);
 }
 
-// A task a bot asked for: the task window's header carries 👍 / 👎, and a tap saves without leaving the window; a
-// person's request has none.
+// A task a bot or another person asked for: the task window's header carries 👍 / 👎, and a tap saves without leaving
+// the window; your own request has none. A 👎 on a person's request takes a reason and nothing else.
 async function taskWindow(browser: Browser) {
   const tasks = [task('t-bot', 'Draft the renewal emails', 'todo', {owner_id: 'human:ana', requester_id: 'bot:writer'}),
-    task('t-person', 'Book the venue', 'todo', {owner_id: 'human:ana', requester_id: 'human:sam'})];
+    task('t-person', 'Book the venue', 'todo', {owner_id: 'human:ana', requester_id: 'human:sam'}),
+    task('t-mine', 'Plan the offsite', 'todo', {owner_id: 'human:ana', requester_id: 'human:ana'})];
   let feedback!: Fake;
-  const {page, errors} = await open(browser, {hash: '#/task/t-person', tasks, needs: [], beforeGoto: async page => { feedback = await feedbackFake(page); }});
-  assert.equal(await page.locator('#task-modal .tmodal-head [data-fb]').count(), 0, "a person's request has no pair");
+  const {page, errors} = await open(browser, {hash: '#/task/t-mine', tasks, needs: [], beforeGoto: async page => { feedback = await feedbackFake(page, {authors: {'t-person': 'human:sam'}}); }});
+  await page.locator('#task-modal[open] .tmodal-head').waitFor();
+  assert.equal(await page.locator('#task-modal .tmodal-head [data-fb]').count(), 0, 'your own request has no pair');
   await page.evaluate(() => { location.hash = '#/task/t-bot'; });
   const head = page.locator('#task-modal[open] .tmodal-head [data-fb="task:t-bot"]');
   await head.waitFor();
@@ -310,6 +316,24 @@ async function taskWindow(browser: Browser) {
   assert.deepEqual(posts(feedback.writes), [{subject_type: 'task', subject_id: 't-bot', rating: 'up'}]);
   assert.equal(await page.locator('#task-modal[open]').count(), 1, 'the window stays open');
   await shot(page, 'task-window');
+  // Another person's request: the same pair; its 👎 sheet keeps the chips and the box, and only saves.
+  await page.evaluate(() => { location.hash = '#/task/t-person'; });
+  const theirs = page.locator('#task-modal[open] .tmodal-head [data-fb="task:t-person"]');
+  await theirs.waitFor();
+  await theirs.getByRole('button', {name: 'Not good', exact: true}).click();
+  const sheet = page.locator('dialog.fb-down[open]');
+  await sheet.waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('dialog.fb-down .fb-chip').length === 5);
+  assert.deepEqual(await sheet.locator('.fb-acts button').allInnerTexts(), ['Save'], "a person's work: no Tell the bot, no rule");
+  await sheet.getByRole('button', {name: 'Too long'}).click();
+  assert.equal(await sheet.locator('.fb-nudge').isVisible(), false, 'no nudge toward a rule');
+  await sheet.getByRole('textbox', {name: 'What was wrong?'}).fill('Wrong venue');
+  await shot(page, 'task-window-person-down');
+  await sheet.getByRole('button', {name: 'Save'}).click();
+  await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
+  assert.deepEqual(posts(feedback.writes, 'task').slice(1), [{subject_type: 'task', subject_id: 't-person', rating: 'down'},
+    {subject_type: 'task', subject_id: 't-person', rating: 'down', reason: 'Wrong venue'}]);
+  assert.ok(!feedback.writes.some(w => /rule|tell/.test(w.p) || w.body?.tell_bot), 'nothing told, no rule');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('feedback task window: ok');
@@ -322,7 +346,8 @@ async function threadMessage(browser: Browser) {
   const bot = {name: 'finance', display_name: 'Finance', host: 'keeper', status: 'active', can_chat: true, schedules: []};
   const threads = threadsFake({bot: 'finance', messages: [
     {id: 'h1', sender_id: 'human:ana', body: 'Is the October close done?'},
-    {id: 'b1', sender_id: 'bot:finance', body: 'Closed. Two invoices are still unpaid.', reactions: [{emoji: '🎉', count: 1, actors: ['human:sam']}]}]});
+    {id: 'b1', sender_id: 'bot:finance', body: 'Closed. Two invoices are still unpaid.', reactions: [{emoji: '🎉', count: 1, actors: ['human:sam']}]},
+    {id: 's1', sender_id: 'human:sam', body: 'I will chase the two invoices.'}]});
   await page.context().route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -340,7 +365,7 @@ async function threadMessage(browser: Browser) {
     if (answer !== undefined) return json(answer);
     return json(unrouted(p));
   });
-  const {writes} = await feedbackFake(page);
+  const {writes} = await feedbackFake(page, {authors: {s1: 'human:sam'}});
   await page.addInitScript(() => { Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async (t: string) => { (window as unknown as PageWin).copied = t; }}}); });
   await page.goto('https://tico-ui.test/#/bot/finance/dm');
   const msg = page.locator('.th-msg[data-mid="b1"]');
@@ -360,6 +385,13 @@ async function threadMessage(browser: Browser) {
   assert.deepEqual(posts(writes), [{subject_type: 'message', subject_id: 'b1', rating: 'up'}]);
   await msg.getByRole('button', {name: 'Copy message'}).click();
   await page.waitForFunction(() => (window as unknown as PageWin).copied === 'Closed. Two invoices are still unpaid.');
+  // Another person's words: the same row of Copy, 👍 and 👎; a 👍 saves on their message.
+  const theirs = page.locator('.th-msg[data-mid="s1"]');
+  await theirs.hover();
+  assert.deepEqual(await theirs.locator('.fb-row button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Copy message', 'Good', 'Not good']);
+  await theirs.getByRole('button', {name: 'Good', exact: true}).click();
+  await page.waitForFunction(() => document.querySelector('[data-fb="message:s1"] [data-fb-rate="up"]')?.getAttribute('aria-pressed') === 'true');
+  assert.deepEqual(posts(writes).at(-1), {subject_type: 'message', subject_id: 's1', rating: 'up'});
   assert.deepEqual(errors, []);
   await page.close();
   console.log('feedback thread message: ok');

@@ -89,7 +89,24 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
       await page.screenshot({path:path.join(shots,'changelog-phone.png'),fullPage:true});
       await page.setViewportSize({width:1440,height:900});
     }
+    // The one page header: search (its placeholder just "Search") and the shared filter icon as tools; no caption.
     const search = page.getByRole('searchbox',{name:'Search changes'});
+    assert.equal(await search.getAttribute('placeholder'),'Search');
+    assert.equal(await page.locator('header.cl-head .ph-tools [data-cl-filter] svg').count(),1,'the filter is the shared icon');
+    assert.equal(await page.locator('.release-summary').count(),0,'no caption under the title');
+    // The view is chosen in the filter's menu (the shared popover); the icon names it when it is not All product updates.
+    const filterLabel = () => page.locator('[data-cl-filter]').getAttribute('aria-label');
+    // The icon closes its own menu (the popover closes itself on the press; the click must not open it again).
+    await page.locator('[data-cl-filter]').click();
+    await page.locator('#task-filter-pop .tl-opt').first().waitFor();
+    await page.locator('[data-cl-filter]').click();
+    await page.locator('#task-filter-pop').waitFor({state:'hidden'});
+    assert.equal(await page.locator('[data-cl-filter]').getAttribute('aria-expanded'),'false','the button closes it');
+    const pick = async (label: string) => {
+      await page.locator('[data-cl-filter]').click();
+      await page.locator('#task-filter-pop .tl-opt',{hasText:label}).click();
+      await page.locator('#task-filter-pop').waitFor({state:'hidden'});
+    };
     const searched = page.waitForResponse(r => r.url().includes('q=restore'));
     await search.fill('restore');
     await searched;
@@ -100,7 +117,8 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     const before = posts.length;
     await page.reload();
     await page.locator('.release-entry').first().waitFor();
-    assert.equal(await page.getByRole('combobox',{name:'Filter changes'}).inputValue(),'product','a later sign-in reads the persisted state');
+    assert.equal(await filterLabel(),'Filter changes','a later sign-in reads the persisted state (All product updates)');
+    assert.equal(await page.locator('[data-cl-filter] .tl-fbadge').isHidden(),true);
     assert.equal(await page.locator('.release-new').count(),0);
     assert.equal(posts.length,before,'nothing is left to acknowledge');
     read.clear(); failRead = true;
@@ -149,10 +167,12 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
     assert.deepEqual(posts.at(-1)!.ids,['release-0.3.22'],'Load older changes acknowledges the older entries it adds');
     assert.equal(count(),0);
     pageSize = 50;
-    await page.getByRole('combobox',{name:'Filter changes'}).selectOption('product');
+    await pick('All product updates');
     await page.waitForFunction(() => document.querySelectorAll('.release-entry').length === 2);
     assert.equal(await page.locator('.release-entry').count(),2,'read changes remain in product history');
-    await page.getByRole('combobox',{name:'Filter changes'}).selectOption('');
+    await pick('All activity');
+    assert.equal(await filterLabel(),'Filter changes, All activity','the icon names the view in force');
+    assert.equal(await page.locator('[data-cl-filter] .tl-fbadge').isHidden(),false);
     await page.waitForFunction(() => document.querySelectorAll('.release-entry').length === 3);
     assert.equal(await page.locator('.release-entry').count(),3);
     assert.equal(await page.locator('.release-card img').count(),0,'untrusted activity titles are escaped');

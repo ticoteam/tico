@@ -148,6 +148,7 @@ async function pageComputerScreen(id: string, from?: string) {
       <button class="ghost scr-btn" type="button" id="scr-keys-btn" hidden>Keyboard</button>
       <div class="theme-seg scr-seg" id="scr-mode" role="radiogroup" aria-label="Mode" hidden>
         <button type="button" role="radio" data-scr-control="0">View</button><button type="button" role="radio" data-scr-control="1">Control</button></div>
+      ${pageChatSlot()}
     </div>
     <div class="scr-stage" id="scr-stage"><div class="scr-target" id="scr-target"></div>
       <div class="scr-msg" id="scr-msg" hidden><span id="scr-msg-text"></span><button class="ghost" type="button" id="scr-retry" hidden>Reconnect</button></div></div>

@@ -10,7 +10,9 @@ const PAGE_SIZES: Record<string, number> = {small: 180, medium: 320, large: 520}
 const PAGE_FULL_MIN = 240;
 
 // ----------------------------------------------------------------- the status line
-const pageDay = (iso: string | null | undefined) => { const d = new Date(String(iso) + 'T12:00:00'); return isNaN(Number(d)) ? String(iso) : d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}); };
+// A day (YYYY-MM-DD) in the app's date words (ui/app/format.ts): "Nov 11", Today, Tomorrow. Read at noon, so a zone
+// never moves it to the day before.
+const pageDay = (iso: string | null | undefined) => dayWords(String(iso) + 'T12:00:00') || String(iso);
 const pageHref = (id: string) => PAGE_ROUTE + encodeURIComponent(id);
 // The bot's name as the rest of the app shows it (duplicates get their slug), else the server's.
 // A page names its bot bot_id; a Library file and a search hit name it bot.
@@ -30,10 +32,10 @@ function pageStatusHTML(p: import('../types/api').Page, {link = true}: {link?: b
   const by = String(p.updated_by || '');
   const who = by.startsWith('bot:') ? pageBotName({bot: by.slice(4), bot_name: p.updated_by_name}) : p.updated_by_name || pageBotName(p);
   const parts = [stale ? `Not updated in ${p.stale_days} day${p.stale_days === 1 ? '' : 's'}`
-    : `Updated ${esc(ago(p.updated_at))}${who ? ' by ' + esc(who) : ''}`];
+    : `Updated ${esc(agoSaid(p.updated_at))}${who ? ' by ' + esc(who) : ''}`];
   if (Number.isInteger(p.version)) parts.push('v' + p.version);
   if (p.cadence && p.cadence !== 'none') parts.push(esc(p.cadence));
-  if (p.as_of) parts.push('data from ' + esc(pageDay(p.as_of)));
+  if (p.as_of) parts.push('data from ' + esc(lowerDay(pageDay(p.as_of))));
   return `<div class="pg-status${stale ? ' pg-stale' : ''}" title="${esc(fmt(p.updated_at))}">${lock}${parts.join(' · ')}</div>`;
 }
 
@@ -407,12 +409,12 @@ async function pageDiffDraw(state: PageFullState) {
     out.innerHTML = a === b ? '<p class="muted pg-pad">No text changes</p>' : tfDiffHTML(a ?? '', b ?? '');   // strict index access types a destructured list item as possibly undefined
   } catch (e) { if (out.isConnected) { out.removeAttribute('aria-busy'); out.innerHTML = `<p class="muted pg-pad">${esc(errorMessage(e, ''))}</p>`; } }
 }
-// The diff's header: What's changed?, the version to compare from, → the one on screen, and Close.
+// The diff's header: What's changed?, the version to compare from, → the one on screen, and ✕ (the one close icon).
 function pageDiffShell(state: PageFullState, body: HTMLElement, from: number) {
   const options = pageDiffBases(state).map(v => `<option value="${v.version}"${v.version === from ? ' selected' : ''}>v${v.version}</option>`).join('');
   body.innerHTML = `<section class="pg-diff" data-to="${state.shown}" aria-label="What's changed?"><header class="pg-diff-head"><h2>What's changed?</h2>
     <select class="pg-diff-from" aria-label="Compare from">${options}</select><span aria-hidden="true">→</span><span class="pg-diff-to">v${state.shown}</span>
-    <span class="spacer"></span><button type="button" class="ghost" data-pg-diff-close>Close</button></header>
+    <span class="spacer"></span><button type="button" class="ghost tmodal-x" data-pg-diff-close aria-label="Close" title="Close">✕</button></header>
     <div class="pg-diff-lines">${skelRows(4)}</div></section>`;
   const sel = body.querySelector('.pg-diff-from') as HTMLSelectElement | null;
   if (sel) sel.onchange = () => { state.diff = Number(sel.value); void pageDiffDraw(state); };
@@ -490,20 +492,18 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
   if (d.tpEl && d.tpEl.dataset.task === id) { slot.replaceWith(d.tpEl); return; }
   d.tpOff?.();
   d.tpEl = slot; slot.dataset.task = id;
-  // "+" offers Make page or Link page; the Describe box shows only once Make page is chosen (or a draft is kept).
-  slot.innerHTML = `<header class="tp-head"><span class="lbl">Pages</span><button type="button" class="prop-add" data-tp-add aria-expanded="false" aria-label="Add a page" title="Add a page" hidden>${TL_ICON.plus}</button></header>
-    <div class="tp-actions" hidden><button type="button" class="ghost" data-tp-make>Make page</button><button type="button" class="ghost" data-tp-link>Link page</button></div>
-    <div class="tp-picker" hidden><div class="tp-search"><input type="search" placeholder="Search pages" aria-label="Search pages" autocomplete="off">
-      <button type="button" class="ghost" data-tp-close aria-label="Close page picker">Close</button></div><div class="tp-results" aria-live="polite"></div></div>
+  // "+" opens the page search: recent pages until something is typed, then what matches; under them, a file dropped
+  // (or picked) uploads to the task (task-files.ts). Make page is ⋯ › Make a page (taskPageMakeOpen); its Describe box
+  // shows once chosen, or while a draft is kept.
+  slot.innerHTML = `<header class="tp-head tw-h"><span class="lbl">Pages</span><button type="button" class="prop-add" data-tp-add aria-expanded="false" aria-label="Add a page" title="Add a page" hidden>${TL_ICON.plus}</button></header>
+    <div class="tp-picker" role="group" aria-label="Link a page" hidden><input type="search" placeholder="Find a page" aria-label="Find a page" autocomplete="off">
+      <div class="tp-results" aria-live="polite"></div><button type="button" class="tp-drop" data-tp-drop>or drop a file to upload</button></div>
     <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
     <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages"></div>`;
   const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
   try { prompt.value = localStorage.getItem(taskMakeDraftKey(id)) || ''; } catch { /* storage may be unavailable */ }
   slot.tpMakeOpen = !!prompt.value;
-  const add = $('[data-tp-add]', slot), choices = $('.tp-actions', slot);
-  const choose = (open: boolean) => { choices.hidden = !open; add.setAttribute('aria-expanded', String(open)); };
-  add.onclick = () => choose(choices.hidden);
-  $('[data-tp-make]', slot).onclick = () => { choose(false); slot.tpMakeOpen = true; make.hidden = false; prompt.focus(); };
+  const add = $('[data-tp-add]', slot);
   prompt.oninput = () => { try { if (prompt.value) localStorage.setItem(taskMakeDraftKey(id), prompt.value); else localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ } };
   make.onsubmit = async (ev: Event) => {
     ev.preventDefault();
@@ -520,23 +520,49 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
     } catch (e) { if (d.tpEl === slot) { error.textContent = errorMessage(e, ''); error.hidden = false; } }
     finally { slot.tpSending = false; $('button', make).disabled = ['making', 'update_required'].includes(slot.tpMaking?.state); }
   };
-  const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker);
-  $('[data-tp-link]', slot).onclick = () => { choose(false); picker.hidden = false; input.focus(); };
-  $('[data-tp-close]', slot).onclick = () => { picker.hidden = true; add.focus(); };
+  const picker = $('.tp-picker', slot), input = $('input', picker), results = $('.tp-results', picker), drop = $('[data-tp-drop]', picker);
   let soon = 0, search = 0;
-  input.oninput = () => {
+  const row = (p: {id: string; title?: string | null}) => `<button type="button" class="tp-result" data-tp-page="${esc(p.id)}"><span class="nav-icon" aria-hidden="true">description</span><span class="tp-name">${esc(p.title || 'Untitled')}</span></button>`;
+  const find = (wait: number) => {
     clearTimeout(soon);
     const seq = ++search, q = input.value.trim();
-    results.replaceChildren();
-    if (!q) return;
     soon = setTimeout(async () => {
       try {
-        const r = await get<import('../types/api').FileSearch>('/v2/files/search?' + new URLSearchParams({q, kind: 'page'}), {fresh: true});
+        // Nothing typed: the newest pages; else the pages that match.
+        const rows = q ? (await get<import('../types/api').FileSearch>('/v2/files/search?' + new URLSearchParams({q, kind: 'page'}), {fresh: true})).results || []
+          : (await get<{files?: {id: string; title?: string | null}[]}>('/v2/files?' + new URLSearchParams({kind: 'page', limit: '6'}), {fresh: true})).files || [];
         if (d.tpEl !== slot || seq !== search) return;
-        results.innerHTML = (r.results || []).map(p => `<button type="button" class="tp-result" data-tp-page="${esc(p.id)}">${esc(p.title)}</button>`).join('') || '<p class="muted">No pages</p>';
+        // A page already on the task is not offered again.
+        const have = new Set([...(slot as HTMLElement).querySelectorAll<HTMLElement>('.tp-row[data-page]')].map(a => a.dataset.page));
+        results.innerHTML = rows.filter(p => !have.has(p.id)).map(row).join('') || `<p class="muted">${q ? 'No pages' : 'No other pages'}</p>`;
       } catch (e) { if (d.tpEl === slot && seq === search) results.innerHTML = `<p class="err">${esc(errorMessage(e, ''))}</p>`; }
-    }, 250);
+    }, wait);
   };
+  const pick = (open: boolean) => {
+    const was = !picker.hidden;
+    picker.hidden = !open; add.setAttribute('aria-expanded', String(open));
+    if (!open) { if (was) picker.dispatchEvent(new Event('menuclosed')); return; }   // a held redraw goes on (task-props.ts)
+    input.value = ''; results.replaceChildren(); find(0);
+    // The drop line is for whoever may add files to the task (its Files input, task-files.ts).
+    drop.hidden = !$('[data-tf-input]', d) || !!$('[data-tf-add][hidden]', d);
+    input.focus();
+  };
+  add.onclick = () => pick(picker.hidden);
+  input.oninput = () => find(250);
+  // Esc closes the search, not the task; the focus goes back to +. ↓ from the box steps into the results.
+  picker.addEventListener('keydown', (ev: KeyboardEvent) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); pick(false); add.focus(); return; }
+    const rows: HTMLElement[] = [...(picker as HTMLElement).querySelectorAll<HTMLElement>('.tp-result, .tp-drop:not([hidden])')], at = rows.findIndex(r => r === document.activeElement);
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      const next = ev.key === 'ArrowDown' ? at + 1 : at - 1;
+      (next < 0 ? input : rows[Math.min(next, rows.length - 1)])?.focus();
+    }
+  });
+  // A file dropped on the search, or picked from its line, uploads to the task and shows under Files: the window's own
+  // drop (task-files.ts, a drop anywhere on the task) uploads it; the search lights up while it hovers, then closes.
+  drop.onclick = () => $('[data-tf-input]', d)?.click();
+  fileDropTarget(picker, () => pick(false));
   slot.onclick = async (ev: MouseEvent) => {
     const link = eventElement(ev)?.closest<HTMLButtonElement>('[data-tp-page]'), unlink = eventElement(ev)?.closest<HTMLButtonElement>('[data-tp-unlink]');
     if ((!link && !unlink) || slot.tpBusy) return;
@@ -548,7 +574,7 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
       if (link) await post('/v2/pins', {place: 'task:' + id, item: 'page:' + link.dataset.tpPage});
       else await writeRequest('DELETE', '/v2/pins/' + encodeURIComponent(String(unlink?.dataset.tpUnlink)));
       if (d.tpEl !== slot) return;
-      if (link) { picker.hidden = true; input.value = ''; results.replaceChildren(); ++search; }
+      if (link) { pick(false); ++search; add.focus(); }
       await taskPagesLoad(d);
     } catch (e) { toast(errorMessage(e, ''), true); }
     finally { slot.tpBusy = false; button.disabled = false; }
@@ -589,6 +615,13 @@ function taskPageMakeDraw(d: TaskPagesHost, status: MakePageStatus | null) {
   $('button', $('.tp-make', slot)).disabled = slot.tpSending || pending;
   taskPageMakeShow(slot);
 }
+// ⋯ › Make a page (task-props.ts): the Describe box, focused.
+function taskPageMakeOpen(d: TaskPagesHost) {
+  const slot = d.tpEl;
+  if (!slot) return;
+  slot.tpMakeOpen = true; taskPageMakeShow(slot);
+  $('.tp-make input', slot)?.focus();
+}
 // The Describe box shows once Make page is chosen, while a draft is kept, or while a request is on its way or failed.
 function taskPageMakeShow(slot: TaskPagesSlot) {
   $('.tp-make', slot).hidden = !slot.tpCanLink || !(slot.tpMakeOpen || ['making', 'update_required', 'failed'].includes(slot.tpMaking?.state ?? ''));
@@ -608,20 +641,12 @@ async function taskPagesLoad(d: TaskPagesHost) {
     const r = await get<TaskPlaceRead>('/v2/places/' + encodeURIComponent('task:' + slot.dataset.task), {fresh: true});
     if (d.tpEl !== slot || seq !== slot.tpSeq) return;
     const pins = (r.pins || []).filter((x): x is TaskPlacePin & {page: import('../types/api').Page} => !!x.page && !x.page.replaced_by_id && !x.page.archived);
+    // Pages shows even with none, for its + (Details' one part that stays when empty); a reader who may not link any
+    // and has none to open gets no section.
     slot.hidden = !r.can_link && !pins.length;
-    // A phone's Pages tab goes with the section: no pages and none to link, no tab that opens empty.
-    const tab = d.querySelector<HTMLElement>('[data-task-tab="pages"]');
-    if (tab) {
-      tab.hidden = slot.hidden;
-      // The last page went while its tab was shown: back to Chat rather than an empty body.
-      if (tab.hidden && tab.getAttribute('aria-selected') === 'true') d.querySelector<HTMLElement>('[data-task-tab="chat"]')?.click();
-    }
     $('[data-tp-add]', slot).hidden = !r.can_link;
     slot.tpCanLink = !!r.can_link;
     taskPageMakeShow(slot);
-    // The Pages tab counts them (a phone's task window, ui/app/task-modal.ts TASK_TABS).
-    const count = d.querySelector<HTMLElement>('[data-task-page-count]');
-    if (count) count.textContent = pins.length ? String(pins.length) : '';
     const kept = slot.tpCards || new Map<string | null, TaskPagesRow>(), cards = new Map<string | null, TaskPagesRow>();
     for (const pin of pins) {
       const key = JSON.stringify([pin.page, pin.size, pin.can_unpin]);
@@ -629,7 +654,7 @@ async function taskPagesLoad(d: TaskPagesHost) {
       if (!row || row.key !== key) {
         // One row: the page's icon and name, and the row opens the page. Its version is on the chat's chip, not here.
         const el = document.createElement('div'); el.className = 'tp-page';
-        el.innerHTML = `<a class="tp-row" href="${esc(pageHref(pin.page.file_id))}" data-page="${esc(pin.page.file_id)}"><span class="nav-icon" aria-hidden="true">article</span><span class="tp-name">${esc(pin.page.title)}</span></a>${pin.can_unpin
+        el.innerHTML = `<a class="tp-row" href="${esc(pageHref(pin.page.file_id))}" data-page="${esc(pin.page.file_id)}" title="${esc(pin.page.title)}"><span class="nav-icon" aria-hidden="true">description</span><span class="tp-name">${esc(pin.page.title)}</span></a>${pin.can_unpin
           ? `<button type="button" class="ghost tp-unlink" data-tp-unlink="${esc(pin.id)}" aria-label="${esc('Unlink ' + pin.page.title)}" title="Unlink">${TL_ICON.x}</button>` : ''}`;
         row = {key, el};
       }
@@ -681,14 +706,15 @@ async function pageLibraryFiles() {
   if (filter.bot) filter.bot = botByRef(filter.bot)?.id || filter.bot;     // an old link names the bot by slug
   const same = LF && document.body.contains(LF.root);
   if (!same) {
+    // The one page header (ui/app/page-head.ts): the search and the shared filter icon are its tools, ⋯ last. The
+    // filter popover sits outside the header, so it still opens when a phone folds the tools into ⋯.
     $('#main').innerHTML = `<div class="lf" id="lf-root">
-      <header class="lf-head"><h1>Files</h1>
-        <div class="lf-search">${TL_ICON.search}<input class="lf-q" type="search" placeholder="Search" aria-label="Search files" autocomplete="off" spellcheck="false"></div>
-        <button type="button" class="lf-fbtn" popovertarget="lf-filter-pop" aria-haspopup="true" aria-expanded="false" aria-label="Filters" title="Filters">${filterIcon(16)}<span class="lf-fbn tnum" hidden></span></button>
-        <div class="tl-pop lf-pop" id="lf-filter-pop" popover></div></header>
+      ${pageHead({title: 'Files', hook: 'lf-head',
+        tools: `<div class="lf-search">${TL_ICON.search}<input class="lf-q" type="search" placeholder="Search" aria-label="Search files" autocomplete="off" spellcheck="false"></div>`
+          + `<button type="button" class="tl-ib lf-fbtn" popovertarget="lf-filter-pop" aria-haspopup="true" aria-expanded="false" aria-label="Filters" title="Filters">${filterIcon(13)}<span class="ph-fold-word" aria-hidden="true">Filters</span><span class="tl-fbadge lf-fbn tnum" hidden></span></button>`})}
+      <div class="tl-pop lf-pop" id="lf-filter-pop" popover></div>
       <div class="lf-bar" hidden></div>
-      <div class="lf-table"><div class="lf-cols" aria-hidden="true"><span class="lf-h"></span><span class="lf-h">Name</span><span class="lf-h lf-kind">Kind</span><span class="lf-h lf-by">Made by</span><span class="lf-h lf-team">Team</span><span class="lf-h lf-when">Updated</span></div>
-        <div class="lf-list" aria-live="polite">${skelRows(6)}</div></div></div>`;
+      <div class="lf-list" aria-live="polite">${skelRows(6)}</div></div>`;
     LF = {root: $('#lf-root'), pop: $('#lf-filter-pop'), filter, rows: [], cursor: null, seq: 0, groups: []};
     lfWire();
     get('/v2/groups').then(g => { if (!LF) return; LF.groups = Array.isArray(g) ? g : g?.groups || []; lfControls(); }).catch(() => {});
@@ -746,7 +772,15 @@ function lfWire() {
     if (clear) { state.filter[String(clear.dataset.lfClear)] = ''; lfChanged(); return; }
     if (eventElement(ev)?.closest<HTMLElement>('[data-lf-clear-all]')) { for (const k of LF_COUNTED) state.filter[k] = ''; lfChanged(); return; }
     if (eventElement(ev)?.closest<HTMLElement>('[data-lf-more]')) { void lfLoad(true); return; }
-    const row = eventElement(ev)?.closest<HTMLElement>('a.lf-row[data-lf-open="tico"]');
+    // A row is one target (style guide, "Rows, pills and counts"): a click anywhere on it is a click on its name's link,
+    // and ⌘ or Ctrl opens that link in a new tab, as the link itself would.
+    const cell = eventElement(ev);
+    const open = !cell?.closest('a, button') ? cell?.closest('tr.lf-row')?.querySelector<HTMLAnchorElement>('a.lf-open') : null;
+    if (open) {
+      if (ev.metaKey || ev.ctrlKey) window.open(open.href, '_blank', 'noopener'); else open.click();
+      return;
+    }
+    const row = eventElement(ev)?.closest<HTMLElement>('a.lf-open[data-lf-open="tico"]');
     if (row && !ev.metaKey && !ev.ctrlKey) { ev.preventDefault(); void openFileLink(row.dataset.id, row.dataset.name); }
   };
   pop.onclick = (ev: MouseEvent) => {
@@ -789,7 +823,9 @@ function lfChanged() {
 // Under the filter button and inside the window; a phone's popover is the bottom sheet the stylesheet makes it.
 function lfMenuPlace(pop: HTMLElement, anchor: Element) {
   if (matchMedia(PHONE).matches) { pop.style.top = pop.style.left = ''; return; }
-  const r = anchor.getBoundingClientRect();
+  // A filter button the header folded into ⋯ is hidden once ⋯ closes: the menu goes under ⋯ instead.
+  const at = anchor.getClientRects().length ? anchor : anchor.closest('header.ph')?.querySelector(':scope > .ph-more') || anchor;
+  const r = at.getBoundingClientRect();
   pop.style.top = `${Math.max(8, Math.min(r.bottom + 6, innerHeight - pop.offsetHeight - 8))}px`;
   pop.style.left = `${Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8))}px`;
 }
@@ -850,18 +886,29 @@ async function lfLoad(more = false) {
       state.cursor = r.has_more ? r.next_cursor : null;
     }
   } catch (e) {
-    if (LF === state && seq === state.seq) {
-      const cols = state.root.querySelector<HTMLElement>('.lf-cols');
-      if (!cols) return;
-      cols.hidden = true;
-      list.innerHTML = `<p class="err lf-pad">${esc(errorMessage(e, ''))}</p>`;
-    }
+    if (LF === state && seq === state.seq) list.innerHTML = `<p class="err lf-pad">${esc(errorMessage(e, ''))}</p>`;
     return;
   }
   lfDraw();
 }
-// One row is one link (the whole row opens the file). Its name cell holds the two-line form a phone shows: the name, then
-// Kind · Bot · time, then the search excerpt; a computer shows the excerpt on the name's line and the columns beside it.
+// The name a row shows (style guide, Files: "the name carries its ending", never a path): a page's and a link's title as
+// written; a stored file's own name when its title is that file's path (guides/holiday-setup.md reads
+// holiday-setup.md), or the last part of a title that is a path (a search hit has no name). A title a bot gave with a
+// slash in its words ("Q3 plan / draft") is kept whole. The full title stays the name's tooltip.
+function lfName(f: LfRow): string {
+  const title = String(f.title || f.name || '');
+  if (f.library_kind === 'page' || f.locator === 'remote_link' || (f.hit && f.url) || !title.includes('/')) return title;
+  // A stored file knows its own name: a title with a slash in it shows that name ("Sales 2024/25.xlsx" stays whole).
+  if (f.name) return f.name;
+  // A search hit has no name: only a title that reads as a path (no spaces in any part, an ending) loses its folders.
+  const parts = title.split('/');
+  const pathLike = parts.every(p => p && !/\s/.test(p)) && /\.[a-z0-9]{1,8}$/i.test(parts.at(-1) || '');
+  return pathLike ? parts.at(-1) || title : title;
+}
+// One row of the shared table (.tt-list, ui/styles/tools.css, as Contacts and Skills draw theirs). The name cell is the
+// row's link and holds the two-line form a phone shows: the name, then Kind · Bot · time, then the search excerpt; a
+// computer shows the excerpt on the name's line and the columns beside it. A click elsewhere on the row is a click on
+// that link (lfWire).
 function lfRowHTML(f: LfRow) {
   const kind = f.library_kind || 'other';
   const page = kind === 'page', link = f.locator === 'remote_link' || (f.hit && f.url);
@@ -871,28 +918,33 @@ function lfRowHTML(f: LfRow) {
   const attrs = page ? '' : link ? ` target="_blank" rel="noopener noreferrer"${google ? ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.title)}"` : ''}`
     : ` data-lf-open="tico" data-id="${esc(f.id)}" data-name="${esc(f.name || f.title)}"`;
   const kindName = (LF_KINDS.find(([v]) => v === kind)?.[1] || 'Other').replace(/s$/, '');
-  const bot = pageBotName(f), when = ago(f.last_activity_at), team = lfTeamName(botRow(f.bot)?.team) || '—';
+  const bot = pageBotName(f), when = ago(f.last_activity_at), team = lfTeamName(botRow(f.bot)?.team) || '';
+  // Pinned and archived are marks, not pills (style guide: a pill only when something is wrong); the mark says where
+  // it is pinned on hover and to a screen reader.
   const pinned = f.pins || [];
-  const pins = pinned.length ? `<span class="lf-pins" title="${esc(pinned.join(', '))}">Pinned${pinned.length > 1 ? ' ' + pinned.length : ''}</span>` : '';
-  const archived = f.archived ? '<span class="lf-pins">Archived</span>' : '';
+  const pinWords = pinned.length > 1 ? `Pinned in ${pinned.length} places` : 'Pinned';
+  const pins = pinned.length ? `<span class="lf-mark lf-pin" role="img" aria-label="${esc(pinWords)}" title="${esc('Pinned: ' + pinned.join(', '))}">${TL_ICON.pin}</span>` : '';
+  const archived = f.archived ? '<span class="lf-mark lf-arch nav-icon" role="img" aria-label="Archived" title="Archived">archive</span>' : '';
   const excerpt = f.excerpt ? `<span class="lf-excerpt">${esc(f.excerpt)}</span>` : '';
-  return `<a class="lf-row" href="${esc(url)}"${attrs}>
-    <span class="nav-icon lf-ico" aria-hidden="true">${link ? 'link' : LF_ICON[kind] || 'inventory_2'}</span>
-    <span class="lf-name"><span class="lf-line"><span class="lf-title" title="${esc(f.title)}">${esc(f.title)}</span>${pins}${archived}</span>
-      <span class="lf-meta">${esc(kindName)} · ${esc(bot)} · ${esc(when)}</span>${excerpt}</span>
-    <span class="lf-kind">${esc(kindName)}</span>
-    <span class="lf-by">${f.bot ? avatar(f.bot, 18) : ''}<span class="lf-by-n">${esc(bot)}</span></span>
-    <span class="lf-team">${esc(team)}</span>
-    <span class="lf-when" title="${esc(fmt(f.last_activity_at))}">${esc(when)}</span></a>`;
+  const name = lfName(f);
+  return `<tr class="lf-row"><td class="lf-name"><a class="lf-open" href="${esc(url)}"${attrs}>
+      <span class="nav-icon lf-ico" aria-hidden="true">${link ? 'link' : LF_ICON[kind] || 'inventory_2'}</span>
+      <span class="lf-text"><span class="lf-line"><span class="lf-title" title="${esc(f.title)}">${esc(name)}</span>${pins}${archived}</span>
+        <span class="lf-meta">${esc(kindName)} · ${esc(bot)} · ${esc(when)}</span>${excerpt}</span></a></td>
+    <td class="lf-kind">${esc(kindName)}</td>
+    <td class="lf-by"><span class="lf-by-in">${f.bot ? avatar(f.bot, 16) : ''}<span class="lf-by-n">${esc(bot)}</span></span></td>
+    <td class="lf-team">${esc(team)}</td>
+    <td class="lf-when" title="${esc(fmt(f.last_activity_at))}">${esc(when)}</td></tr>`;
 }
 function lfDraw() {
   const state = LF;
   if (!state) return;
-  const root = state.root, list = root.querySelector<HTMLElement>('.lf-list'), cols = root.querySelector<HTMLElement>('.lf-cols'), rows = state.rows;
-  if (!list || !cols) return;
+  const root = state.root, list = root.querySelector<HTMLElement>('.lf-list'), rows = state.rows;
+  if (!list) return;
   const any = LF_FILTERS.some(k => state.filter[k]);
-  cols.hidden = !rows.length;
-  list.innerHTML = rows.length ? rows.map(lfRowHTML).join('') + (state.cursor ? '<button type="button" class="ghost lf-more" data-lf-more>More</button>' : '')
+  list.innerHTML = rows.length ? `<table class="tt-list lf-tbl"><thead><tr><th class="lf-name">Name</th><th class="lf-kind">Kind</th>`
+      + `<th class="lf-by">Made by</th><th class="lf-team">Team</th><th class="lf-when">Updated</th></tr></thead><tbody>${rows.map(lfRowHTML).join('')}</tbody></table>`
+      + (state.cursor ? '<button type="button" class="ghost lf-more" data-lf-more>More</button>' : '')
     : `<p class="muted lf-pad">${any ? 'Nothing matches.' : 'No files yet.'}</p>`;
 }
 

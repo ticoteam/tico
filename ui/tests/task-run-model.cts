@@ -1,6 +1,7 @@
 // A bot's task says the model its runs use (Runs on, backend/task_run_models.py). Whoever the server says may set it
 // (`can_set_run_model` in GET /v2/tasks/{id}) picks the task's own model, harness and effort and applies it, or clears
-// it back to the bot's task model; anyone else reads what it runs on. Retired and Gateway tier models are not offered.
+// it back to the bot's task model; anyone else reads what it runs on. Runs on is one line among the task's facts ("Same as
+// bot" or the model); for whoever may set it, the line opens the form in a popover. Retired and Gateway tier models are not offered.
 // Its Compact list starts on "Same as bot" and offers only the sizes the picked model holds; a window alone keeps the
 // bot's model (task #237); Claude Code, which compacts on its own default, has none. The form fits a phone's width.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -70,8 +71,8 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     await page.waitForFunction(() => typeof taskModalShow === 'function' && S.emps?.length);
     await page.evaluate(t => taskModalShow(t), task);
     const modal = page.locator('#task-modal'), sec = modal.locator('[data-task-run-model]');
-    if (viewport.width <= 390) await page.locator('#task-modal[open] [data-task-tab="info"]').click();   // a phone: Runs on is in Info (task #409)
-    await sec.locator('.task-run-now', {hasText: "The bot's task model"}).waitFor();
+    await page.locator('#task-modal[open] [data-task-tab="details"]').click();   // Runs on is one of the facts on the Details tab
+    await sec.locator('[data-run-model-now]', {hasText: 'Same as bot'}).waitFor();
 
     if (!canSet) {
       // Someone the server does not let set the model reads what the task runs on, with nothing to pick, whatever
@@ -79,15 +80,26 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
       // have appeared by now.
       await page.waitForFunction(() => Array.isArray(TASK_RUN_ROWS));
       assert.equal(await sec.locator('form').count(), 0);
+      assert.equal(await sec.locator('[data-run-model-open]').count(), 0, 'the line opens nothing');
       assert.deepEqual(errors, []);
       return;
     }
-    const model = sec.locator('[data-run-model]');
+    // The one line opens the form in a popover, its first field focused; Esc closes it and the focus goes back.
+    const line = sec.locator('[data-run-model-open]'), pop = sec.locator('[data-run-model-pop]');
+    await line.click();
+    const model = pop.locator('[data-run-model]');
+    await model.waitFor();
+    assert.ok(await model.evaluate(e => e === document.activeElement), 'the model field has the focus');
+    await page.keyboard.press('Escape');
+    await model.waitFor({state: 'hidden'});
+    assert.ok(await line.evaluate(e => e === document.activeElement), 'the focus is back on the line');
+    assert.ok(await page.locator('#task-modal[open]').count(), 'Esc closed the popover, not the task');
+    await line.click();
     await model.waitFor();
     const offered = await model.locator('option').evaluateAll((os: HTMLOptionElement[]) => os.map(o => o.value));
     assert.deepEqual(offered, ['', 'claude-sonnet-5-5', 'gpt-test'], 'no retired or Gateway tier model');
     // The rendered options: the window follows the name when the catalog gives one, and a model without one shows none.
-    assert.deepEqual(await model.locator('option').allInnerTexts(), ["The bot's task model", 'Sonnet 5.5', 'GPT Test · 1.05M'],
+    assert.deepEqual(await model.locator('option').allInnerTexts(), ['Same as bot', 'Sonnet 5.5', 'GPT Test · 1.05M'],
       'the window is in the option label');
     assert.equal(await sec.locator('[data-run-model-apply]').isDisabled(), true, 'nothing to apply yet');
 
@@ -109,24 +121,26 @@ async function run(viewport: {width: number; height: number}, shot: string, me: 
     assert.deepEqual(await compact.locator('option').allInnerTexts(), ['Same as bot', '100K', '150K', '200K', '250K', '300K',
       '400K', '500K', '600K', '700K', '800K', '900K', '1M']);
     await compact.selectOption('400000');
-    const box = (await sec.boundingBox())!;
+    const box = (await pop.boundingBox())!;
     assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `Runs on fits the ${viewport.width} px width`);
     if (shot) await page.screenshot({path: shot});
     await sec.locator('[data-run-model-apply]').click();
-    await sec.locator('.task-run-now', {hasText: 'GPT Test'}).waitFor();
+    await sec.locator('[data-run-model-now]', {hasText: 'GPT Test'}).waitFor();
     assert.deepEqual(posted.at(-1), {model: 'gpt-test', harness: 'cursor', effort: 'high', compact_at: 400000});
-    assert.match(await sec.locator('.task-run-now').innerText(), /GPT Test · .+ · high · .+ · compacts at 400K/);
+    assert.match(await sec.locator('[data-run-model-now]').innerText(), /GPT Test · .+ · high · .+ · compacts at 400K/);
 
     // Back to the bot's task model keeps the task's own window ("Same as bot 400K")...
+    await sec.locator('[data-run-model-open]').click();
     await sec.locator('[data-run-model]').selectOption('');
     assert.equal(await sec.locator('[data-run-compact]').inputValue(), '400000', 'the window stays when the model goes');
     await sec.locator('[data-run-model-apply]').click();
-    await sec.locator('.task-run-now', {hasText: "The bot's task model · compacts at 400K"}).waitFor();
+    await sec.locator('[data-run-model-now]', {hasText: 'Same as bot · compacts at 400K'}).waitFor();
     assert.deepEqual(posted.at(-1), {model: null, compact_at: 400000});
     // ...and Same as bot clears the task's own choice.
+    await sec.locator('[data-run-model-open]').click();
     await sec.locator('[data-run-compact]').selectOption('');
     await sec.locator('[data-run-model-apply]').click();
-    await sec.locator('.task-run-now', {hasText: /^The bot's task model$/}).waitFor();
+    await sec.locator('[data-run-model-now]', {hasText: /^Same as bot$/}).waitFor();
     assert.deepEqual(posted.at(-1), {model: null, compact_at: null});
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }

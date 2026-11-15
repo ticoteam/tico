@@ -70,8 +70,8 @@ interface AuFilters {
   owner: string;
   q: string;
 }
-// The filter sections a phone shows as headers.
-type AuSection = 'trig' | 'status' | 'team' | 'owner';
+// The filter sections a phone shows as headers; 'run' (a run's status) is the Runs tab's own.
+type AuSection = 'trig' | 'status' | 'team' | 'owner' | 'run';
 // The table's columns, by key.
 type AuColKey = 'name' | 'trigger' | 'owner' | 'last' | 'next' | 'trend' | 'runs' | 'failed' | 'cost';
 type AuCol = [string, string, (r: AuRowT) => string | number];
@@ -105,7 +105,15 @@ const AU_KIND_WORDS: Record<string, string> = {message: 'Message', task_received
 const AU_KIND_ICONS: Record<string, string> = {...AU_TRIGGER_ICONS, system: 'settings'};
 const AU_STATES: [string, string, string][] = [['on', 'On', 'ok'], ['failing', 'Last run failed', 'fail'], ['hold', 'On hold', 'wait'], ['paused', 'Paused', 'wait'], ['off', 'Off', 'idle']];
 const AU_SORTS: [string, string][] = [['last', 'Last run'], ['fail', 'Most failures'], ['runs', 'Most runs'], ['cost', 'Cost'], ['name', 'Name']];
-const AU_RUN_PILLS: Record<string, string> = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'waiting', running: 'in-progress', queued: 'in-progress', held: 'waiting'};
+const AU_GROUPS: [string, string][] = [['trigger', 'Trigger'], ['owner', 'Owner'], ['none', 'None']];
+// The Runs tab's status filter (GET /v2/automations/runs?status=); none picked is every run.
+const AU_RUN_FILTERS: [string, string][] = [['failed', 'Failed'], ['waiting', 'Waiting'], ['running', 'Running'], ['done', 'Done']];
+// A run's pill, only where something is of interest: failed is red, waiting and held amber, running and queued plain.
+// A run that went through (done, nothing found, skipped) has none (style guide: "A row with nothing wrong has no pill").
+const AU_RUN_PILLS: Record<string, string> = {failed: 'fail', waiting: 'waiting', held: 'waiting'};
+const AU_RUN_QUIET = new Set(['ok', 'empty', 'skipped']);
+const auRunPill = (status: string | null | undefined): string => AU_RUN_QUIET.has(status ?? '') ? ''
+  : `<span class="pill ${AU_RUN_PILLS[status ?? ''] || ''}">${esc(AU_RUN_STATUS[status ?? ''] || auCap(status))}</span>`;
 // Columns that leave the table when no automation has a value in them for the range (auTableHTML).
 const AU_OPTIONAL_COLS: AuColKey[] = ['next', 'trend', 'runs', 'failed', 'cost'];
 const AU_ALL_PAGE = 50;
@@ -132,7 +140,7 @@ function auTeam(a: AuItem): string {
 const auTrigLine = (a: AuItem): string => auKind(a) === 'system' ? a.schedule || a.controls?.schedule || 'Tico' : auSource(a.trigger) || (AU_TRIGGER_WORDS as Record<string, string>)[a.trigger?.type ?? ''] || '';
 const auActive = (f: AuFilters): number => f.trig.size + +!!f.status + +!!f.team + +!!f.owner;
 // How many of a filter section's items are picked: the phone's section headers and which of them start open.
-const auPicked = (f: AuFilters, sec: AuSection): number => sec === 'trig' ? f.trig.size : +!!f[sec];
+const auPicked = (f: AuFilters, sec: AuSection): number => sec === 'trig' ? f.trig.size : sec === 'run' ? +!!(AU?.tab === 'runs' && AU.rstatus) : +!!f[sec];
 
 function auMatches(a: AuItem, f: AuFilters = auPage().f): boolean {
   if (f.trig.size && !f.trig.has(auKind(a))) return false;
@@ -144,13 +152,16 @@ function auMatches(a: AuItem, f: AuFilters = auPage().f): boolean {
 }
 const auShown = (): AuItem[] => (auPage().list || []).filter((a: AuItem) => auMatches(a));
 
-// Compact ages: "now", "4m", "3h", "2d".
+// A past time as the shared helper writes it (format.ts ago: "now", "4m", "3h", then the date "Nov 6"); ahead, how long
+// until it ("4m", "3h"), then its day ("Tomorrow", "Nov 18"). The chart's ticks are ages too.
 function auAge(iso: string | null | undefined, ahead = false): string {
   const t = new Date(iso ?? '').getTime();
   if (!iso || isNaN(t)) return '';
-  const s = Math.abs(ahead ? t - Date.now() : Date.now() - t) / 1000;
-  return s < 60 ? 'now' : s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd';
+  if (!ahead) return ago(iso);
+  return until(iso) === 'due' ? 'now' : until(iso).replace(/^in /, '');
 }
+// When it next runs, as a phrase: "in 3h", "tomorrow", "Nov 18".
+const auUntil = (iso: string | null | undefined): string => { const a = auAge(iso, true); return a === 'now' ? 'now' : /^\d+[mh]$/.test(a) ? 'in ' + a : lowerDay(a); };
 const auDur = (r: AuOverviewRun): string => { const s = r.finished_at ? (new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000 : NaN;
   return isNaN(s) || s < 0 ? '' : s < 60 ? Math.round(s) + 's' : s < 3600 ? Math.round(s / 60) + 'm' : Math.round(s / 3600) + 'h'; };
 const auIcon = (name: string | undefined, cls = ''): string => `<span class="nav-icon${cls ? ' ' + cls : ''}" aria-hidden="true">${name}</span>`;
@@ -198,9 +209,16 @@ async function auAllLoad(state: AuOverviewView, more = false): Promise<void> {
 // -------------------------------------------------------------------------------------------- drawing
 function auRangeDraw(): void {
   auDrawn(AU);
+  if (AU.lst) return;   // Listening has no range
   const seg = auEl(AU.root, '.au-range');
   seg.innerHTML = Object.keys(AU_RANGES).map(k => `<button type="button" data-range="${k}" aria-pressed="${auPage().range === k}">${k}</button>`).join('');
+  // The phone's copy in ⋯ (auCtlDraw) marks the same range.
+  for (const b of AU.root.querySelectorAll<HTMLElement>('.au-mrange [data-range]')) b.setAttribute('aria-pressed', String(b.dataset.range === AU.range));
 }
+// One choice in ⋯: the header's ⋯ is a named group of plain buttons (page-head.ts), so a choice of one is a labelled
+// group of buttons, the one on aria-pressed, its check mark the visible sign (automations.css .au-mi).
+const auMenuItem = (attr: string, v: string, label: string, on: boolean): string =>
+  `<button type="button" class="au-mi" ${attr}="${esc(v)}" aria-pressed="${on}">${auIcon('check')}${esc(label)}</button>`;
 // The filters: every section open on a computer; on a phone each is a header that opens its list (AU.fopen).
 function auFacetsDraw(): void {
   auDrawn(AU);
@@ -220,26 +238,43 @@ function auFacetsDraw(): void {
     return `<div class="au-fg" role="group" aria-label="${label}"><button type="button" class="au-fh" data-fsec="${key}" aria-expanded="${open}">`
       + `<span class="au-ft">${label}</span>${n ? `<span class="au-fhn">${n}</span>` : ''}${auIcon('chevron_right', 'au-chev')}</button>${open ? html : ''}</div>`;
   };
-  box.innerHTML = sec('trig', 'Trigger', () => AU_KINDS.map(k => btn('data-ftrig', k, f.trig.has(k), auIcon(AU_KIND_ICONS[k]), AU_KIND_WORDS[k], count(a => auKind(a) === k))).join(''))
+  // A redraw keeps the focus on the choice that had it (a pick redraws the rail).
+  const had = document.activeElement instanceof HTMLElement && box.contains(document.activeElement) ? document.activeElement : null;
+  const again = had ? [...had.attributes].find(a => /^data-f/.test(a.name)) : undefined;
+  // The Runs tab narrows its runs by their status too, first; the server counts no runs, so these have no counts.
+  box.innerHTML = (AU.tab === 'runs' ? sec('run', 'Run', () => AU_RUN_FILTERS.map(([k, l]) => `<button type="button" class="au-fb" data-frun="${k}" aria-pressed="${auPage().rstatus === k}">`
+      + `<span class="au-dot ${AU_DOTS[k === 'done' ? 'ok' : k] || 'idle'}" aria-hidden="true"></span><span class="au-ft">${l}</span></button>`).join('')) : '')
+    + sec('trig', 'Trigger', () => AU_KINDS.map(k => btn('data-ftrig', k, f.trig.has(k), auIcon(AU_KIND_ICONS[k]), AU_KIND_WORDS[k], count(a => auKind(a) === k))).join(''))
     + sec('status', 'Status', () => AU_STATES.map(([k, l, dot]) => btn('data-fstatus', k, f.status === k, `<span class="au-dot ${dot}" aria-hidden="true"></span>`, l, count(a => auState(a) === k))).join(''))
     + (teams.length ? sec('team', 'Team', () => teams.map(t => btn('data-fteam', t, f.team === t, auIcon('groups'), t, count(a => auTeam(a) === t))).join('')) : '')
     + sec('owner', 'Owner', () => owners.map(([o, name]) => btn('data-fowner', o, f.owner === o, personCircle(name, 16), name, count(a => a.owner_id === o))).join(''));
+  if (again) box.querySelector<HTMLElement>(`[${again.name}="${CSS.escape(again.value)}"]`)?.focus();
 }
-// The tabs and the filter button are drawn once (auShell) and moved between widths (auPlace); this sets their state and
-// draws the bar's Group and Sort, or the Runs tab's Status.
+// The header's tabs, range and filter button are drawn once (auShell); this sets their state and fills ⋯ with what is
+// used less than daily: Group by and Sort by on the list, and on a phone the time range (the header's segment is a
+// computer's). The Runs tab's status is a filter, in the rail (auFacetsDraw).
 function auCtlDraw(): void {
   auDrawn(AU);
-  const r = AU.root, list = AU.tab === 'list', n = auActive(AU.f);
-  const opts = (pairs: [string, string][], cur: string): string => pairs.map(([v, l]) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`).join('');
-  for (const b of r.querySelectorAll<HTMLElement>('[data-tab]')) b.setAttribute('aria-selected', String((b.dataset.tab === 'list') === list));
+  const r = AU.root, list = AU.tab === 'list', n = auActive(AU.f) + auPicked(AU.f, 'run');
+  const head = r.querySelector<HTMLElement>(':scope > .au-ph');
+  for (const b of r.querySelectorAll<HTMLElement>(':scope > .au-ph [data-tab]')) {
+    const on = (b.dataset.tab === 'list') === list;
+    b.setAttribute('aria-selected', String(on));
+    b.classList.toggle('cur', on);
+  }
   const fb = auEl(r, '[data-filters]'), badge = fb.querySelector<HTMLElement>('.au-fbn');
   fb.setAttribute('aria-expanded', String(r.classList.contains('filters-open')));
   auSure(badge, '.au-fbn');
   badge.hidden = !n; badge.textContent = String(n || '');
-  auEl(r, '.au-sels').innerHTML = list
-    ? `<label class="au-sel">Group <select data-group>${opts([['trigger', 'Trigger'], ['owner', 'Owner'], ['none', 'None']], AU.group)}</select></label>
-      <label class="au-sel">Sort <select data-sort>${opts(AU_SORTS, AU.sort)}</select></label>`
-    : `<label class="au-sel">Status <select data-rstatus>${opts([['', 'All'], ['failed', 'Failed'], ['waiting', 'Waiting'], ['running', 'Running'], ['done', 'Done']], AU.rstatus)}</select></label>`;
+  if (!head || AU.lst) return;
+  const range = `<div class="au-mrange" role="group" aria-label="Time range"><div class="au-mh">Last</div>${Object.keys(AU_RANGES).map(k => auMenuItem('data-range', k, k, AU!.range === k)).join('')}</div>`;
+  const view = list && !AU.id ? `<div role="group" aria-label="Group by"><div class="au-mh">Group by</div>${AU_GROUPS.map(([v, l]) => auMenuItem('data-group-v', v, l, AU!.group === v)).join('')}</div>`
+    + `<div role="group" aria-label="Sort by"><div class="au-mh">Sort by</div>${AU_SORTS.map(([v, l]) => auMenuItem('data-sort-v', v, l, AU!.sort === v)).join('')}</div>` : '';
+  // An open automation's own items take ⋯ (auMoreHead); the list's come back when it is left.
+  const html = AU.id ? (AU.cur && AU.cur.id === AU.id ? auMoreHead() : PAGE_HEAD_COPY) : range + view + PAGE_HEAD_COPY;
+  const menu = head.querySelector<HTMLElement>(':scope > .ph-menu');
+  // Drawn again only when it changed, so an open ⋯ keeps its focus.
+  if (menu?.dataset.au !== html) { pageHeadSet(head, 'more', html); const m = head.querySelector<HTMLElement>(':scope > .ph-menu'); if (m) m.dataset.au = html; }
 }
 // A phone's header tools hold the search, which a computer shows in the filters: one search, moved when the width
 // crosses over, so a typed search stays put. Listening's search sits in the header's tools at every width.
@@ -283,12 +318,12 @@ const AU_DOTS: Record<string, string> = {ok: 'ok', empty: 'ok', skipped: 'ok', f
 // The Next cell: when it next runs; for a due date, the due day over when its task opens.
 function auNextHTML(a: AuItem): string {
   if (a.enabled === false || !a.next_run) return '';
-  const at = new Date(a.next_run).getTime(), age = at > Date.now() ? auAge(a.next_run, true) : 'now';
+  const at = new Date(a.next_run).getTime(), age = at > Date.now() ? auUntil(a.next_run) : 'now';
   if (auKind(a) === 'due' && a.next_due_at) {
     const far = Date.parse(a.next_due_at) - Date.now() > 330 * 864e5;   // the year only once it could be mistaken
-    return `<span class="au-nx"><span class="au-nx-d">Due ${esc(auDay(a.next_due_at, far))}</span><span>${age === 'now' ? 'opens now' : 'opens in ' + esc(age)}</span></span>`;
+    return `<span class="au-nx"><span class="au-nx-d">Due ${esc(auDay(a.next_due_at, far))}</span><span>${age === 'now' ? 'opens now' : 'opens ' + esc(age)}</span></span>`;
   }
-  return age === 'now' ? 'due' : 'in ' + esc(age);
+  return age === 'now' ? 'due' : esc(age);
 }
 // On a phone (auPhone, automations.js) the table's columns come in another order: redraw when the width crosses over.
 // The header's parts and the filters change places and shape too.
@@ -316,9 +351,9 @@ function auTableHTML(): string {
   const label = (k: string): string => auPage().group === 'trigger' ? auIcon(AU_KIND_ICONS[k] || 'bolt') + esc(AU_KIND_WORDS[k] || auCap(k))
     : personCircle(auActorName(k), 16) + esc(auActorName(k));
   const money = (c: number): string => c >= 0.005 ? esc(auMoney(c)) : '';
-  // Each column: its class (widths and folding in automations.css), heading and cell. A phone leads with what is read
-  // first (name, last run, runs, failed) and scrolls sideways for the rest. A cell holding the usual value (no runs, no
-  // failures, no cost, no next run) is empty, so the row that differs is the one that shows.
+  // Each column: its class (widths and folding in automations.css), heading and cell. A phone has no table: each
+  // automation is a row (auRowsHTML). A cell holding the usual value (no runs, no failures, no cost, no next run) is
+  // empty, so the row that differs is the one that shows.
   const cols: Record<AuColKey, AuCol> = {
     name: ['au-tn', 'Name', ({a}) => `<div><a href="${auHref(a.id)}">${auIcon(AU_KIND_ICONS[auKind(a)] || 'bolt')}<span class="au-nm">${esc(a.name || 'Untitled')}</span></a>${auPill(a)}</div>${auWarn(a)}`],
     trigger: ['au-tt', 'Trigger', ({a}) => esc(auTrigLine(a))],
@@ -338,8 +373,9 @@ function auTableHTML(): string {
     AU.cols = AU_OPTIONAL_COLS.filter(k => every.some(r => cols[k][2](r) !== ''));
   }
   const kept = AU.cols;
-  const order: AuColKey[] = (auPhone() ? ['name', 'last', 'runs', 'failed', 'trigger', 'owner', 'next', 'trend', 'cost'] as AuColKey[]
-    : ['name', 'trigger', 'owner', 'last', 'next', 'trend', 'runs', 'failed', 'cost'] as AuColKey[])
+  const statsError = st?.error ? `<p class="err au-pad">${esc(st.error)}</p>` : '';
+  if (auPhone()) return auRowsHTML(groups, label, money) + statsError;
+  const order: AuColKey[] = (['name', 'trigger', 'owner', 'last', 'next', 'trend', 'runs', 'failed', 'cost'] as AuColKey[])
     .filter(k => !kept || !AU_OPTIONAL_COLS.includes(k) || kept.includes(k));
   const cell = (k: AuColKey, r: AuRowT): string => {
     const [cls, , html] = cols[k], extra = k === 'failed' ? (r.s.failed ? ' au-bad' : ' muted') : '';
@@ -350,8 +386,33 @@ function auTableHTML(): string {
     `<tr class="au-grp${auPage().closed.has(g.k) ? ' closed' : ''}" data-agrp="${esc(g.k)}" role="button" tabindex="0" aria-expanded="${!auPage().closed.has(g.k)}"><td colspan="${order.length}">${auIcon('expand_more', 'au-chev')}${label(g.k)}<span class="au-fn">${g.rows.length}</span></td></tr>`)
     + (auPage().closed.has(g.k) && auPage().group !== 'none' ? '' : g.rows.map(tr).join(''))).join('')
     : `<tr><td colspan="${order.length}" class="muted au-pad">${(AU.list || []).length ? 'No automations match these filters' : 'No automations'}</td></tr>`;
-  return `<table class="au-tbl-t" style="--au-cols:${order.length}"><thead><tr>${order.map(k => `<th class="${cols[k][0].replace(' muted', '')}">${cols[k][1]}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>
-    ${st?.error ? `<p class="err au-pad">${esc(st.error)}</p>` : ''}`;
+  return `<table class="au-tbl-t"><thead><tr>${order.map(k => `<th class="${cols[k][0].replace(' muted', '')}">${cols[k][1]}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table>${statsError}`;
+}
+
+// A phone's list: a table does not fit, so each automation is a row, its name (and pills) over its facts: trigger, last
+// run, next run, runs and failures for the range, cost. A fact holding the usual value is left out, as the table leaves
+// its cell empty. The whole row is the link to the automation; its group header folds the group, as on a computer.
+function auRowsHTML(groups: {k: string; rows: AuRowT[]}[], label: (k: string) => string, money: (c: number) => string): string {
+  auHave(AU);
+  const grouped = AU.group !== 'none', closed = AU.closed;
+  const row = ({a, s}: AuRowT): string => {
+    const last = a.last_run ? `<span class="au-lr"><span class="au-dot ${AU_DOTS[a.last_run.status ?? ''] || 'idle'}" role="img" aria-label="${esc(AU_RUN_STATUS[a.last_run.status ?? ''] || a.last_run.status)}"></span>${esc(auAge(a.last_run.started_at))}</span>` : '';
+    // auNextHTML's words, escaped already: a due date's two lines read "Due Mar 1 · opens in 3d" here.
+    const next = auNextHTML(a).replace(/<\/span><span>/g, ' · ').replace(/<[^>]+>/g, '').trim();
+    const trig = auTrigLine(a);
+    const facts = [trig ? `<span class="au-tt">${esc(trig)}</span>` : '', last, next && !/^(in |due|now|opens)/i.test(next) ? 'next ' + next : next, s.runs ? `${s.runs.toLocaleString()} ${s.runs === 1 ? 'run' : 'runs'}` : '',
+      s.failed ? `<span class="au-bad">${s.failed} failed</span>` : '', money(s.cost)].filter(Boolean);
+    // The name is the link (as the table's name cell is); a tap anywhere else on the row opens it too (auOverviewClick).
+    // The link's name is the automation's alone; its pills and its owner (an image named for them) sit beside it.
+    return `<div class="au-r au-row${a.enabled === false ? ' off' : ''}" data-row="${esc(a.id)}">`
+      + `<span class="au-r1"><a class="au-r-a" href="${auHref(a.id)}">${auIcon(AU_KIND_ICONS[auKind(a)] || 'bolt')}<span class="au-nm">${esc(a.name || 'Untitled')}</span></a>${auPill(a)}`
+      + `<span class="au-r-own" role="img" aria-label="${esc(auActorName(a.owner_id))}">${personCircle(auActorName(a.owner_id), 22)}</span></span>`
+      + (facts.length ? `<span class="au-r2">${facts.map(x => x.startsWith('<span class="au-tt"') ? x : `<span>${x}</span>`).join('')}</span>` : '') + `${auWarn(a)}</div>`;
+  };
+  if (!groups.some(g => g.rows.length)) return `<p class="muted au-pad">${(AU.list || []).length ? 'No automations match these filters' : 'No automations'}</p>`;
+  return `<div class="au-rows">${groups.map(g => (grouped ? `<button type="button" class="au-grp au-rg${closed.has(g.k) ? ' closed' : ''}" data-agrp="${esc(g.k)}" aria-expanded="${!closed.has(g.k)}">`
+    + `${auIcon('expand_more', 'au-chev')}${label(g.k)}<span class="au-fn">${g.rows.length}</span></button>` : '')
+    + (grouped && closed.has(g.k) ? '' : g.rows.map(row).join(''))).join('')}</div>`;
 }
 
 // The Runs tab: done and failed per bucket for what the filters show, then every run newest first.
@@ -378,11 +439,20 @@ function auAllHTML(): string {
   const r: AuAll | null = AU.all, shown = new Set(auShown().map(a => a.id));
   const rows = (r?.rows || []).filter(x => shown.has(x.automation_id));
   const kindOf = (id: string): string => auKind((auPage().list || []).find((a: AuItem) => a.id === id) || {});
-  const table = rows.length ? `<table class="au-tbl-t au-all"><thead><tr><th class="au-cw">When</th><th class="au-cst">Status</th><th>Automation</th><th class="au-why">Started by</th><th class="au-out">Outcome</th>
+  const when = (x: AuOverviewRun): string => agoSaid(x.started_at);
+  // A phone: each run a row, the automation and its status over when, who started it, the outcome and its numbers.
+  const phoneRows = (): string => `<div class="au-rows">${rows.map(x => `<div class="au-r au-arow" role="button" tabindex="0" data-arun="${esc(x.id)}" data-aid="${esc(x.automation_id)}">`
+    + `<span class="au-r1">${auIcon(AU_KIND_ICONS[x.trigger || kindOf(x.automation_id)] || 'bolt')}<span class="au-nm">${esc(x.automation_name || '')}</span>`
+    + `${auRunPill(x.status)}</span>`
+    + `<span class="au-r2">${[`<span title="${esc(fmt(x.started_at))}">${esc(when(x))}</span>`,
+      x.outcome ? `<span class="${x.status === 'failed' ? 'au-bad' : ''}">${esc(x.outcome)}${(x.count ?? 0) > 1 ? ` ×${x.count}` : ''}</span>` : '',
+      x.step_count != null ? `<span>${x.step_count} ${x.step_count === 1 ? 'step' : 'steps'}</span>` : '', auDur(x) ? `<span>${esc(auDur(x))}</span>` : '',
+      x.cost ? `<span>${esc(auMoney(x.cost))}</span>` : '', x.started_by ? `<span>${esc(x.started_by)}</span>` : ''].filter(Boolean).join('')}</span></div>`).join('')}</div>`;
+  const table = rows.length && auPhone() ? phoneRows() : rows.length ? `<table class="au-tbl-t au-all"><thead><tr><th class="au-cw">When</th><th class="au-cst">Status</th><th>Automation</th><th class="au-why">Started by</th><th class="au-out">Outcome</th>
       <th class="au-n au-cx">Steps</th><th class="au-n au-cx">Time</th><th class="au-n au-cc">Cost</th></tr></thead><tbody>
       ${rows.map(x => `<tr class="au-arow" role="button" tabindex="0" data-arun="${esc(x.id)}" data-aid="${esc(x.automation_id)}">
-        <td class="muted" title="${esc(fmt(x.started_at))}">${esc(auAge(x.started_at) === 'now' ? 'now' : auAge(x.started_at) + ' ago')}</td>
-        <td><span class="pill ${AU_RUN_PILLS[x.status ?? ''] || ''}">${esc(AU_RUN_STATUS[x.status ?? ''] || auCap(x.status))}</span></td>
+        <td class="muted" title="${esc(fmt(x.started_at))}">${esc(when(x))}</td>
+        <td>${auRunPill(x.status)}</td>
         <td class="au-tn"><div>${auIcon(AU_KIND_ICONS[x.trigger || kindOf(x.automation_id)] || 'bolt')}<span class="au-nm">${esc(x.automation_name || '')}</span></div></td>
         <td class="au-why" title="${esc(x.started_by || '')}">${esc(x.started_by || '')}</td>
         <td class="au-out${x.status === 'failed' ? ' au-bad' : ''}" title="${esc(x.outcome || '')}">${esc(x.outcome || '')}${(x.count ?? 0) > 1 ? ` <span class="muted">×${x.count}</span>` : ''}</td>
@@ -433,20 +503,41 @@ function auOverviewClick(t: Element): boolean {
   let m: HTMLElement | null;
   auHave(AU);
   const f = AU.f, one = (key: 'status' | 'team' | 'owner', v: string) => { f[key] = f[key] === v ? '' : v; auFiltered(); };
+  // A pick in ⋯ closes it first: ⋯ is drawn again with the new choice checked, and the shared close (page-head.ts) no
+  // longer finds the item it was given.
+  const menu = t.closest<HTMLElement>('.ph-menu');
+  if (t.closest('.au-mi') && menu?.matches(':popover-open')) menu.hidePopover();
   if ((m = t.closest<HTMLElement>('[data-range]'))) { auRangeSet(m.dataset.range || ''); return true; }
   if ((m = t.closest<HTMLElement>('[data-ftrig]'))) { const k = m.dataset.ftrig || ''; if (f.trig.has(k)) f.trig.delete(k); else f.trig.add(k); auFiltered(); return true; }
   if ((m = t.closest<HTMLElement>('[data-fstatus]'))) { one('status', m.dataset.fstatus || ''); return true; }
   if ((m = t.closest<HTMLElement>('[data-fteam]'))) { one('team', m.dataset.fteam || ''); return true; }
   if ((m = t.closest<HTMLElement>('[data-fowner]'))) { one('owner', m.dataset.fowner || ''); return true; }
   if ((m = t.closest<HTMLElement>('[data-tab]'))) {
-    AU.tab = m.dataset.tab ?? ''; auCtlDraw(); auDrawTable();
+    // The header's views: from an open automation they lead back to the list, on that view.
+    AU.tab = m.dataset.tab ?? '';
+    if (AU.id) { location.hash = auBase(); return true; }
+    auDrawList();
     if (AU.tab === 'runs') void auAllLoad(AU);
+    return true;
+  }
+  // ⋯'s Group by and Sort by (auCtlDraw).
+  m = t.closest<HTMLElement>('[data-group-v]');
+  if (m) { AU.group = m.dataset.groupV || 'trigger'; AU.closed.clear(); auCtlDraw(); auDrawTable(); return true; }
+  m = t.closest<HTMLElement>('[data-sort-v]');
+  if (m) { AU.sort = m.dataset.sortV || 'last'; auCtlDraw(); auDrawTable(); return true; }
+  // The Runs tab's status, in the rail: one at a time; the same again shows every run.
+  m = t.closest<HTMLElement>('[data-frun]');
+  if (m) {
+    const v = m.dataset.frun || '';
+    AU.rstatus = AU.rstatus === v ? '' : v; AU.scroll.runs = 0;
+    if (AU.id) { location.hash = auBase(); return true; }   // as every filter does: the list again, filtered
+    auFacetsDraw(); auCtlDraw(); void auAllLoad(AU);
     return true;
   }
   if ((m = t.closest<HTMLElement>('[data-filters]'))) {
     // Opening starts with the sections that have a filter on open and the rest closed.
     const open = auNeed(AU.root, '#au-root').classList.toggle('filters-open');
-    if (open) { AU.fopen = new Set((['trig', 'status', 'team', 'owner'] as AuSection[]).filter(k => auPicked(f, k))); auFacetsDraw(); }
+    if (open) { AU.fopen = new Set((['trig', 'status', 'team', 'owner', 'run'] as AuSection[]).filter(k => auPicked(f, k))); auFacetsDraw(); }
     m.setAttribute('aria-expanded', String(open));
     return true;
   }
@@ -459,28 +550,22 @@ function auOverviewClick(t: Element): boolean {
   }
   if ((m = t.closest<HTMLElement>('[data-agrp]'))) { const k = m.dataset.agrp || ''; if (AU.closed.has(k)) AU.closed.delete(k); else AU.closed.add(k); auDrawTable(); return true; }
   if ((m = t.closest<HTMLElement>('[data-all-more]'))) { void auAllLoad(AU, true); return true; }
-  if ((m = t.closest<HTMLElement>('tr[data-arun]'))) {
+  m = t.closest<HTMLElement>('[data-arun]');
+  if (m) {
     const id = m.dataset.arun || '';
     if (id.startsWith('mnt_')) AU.mtOpenRun = id.slice(4);
     else if (!id.startsWith('sys_') && !id.startsWith('hb_')) AU.openRun = id;   // a Heartbeat run opens its log
     location.hash = auHref(m.dataset.aid, 'runs');
     return true;
   }
-  if ((m = t.closest<HTMLElement>('tr[data-row]')) && !t.closest('a')) { location.hash = auHref(m.dataset.row); return true; }
+  m = t.closest<HTMLElement>('[data-row]');
+  if (m && !t.closest('a')) { location.hash = auHref(m.dataset.row); return true; }
   return false;
-}
-function auOverviewChange(e: Event): void {
-  const t = e.target;
-  if (!(t instanceof HTMLSelectElement)) return;   // the list's changes are its selects
-  if (t.matches('[data-group]')) { auHave(AU); AU.group = t.value; AU.closed.clear(); auDrawTable(); }
-  else if (t.matches('[data-sort]')) { auHave(AU); AU.sort = t.value; auDrawTable(); }
-  else if (t.matches('[data-rstatus]')) { auHave(AU); AU.rstatus = t.value; AU.scroll.runs = 0; void auAllLoad(AU); }
 }
 function auOverviewWire(root: HTMLElement): void {
   const q = root.querySelector<HTMLInputElement>('.au-q'), box = root.querySelector<HTMLElement>('.au-tbl');
   if (!q || !box) return;   // the page always has both; without them there is nothing to wire
   q.addEventListener('input', () => { auPage().f.q = q.value.trim().toLowerCase(); auFiltered(); });
-  root.addEventListener('change', auOverviewChange);
   box.addEventListener('scroll', () => {
     if (!AU || AU.id) return;
     AU.scroll[AU.tab] = box.scrollTop;

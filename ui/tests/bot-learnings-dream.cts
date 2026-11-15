@@ -41,6 +41,7 @@ declare const window: Window & typeof globalThis & {
   esc: (value: unknown) => string;
   md: (text: string) => string;
   ago: () => string;
+  fmt: (iso: string) => string;   // the app's date words (ui/app/format.ts), stood in for
   toast: (message: string) => void;
   errorMessage: (e: unknown) => string;
   newRequestId: () => string;
@@ -73,6 +74,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.ago = () => 'today';
+      window.fmt = () => 'Mon, Oct 26, 10:00 AM';
       // errors.ts's errorMessage, so a refused request reaches toast with the server's detail.
       window.errorMessage = (e: unknown) => String((e as Error)?.message ?? e);
       window.toast = message => { state.toasts.push(message); throw new Error('toast: ' + message); };

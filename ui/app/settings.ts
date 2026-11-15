@@ -43,14 +43,14 @@ type StoppedPick = {retry: boolean; what: (tools?: string) => string; say: (tool
 type StoppedJob = {id: string; run_id: string; stopped: StoppedKind; reason: string; request: string; output: {text?: string}[]; run?: {final_text?: string | null; started_at?: string; created_at?: string} | null; task?: {title?: string; status: string; owner_name?: string} | null; acted?: string[]; tools?: {tool: string; summary?: string; status?: string; nested?: boolean}[]; pending_decision?: {decision: StoppedDecision | 'mixed'} | null};
 type StoppedControls = {note: HTMLTextAreaElement};
 
-// How visuals show (Visuals always on): decided by the setup, so a line to read, never a switch. "full" with a
+// How visuals show (Visuals always on): decided by the setup, so a row to read, never a switch. "full" with a
 // separate visual address, "hosted" from Tico file hosting's address; otherwise pages and SVG are Open cards, and the
-// line says what fixes it (backend/visuals.py shown).
-const SETTINGS_VISUALS: Record<string, string> = {full: 'Visuals: full', hosted: 'Visuals: full, from Tico file hosting',
-  media: "Visuals: pages and SVG can't show inline. Add a visual address or Tico file hosting."};
+// row links to what fixes it (backend/visuals.py shown). That case says so, with the link to the fix.
+const SETTINGS_VISUALS: Record<string, string> = {full: 'Full', hosted: 'Full, from Tico file hosting'};
 function settingsVisualsLine() {
-  return `${SETTINGS_VISUALS[String(S.config?.visuals)] || SETTINGS_VISUALS.media}
-    <a href="${GH}/blob/main/docs/visuals.md#self-hosting" target="_blank" rel="noopener noreferrer">How visuals show</a>`;
+  const shown = SETTINGS_VISUALS[String(S.config?.visuals)];
+  return `<span>Visuals</span> ${shown ? `<span>${shown}</span>`
+    : `<span class="muted">Pages and SVG open as cards · <a href="${GH}/blob/main/docs/visuals.md#self-hosting" target="_blank" rel="noopener noreferrer">How visuals show</a></span>`}`;
 }
 
 function settingsMachinesSnapshot(machines: SettingsMachine[], request = ++SETTINGS_PRESENCE.request, coming: SettingsCloudComing[] = []) {
@@ -118,7 +118,16 @@ const SETTINGS_GENERAL: Record<string, string> = {team: '#settings-team', compan
 const settingsReveal = (selector: string) => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
   SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
+  if (selector === '#settings-app') settingsRevealTheme();
 };
+// The App card holds one control people look for by name (the settings catalogue's Theme): it takes the focus. It is
+// General's last card, so it waits for Repositories above it (drawn once GitHub answers) before it is scrolled to.
+function settingsRevealTheme(tries = 20) {
+  const repos = $('#set-repos');
+  if (repos && !repos.hidden && repos.dataset.drawn === undefined && tries > 0) { setTimeout(() => settingsRevealTheme(tries - 1), 150); return; }
+  $('#settings-app')?.scrollIntoView({block: 'nearest'});
+  $('#settings-theme [aria-checked=true]')?.focus({preventScroll: true});
+}
 // A card a link names (`#/settings/<tab>/<card>`, the settings catalogue's) on a tab that draws it later: scroll once it is there.
 const settingsRevealSoon = (selector: string, tries = 20) => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
@@ -143,13 +152,13 @@ function settingsDestinationChoice(error: unknown) {
     const dialog = document.createElement('dialog');
     dialog.className = 'tmodal destination-dialog';
     dialog.setAttribute('aria-label', 'Change where this sends');
-    dialog.innerHTML = `<form method="dialog"><header><h2>Change where ${esc(held.name || 'this integration')} sends?</h2></header>
+    dialog.innerHTML = `<form method="dialog"><header><h2>Change where ${esc(held.name || 'this integration')} sends?</h2><button value="" class="ghost tmodal-x" aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <p><b>${esc(labels)}</b> ${several ? 'were' : 'was'} saved for <b data-destination-old>${esc(held.old?.address || '')}</b>.
         This change sends to <b data-destination-new>${esc(held.new?.address || '')}</b>${held.path ? ` (${esc(held.path)})` : ''}.</p>
       <p class="muted">Keep sends the saved ${esc(labels)} to the new address from now on. Clear removes ${several ? 'them' : 'it'}, so you type ${several ? 'them' : 'it'} again for the new address. Either way the change is kept in the history.</p>
-      <footer><button value="keep" class="primary" data-destination-keep>Keep and send to the new address</button>
+      <footer><button value="" class="ghost" data-destination-cancel>Cancel</button><span class="spacer"></span>
         <button value="clear" class="ghost danger" data-destination-clear>Clear and re-enter</button>
-        <button value="" class="ghost" data-destination-cancel>Cancel</button></footer></form>`;
+        <button value="keep" class="primary" data-destination-keep>Keep and send to the new address</button></footer></form>`;
     dialog.addEventListener('close', () => { dialog.remove(); resolve(dialog.returnValue || ''); });
     document.body.appendChild(dialog); dialog.showModal();
   });
@@ -191,27 +200,14 @@ function settingsFieldError(control: Element | null | undefined, message: string
 }
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
-  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { location.hash = SETTINGS_TAB === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; SETTINGS_TAB = 'general'; return; }
+  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { location.hash = SETTINGS_TAB === 'credentials' ? '#/tools?show=keys' : '#/tools'; SETTINGS_TAB = 'general'; return; }
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
   // it would snap back to the default tab and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
   if (built && built.dataset.role === (S.me?.role || '') && built.dataset.admin === String(settingsIsAdmin())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
-  $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
-    ${settingsSearchHTML()}
-    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" role="tablist" aria-label="Settings">
-      <button type="button" data-settings-tab="general" role="tab">General</button>
-      ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">People</button>' : ''}
-      <button type="button" data-settings-tab="bots" role="tab">Bots</button>
-      <button type="button" data-settings-tab="devices" role="tab">Computers</button>
-      <button type="button" data-settings-tab="models" role="tab">Models</button>
-      <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="contacts" role="tab">Contacts</button>
-      ${settingsIsAdmin() ? '<button type="button" data-settings-tab="security" role="tab">Security</button>' : ''}
-      <button type="button" data-settings-tab="history" role="tab">History</button>
-      <details class="settings-more" id="settings-more"><summary>More</summary><div>
-        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="billing" role="tab">Billing</button>' : ''}
-      </div></details>
-    </div>
+  $('#main').innerHTML = `${pageHead({title: 'Settings', hook: 'settings-head', tabsHook: 'settings-tabs',
+      tabsAttrs: `id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" aria-label="Settings"`,
+      tabs: settingsTabsList(), tools: settingsSearchHTML()})}
     <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
       <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
       <section class="card settings-health" id="settings-health-line" aria-label="Health"></section>
@@ -224,7 +220,7 @@ function pageSettings() {
             <p id="settings-team-icon-status" class="settings-cell-note" role="status"></p>
           </div>
         </div>` : ''}
-        <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p>
+        <div class="settings-kv" id="settings-visuals">${settingsVisualsLine()}</div>
         ${S.me?.role === 'owner' ? '<div id="settings-bot-reports"></div>' : ''}</section>
       <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>
       <section class="card" id="settings-page-owners"><header><h2>Page owners</h2></header><div id="set-page-owners"></div></section>` : ''}
@@ -237,6 +233,8 @@ function pageSettings() {
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
       ${settingsIsAdmin() ? `<section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section>` : ''}
+      <section class="card" id="settings-app"><header><h2>App</h2></header>
+        <div class="settings-kv"><span id="settings-theme-label">Theme</span>${settingsThemeHTML()}</div>${settingsVersionHTML()}</section>
     </div>
     <div class="settings-pane" id="settings-devices" role="tabpanel">
       <section class="card" id="settings-computers"><header><h2>Computers</h2><button class="primary settings-head-act" type="button" id="machine-add-open">Add computer</button></header><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -251,7 +249,7 @@ function pageSettings() {
       ${settingsIsAdmin() ? '<section class="card" id="settings-limits"><header><h2>Limits</h2></header><div id="set-turn-levels"></div></section>' : ''}
     </div>
     <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
-      <section class="card settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="ghost sb-plus" type="button" id="settings-add-bot" aria-label="Add bot" title="Add bot" disabled><span class="nav-icon" aria-hidden="true">add</span></button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<section class="card" id="settings-turn-budgets" hidden><header><h2>Run budget</h2></header><div id="set-turn-budgets"></div></section>' : ''}
     </div>
     <div class="settings-pane" id="settings-health" role="tabpanel" hidden><a class="settings-back" href="#/settings/general" data-settings-back>‹ General</a>
@@ -270,7 +268,7 @@ function pageSettings() {
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
     <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
-      <div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="log">Log</button><button type="button" role="radio" data-history-view="runs">Runs</button>${S.me?.role === 'owner' ? '<button type="button" role="radio" data-history-view="changes">Changes</button>' : ''}</div></header>
+      <div class="ph-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="log">Log</button><button type="button" role="radio" data-history-view="runs">Runs</button>${S.me?.role === 'owner' ? '<button type="button" role="radio" data-history-view="changes">Changes</button>' : ''}</div></header>
       <div id="set-log"></div>
       <div id="set-runs" hidden>${skelRows(3, {card: true, dot: false})}</div>
       ${S.me?.role === 'owner' ? `<div id="set-history" hidden>${skelRows(3, {card: true, dot: false})}</div>` : ''}</section></div>
@@ -290,13 +288,17 @@ function pageSettings() {
     const button = eventElement(event)?.closest<HTMLElement>('[data-settings-tab]');
     if (button) settingsShow(String(button.dataset.settingsTab));
   };
-  // Opening More on a phone shows its tabs at the end of the scrolling row, or the current one when it is in More.
-  $('#settings-more').addEventListener('toggle', (event: Event) => {
-    const more = eventElement(event);
-    if (more instanceof HTMLDetailsElement && more.open) settingsTabIntoView(more.querySelector('[data-settings-tab].cur') || more.lastElementChild);
-  });
   settingsShow(SETTINGS_TAB);
   loadSettings();
+}
+// The tabs, in the order people reach for them: the shared header (pageHead) shows the first five on the row and lists
+// the rest under ⋯, so every tab stays one tap away on a computer and on a phone. Admin tabs only for admins.
+function settingsTabsList(): PageTab[] {
+  const admin = settingsIsAdmin();
+  const tabs: [string, string, boolean][] = [['general', 'General', true], ['people', 'People', admin], ['bots', 'Bots', true],
+    ['devices', 'Computers', true], ['models', 'Models', true], ['tasks', 'Tasks', true], ['contacts', 'Contacts', true],
+    ['security', 'Security', admin], ['history', 'History', true], ['billing', 'Billing', admin]];
+  return tabs.filter(([, , shown]) => shown).map(([id, label]) => ({label, attrs: `data-settings-tab="${id}"`}));
 }
 // The server's version (and the release Tico support will update a hosted one to), and the desktop app's own when the page runs inside it (app/src/main.rs bridge_script), with
 // a way to the app's log file (app/src/applog.rs) when the shell keeps one (it says so in ticoNativeFeatures).
@@ -312,7 +314,7 @@ function settingsVersionHTML() {
 const SETTINGS_THEMES = [['dark', 'Dark'], ['light', 'Light'], ['system', 'System']];
 function settingsThemeHTML() {
   const cur = window.ticoTheme?.get() || 'dark';
-  return `<div class="theme-seg" id="settings-theme" role="radiogroup" aria-label="Theme">${SETTINGS_THEMES.map(([v, label]) =>
+  return `<div class="ph-seg settings-theme" id="settings-theme" role="radiogroup" aria-labelledby="settings-theme-label">${SETTINGS_THEMES.map(([v, label]) =>
     `<button type="button" role="radio" data-theme-choice="${v}" aria-checked="${v === cur}">${label}</button>`).join('')}</div>`;
 }
 function pageSettingsThemeBind() {
@@ -325,7 +327,7 @@ function pageSettingsThemeBind() {
   };
 }
 function settingsShow(tab: string) {
-  if (tab === 'credentials' || tab === 'cloud') { location.hash = tab === 'credentials' ? '#/tools/keys?show=credentials' : '#/tools'; return; }
+  if (tab === 'credentials' || tab === 'cloud') { location.hash = tab === 'credentials' ? '#/tools?show=keys' : '#/tools'; return; }
   if (tab === 'gateway') SETTINGS_REVEAL = SETTINGS_GATEWAY_CARD;   // and any card the old page's address named
   if (SETTINGS_REVEAL === '#wh-gateway') {   // the Gateway card's Webhooks fold, opened
     SETTINGS_REVEAL = SETTINGS_GATEWAY_CARD;
@@ -365,14 +367,12 @@ function settingsShow(tab: string) {
   if (denied) denied.hidden = !SETTINGS_DENIED;
   try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
   settingsAddress();
-  if (SETTINGS_TAB === 'billing') $('#settings-more').open = true;
   const tasks = $('#settings-tasks');
   if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
   tabs.forEach(button => {
     const selected = button.dataset.settingsTab === SETTINGS_TAB;
     button.classList.toggle('cur', selected); button.setAttribute('aria-selected', String(selected));
   });
-  settingsTabIntoView();
   settingsTags();
   if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void askFilterSettingsLoad(); }
   const devices = $('#settings-devices'), models = $('#settings-models'), history = $('#settings-history'), bots = $('#settings-bots');
@@ -431,15 +431,6 @@ function settingsAddress() {
   SETTINGS_ADDRESS = `${SETTINGS}/${SETTINGS_TAB}${SETTINGS_TAB === 'history' ? settingsHistoryQuery() : ''}`;
   if (location.hash !== SETTINGS_ADDRESS) history.replaceState(history.state, '', SETTINGS_ADDRESS);
 }
-// On a phone the tabs are one row that scrolls sideways (styles/settings.css); bring the current one into view.
-// Only the row scrolls: scrollIntoView would also move the page, which a refresh must not do.
-function settingsTabIntoView(target?: Element | null) {
-  const bar = $('#settings-tabs'), cur = target || bar?.querySelector('[data-settings-tab].cur');
-  if (!cur || bar.scrollWidth <= bar.clientWidth) return;
-  const box = bar.getBoundingClientRect(), tab = cur.getBoundingClientRect(), pad = 24;
-  if (tab.left < box.left) bar.scrollLeft -= box.left - tab.left + pad;
-  else if (tab.right > box.right) bar.scrollLeft += tab.right - box.right + pad;
-}
 function settingsTeamIconBind() {
   const input = $('#settings-team-icon-file'), button = $('#settings-team-icon-change');
   if (!input || !button) return;
@@ -486,30 +477,72 @@ async function renderSettingsBotReports() {
     catch (e) { box.checked = !box.checked; settingsFieldError(box, errorMessage(e, 'Something went wrong.')); }
   };
 }
-// Settings > General > Page owners: the bot each page's Chat opens (backend/page_owners.py, ui/app/page-chat.ts).
-// Owners and admins; the page follows at its next load. No owner: the page has no Chat.
+// Settings > General > Page owners: the bot each page's chat is with (backend/page_owners.py, ui/app/page-chat.ts), one
+// row per page in a compact table: the page, then its owner. Owners and admins; the page follows at its next load.
+// "Default (X)" is the page's default as the company has it (the choice dropped); No owner: the page has no chat. A
+// list longer than a screen gets a search over pages and owners. Drawn again when the roster comes or changes.
+const SETTINGS_PAGE_OWNERS_SEARCH = 12;
+interface SettingsPageOwnerRow { bot?: string | null; name?: string; choice?: string; default?: string | null }
+let SETTINGS_PAGE_OWNERS_ROSTER = '';
+const settingsPageOwnerBots = () => S.emps.filter(e => e.id && !['planned', 'archived'].includes(String(e.state || e.status || '')))
+  .sort((a, b) => String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
+const settingsPageOwnersRoster = () => settingsPageOwnerBots().map(e => e.id + ':' + (e.display_name || e.slug || '')).join('|');
 async function renderSettingsPageOwners() {
-  const host = $('#set-page-owners');
+  const host = document.getElementById('set-page-owners');
   if (!host || formBusy(host)) return;
-  let pages: Record<string, {bot?: string | null; name?: string}>;
-  try { pages = ((await get('/v2/page-owners', {fresh: true})) as {pages?: Record<string, {bot?: string | null; name?: string}>}).pages || {}; }
+  let pages: Record<string, SettingsPageOwnerRow>;
+  try { pages = ((await get('/v2/page-owners', {fresh: true})) as {pages?: Record<string, SettingsPageOwnerRow>}).pages || {}; }
   catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(errorMessage(e, 'Something went wrong.'))}</div>`; return; }
   if (!host.isConnected || formBusy(host)) return;
-  const bots = S.emps.filter(e => e.id && !['planned', 'archived'].includes(String(e.state || e.status || '')))
-    .sort((a, b) => String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
-  host.innerHTML = Object.entries(pages).map(([page, row]) => {
-    const now = String(row.bot || '').replace(/^bot:/, '');
-    const options = ['<option value="">No owner</option>', ...bots.map(e => `<option value="${esc(e.id)}"${e.id === now ? ' selected' : ''}>${esc(e.display_name || e.slug || e.id)}</option>`)];
-    return `<label class="people-line"><span>${esc(row.name || page)}</span><select data-page-owner="${esc(page)}" aria-label="${esc((row.name || page) + ' owner')}">${options.join('')}</select></label>`;
-  }).join('') + '<p class="settings-cell-note">The bot you chat with from the page. No owner, no Chat.</p>';
+  const bots = settingsPageOwnerBots();
+  SETTINGS_PAGE_OWNERS_ROSTER = settingsPageOwnersRoster();
+  const named = (actor: string | null | undefined) => {
+    const id = String(actor || '').replace(/^bot:/, ''), e = bots.find(b => b.id === id);
+    return e ? String(e.display_name || e.slug || e.id) : id ? actorLabel('bot:' + id) : '';
+  };
+  const rows = Object.entries(pages).map(([page, row]) => {
+    const name = row.name || page, choice = row.choice || 'default', picked = choice.replace(/^bot:/, '');
+    // A chosen bot no longer live shows as Default, which is what the page has now.
+    const value = choice === 'none' ? '' : choice !== 'default' && bots.some(e => e.id === picked) ? picked : 'default';
+    const fallback = named(row.default);
+    const option = (v: string, words: string) => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(words)}</option>`;
+    const options = [option('default', fallback ? `Default (${fallback})` : 'Default'), option('', 'No owner'),
+      ...bots.map(e => option(String(e.id), String(e.display_name || e.slug || e.id)))];
+    const words = (name + ' ' + (value === '' ? 'No owner' : named(row.bot))).toLowerCase();
+    return `<tr data-words="${esc(words)}"><td class="po-page">${esc(name)}</td><td class="po-owner"><select data-page-owner="${esc(page)}" aria-label="${esc(name + ' owner')}">${options.join('')}</select></td></tr>`;
+  });
+  const search = rows.length > SETTINGS_PAGE_OWNERS_SEARCH
+    ? '<input type="search" class="po-search" data-page-owners-q aria-label="Search pages" placeholder="Search pages" autocomplete="off">' : '';
+  const was = host.querySelector<HTMLInputElement>('[data-page-owners-q]')?.value || '';
+  host.innerHTML = `${search}<table class="po-table"><thead><tr><th scope="col">Page</th><th scope="col">Owner</th></tr></thead><tbody>${rows.join('')}</tbody></table>`
+    + '<p class="empty po-none" hidden>No matches</p>';
+  const q = host.querySelector<HTMLInputElement>('[data-page-owners-q]');
+  if (q) {
+    const filter = () => {
+      const words = q.value.trim().toLowerCase();
+      let shown = 0;
+      for (const tr of Array.from(host.querySelectorAll<HTMLElement>('tbody tr'))) { tr.hidden = !!words && !(tr.dataset.words || '').includes(words); if (!tr.hidden) shown++; }
+      const none = host.querySelector<HTMLElement>('.po-none');
+      if (none) none.hidden = shown > 0;
+    };
+    q.oninput = filter;
+    if (was) { q.value = was; filter(); }
+  }
   for (const select of Array.from(host.querySelectorAll('[data-page-owner]') as NodeListOf<HTMLSelectElement>)) {
     select.onchange = async () => {
       const page = select.dataset.pageOwner || '';
       try { await put('/v2/page-owners/' + encodeURIComponent(page), {bot: select.value || null}); toast('Saved'); }
-      catch (e) { settingsFieldError(select, errorMessage(e, 'Something went wrong.')); void renderSettingsPageOwners(); }
+      catch (e) { settingsFieldError(select, errorMessage(e, 'Something went wrong.')); }
+      void renderSettingsPageOwners();
     };
   }
 }
+/** The roster came or changed (refresh.ts sends tico:roster): the card's choices follow, unless a change is being saved. */
+document.addEventListener('tico:roster', () => {
+  const host = document.getElementById('set-page-owners');
+  if (!host?.isConnected || !host.firstChild || settingsPageOwnersRoster() === SETTINGS_PAGE_OWNERS_ROSTER) return;
+  void renderSettingsPageOwners();
+});
 // Settings > General > Privacy: usage counting and explicit consent for Gateway suggestions (PRIVACY.md).
 async function renderSettingsPrivacy() {
   const host = $('#set-privacy');
@@ -521,7 +554,7 @@ async function renderSettingsPrivacy() {
   const forced = v.off_by && v.off_by !== 'setting';
   host.innerHTML = `<label class="privacy-row"><input type="checkbox" id="privacy-count"${v.enabled ? ' checked' : ''}${forced ? ' disabled' : ''}> Help count active installs</label>
     <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}Anonymous: no names, no content. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
-    <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>
+    <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet.'}</p>
     <label class="privacy-row"><input type="checkbox" id="privacy-suggestions"${suggestions.share_stats_for_suggestions ? ' checked' : ''}${suggestions.available ? '' : ' disabled'}> Share stats for suggestions</label>
     <label class="privacy-row"><input type="checkbox" id="privacy-outcomes"${suggestions.report_suggestion_outcomes ? ' checked' : ''}${suggestions.available ? '' : ' disabled'}> Report suggestion outcomes</label>`;
   host.querySelector('#privacy-suggestions').onchange = async (ev: Event) => {
@@ -689,7 +722,7 @@ async function executionReview(bot: string, after: () => unknown = () => $('#set
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell stopped-runs-dialog';
   dialog.setAttribute('aria-label', 'Stopped runs');
   // Open bot lives here, not on the Needs you card that opens this.
-  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><a class="ghost" href="#/bot/${esc(encodeURIComponent(bot))}/more" data-open-bot>Open bot</a><button class="ghost" type="button" data-close>Close</button></header><div class="tmodal-body" data-review>Loading…</div>`;
+  dialog.innerHTML = `<header class="tmodal-head"><h2>Stopped runs</h2><span class="spacer"></span><a class="ghost" href="#/bot/${esc(encodeURIComponent(bot))}/more" data-open-bot>Open bot</a><button class="ghost tmodal-x" type="button" data-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></header><div class="tmodal-body" data-review>Loading…</div>`;
   (dialog.querySelector('[data-close]') as HTMLElement).onclick = () => dialog.close();
   (dialog.querySelector('[data-open-bot]') as HTMLElement).onclick = () => dialog.close();
   dialog.addEventListener('close', () => dialog.remove());
@@ -704,7 +737,7 @@ async function executionReview(bot: string, after: () => unknown = () => $('#set
       const button = (decision: string, label: string) =>`<button type="submit" name="decision" value="${decision}"${(decision === 'resume') === retry ? '' : ' class="ghost"'}>${label}</button>`;
       return `<form data-job="${esc(job.id)}" class="stopped-run">
       <h3>${esc(job.task?.title || 'Interrupted conversation')}</h3>
-      <p data-stopped>Stopped ${esc(fmt(job.run?.started_at || job.run?.created_at))} ${esc(pick.what(tools))}.</p>
+      <p data-stopped>Stopped ${esc(timeSaid(job.run?.started_at || job.run?.created_at))} ${esc(pick.what(tools))}.</p>
       <p data-pick><strong>${esc(pick.say(tools))}</strong></p>
       <details data-details><summary>Details</summary>
         ${job.task ? `<p class="muted">Task ${esc(job.task.status)}${job.task.owner_name ? `, owner ${esc(job.task.owner_name)}` : ''}</p>` : ''}
@@ -756,5 +789,5 @@ async function executionReview(bot: string, after: () => unknown = () => $('#set
 function renderSettingsServices() {
   const el = $('#set-services'); if (!el) return;
   const rows = SETTINGS_DATA.services;
-  el.innerHTML = `<div class="settings-services-list">${rows.map(service => `<div><strong>${esc(service.name || service.service)}</strong> · ${service.last_error ? `<span class="err">${esc(service.last_error)}</span>` : '<span class="ok">healthy</span>'}${service.last_succeeded_at ? `<span class="settings-cell-note">${esc(ago(service.last_succeeded_at))}</span>` : ''}</div>`).join('') || '<span class="muted">No health reports yet.</span>'}</div>`;
+  el.innerHTML = `<div class="settings-services-list">${rows.map(service => `<div><strong>${esc(service.name || service.service)}</strong> · ${service.last_error ? `<span class="err">${esc(service.last_error)}</span>` : '<span class="ok">healthy</span>'}${service.last_succeeded_at ? `<span class="settings-cell-note">${esc(agoSaid(service.last_succeeded_at))}</span>` : ''}</div>`).join('') || '<span class="muted">No health reports yet.</span>'}</div>`;
 }

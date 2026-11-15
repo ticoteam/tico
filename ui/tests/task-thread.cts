@@ -114,7 +114,7 @@ async function run(viewport: {width: number; height: number}, shot: string) {
     await page.waitForFunction(() => { const t = document.querySelector<HTMLElement>('#task-modal .task-comments')!; return t.scrollHeight > t.clientHeight && t.scrollHeight - t.scrollTop - t.clientHeight < 4; });
     // The box is the main chat's composer: a one-line pill with the send arrow.
     const box = modal.locator('.task-pill .p-text');
-    assert.equal(await box.getAttribute('placeholder'), 'Message…');
+    assert.equal(await box.getAttribute('placeholder'), 'Message BotOps', 'the box names who reads it');
     assert.equal(await box.getAttribute('rows'), '1');
     assert.ok(await modal.locator('.task-pill .p-send-icon').isVisible(), 'the send arrow');
     await modal.locator('[data-thread-back]').click();

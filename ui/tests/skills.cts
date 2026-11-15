@@ -102,6 +102,7 @@ function skillsFake({admin = true, waiting = true}: {admin?: boolean; waiting?: 
     let m = p.match(/^\/api\/v2\/skills\/proposals\/([^/]+)(?:\/(\w+))?$/);
     if (m) {
       const [, id, action] = m as [string, string, string | undefined], row = proposals.find(x => x.id === id)!;
+      if (!row) return refuse(404, 'not_found', 'No such proposal');
       if (!action) return {proposal: row, files: files[id], diff: row.base_version ? '--- a/SKILL.md\n+++ b/SKILL.md\n@@ -1 +1 @@\n-old\n+new\n' : '',
         stale: false, screening: screening[id]};
       if (action === 'approve') {
@@ -158,6 +159,13 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         const lead = page.locator('tr[data-sk-proposal="p-lead"]');
         await lead.locator('[data-sk-screen="screened"]').filter({hasText: 'high'}).waitFor();
         assert.match(await page.locator('tr[data-sk-proposal="p-refund"]').innerText(), /Not screened/, `${tag}: an unscreened one says so`);
+        // A pill only when something is wrong or waiting: a low-risk screening shows none, and no pill is green.
+        assert.equal(await page.locator('tr[data-sk-proposal="p-invoice"] .pill').count(), 0, `${tag}: low risk has no pill`);
+        assert.equal(await page.locator('#skills-root .pill.ok').count(), 0, `${tag}: no green pills`);
+        // The one page header: Skills, the search, then ⋯ last; no word buttons in the bar.
+        const head = page.locator('#skills-root > header.ph');
+        assert.equal(await head.locator('.ph-t').innerText(), 'Skills', `${tag}: the header's title`);
+        assert.equal(await head.evaluate(h => h.lastElementChild?.previousElementSibling?.classList.contains('ph-more')), true, `${tag}: ⋯ is the last control`);
         assert.equal(await page.evaluate(() => !!(document.querySelector('[data-sk-waiting]')!.compareDocumentPosition(document.querySelector('.sk-list')!) & Node.DOCUMENT_POSITION_FOLLOWING)),
           true, `${tag}: waiting sits above the skills`);
         const refund = page.locator('tr[data-sk-row="refund-check"]');
@@ -177,13 +185,16 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         }
         assert.equal(await sideways(page), false, `${tag}: the list has no sideways scroll`);
         await shot(page, `list-${tag}`);
-        // The Claude Code command, with Copy.
+        // The Claude Code command, from ⋯ (used once per computer), with Copy and the dialog's ✕; no Cancel or Close word.
+        await page.locator('#skills-root > header.ph > .ph-more').click();
         await page.locator('[data-sk-helper]').click();
         const command = await page.locator('dialog [data-sk-command]').innerText();
         assert.match(command, /^curl -fsSL --create-dirs https:\/\/tico-ui\.test\/api\/v2\/skills\/helper\.mjs -o ~\/\.tico\/skills-helper\.mjs && node ~\/\.tico\/skills-helper\.mjs setup$/, `${tag}: the command`);
         assert.equal(await sideways(page), false, `${tag}: the command dialog fits`);
         if (tag === 'phone') await shot(page, `helper-${tag}`);
-        await page.locator('dialog [data-sk-cancel]').click();
+        assert.equal(await page.locator('dialog [data-sk-cancel], dialog button:text-is("Close")').count(), 0, `${tag}: no Cancel or Close word in the command dialog`);
+        await page.locator('dialog [data-sk-x]').click();
+        await page.locator('dialog.sk-dialog').waitFor({state: 'detached'});
         await refund.locator('.sk-when').click();
         await page.waitForFunction(() => location.hash === '#/library/skills/refund-check');
         await page.locator('#skill-usage [data-sk-total]').waitFor();
@@ -198,6 +209,9 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       {
         const {page, seen, api} = await start(browser, '#/library/skills', {width, ready: '[data-sk-idea]'});
         assert.equal(await page.locator('[data-sk-idea]').count(), 2, `${tag}: both suggestions`);
+        // One quiet action per row; Dismiss is in the row's ⋯.
+        assert.equal(await page.locator('[data-sk-idea] [data-sk-idea-dismiss]').count(), 0, `${tag}: Dismiss is not a row button`);
+        assert.equal(await page.locator('[data-sk-idea="sks-1"] button').count(), 2, `${tag}: a row holds its action and ⋯`);
         assert.match(await page.locator('[data-sk-idea="sks-2"]').innerText(), /warranty-lookup[\s\S]*Support[\s\S]*41 uses · 3 bots/, `${tag}: promote says uses and bots`);
         assert.match(await page.locator('[data-sk-elsewhere]').innerText(), /warranty-lookup[\s\S]*41 uses[\s\S]*Support, Support QA \+1/, `${tag}: Not in directory`);
         assert.equal(await sideways(page), false, `${tag}: Suggestions have no sideways scroll`);
@@ -239,11 +253,15 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       {
         const {page, seen, api} = await start(browser, '#/library/skills/proposals/p-lead', {width, ready: '[data-sk-findings]'});
         assert.match(await page.locator('[data-sk-findings]').innerText(), /SKILL\.md:9[\s\S]*high[\s\S]*curl \| sh/, `${tag}: the finding`);
-        assert.equal((await page.locator('[data-sk-crumb]').innerText()).replace(/\s+/g, ''), 'Skills›lead-enrich', `${tag}: the crumb is Skills › the proposal`);
+        assert.equal((await page.locator('#skills-root > header.ph .ph-back').innerText()).replace(/\s+/g, ''), 'Skills›', `${tag}: the header goes back to Skills`);
+        assert.equal(await page.locator('#skills-root > header.ph .ph-t').innerText(), 'lead-enrich', `${tag}: the header names the proposal`);
         assert.match(await page.locator('[data-sk-patterns]').innerText(), /SKILL\.md:9[\s\S]*curl \| sh/, `${tag}: the pattern hit`);
         assert.match(await page.locator('#proposal-changes [data-sk-file]').innerText(), /enrich\.acme\.example/, `${tag}: a new skill shows its files`);
         const approve = page.locator('[data-sk-approve]');
         assert.equal(await approve.isDisabled(), true, `${tag}: Approve waits for the tick`);
+        // Button order: the tick, Decline, then Approve right and last.
+        assert.deepEqual(await page.locator('[data-sk-decide] :is(button, label)').evaluateAll(els => els.map(e => (e.textContent || '').trim())),
+          ["I've read this", 'Decline', 'Approve'], `${tag}: Decline left, Approve right and last`);
         assert.equal(await sideways(page), false, `${tag}: the proposal has no sideways scroll`);
         await shot(page, `proposal-${tag}`);
         // The server's 422 is mirrored: forced without the tick, the error shows and Approve goes back to waiting.
@@ -291,6 +309,8 @@ async function start(browser: import('playwright').Browser, hash: string, {width
         assert.equal(await sideways(page), false, `${tag}: the skill has no sideways scroll`);
         await shot(page, `skill-${tag}`);
         await page.locator('[data-sk-install]').click();
+        // The dialog's focus starts on its first field, not on ✕.
+        await page.waitForFunction(() => document.activeElement?.matches('dialog [data-sk-target]'), null, {timeout: 5000});
         await page.locator('dialog [data-sk-target]').selectOption('team:g-support');
         await page.locator('dialog [data-sk-policy]').selectOption('2');
         await page.locator('dialog [data-sk-install-go]').click();
@@ -321,11 +341,21 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       assert.deepEqual(seen.errors, [], 'member list errors');
       await page.close();
       const admin = await start(browser, '#/library/skills', {ready: '[data-sk-idea]'});
-      await admin.page.locator('[data-sk-idea="sks-1"] [data-sk-idea-dismiss]').click();
+      await admin.page.locator('[data-sk-idea="sks-1"] [data-sk-idea-more]').click();
+      assert.equal(await admin.page.locator('[data-sk-idea="sks-1"] [data-sk-idea-more]').getAttribute('aria-expanded'), 'true', 'the row ⋯ says it is open');
+      await admin.page.locator('#task-filter-pop [data-sk-idea-dismiss]').click();
       await admin.page.waitForFunction(() => !document.querySelector('[data-sk-idea="sks-1"]'));
       assert.deepEqual(admin.api.writes.at(-1), {method: 'POST', path: '/api/v2/skills/suggestions/sks-1/dismiss', body: {}}, 'Dismiss');
       assert.deepEqual(admin.seen.errors, [], 'dismiss errors');
       await admin.page.close();
+    }
+    // A proposal that cannot be read: the header still says Skills › Proposal, and the error shows under it.
+    {
+      const {page} = await start(browser, '#/library/skills/proposals/p-gone', {ready: '[data-sk-error]'});
+      assert.equal(await page.locator('#skills-root > header.ph > .ph-t').innerText(), 'Proposal', 'missing: the header names it');
+      assert.equal(await page.locator('#skills-root > header.ph > .ph-back').getAttribute('href'), '#/library/skills', 'missing: back to Skills');
+      assert.match(await page.locator('[data-sk-error]').innerText(), /No such proposal/, 'missing: the error says so');
+      await page.close();
     }
     // A member: her own proposals, no Approve or Decline, Withdraw on her own.
     {

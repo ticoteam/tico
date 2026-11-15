@@ -1111,7 +1111,10 @@ def install_credentials(app, store, delegate=None, propose=None):
                 if not (revealable or mine):
                     continue
                 added |= mine
-                item = vault.brief(row) | {'can_reveal': revealable} | last_used(c, row['id'])
+                # tool_id: the API tool that holds it as a key, so Tools lists it on that tool, not as a loose key.
+                item = (
+                    vault.brief(row) | {'can_reveal': revealable, 'tool_id': row['tool_id']} | last_used(c, row['id'])
+                )
                 item['grants'] = [
                     dict(g)
                     | {

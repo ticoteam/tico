@@ -1,7 +1,7 @@
 /* ui/app/finance-admin.ts — Finance › Sources and Access (spec §12, §7.5).
    Sources: every source of the books, grouped (banks, cards, payments, payroll, bills and invoices, Tico, accounting,
    manual), collapsed by default; a source opens its account mapping, sync and who sees it, and a finance admin syncs
-   it now, maps its accounts to lines and disconnects it. "+ Source" connects Mercury, Brex or Stripe with a key from
+   it now, maps its accounts to lines and disconnects it. The header's quiet + connects Mercury, Brex or Stripe with a key from
    Tools (a pasted one is stored on Tools), QuickBooks or Xero, and sends Google Ads and Meta Ads to their tool pages.
    Access: who sees what in Finance, on the org chart (each teammate's default and grants), private lines, the owner's
    "View as", Edit defaults, and a teammate's "Grant more".
@@ -83,10 +83,11 @@ const FIN_SRC = {open: new Set<string>(), q: '', sel: ''};
 function finSourcesPage() {
   const caps = finNeed(finCaps(), 'the finance caps'), s = FIN_SRC;
   finNeed(FIN, 'the Finance page').src = {groups: [], lines: [], load: 0};
-  $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(s.q)}" placeholder="Search sources, accounts, cards" aria-label="Search sources"></label>
-      <button type="button" class="ghost" data-fin-collapse>Expand all</button><span class="spacer"></span>
-      ${finSourceMenuHtml(caps)}</div>`
+  $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(s.q)}" placeholder="Search sources, accounts, cards" aria-label="Search sources"></label></div>`
     + finSplit(`<div class="fin-scroll" id="fin-src">${skelRows(8, {dot: false})}</div>`, '', 'Selected source');
+  // Connecting a source is rare: the header's quiet + opens its menu; Expand all is a ⋯ item (style guide "Top bars").
+  finHeadAct(finSourceMenuHtml(caps));
+  finHeadMore('<button type="button" data-fin-collapse>Expand all</button>');
   const body = $('#fin-body');
   body.querySelector('[data-fin-q]').oninput = (ev: FinInputEvent) => { s.q = ev.target.value.trim().toLowerCase(); finSrcDraw(); };
   body.onclick = (ev: Event) => {
@@ -94,7 +95,8 @@ function finSourcesPage() {
     const add = at?.closest<HTMLElement>('[data-fin-connect]');
     if (add) { finPop(add, $('#fin-connect')); return; }
     const pick = at?.closest<HTMLElement>('[data-fin-connect-item]');
-    if (pick) { $('#fin-connect').hidden = true; (add as HTMLElement | null | undefined)?.setAttribute('aria-expanded', 'false'); finConnect(pick.dataset.finConnectItem ?? ''); return; }
+    // The menu closes and its + says so (the + is not the clicked item's ancestor, so it is found on its own).
+    if (pick) { $('#fin-connect').hidden = true; $('#fin-head [data-fin-connect]')?.setAttribute('aria-expanded', 'false'); finConnect(pick.dataset.finConnectItem ?? ''); return; }
     if (at?.closest('[data-fin-collapse]')) {
       if (finSrcAllShut()) for (const g of finNeed(FIN?.src, 'the sources').groups) s.open.add(g.group); else s.open.clear();
       finSrcDraw(); return;
@@ -156,7 +158,7 @@ const finSrcAllShut = () => !FIN_SRC.q && !(FIN?.src?.groups || []).some((g: Fin
 function finSrcDraw() {
   const state = FIN?.src, s = FIN_SRC, box = $('#fin-src'); if (!box || !state) return;
   // A search shows every match open, so the toggle hides until the search clears.
-  const btn = $('#fin-body [data-fin-collapse]'); if (btn) { btn.hidden = !!s.q; btn.textContent = finSrcAllShut() ? 'Expand all' : 'Collapse all'; }
+  const btn = $('#fin-head [data-fin-collapse]'); if (btn) { btn.hidden = !!s.q; btn.textContent = finSrcAllShut() ? 'Expand all' : 'Collapse all'; }
   if (!state.groups.length) { box.innerHTML = finNote('No sources yet.'); return; }
   const match = (r: FinSrcRow) => !s.q || [r.name, r.provider, r.last4, r.account?.name].some(v => String(v || '').toLowerCase().includes(s.q));
   const out = [];
@@ -169,12 +171,15 @@ function finSrcDraw() {
     for (const r of rows) {
       const c = finSrcCols(r), k = finSrcKey(r);
       out.push(`<tr data-fin-src="${esc(k)}"${s.sel === k ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link fin-src-name">${esc(r.name || r.provider || '')}${r.last4 ? ` <span class="muted">••${esc(r.last4)}</span>` : ''}</button></td>
-        <td>${c.has === '—' || !c.has ? '<span class="muted">—</span>' : esc(c.has)}</td><td>${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td>${esc(c.how)}</td><td class="fin-nowrap">${esc(c.last)}</td>
-        <td>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}${finSrcMoney(r) && r.off_by ? ` <span class="pill needs">Off by ${finStmtUsd(Math.abs(r.off_by))}</span>` : ''}</td></tr>`);
+        <td data-k="Has">${c.has === '—' || !c.has ? '' : esc(c.has)}</td><td data-k="Feeds">${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td data-k="Sync">${esc(c.how)}</td><td class="fin-nowrap" data-k="Synced">${esc(c.last)}</td>
+        <td data-sk="Status">${[finSrcStatus(c.status), finSrcMoney(r) && r.off_by ? `<span class="pill needs">Off by ${finStmtUsd(Math.abs(r.off_by))}</span>` : ''].filter(Boolean).join(' ')}</td></tr>`);
     }
   }
-  box.innerHTML = `<table class="fin-t fin-src-t"><thead><tr><th>Source</th><th>Has</th><th>Feeds</th><th>Sync</th><th>Last</th><th>Status</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
+  box.innerHTML = `<table class="fin-t fin-src-t fin-rows"><thead><tr><th>Source</th><th>Has</th><th>Feeds</th><th>Sync</th><th>Last</th><th>Status</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
 }
+// A source's state: OK (or nothing to say) is the normal state and says nothing; Disconnected is a plain muted word;
+// starting, importing or checking waits (amber); an error or a sign-in to redo is red (style guide pills).
+const finSrcStatus = ([cls, label]: string[]) => !label || label === '—' || cls === 'ok' ? '' : cls === 'idle' ? `<span class="muted">${esc(label)}</span>` : `<span class="pill ${cls}">${esc(label)}</span>`;
 function finSrcRail() {
   const state: FinSrcState = finNeed(FIN?.src, 'the sources'), s = FIN_SRC;
   const r = state.groups.flatMap(g => g.rows).find(x => finSrcKey(x) === s.sel);
@@ -186,7 +191,7 @@ function finSrcRail() {
   const stripe = r.provider === 'stripe' && (r.kind === 'connection' || r.kind === 'stripe');
   const money = finSrcMoney(r), mine = r.kind === 'connection' ? state.groups.flatMap(g => g.rows).filter(x => finSrcMoney(x) && x.sync?.connection_id === r.id) : [];
   const upload = !!money && ['bank', 'card_program'].includes(r.kind) && !!finCaps()?.may('finance.book');
-  finRail(`<div class="fin-rail-title"><h2>${esc(r.name || r.provider || '')}</h2>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}</div>
+  finRail(`<div class="fin-rail-title"><h2>${esc(r.name || r.provider || '')}</h2>${finSrcStatus(c.status)}</div>
     ${r.provider ? finKv('Provider', esc(r.provider)) : ''}${r.address ? finKv('Address', esc(r.address)) : ''}${r.last4 ? finKv('Account', '••' + esc(r.last4)) : ''}
     ${r.kind !== 'connection' && 'balance' in r ? finKv('Balance', finUsd(r.balance) + (r.balance_as_of ? ` <span class="muted">${esc(finDayLabel(r.balance_as_of))}</span>` : '')) : ''}
     ${r.kind !== 'connection' && r.available_balance != null && r.available_balance !== r.balance ? finKv('Available', finUsd(r.available_balance)) : ''}
@@ -375,15 +380,14 @@ async function finConnectAds(service: string) {
   location.hash = tools[0] ? tools[0].href || '#/tools/api/' + encodeURIComponent(tools[0].id) : '#/tools';
 }
 
-// "+ Source": a bank or card account (Mercury, Brex), Stripe, the company's books (QuickBooks, Xero), or an ad
+// Connect a source (the header's quiet +): a bank or card account (Mercury, Brex), Stripe, the company's books (QuickBooks, Xero), or an ad
 // platform's spend (its tool page). Finance admins only.
 function finSourceMenuHtml(caps: FinCapsNow) {
   if (!caps.may('finance.admin')) return '';
   const items = [['mercury', 'Mercury'], ['brex', 'Brex'], ['stripe', 'Stripe'], ['quickbooks', 'QuickBooks'], ['xero', 'Xero'],
     ...Object.entries(FIN_AD_SOURCES)];
-  return `<span class="fin-pop-at"><button type="button" class="primary" data-fin-connect aria-haspopup="menu" aria-expanded="false" aria-controls="fin-connect">+ Source</button>
-    <div class="fin-pop fin-menu" id="fin-connect" role="menu" aria-label="Connect" hidden>${items.map(([v, l]) =>
-      `<button type="button" role="menuitem" data-fin-connect-item="${v}">${l}</button>`).join('')}</div></span>`;
+  return finAddMenu('Connect a source', 'data-fin-connect', 'fin-connect', items.map(([v, l]) =>
+    `<button type="button" role="menuitem" data-fin-connect-item="${v}">${l}</button>`).join(''));
 }
 function finConnect(v: string) {
   if (FIN_KEY_SOURCES[v]) void finConnectKey(v as FinKeyProvider);
@@ -520,9 +524,11 @@ function finAccRows(acc: FinAccData) {
 }
 function finAccessPage() {
   const acc: FinAccData = finNeed(FIN?.acc, 'the access list');
-  $('#fin-body').innerHTML = `<div class="fin-bar">${finApproverHtml(acc)}<span class="spacer"></span>${acc.can_edit_defaults ? '<button type="button" class="ghost" data-fin-defaults>Edit defaults</button>' : ''}
-      ${acc.can_view_as ? '<button type="button" class="ghost" data-fin-viewas>View as…</button>' : ''}</div>`
+  const approver = finApproverHtml(acc);
+  $('#fin-body').innerHTML = (approver ? `<div class="fin-bar">${approver}</div>` : '')
     + finSplit(`<h2 class="fin-h2">Org chart</h2><div class="fin-scroll" id="fin-acc"></div><div id="fin-private"></div>`, '', 'Selected teammate');
+  // Editing the defaults and viewing as someone are rare: ⋯ items (style guide "Top bars: one line").
+  finHeadMore(`${acc.can_edit_defaults ? '<button type="button" data-fin-defaults>Edit defaults</button>' : ''}${acc.can_view_as ? '<button type="button" data-fin-viewas>View as…</button>' : ''}`);
   if (!acc.teammates.some(t => t.teammate === FIN_ACC.sel)) FIN_ACC.sel = finAccRows(acc).find(r => r.t)?.t?.teammate || '';
   $('#fin-body').onclick = (ev: Event) => {
     const at = eventElement(ev);
@@ -560,9 +566,9 @@ function finAccDraw() {
   const grants = (t: FinAccMate) => (t.grants || []).map(g => `<span class="fin-chip fin-grant${g.status !== 'active' ? ' muted' : ''}">${esc(finGrantLabel(g))}${g.status !== 'active' ? ' · suspended' : ''}</span>${g.granted_by
     ? `<span class="muted fin-small">by ${esc(finWho(g.granted_by))}</span>` : ''}`).join(' ');
   const row = (t: FinAccMate, d: number) => `<tr data-fin-mate="${esc(t.teammate)}"${FIN_ACC.sel === t.teammate ? ' class="fin-on"' : ''} style="--d:${d}"><td><span class="fin-who fin-ind">${finAvatar(t.teammate, 20)}<button type="button" class="fin-link">${esc(finWho(t.teammate))}</button>${role(t) ? `<span class="muted fin-small">${role(t)}</span>` : ''}</span></td>
-    <td><span class="fin-s ${finDefaultCls(t)}">${esc(finDefaultLabel(t))}</span></td><td>${grants(t) || '<span class="muted">—</span>'}</td></tr>`;
+    <td data-k="Sees"><span class="fin-s ${finDefaultCls(t)}">${esc(finDefaultLabel(t))}</span></td><td data-k="Granted">${grants(t)}</td></tr>`;
   const out = finAccRows(acc).map(r => r.t ? row(r.t, r.d) : `<tr class="fin-grp" style="--d:${r.d}"><td colspan="3"><span class="fin-ind">${esc(r.group)}</span></td></tr>`);
-  box.innerHTML = `<table class="fin-t fin-acc-t"><thead><tr><th>Teammate</th><th>By default</th><th>Granted</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
+  box.innerHTML = `<table class="fin-t fin-acc-t fin-rows"><thead><tr><th>Teammate</th><th>By default</th><th>Granted</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
   // backend/finance/tab.py access: others_see totals|hidden; full_detail the teammates who see it all (owners only).
   // Payroll by person is private by default (a payroll line is made private when it comes in), so that default shows
   // even before there is one: its totals follow the managers' payroll default.
@@ -602,7 +608,7 @@ function finAccRail() {
       <label>What<select name="what">${whats.map(([v, l]) => `<option value="${v}"${v === 'expenses' ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
       <label data-fin-line hidden>Line<select name="line"></select></label>
       <label data-fin-whose>Whose<select name="whose"><option value="own">Their own</option>${teams.filter(x => owner || leads.has(x.id)).map(x => `<option value="team:${esc(x.id)}"${x.id === t.team ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}${owner ? '<option value="company">Company</option>' : ''}</select></label>
-      <label>Until<input type="date" name="until" min="${finToday()}"></label>
+      <label>Until<input type="date" data-date-field name="until" min="${finToday()}"></label>
       <div class="fin-foot"><button type="submit" class="primary">Grant</button></div></form>` : ''}`);
   const form = $('#fin-rail [data-fin-grant]'); if (!form || !L) return;
   const sync = () => {

@@ -1,8 +1,8 @@
 // Subscriptions under the P&L table (finance-pnl.ts): the recurring charges the daily look suggests and the Finance Owner
 // confirms (backend/finance/subscriptions.py), with the monthly cost, cadence, next charge and seats of each. A suggested
-// row shows Confirm and Ignore to a reader with finance.book; everyone else sees its status. The section is hidden when
-// there are none. Confirm and Ignore post subscription_confirm, and the section reads again. Phone width: the table scrolls
-// in its container.
+// row shows Ignore and Confirm to a reader with finance.book; everyone else sees its status. The section is hidden when
+// there are none. Confirm and Ignore post subscription_confirm, and the section reads again. Phone width: each row is
+// the vendor and its monthly cost, then the facts (finance.css .fin-rows).
 
 'use strict';
 
@@ -27,9 +27,11 @@ interface FinSubRead {
   as_of: string;
 }
 
+// A suggestion waits on someone (a pill); an active subscription is the normal state and says nothing; ignored and
+// cancelled are plain muted words (style guide pills: only what is of interest or wrong).
 const FIN_SUB_STATUS: Record<FinSubRow['status'], [string, string]> = {
   suggested: ['Suggested', 'needs'],
-  active: ['Active', 'active'],
+  active: ['', ''],
   ignored: ['Ignored', ''],
   cancelled: ['Cancelled', ''],
 };
@@ -39,17 +41,18 @@ const FIN_SUB_STATUS: Record<FinSubRow['status'], [string, string]> = {
 function finSubTable(read: FinSubRead, may: boolean): string {
   const body = read.rows.map(r => {
     const [label, tone] = FIN_SUB_STATUS[r.status];
+    // Ignore, then Confirm: the step back on the left, the one that moves on last (style guide "Button order").
     const status = may && r.status === 'suggested'
-      ? `<button type="button" class="ghost" data-fin-sub-id="${esc(r.id)}" data-fin-sub-status="active">Confirm</button>
-         <button type="button" class="ghost" data-fin-sub-id="${esc(r.id)}" data-fin-sub-status="ignored">Ignore</button>`
-      : `<span class="pill ${tone}">${label}</span>`;
-    return `<tr data-fin-sub="${esc(r.id)}"><td>${esc(r.vendor.name || '—')}</td>
-      <td class="fin-n">${finUsd(r.monthly)}</td><td>${r.cadence === 'annual' ? 'Annual' : 'Monthly'}</td>
-      <td>${r.next_charge_on ? esc(finDayLabel(r.next_charge_on)) : '—'}</td><td class="fin-n">${r.seats ?? '—'}</td>
-      <td>${status}</td></tr>`;
+      ? `<span class="fin-sub-acts"><button type="button" class="ghost" data-fin-sub-id="${esc(r.id)}" data-fin-sub-status="ignored">Ignore</button>
+         <button type="button" class="ghost" data-fin-sub-id="${esc(r.id)}" data-fin-sub-status="active">Confirm</button></span>`
+      : !label ? '' : tone ? `<span class="pill ${tone}">${label}</span>` : `<span class="muted">${label}</span>`;
+    return `<tr data-fin-sub="${esc(r.id)}"><td>${esc(r.vendor.name || 'No name')}</td>
+      <td class="fin-n fin-amt">${finUsd(r.monthly)}</td><td data-sk="Cadence">${r.cadence === 'annual' ? 'Annual' : 'Monthly'}</td>
+      <td data-k="Next">${r.next_charge_on ? esc(finDayLabel(r.next_charge_on)) : ''}</td><td class="fin-n" data-k="Seats">${r.seats ?? ''}</td>
+      <td data-sk="Status">${status}</td></tr>`;
   }).join('');
   return `<h2 class="fin-h2">Subscriptions <span class="muted">${finUsd(read.monthly_total)} / mo</span></h2>
-    <div class="scroll"><table class="fin-t fin-sub-t"><thead><tr><th>Vendor</th><th class="fin-n">Monthly</th><th>Cadence</th>
+    <div class="scroll"><table class="fin-t fin-sub-t fin-rows"><thead><tr><th>Vendor</th><th class="fin-n">Monthly</th><th>Cadence</th>
     <th>Next charge</th><th class="fin-n">Seats</th><th>Status</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 

@@ -66,7 +66,7 @@ function world(over: {title?: string} = {}) {
         await left.locator('.skel').waitFor({timeout: 5000});
         release();
         await left.locator('.dc-md').waitFor({timeout: 5000});
-        assert.match(await left.locator('.dc-who').innerText(), /^From PM · \dh ago$/);
+        assert.match(await left.locator('.dc-who').innerText(), /^From PM · \dh$/);
         assert.equal(await left.locator('.dc-md strong').innerText(), 'Vision', 'the text is Markdown');
         assert.equal(await left.locator('.dc-md li').count(), 2);
         assert.equal(await left.locator('a.dc-ref-chip[href="/api/v2/files/f-brief"]').innerText(), 'brief.pdf', 'its file is a chip');

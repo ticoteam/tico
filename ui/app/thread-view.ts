@@ -250,6 +250,7 @@ interface ThvView extends ThvConv {
   later?: ThvLater | null;
   // The list's markup above its status rows, as last drawn: a status-only draw replaces only what follows it.
   listRows?: string;
+  pidx?: PromptIndex;             // your messages on the timeline's edge (ui/app/chat-index.ts)
 }
 // The parts of a view a change touches: the header, the message rows, the bots' status rows at the list's end, the composer.
 type ThvPart = 'head' | 'list' | 'status' | 'composer';
@@ -346,6 +347,12 @@ function threadMount(host: HTMLElement, opts: ThvOpts = {}): ThvView {
   view.el = host.querySelector('.thv') as HTMLElement;
   if (opts.goals) view.goals = chatGoalThread(view, opts.goals);
   thvWire(view);
+  // Your messages on the timeline's edge (ui/app/chat-index.ts): the ones loaded; a tick brings its message back as a
+  // quote does, reading earlier pages when a redraw has dropped it.
+  const scroller = host.querySelector<HTMLElement>('.thv-scroll')!;
+  view.pidx = promptIndexMount({scroller, row: id => view.el.querySelector<HTMLElement>(thvRowSel(id)), go: id => thvGoTo(view, id),
+    items: () => view.messages.filter(m => thvMine(m) && !m.deleted && !m.hidden && !m.collapsed && !chatGoalControl(m))
+      .map(m => ({id: m.id, text: pidxText(m.body, [...(m.refs?.attachments || []), ...(m.refs?.files || [])]), at: m.created_at}))});
   // A view that is not displayed (a hidden tab or pane) reads nothing; it marks read once it shows.
   if (window.ResizeObserver) { view.shown = new ResizeObserver(() => thvMarkRead(view)); view.shown.observe(view.el); }
   void thvLoad(view);
@@ -360,6 +367,7 @@ function threadUnmount(view: ThvView | null | undefined) {
   thvDraftSave(view);
   if (view.opts.keyDrop) kdForget(view);
   view.gone = true;
+  view.pidx?.destroy();
   view.follow?.();
   view.shown?.disconnect();
   THV_VIEWS.delete(view);
@@ -563,9 +571,15 @@ const thvCanPost = (view: ThvView) => view.opts.canPost ?? (view.thread ? !!view
 // Archive on a root thread the viewer manages (not a Home): it leaves Threads and Catch up (threadsArchive). An archived
 // one offers Unarchive.
 const thvArchivable = (t: ThvThread | null | undefined) => !!t && !t.parent_id && t.audience !== 'home' && !!t.me?.can_manage;
-const thvArchiveHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t ? `<button type="button" class="ghost thv-arch" data-thv-archive>${t.archived_at ? 'Unarchive' : 'Archive'}</button>` : '';
-// Delete, only when the server says the thread is deletable: every message deleted and nobody else in it.
-const thvDeleteHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t?.deletable ? `<button type="button" class="ghost thv-del" data-thv-delete aria-label="Delete thread">Delete</button>` : '';
+// The archive icon, as the rail's rows have it (the style guide: finishing an item is the archive icon, never a word).
+const thvArchiveHTML = (t: ThvThread | null | undefined) => {
+  if (!thvArchivable(t) || !t) return '';
+  const word = t.archived_at ? 'Unarchive' : 'Archive';
+  return `<button type="button" class="thv-arch" data-thv-archive aria-label="${word}" title="${word}"><span class="nav-icon" aria-hidden="true">${t.archived_at ? 'unarchive' : 'archive'}</span></button>`;
+};
+// Delete is offered (last and red in Thread settings, ui/app/threads-page.ts) only when the server says the thread is
+// deletable: every message deleted and nobody else in it.
+const thvDeletable = (t: ThvThread | null | undefined): boolean => thvArchivable(t) && !!t?.deletable;
 function thvActsHTML(view: ThvView) {
   const t = view.thread!, list = view.memberList;
   const members = !t.parent_id && ['members', 'personal', 'company', 'team'].includes(t.audience);
@@ -573,8 +587,8 @@ function thvActsHTML(view: ThvView) {
   const n = list ? list.length : 0, more = view.memberMore ? '+' : '';
   const people = members && list ? `<button type="button" class="thv-people" data-thv-members aria-label="Members, ${n}${more}" title="Members">${
       list.slice(0, 3).map(m => actorAvatar(m.actor, 22)).join('')}<span class="thv-people-n">${n}${more}</span></button>`
-    : members ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : '';
-  return `${people}${callHeadHTML(view)}${thvArchiveHTML(t)}${thvDeleteHTML(t)}
+    : members ? '<button type="button" class="thv-arch" data-thv-members aria-label="Members" title="Members"><span class="nav-icon" aria-hidden="true">groups</span></button>' : '';
+  return `${people}${callHeadHTML(view)}${thvArchiveHTML(t)}
       ${view.opts.menu === false ? '' : `<button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`}`;
 }
 // The viewer's own pin, on a thread the rail lists (a server with pins says `me.pinned`).
@@ -689,7 +703,6 @@ function thvWhoHTML(a: string | undefined) {
   if (pid) return `<a class="th-who" href="#/person/${esc(encodeURIComponent(pid))}">${esc(actorName(a))}</a>`;
   return `<span class="th-who">${esc(actorName(a) || 'Someone')}</span>`;
 }
-const THV_BOT_TAG = '<span class="th-bot">BOT</span>';
 // An update is its own record with its own page: the Home shows a card that opens it, never the update as chat.
 function thvUpdateHTML(m: ThvMessage) {
   const u = m.refs?.update, id = typeof u === 'object' ? u?.id : u;
@@ -737,11 +750,14 @@ function thvQuoteOf(view: ThvView, m: ThvMessage): ThvQuote | null {
   if (target) return thvQuoteFrom(target);
   return m.in_reply_to ? {id: m.in_reply_to, author: '', author_name: '', excerpt: ''} : null;
 }
-function thvQuoteHTML(q: ThvQuote | null | undefined) {
+// `inline`: on the message's name line, right of its time (the style guide's chat window); a message being written
+// (thvPendingHTML) and the composer's line keep their own row.
+function thvQuoteHTML(q: ThvQuote | null | undefined, inline = false) {
   if (!q?.id) return '';
-  if (q.hidden) return `<span class="th-quote th-quote-hidden">${THV_SVG.quote}<span class="th-quote-text">${q.deleted ? 'Message deleted' : 'Message not shown'}</span></span>`;
+  const cls = 'th-quote' + (inline ? ' th-quote-in' : '');
+  if (q.hidden) return `<span class="${cls} th-quote-hidden">${THV_SVG.quote}<span class="th-quote-text">${q.deleted ? 'Message deleted' : 'Message not shown'}</span></span>`;
   const who = q.author_name || (q.author ? actorName(q.author) : '');
-  return `<button type="button" class="th-quote" data-th-quote="${esc(q.id)}" aria-label="${esc(who ? 'Reply to ' + who : 'Reply')}">${THV_SVG.quote}${
+  return `<button type="button" class="${cls}" data-th-quote="${esc(q.id)}" aria-label="${esc(who ? 'Reply to ' + who : 'Reply')}">${THV_SVG.quote}${
     who ? `<b class="th-quote-who">${esc(who)}</b>` : ''}<span class="th-quote-text">${esc(q.excerpt || '')}</span></button>`;
 }
 // Under a person's message that went through routing: which bots it asked, or that none was.
@@ -756,6 +772,8 @@ function thvRoutedHTML(m: ThvMessage) {
 // page, and to what was open on it when the page can open it.
 const THV_FROM_PAGES: Record<string, (item?: PageChatItem) => string> = {
   listening: item => LISTENING + (item?.kind === 'automation' && item.id ? '/' + encodeURIComponent(item.id) : ''),
+  automations: item => AUTOMATIONS + (item?.kind === 'automation' && item.id ? '/' + encodeURIComponent(item.id) : ''),
+  docs: item => DOCS + (item?.kind === 'doc' && item.id ? '/' + encodeURIComponent(item.id) : ''),
   // the review view (file-review.ts), at the version that was on screen
   file: item => item?.kind === 'file' && item.id ? fileReviewHref(item.id, {version: Number(String(item.name || '').replace(/^v/, '')) || null}) : '',
   goals: item => goalsBase() + (item?.kind === 'goal' && item.id ? '/' + encodeURIComponent(item.id) : ''),
@@ -764,7 +782,8 @@ function thvFromHTML(m: ThvMessage) {
   const f = m.refs?.from_page;
   if (!f || typeof f !== 'object' || !f.label) return '';
   // The page name comes from the message, so only the table's own keys count (not Object's, such as constructor).
-  const href = Object.hasOwn(THV_FROM_PAGES, f.page) ? THV_FROM_PAGES[f.page]?.(f.item) : undefined;
+  // A page with no entry above leads to its own address (page-chat.ts pageChatHome).
+  const href = Object.hasOwn(THV_FROM_PAGES, f.page) ? THV_FROM_PAGES[f.page]?.(f.item) : pageChatHome(String(f.page)) || undefined;
   const words = esc('From ' + f.label) + (f.item?.name ? ' › ' + esc(f.item.name) : '');
   return `<div class="th-from">${href ? `<a href="${esc(href)}">${words}</a>` : words}</div>`;
 }
@@ -775,7 +794,7 @@ const thvClock = (iso: string | undefined) => { const d = new Date(iso || ''); r
 // Whether `m` sits under `prev`'s header: the same author within five minutes, and `m` neither a reply nor a bot's run.
 function thvJoins(view: ThvView, prev: ThvMessage | null, m: ThvMessage) {
   if (!prev || prev.sender_id !== m.sender_id || prev.deleted || m.deleted || thvIsUpdateCard(m) || thvIsUpdateCard(prev)) return false;
-  if (thvQuoteOf(view, m) || thvRunOf(m)) return false;
+  if (thvQuoteOf(view, m) || thvRunOf(m) || m.refs?.topic_changed) return false;
   const a = Date.parse(prev.created_at || ''), b = Date.parse(m.created_at || '');
   return a > 0 && b > 0 && Math.abs(b - a) <= THV_GROUP_MS;
 }
@@ -789,15 +808,15 @@ function thvMsgActsHTML(view: ThvView, m: ThvMessage) {
 function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   const relay = rowSource(m).kind === 'assistant_for';
   const bot = thvBot(m.sender_id);
-  // In a bot's own Home or DM every bot line is that bot, so the BOT tag would only repeat the page.
-  const ownBot = bot && !!view.opts?.goals && m.sender_id === `bot:${view.opts.goals}`;
-  // A bot's own words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions (ui/app/feedback.ts).
-  const fb = !m.deleted && m.id && bot ? fbKey('message', m.id) : '';
+  // A bot's or another person's words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions
+  // (ui/app/feedback.ts).
+  const fb = !m.deleted && m.id && fbRates(m.sender_id) ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', cont && 'th-cont', view.focus === m.id && 'th-focus', view.flash === m.id && 'th-flash', m.refs?.follow_up && 'th-followup',
     thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted'].filter(Boolean).join(' ');
-  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${(bot && !ownBot) || relay ? THV_BOT_TAG : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
-    m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
+  // The name line (the style guide's chat window): name, time, then what it answers. No "bot" tag, no "edited".
+  const quote = m.deleted ? '' : thvQuoteHTML(thvQuoteOf(view, m), true);
+  const head = cont ? '' : `<div class="th-head">${relay ? `<span class="th-who">${esc(rowSource(m).name)}</span>` : thvWhoHTML(m.sender_id)}${chatTimeHTML(m.created_at)}${quote}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
@@ -812,7 +831,7 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   // The Assistant's read-back of what it will approve is shown exactly as written, never formatted.
   else if (m.refs?.read_back) body = `<div class="th-body read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`;
   // A file the bot names is a link to it (file-mentions.ts).
-  else body = `${messageMd('th-body md', m.body || '', bot ? m.sender_id : '', {shortLinks: true})}${
+  else body = `${messageMd('th-body md' + chatClampCls(m.id, m.body), m.body || '', bot ? m.sender_id : '', {shortLinks: true})}${chatMoreHTML(m.id, m.body)}${
     // The notice a bot's manager got about its Home's closed history (no longer sent; old ones keep their button).
     m.refs?.earlier_messages?.thread_id ? `<button type="button" class="ghost small th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''}`;
   // A bot's reply reads as Claude's does: one folded line of what its run did first (ui/app/chat.ts), then the words,
@@ -820,12 +839,13 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   const run = !m.deleted && bot ? v2RunHTML(m, view.run) : '';
   if (!m.deleted && bot)
     body += (m.refs?.warnings || []).map(w => `<div class="chat-warn">${esc(String(w).charAt(0).toUpperCase() + String(w).slice(1))}</div>`).join('') + v2MessageCards(m);
-  const quote = m.deleted ? '' : thvQuoteHTML(thvQuoteOf(view, m));
-  const av = cont ? `<time class="th-cont-time" title="${esc(fmt(m.created_at))}">${esc(thvClock(m.created_at))}</time>`
-    : relay ? avatar(assistantBot(), 32) : actorAvatar(m.sender_id, 32);
-  return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}">
+  const av = cont ? `<time class="th-cont-time" title="${esc(chatWhen(m.created_at))}">${esc(thvClock(m.created_at))}</time>`
+    : relay ? avatar(assistantBot(), 28) : actorAvatar(m.sender_id, 28);
+  // A fresh session (backend/topic_change.py) is one quiet word above the message that started it.
+  const compacted = m.refs?.topic_changed && !m.deleted ? CHAT_COMPACTED : '';
+  return `${compacted}<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}">
     <div class="th-av">${av}</div>
-    <div class="th-main">${head}${quote}${run}${body}${m.deleted ? '' : thvFilesHTML(m) + thvBoardHTML(m) + thvFromHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}${thvRoutedHTML(m)}</div>
+    <div class="th-main">${head}${cont && quote ? quote : ''}${run}${body}${m.deleted ? '' : thvFilesHTML(m) + thvBoardHTML(m) + thvFromHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}${thvRoutedHTML(m)}</div>
     ${m.deleted ? '' : thvMsgActsHTML(view, m)}
   </div>`;
 }
@@ -838,17 +858,20 @@ const thvMoreHTML = (m: ThvMessage) => `<a class="th-fold th-more" href="${threa
 function thvPendingHTML(view: ThvView, p: ThvPending) {
   const text = `<div class="th-body">${esc(p.text)}${p.files?.length ? ` <span class="muted">· ${p.files.length} file${p.files.length === 1 ? '' : 's'}</span>` : ''}</div>`;
   const quote = thvQuoteHTML(p.quote);
-  const av = `<div class="th-av">${actorAvatar(myActor(), 32)}</div>`;
+  const av = `<div class="th-av">${actorAvatar(myActor(), 28)}</div>`;
+  // Held: Discard, Edit, Send anyway; the rule that holds it is the tooltip on Held, never a line of its own (a
+  // screen reader hears it with the word). Not sent: the reason, then Discard, Edit, Retry.
   if (p.state === 'held') {
-    const h: Partial<ThvHeld> = p.held || {}, rules = (h.rules || []).map(r => `<div class="th-held-rule">${ruTextHTML(r.text)}</div>`).join('');
+    const h: Partial<ThvHeld> = p.held || {}, why = (h.rules || []).map(r => String(r.text || '').trim()).filter(Boolean).join('\n');
     return `<div class="th-msg th-mine th-held" data-pending="${p.key}">${av}
-      <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state">${h.outcome === 'escalated' ? 'Waiting for review' : 'Held'}</span></div>${quote}${text}${rules}
-        <div class="th-held-acts"><button type="button" class="ghost small" data-held-edit>Edit</button>${
-          p.canSend ? '<button type="button" class="ghost small" data-held-send>Send anyway</button>' : ''}<button type="button" class="ghost small" data-held-drop>Discard</button></div></div></div>`;
+      <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state"${why ? ` title="${esc(why)}"` : ''}>${h.outcome === 'escalated' ? 'Waiting for review' : 'Held'}${
+        why ? `<span class="sr-only">: ${esc(why)}</span>` : ''}</span></div>${quote}${text}
+        <div class="th-held-acts"><button type="button" class="ghost small" data-held-drop>Discard</button><button type="button" class="ghost small" data-held-edit>Edit</button>${
+          p.canSend ? '<button type="button" class="primary small" data-held-send>Send anyway</button>' : ''}</div></div></div>`;
   }
   return `<div class="th-msg th-mine th-pending${p.state === 'failed' ? ' th-failed' : ''}" data-pending="${p.key}">${av}
     <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state" role="status">${p.state === 'failed' ? esc(p.error || 'Not sent') : 'Checking…'}</span></div>${quote}${text}
-    ${p.state === 'failed' ? '<div class="th-held-acts"><button type="button" class="ghost small" data-held-edit>Edit</button><button type="button" class="ghost small" data-held-drop>Discard</button></div>' : ''}</div></div>`;
+    ${p.state === 'failed' ? '<div class="th-held-acts"><button type="button" class="ghost small" data-held-drop>Discard</button><button type="button" class="ghost small" data-held-edit>Edit</button><button type="button" class="primary small" data-held-retry>Retry</button></div>' : ''}</div></div>`;
 }
 
 // ---- the bots' status, at the end of the timeline
@@ -867,8 +890,8 @@ function thvStatusHTML(view: ThvView, b: ThvBotRow | null | undefined) {
     ? `<button type="button" class="ghost small th-status-act" data-th-stop="${esc(slug)}" data-run="${esc(b.run_id || '')}">Stop</button>` : '';
   const fix = b.state === 'cant_reply' && b.fix?.href ? `<a class="ghost small th-status-act" href="${esc(b.fix.href)}">${esc(b.fix.label || 'Fix')}</a>` : '';
   return `<div class="th-status th-status-${esc(b.state)}" data-th-status="${esc(b.actor)}" role="status">
-    <div class="th-av">${actorAvatar(b.actor, 32)}</div>
-    <div class="th-main"><div class="th-head"><span class="th-who">${esc(name)}</span>${THV_BOT_TAG}<span class="th-status-word">${word}</span></div>${
+    <div class="th-av">${actorAvatar(b.actor, 28)}</div>
+    <div class="th-main"><div class="th-head"><span class="th-who">${esc(name)}</span><span class="th-status-word">${word}</span></div>${
       b.detail ? `<div class="th-status-detail">${b.state === 'working' ? '<span class="th-status-dot" aria-hidden="true"></span>' : ''}${esc(b.detail)}</div>` : ''}</div>
     ${stop}${fix}</div>`;
 }
@@ -962,10 +985,16 @@ function thvRowsHTML(view: ThvView) {
   if (view.state === 'gone') return '<div class="th-empty muted">Not found</div>';
   if (view.state === 'error') return `<div class="th-empty err">${esc(view.error || 'Could not load')}</div>`;
   const rows = thvRows(view), out = [], groups = thvUpdateGroups(view), lineGroups = thvLineGroups(view);
-  let divided = false, prev: ThvMessage | null = null;
+  let divided = false, prev: ThvMessage | null = null, day = '';
+  // One line names the day wherever it changes; the first message of a day starts with its full header.
+  const dayLine = (m: ThvMessage | undefined) => {
+    const key = chatDayKey(m?.created_at);
+    if (key && key !== day) { day = key; out.push(chatDayLineHTML(m!.created_at)); prev = null; }
+  };
   // One row drawn where it sits. The "New" line goes above the first message the viewer had not read when the thread opened,
   // and only a row that is drawn can take it: a shut group's rows are not drawn, so they are not news on the screen.
   const draw = (row: ThvRow) => {
+    dayLine(row.m);
     if (!divided && row.m && thvIsNew(view, row.m)) { out.push('<div class="th-newline" role="separator" aria-label="New"><span>New</span></div>'); divided = true; prev = null; }
     if (row.m && !row.m.deleted && isSourceLine(row.m)) { out.push(thvLineHTML(view, row.m)); prev = null; return; }
     if (row.m) { out.push(thvMsgHTML(view, row.m, thvJoins(view, prev, row.m))); prev = row.m; return; }
@@ -988,6 +1017,7 @@ function thvRowsHTML(view: ThvView) {
         if (!r.m || lineGroups.get(r.m.id) !== run) break;
         ms.push(r.m);
       }
+      dayLine(ms[0]);
       out.push(sourceRunsHTML(ms, {line: (m: ThvMessage) => thvLineHTML(view, m), draw: () => '', open: (run: ThvMessage[]) => run.some(m => view.openLines.has(m.id))}));
       prev = null;
       i = end - 1;
@@ -998,6 +1028,7 @@ function thvRowsHTML(view: ThvView) {
     let end = i;
     while (end < rows.length && rows[end]!.m && groups.get(rows[end]!.m!.id) === req) end++;
     const open = view.openUpdates.has(req), panel = 'th-upd-' + view.key + '-' + req.replace(/\W/g, '_');
+    dayLine(row.m);
     out.push(thvUpdateLineHTML(req, panel, open));
     out.push(`<div class="th-upd-body" id="${panel}"${open ? '' : ' hidden'}>`);
     prev = null;
@@ -1007,7 +1038,7 @@ function thvRowsHTML(view: ThvView) {
     i = end - 1;
   }
   for (const p of view.pending) out.push(thvPendingHTML(view, p));
-  return out.join('');
+  return chatQuietMerge(out.join(''));
 }
 const thvAtBottom = (view: ThvView) => { const b = view.el?.querySelector('.thv-scroll'); return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 60; };
 const THV_ALL: ThvPart[] = ['head', 'list', 'status', 'composer'];
@@ -1044,6 +1075,7 @@ function thvListDraw(view: ThvView, list: HTMLElement, box: HTMLElement) {
   const rows = thvRowsHTML(view);
   view.listRows = rows;
   patchHTML(list, rows + thvTailHTML(view, rows), visualSwap);
+  chatClampSync(list);
   const reload = () => thvRefresh(view);
   if (list.querySelector('[data-action-host]')) void window.assistantChat?.cards(list, {get, post, esc, toast, reload});
   if (list.querySelector('[data-credential-host]')) void window.credentialCards?.mount(list, {get, post, esc, toast, reload});
@@ -1227,7 +1259,7 @@ function thvComposerDraw(view: ThvView) {
   // Files waiting to be sent sit above the box, an image as its thumbnail (#138).
   host.innerHTML = `<div class="thv-replying" hidden></div><div class="thv-ctx" hidden></div><div class="ask pill-thread thv-ask"><div class="p-chips"></div><div class="p-pill">
       ${bot ? pillBotHTML(bot) : ''}
-      ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
+      ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" class="tap-mark" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
       <span class="thv-attach-wrap"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${ICON_CLIP}</button>
         <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">Upload</button><button type="button" role="menuitem" data-attach="library">Library file</button></div></span>
@@ -1508,9 +1540,12 @@ function thvChips(view: ThvView) {
 async function thvLibOpen(view: ThvView) {
   const C = view.composer, pane = C.el.querySelector('.thv-lib') as HTMLElement;
   pane.hidden = false;
-  pane.innerHTML = '<input type="search" class="thv-lib-q" placeholder="Find a file" aria-label="Find a file"><div class="thv-lib-list"><div class="muted">Loading…</div></div><button type="button" class="ghost small" data-lib-close>Close</button>';
+  pane.innerHTML = '<div class="thv-lib-top"><input type="search" class="thv-lib-q" placeholder="Find a file" aria-label="Find a file"><button type="button" class="ghost thv-lib-x" data-lib-close aria-label="Close">✕</button></div><div class="thv-lib-list"><div class="muted">Loading…</div></div>';
   const q = pane.querySelector('.thv-lib-q') as HTMLInputElement, list = pane.querySelector('.thv-lib-list') as HTMLElement;
-  (pane.querySelector('[data-lib-close]') as HTMLElement).onclick = () => { pane.hidden = true; };
+  // ✕ or Escape puts the picker away and hands the cursor back to the message box.
+  const shut = () => { pane.hidden = true; C.el.querySelector<HTMLElement>('.p-text')?.focus(); };
+  (pane.querySelector('[data-lib-close]') as HTMLElement).onclick = shut;
+  pane.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); shut(); } };
   let files: ThvFileRow[] = [];
   try { files = ((await get<{files?: ThvFileRow[]}>('/v2/files?limit=50', {fresh: true})).files || []).filter(f => f.locator !== 'remote_link' && !f.url && !f.archived); }
   catch (e) { list.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
@@ -1734,8 +1769,6 @@ async function thvClick(view: ThvView, ev: Event) {
   if (pin) { void thvPinToggle(view, pin); return; }
   const arch = t.closest<HTMLButtonElement>('[data-thv-archive]');
   if (arch) { void thvArchive(view, arch); return; }
-  const del = t.closest<HTMLButtonElement>('[data-thv-delete]');
-  if (del) { void thvDelete(view, del); return; }
   const call = t.closest<HTMLElement>('[data-call]');
   if (call) { void callAction(view, call.dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadSettingsOpen(view); return; }
@@ -1775,6 +1808,13 @@ async function thvClick(view: ThvView, ev: Event) {
       if (p.replyTo && view.messages.some(x => x.id === p.replyTo)) thvReplyStart(view, view.messages.find(x => x.id === p.replyTo));
       if (box) { box.value = p.text; box.focus(); }
       if (C) { C.files.push(...(p.files || [])); C.lib.push(...(p.lib || [])); thvChips(view); }
+      return;
+    }
+    // Retry sends the same words and files again, the way the composer sends now.
+    if (t.closest('[data-held-retry]')) {
+      view.pending = view.pending.filter(x => x !== p);
+      const way = view.composer?.ways ? deliveryBody(thvSendMode(view)) : null;
+      await thvSend(view, {text: p.text, files: p.files, lib: p.lib, way, replyTo: view.messages.find(x => x.id === p.replyTo) || null});
       return;
     }
     const send = t.closest<HTMLButtonElement>('[data-held-send]');
@@ -1848,7 +1888,7 @@ function thvPressWire(view: ThvView) {
 }
 function thvSheet(view: ThvView, m: ThvMessage) {
   const d = fbDialog('fb-menu thv-sheet', 'Message actions');
-  const key = thvBot(m.sender_id) ? fbKey('message', m.id) : '', mine = key ? fbMine(key)?.rating || '' : '';
+  const key = fbRates(m.sender_id) ? fbKey('message', m.id) : '', mine = key ? fbMine(key)?.rating || '' : '';
   d.innerHTML = `<div class="thv-sheet-emoji" role="group" aria-label="React">${thvEmojiChoices(view).slice(0, 6).map(e =>
       `<button type="button" data-pick-emoji="${esc(e)}" aria-label="${esc(e)}">${esc(e)}</button>`).join('')}</div>
     <div class="fb-menu-row">${thvCanPost(view) ? `<button type="button" data-pick="reply" aria-label="Reply">${THV_SVG.reply}</button>` : ''}${

@@ -104,10 +104,12 @@ async function open(browser: Browser, {viewport, rows}: {viewport: {width: numbe
 }
 
 const buttons = (page: Page, id: string) => page.locator(`[data-fin-receipt="${id}"] button`).allInnerTexts().then(t => t.map(x => x.trim()));
-const pill = (page: Page, id: string) => page.locator(`[data-fin-receipt="${id}"] .pill`).innerText();
+// A receipt's state: a pill only for a suggested match (it waits on someone), a plain muted word otherwise.
+const pill = (page: Page, id: string) => page.locator(`[data-fin-receipt="${id}"] .fin-rc-state`).innerText();
+const pills = (page: Page, id: string) => page.locator(`[data-fin-receipt="${id}"] .pill`).count();
 const lines = (page: Page, id: string) => page.locator(`[data-fin-receipt="${id}"] .muted`).allInnerTexts();
 async function waitPill(page: Page, id: string, text: string) {
-  await page.waitForFunction(([i, t]) => document.querySelector(`[data-fin-receipt="${i}"] .pill`)?.textContent.trim() === t, [id, text]);
+  await page.waitForFunction(([i, t]) => document.querySelector(`[data-fin-receipt="${i}"] .fin-rc-state`)?.textContent.trim() === t, [id, text]);
 }
 
 (async () => {
@@ -125,11 +127,13 @@ async function waitPill(page: Page, id: string, text: string) {
       const r1 = await lines(page, 'rc-1');
       assert.match(r1[0], /^12\.00 · Nov 1(, 2026)? · Canva$/, `${tag}: read line`);
       assert.match(r1[1], /^Suggested on: CANVA · 12\.00 · Nov 1(, 2026)?$/, `${tag}: suggested row line`);
-      assert.deepEqual(await buttons(page, 'rc-1'), ['Attach', 'Refuse'], `${tag}: suggestion buttons`);
+      assert.deepEqual(await buttons(page, 'rc-1'), ['Refuse', 'Attach'], `${tag}: suggestion buttons, the one that moves on last`);
+      assert.equal(await pills(page, 'rc-1'), 1, `${tag}: a suggestion is a pill`);
       // Filed: the row it is filed to, and Undo.
       assert.equal(await pill(page, 'rc-2'), 'Matched', `${tag}: attached pill`);
       assert.match((await lines(page, 'rc-2'))[1], /^Filed to: META · 9\.00 · Oct 30(, 2026)?$/, `${tag}: filed line`);
       assert.deepEqual(await buttons(page, 'rc-2'), ['Undo'], `${tag}: attached buttons`);
+      assert.equal(await pills(page, 'rc-2'), 0, `${tag}: matched is the normal state, no pill`);
       // Not read yet: says so and offers nothing.
       assert.equal(await pill(page, 'rc-3'), 'To read', `${tag}: unread pill`);
       assert.equal((await lines(page, 'rc-3'))[0], 'Not read yet', `${tag}: unread line`);
@@ -146,7 +150,7 @@ async function waitPill(page: Page, id: string, text: string) {
       await page.locator('[data-fin-receipt="rc-2"] button', {hasText: 'Undo'}).click();
       await waitPill(page, 'rc-2', 'Suggested match');
       assert.deepEqual(f.state.writes.at(-1), {kind: 'receipt_match_undo', payload: {receipt_id: 'rc-2'}}, `${tag}: undo write`);
-      assert.deepEqual(await buttons(page, 'rc-2'), ['Attach', 'Refuse'], `${tag}: suggested again after undo`);
+      assert.deepEqual(await buttons(page, 'rc-2'), ['Refuse', 'Attach'], `${tag}: suggested again after undo`);
 
       // Refuse posts reject; the receipt reads Refused and offers nothing.
       await page.locator('[data-fin-receipt="rc-2"] button', {hasText: 'Refuse'}).click();

@@ -177,7 +177,7 @@ function generalManagerHTML(v: SettingsGeneralManagerView): string {
       ${d.task ? `<a href="#/task/${encodeURIComponent(d.task.id)}" title="${esc(d.task.title || '')}">Check task</a>` : '<span class="muted">—</span>'}
     </div>`).join('');
   return `<div class="tm-head"><span class="sysr-state" data-tm-state>${state}</span>
-      ${last ? `<span class="muted">Last run <span class="tnum" title="${esc(fmt(last))}">${esc(ago(last))}</span></span>` : '<span class="muted">Not run yet</span>'}
+      ${last ? `<span class="muted">Last run <span class="tnum" title="${esc(fmt(last))}">${esc(agoSaid(last))}</span></span>` : '<span class="muted">Not run yet</span>'}
       ${toggle}${botPageView()?.slug === v.bot ? '' : `<a class="ghost" href="#/bot/${encodeURIComponent(String(v.bot))}">Open</a>`}</div>
     <div class="tm-list">${rows}</div><p class="settings-cell-note" role="status" data-tm-status></p>`;
 }

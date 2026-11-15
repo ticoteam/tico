@@ -139,13 +139,15 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     const fab = page.locator('#ask-row'), panel = page.locator('#ask-panel');
     await fab.waitFor();
     assert.equal(await fab.evaluate(el => getComputedStyle(el, '::after').content), 'none', 'no count on the button');
-    // The row sits in the sidebar's footer, above the account, nothing floating over the page; Search is an icon at its
-    // end (⌘K in its name) and opens Search.
+    // The sidebar foot is one row: "Assistant", Search's icon (⌘K in its name, it opens Search), Help, then your picture
+    // with an up arrow. Nothing floats over the page.
     const where = await page.evaluate(() => { const row = document.querySelector<HTMLElement>('#ask-row')!, b = (el: Element) => el.getBoundingClientRect();
-      return {inFooter: !!row.closest('#side .side-footer'), above: b(row).bottom <= b(document.querySelector('.side-utility')!).top + 1,
-        next: row.nextElementSibling?.id, rail: b(document.querySelector('#side')!).right, right: b(row).right, height: Math.round(b(row).height)}; });
-    assert.deepEqual([where.inFooter, where.above, where.next], [true, true, 'search-open'], JSON.stringify(where));
-    assert.ok(where.right < where.rail && where.height <= 36, `one plain row in the rail: ${JSON.stringify(where)}`);
+      const ids = ['ask-row', 'search-open', 'support-open', 'account'].map(id => document.getElementById(id)!);
+      return {inFooter: !!row.closest('#side .side-footer'), label: row.querySelector('.ask-label')!.textContent,
+        order: [...row.parentElement!.children].map(el => el.id || el.className), oneRow: ids.every(el => Math.abs(b(el).top + b(el).height / 2 - b(row).top - b(row).height / 2) < 2),
+        rail: b(document.querySelector('#side')!).right, right: b(document.getElementById('account')!).right, height: Math.round(b(row).height)}; });
+    assert.deepEqual([where.inFooter, where.label, where.order, where.oneRow], [true, 'Assistant', ['ask-row', 'search-open', 'support-open', 'account-wrap'], true], JSON.stringify(where));
+    assert.ok(where.right <= where.rail && where.height <= 36, `one plain row in the rail: ${JSON.stringify(where)}`);
     const search = page.locator('#search-open');
     assert.equal(await search.getAttribute('aria-label'), 'Search (⌘K)');
     assert.equal(await search.innerText(), 'search', 'an icon, no words beside Ask');
@@ -161,17 +163,22 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     await page.keyboard.press('Escape');
     await page.locator('#support-pop').waitFor({state: 'hidden'});
     // Open: the row's dot flies up to its place beside the panel's name and lands exactly there. The row stays, a close
-    // mark in its dot's place; the panel stands straight above the row, over the sidebar, and leaves the row in view.
-    // The flight is quick: under 350 ms however far it goes.
+    // mark in its dot's place; the panel takes the sidebar above the foot, in place of the list, and never covers the
+    // page. The flight is quick: under 350 ms however far it goes.
     const {took} = await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await fab.click(); await panel.waitFor(); });
     assert.ok(took <= 350, `a quick flight: ${took}ms`);
     assert.deepEqual([await fab.getAttribute('aria-expanded'), await fab.getAttribute('aria-label')], ['true', 'Close Tico Assistant']);
     assert.equal(await fab.isVisible(), true, 'the row stays');
     assert.equal(await fab.evaluate(el => getComputedStyle(el.querySelector('.ask-x')!).opacity), '1', 'a close mark holds its place');
-    const above = await page.evaluate(() => { const b = (s: string) => document.querySelector(s)!.getBoundingClientRect(), p = b('#ask-panel'), r = b('#ask-row');
-      return {left: p.left - b('#side').left, gap: r.top - p.bottom, top: p.top}; });
-    assert.ok(above.left >= 0 && above.left <= 12 && above.gap >= 0 && above.gap <= 12 && above.top >= 0,
-      `the panel stands on the row: ${JSON.stringify(above)}`);
+    const place = await page.evaluate(() => { const b = (s: string) => document.querySelector(s)!.getBoundingClientRect(), p = b('#ask-panel'), side = b('#side');
+      return {inSide: !!document.querySelector('#ask-panel')!.closest('#side'), left: p.left - side.left, right: side.right - p.right, top: p.top - side.top,
+        foot: b('.side-footer').top - p.bottom, main: b('#main').left - p.right, width: Math.round(side.width),
+        listInert: document.querySelector<HTMLElement>('#side .side-scroll')!.inert, listHidden: getComputedStyle(document.querySelector('#side .side-scroll')!).visibility}; });
+    assert.ok(place.inSide && Math.abs(place.left) < 1 && place.right >= 0 && place.right <= 1 && Math.abs(place.top) < 1 && Math.abs(place.foot) < 1,
+      `the panel takes the sidebar above the foot: ${JSON.stringify(place)}`);
+    assert.ok(place.main >= -1, `it never covers the page: ${JSON.stringify(place)}`);
+    assert.equal(place.width, 340, 'the sidebar is a chat\'s width while the Assistant is open');
+    assert.deepEqual([place.listInert, place.listHidden], [true, 'hidden'], 'the list under it is out of reach');
     // The header's dot is the one live dot while it is open; Tico's turns carry none.
     const dots = () => page.evaluate(() => ['#ask-row [data-ask-dot]', '#ask-panel [data-ask-dot]'].map(s => document.querySelector<HTMLElement>(s)?.dataset.state || ''));
     const landed = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
@@ -251,6 +258,9 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     assert.deepEqual(await dots(), ['idle', 'still'], 'closed: the dot is back on the row');
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'ask-row');
     assert.equal(await fab.getAttribute('aria-label'), null);
+    // Closed, the list is back as it was, and the sidebar at its own width.
+    assert.deepEqual(await page.evaluate(() => { const l = document.querySelector<HTMLElement>('#side .side-scroll')!;
+      return [l.inert, getComputedStyle(l).visibility, Math.round(document.querySelector('#side')!.getBoundingClientRect().width)]; }), [false, 'visible', 236]);
     await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await page.keyboard.press('Control+j'); await panel.waitFor(); });
     // The Assistant page is this chat already: there the row is not needed, and Search is the whole row again.
     await page.evaluate(() => { location.hash = '#/assistant'; });
@@ -336,12 +346,22 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     await page.evaluate(() => ASK.refresh());
     assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a new step leaves the thread be');
     assert.match(await working.innerText(), /^Working · \d+s · Reading tasks$/);
-    // Two minutes on, a message's "5m ago" reads "7m ago": its time moves in place, the thread stays.
-    const stamp = page.locator('#ask-panel [data-ask-thread] [data-ago]').first();
-    assert.equal(await stamp.innerText(), '5m ago');
+    // Closed mid-reply and opened again: the run goes on with its thread kept; closed, the row's dot shows it working;
+    // open, the cursor is back in the box.
+    await page.locator('#ask-row').click();
+    await page.locator('#ask-panel').waitFor({state: 'hidden'});
+    assert.notEqual(await page.locator('#ask-row [data-ask-dot]').getAttribute('data-state'), 'idle', "closed, the row's dot shows the run");
+    await page.locator('#ask-row').click();
+    await page.waitForFunction(() => document.activeElement?.matches('#ask-panel .p-text'));
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'the same thread, nothing lost');
+    // A message's time is its clock on its name line (the style guide's chat window): two minutes on it reads the same,
+    // and the redraw leaves the thread be.
+    const stamp = page.locator('#ask-panel [data-ask-thread] .th-head time').first();
+    const clock = await stamp.innerText();
+    assert.match(clock, /^\d{1,2}:\d{2}\s?[AP]M$/);
     await page.evaluate(() => { const real = Date.now; Date.now = () => real() + 120000; ASK.draw(); Date.now = real; });
-    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a message\'s time ticking leaves the thread be');
-    assert.equal(await stamp.innerText(), '7m ago');
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a minute passing leaves the thread be');
+    assert.equal(await stamp.innerText(), clock);
     state.execution = {...state.execution!, state: 'completed', label: 'Complete', parts: []};
     state.messages.push(msg('w2', 'bot:assistant', 'Closed 12 tasks.'));
     await page.evaluate(() => ASK.refresh());

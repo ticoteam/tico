@@ -5,7 +5,7 @@ import sqlite3
 from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import patch
-from backend import cloud_machines, providers, settings_catalog
+from backend import cloud_machines, page_owners, providers, settings_catalog
 from backend.store import H
 from backend.tests.helpers.api import get, post, runner
 from backend.tests.helpers.botops_parity import act
@@ -67,9 +67,7 @@ SAMPLES = {
     "release.times": "09:30",
     "release.bot": "finance",
     "release.writer": "finance",
-    "pages.listening.owner": "finance",
-    "pages.goals.owner": "finance",
-    "pages.tools.owner": "finance",
+    **{"pages." + page + ".owner": "finance" for page in page_owners.PAGES},
     "mail.legal_bot": {"legal_bot_id": "finance"},
     "rules.task_rule": {"on": False},
     "rules.task_rule.create": {"name": "Parity rule", "when": {}, "then": {}},

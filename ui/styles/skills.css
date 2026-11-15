@@ -35,6 +35,12 @@
 #skills-root .card>header .theme-seg button{min-width:40px}
 #skills-root .sk-elsewhere,#skills-root .sk-ideas{margin-top:16px}
 .sk-ideas .sk-act{white-space:nowrap}
+/* the header's search (page-head.ts tools); a sub-page's first line under its header */
+.ph>.ph-tools>.sk-q{flex:0 1 240px;width:240px}
+.sk-desc{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:0 0 12px;font-size:var(--t-sm)}
+/* a Suggestions row: its one quiet action, then its ⋯ (the shared icon button, task-list.css .tl-ib) */
+.sk-ideas .sk-more{margin-left:4px;vertical-align:middle}
+.sk-ideas .sk-more .nav-icon{font-size:18px}
 .sk-elsewhere .sk-bots{white-space:nowrap;text-align:right}
 
 @media (max-width:760px){
@@ -42,4 +48,7 @@
   .sk-list td.sk-name{width:auto;grid-column:1 / -1}
   .sk-list tr{grid-template-columns:minmax(0,1fr) auto auto}
   .sk-act{width:auto;text-align:left}
+  .sk-ideas .sk-more{width:var(--ctl)}
+  .ph>.ph-tools>.sk-q{flex:0 1 160px;width:160px}   /* room for the title on the phone's title line */
+  .sk-waiting .sk-screen:empty{display:none}   /* a proposal with nothing to flag: no gap where a pill would be */
 }

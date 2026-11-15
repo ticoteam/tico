@@ -228,7 +228,17 @@ async function save(page: Page) {
   await page.locator('dialog.bt-panel').waitFor({state: 'detached'});
 }
 // Every row is one line, and nothing in the open editor runs past its edge.
-const oneLine = (page: Page) => page.locator('.bt-main').evaluateAll(els => els.every(el => el.getBoundingClientRect().height <= 48));
+// A row is one line; on a phone a row with a limit takes a second, the limit under its name (style guide, Budget tree,
+// Mobile). The name never wraps.
+const oneLine = (page: Page) => page.locator('.bt-main').evaluateAll(els => els.every(el => {
+  const lim = el.querySelector('.bt-lim'), name = el.querySelector('.bt-name')!, phone = innerWidth <= 760;
+  const nameOk = name.getBoundingClientRect().height <= 24;
+  if (!lim || !phone) return nameOk && el.getBoundingClientRect().height <= 48;
+  return nameOk && lim.getBoundingClientRect().top >= name.getBoundingClientRect().bottom - 1 && el.getBoundingClientRect().height <= 70;
+}));
+// Near limit sits behind the toolbar's filter icon; Expand all / Collapse all is the header's ⋯ item.
+const nearLimit = async (page: Page) => { await page.click('#bt-filter'); await page.click('#bt-filter-pop [data-bt-hot]'); };
+const allToggle = async (page: Page) => { await page.click('.rd-strat-head > .ph-more'); await page.click('.rd-strat-head > .ph-menu [data-bt-all]'); };
 const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluate(d => [...d.querySelectorAll('.bt-win,.bt-cap,.bt-line,.bt-foot,.tmodal-head')]
   .every(el => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().right <= innerWidth + 1));
 
@@ -245,23 +255,27 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       assert.ok(await bySpend(page), tag + ': most spend first');
       assert.equal(await page.locator('.bt-r:has([data-bt-fold="helpers"]) .bt-name').innerText(), 'Helpers', tag + ': helpers in a branch of their own');
       assert.equal(await page.locator('[data-bt-span][aria-selected="true"]').innerText(), '30 days', tag + ': 30 days to start');
+      assert.equal(await page.locator('.bt-top .rd-help').count(), 0, tag + ': no (?) explaining the page in the toolbar');
+      assert.equal(await page.locator('.rd-strat-head > .ph-more').count(), 1, tag + ': the header has its ⋯');
       const span = usage.find(u => u.group === 'bot');
       assert.equal((Date.parse(span!.to) - Date.parse(span!.from)) / 864e5, 29, tag + ': 30 days, today too');
       assert.equal(await amount(page, 'bot:builder'), '$150', tag + ': a bot, what it spent (billed and on subscriptions)');
-      assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', tag + ': and the window that binds');
-      assert.equal(await limit(page, 'bot:strategy-owner'), '70% · $20/day', tag + ': a day window binding says day');
+      // Spend and limit on one line, "$36 of $50" (style guide, Budget tree); the share is said on hover.
+      assert.equal(await limit(page, 'bot:builder'), '$5.70 of $6 per 30 min', tag + ': and the window that binds');
+      assert.equal(await page.locator(row('bot:builder') + ' .bt-lim').getAttribute('title'), '95% of the limit', tag + ': its share on hover');
+      assert.equal(await limit(page, 'bot:strategy-owner'), '$14 of $20 a day', tag + ': a day window binding says day');
       assert.equal(await amount(page, 'company'), '$771', tag + ': the company adds up everyone');
-      assert.equal(await limit(page, 'company'), '34% · $80/30m', tag + ': against its pool');
+      assert.equal(await limit(page, 'company'), '$27.38 of $80 per 30 min', tag + ': against its pool');
       assert.equal(await amount(page, 'bot:eng-lead'), '$80.00', tag + ': a bot with reports, its own spend');
-      assert.equal(await limit(page, 'bot:eng-lead'), '83% · $3/hour', tag + ': an hour limit not yet moved to 30 minutes still binds');
+      assert.equal(await limit(page, 'bot:eng-lead'), '$2.50 of $3 an hour', tag + ': an hour limit not yet moved to 30 minutes still binds');
       assert.equal(await amount(page, 'group:eng'), '$395', tag + ': a group, everyone under it');
-      assert.equal(await limit(page, 'group:eng'), '42% · $40/30m', tag + ': against its pool');
+      assert.equal(await limit(page, 'group:eng'), '$16.79 of $40 per 30 min', tag + ': against its pool');
       assert.equal(await limit(page, 'group:sales'), '', tag + ': a group with no pool, no limit');
       assert.equal(await amount(page, 'group:sales'), '$208', tag + ': what it spent');
       assert.equal(await limit(page, 'bot:sdr'), '', tag + ': a bot with no limit');
       assert.equal(await amount(page, 'person:cara'), '', tag + ': a person with no reports has no spend of its own');
       assert.equal(await amount(page, 'person:ana'), '$100', tag + ': a person with reports adds them up (Release Owner; the Strategy Owner is a helper)');
-      assert.equal(await limit(page, 'bot:release'), '100% · $4/30m', tag + ': a held bot at its limit');
+      assert.equal(await limit(page, 'bot:release'), '$4 of $4 per 30 min', tag + ': a held bot at its limit');
       assert.ok(await page.locator(row('bot:release') + ' .bt-paused').isVisible(), tag + ': a held bot says Paused');
       assert.ok(await page.locator(row('bot:release')).evaluate(el => el.classList.contains('bad')), tag + ': in the fail tone');
       assert.ok(await page.locator(row('bot:builder')).evaluate(el => el.classList.contains('warn')), tag + ': 95% warns');
@@ -279,7 +293,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       await page.click('[data-bt-fold="group:eng"]');
       assert.equal(await page.locator('[data-bt-open="bot:builder"]').count(), 0, tag + ': a folded group hides its rows');
       assert.equal(await page.locator('[data-bt-all]').innerText(), 'Expand all', tag + ': Expand all once anything is folded');
-      await page.click('[data-bt-all]');
+      await allToggle(page);
       assert.equal(await page.locator('[data-bt-open="bot:builder"]').count(), 1, tag + ': Expand all');
       assert.equal(await page.locator('[data-bt-all]').innerText(), 'Collapse all', tag + ': then Collapse all');
 
@@ -292,11 +306,26 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       assert.equal(await page.locator('#bt-body .bt-note').innerText(), 'No matches', tag + ': no matches');
       await page.fill('#bt-q', '');
       await page.locator('[data-bt-open="bot:sdr"]').waitFor();
-      assert.equal((await page.locator('#bt-hot-n').innerText()).trim(), '3', tag + ': how many are near a limit');
-      await page.click('[data-bt-hot]');
+      assert.equal((await page.locator('#bt-hot-mi').innerText()).trim(), '3', tag + ': how many are near a limit, on the Near limit item');
+      // The icon's badge counts the filters on, as on Tasks, Mail and Meetings: none yet.
+      assert.equal(await page.locator('#bt-hot-n').isHidden(), true, tag + ': no badge while no filter is on');
+      // The toolbar is the period, the search and the shared filter icon: no word buttons; ⋯ is the header's last control.
+      assert.equal(await page.locator('.bt-top > button:not(#bt-filter)').count(), 0, tag + ': no word buttons in the toolbar');
+      assert.equal(await page.locator('#bt-filter.on').count(), 0, tag + ': the filter is off to start');
+      await page.click('#bt-filter');
+      assert.equal(await page.locator('#bt-filter').getAttribute('aria-expanded'), 'true', tag + ': the filter menu opens');
+      assert.equal((await page.locator('#bt-filter-pop [data-bt-hot]').innerText()).replace(/\s+/g, ' ').trim(), 'Near limit 3', tag + ': Near limit, with its count');
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('#bt-filter').getAttribute('aria-expanded'), 'false');
+      await nearLimit(page);
+      assert.equal(await page.locator('#bt-filter.on').count(), 1, tag + ': the icon is pressed while it filters');
+      assert.equal(await page.locator('#bt-hot-n').innerText(), '1', tag + ': one filter on');
+      assert.equal(await page.locator('#bt-filter').getAttribute('aria-label'), 'Filter, near limit on');
+      assert.equal(await page.locator('#bt-filter-pop [data-bt-hot]').getAttribute('aria-checked'), 'true');
       assert.deepEqual(await keys(page), ['company', 'group:eng', 'bot:eng-lead', 'bot:builder', 'person:ana', 'bot:release'], tag + ': Near limit');
       await shot(page, 'small-desktop-near-limit');
-      await page.click('[data-bt-hot]');
+      await nearLimit(page);
+      assert.equal(await page.locator('#bt-hot-n').isHidden(), true, tag + ': the badge goes with the filter');
 
       // The period: 7 days reads each bot's week and the rows follow; limits stay; the choice is kept for the next visit.
       await page.click('[data-bt-span="7d"]');
@@ -305,14 +334,14 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       assert.equal((Date.parse(week!.to) - Date.parse(week!.from)) / 864e5, 6, tag + ': 7 days, today too');
       assert.equal(await page.locator('[data-bt-span][aria-selected="true"]').innerText(), '7 days', tag + ': 7 days picked');
       assert.ok(await bySpend(page), tag + ': still most spend first');
-      assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', tag + ': a limit does not move with the period');
+      assert.equal(await limit(page, 'bot:builder'), '$5.70 of $6 per 30 min', tag + ': a limit does not move with the period');
       assert.equal(await page.evaluate(() => (JSON.parse(localStorage.getItem('tico.budget')!) as {span: string}).span), '7d', tag + ': kept');
       await page.click('[data-bt-span="30d"]');
       await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-amt')?.textContent === '$150');
 
       // A bot: where its spend went, then its four windows with what it spent; only what changed is sent; a bad amount says which.
       await edit(page, 'bot:builder');
-      assert.equal(await page.locator('dialog[open] [data-went] h3').innerText(), '30 DAYS · $150', tag + ': the period and its spend');
+      assert.equal(await page.locator('dialog[open] [data-went] h3').innerText(), '30 days · $150', tag + ': the period and its spend');
       await page.locator('dialog[open] [data-went="tasks"]').waitFor();
       assert.deepEqual(await page.locator('dialog[open] [data-went="models"] .bt-line > span:first-child').allInnerTexts(), ['claude-sonnet-4-5', 'gpt-5.1'], tag + ': by model');
       assert.deepEqual(await page.locator('dialog[open] [data-went="models"] .bt-spent').allInnerTexts(), ['$105', '$45.00'], tag + ': with what each cost');
@@ -335,7 +364,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       assert.equal(await page.inputValue('dialog[open] [data-cap="bot:builder>bot:eng-lead"] input'), '5', tag + ': a new cap starts at 5');
       await page.fill('dialog[open] [data-cap="bot:builder>bot:eng-lead"] input', '4');
       await save(page);
-      await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-lim')?.textContent === '76% · $7.50/30m');
+      await page.waitForFunction(() => document.querySelector('.bt-r:has([data-bt-open="bot:builder"]) .bt-lim')?.textContent === '$5.70 of $7.50 per 30 min');
 
       // An hour limit not yet moved shows as its own row and is not sent back unless changed.
       await edit(page, 'bot:eng-lead');
@@ -346,7 +375,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       // A group's pool, and the company's pool and the default for each bot.
       usage.length = 0;
       await edit(page, 'group:eng');
-      assert.equal(await page.locator('dialog[open] [data-scope="pool"] h3').innerText(), 'POOL', tag + ': a group edits its pool');
+      assert.equal(await page.locator('dialog[open] [data-scope="pool"] h3').innerText(), 'Pool', tag + ': a group edits its pool');
       await page.locator('dialog[open] [data-went="models"]').waitFor();
       assert.deepEqual(usage.find(u => u.group === 'model')!.bots!.sort(), ['builder', 'eng-lead', 'reviewer', 'web-dev'], tag + ': where a group\'s went covers everyone under it');
       await page.fill('dialog[open] input[name="pool.daily_usd"]', '250');
@@ -385,6 +414,9 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       const tag = 'small phone';
       const {page, errors} = await open(browser, {viewport: PHONE});
       assert.equal(await sideways(page), false, tag + ': no sideways scroll');
+      // The search has the toolbar's row to itself but for the 44px filter icon.
+      const room = await page.evaluate(() => ({q: document.querySelector('#bt-q')!.getBoundingClientRect().width, f: document.querySelector('#bt-filter')!.getBoundingClientRect()}));
+      assert.ok(room.q >= 290 && room.f.width >= 44 && room.f.height >= 44, `${tag}: a wide search and a 44px filter icon: ${JSON.stringify(room)}`);
       assert.ok(await oneLine(page), tag + ': one-line rows');
       assert.ok(await page.locator('.bt-amt').evaluateAll(els => els.every(el => el.getBoundingClientRect().right <= innerWidth)), tag + ': amounts not clipped');
       await shot(page, 'small-phone');
@@ -433,7 +465,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
     {
       const {page, errors} = await open(browser, {capsStatus: 404});
       assert.equal(await page.locator('.bt-chip').count(), 0, '404: no caps chips');
-      assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', '404: spend still draws');
+      assert.equal(await limit(page, 'bot:builder'), '$5.70 of $6 per 30 min', '404: spend still draws');
       assert.deepEqual(errors, [], '404: no page errors');
       await page.close();
     }
@@ -442,7 +474,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       const {page, errors} = await open(browser, {usageStatus: 500});
       assert.equal(await page.locator('#bt-body .bt-note').count(), 1, 'usage down: one note');
       assert.equal(await amount(page, 'bot:builder'), '', 'usage down: no amount');
-      assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', 'usage down: limits still draw');
+      assert.equal(await limit(page, 'bot:builder'), '$5.70 of $6 per 30 min', 'usage down: limits still draw');
       assert.deepEqual(errors, [], 'usage down: no page errors');
       await page.close();
     }
@@ -466,7 +498,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       assert.deepEqual(folded.filter(k => k.startsWith('group:')).sort(), ['group:eng', 'group:mkt', 'group:ops', 'group:sales', 'group:support'], tag + ': the groups on top');
       assert.ok(await bySpend(page), tag + ': most spend first');
       assert.equal(await page.locator(row('company') + ' .bt-n').innerText(), String(5 + bots), tag + ': the company counts everyone');
-      assert.match(await limit(page, 'group:eng'), /^\d+% · \$600\/day$/, tag + ': a group pool');
+      assert.match(await limit(page, 'group:eng'), /^\$[\d,.]+ of \$600 a day$/, tag + ': a group pool');
       await shot(page, 'big-desktop');
       await page.evaluate(() => {
         BUDGET.tree = budgetTree(BUDGET.limits);
@@ -477,7 +509,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       assert.equal(all.length, 1 + 5 + 16 + bots, tag + ': Expand all shows every row: the company, 5 people, 16 groups, the bots');
       assert.ok(await oneLine(page), tag + ': one-line rows');
       await shot(page, 'big-desktop-expanded');
-      await page.click('[data-bt-all]');
+      await allToggle(page);
       assert.deepEqual(await keys(page), folded, tag + ': Collapse all');
       // Search opens what a match sits in.
       await page.fill('#bt-q', 'Mobile Developer 03');
@@ -489,12 +521,12 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       // Near limit: the paused and near bots, wherever they sit.
       const hot = Object.entries(team.limits.bots).filter(([, r]) => r.spent.day! >= 8).map(([slug]) => 'bot:' + slug);
       const full = team.caps.filter(c => c.count >= c.per_day).map(c => c.sender);
-      await page.click('[data-bt-hot]');
+      await nearLimit(page);
       const shown = await keys(page);
       for (const k of [...hot, ...full]) assert.ok(shown.includes(k), `${tag}: ${k} is near a limit`);
-      assert.equal(Number(await page.locator('#bt-hot-n').innerText()), new Set([...hot, ...full]).size, tag + ': the count');
+      assert.equal(Number(await page.locator('#bt-hot-mi').innerText()), new Set([...hot, ...full]).size, tag + ': the count');
       await shot(page, 'big-desktop-near-limit');
-      await page.click('[data-bt-hot]');
+      await nearLimit(page);
       await edit(page, 'group:eng');
       assert.equal(await page.inputValue('dialog[open] input[name="pool.daily_usd"]'), '600', tag + ': a group pool to edit');
       await shot(page, 'big-desktop-group');
@@ -508,13 +540,13 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       const {page, errors} = await open(browser, {team: big(), viewport: PHONE});
       assert.equal(await sideways(page), false, tag + ': no sideways scroll');
       await shot(page, 'big-phone');
-      await page.click('[data-bt-all]');
+      await allToggle(page);
       assert.equal(await sideways(page), false, tag + ': none with everything open');
       assert.ok(await oneLine(page), tag + ': one-line rows, the deepest too');
       assert.ok(await page.locator('.bt-amt').evaluateAll(els => els.every(el => el.getBoundingClientRect().right <= innerWidth)), tag + ': amounts not clipped');
       await page.evaluate(() => document.querySelector('[data-bt-open="bot:tier1-lead"]')!.scrollIntoView({block: 'start'}));
       await shot(page, 'big-phone-expanded');
-      await page.click('[data-bt-all]');
+      await allToggle(page);
       await page.fill('#bt-q', 'sdr');
       await page.locator('[data-bt-open="bot:outbound-01"]').waitFor();
       await shot(page, 'big-phone-search');

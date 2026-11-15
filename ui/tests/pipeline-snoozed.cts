@@ -1,11 +1,14 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of snoozed tasks in a pipeline's view (task-pipelines.ts): in the desktop columns, the desktop
 // list and the phone's stage (390 px), a snoozed task stays in its stage after every task that is not, dimmed, with the
-// day it wakes (or Snoozed when its snooze has no end) and a moon that is its one button: Unsnooze (its label and title,
-// no words beside it, a 40 px tap area on a phone). One click wakes it without opening it; a refusal says why. A snoozed
+// day it wakes in the shared day words (format.ts dayWords: "Today", "Tomorrow", "Nov 18"; or Snoozed when its snooze
+// has no end) and a moon that is its one button: Unsnooze (its label and title, no words beside it, a 44 px tap area on a
+// phone that reaches no other card). One click wakes it without opening it; a refusal says why. A snoozed
 // task holds no slot, so the stage's number leaves it out. The fake server answers `snoozed=hide` as backend/hubdb.py
 // does: it leaves snoozed tasks out.
 // Run: npm run build:ui && node ui/tests/pipeline-snoozed.cts
+/** The app's shared day words (ui/app/format.ts), read inside page.evaluate. */
+declare function dayWords(value: string | number | Date | null | undefined, opts?: {weekday?: boolean}): string;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -78,7 +81,7 @@ async function drawn(page: Page, rows: string) {
   }));
 }
 
-function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
+function check(where: string, rows: Awaited<ReturnType<typeof drawn>>, wake: string): void {
   assert.deepEqual(rows.map(r => r.id), [...AWAKE, ...ASLEEP], `${where}: the snoozed tasks sit after all the others`);
   const by = Object.fromEntries(rows.map(r => [r.id, r]));
   for (const id of AWAKE) assert.equal(by[id]!.label, null, `${where}: ${id} is awake, with no sleep mark`);
@@ -94,7 +97,7 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
     assert.equal(r.markText, '', `${where}: ${id}'s moon has no words`);
     assert.match(r.rowTip ?? '', /Back after the launch/, `${where}: ${id}'s tip keeps the snooze's why`);
   }
-  assert.match(by['s1']!.text, /Nov 14$/, `${where}: the wake day shows`);
+  assert.ok(wake && by['s1']!.text.endsWith(wake), `${where}: the wake day shows in the shared words (${wake}): ${by['s1']!.text}`);
   assert.match(by['s2']!.text, /Snoozed$/, `${where}: a snooze with no end says Snoozed`);
   assert.ok(!rows.some(r => /On ice/.test(r.text)), `${where}: On ice is said nowhere`);
 }
@@ -106,13 +109,15 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
     const desk = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block', locale: 'en-US', timezoneId: 'UTC'});
     await serve(desk, errors);
     await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=columns');
-    check('columns', await drawn(desk, '[data-pv-col="build"] .tk-card'));
+    // s1 wakes Nov 14, 08:00 UTC: "Today", "Tomorrow" or "Nov 14" by the day the check runs, never a hand-made date.
+    const wake = await desk.evaluate(() => dayWords('2026-11-14T08:00:00Z'));
+    check('columns', await drawn(desk, '[data-pv-col="build"] .tk-card'), wake);
     // Build has a limit of 3: the two snoozed tasks hold no slot.
     assert.equal((await desk.locator('[data-pv-col="build"] .pv-stage-n').innerText()).trim(), '2/3', 'snoozed tasks hold no slot');
 
     await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=list');
     await desk.locator('.pv-group').first().waitFor();
-    check('list', await drawn(desk, '.pv-group[aria-label="Build"] .tk-row'));
+    check('list', await drawn(desk, '.pv-group[aria-label="Build"] .tk-row'), wake);
 
     const phone = await browser.newPage({viewport: {width: 390, height: 844}, serviceWorkers: 'block', locale: 'en-US', timezoneId: 'UTC',
       isMobile: true, hasTouch: true});
@@ -120,14 +125,21 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
     await phone.goto('http://tico-ui.test/#/tasks?pipeline=eng');
     await phone.locator('.pv-is-phone').waitFor();
     await phone.locator('[data-pv-tab="build"]').click();
-    check('phone', await drawn(phone, '.pv-phone .tk-card'));
+    check('phone', await drawn(phone, '.pv-phone .tk-card'), wake);
     const wide = await phone.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(wide <= 390, `the phone page does not scroll sideways (${wide} px)`);
+    // The moon's 44 px tap area (.tap-mark) is the moon's to the edges of that area, and reaches no other card: a tap just
+    // inside it lands on the moon, and the area stays inside its own card (a snoozed card is 44 px tall on a phone), so it
+    // never meets the next card's moon.
     const tap = await phone.locator('.pv-phone [data-pv-unsnooze="s1"]').evaluate(el => {
-      const after = getComputedStyle(el, '::after');
-      return [parseFloat(after.width), parseFloat(after.height)];
+      const before = getComputedStyle(el, '::before'), r = el.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const card = el.closest('[data-task]')!.getBoundingClientRect();
+      const hit = (x: number, y: number) => el.contains(document.elementFromPoint(x, y));
+      return {w: parseFloat(before.width), h: parseFloat(before.height),
+        hits: [hit(cx - 20, cy), hit(cx + 20, cy), hit(cx, cy - 20), hit(cx, cy + 20)],
+        clear: card.top <= cy - 22 + 0.5 && card.bottom >= cy + 22 - 0.5};
     });
-    assert.deepEqual(tap, [40, 40], 'the moon is a 40 px tap area on a phone');
+    assert.deepEqual(tap, {w: 44, h: 44, hits: [true, true, true, true], clear: true}, 'the moon is a 44 px tap area on a phone, clear of the other cards');
 
     // One click on the moon wakes it, and does not open the task. A refusal says the engine's reason above the stages.
     await desk.goto('http://tico-ui.test/#/tasks?pipeline=eng&layout=columns');

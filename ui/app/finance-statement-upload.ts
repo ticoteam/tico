@@ -45,19 +45,20 @@ async function finStmtBase64(file: File): Promise<string> {
   for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...Array.from(bytes.subarray(i, i + 0x8000)));
   return btoa(text);
 }
-// "October 2026" for a statement that ends in October; "Oct 02" for a row's day.
+// "October 2026" for a statement that ends in October; "Oct 2" for a row's day (no leading zero, style guide "Dates and times").
 const finStmtMonth = (day: string): string => new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', {month: 'long', year: 'numeric', timeZone: 'UTC'});
-const finStmtDay = (day: string): string => new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', {month: 'short', day: '2-digit', timeZone: 'UTC'});
+const finStmtDay = (day: string): string => new Date(day + 'T12:00:00Z').toLocaleDateString('en-US', {month: 'short', day: 'numeric', timeZone: 'UTC'});
 
 // One row of the review. A row already in Tico has no attribution (it posts nothing).
 function finStmtRowHtml(x: FinStmtRow): string {
   const isNew = x.status === 'new';
-  const attributed = !isNew ? '<span class="muted">—</span>'
+  // A new row is what the post adds, so it is the pill; one already in Tico is a plain muted word (style guide pills).
+  const attributed = !isNew ? ''
     : x.attribution ? `${esc(x.attribution.account)} <span class="muted">(rule)</span>` : '<span class="muted">Unattributed</span>';
-  const pill = isNew ? '<span class="pill ok">New</span>' : '<span class="pill">Already in Tico</span>';
-  return `<tr><td class="fin-nowrap">${esc(finStmtDay(x.date))}</td><td>${esc(x.description)}</td>
-    <td class="fin-nowrap">${esc(finStmtUsd(x.amount))}</td><td>${x.vendor?.name ? esc(x.vendor.name) : '<span class="muted">—</span>'}</td>
-    <td>${attributed}</td><td>${pill}</td></tr>`;
+  const pill = isNew ? '<span class="pill ok">New</span>' : '<span class="muted">Already in Tico</span>';
+  return `<tr><td class="fin-nowrap" data-sk="Date">${esc(finStmtDay(x.date))}</td><td class="fin-tt">${esc(x.description)}</td>
+    <td class="fin-nowrap fin-amt">${esc(finStmtUsd(x.amount))}</td><td data-k="Vendor">${x.vendor?.name ? esc(x.vendor.name) : ''}</td>
+    <td data-k="Line">${attributed}</td><td data-sk="Status">${pill}</td></tr>`;
 }
 
 // The review: a header line (account, month, file), the tie-out with its warning when the rows miss the statement, then
@@ -72,7 +73,7 @@ function finStmtReviewHtml(money: FinStmtMoney, r: FinStmtReview): string {
     <p class="fin-stmt-tie">Opening ${esc(finStmtUsd(t.opening))} + ${inWord} ${esc(finStmtUsd(t.added))} − ${outWord} ${esc(finStmtUsd(t.removed))}
       = Ends at ${esc(finStmtUsd(t.ends))}${says}${off}</p>
     ${flip}
-    <div class="fin-scroll"><table class="fin-t fin-stmt-t"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Vendor</th>
+    <div class="fin-scroll"><table class="fin-t fin-stmt-t fin-rows fin-rows-tt"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Vendor</th>
       <th>Attributed to</th><th>Status</th></tr></thead><tbody>${r.rows.map(finStmtRowHtml).join('')}</tbody></table></div>`;
 }
 

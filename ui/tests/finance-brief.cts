@@ -81,9 +81,15 @@ async function shot(page: Page, name: string) {
       await block.waitFor();
       assert.equal(await block.locator('h2').innerText(), 'What changed', 'the heading');
       assert.deepEqual(await block.locator('li').allInnerTexts(), LINES, 'the lines, as the server cut them');
-      assert.match(await block.locator('.fin-brief-at').innerText(), /^as of \d{1,2}:\d{2}/, 'the time they were worked out');
+      // Forty minutes ago is yesterday just after midnight, and then the day comes first ("Sat, Nov 14, 11:29 PM").
+      assert.match(await block.locator('.fin-brief-at').innerText(), /^as of (\w{3}, \w{3} \d{1,2}, )?\d{1,2}:\d{2}/, 'the time they were worked out');
       assert.deepEqual(errors, [], 'no page errors');
       await shot(page, 'finance-brief');
+      // What changed is the P&L's: another tab draws its own table first, with no brief over it.
+      await page.evaluate(() => { location.hash = '#/finance/balance'; });
+      await page.locator('#fin-head [data-fin-tab="balance"].cur').waitFor();
+      await page.waitForLoadState('networkidle');
+      assert.equal(await page.locator('#fin-brief .fin-brief').count(), 0, 'no brief off the P&L');
       await page.close();
     }
     {

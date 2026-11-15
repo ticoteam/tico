@@ -58,9 +58,10 @@ EVERYONE = {"*", "all", "every", "everyone", "all-bots", "all_bots", "computers"
 
 
 def _owner(c: Any) -> str | None:
+    """The Tools page's own owner: never the General Manager standing in for a company with none (page_owners)."""
     from . import page_owners
 
-    return page_owners.owner(c, secret_drop.TOOLS_PAGE)
+    return page_owners.owner(c, secret_drop.TOOLS_PAGE, fallback=False)
 
 
 def _members(c: Any, thread: Row) -> list[str]:

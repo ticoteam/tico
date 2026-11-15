@@ -72,7 +72,7 @@ const NOISE_ISSUES = [
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
     const settle = async () => { await page.evaluate(async () => { await refresh(false); await hlRefresh(); }); };
     // Status dots in the sidebar footer, whatever their class: what a person sees as a small coloured circle.
-    const dots = () => page.evaluate(() => [...(document.querySelectorAll('.side-utility *') as unknown as Element[])].filter(el => {
+    const dots = () => page.evaluate(() => [...(document.querySelectorAll('.account-wrap *') as unknown as Element[])].filter(el => {
       if (el.closest('.account-status')) return false;   // the bullets of the lines themselves
       const box = el.getBoundingClientRect(), css = getComputedStyle(el);
       return box.width > 0 && box.width <= 12 && Math.abs(box.width - box.height) < 1 && parseFloat(css.borderRadius) >= box.width / 2 - 1
@@ -81,6 +81,47 @@ const NOISE_ISSUES = [
     const dot = page.locator('#account .account-dot');
     const menuLines = async () => { await page.evaluate(() => setAccountMenu(true)); await page.locator('#account-menu').waitFor(); return page.locator('#account-menu .account-status-line'); };
     const texts = (locator: import('playwright').Locator) => locator.locator('.account-status-text').allInnerTexts();
+
+    // The account button is your picture with an up arrow, last in the foot's one row; its menu opens upward over the
+    // row: Settings, Learnings, Usage, Changelog, Take the tour, then what applies (Switch organization, Sign out). No
+    // Replay. A menu to the keyboard: the arrows move through it, Esc closes it and gives focus back.
+    const button = page.locator('#account');
+    assert.deepEqual([await button.getAttribute('aria-haspopup'), await button.getAttribute('aria-expanded')], ['menu', 'false']);
+    assert.equal(await button.locator('.account-face .av').count(), 1, 'your picture');
+    assert.equal(await button.locator('.account-up').evaluate(el => [el.textContent, getComputedStyle(el).transform]).then(([t, m]) => t === 'expand_more' && m !== 'none'), true, 'an up arrow');
+    await button.click();
+    const acctMenu = page.locator('#account-menu');
+    await acctMenu.waitFor();
+    assert.equal(await acctMenu.getAttribute('role'), 'menu');
+    const items = () => acctMenu.locator('[role="menuitem"]').evaluateAll(els => els.filter(el => (el as HTMLElement).checkVisibility()).map(el => [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()));
+    const shownItems = await items();
+    assert.deepEqual(shownItems.slice(0, 5), ['Settings', 'Learnings', 'Usage', 'Changelog', 'Take the tour'], JSON.stringify(shownItems));
+    assert.ok(!shownItems.includes('Replay'), 'no Replay');
+    assert.ok(!shownItems.includes('Switch organization'), 'one organization: no Switch organization');
+    await acctMenu.evaluate(el => Promise.all(el.getAnimations().map(x => x.finished)));   // it pops in from a little smaller
+    const geo = await page.evaluate(() => { const b = (s: string) => document.querySelector(s)!.getBoundingClientRect(), m = b('#account-menu'), row = b('.side-ask');
+      return {above: m.bottom <= row.top, left: Math.round(m.left - row.left), right: Math.round(row.right - m.right)}; });
+    assert.deepEqual(geo, {above: true, left: 0, right: 0}, 'it opens upward over the whole row');
+    await page.keyboard.press('Escape');
+    await acctMenu.waitFor({state: 'hidden'});
+    await button.focus();
+    await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(() => document.activeElement?.id === 'account-settings');
+    await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim().endsWith('Learnings')), true);
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await page.evaluate(() => document.activeElement === [...document.querySelectorAll<HTMLElement>('#account-menu [role="menuitem"]')].filter(el => el.checkVisibility()).at(-1)), true, 'round to the last');
+    await page.keyboard.press('Home');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'account-settings');
+    await page.keyboard.press('Escape');
+    await acctMenu.waitFor({state: 'hidden'});
+    assert.deepEqual([await page.evaluate(() => document.activeElement?.id), await button.getAttribute('aria-expanded')], ['account', 'false']);
+    // Enter opens it at its first item.
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.activeElement?.id === 'account-settings');
+    await page.keyboard.press('Escape');
+    await acctMenu.waitFor({state: 'hidden'});
 
     // A server being remote is not a portal connection. A linked company supplies its own portal URL.
     await page.locator('#account').click();
@@ -94,7 +135,7 @@ const NOISE_ISSUES = [
     assert.equal(await administration.getAttribute('href'), portal);
     assert.equal(await administration.getAttribute('target'), '_blank');
     assert.match((await administration.getAttribute('rel'))!, /noopener/);
-    assert.equal(await page.getByRole('link', {name: 'Admin', exact: true}).count(), 1);
+    assert.equal(await page.getByRole('menuitem', {name: 'Admin', exact: true}).count(), 1);
     await page.context().route(portal, route => route.fulfill({contentType: 'text/html', body: '<title>Account portal</title>'}));
     const popupOpened = page.waitForEvent('popup');
     await administration.click();
@@ -222,7 +263,7 @@ const NOISE_ISSUES = [
     await phone.locator('#account').tap();
     const phoneLines = phone.locator('#account-menu .account-status-line');
     await phoneLines.first().waitFor();
-    assert.equal(await phone.getByRole('link', {name: 'Admin', exact: true}).getAttribute('href'), portal);
+    assert.equal(await phone.getByRole('menuitem', {name: 'Admin', exact: true}).getAttribute('href'), portal);
     assert.deepEqual(await texts(phoneLines), ["Bots aren't running: no computer is online"]);
     const menu = (await phone.locator('#account-menu').boundingBox())!;
     assert.ok(menu.x >= 0 && menu.x + menu.width <= 390, `the menu fits a phone: ${JSON.stringify(menu)}`);

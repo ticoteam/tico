@@ -100,6 +100,13 @@ def test_nothing_is_not_a_value_and_the_team_icon_is_an_upload():
     assert refused.value.status == 422 and e.card in refused.value.detail
 
 
+def test_the_theme_is_found_but_has_no_request_to_plan():
+    e = ENTRY("app.theme")
+    with pytest.raises(Problem) as refused:
+        settings_catalog.plan(None, None, _owner(via=""), e, "dark")
+    assert refused.value.status == 422 and e.card in refused.value.detail
+
+
 def test_find_lists_admins_see_sql_with_its_place_and_class(api):
     found = get(api, "settings/catalog?q=sql")["settings"]
     sql = next(s for s in found if s["key"] == "team.rules.admin_sql")

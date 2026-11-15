@@ -9,12 +9,12 @@ function botPauseHTML(slug: string, state: BotPauseState | null | undefined, err
   if (!state) return error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : '<p class="muted" role="status">Loading…</p>';
   const name = botDisplayName(slug);
   const paused = state.state === 'paused', record = state.paused_by;
-  const stamp = record && Number.isFinite(Date.parse(record.at))
-    ? `${new Date(record.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
+  // When, in the shared words (format.ts): "today, 10:15 AM", "Tue, Oct 28, 12:30 PM"; never an ISO stamp or 24-hour time.
+  const stamp = record && Number.isFinite(Date.parse(record.at)) ? timeSaid(record.at) : '';
   const can = state.can_control && !state.company_paused && ['active', 'paused'].includes(state.state);
   const tasks = paused && state.open_tasks ? ` <a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a>` : '';
   return `<div class="bot-pause-row">
-    <div class="bot-pause-copy"><div class="bot-pause-title${paused ? ' bot-pause-record' : ''}" role="status" aria-live="polite" aria-atomic="true">${paused ? (stamp ? `Paused by ${esc(record!.name)} on ${esc(stamp)}` : 'Paused') : 'Pause this bot'}</div>
+    <div class="bot-pause-copy"><div class="bot-pause-title${paused ? ' bot-pause-record' : ''}" role="status" aria-live="polite" aria-atomic="true">${paused ? (stamp ? `Paused by ${esc(record!.name)}, ${esc(stamp)}` : 'Paused') : 'Pause this bot'}</div>
       <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.owner_id || 'its operator')} to unpause.` : ''}`
         : 'Stops new tasks, messages and routines; a turn in progress is interrupted.'}</p>
       ${state.company_paused ? '<p class="muted">Company is paused for billing. <a href="#/settings/billing">Add credit</a></p>' : ''}
