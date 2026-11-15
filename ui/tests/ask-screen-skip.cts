@@ -1,8 +1,8 @@
 import type {Route} from 'playwright';
 // Offline browser check of Skip on the ask screen (task #181), against a fake of the new routes, on a 390 px phone and
 // on a desktop:
-// - every item that is not an ask (your own task here) shows a Skip button with at least a 40 px tap area, on every
-//   width; an ask, a typed choice with no answer row of its own included, shows Snooze in its place and no Skip
+// - your own task has Skip in its ⋯ (the row an ask has: Done, snooze icon, ⋯): ⋯ at least 40 px, Skip a menu item
+//   44 px tall on a phone; an ask, a typed choice with no answer row of its own included, shows Snooze and no Skip
 //   (#3769, ask-screen-snooze.cts); the phone has ‹ › too (task #454);
 // - Skip goes to the next item and sends nothing: the skipped item is not answered or changed;
 // - at the last item, Skip wraps to the first, which is still waiting;
@@ -76,12 +76,17 @@ const Q = ['Write the plan note', 'Which region first?', 'Book the venue'];
         assert.equal(await dialog.locator('[data-dc="prev"]').isDisabled(), n === 1, `${label}: ‹ at ${n} of ${of}`);
         assert.equal(await dialog.locator('[data-dc="next"]').isDisabled(), n === of, `${label}: › at ${n} of ${of}`);
       };
-      const skip = dialog.locator('[data-dc="skip"]'), snooze = dialog.locator('[data-dc="snooze"]');
+      const skip = dialog.locator('[data-dc="skip"]'), snooze = dialog.locator('[data-dc="snooze"]'), more = dialog.locator('[data-dc="ask-more"]');
       const skipBox = async () => {
+        assert.equal(await skip.count(), 0, `${label}: Skip waits in ⋯`);
+        const mb = (await more.boundingBox())!;
+        assert.ok(mb.width >= 40 && mb.height >= 40 && mb.y + mb.height <= viewport.height, `${label}: ⋯ is ${mb.width}x${mb.height}, in view`);
+        await more.click();
         assert.equal(await skip.count(), 1, `${label}: one Skip on the card`);
         assert.ok(await skip.isVisible(), `${label}: Skip shows`);
         const box = (await skip.boundingBox())!;
-        assert.ok(box.width >= 40 && box.height >= 40, `${label}: Skip's tap area is ${box.width}x${box.height}`);
+        // A menu item: 44 px tall on a phone, a menu's 36 on a desktop (the snooze menu's own sizes).
+        assert.ok(box.width >= 40 && box.height >= (label === 'phone' ? 44 : 36), `${label}: Skip's tap area is ${box.width}x${box.height}`);
         assert.ok(box.y >= 0 && box.y + box.height <= viewport.height, `${label}: Skip is in view`);
       };
       // Answers come first in the walk: the typed choice, then your two tasks.

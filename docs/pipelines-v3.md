@@ -708,7 +708,7 @@ your own tasks and one-tap fixes.
   cause goes. A stage reading PRs with no GitHub App installed is one: **Connect GitHub**, for the company's owner,
   links to Tools, GitHub (**Choose a repository** once installed with none In use); its tasks wake nobody until then,
   and each bot is woken once after (docs/github-app.md).
-- **Yours:** a task you own. Buttons: Done, Snooze, Give to….
+- **Yours:** a task you own. Done, then the snooze icon and ⋯ (Give to…, Skip), the row an ask has.
 - **Stuck:** the ladder or Late reached you. Buttons: Try again, Reassign, Move back, Close, Snooze.
 
 Stored: a requirement added to one task (a question, a held action, an OK someone added). Read: a stage's OK (from the

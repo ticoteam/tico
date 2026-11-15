@@ -1066,7 +1066,8 @@ function decidePaintSide(st: DecState) {
   } else if (question) {
     body = decideQuestionHTML(st, it, typed);
   } else if (kind === 'yours') {
-    body = `${decideReplyHTML(st, it)}<div class="dc-acts dc-acts-row">${decideBtn('done', 'Done', true, busy)}${decideSnoozeHTML(st, 'Snooze')}${decideBtn('give', 'Give to…', false, busy)}</div>${decideMoreHTML(st, it)}`;
+    // The row an ask has: Done, then the snooze icon and ⋯ (Give to…, Skip) at the right.
+    body = `${decideReplyHTML(st, it)}<div class="dc-acts dc-acts-row">${decideBtn('done', 'Done', true, busy)}${decideSnoozeHTML(st)}${decideAskMoreHTML(st, it)}</div>${decideMoreHTML(st, it)}`;
   } else if (kind === 'stuck') {
     // Stuck because someone can't see the private task: one button lets exactly them see it and moves it on, and says
     // what they get before the press (task #392). Else Try again.
@@ -1089,10 +1090,10 @@ function decidePaintSide(st: DecState) {
   const caret = same && typing instanceof HTMLTextAreaElement && host.contains(typing) && typing.id
     ? {id: typing.id, from: typing.selectionStart, to: typing.selectionEnd, dir: typing.selectionDirection ?? undefined} : null;
   host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
-  // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there. An
-  // item with no row of its own (a typed choice) gets one.
+  // An ask has Snooze (for you alone) at the end of the answer row, on every width; anything else has Skip there (your
+  // own task: in its ⋯). An item with no row of its own (a typed choice) gets one.
   const ask = it.kind === 'ask';
-  if (ask || decideLive(st).length > 1) {
+  if (ask || (kind !== 'yours' && decideLive(st).length > 1)) {
     const card = host.firstElementChild!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
     const end = ask ? decideSnoozeHTML(st) : `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
     if (row) row.insertAdjacentHTML('beforeend', end); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${end}</div>`);
@@ -1250,11 +1251,14 @@ function decideQuestionHTML(st: DecState, it: NeedsEntry, typed: TaskReq['typed'
 }
 /** ⋯ at the end of a question's row: a bot's "I don't know, explain" and "Give it back" (answers.DONT_KNOW and
     GIVE_BACK, which Tico adds to every bot's question), and Ask back, which sends the box's words to whoever asked as a
-    comment and leaves the question open. '' when it would hold nothing (a stage's question: no one to ask back). */
+    comment and leaves the question open. On your own task: Give to…, and Skip when there is a next. '' when it would
+    hold nothing (a stage's question: no one to ask back). */
 function decideAskMoreHTML(st: DecState, it: NeedsEntry): string {
   const busy = st.busy ? ' disabled' : '', open = st.more === 'ask', bot = decideAsker(it).startsWith('bot:');
-  const items: [string, string][] = [...(bot ? [['dont-know', DEC_DONT_KNOW], ['give-back', DEC_GIVE_BACK]] as [string, string][] : []),
-    ...(decideReplyTo(it) ? [['askback', 'Ask back']] as [string, string][] : [])];
+  const items: [string, string][] = decideKind(it) === 'yours'
+    ? [['give', 'Give to…'], ...(decideLive(st).length > 1 ? [['skip', 'Skip']] as [string, string][] : [])]
+    : [...(bot ? [['dont-know', DEC_DONT_KNOW], ['give-back', DEC_GIVE_BACK]] as [string, string][] : []),
+      ...(decideReplyTo(it) ? [['askback', 'Ask back']] as [string, string][] : [])];
   if (!items.length) return '';
   const btn = `<button type="button" class="dc-icon dc-snz-b dc-more-b" data-dc="ask-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded="${open}"${busy}>⋯</button>`;
   const menu = open ? `<span class="dc-snz" role="menu" aria-label="More">${items.map(([k, l]) =>
@@ -1876,8 +1880,13 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       st.more = 'snooze'; st.snzOther = false; decidePaintSide(st);
       ($('.decide .dc-snz [role="menuitem"]') as HTMLElement | null)?.focus({preventScroll: true});
       return;
-    case 'give': case 'back':
-      st.more = st.more === what ? '' : what; decidePaintSide(st); return;
+    case 'give': case 'back': {
+      // Give to… from your own task's ⋯: the menu closes and its picker takes the focus the menu item had.
+      const menu = st.more === 'ask';
+      st.more = st.more === what ? '' : what; decidePaintSide(st);
+      if (menu) ($('.decide .dc-more .gv-field button, .decide .dc-more .gv-field input:not([type="hidden"])') as HTMLElement | null)?.focus({preventScroll: true});
+      return;
+    }
     case 'snooze-other':
       st.snzOther = true; decidePaintSide(st);
       decideSnzBox()?.focus({preventScroll: true});
