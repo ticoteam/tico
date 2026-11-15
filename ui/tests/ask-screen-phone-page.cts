@@ -6,7 +6,7 @@ import type {Route} from 'playwright';
 //   phone: a page with no styles of its own gets an h1 near 22 px and side padding (htmlPreviewDoc's base styles);
 // - it opens clean: no blocks marked and no diff; the version control in the one meta line under it lists each version
 //   and "Changes since v2", which marks the changed blocks;
-// - the meta line is one control holding who asked (cut first when long), the stage, the version and Jev's mark, then
+// - the meta line is pinned on the buttons (on the card without scrolling), one control holding who asked (cut first when long), the stage, the version and Jev's mark, then
 //   the task as "#80 ↗"; its menu has the date and Jev's word and reason in full; no history cards, no
 //   "Open task" row, no task title over it on a phone;
 // - Notes is one row with Attach inside it, 44 px tall, and Tico's send-back note fills it in full.
@@ -113,7 +113,10 @@ const VIEW = {width: 390, height: 844};
     const bar = (await dialog.locator('[data-dc="approve"] >> xpath=..').boundingBox())!;
     const fb = hasFrame ? (await frame.boundingBox())! : {x: 0, y: 999, width: 0, height: 0};
     check(fb.y < 140, `the page starts near the top (${fb.y})`);
-    check(fb.y + fb.height >= bar.y - 24, `the page reaches the buttons (${fb.y + fb.height} vs ${bar.y})`);
+    // The meta line (who asked) is pinned on the buttons, on the card without scrolling; the page reaches it.
+    const pin = (await dialog.locator('.dc-meta').boundingBox())!;
+    check(Math.abs(pin.y + pin.height - bar.y) <= 1 && pin.height >= 44 && pin.height <= 48, `the meta line sits on the buttons, one 44 px row (${JSON.stringify(pin)} vs ${bar.y})`);
+    check(fb.y + fb.height >= pin.y - 24, `the page reaches the meta line (${fb.y + fb.height} vs ${pin.y})`);
     if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-before-line.png')});
 
     // Text sized for a phone, with side padding.
@@ -170,8 +173,19 @@ const VIEW = {width: 390, height: 844};
     await dialog.locator('.dc-main').evaluate(e => { e.scrollTop = e.scrollHeight; });
     await p.waitForTimeout(100);
     if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-scrolled.png')});
-    const nb2 = (await notes.boundingBox())!, bar2 = (await dialog.locator('[data-dc="approve"] >> xpath=..').boundingBox())!;
-    check(nb2.y + nb2.height <= bar2.y, `Notes ends above the buttons at the end of the scroll (${nb2.y + nb2.height} > ${bar2.y})`);
+    const nb2 = (await notes.boundingBox())!, pin2 = (await dialog.locator('.dc-meta').boundingBox())!;
+    check(nb2.y + nb2.height <= pin2.y, `Notes ends above the pinned meta line at the end of the scroll (${nb2.y + nb2.height} > ${pin2.y})`);
+    check(Math.abs(pin2.y - pin.y) <= 1, 'the meta line stays put while the page scrolls');
+    await dialog.locator('.dc-main').evaluate(e => { e.scrollTop = 0; });
+
+    // Send back with no note takes the person to Notes, under the page: focused, in view over the pinned bar.
+    await dialog.locator('[data-dc="sendback"]').click();
+    await p.waitForTimeout(300);
+    const nb3 = (await notes.boundingBox())!;
+    check(await notes.evaluate(e => e === document.activeElement), 'an empty Send back focuses Notes');
+    check(nb3.y >= 0 && nb3.y + nb3.height <= pin.y + 1, `an empty Send back brings Notes into view (${nb3.y}..${nb3.y + nb3.height} vs ${pin.y})`);
+    check(await notes.getAttribute('placeholder') === 'Say what to change', 'and asks for words');
+    await notes.evaluate(e => e.blur());
     await dialog.locator('.dc-main').evaluate(e => { e.scrollTop = 0; });
 
     // The version control: each version on one line, and Changes since v2, which marks the changed blocks.

@@ -1057,18 +1057,23 @@ function decidePaintSide(st: DecState) {
   decideNeedsText($('.decide')!);
   decideBarRoom();
 }
-/** On a phone the answer row is pinned to the bottom (decide.css): the scroll keeps its height clear at the end and the
-    Undo bar sits above it. 0 where no row is pinned. */
+/** On a phone the answer row is pinned to the bottom (decide.css), with a page's meta line pinned on top of it: the
+    scroll keeps their height clear at the end (--dc-bar-h) and the Undo bar sits above them; the meta line sits on the
+    row (--dc-acts-h). 0 where no row is pinned. */
 function decideBarRoom() {
-  const row = decideBarSet();
+  const row = decideBarSet(), meta = row ? decideBarMeta() : null;
   // Measured again whenever its height changes without a redraw (the font arriving, a long label wrapping).
   DEC_BAR_WATCH?.disconnect();
   if (row) DEC_BAR_WATCH?.observe(row, {box: 'border-box'});   // padding too: the safe-area inset
+  if (meta) DEC_BAR_WATCH?.observe(meta, {box: 'border-box'});
 }
 const decideBarRow = () => decidePhone() ? $('.decide .dc-side>div:not(.dc-done)>.dc-acts:last-child') as HTMLElement | null : null;
+const decideBarMeta = () => $('.decide .dc-side>div:not(.dc-done)>.dc-meta') as HTMLElement | null;
 function decideBarSet(): HTMLElement | null {
-  const root = $('.decide') as HTMLElement | null, row = decideBarRow();
-  root?.style.setProperty('--dc-bar-h', `${row ? row.offsetHeight : 0}px`);
+  const root = $('.decide') as HTMLElement | null, row = decideBarRow(), meta = row ? decideBarMeta() : null;
+  const h = row ? row.offsetHeight : 0;
+  root?.style.setProperty('--dc-acts-h', `${h}px`);
+  root?.style.setProperty('--dc-bar-h', `${h + (meta ? meta.offsetHeight : 0)}px`);
   return row;
 }
 const DEC_BAR_WATCH = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { decideBarSet(); });
@@ -1646,7 +1651,8 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       if (!note) {
         const box = $('#dc-notes') as HTMLTextAreaElement | null;
         DEC_ASK_NOTE = it.id;
-        if (box) { box.placeholder = 'Say what to change'; box.focus(); }
+        // Notes is under the page on a phone: brought into view over the pinned bar (scroll-padding-bottom).
+        if (box) { box.placeholder = 'Say what to change'; box.focus({preventScroll: true}); box.scrollIntoView({block: 'nearest'}); }
         return;
       }
       const files = await decideFilesReady(st, it.id);
