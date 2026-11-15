@@ -9,12 +9,6 @@ const STYLE_GUIDE = '#/style-guide';
 const STYLE_GUIDE_FILES = '/tico/ui/style-guide/';
 let STYLE_GUIDE_LOAD = 0, STYLE_GUIDE_CSS: Promise<void> | null = null;
 
-function styleGuideRoute(r: string): boolean {
-  if ((r.split('?')[0] ?? '') !== STYLE_GUIDE) return false;
-  void pageStyleGuide();
-  return true;
-}
-
 // The stylesheets are linked once; a failed load lets the next open try again.
 function styleGuideStyles(): Promise<void> {
   if (STYLE_GUIDE_CSS) return STYLE_GUIDE_CSS;

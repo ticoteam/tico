@@ -7,6 +7,7 @@ import type {Browser, Page} from 'playwright';
 declare const S: {emps: Record<string, unknown>[]; people: Record<string, unknown>[]; v2: {needs?: {id: string}[] | null}};
 declare function v2NeedsRead(): Promise<unknown>;
 declare function refresh(force?: boolean): Promise<void>;
+declare function uiPartLoad(part: string): Promise<void>;
 declare function giveToOpen(anchor: HTMLElement, opts: Record<string, unknown>): HTMLElement;
 declare function giveToEntries(selected?: string): {value: string; actor: string; name: string; role: string}[];
 declare function giveToMatch(q: string, entries: unknown[]): {name: {name: string}[]; role: {name: string}[]};
@@ -53,6 +54,8 @@ async function desktop(browser: Browser): Promise<void> {
   const {page, errors, data} = await open(browser, {viewport: {width: 1440, height: 900}});
   await roster(page);
   await page.evaluate(() => localStorage.clear());
+  // The matching is in the picker's page part (ui/parts.json), loaded here as its first open would.
+  await page.evaluate(() => uiPartLoad('give-to'));
 
   // AC-1 and AC-9 on the matching itself.
   const names = (q: string) => page.evaluate(q => { const m = giveToMatch(q, giveToEntries()); return [...m.name, ...m.role].map(e => e.name); }, q);

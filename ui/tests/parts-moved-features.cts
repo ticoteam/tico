@@ -1,8 +1,9 @@
 // Code moved out of the shell to keep a cold open of Home under 300 KB (P05b, backend/ui_bundle.py SHELL_JS_CEILING),
 // on a real hub with the bundle served as in production, in Chromium and in WebKit (Safari):
 // - a cold open of Home downloads none of the moved parts;
-// - each moved feature works on its first use: Tags, What's new, a thread's settings and Members, the Tools chat's key
-//   drop, the Assistant's settings strip, and a task's page with its files, Needs you and the browser view;
+// - each moved feature works on its first use: Tags, What's new, the style guide, a thread's settings and Members, the
+//   Tools chat's key drop, the Assistant's settings strip, a task's page with its files, Needs you, the browser view,
+//   its stages' rules and its Owner's Give to… picker, and a file link's review view (a call's join is meet-calls.cts);
 // - with no network, the first use of a moved feature says so (a page shows Retry, a control a toast), the rest of the
 //   screen keeps working, and it works once the network is back; the Tools chat whose key drop failed to load sends
 //   once it is back, still checked for keys.
@@ -16,7 +17,8 @@ const {must} = require('./support/e2e.cts') as {must: (hub: RealHubSupport.Hub, 
 
 const PART = /\/tico\/ui\/app\.bundle\.([a-z][a-z0-9-]*)\.js/;
 // The parts P05b made: none of them is downloaded by a cold open of Home.
-const MOVED = ['assistant', 'changelog', 'task-files', 'decide', 'tags', 'key-drop', 'browser-view', 'thread-settings'];
+const MOVED = ['assistant', 'changelog', 'task-files', 'decide', 'tags', 'key-drop', 'browser-view', 'thread-settings',
+  'stage-rules', 'file-review', 'style-guide', 'give-to', 'thread-call-live'];
 
 async function cold(browser: Browser, hub: RealHubSupport.Hub) {
   const context = await browser.newContext({...DESKTOP, serviceWorkers: 'block', extraHTTPHeaders: {Authorization: 'Bearer ' + hub.tokens.dana!}});
@@ -57,8 +59,8 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       await open.close();
     }
 
-    // Tags and What's new on their first visit.
-    for (const [route, part, sees] of [['#/tags', 'tags', '#main'], ['#/changelog', 'changelog', '#main']] as const) {
+    // Tags, What's new and the style guide on their first visit.
+    for (const [route, part, sees] of [['#/tags', 'tags', '#main'], ['#/changelog', 'changelog', '#main'], ['#/style-guide', 'style-guide', '#main']] as const) {
       const open = await cold(browser, hub);
       await open.page.goto(hub.url + '/' + route);
       await drawn(open.page, name + ' ' + route);
@@ -117,7 +119,7 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
       await page.locator('#main').getByText('Moved code task').first().waitFor({timeout: t(20000)});
       await page.waitForFunction(() => ['tfTileHTML', 'tfFromAttachments', 'decideGoThrough', 'bvMount']
         .every(f => typeof (window as unknown as Record<string, unknown>)[f] === 'function'), null, {timeout: t(15000)});
-      for (const part of ['task-files', 'decide', 'browser-view']) assert.ok(open.parts.includes(part), `${name}: a task's page downloaded ${part}`);
+      for (const part of ['task-files', 'decide', 'browser-view', 'stage-rules']) assert.ok(open.parts.includes(part), `${name}: a task's page downloaded ${part}`);
       const ran = await page.evaluate(async () => {
         const w = window as unknown as {
           tfTileHTML: (f: unknown, open: boolean) => string; tfFromAttachments: (list: unknown[]) => unknown[];
@@ -135,7 +137,29 @@ async function run(engine: BrowserType, name: string, hub: RealHubSupport.Hub, t
         return {tile, through, browserView};
       });
       assert.deepEqual(ran, {tile: true, through: 'boolean', browserView: true}, name + ': a task\'s files, Needs you and the browser view run');
+      // Its Owner, on the Details tab, opens the Give to… picker, whose code comes with that first click.
+      assert.ok(!open.parts.includes('give-to'), name + ': a task\'s page does not download the Give to… picker');
+      await page.locator('[data-task-tab="details"]:visible').first().click();
+      await page.locator('[data-prop="owner"]:visible').first().click();
+      await page.locator('.gv-pop:popover-open .gv-q').waitFor({timeout: t(15000)});
+      assert.ok(open.parts.includes('give-to'), name + ': the Owner\'s first click downloaded the picker');
+      await page.keyboard.press('Escape');
+      await page.locator('.gv-pop').waitFor({state: 'detached', timeout: t(10000)});
       assert.deepEqual(open.errors, [], name + ': errors on a task\'s page');
+      await open.close();
+    }
+
+    // A file link opened cold: the task's page under it and the review view over it, with its code (the file is
+    // missing, so the view says it could not open it).
+    {
+      const open = await cold(browser, hub);
+      const {page} = open;
+      await page.goto(hub.url + '/#/file/no-such-file?task=' + encodeURIComponent(task));
+      await page.locator('dialog.frv[open]').waitFor({timeout: t(20000)});
+      await page.locator('dialog.frv .frv-err').waitFor({timeout: t(15000)});
+      assert.ok(open.parts.includes('file-review'), name + ': a file link downloaded the review view');
+      await page.locator('#main').getByText('Moved code task').first().waitFor({timeout: t(20000)});
+      assert.deepEqual(open.errors, [], name + ': errors in the review view');
       await open.close();
     }
 

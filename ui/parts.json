@@ -349,7 +349,8 @@
   "deps": [
    "computers",
    "growth",
-   "docs-editor"
+   "docs-editor",
+   "stage-rules"
   ],
   "pages": [
    "pageBudget",
@@ -589,7 +590,8 @@
   "deps": [
    "task-files",
    "decide",
-   "tags"
+   "tags",
+   "stage-rules"
   ],
   "pages": [
    "pageRoadmap"
@@ -669,5 +671,61 @@
    "decideRefresh",
    "decidePaintBody"
   ]
+ },
+ "stage-rules": {
+  "files": [
+   "app/stage-rules.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "file-review": {
+  "files": [
+   "app/file-review.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "frvShow",
+   "frvAboveTask",
+   "frvTeardown"
+  ],
+  "idle": []
+ },
+ "style-guide": {
+  "files": [
+   "app/style-guide.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageStyleGuide"
+  ],
+  "calls": [],
+  "idle": []
+ },
+ "give-to": {
+  "files": [
+   "app/give-to.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "giveToOpen"
+  ],
+  "idle": []
+ },
+ "thread-call-live": {
+  "files": [
+   "app/thread-call-live.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "callJoin",
+   "callHangUp"
+  ],
+  "idle": []
  }
 }
