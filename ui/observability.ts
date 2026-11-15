@@ -261,7 +261,7 @@ declare var module: {exports?: unknown} | undefined;
   // The app's screens (ui/app/router.ts) as browser timings name them: the first part of the address, and a second
   // part only as a placeholder (`/task/:task`), so no id leaves. backend/flight.py WEB_SCREENS keeps the same list; an
   // address outside it is `/unknown` and sends nothing. PostHog's `routeTemplate` above keeps its own, shorter list.
-  const SCREENS = new Set<string | undefined>(('assistant automations bot calendar changelog chat company-page credentials decide docs file finance '
+  const SCREENS = new Set<string | undefined>(('assistant automations bot calendar changelog chat company-page computers credentials decide docs file finance '
     + 'getting-started goals growth health help home inbox integrations learnings library listening mail market meetings messaging '
     + 'notes overview page person recordings replay repositories roadmap rules runs seat settings skills sql strategy style-guide '
     + 'subscriptions tag tags task tasks team thread threads tools triggers updates usage webhooks welcome').split(' '));

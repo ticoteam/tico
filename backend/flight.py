@@ -105,7 +105,7 @@ WEB_METRICS = ("lcp", "inp")
 # The app's screens (ui/observability.ts SCREENS, from ui/app/router.ts): `/<screen>`, or `/<screen>/<placeholder>` for
 # its pages, never with an id.
 WEB_SCREENS = (
-    "assistant automations bot calendar changelog chat company-page credentials decide docs file finance getting-started "
+    "assistant automations bot calendar changelog chat company-page computers credentials decide docs file finance getting-started "
     "goals growth health help home inbox integrations learnings library listening mail market meetings messaging notes "
     "overview page person recordings replay repositories roadmap rules runs seat settings skills sql strategy style-guide "
     "subscriptions tag tags task tasks team thread threads tools triggers updates usage webhooks welcome"

@@ -270,7 +270,10 @@ start), and `inp`, the slowest click or key press of each screen visit (Interact
 browser's event timings). A visit ends when the person moves to another screen or hides the page; the readings go in
 one `sendBeacon` to `POST /api/v2/web-timings`; a visit a screen change ended waits up to a second for the click
 that changed the screen, which the browser reports after the next paint. Before any click or key press, a screen
-change is the app moving an old link on at load: the load's LCP goes with the screen the person lands on. Browsers without these APIs send nothing.
+change is the app moving an old link on at load: the load's LCP goes with the screen the person lands on. The browser's own Back and Forward
+buttons are not a press in the page, so a visit they end before any press carries the LCP on in the same way (no
+interaction, so no INP is lost). INP is the click's own time to the next paint: a screen that is slow to draw after
+the click shows in its route's server p99, not in INP. Browsers without these APIs send nothing.
 
 Only a person's session may send (bots and runners get 403). Each reading is a metric, a screen template (`/home`,
 `/task/:task`, `/thread/:thread`: the app's screen and a placeholder for its page, never a full address or an id; the
