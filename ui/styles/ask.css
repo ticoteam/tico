@@ -60,7 +60,7 @@
 .mobile-ask{display:none}
 .mobile-ask[hidden]{display:none!important}
 @media (max-width:760px){
-  #ask-row{display:none}   /* the tab bar's dot is Ask; Search stays here, in More, for when Threads holds its tab */
+  #ask-row{display:none}   /* the tab bar's dot is Ask; Search stays here, in More */
   .mobile-ask{display:flex}
   /* The dot, live, in the centre of the tab bar's five slots: two tabs on each side. */
   #mobile-nav:has(.mobile-ask:not([hidden])){grid-template-columns:repeat(2,minmax(0,1fr)) minmax(64px,1.2fr) repeat(2,minmax(0,1fr))}

@@ -154,7 +154,7 @@ cause they can fix (one row per cause, not per task), every task the ladder or L
 them by a person until they reply. A bot's @ only marks the task unread. No chat, email or push goes to a person about
 a task.
 
-`GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0).
+`GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0, and a phone's Flow tab turns jade).
 
 When Flow (the screen that walks the list one ask at a time) opens, Tico gives its opinion on each ask: the button it
 would press and one line of 80 characters or fewer saying why, with a note ready when it would send back, plus a

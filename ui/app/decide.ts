@@ -182,8 +182,10 @@ function decideSync(st: DecState, items: NeedsEntry[]) {
 }
 
 // ---- the count, and the lists that show Needs you
+/** A bot, or a bot's read-only view of the app (view-only.ts), has no Needs you and never opens Flow. */
+const decideNoFlow = (): boolean => S.me?.role === 'bot' || !!S.me?.read_only_view;
 function decideCount(): number {
-  if (S.me?.role === 'bot') return 0;
+  if (decideNoFlow()) return 0;
   return S.v2?.needsCount ?? (S.v2?.needs || []).length;
 }
 /** Flow's mark beside Tasks while something needs the person; no number (the Tasks header has the one count). */
@@ -191,8 +193,20 @@ function needsBadgePaint() {
   const n = decideCount();
   for (const badge of document.querySelectorAll<HTMLElement>('[data-needs-badge]')) {
     badge.hidden = !n;
-    if (!badge.firstElementChild) { badge.innerHTML = flowMarkHTML(14); badge.title = 'Flow'; }
+    if (!badge.firstElementChild) badge.innerHTML = flowMarkHTML(14);
   }
+  flowTabPaint();
+}
+/** The phone bar's second slot: Flow, its mark grey like the other tabs and jade while something needs the person (no
+    number). A bot has no Flow: the slot keeps Threads, or Search on a server without threads (threads.ts THREADS.on). A
+    person's Threads and Search are in More (threads.ts threadsSideRender carries the count there). */
+function flowTabPaint() {
+  const off = decideNoFlow(), threads = typeof THREADS === 'undefined' || THREADS.on !== false;
+  const flow = document.querySelector<HTMLElement>('#mobile-flow');
+  if (flow) { flow.hidden = off; flow.toggleAttribute('data-waiting', decideCount() > 0); }
+  const tab = document.querySelector<HTMLElement>('#mobile-threads'), search = document.querySelector<HTMLElement>('#mobile-search');
+  if (tab) tab.hidden = !off || !threads;
+  if (search) search.hidden = !off || threads;
 }
 /** Needs you changed: the badge, the Tasks page and a bot's rail draw again. */
 function needsListsRedraw() {
@@ -275,9 +289,9 @@ function decideNeedsText(root: HTMLElement) {
 }
 /** Opens the item `id`, or the first of the list with none. `items` is the list to walk, Needs you as the page shows
     it by default; `stage` walks only that stage's items, `pipeline` only its stages' items, and an open screen walking
-    another switches to it. False when there is no such item. */
-function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage: string = '', pipeline: string = ''): boolean {
-  if (S.me?.role === 'bot') return false;
+    another switches to it. False when there is no such item; with `end`, nothing to walk opens the screen on All done. */
+function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage: string = '', pipeline: string = '', end = false): boolean {
+  if (decideNoFlow()) return false;
   const fresh = !DEC;
   const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), more: '', busy: false, error: '',
     barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, pipeline, snoozed: 0, files: [], open: new Set(),
@@ -288,11 +302,11 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   decideSync(st, items);
   if (id && (st.stage || st.pipeline) && !st.items.has(id)) { to0('', ''); decideSync(st, items); }
   const live = decideLive(st), to = id ? (live.includes(id) ? id : null) : live[0] || null;
-  if (!to) return false;
+  if (!to && !end) return false;
   if (fresh) DEC = st;
   const d = decideDialog();
   decideGo(st, to);
-  if (!d.open) { d.showModal(); decideStart(d); }
+  if (!d.open) { d.showModal(); if (to) decideStart(d); }
   decideOpinions(st);
   return true;
 }
@@ -308,6 +322,18 @@ function decideStart(d: HTMLDialogElement) {
 }
 /** ▶: the walk from its first item, or, after Go to, from the item it left (decide-about.ts). */
 const decideGoThrough = () => { const at = DEC_RESUME; DEC_RESUME = ''; return (!!at && decideOpen(at)) || decideOpen(''); };
+/** The phone's Flow tab and Flow's mark beside Tasks: ▶ over all of Needs you, as the Tasks header's Flow on You; with
+    nothing waiting, the same screen on All done (and its suggested rules), never a tap that does nothing. Closing it
+    gives focus back to `from` (a tapped button is not focused on every browser). */
+function decideFlow(from: HTMLElement) {
+  if (!decideGoThrough()) decideOpen('', [], '', '', true);
+  const st = DEC;
+  if (!st) return;
+  st.opener = from;
+  // Away from Tasks the pipelines may not be read yet: All done's suggested rules (and the crumb's menu) need them.
+  if (!decidePipelines().length) void tasksPipelinesRead().then(() => { if (DEC === st && !decideCurrent(st)) decideSugStart(st); }, () => {});
+}
+for (const el of document.querySelectorAll<HTMLElement>('#mobile-flow, #side .nav-flow')) el.addEventListener('click', () => decideFlow(el));
 /** A task page's Answer: the Needs you item that is this task's ask for requirement `rid`. Items are keyed by their own
     id (`<ask id>:<requirement id>`) and a stage's requirement is the same on every task in the stage, so both the task
     and the requirement must match. Not in the list held: read it once more. Still not: say why, never nothing. The Tasks
@@ -337,7 +363,7 @@ async function decideOpenAsk(taskId: string, rid: string, quiet = false): Promis
 type DecWait = {ask?: boolean | null; requirement_id?: string | null; who?: string | null};
 async function decideTaskOpen(task: {id: string | number; turn?: DecWait | null; waits?: DecWait[] | null; status?: string | null}): Promise<boolean> {
   const me = myActor(), id = String(task.id);
-  if (S.me?.role === 'bot' || !me || ['done', 'closed'].includes(String(task.status || ''))) return false;
+  if (decideNoFlow() || !me || ['done', 'closed'].includes(String(task.status || ''))) return false;
   // Any of the task's waits that is their own ask counts, not only the first (another person's OK may head the list).
   const waits = task.waits?.length ? task.waits : task.turn ? [task.turn] : [];
   const rid = waits.find(w => w.ask && w.requirement_id && w.who === me)?.requirement_id
@@ -352,7 +378,7 @@ function decideHeldAsk(taskId: string): string {
 /** Flow on a stage, or with `pipeline` and no stage on a pipeline: every page of Needs you is read first, then its items
     are walked. False when none wait. */
 async function decideStageOpen(stage: string, pipeline: string = ''): Promise<boolean> {
-  if (!stage && !pipeline || S.me?.role === 'bot') return false;
+  if (!stage && !pipeline || decideNoFlow()) return false;
   if (!needsAll()) await needsReadAll();
   return decideOpen('', decideSource(), stage, stage ? '' : pipeline);
 }

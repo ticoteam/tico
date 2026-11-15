@@ -179,14 +179,15 @@ async function restrictPerson(hub: RealHubSupport.Hub) {
     assert.equal(await manager.locator('#person-dm').count(), 1, 'her manager may write to her');
     await manager.context().close();
 
-    // Priya, phone: the Threads tab in the bottom bar opens the rail, which lists the company thread; tapping it opens
-    // the thread with its composer, and the page does not scroll sideways.
+    // Priya, phone: Threads in More opens the rail, which lists the company thread; tapping it opens the thread with
+    // its composer, and the page does not scroll sideways.
     // Priya follows the company thread first: the rail lists only threads she is in.
     await api(hub, 'priya', 'PUT', `/v2/threads/${plan.id}/follow`, {notify: 'live'});
     const priya = await pageAs(browser, hub, 'priya', {phone: true});
     await priya.goto(hub.url + '/#/tasks');
-    await priya.locator('#mobile-threads:not([hidden])').waitFor({timeout: t(15000)});
-    await priya.locator('#mobile-threads').click();
+    await priya.locator('#mobile-more').click();
+    await priya.waitForFunction(() => document.body.classList.contains('drawer'), null, {timeout: t(15000)});
+    await priya.locator('#nav-threads:not([hidden])').click({timeout: t(15000)});
     await priya.waitForFunction(() => location.hash === '#/threads', null, {timeout: t(15000)});
     await priya.locator('#thread-rail .tr-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
     assert.equal(await priya.locator('#thread-rail .tr-title', {hasText: 'Pricing war room'}).count(), 0);
