@@ -276,7 +276,9 @@ const names = (page: import('playwright').Page) => page.evaluate(() => {
       const {context, page, errors} = await open(browser, {width: 390, height: 844});
       await page.locator('#mobile-more').click();
       await page.waitForFunction(() => document.body.classList.contains('drawer'));
-      assert.deepEqual(await page.locator('#org-more').evaluate(el => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }), [40, 40], '⋯ is 40×40 on a phone');
+      // 40 wide, and as tall as the foot's row (your picture's 44px target beside it).
+      const more = await page.locator('#org-more').evaluate(el => { const r = el.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; });
+      assert.ok(more[0] === 40 && more[1]! >= 40 && more[1]! <= 44, `⋯ is at least 40×40 on a phone: ${more}`);
       assert.deepEqual(errors, []);
       await context.close();
     }

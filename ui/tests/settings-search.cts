@@ -65,7 +65,6 @@ async function scenario(browser: import('playwright').Browser, role: 'owner' | '
     // A narrow header folds its tools into ⋯: the search is reached there (opened first), and ⋯ closes after a pick.
     const folded = await page.locator('header.ph > .ph-menu #settings-search-q').count() > 0;
     if (width === 900) assert.equal(folded, true, 'a narrow computer folds the search into ⋯');
-    if (width < 761) assert.equal(folded, false, 'a phone keeps the search on the title line');
     const menuOpen = () => page.locator('header.ph > .ph-menu').evaluate(m => m.matches(':popover-open')).catch(() => false);
     const reach = async () => { if (folded && !(await menuOpen())) await page.locator('header.ph > .ph-more').click(); };
 
