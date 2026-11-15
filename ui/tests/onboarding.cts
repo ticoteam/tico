@@ -394,7 +394,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     assert.equal(await page.locator('#nav-welcome').evaluate((el: HTMLElement) => el.hidden), false);
     assert.match((await page.locator('#nav-welcome').textContent())!, /Finish setup/);
     // The app stays whole behind it: its sidebar keeps every page.
-    assert.equal(await page.locator('#side .side-scroll > [data-nav="tasks"]').isVisible(), true);
+    assert.equal(await page.locator('#side .side-scroll [data-nav="tasks"]').isVisible(), true);
     assert.equal((await page.locator('#onb-title').textContent())!, 'Set up Initech');
     assert.equal(await count(page), 'Step 1 of 3');
     assert.equal((await page.locator('.onb-step-title').textContent())!, 'What are you building?');
@@ -921,7 +921,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     await page.locator('dialog#onb').waitFor({state: 'detached'});
     assert.deepEqual(tourPosts.at(-1), {checklist: true});
     assert.equal(await page.locator('#nav-welcome').evaluate((el: HTMLElement) => el.hidden), true);
-    await page.locator('#side .side-scroll > [data-nav="tasks"]').waitFor();
+    await page.locator('#side .side-scroll [data-nav="tasks"]').waitFor();
     assert.equal(await page.title(), 'Initech Hub');
     await page.locator('#tree .node[href="#/bot/support"] .tree-setup').waitFor();
     assert.equal(await page.locator('#tree .node[href="#/bot/coo"] .tree-setup').count(), 0);
