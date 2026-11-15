@@ -348,16 +348,20 @@ def health_check(api, args):
 
 @tool(
     "tico_health_metrics",
-    "The server's flight recorder, for owners, admins and bots: per route request counts, errors, p50/p95 and "
+    "The server's flight recorder, for owners, admins and bots: per route request counts, errors, p50/p95/p99 and "
     "bytes by caller kind; slow requests; CPU, memory, event-loop lag and stalls with thread stacks; top SQL by total "
-    "time; write-lock waits; database size and growth by table; and each start's release and image check.",
+    "time; write-lock waits; database size and growth by table; each start's release and image check; and people's "
+    "browser timings (LCP, INP) per screen.",
     {
         "minutes": {"type": "integer", "description": "Look back this many minutes (default 60, at most 20160)"},
-        "section": _s("all (default) or a comma list of requests, slow, process, sql, db, events"),
+        "section": _s("all (default) or a comma list of requests, slow, process, sql, db, events, web"),
+        "caller": _s(
+            "only this kind of caller's requests, ranked by its count: human, bot, runner, service or anonymous"
+        ),
     },
 )
 def health_metrics(api, args):
-    query = {k: args[k] for k in ("minutes", "section") if args.get(k)}
+    query = {k: args[k] for k in ("minutes", "section", "caller") if args.get(k)}
     return _as_person(api).get("system/metrics", **query)
 
 

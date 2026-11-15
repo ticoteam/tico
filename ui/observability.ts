@@ -254,11 +254,53 @@ declare var module: {exports?: unknown} | undefined;
     }
     return {start, reset, route, run, response, chatSend, activity, visibility:tick, flush};
   }
-  const exports = {create, routeTemplate, workflow, safeProperties, scrubPosthog, scrubSentry};
+  // People's own speed, measured in their browser and sent only to this server, whatever the vendor settings
+  // (docs/observability.md, "People's browser timings"): the first screen's LCP once per load, unless the page was
+  // hidden before it drew, and each screen visit's slowest interaction (INP). A visit ends on a screen change or when the
+  // page is hidden. Only the metric, the screen template and the time leave; a browser without the API sends nothing.
+  function vitals(win: Window & typeof globalThis) {
+    const Observer = win.PerformanceObserver, types = Observer?.supportedEntryTypes || [], doc = win.document;
+    let screen = routeTemplate(win.location?.hash), lcp = 0, lcpDone = false, worst = 0;
+    let hidden = doc.visibilityState === 'hidden' ? 0 : Infinity;
+    type Entry = PerformanceEntry & {interactionId?: number};
+    const observers: [PerformanceObserver, (entry: Entry) => void][] = [];
+    function watch(type: string, take: (entry: Entry) => void, extra = {}) {
+      if (!types.includes(type)) return;
+      try {
+        const observer = new Observer(list => { for (const entry of list.getEntries()) take(entry); });
+        observer.observe({type, buffered: true, ...extra}); observers.push([observer, take]);
+      } catch (_) { /* no reading is better than a failing page */ }
+    }
+    watch('largest-contentful-paint', entry => { if (!lcpDone) lcp = entry.startTime; });
+    watch('event', entry => { if ((entry.interactionId || 0) > 0) worst = Math.max(worst, entry.duration); }, {durationThreshold: 16});
+    function end() {
+      // Entries the browser has not handed over yet (the click that changed the screen) belong to this visit.
+      for (const [observer, take] of observers) { try { observer.takeRecords().forEach(take); } catch (_) {} }
+      const timings: {metric: string; route: string; ms: number}[] = [];
+      const add = (metric: string, ms: number) => { if (ms > 0 && screen !== '/unknown') timings.push({metric, route: screen, ms: Math.round(Math.min(ms, 60000))}); };
+      if (!lcpDone) { lcpDone = true; if (lcp < hidden) add('lcp', lcp); }
+      add('inp', worst); worst = 0;
+      if (!timings.length) return;
+      const body = JSON.stringify({timings}), url = '/api/v2/web-timings';
+      try {
+        if (!win.navigator.sendBeacon?.(url, new Blob([body], {type: 'application/json'})))
+          void win.fetch(url, {method: 'POST', body, keepalive: true, credentials: 'same-origin', headers: {'Content-Type': 'application/json'}}).catch(() => {});
+      } catch (_) { /* timings must never affect work */ }
+    }
+    doc.addEventListener('visibilitychange', event => { if (doc.visibilityState === 'hidden') { hidden = Math.min(hidden, event.timeStamp); end(); } });
+    win.addEventListener('pagehide', end);
+    win.addEventListener('hashchange', () => {
+      const next = routeTemplate(win.location.hash);
+      if (next !== screen) { end(); screen = next; }
+    });
+    return {end};
+  }
+  const exports = {create, routeTemplate, workflow, safeProperties, scrubPosthog, scrubSentry, vitals};
   if (typeof module !== 'undefined' && module.exports) module.exports = exports;
   else {
     // Object.assign sets the property the way `root.TicoObservability = client` does; typeof globalThis does not carry the Window member.
     const client = create(); Object.assign(root, {TicoObservability: client});
+    vitals(root as Window & typeof globalThis);
     for (const event of ['pointerdown', 'keydown', 'scroll', 'touchstart']) root.addEventListener(event, client.activity, {passive:true, capture:true});
     root.document.addEventListener('visibilitychange', () => { client.visibility(); if (root.document.hidden) client.flush(); });
     root.addEventListener('pagehide', client.flush);
