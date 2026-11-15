@@ -1233,6 +1233,19 @@ STABLE = [
         "NeedsYou",
     ),
     (
+        "/api/v2/flow/opinions",
+        "post",
+        "Needs you",
+        "getFlowOpinions",
+        "Tico's opinion on each ask in Flow's set (`items`: the Needs-you ids of asks, at most 30), one entry per id in "
+        "order: `ready` with `pick` (an OK: approve, send_back or snooze; a question: one of its choices, or empty), "
+        "`line` (80 characters at most), `note` (for a send back) and `score` (0-100, to sort by, never shown); "
+        "`pending` while it is worked out: ask again for those; `none` when there is none, including any id that is "
+        "not an ask on the caller's own Needs you. Answers at once, never waits on a model and changes no task. One "
+        "opinion per ask, shared by everyone the ask waits on, for 24 hours or until the ask changes",
+        "FlowOpinions",
+    ),
+    (
         "/api/v2/meetings",
         "get",
         "Meetings",
@@ -3733,6 +3746,22 @@ SCHEMAS = {
             obj({"actor": "s", "count": "i"}),
         ]
     },
+    "FlowOpinions": obj(
+        {
+            "opinions": items(
+                obj(
+                    {
+                        "id": "s",
+                        "state": {"type": "string", "enum": ["ready", "pending", "none"]},
+                        "pick": "s",
+                        "line": "s",
+                        "note": "s",
+                        "score": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
+                    }
+                )
+            )
+        }
+    ),
     "TaskBrief": obj(
         {
             "id": "s",
