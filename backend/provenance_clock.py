@@ -94,3 +94,15 @@ def cached(c, key, build):
     if version is None or writing and version != getattr(c, 'provenance_start', None):
         return build()
     return cache.read(version, key, build, publish=not writing)
+
+
+def known(c, key):
+    """Whether `cached(c, key, ...)` would answer from the shared cache now, so a page can prime only the rest."""
+    cache = getattr(c, 'provenance_cache', None)
+    if cache is None:
+        return False
+    version = current(c)
+    if version is None:
+        return False
+    with cache.lock:
+        return (version, key) in cache.values
