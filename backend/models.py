@@ -3548,6 +3548,7 @@ class GrowthChannelCreate(Contract):
     why: str = Field(default="", max_length=1000)
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
+    input_kpi_id: str | None = Field(default=None, max_length=200)
     sort: int = 0
 
 
@@ -3561,7 +3562,12 @@ class GrowthChannelUpdate(Contract):
     why: str | None = Field(default=None, max_length=1000)
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
+    input_kpi_id: str | None = Field(default=None, max_length=200)
     sort: int | None = None
+
+
+class GrowthLineUse(Contract):
+    use: Literal["trace", "source"]
 
 
 # A synced source's kind (backend/growth_sync.py): file import, database query, Finance ad spend

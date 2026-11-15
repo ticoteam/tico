@@ -3,7 +3,8 @@ cohorts per channel (spend, bot cost, new customers, the share kept at 30, 90 an
 they add up to, and the sources each number's truth lives in.
 
 - Channels (`growth_channels`): a performance or brand track and a stage (idea, testing, scaling, paused), an owner, a
-  monthly budget, the source its numbers come from, and an optional guardrail (a KPI that must stay at or under a max).
+  monthly budget, the source its numbers come from, an optional guardrail (a KPI that must stay at or under a max) and
+  the optional input KPI it moves (backend/growth_line.py draws both).
   A channel's marketing work is the open tasks labelled `channel:<slug>` (backend/marketing_tasks.py).
 - Sources (`gtm_sources`): which system is the truth for what, and how a bot reaches it. Two live sources for the
   same thing are a conflict the page shows. A source with a sync kind fills numbers itself, and each number records
@@ -13,7 +14,7 @@ they add up to, and the sources each number's truth lives in.
 - The KPI tree is four columns on `kpis` (parent, growth role, funnel stage, loop): at most one North Star.
 
 Who may: everyone signed in reads. The owner and admins (people) write channels, sources and settings; the bot that
-owns a channel may change its why, stage and budget; any bot or admin records cohorts.
+owns a channel may change its why, stage, budget and input KPI; any bot or admin records cohorts.
 """
 
 import asyncio
@@ -46,11 +47,12 @@ CHANNEL_FIELDS = (
     "why",
     "guardrail_kpi_id",
     "guardrail_max",
+    "input_kpi_id",
     "sort",
     "retired_at",
 )
 SOURCE_FIELDS = ("id", "truth_for", "system", "reach_kind", "reach_ref", "may", "owner_ref", "retired_at")
-OWNER_PATCH = {"why", "stage", "budget_month"}  # what the bot that owns a channel may change
+OWNER_PATCH = {"why", "stage", "budget_month", "input_kpi_id"}  # what the bot that owns a channel may change
 ROLES = ("north_star", "input", "guardrail")
 STAGES = ("reach", "acquire", "activate", "retain", "refer")
 KPI_FIELDS = ("parent_kpi_id", "growth_role", "stage", "loop_name", "loop_step")
@@ -781,6 +783,7 @@ def channel_create(c, actor, body):
         "why": body.why,
         "guardrail_kpi_id": _kpi_ref(c, body.guardrail_kpi_id, "guardrail_kpi_id"),
         "guardrail_max": body.guardrail_max,
+        "input_kpi_id": _kpi_ref(c, body.input_kpi_id, "input_kpi_id"),
         "sort": body.sort,
         "created_at": H.now(),
     }
@@ -802,6 +805,8 @@ def channel_update(c, actor, slug, fields):
         fields["source_id"] = _source_ref(c, fields["source_id"])
     if "guardrail_kpi_id" in fields:
         fields["guardrail_kpi_id"] = _kpi_ref(c, fields["guardrail_kpi_id"], "guardrail_kpi_id")
+    if "input_kpi_id" in fields:
+        fields["input_kpi_id"] = _kpi_ref(c, fields["input_kpi_id"], "input_kpi_id")
     for required in ("name", "track", "stage", "why", "sort"):
         if required in fields and fields[required] is None:
             raise Problem("validation", f"{required} cannot be cleared", 422)
@@ -1223,7 +1228,7 @@ def install(app, store, auth, mutate):
 
     @app.patch("/api/v2/growth/channels/{slug}")
     def growth_channel_update(request: Request, slug: str, body: M.GrowthChannelUpdate):
-        """Owner or admin: any field. The bot that owns the channel: its why, stage and budget."""
+        """Owner or admin: any field. The bot that owns the channel: its why, stage, budget and input KPI."""
         who = request.state.identity
 
         def work(c):
@@ -1240,7 +1245,7 @@ def install(app, store, auth, mutate):
                 if set(fields) - OWNER_PATCH:
                     raise Problem(
                         "forbidden",
-                        "The bot that owns a channel changes its why, stage and budget_month; "
+                        "The bot that owns a channel changes its why, stage, budget_month and input_kpi_id; "
                         "an admin changes the rest",
                         403,
                     )

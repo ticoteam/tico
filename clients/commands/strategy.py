@@ -350,6 +350,7 @@ CHANNEL_PROPS = {
     "why": _s("Why we use it, in a line"),
     "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
     "guardrail_max": {"type": "number", "description": "The most that KPI may reach"},
+    "input_kpi_id": _s("The input KPI the channel moves; \"\" clears"),
     "sort": {"type": "integer", "description": "Its place in the list, lowest first"},
 }
 
@@ -404,7 +405,7 @@ def growth_channel_add(api, args):
 @tool(
     "tico_growth_channel_update",
     "Change a channel, only the fields sent. Owner or admin; the bot that owns the "
-    "channel may change its why, stage and monthly budget.",
+    "channel may change its why, stage, monthly budget and input KPI.",
     {"slug": _s("Channel slug"), **CHANNEL_PROPS},
     required=("slug",),
     writes=True,
@@ -919,6 +920,7 @@ _CHANNEL = (
     Arg("source_id", "--source", metavar="ID"),
     Arg("guardrail_kpi_id", "--guardrail-kpi", metavar="ID"),
     Arg("guardrail_max", "--guardrail-max", metavar="N"),
+    Arg("input_kpi_id", "--input-kpi", metavar="ID"),
 )
 _SOURCE = (
     Arg("truth_for", "--truth-for"),
@@ -972,7 +974,7 @@ CLI = (
     ),
     Command(
         "growth channel update",
-        "change a channel (owner or admin; the owning bot may change why, stage, budget)",
+        "change a channel (owner or admin; the owning bot may change why, stage, budget, input KPI)",
         args=_CHANNEL,
         render=_growth_text,
         example="tico growth channel update google-search --stage scaling",

@@ -639,6 +639,7 @@ KEEP = (
             "growth_channels",
             "growth_cohorts",
             "growth_computed_choices",  # which of a typed and a computed number a channel's owner kept: no customer keys
+            "growth_line_uses",  # who used the Growth line on which day: the measure's counts, no content
             "growth_origins",
             "growth_settings",
             "growth_sync_runs",

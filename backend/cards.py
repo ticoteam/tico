@@ -118,14 +118,11 @@ DEFAULTS = {
         ("updates", "medium"),
         ("latest_pages", "medium"),
     ],
-    # A default pin's third item is its card's settings beyond the template's own defaults.
+    # A default pin's third item is its card's settings beyond the template's own defaults. Growth's month numbers
+    # and channels are the Growth line's, drawn above the cards (backend/growth_line.py), so no Number or Channels
+    # card by default; a team that pinned them keeps them.
     "growth": [
         ("growth_funnel", "large"),
-        *(
-            ("growth_number", "small", {"metric": m})
-            for m in ("new_customers", "cac", "spend", "ltv_cac", "payback_months", "kept_d30")
-        ),
-        ("growth_channels", "large"),
         ("growth_retention", "medium"),
         ("growth_board", "medium"),
     ],
@@ -916,7 +913,8 @@ def growth_funnel(ctx, s):
     upto = (lambda v: kpi_upto(v, ctx.asked_month)) if ctx.asked_month else (lambda v: v)
     north = upto(kpis["north_star"]) if kpis["north_star"] else None
     views = ([north] if north else []) + [upto(v) for v in kpis["inputs"] + kpis["guardrails"] + kpis["other"]]
-    stages, last = [], None
+    # A share of the stage before only between two KPIs in the same unit: customers over dollars means nothing.
+    stages, last, last_unit = [], None, None
     for key, label in (
         ("reach", "Reach"),
         ("acquire", "Acquire"),
@@ -935,12 +933,14 @@ def growth_funnel(ctx, s):
                 "unit": view["unit"] if view else "",
                 "value": value,
                 "prev": prev,
-                "conv": round(value / last * 100, 1) if value is not None and last else None,
+                "conv": round(value / last * 100, 1)
+                if value is not None and last and view and (view["unit"] or "") == (last_unit or "")
+                else None,
                 "north_star": bool(view and north and view["id"] == north["id"]),
                 "series": [p["value"] for p in view["series"]] if view else [],
             }
         )
-        last = value
+        last, last_unit = value, (view["unit"] if view else None)
     star = None
     if north:
         value, prev = kpi_reading(north)
