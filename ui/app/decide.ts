@@ -106,6 +106,7 @@ let DECIDE_WANT = '';                       // a deep link's item (#/decide?item
 let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
 const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
 const DEC_UNDO_MS = 10_000;
+const DEC_BAR_FADE_MS = 400;     // the undo fades out over this long (decide.css .dc-bar-out)
 const DEC_CALM_MS = 400;
 let DEC_CALM_TIMER = 0;
 let DEC_ASK_NOTE = '';                      // the item whose empty Send back asked for a note: Notes keeps saying so
@@ -118,6 +119,8 @@ const DEC_START_MS = 600;                   // "Getting ready to flow" over the 
 /** Tico's line on an item and the answer it would press (decideLineSet), by item id. */
 const DEC_LINES = new Map<string, {line: string; pick: string}>();
 const DEC_SNOOZE: [string, string][] = [['hour', '1 hour'], ['day', 'Tomorrow'], ['week', 'Next week']];
+/** ↩ for the undo in the top bar, drawn as the mic and the clip are. */
+const DEC_UNDO_ICON = '<svg class="dc-bar-i" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>';
 const DEC_MIC = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
 
 // ---- which items, in which order
@@ -232,13 +235,13 @@ function decideDialog(): HTMLDialogElement {
       <div class="dc-sayw"><button type="button" class="dc-say" data-dc-say aria-expanded="false"></button><span class="dc-vh" aria-live="polite"></span></div>
       <span class="dc-up"></span>
       <span class="dc-nav">
+        <span class="dc-bar" role="status" hidden></span>
         <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
         <button type="button" class="dc-icon dc-wide" data-dc="next" aria-label="Next" title="Next (→)">›</button>
         <button type="button" class="dc-icon" data-dc="close" aria-label="Close" title="Close (Esc)">✕</button>
       </span>
     </header>
     <div class="dc-main"><div class="dc-thing"></div><div class="dc-side"></div></div>
-    <div class="dc-bar" role="status" hidden><span></span><button type="button" data-dc="undo">Undo</button></div>
   </section>`;
   const root: HTMLElement = $('.decide', d)!;
   root.addEventListener('click', (ev: MouseEvent) => { if (DEC) void decideClick(DEC, ev); });
@@ -1058,7 +1061,7 @@ function decidePaintSide(st: DecState) {
   decideBarRoom();
 }
 /** On a phone the answer row is pinned to the bottom (decide.css), with a page's meta line pinned on top of it: the
-    scroll keeps their height clear at the end (--dc-bar-h) and the Undo bar sits above them; the meta line sits on the
+    scroll keeps their height clear at the end (--dc-bar-h); the meta line sits on the
     row (--dc-acts-h). 0 where no row is pinned. */
 function decideBarRoom() {
   const row = decideBarSet(), meta = row ? decideBarMeta() : null;
@@ -1300,20 +1303,31 @@ function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   }
   return '';
 }
+/** What was just done, in Flow's top bar left of ‹ ›, over nothing else: ↩ with its word (icon only on a phone, the
+    word for screen readers), which takes it back. It stays DEC_UNDO_MS, then fades. A failed undo says so there, in
+    words on a phone too. */
 function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
   const st = DEC, bar: HTMLElement | null = $('.decide .dc-bar');
   if (!st || !bar) return;
   clearTimeout(st.barTimer);
-  const words: HTMLElement = $('span', bar), b: HTMLButtonElement = $('button', bar);
-  words.textContent = label;
-  b.hidden = !undo; b.disabled = false;
-  b.onclick = undo ? async () => {
+  const word = `<span class="dc-bar-w">${esc(label)}</span>`;
+  bar.innerHTML = undo ? `<button type="button" data-dc="undo" aria-label="${esc(`Undo: ${label}`)}" title="${esc(`Undo: ${label}`)}">`
+    + `${DEC_UNDO_ICON}${word}</button>` : word;
+  bar.classList.remove('dc-bar-out', 'dc-bar-err');
+  const b = $('button', bar) as HTMLButtonElement | null;
+  if (b && undo) b.onclick = async () => {
     b.disabled = true;
     try { await undo(); bar.hidden = true; await v2Refresh(); if (DEC === st) { decideSync(st, decideSource()); decidePaintHead(st); } }
-    catch (e) { words.textContent = errorMessage(e, 'Not undone.'); }
-  } : null;
+    catch (e) {
+      const said = errorMessage(e, 'Not undone.');
+      bar.classList.add('dc-bar-err'); bar.title = said;
+      bar.innerHTML = `<span class="dc-bar-w">${esc(said)}</span>`;
+    }
+  };
+  bar.title = '';
   bar.hidden = false;
-  st.barTimer = window.setTimeout(() => { bar.hidden = true; }, DEC_UNDO_MS);
+  const out = () => { bar.classList.add('dc-bar-out'); st.barTimer = window.setTimeout(() => { bar.hidden = true; }, DEC_BAR_FADE_MS); };
+  st.barTimer = window.setTimeout(out, DEC_UNDO_MS);
 }
 
 // ---- an OK: what it shows

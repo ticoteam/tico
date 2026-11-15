@@ -153,10 +153,17 @@
 .dc-acts.dc-fixed{flex-wrap:nowrap;align-items:center;padding-top:12px;border-top:1px solid var(--line)}
 .dc-acts.dc-fixed button{white-space:nowrap}
 .dc-acts.dc-fixed [data-dc="skip"]{margin-left:auto}
-.dc-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:14px;max-width:calc(100% - 32px);padding:10px 14px;border-radius:12px;background:var(--ink);color:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.25)}
+/* What was just done, with ↩ to take it back: in the top bar left of ‹ ›, laid over the bar's own end (the faint
+   next-up line) so nothing moves, never over the page or the buttons (decide.ts decideBar). */
+.dc-nav{position:relative}
+.dc-bar{position:absolute;right:100%;top:50%;transform:translateY(-50%);z-index:2;display:flex;align-items:center;margin-right:4px;padding-left:8px;background:var(--bg);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;transition:opacity .4s}
 .dc-bar[hidden]{display:none}
-.dc-bar button{padding:0;border:0;background:none;color:inherit;font:600 var(--t-base) var(--sans);text-decoration:underline;cursor:pointer}
-.dc-bar button[hidden]{display:none}
+.dc-bar.dc-bar-out{opacity:0}
+.dc-bar button{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 8px;border:0;border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
+.dc-bar button:hover{color:var(--ink);background:var(--surface2)}
+.dc-bar-i{flex:none}
+.dc-bar-err{color:var(--fail)}
+.dc-bar-err .dc-bar-w{max-width:40vw;overflow:hidden;text-overflow:ellipsis}
 /* a page that comes back (decideRoundsHTML): one meta line (stage · version · date · Jev · #N ↗), the version a menu of
    each version and Changes since vK, then its parts */
 .dc-meta{display:flex;align-items:center;gap:0 6px;min-width:0;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
@@ -271,9 +278,11 @@ button.dc-jev{cursor:pointer}
   .dc-mi{min-height:44px}
   .dc-more select,.dc-side select{min-height:44px}
   /* The answer row: out of the scroll, pinned to the bottom of the screen (.decide), solid, over the safe area. The
-     scroll keeps its height clear at the end (--dc-bar-h, measured by decideBarRoom), and the Undo bar sits above it. */
+     scroll keeps its height clear at the end (--dc-bar-h, measured by decideBarRoom). */
   .dc-side>div:not(.dc-done)>.dc-acts:last-child{position:absolute;left:0;right:0;bottom:0;z-index:1;margin:0;padding:8px 16px calc(8px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--bg)}
-  .dc-bar{bottom:calc(var(--dc-bar-h,0px) + 8px)}
+  /* the undo: ↩ alone, its word for screen readers; a failed undo keeps its words */
+  .dc-bar:not(.dc-bar-err) .dc-bar-w{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .dc-bar button{min-width:44px;justify-content:center;padding:0}
   /* A page's meta line (who asked, check, version, mark, task): pinned on the answer row, always on the card; Notes
      and the parts stay under the page in the scroll. */
   .dc-side>div:not(.dc-done)>.dc-meta:has(~.dc-acts:last-child){position:absolute;left:0;right:0;bottom:var(--dc-acts-h,0px);z-index:2;box-sizing:border-box;min-height:44px;margin:0;padding:0 16px;border-top:1px solid var(--line);background:var(--bg)}

@@ -72,6 +72,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      // The icon font, so the shots show icons, not their names.
+      if (p.startsWith('/vendor/fonts/')) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/api/me') return json({...me, config});
@@ -195,7 +197,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     }
     await page.locator(`${approve}:not([disabled])`).waitFor();
 
-    // Approve: "Approved · Undo" above the bar; all three buttons visible, 44 px, and reached by a tap.
+    // Approve: ↩ in the top bar, left of ‹ ›, over nothing: not the page, not the buttons; all three buttons visible,
+    // 44 px, and reached by a tap.
     const spot = (await box(page, approve))!;
     await page.mouse.click(spot.x + spot.width / 2, spot.y + spot.height / 2);
     await at(2);
@@ -204,7 +207,23 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(await dialog.locator('.dc-bar:not([hidden])').count() === 1, 'the message still shows');
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-approved.png')});
     const toast = (await box(page, '#need-card .dc-bar'))!, row = (await box(page, `${approve} >> xpath=..`))!;
-    check(toast.y + toast.height <= row.y, `"Approved · Undo" is above the bar (${toast.y + toast.height} > ${row.y})`);
+    const dcHead = (await box(page, '#need-card .dc-head'))!, nav = (await box(page, '#need-card .dc-nav'))!;
+    check(toast.y >= dcHead.y && toast.y + toast.height <= dcHead.y + dcHead.height && toast.x + toast.width <= nav.x + 1, `the undo sits in the top bar, left of ‹ › (${JSON.stringify(toast)})`);
+    check(toast.y + toast.height <= row.y, `the undo is clear of the buttons (${toast.y + toast.height} > ${row.y})`);
+    const undoBtn = (await box(page, '#need-card .dc-bar [data-dc="undo"]'))!;
+    check(undoBtn.width >= 44 && undoBtn.height >= 44, `the undo is a 44 px target (${undoBtn.width}x${undoBtn.height})`);
+    check(await page.locator('#need-card .dc-bar [data-dc="undo"]').getAttribute('aria-label') === 'Undo: Approved', 'its name says what it takes back');
+    check(!await page.locator('#need-card .dc-bar .dc-bar-w').evaluate(e => e.getBoundingClientRect().width > 2), 'icon only on a phone');
+    // Nothing of the bar's own moves for it, and it covers nothing: what is under its middle is the undo itself.
+    const covers = await page.evaluate(() => {
+      const r = document.querySelector('#need-card .dc-bar')!.getBoundingClientRect();
+      const under = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const others = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-nav), #need-card .dc-nav > button')]
+        .filter(e => e.offsetParent).map(e => e.getBoundingClientRect())
+        .filter(o => o.width && o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top);
+      return [!!under?.closest('.dc-bar'), others.length];
+    });
+    check(covers[0] === true && covers[1] === 0, `the undo overlaps no control, the page or the buttons (${JSON.stringify(covers)})`);
     for (const sel of [approve, sendback, skip]) {
       const b = (await box(page, sel))!, reached = await hit(page, sel);
       check(b.height >= 44 && b.y + b.height <= VIEW.height && reached === 'self', `${sel} is visible and tappable while the message shows (${b.height} px, tap reaches ${reached})`);
