@@ -1,14 +1,13 @@
 import type {Route} from 'playwright';
 // Offline browser check of a page's OK on a 390 px phone (the owner's review of a v3 page after two send backs), the
 // ask answered in its task's chat (decide.ts decideChatMount):
-// - Tico's line is a callout under the bar with a caret at the mark, only once the line is ready, inside the bar; it
-//   wraps to two lines and is never cut; a thumb down stands for its leading "Send back.", the whole line its name;
+// - Tico's opinion shows no line: nothing of it is drawn under the bar, however ready it is;
 // - two tabs, Chat and Spec, where an OK opens; Spec shows the page, which fills the screen
 //   down to the row (no short box that cuts it), its text sized for a phone (an h1 near 22 px, side padding);
 // - it opens clean: no blocks marked and no diff; the version control in the ask's one meta line lists each version
 //   and "Changes since v2", which marks the changed blocks;
-// - the ask's meta line: who asked (cut first when long), the stage, the version and Jev's mark, then the task as
-//   "#80 ↗"; its menu has the date and Jev's word and reason in full; no history cards, no "Open task" row;
+// - the ask's meta line: who asked (cut first when long), the stage, the version and the Decision model's mark,
+//   then the task as "#80 ↗"; its menu has the date and the Decision model's word and reason in full; no history cards, no "Open task" row;
 // - Tico never types for the person: the chat's box stays empty.
 // Each check is collected, so a run on the old code lists every one that fails. FLOW_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -137,7 +136,7 @@ const VIEW = {width: 390, height: 844};
     check(await dialog.locator('.dc-diff').count() === 0, 'no diff');
     check(await dialog.locator('.dc-since, .dc-switch').count() === 0, 'no "Changes since" row over the page');
 
-    // Back on Chat: the ask's meta line: stage, version, Jev, #80 ↗; no cards, no Open task row.
+    // Back on Chat: the ask's meta line: stage, version, Decision model, #80 ↗; no cards, no Open task row.
     await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').click();
     const meta = dialog.locator('.dc-meta');
     check(await meta.count() === 1, 'one meta line');
@@ -169,7 +168,7 @@ const VIEW = {width: 390, height: 844};
       check(cb.height >= 44 || cb.width >= 44, `the version control is tappable (${cb.width}x${cb.height})`);
       await ctl.click();
       const info = (await dialog.locator('.dc-vmenu .dc-vinfo').allInnerTexts()).map(t => t.trim());
-      check(JSON.stringify(info) === JSON.stringify(['Tasks Product Owner · Spec · v3 · Nov 13', 'Jev: Meets · Clear']),
+      check(JSON.stringify(info) === JSON.stringify(['Tasks Product Owner · Spec · v3 · Nov 13', 'Decision model: Meets · Clear']),
         `the menu says the rest in full (${JSON.stringify(info)})`);
       const items = dialog.locator('.dc-vmenu [data-dc-ver]');
       check(await items.count() === 3, `the menu lists three versions (${await items.count()})`);
@@ -190,38 +189,18 @@ const VIEW = {width: 390, height: 844};
       check(await dialog.locator('[data-dc-vmenu].on').count() === 0, 'off again');
     }
 
-    // Tico's line ready: a callout with a caret at the mark, inside the bar; the chat's box stays empty.
+    // Tico's opinion ready: no line is drawn under the bar, and the chat's box stays empty.
     ready = true;
-    await say.waitFor({state: 'visible', timeout: 8000}).catch(() => {});
-    check(await say.isVisible(), 'the callout shows once the line is ready');
-    if (await say.isVisible()) {
-      const look = await say.evaluate(e => {
-        const wrap = e.parentElement!, s = getComputedStyle(e), c = getComputedStyle(wrap, '::before'), head = e.closest('.dc-head')!.getBoundingClientRect();
-        const mark = document.querySelector('#need-card .dc-flow')!.getBoundingClientRect(), r = wrap.getBoundingClientRect();
-        return {bg: s.backgroundColor, radius: parseFloat(s.borderTopLeftRadius), caret: c.content !== 'none' && c.content !== '',
-          caretX: r.left + parseFloat(getComputedStyle(wrap).getPropertyValue('--dc-caret-x') || '0'), markX: mark.left + mark.width / 2, bottom: e.getBoundingClientRect().bottom, headBottom: head.bottom};
-      });
-      check(!/rgba\(0, 0, 0, 0\)|transparent/.test(look.bg) && look.radius >= 6, `the line is a callout (${look.bg}, ${look.radius})`);
-      check(look.caret && Math.abs(look.caretX - look.markX) <= 4, `its caret points at the mark (${look.caretX} vs ${look.markX})`);
-      check(look.bottom <= look.headBottom, `the callout stays inside the bar (${look.bottom} > ${look.headBottom})`);
-      // Never cut: it wraps (two lines at most), with a thumb down for Send back in place of its word; the name keeps the
-      // whole line.
-      const t = say.locator('.dc-say-t');
-      const fit = await t.evaluate(e => [e.getBoundingClientRect().height, e.scrollWidth > e.clientWidth, e.scrollHeight > e.clientHeight + 1] as const);
-      check(fit[0] > 24 && fit[0] <= 48 && !fit[1] && !fit[2], `the line wraps to two lines, never cut (${fit})`);
-      check(await say.locator('.dc-say-i').textContent() === 'thumb_down' && await say.locator('.dc-say-i').getAttribute('title') === 'Send back', 'a thumb down stands for Send back');
-      check(await t.textContent() === LINE.replace('Send back. ', ''), `the icon takes the leading word (${await t.textContent()})`);
-      check(await say.getAttribute('aria-label') === LINE, 'its name is the whole line');
-      check(Math.round((await say.boundingBox())!.height) >= 44, 'the line is a 44 px target');
-      if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-line-open.png')});
-      check(await dialog.locator('.dc-chat .p-text').inputValue() === '', 'Tico never types for the person');
-      check(await dialog.locator('.dc-chat .p-text').getAttribute('placeholder') === `Message ${TITLE}`, `the box is named for the task (${await dialog.locator('.dc-chat .p-text').getAttribute('placeholder')})`);
-      if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-after.png')});
-    }
+    await p.waitForFunction("[...DEC_OP.state.values()].includes('ready')", undefined, {timeout: 8000});
+    check(!await say.isVisible(), 'no line is drawn once the opinion is ready');
+    check(await say.textContent() === '', 'the bar holds no line');
+    check(await dialog.locator('.dc-chat .p-text').inputValue() === '', 'Tico never types for the person');
+    check(await dialog.locator('.dc-chat .p-text').getAttribute('placeholder') === `Message ${TITLE}`, `the box is named for the task (${await dialog.locator('.dc-chat .p-text').getAttribute('placeholder')})`);
+    if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-after.png')});
     await p.close();
 
     assert.deepEqual(errors, []);
     assert.deepEqual(fails, [], `\n- ${fails.join('\n- ')}`);
-    console.log("PASS: on a phone a page's OK opens on Chat and its Task tab gives the page the screen; it opens clean, keeps versions and changes in the ask's meta line, and Tico's line is a callout at the mark.");
+    console.log("PASS: on a phone a page's OK opens on Chat and its Task tab gives the page the screen; it opens clean, keeps versions and changes in the ask's meta line, and Tico's opinion shows no line under the bar.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

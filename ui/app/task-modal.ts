@@ -778,7 +778,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   // The rest of the history the server writes (backend/task_engine.py and its neighbours), so no line reads
   // "changed <field>". A page attached carries its chip (taskEventChipHTML).
   page_attached: (_v, x) => x.old ? 'attached a new version of a page' : 'attached a page',
-  jev_verdict: v => `Jev's check: ${JEV_WORDS[String(v)] || String(v || '')}`,
+  jev_verdict: v => `Decision model's check: ${JEV_WORDS[String(v)] || String(v || '')}`,
   ok_kept: v => String(v || 'kept the OK on the new version'),
   answer: v => ANSWER_WORDS[String(v)] || `answered: ${clipLine(String(v || ''), 80)}`,
   requirement: () => 'asked for an answer', requirement_withdrawn: () => 'withdrew an ask',

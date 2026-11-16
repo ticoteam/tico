@@ -4,8 +4,8 @@ import type {Route} from 'playwright';
 // - an OK shows exactly what GET /api/v2/oks/{id} returned, and Approve sends that preview's hash;
 // - when the engine says it changed (409 task_changed), the new content is shown with "It changed. Look again." and
 //   nothing is sent again until a new click, which sends the new hash;
-// - after Approve the next item shows at once, and Tico's line reads "✓ Approved · Undo" (POST /api/v2/answers/{id}/undo)
-//   for about 5 s, then the new item's line; it stays while Undo has the keyboard's focus;
+// - after Approve the next item shows at once, and the bar reads "✓ Approved · Undo" (POST /api/v2/answers/{id}/undo)
+//   for about 5 s, then the bar is empty; it stays while Undo has the keyboard's focus;
 // - a question answers with its choice; then All done;
 // - ⋯ is last on an OK's row and holds Close task: it closes the task with what is typed in the chat as the reason, moves
 //   on with no confirm, and ↶ reopens it (with a why, which a reopen needs).
@@ -114,7 +114,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
     assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/asks/r1/ok', body: {shown_hash: 'b'.repeat(64)}});
     const undo = dialog.locator('.dc-bar [data-dc="undo"]');
-    assert.equal((await dialog.locator('.dc-sayw > .dc-bar').innerText()).replace(/\s+/g, ' ').trim(), '✓ Approved Undo', "in Tico's line slot: what was done, then Undo");
+    assert.equal((await dialog.locator('.dc-sayw > .dc-bar').innerText()).replace(/\s+/g, ' ').trim(), '✓ Approved Undo', "in the bar's slot: what was done, then Undo");
     assert.equal((await undo.innerText()).trim(), 'Undo');
     // Undo stays while it has the keyboard's focus, and fades a few seconds after it is left.
     await undo.focus();
