@@ -15,11 +15,15 @@ const SHA256_ROUND = new Uint32Array([
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
 
+// The eight 32-bit words of the hash state.
+type Sha256State = [number, number, number, number, number, number, number, number];
+const SHA256_INITIAL: Sha256State = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+
 // Rotate right. The result may be negative; the uint32 sums in sha256Block wrap it back.
 const sha256Rotr = (x: number, n: number): number => (x >>> n) | (x << (32 - n));
 
-// One 64-byte block of `view` at `at`, folded into the eight state words `h`. `w` is scratch for the schedule.
-function sha256Block(h: Uint32Array, view: DataView, at: number, w: Uint32Array): void {
+// One 64-byte block of `view` at `at`, folded into the state, which comes back as a new one. `w` is scratch for the schedule.
+function sha256Block(state: Sha256State, view: DataView, at: number, w: Uint32Array): Sha256State {
   for (let i = 0; i < 16; i++) w[i] = view.getUint32(at + i * 4);
   for (let i = 16; i < 64; i++) {
     const x = w[i - 15]!, y = w[i - 2]!;
@@ -27,24 +31,24 @@ function sha256Block(h: Uint32Array, view: DataView, at: number, w: Uint32Array)
     const s1 = sha256Rotr(y, 17) ^ sha256Rotr(y, 19) ^ (y >>> 10);
     w[i] = (w[i - 16]! + s0 + w[i - 7]! + s1) >>> 0;
   }
-  let a = h[0]!, b = h[1]!, c = h[2]!, d = h[3]!, e = h[4]!, f = h[5]!, g = h[6]!, k = h[7]!;
+  let [a, b, c, d, e, f, g, k] = state;
   for (let i = 0; i < 64; i++) {
     const t1 = (k + (sha256Rotr(e, 6) ^ sha256Rotr(e, 11) ^ sha256Rotr(e, 25)) + ((e & f) ^ (~e & g)) + SHA256_ROUND[i]! + w[i]!) >>> 0;
     const t2 = ((sha256Rotr(a, 2) ^ sha256Rotr(a, 13) ^ sha256Rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
     k = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
   }
-  h[0] = h[0]! + a; h[1] = h[1]! + b; h[2] = h[2]! + c; h[3] = h[3]! + d;
-  h[4] = h[4]! + e; h[5] = h[5]! + f; h[6] = h[6]! + g; h[7] = h[7]! + k;
+  return [(state[0] + a) >>> 0, (state[1] + b) >>> 0, (state[2] + c) >>> 0, (state[3] + d) >>> 0,
+    (state[4] + e) >>> 0, (state[5] + f) >>> 0, (state[6] + g) >>> 0, (state[7] + k) >>> 0];
 }
 
 // The SHA-256 of the bytes, as crypto.subtle.digest('SHA-256', bytes) answers it. The message is read in place, block by
 // block; only its last one or two blocks (the padding and the length) are copied.
 function sha256Digest(data: ArrayBuffer): ArrayBuffer {
-  const h = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+  let state = SHA256_INITIAL;
   const w = new Uint32Array(64);
   const whole = Math.floor(data.byteLength / 64) * 64;
   const view = new DataView(data);
-  for (let at = 0; at < whole; at += 64) sha256Block(h, view, at, w);
+  for (let at = 0; at < whole; at += 64) state = sha256Block(state, view, at, w);
   // What is left, then a 0x80 byte, zeros and the length in bits as 64 bits: one block if that fits in 64 bytes, else two.
   const rest = data.byteLength - whole;
   const tail = new Uint8Array(rest < 56 ? 64 : 128);
@@ -54,10 +58,10 @@ function sha256Digest(data: ArrayBuffer): ArrayBuffer {
   const tailView = new DataView(tail.buffer);
   tailView.setUint32(tail.length - 8, Math.floor(bits / 0x100000000));
   tailView.setUint32(tail.length - 4, bits >>> 0);
-  for (let at = 0; at < tail.length; at += 64) sha256Block(h, tailView, at, w);
+  for (let at = 0; at < tail.length; at += 64) state = sha256Block(state, tailView, at, w);
   const out = new ArrayBuffer(32);
   const outView = new DataView(out);
-  for (let i = 0; i < 8; i++) outView.setUint32(i * 4, h[i]!);
+  state.forEach((word, i) => outView.setUint32(i * 4, word));
   return out;
 }
 
