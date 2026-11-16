@@ -298,8 +298,9 @@ and write**, each a vault credential, and **Who can use it** gives a person or b
 there is one, else the full key at Read. Only credential administrators add keys or set levels; a person with a level
 reads the tool's page.
 
-Status: **Working**, **Key rejected** (the check got 401 or 403), **Check failed**, **Expires in N days** (14 or fewer),
-or **Not checked**. Only a real problem puts a tool under Needs you: how its key reaches runs never does (a key on
+Status: **Working** (the check got 2xx, or a real call through the proxy did in the last 24 hours), **Works (limited)**
+(the check got 403: the key works, the check path needs a scope it lacks), **Key rejected** (the check got 401, or 3 real
+calls in a row did with no 2xx since), **Check failed**, **Expires in N days** (14 or fewer), or **Not checked**. Only a real problem puts a tool under Needs you: how its key reaches runs never does (a key on
 computers goes to each run's environment, as every key stored before API tools did; Move to proxy on the tool's page
 changes that).
 
@@ -314,5 +315,5 @@ its plain value, shown in the clear on the tool's page, changed by credential ad
 (`POST /api/v2/api-tools/<id>/settings {name, value}`, `PATCH|DELETE …/settings/<setting id>`), and set in the
 environment of every run that holds any level on the tool, on the proxy or on computers. A setting is never a key: a
 value that looks like one (a key shape, a URL with a password or a token in it) is refused, and a name with TOKEN,
-SECRET, PASSWORD or API_KEY in it belongs under Keys. A key the run holds under the same variable wins. Tico checks each proxied tool every 30 minutes; `tico tool check
+SECRET, PASSWORD or API_KEY in it belongs under Keys. A key the run holds under the same variable wins. Tico checks each tool with a check path every 30 minutes, on the proxy or on computers; `tico tool check
 <id>` (MCP `tico_tool_check`) checks now. Checks and calls older than 90 days are deleted.

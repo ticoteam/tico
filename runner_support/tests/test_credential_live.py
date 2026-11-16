@@ -93,7 +93,7 @@ def credential(api, name, env, value, kind="api_key"):
 
 
 def rejected_after_a_wrong_key(api, tool, key, wrong):
-    """The person pastes a wrong key and runs Check now: the service's own refusal shows as Key rejected."""
+    """The person pastes a wrong key and runs Check now: the service's own refusal comes back on the check."""
     r = api.patch(f"/api/v2/api-tools/{tool}/keys/{key['id']}", json={"value": wrong}, headers=headers())
     assert r.status_code == 200, r.text
     checked = post(api, f"api-tools/{tool}/check", {})
@@ -201,9 +201,10 @@ def test_api_key_header_through_the_proxy_reqres(api, computer):
     answered(call["status"], "reqres.in through the proxy")
     assert call["status"] == 200 and "janet.weaver@reqres.in" in call["body"], call
     nowhere(api, computer, conversation, "reqres-free-v1", proxy_token(call))
-    # reqres.in answers a call with no key at all; a wrong key is a 403, so this shows the proxy sends the key.
+    # reqres.in answers a call with no key at all; a wrong key is a 403, so this shows the proxy sends the key. Only a
+    # 401 reads Key rejected: a 403 is a key without the path's scope to a check, so real calls say whether it works.
     checked = rejected_after_a_wrong_key(api, tool, key, "reqres-free-v1x")
-    assert (checked["status_code"], checked["detail"]) == (403, "Key rejected"), checked
+    assert (checked["status_code"], checked["detail"]) == (403, "Works (limited)"), checked
 
 
 def test_api_key_query_through_the_proxy_nasa(api, computer):
@@ -221,7 +222,7 @@ def test_api_key_query_through_the_proxy_nasa(api, computer):
     assert logged == ["/neo/rest/v1/feed?start_date=&end_date=&api_key="], logged  # names, never values
     nowhere(api, computer, conversation, "DEMO_KEY", proxy_token(call))
     checked = rejected_after_a_wrong_key(api, tool, key, "DEMO_KEYX")
-    assert (checked["status_code"], checked["detail"]) == (403, "Key rejected"), checked
+    assert (checked["status_code"], checked["detail"]) == (403, "Works (limited)"), checked  # 403: see reqres above
 
 
 # ---- a client certificate as a file credential

@@ -19,9 +19,13 @@ every run that holds a level on the tool (backend/tool_settings.py). Tools lists
 address), and `GET /api/v2/tool-vendors/{vendor}` answers a vendor's page in one read: its rows, an API tool's with its
 keys, levels and settings. Mailboxes, Tico's numbers and addresses and Tico's own tools have no vendor.
 
-A check is one authenticated GET to the tool's `check_path` with each stored key: 2xx is Working, 401/403 Key rejected,
-anything else (a timeout, a refused address, a 500) Check failed. A 401 is never "reachable". The scheduler checks every
-proxied tool with a check path every CHECK_EVERY on a background thread; "Check now" runs one at once. A check sends
+A check is one authenticated GET to the tool's `check_path` (its known service's when it has none:
+tool_services.check_path_for) with each stored key: 2xx is Working, 403 Works (limited) (the vendor knows the key, the
+path needs a scope it lacks), only 401 Key rejected, anything else (a timeout, a refused address, a 500) Check failed.
+An id stored as a key is never sent as one. A proxied tool's real calls (`call_health`, over CALLS_WINDOW) outrank its
+check: a 2xx makes it Working whatever the check said, and only REJECTED_AFTER 401s in a row, none 2xx since, make it
+Key rejected. The scheduler checks every API tool with a check path every CHECK_EVERY on a background thread, its keys
+on the proxy or on computers alike (the server holds every value); "Check now" runs one at once. A check sends
 the key only to the tool's own https address, pinned to the public IP it resolved to (backend/egress.py), and nothing
 about a key but its tool and id is logged or stored. A tool with an MCP address (`mcp_url`, backend/mcp_connect.py) is a
 remote MCP server: its check is MCP's initialize and tools/list instead, and it may sign in over OAuth rather than hold
@@ -88,6 +92,9 @@ INDEX_LIMIT_MAX = 500
 INDEX_BYTES_MAX = 192 * 1024
 ACTIVITY_MAX = 200
 RESULTS = ("sent", "refused", "failed", "use")
+CALLS_WINDOW = timedelta(hours=24)  # real calls this recent say whether a proxied tool works (`call_health`)
+REJECTED_AFTER = 3  # 401s in a row on real calls, none 2xx since, before a tool reads Key rejected
+LIMITED = "Works (limited)"  # a check that got 403: the vendor knows the key, this path needs a scope it lacks
 CHECK_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,299}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # connections.py's statuses, as the tones and words Tools shows them in.
@@ -214,8 +221,47 @@ def _days_left(on, today):
         return None
 
 
-def _check_text(ok, status_code):
-    return "Working" if ok else "Key rejected" if status_code in (401, 403) else "Check failed"
+def _check_text(ok, status_code, service=""):
+    """A check's words: only a 401 (or what a known service answers a bad key with: tool_services.rejects) says the
+    key is rejected. Another 403 answers a key the vendor knows, without the scope for this path (a restricted key):
+    it works, limited."""
+    if ok:
+        return LIMITED if status_code == 403 else "Working"
+    return "Key rejected" if status_code is not None and TS.rejects(service, status_code) else "Check failed"
+
+
+def _limited(tool, row):
+    """A check row that got a 403 from an API (not an MCP server's initialize) whose service does not answer a bad key
+    with 403: the key is accepted, its scope limited. Rows stored as failed before 403 meant this read the same."""
+    return row["status_code"] == 403 and not _field(tool, "mcp_url") and not TS.rejects(tool["service"], 403)
+
+
+def call_health(c, tool_id, now=None):
+    """What the tool's real calls through the proxy say, over the last CALLS_WINDOW: `working` when one got a 2xx,
+    `rejected` when REJECTED_AFTER calls in a row got 401 and none got a 2xx since; else None (nothing to say)."""
+    since = H.shift(now or H.now(), seconds=-int(CALLS_WINDOW.total_seconds()))
+    codes = [
+        r[0]
+        for r in c.execute(
+            "SELECT status_code FROM tool_calls WHERE tool_id=? AND result='sent' AND status_code IS NOT NULL "
+            "AND created_at>=? ORDER BY created_at DESC, id DESC LIMIT 200",
+            (tool_id, since),
+        )
+    ]
+    run = 0
+    for code in codes:  # newest first, up to the newest 2xx
+        if 200 <= code < 300:
+            break
+        run = run + 1 if code == 401 else 0
+        if run >= REJECTED_AFTER:
+            return "rejected"
+    return "working" if any(200 <= code < 300 for code in codes) else None
+
+
+def state_of(c, tool, keys=None, now=None):
+    """`status` for a tool row from the database: its keys, last checks and real calls."""
+    keys = _keys(c, tool["id"]) if keys is None else keys
+    return status(tool, keys, latest_checks(c, tool["id"]), calls=call_health(c, tool["id"], now))
 
 
 def latest_checks(c, tool_id):
@@ -226,20 +272,28 @@ def latest_checks(c, tool_id):
     return out
 
 
-def status(tool, keys, checks, today=None):
-    """{tone, text, needs_you} for an API tool. Worst first: no stored key, a failed check, an expired key; then a key
-    expiring within EXPIRING_DAYS (Needs you, not broken); then Working once every stored key passed its last check, else
-    Not checked. How its key reaches runs (`delivery`) is never one of them."""
+def status(tool, keys, checks, today=None, calls=None):
+    """{tone, text, needs_you} for an API tool. Worst first: no stored key; real calls rejected (`calls`, from
+    `call_health`: REJECTED_AFTER 401s in a row); a refused sign-in; a failed check, unless a real call got a 2xx
+    within CALLS_WINDOW (a check's path may need a scope the key's calls do not); an expired key; then a key expiring
+    within EXPIRING_DAYS (Needs you, not broken); then Working once a real call worked or every stored key passed its
+    last check (Works (limited) when a check got 403), else Not checked. How its key reaches runs (`delivery`) is never
+    one of them."""
     today = today or _today()
     stored = [k for k in keys if k["ciphertext"] is not None]
     if not stored:
         # An MCP tool that signs in (backend/mcp_connect.py) is waiting for its sign-in, not for a key.
         return {"tone": "fail", "text": "Not signed in" if _field(tool, "mcp_oauth") else "No key", "needs_you": True}
+    if calls == "rejected":
+        return {"tone": "fail", "text": "Key rejected", "needs_you": True}
     last = [checks.get(k["id"]) for k in stored]
-    failed = [r for r in last if r is not None and not r["ok"]]
-    if failed:
-        text = failed[0]["detail"] if failed[0]["detail"] == "Sign in again" else None
-        return {"tone": "fail", "text": text or _check_text(False, failed[0]["status_code"]), "needs_you": True}
+    failed = [r for r in last if r is not None and not r["ok"] and not _limited(tool, r)]
+    if any(r["detail"] == "Sign in again" for r in failed):
+        # A refused sign-in refresh is no check path's opinion: it stands, whatever calls worked before it.
+        return {"tone": "fail", "text": "Sign in again", "needs_you": True}
+    if failed and calls != "working":
+        code = failed[0]["status_code"]
+        return {"tone": "fail", "text": _check_text(False, code, tool["service"]), "needs_you": True}
     left = [d for d in (_days_left(k["expires_on"], today) for k in stored) if d is not None]
     if left and min(left) < 0:
         return {"tone": "fail", "text": "Key expired", "needs_you": True}
@@ -250,8 +304,11 @@ def status(tool, keys, checks, today=None):
             "text": "Expires today" if n == 0 else f"Expires in {n} day{'s' if n != 1 else ''}",
             "needs_you": True,
         }
-    if all(r is not None for r in last):
+    if calls == "working":
         return {"tone": "ok", "text": "Working", "needs_you": False}
+    if all(r is not None for r in last):
+        limited = any(_limited(tool, r) for r in last)
+        return {"tone": "ok", "text": LIMITED if limited else "Working", "needs_you": False}
     return {"tone": "idle", "text": "Not checked", "needs_you": False}
 
 
@@ -691,7 +748,7 @@ def detail(c, who, tool_id, admins, auth=None):
             recent.append(_call_view(row))
             if len(recent) == RECENT:
                 break
-    state = status(tool, keys, latest_checks(c, tool_id))
+    state = state_of(c, tool, keys)
     out = {
         "tool": _tool_view(tool),
         "keys": [_key_view(c, who, k, admin, admins) for k in keys],
@@ -798,15 +855,16 @@ def _check_one(tool, key, secret):
         **headers,
         "User-Agent": "Tico-tool-check",
     }
-    url = tool["base_url"].rstrip("/") + tool["check_path"]
+    url = tool["base_url"].rstrip("/") + check_path_of(tool)
     try:
         code = send_check(url, headers, params)
     except egress.Blocked:
         return False, None, "Check failed: address refused"
     except Exception as exc:  # noqa: BLE001 - every network failure is one answer: the check failed
         return False, None, "Check failed: " + ("timed out" if "Timeout" in type(exc).__name__ else "no answer")
-    ok = 200 <= code < 300
-    return ok, code, _check_text(ok, code) if ok or code in (401, 403) else f"Check failed: {code}"
+    rejected = TS.rejects(tool["service"], code)
+    ok = 200 <= code < 300 or (code == 403 and not rejected)  # a 403: the key is known, the path needs another scope
+    return ok, code, _check_text(ok, code, tool["service"]) if ok or rejected else f"Check failed: {code}"
 
 
 def check_tool(store, vault, tool_id):
@@ -815,7 +873,7 @@ def check_tool(store, vault, tool_id):
         tool = tool_row(c, tool_id)
         if _field(tool, "mcp_url"):
             mcp = True
-        elif not tool["base_url"] or not tool["check_path"]:
+        elif not tool["base_url"] or not check_path_of(tool):
             raise Problem(
                 "check",
                 f"{tool['name']} has no check. Set its address and check path in Tools > {tool['name']} > Settings",
@@ -830,6 +888,10 @@ def check_tool(store, vault, tool_id):
         return mcp_connect.check(store, vault, tool_id)
     if not stored:
         raise Problem("check", f"{tool['name']} has no stored key. Add one in Tools > {tool['name']} > Keys", 409)
+    # An id stored as a key (TWILIO_ACCOUNT_SID) is no key to the vendor: sent as one it would read Key rejected.
+    stored = [(k, secret) for k, secret in stored if not tool_settings.is_setting(k["env"], secret)]
+    if not stored:
+        raise Problem("check", f"{tool['name']} holds only ids, no key to check", 409)
     results = [(key, *_check_one(tool, key, secret)) for key, secret in stored]
     stored = None  # the values leave scope before anything is written
     rows = []
@@ -857,18 +919,35 @@ def check_tool(store, vault, tool_id):
 _checking = threading.Lock()
 
 
+def check_path_of(tool):
+    """The path a tool's check GETs: its own, else its known service's at that service's address
+    (tool_services.check_path_for)."""
+    return TS.check_path_for(tool["service"], tool["base_url"], tool["check_path"])
+
+
 def due(c, now=None):
-    """Proxied tools with an address, a check path and a stored key whose newest check is older than CHECK_EVERY."""
+    """API tools with an address, a check path (their own or their known service's) and a stored key whose newest
+    check is older than CHECK_EVERY, however their key reaches runs: the server holds every key's value, so a key on
+    computers is checked as a proxied one is (same egress rules). A tool whose every stored key is named as an id
+    (`tool_settings.known_name`) has nothing to check."""
     cutoff = H.shift(now or H.now(), seconds=-int(CHECK_EVERY.total_seconds()))
-    return [
-        r[0]
-        for r in c.execute(
-            "SELECT t.id FROM tools t WHERE t.delivery='proxy' AND t.base_url<>'' AND (t.check_path<>'' OR t.mcp_url<>'') "
-            "AND EXISTS(SELECT 1 FROM credentials k WHERE k.tool_id=t.id AND k.ciphertext IS NOT NULL) "
-            "AND coalesce((SELECT max(checked_at) FROM tool_checks k WHERE k.tool_id=t.id),'')<? ORDER BY t.id",
-            (cutoff,),
-        )
-    ]
+    out = []
+    for tool in c.execute(
+        "SELECT t.* FROM tools t WHERE t.kind='api' AND t.base_url<>'' "
+        "AND EXISTS(SELECT 1 FROM credentials k WHERE k.tool_id=t.id AND k.ciphertext IS NOT NULL) "
+        "AND coalesce((SELECT max(checked_at) FROM tool_checks k WHERE k.tool_id=t.id),'')<? ORDER BY t.id",
+        (cutoff,),
+    ):
+        if not (tool["mcp_url"] or check_path_of(tool)):
+            continue
+        envs = [
+            r[0]
+            for r in c.execute("SELECT env FROM credentials WHERE tool_id=? AND ciphertext IS NOT NULL", (tool["id"],))
+        ]
+        if not tool["mcp_url"] and envs and all(tool_settings.known_name(e) for e in envs):
+            continue
+        out.append(tool["id"])
+    return out
 
 
 def check_soon(store, settings=None, vault=None):
@@ -1234,7 +1313,7 @@ def add_key(c, who, vault, tool_id, body):
     return _key_view(c, who, vault.row(c, brief["id"]), True, vault.admins)
 
 
-def ensure_tool(c, who, credential_id, from_computer=False):
+def ensure_tool(c, who, credential_id, from_computer=False, value=None):
     """Put a key stored outside Tools (Settings' vault, a chat's credential card, a computer's file migration) on a
     tool, in the caller's transaction, so every tool key shows on Tools: the first tool of its service that has no Read
     and write key yet takes it as that key, else a new tool is made for it, on the proxy when its service's address is
@@ -1243,7 +1322,10 @@ def ensure_tool(c, who, credential_id, from_computer=False):
     counts toward the new tool's id or name. A key Tools stored itself (`tool:` source) already has its tool; anything
     else is left alone. `from_computer`: a key a bot already
     uses from its computer's files (the file migration) stays on computers, on a computer tool, like the data
-    migration's: moving it to the proxy unasked would change a working bot. The tool id, or None."""
+    migration's: moving it to the proxy unasked would change a working bot. An id stored as a key (POSTHOG_PROJECT_ID,
+    TWILIO_ACCOUNT_SID: `tool_settings.is_setting` on its name and `value`, or its name alone when the value is not at
+    hand) never goes behind the proxy, nor on a tool with an address: it goes on a computer tool of its own with no
+    address, so its value reaches runs as it is and no check sends it as a key. The tool id, or None."""
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
     if not row or row["tool_id"] or str(row["source"] or "").startswith("tool:"):
         return None
@@ -1259,6 +1341,13 @@ def ensure_tool(c, who, credential_id, from_computer=False):
     ):
         return None
     service = TS.match(env=row["env"], name=row["name"])
+    env = row["env"] or ""
+    if tool_settings.is_setting(env, value) if value is not None else tool_settings.known_name(env):
+        tid = TS.insert_tool(c, service, row["name"], "computer", who.actor, H.now(), tid=_unique_id(c, TS.slug(env)))
+        c.execute("UPDATE tools SET name=?, base_url='', check_path='' WHERE id=?", (env, tid))
+        c.execute("UPDATE credentials SET tool_id=?, access_level='read_write' WHERE id=?", (tid, credential_id))
+        H.event(c, who.actor, "tool.key_added", tid, {"credential": credential_id, "access_level": "read_write"})
+        return tid
     free = (
         service
         and c.execute(
@@ -1424,7 +1513,7 @@ def _api_rows(c, who, admins, view):
         if not (admin and tool["audience"] is None) and not visible(c, who, tool, admins, view.auth):
             continue
         keys = _keys(c, tool["id"])
-        state = status(tool, keys, latest_checks(c, tool["id"]))
+        state = state_of(c, tool, keys)
         people = access_rows(c, who, tool["id"], admins, view.auth)
         if who.role in ("owner", "human"):
             # A bot listed is one the reader may see (the same rule every list of bots follows).
