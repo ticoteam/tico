@@ -1377,13 +1377,11 @@ def _checks_need_no_run(conn: "sqlite3.Connection", row: Row, owner: str, refs: 
 
     - PASSED_MOVES_ON: with the checks passed the stage asks for nothing more, so it is nobody's turn and the
       never-stuck check moves the task on when the next stage has room. `turn` is already False then: this only names it.
-    - CHECKS_SEEN: it is the owner's turn, but its last run on the task (not a keep-warm turn) began after Tico had this
+    - CHECKS_SEEN: it is the owner's turn, but its last run on the task began after Tico had this
       result (`refs.pr_done_at`), and the pull request's head is still this one: that run already had the head and its
       checks. The result stays a note for its next run.
 
     Anything it cannot read starts the run."""
-    from . import run_triggers
-
     if refs.get("pr_result") != "pass":
         return None
     if not turn:
@@ -1394,8 +1392,8 @@ def _checks_need_no_run(conn: "sqlite3.Connection", row: Row, owner: str, refs: 
         return None
     last = conn.execute(
         "SELECT started_at FROM attempts WHERE bot_id=? AND task_id=? AND started_at IS NOT NULL "
-        "AND coalesce(purpose,'')<>? ORDER BY rowid DESC LIMIT 1",
-        (_h().actor_id(owner), row["id"], cast("Any", run_triggers).KEEP_WARM),
+        "ORDER BY rowid DESC LIMIT 1",
+        (_h().actor_id(owner), row["id"]),
     ).fetchone()
     if not last or str(last[0]) <= at:
         return None

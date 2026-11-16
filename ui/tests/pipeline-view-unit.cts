@@ -434,7 +434,7 @@ const factories = (async () => {
   for (const f of ['data-pe-sf="expected_n"', 'data-sr-phase="here"']) assert.ok(at(f) > works && at(f) < leave, `${f} is under While here`);
   for (const f of ['data-pe-req-add']) assert.ok(at(f) > leave && at(f) < at('data-pe-more='), `${f} is under To leave`);
   assert.match(body, /<span>Late after<\/span>/);
-  assert.doesNotMatch(body, /keep_warm_hours|data-pe-seg="by_hand"|Expected time/, 'no Keep warm, no Tasks leave switch');
+  assert.doesNotMatch(body, /data-pe-seg="by_hand"|Expected time/, 'no Tasks leave switch');
   at('data-pe-sf="expected_unit"');
   // On entering, one list: the rules first (the Limit, then the rules acting there), then the actions (the owner
   // change), then + Rule and + Action; the other phases' rules come after their fields

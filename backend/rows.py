@@ -1490,7 +1490,6 @@ class PipelineRow(TypedDict):
     created_at: str
     updated_at: str
     retired_at: str | None
-    keep_warm_hours: int
 
 
 class StageRow(TypedDict):

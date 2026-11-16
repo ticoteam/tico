@@ -1,11 +1,11 @@
 """Keep-warm replies already posted leave every timeline.
 
-A keep-warm turn (backend/keep_warm.py) asks a task's session for a one-word "ok". Its notice was always kept out of
-every timeline (no seq), but its reply was posted to the task's room as an ordinary bot message, shown as an answer to
-a message nobody could see: one every 46 minutes or so, burying the bot's real questions. execution.complete no longer
-posts it. This takes the ones already written out the same way the notice is kept out: their seq is cleared, so no
-timeline, unread count, Flow chat, task page or later turn's room history reads them. Their text stays on the run
-(attempts.final_text), and a delivery of one still waiting is moot.
+A keep-warm turn (removed: 20261116130940_keep_warm_removed) asked a task's session for a one-word "ok". Its notice
+was always kept out of every timeline (no seq), but its reply was posted to the task's room as an ordinary bot message,
+shown as an answer to a message nobody could see: one every 46 minutes or so, burying the bot's real questions. This
+takes the ones already written out the same way the notice is kept out: their seq is cleared, so no timeline, unread
+count, Flow chat, task page or later turn's room history reads them. Their text stays on the run (attempts.final_text),
+and a delivery of one still waiting is moot.
 
 A thread whose newest message, or newest unread one, was such a reply has `last_seq` or `last_unread_seq` lowered to
 the newest message left, so it does not show as unread with nothing new in it.

@@ -91,7 +91,7 @@ def test_a_company_that_builds_software_gets_product_and_no_engineering(c):
         PS.PRODUCT,
         "product",
     )
-    assert (product["manager_id"], product["keep_warm_hours"]) == ("bot:" + PPM, 0)
+    assert product["manager_id"] == "bot:" + PPM
     assert [s["name"] for s in product["stages"]] == STAGES
     owners = {s["name"]: s["owner"] for s in product["stages"]}
     assert {name for name, owner in owners.items() if owner == PS.ASSIGNEE} == HELD_BY_THE_OWNER

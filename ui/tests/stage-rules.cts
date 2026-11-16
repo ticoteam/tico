@@ -225,9 +225,9 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(await desk.locator(`${ENTER} :is(input, select, fieldset)`).count(), 0, 'On entering has no fields');
     assert.deepEqual(await desk.locator(`${ENTER} [data-pe-enter-add]`).evaluateAll(els => els.map(el => [(el.textContent || '').trim(), el.getAttribute('data-pe-enter-add'),
       el.classList.contains('ghost')])), [['+ Rule', 'rule', true], ['+ Action', 'act', true]]);
-    // While here: Late after (the stage's expected time); no Keep warm, no Owner.
+    // While here: Late after (the stage's expected time); no Owner.
     assert.equal(await desk.locator('#pe-dialog .pe-phase[data-pe-phase="here"] .pe-f-time > span').first().innerText(), 'Late after');
-    assert.equal(await desk.locator('#pe-dialog :is([data-pe-sf="keep_warm_hours"], [data-pe-sf="owner"], [data-pe-seg="by_hand"])').count(), 0);
+    assert.equal(await desk.locator('#pe-dialog :is([data-pe-sf="owner"], [data-pe-seg="by_hand"])').count(), 0);
     // Each rule sits where it acts: a timer While here; an owner change and a bot's snooze under More rules, the stage's
     // own first. Every When lands in exactly one place.
     assert.deepEqual(await phaseRules(desk, 'enter'), []);

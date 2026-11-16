@@ -131,9 +131,6 @@ function peExpected(minutes: number | null): {n: string; unit: number} {
 /** A field: its name above its control, as every form in the app. `size` narrows it ('short': a number or a prefix). */
 const peF = (label: string, control: string, size = ''): string =>
   `<label class="pe-f${size ? ' pe-f-' + size : ''}"><span>${esc(label)}</span>${control}</label>`;
-/** Keep-warm hours as typed: a whole number from 0 to 24, or null for empty. */
-const peHours = (value: string): number | null =>
-  value.trim() === '' || !Number.isFinite(Number(value)) ? null : Math.min(24, Math.max(0, Math.round(Number(value))));
 /** Fields side by side on one line; they wrap on a narrow screen. */
 const peRow = (fields: string): string => `<div class="pe-row">${fields}</div>`;
 
@@ -536,7 +533,7 @@ function peMoreClick(ev: Event): boolean {
 
 /** A stage, as its phases in the order a task moves (spec "A stage picks its owner from several", 1): its name and goal;
     On entering, one list (its Limit, its actions, the rules that act as a task enters), + Rule and + Action; While here
-    (Late after: the stage's expected time; a stage's own keep-warm hours stay stored and are set through the API) and the rules that act while it is there; To leave (how tasks leave, then the
+    (Late after: the stage's expected time) and the rules that act while it is there; To leave (how tasks leave, then the
     requirements); then the built-in rules in one line. Read only, the fields are off and nothing is added or removed;
     the rules still open to be read. */
 function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count: number): string {
@@ -596,9 +593,7 @@ function peBodyHTML(state: PeState): string {
     + peRow(peF('Manager', `<select data-pe-pf="manager_id">${peChoice(peBots(), d.manager_id, 'Not set')}</select>`)
     + (state.factories ? peF('Factory', `<select data-pe-pf="factory_id">${peChoice(factories, d.factory_id, 'None')}</select>`) : '')
     // An empty prefix shows the pipeline's first letter as the example.
-    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" placeholder="${esc(d.name.trim().charAt(0).toUpperCase())}" autocomplete="off">`, 'short')
-    // Hours an active task's session is kept warm after its last work (backend/keep_warm.py); 0 is off.
-    + peF('Keep bot sessions ready (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-pf="keep_warm_hours" value="${d.keep_warm_hours ?? 0}">`, 'short'));
+    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" placeholder="${esc(d.name.trim().charAt(0).toUpperCase())}" autocomplete="off">`, 'short'));
   // One stage's editor (opened from its header): that stage alone, with no pipeline fields, + Stage or moves.
   const one = state.only ? d.stages.findIndex(s => s.id === state.only) : -1;
   const stages = one >= 0 ? peStageHTML(state, d.stages[one]!, one, d.stages.length)
@@ -658,7 +653,6 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
     else if (pf === 'prefix') d.prefix = value.trim() || null;
     else if (pf === 'manager_id') d.manager_id = value || null;
     else if (pf === 'factory_id') d.factory_id = value || null;
-    else if (pf === 'keep_warm_hours') d.keep_warm_hours = peHours(value) ?? 0;
     return;
   }
   const stage = d.stages[peIndex(el, 'peSi')];
@@ -693,7 +687,6 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
       stage.task_limit = Number(value) > 0 ? Math.round(Number(value)) : null;
       peEnterSay(state, peIndex(el, 'peSi'), 'limit');
     }
-    else if (sf === 'keep_warm_hours') stage.keep_warm_hours = peHours(value);
     else if (sf === 'expected_n' || sf === 'expected_unit') {
       const panel = el.closest('.pe-pair');
       const n = Number(panel?.querySelector<HTMLInputElement>('[data-pe-sf="expected_n"]')?.value ?? '');

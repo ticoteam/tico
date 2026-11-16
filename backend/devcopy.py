@@ -540,7 +540,6 @@ KEEP = (
             "rules",
             "stage_rules",
             "stage_pick_turns",
-            "stage_keep_warm",
             "run_backoff",
             "runners",
             "runner_states",
