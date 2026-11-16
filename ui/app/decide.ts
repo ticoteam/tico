@@ -1660,13 +1660,16 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
   const cid = decideAboutOf(it)?.task?.conversation_id || '';
   if (!DEC_CHAT || DEC_CHAT.item !== it.id || (cid && !DEC_CHAT.view) || !host.querySelector(':scope > .dc-chat')) {
     const typed = DEC_CHAT?.item === it.id ? DEC_CHAT.typed : '';
-    if (DEC_CHAT?.item !== it.id) $('.decide')?.classList.remove('dc-on-task');   // each item opens on its chat
+    // Each item opens on what it needs from the person: an OK on what is to be approved (its Spec, Proof, Invoice...),
+    // anything else on its chat. A redraw of the same item keeps the tab the person chose.
+    const fresh = DEC_CHAT?.item !== it.id, onTask = fresh ? decideKind(it) === 'ok' : !!$('.decide')?.classList.contains('dc-on-task');
+    if (fresh) $('.decide')?.classList.toggle('dc-on-task', onTask);
     decideChatStop();
     // A phone's two tabs, Chat and Task (decide.css): the task's chat, or the task itself, open, with its page.
     const tab = (k: string, label: string, on: boolean) => `<button type="button" role="tab" data-dc="tab" data-dc-tab="${k}" aria-selected="${on}">${label}</button>`;
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
-    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3><span role="tablist" aria-label="Show">${tab('chat', 'Chat', true)}`
-      + `${tab('task', decideTabName(st, it), false)}</span></div><div class="dc-chat"></div>`;
+    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3><span role="tablist" aria-label="Show">${tab('chat', 'Chat', !onTask)}`
+      + `${tab('task', decideTabName(st, it), onTask)}</span></div><div class="dc-chat"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
