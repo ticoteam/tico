@@ -44,18 +44,6 @@ EVENT = "market.briefing"
 PAGE = "market/briefings/"
 CATEGORY = "Market / Briefings"
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS market_briefings (id TEXT PRIMARY KEY, week TEXT NOT NULL UNIQUE, title TEXT NOT NULL, "
-    "body TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', bets TEXT NOT NULL DEFAULT '[]', created_by TEXT, "
-    "created_at TEXT, updated_at TEXT, answers TEXT)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-    H.add_column(c, "market_briefings", "source", "TEXT")
-
 
 def this_week(at=None):
     """The ISO week of a day: 2026-W44."""

@@ -392,21 +392,9 @@ BUILTINS = _builtins()
 BUILTIN_IDS = frozenset(r["id"] for r in BUILTINS)
 
 
-# ----------------------------------------------------------------------------- schema
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS rules(
- id TEXT PRIMARY KEY, scope_kind TEXT NOT NULL, scope_id TEXT NOT NULL DEFAULT '', event TEXT NOT NULL,
- condition TEXT NOT NULL DEFAULT '{}', then_outcome TEXT NOT NULL, params TEXT NOT NULL DEFAULT '{}',
- enabled INTEGER NOT NULL DEFAULT 1, position INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
- created_by TEXT NOT NULL, action_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
-CREATE INDEX IF NOT EXISTS rules_event ON rules(event, enabled);
-CREATE INDEX IF NOT EXISTS rules_scope ON rules(scope_kind, scope_id);
-"""
-
-
 def ensure_schema(c):
-    """Keep creator attribution separate from the person responsible for a task action."""
-    H.add_column(c, "rules", "action_by", "TEXT")
+    """Keep creator attribution separate from the person responsible for a task action: a rule made without one
+    (backend/profiles.py) acts as its creator until it is revised."""
     # Only an unedited legacy rule is known to carry its creator's action. Revised legacy rules fail open on private
     # tasks until someone saves their action again, rather than borrowing an unknown editor's creator permissions.
     c.execute("UPDATE rules SET action_by=created_by WHERE action_by IS NULL AND revision=1")

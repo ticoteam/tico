@@ -40,7 +40,7 @@ function gsSetupOpen(): boolean {
 
 // first-run.ts
 // ----------------------------------------------------------------- the bot page and the org chart
-const frNeedsSetup = (e: FrBot | null | undefined): e is FrBot => !!e && ['needs_setup', 'needs_onboarding'].includes(String(e.onboarding_state));
+const frNeedsSetup = (e: FrBot | null | undefined): e is FrBot => !!e && e.onboarding_state === 'needs_setup';
 // The org chart's mark: small, beside the name, a gear so the name keeps the row; it says the bot page's words on hover.
 const frTreeMark = (e: FrBot | null | undefined): string => (frNeedsSetup(e) ? '<span class="tree-setup" role="img" aria-label="Onboarding" title="Onboarding: it learns in chat and takes no work until someone above it marks onboarding complete"><span class="nav-icon" aria-hidden="true">settings</span></span>' : '');
 

@@ -7,7 +7,6 @@ import uuid
 import pytest
 
 from backend import github_app, hubdb as H, repositories as R
-from backend.store import Store
 from backend.tests.helpers.github_app import api, gh, auth, connect, runner_token, turn_token, put_extras  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.repositories import catalog, put
@@ -246,30 +245,6 @@ def test_modes_mixed_scopes_alias_and_default(api, gh):
         c.execute("INSERT INTO bot_config(bot,team,owner_id,repo) VALUES('new-test','t','ana','bot-new-test')")
         BS.write(c, 'new-test', {})
         assert BS.read(c, 'new-test')['repo_access_mode'] == 'all'
-
-
-def test_upgrade_migrates_existing_extras_once(api, gh):
-    connect(api)
-    runner_token(api, 'cpo')
-    store = api.app_state.store
-    with store.transaction() as c:
-        c.execute('DELETE FROM cloud_migrations WHERE version=50')
-        c.execute("DELETE FROM registry_metadata WHERE key='repositories-access-migrated'")
-        R.save_metadata(c, 'github-extra-repos', {'cpo': ['Acme/product', 'Acme/docs'], 'oldie': ['Acme/archive']})
-    Store(store.settings).initialize(seed_market=False)
-    with store.transaction() as c:
-        data = R.access(c, 'cpo', 'Acme')
-        assert data['mode'] == 'chosen'
-        assert {r['full_name']: r['access'] for r in data['chosen']} == {'Acme/product': 'write', 'Acme/docs': 'write'}
-        assert R.access(c, 'oldie', 'Acme')['mode'] == 'chosen'
-        assert R.access(c, 'cmo', 'Acme')['mode'] == 'own'
-        assert c.execute('SELECT count(*) FROM repositories WHERE enabled=1').fetchone()[0] == 3
-    assert set(turn_token(api).json()['repositories']) == {'Acme/emp-cpo', 'Acme/product', 'Acme/docs'}
-    with store.transaction() as c:
-        R.set_access(c, 'cpo', R.RepoAccessUpdate(mode='own'), 'Acme', 'human:ana')
-        R.migrate(c)
-        assert R.access(c, 'cpo', 'Acme')['mode'] == 'own'
-        assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
 
 
 def test_computer_union_token_and_old_heartbeat(api, gh):

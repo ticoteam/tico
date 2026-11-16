@@ -694,24 +694,6 @@ def test_condition_validation_matches_hq_dictionary_types_and_bounds():
     )
 
 
-def test_migration_is_idempotent_and_preserves_receipts():
-    path = Path(__file__).resolve().parents[1] / "migrations" / "20261105010200_suggestions.py"
-    spec = importlib.util.spec_from_file_location("suggestions_migration", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with sqlite3.connect(":memory:") as c:
-        migration.up(c)
-        c.execute(
-            "INSERT INTO suggestions(id,fingerprint,owner_role,title,body,condition,cooldown_days,created_at,updated_at) "
-            "VALUES('id','hash','botops','Title','Body','{}',7,'then','then')"
-        )
-        migration.up(c)
-        assert c.execute("SELECT status,message_id FROM suggestions").fetchone() == ("new", None)
-        with pytest.raises(sqlite3.IntegrityError):
-            c.execute("UPDATE suggestions SET status='unknown'")
-        assert c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-
-
 def test_engineering_lead_role_goes_to_a_new_org_engineering_team_manager(install, api):
     with install.transaction() as c:
         BS.update(c, "ops", {"template": "engineering-manager"})

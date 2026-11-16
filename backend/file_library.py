@@ -35,25 +35,6 @@ from .store import H, Problem
 
 LOG = logging.getLogger("tico.files")
 
-SCHEMA = [
-    # Which version of each file the index holds; `doc` is the file's row id in file_text.
-    "CREATE TABLE IF NOT EXISTS file_text_state(doc INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL UNIQUE, "
-    "version INTEGER NOT NULL, indexed_at TEXT NOT NULL)",
-    # One row per hard-deleted file: who and when, never what it held.
-    "CREATE TABLE IF NOT EXISTS file_deletions(file_id TEXT PRIMARY KEY, actor TEXT NOT NULL, versions INTEGER NOT NULL, "
-    "created_at TEXT NOT NULL)",
-    # Bytes a deletion left unused, removed from storage after the write commits and retried until gone.
-    "CREATE TABLE IF NOT EXISTS blob_purges(digest TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT '', "
-    "queued_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')",
-    # Versions are immutable, except that a hard delete (a file_deletions row, written first) removes them.
-    "DROP TRIGGER IF EXISTS bot_file_versions_no_delete",
-    "CREATE TRIGGER bot_file_versions_no_delete BEFORE DELETE ON bot_file_versions "
-    "WHEN NOT EXISTS (SELECT 1 FROM file_deletions WHERE file_id=OLD.file_id) "
-    "BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END",
-]
-# Created apart so a SQLite built without FTS5 still starts: search then matches titles only.
-FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS file_text USING fts5(title, text, tokenize='porter unicode61')"
-
 LIST_MAX = 100
 SEARCH_MAX = 50
 LIST_BYTES = 256 * 1024  # a page of the list stops here, whatever its limit
@@ -110,16 +91,6 @@ def kind_filter(kind):
         + ("NOT IN" if kind == "other" else "IN")
         + " (%s)" % ",".join("?" * len(stored))
     ), stored
-
-
-def ensure(c):
-    """Unversioned, like the trash: runs inside initialize's transaction at every start."""
-    for statement in SCHEMA:
-        c.execute(statement)
-    try:
-        c.execute(FTS)
-    except sqlite3.OperationalError:
-        pass
 
 
 def has_fts(c):

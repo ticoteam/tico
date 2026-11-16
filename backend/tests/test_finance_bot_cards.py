@@ -17,7 +17,6 @@ from backend.finance.context import load
 from backend.finance.core import validate as V
 from backend.finance.core.org import SYSTEM
 from backend.finance.store import budgets as SB
-from backend.finance.store import schema as FS
 from backend.tests.helpers.api import headers  # noqa: F401
 from backend.tests.helpers.finance_fixtures import (
     AT,
@@ -1300,37 +1299,6 @@ def test_a_card_number_entered_as_a_tax_id_is_refused_before_it_is_sealed(books)
             act(c, OWNER, "contact_create", {"name": "Acme Shop", "kind": "vendor", "tax_id": "12-3456789"}).status
             == "committed"
         )
-
-
-def test_migration_67_marks_a_cutoff_freeze_made_before_freeze_by_existed(books):
-    fake = FakeMercury()
-    budget, coder, seller = _world(books, fake)
-    with books.transaction() as c:
-        assert act(c, OWNER, "card_freeze", {"card_id": seller}).status == "committed"  # a person's freeze first
-        spend(c, "6100", 50_000)
-        FA.drain_events(c, AT)  # then the cutoff: coder only
-        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "person"
-        # An install from before freeze_by: the columns are empty, the action log is what there is.
-        c.execute("UPDATE fin_cards SET freeze_by=NULL, freeze_budget_id=NULL")
-        FS.phase3(c)
-        row = c.execute("SELECT freeze_by, freeze_budget_id FROM fin_cards WHERE id=?", (coder,)).fetchone()
-        assert tuple(row) == ("budget", budget)
-        assert _frozen_by(c, seller) is None
-        # A cutoff freeze whose card has since been given no allocation was a person's zero: it stays NULL.
-        c.execute("UPDATE fin_cards SET freeze_by=NULL, freeze_budget_id=NULL")
-        c.execute("UPDATE fin_allocations SET amount=0 WHERE target_kind='card' AND target_id=?", (coder,))
-        FS.phase3(c)
-        assert _frozen_by(c, coder) is None
-
-
-def test_migration_67_adds_the_saved_card_record_to_an_install_from_66(store):
-    with store.transaction() as c:
-        c.execute("DELETE FROM cloud_migrations WHERE version=67")
-        c.execute("DROP TABLE fin_card_saves")
-    store.initialize(seed_market=False)
-    with store.read() as c:
-        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_card_saves'").fetchone()
-        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=67").fetchone()[0] == 1
 
 
 def test_a_routed_raise_is_checked_at_the_raised_amount_with_the_parents_cards(books):

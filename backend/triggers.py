@@ -54,7 +54,6 @@ from . import tico_notices
 from . import trigger_presets as P
 from .models import Contract
 from .store import Problem
-from .triggers_schema import SCHEMA  # noqa: F401  (hubdb.MIGRATIONS applies it)
 
 PATH = "/api/v2/hooks/"  # under /api/v2: the runner hostname routes only that prefix
 EVENT = "webhook."  # a routine runs `on: webhook.<id>`

@@ -14,30 +14,30 @@ they stay greppable.
 ## Value lists
 
 <!-- status-values:start -->
-| Column | Enforced by | NULL | Values | Retired spelling (mapped to) |
-|---|---|---|---|---|
-| [`tasks.status`](#tasksstatus) | trigger | refused | `open`, `done`, `closed` |  |
-| [`jobs.state`](#jobsstate) | trigger | refused | `queued`, `leased`, `running`, `input`, `completed`, `failed`, `uncertain`, `canceled` | `cancelled` (`canceled`), `done` (`completed`) |
-| [`attempts.state`](#attemptsstate) | trigger | allowed | `leased`, `running`, `input`, `completed`, `failed`, `interrupted`, `expired` |  |
-| [`automation_runs.status`](#automation_runsstatus) | trigger | refused | `queued`, `running`, `waiting`, `ok`, `partial`, `failed`, `empty`, `skipped`, `held` |  |
-| [`webhook_sends.state`](#webhook_sendsstate) | trigger | refused | `ready`, `sending`, `delivered`, `failed`, `canceled`, `withheld` | `cancelled` (`canceled`) |
-| [`bots.state`](#botsstate) | check | allowed | `active`, `paused`, `planned`, `quarantined`, `archived` |  |
-| [`bot_config.onboarding_state`](#bot_configonboarding_state) | check | allowed | `needs_setup`, `onboarded` | `needs_onboarding` (`needs_setup`) |
-| [`bot_status.state`](#bot_statusstate) | check | allowed | `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`, `quarantined` |  |
-| [`automation_versions.status`](#automation_versionsstatus) | check | refused | `active`, `pending` |  |
-| [`goals.status`](#goalsstatus) | check | allowed | `red`, `yellow`, `green`, `gray`, `done`, `dropped` |  |
-| [`goals.status_source`](#goalsstatus_source) | check | allowed | `person`, `auto` |  |
-| [`goals.suggest_status`](#goalssuggest_status) | check | allowed | `red`, `yellow`, `green` |  |
-| [`goal_proposals.status`](#goal_proposalsstatus) | check | refused | `pending`, `confirmed`, `rejected` |  |
-| [`bot_files.state`](#bot_filesstate) | check | refused | `ready`, `deleted`, `not_synced` |  |
-| [`doc_sources.status`](#doc_sourcesstatus) | check | refused | `link_only`, `queued`, `preparing`, `updating`, `ready`, `empty`, `failed`, `access_needed` |  |
-| [`model_subscriptions.status`](#model_subscriptionsstatus) | check | refused | `new`, `working`, `needs_reconnect` |  |
-| [`strategy_actions.state`](#strategy_actionsstate) | check | refused | `proposed`, `done`, `undone` |  |
-| [`google_connects.status`](#google_connectsstatus) | check | refused | `signing_in`, `finishing`, `connected`, `disconnected`, `failed` |  |
-| [`google_workspaces.status`](#google_workspacesstatus) | check | refused | `pending`, `connected`, `failing` |  |
-| [`fin_cards.status`](#fin_cardsstatus) | check | refused | `active`, `frozen`, `canceled` | `cancelled` (`canceled`) |
-| [`fin_payments.status`](#fin_paymentsstatus) | check | refused | `queued`, `sending`, `awaiting_bank_approval`, `submitted`, `settled`, `returned`, `failed`, `canceled`, `unknown` | `cancelled` (`canceled`) |
-| [`fin_transfers.status`](#fin_transfersstatus) | check | refused | `queued`, `submitted`, `unknown`, `failed`, `posted`, `canceled` | `cancelled` (`canceled`) |
+| Column | Enforced by | NULL | Values |
+|---|---|---|---|
+| [`tasks.status`](#tasksstatus) | trigger | refused | `open`, `done`, `closed` |
+| [`jobs.state`](#jobsstate) | trigger | refused | `queued`, `leased`, `running`, `input`, `completed`, `failed`, `uncertain`, `canceled` |
+| [`attempts.state`](#attemptsstate) | trigger | allowed | `leased`, `running`, `input`, `completed`, `failed`, `interrupted`, `expired` |
+| [`automation_runs.status`](#automation_runsstatus) | trigger | refused | `queued`, `running`, `waiting`, `ok`, `partial`, `failed`, `empty`, `skipped`, `held` |
+| [`webhook_sends.state`](#webhook_sendsstate) | trigger | refused | `ready`, `sending`, `delivered`, `failed`, `canceled`, `withheld` |
+| [`bots.state`](#botsstate) | check | allowed | `active`, `paused`, `planned`, `quarantined`, `archived` |
+| [`bot_config.onboarding_state`](#bot_configonboarding_state) | check | allowed | `needs_setup`, `onboarded` |
+| [`bot_status.state`](#bot_statusstate) | check | allowed | `idle`, `running`, `waiting_human`, `waiting_bot`, `blocked`, `limited`, `crashed`, `paused`, `quarantined` |
+| [`automation_versions.status`](#automation_versionsstatus) | check | refused | `active`, `pending` |
+| [`goals.status`](#goalsstatus) | check | allowed | `red`, `yellow`, `green`, `gray`, `done`, `dropped` |
+| [`goals.status_source`](#goalsstatus_source) | check | allowed | `person`, `auto` |
+| [`goals.suggest_status`](#goalssuggest_status) | check | allowed | `red`, `yellow`, `green` |
+| [`goal_proposals.status`](#goal_proposalsstatus) | check | refused | `pending`, `confirmed`, `rejected` |
+| [`bot_files.state`](#bot_filesstate) | check | refused | `ready`, `deleted`, `not_synced` |
+| [`doc_sources.status`](#doc_sourcesstatus) | check | refused | `link_only`, `queued`, `preparing`, `updating`, `ready`, `empty`, `failed`, `access_needed` |
+| [`model_subscriptions.status`](#model_subscriptionsstatus) | check | refused | `new`, `working`, `needs_reconnect` |
+| [`strategy_actions.state`](#strategy_actionsstate) | check | refused | `proposed`, `done`, `undone` |
+| [`google_connects.status`](#google_connectsstatus) | check | refused | `signing_in`, `finishing`, `connected`, `disconnected`, `failed` |
+| [`google_workspaces.status`](#google_workspacesstatus) | check | refused | `pending`, `connected`, `failing` |
+| [`fin_cards.status`](#fin_cardsstatus) | check | refused | `active`, `frozen`, `canceled` |
+| [`fin_payments.status`](#fin_paymentsstatus) | check | refused | `queued`, `sending`, `awaiting_bank_approval`, `submitted`, `settled`, `returned`, `failed`, `canceled`, `unknown` |
+| [`fin_transfers.status`](#fin_transfersstatus) | check | refused | `queued`, `submitted`, `unknown`, `failed`, `posted`, `canceled` |
 <!-- status-values:end -->
 
 ## How the lists are enforced
@@ -49,7 +49,7 @@ Two kinds of enforcement, both refusing a new write outside the list:
   attempts, automation_runs, webhook_sends), where a CHECK would mean rebuilding a large table. They check new writes
   only; rows already stored are not read.
 - **check**: a named table constraint `CONSTRAINT status_values_<column> CHECK (<column> IN (...))`, installed by
-  rebuilding the small table. A rebuild renames the old table aside, copies every row (mapping retired spellings), checks
+  rebuilding the small table. A rebuild renames the old table aside, copies every row, checks
   the row count, then drops the old table. Foreign keys are off for the rebuild, so child rows are not cascaded.
 
 Changing a list is a code change in `backend/status_values.py`. `Store.initialize` calls `enforce` on every start: it
@@ -57,8 +57,7 @@ replaces a trigger whose text differs and rebuilds a CHECK whose list differs. A
 
 ### A stored value outside its list
 
-Nothing stops the server for a value outside a list. Migration 0002 (`upgrade`) and every later start (`enforce`) do
-this instead:
+Nothing stops the server for a value outside a list. Every start (`enforce`) does this instead:
 
 | Column kind | Rows that hold the value | New writes | What is logged |
 |---|---|---|---|
@@ -68,32 +67,8 @@ this instead:
 So removing a value from a CHECK column's list while rows still hold it leaves that column enforcing the old list, and
 says so in the log. Remediation: read the rows with `status_values.unknown_values(conn)` (or the warning), write a
 migration that maps or refuses them, and the next start's `enforce` installs the CHECK. Tests:
-`test_status_values.py::test_the_upgrade_keeps_values_it_cannot_map_logs_them_and_still_guards_new_writes`,
-`::test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check` and
+`test_status_values.py::test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check` and
 `::test_a_later_start_logs_a_check_column_it_cannot_enforce`.
-
-## Retired spellings and the upgrade
-
-Migration `backend/migrations/0002_status_values.py` runs `backend/status_values.py` `upgrade`, with foreign keys off
-(`FOREIGN_KEYS_OFF`) so a CHECK rebuild does not cascade:
-
-1. Counts every stored value outside the list (retired spellings are accepted, they are mapped next) and logs what it
-   finds (see above). It never stops for them.
-2. Rewrites retired spellings on trigger columns with `UPDATE`, and maps them on CHECK columns while the table is copied.
-3. Installs the triggers, and the CHECKs for every column whose rows are all in its list.
-
-The retired spellings are the last column of the value table. `cancelled` was also moved to `canceled` outside the
-stable set by migration 0032: `assistant_actions.status`, `automation_mail_actions.state`, `bot_tool_requests.state`,
-`bot_transitions.state`, `bot_transition_checkpoints.state`, `credential_requests.status`, `fin_cards.provider_status`,
-`model_logins.state`, `seats.request_state` (with `cancelling` to `canceling`), `service_jobs.state`, `slack_posts.state`,
-`task_reconnects.ended`, `worktree_waits.state`. `jobs.state` `done` is the spelling older hubs stored for a finished
-job.
-
-Readers of `bot_config.onboarding_state` still accept `needs_onboarding` for one release (`backend/statuses.py`).
-New writes can only be `needs_setup` or `onboarded`.
-
-On a fresh file the migration runs before the module schema code creates most tables, so `Store.initialize` calls
-`enforce` last, on every start: a new database has the constraints and no retired spelling.
 
 ## Same word, different meanings (kept apart)
 

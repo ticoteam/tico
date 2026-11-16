@@ -48,20 +48,6 @@ MESSAGE_PART = (
     "\n\nThe message to handle: id {{message.id}} in thread {{message.thread}}, from {{message.from}} "
     "({{message.from_name}}), subject {{message.subject}}. Its body:\n{{message.body}}"
 )
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS redesign_migrated(kind TEXT NOT NULL, id TEXT NOT NULL, migration TEXT NOT NULL, "
-    "automation TEXT, PRIMARY KEY(kind, id))",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-    from .hubdb import add_column
-
-    # What became of each object (`outcome` converted | kept | failed, `why`), and when the owner was told of it.
-    for column in ("outcome", "why", "title", "migrated_at", "told"):
-        add_column(c, "redesign_migrated", column, "TEXT")
 
 
 # ---------------------------------------------------------------------------------------------------- reading
@@ -1055,7 +1041,6 @@ def cutover(store, new=False):
     install with nobody yet, waits for `catch_up`. `new`: the database was made by this start (Store.initialize), so
     it tells no one and logs no warning (`_finish`). Returns the result, or None when it already ran."""
     with store.transaction() as c:
-        ensure(c)
         record = state(c)
         if record.get("state") == "done":
             return None

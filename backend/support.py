@@ -44,14 +44,6 @@ from .store import H, Problem, encode, refusal_problem
 
 log = logging.getLogger("tico.support")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS support_tickets(
- id TEXT PRIMARY KEY, actor TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
- message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent TEXT NOT NULL DEFAULT '{}',
- hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
- seen_id INTEGER NOT NULL DEFAULT 0, checked_at TEXT, request_key TEXT);
-CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
-"""
 MAX_MESSAGE = 4000
 PER_DAY = 10  # new tickets one person may file in a day; HQ limits the address as well
 # How often a ticket is asked about, at most. HQ counts every ask from this install (one address) together, so a ticket

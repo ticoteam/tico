@@ -20,25 +20,6 @@ from fastapi import Request
 from .runs import state as run_state
 from .store import H, Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS runner_load_samples(runner_id TEXT NOT NULL, created_at INTEGER NOT NULL,
-  sampled_at INTEGER NOT NULL, cpu_pct REAL, mem_used INTEGER, mem_total INTEGER, swap_used INTEGER,
-  swap_total INTEGER, running_turns INTEGER NOT NULL, PRIMARY KEY(runner_id,created_at)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS attempt_load_snapshots(attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
-  at_start TEXT, at_end TEXT) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_points(runner_id TEXT NOT NULL, span INTEGER NOT NULL, created_at INTEGER NOT NULL,
-  n INTEGER NOT NULL, scope TEXT NOT NULL DEFAULT 'host', cpu REAL NOT NULL, cpu_max REAL NOT NULL, load1 REAL,
-  mem_used INTEGER, mem_max INTEGER, mem_total INTEGER, swap_used INTEGER, swap_total INTEGER, disk_free INTEGER,
-  disk_total INTEGER, active INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, span, created_at)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_usage(runner_id TEXT NOT NULL, span INTEGER NOT NULL, created_at INTEGER NOT NULL,
-  kind TEXT NOT NULL, key TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', harness TEXT NOT NULL DEFAULT '',
-  n INTEGER NOT NULL, cpu REAL NOT NULL, cpu_max REAL NOT NULL, mem INTEGER NOT NULL, mem_max INTEGER NOT NULL,
-  PRIMARY KEY(runner_id, span, created_at, kind, key)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS perf_overloads(id INTEGER PRIMARY KEY, runner_id TEXT NOT NULL, started_at INTEGER NOT NULL,
-  last_seen_at INTEGER NOT NULL, ended_at INTEGER, reasons TEXT NOT NULL, cpu_max REAL NOT NULL, mem_max REAL NOT NULL,
-  runs_max INTEGER NOT NULL DEFAULT 0, bots TEXT NOT NULL DEFAULT '[]', procs TEXT NOT NULL DEFAULT '[]');
-CREATE INDEX IF NOT EXISTS perf_overloads_runner ON perf_overloads(runner_id, started_at);
-"""
 MODES = ("on", "off")
 MINUTE, TEN = 60, 600
 MINUTE_HOURS = 48  # one-minute points, then ten-minute ones

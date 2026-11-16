@@ -34,7 +34,7 @@ from .store import H, Problem
 # Rows and seconds per query; `max_rows` in the request may only lower the cap.
 LIMITS = {"owner": (5000, 20.0), "human": (500, 5.0), "bot": (500, 5.0)}
 # Readable as they are, by everyone: nothing personal, nothing secret, plus the schema.
-OPEN = {"cloud_migrations", "rate_limits", "service_health", "learnings", "sqlite_master"}
+OPEN = {"rate_limits", "service_health", "learnings", "sqlite_master"}
 # The Company page's tables the owner reads as the page's API does; the readers' own tables are not here at all.
 COMPANY_PAGE_OWNER_TABLES = (
     "company_page_settings",
@@ -614,7 +614,7 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # team watches and what the Librarian wrote about them, the market's to read.
         "entity_watches": "1",
         "market_briefings": "1",
-        # One history table (backend/migrations/0064_history_events.py), each row read as its subject is: a task's
+        # One history table (backend/migrations/baseline.sql), each row read as its subject is: a task's
         # with the task (and its words through the content gate), a goal's with the goal, the company's and the
         # market's by everyone, the strategy's by the owner (its draft's words may be unpublished).
         "history_events": (

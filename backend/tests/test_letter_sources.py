@@ -165,33 +165,3 @@ def test_large_source_fanout_coalesces_to_one_invalidation_without_letter_ids(ap
     invalidated = read_letters(api, 'ana-test', before)
     assert len(invalidated) == 1 and invalidated[0][2]['invalidate'] is True and 'id' not in invalidated[0][2]
     assert read_letters(api, 'cara-test', before) == []
-
-
-def test_source_map_migration_is_standalone_and_backfills_tasks_threads_and_roots():
-    path = Path(__file__).resolve().parents[1] / 'migrations' / '20261105101525_letter_sources.py'
-    spec = importlib.util.spec_from_file_location('letter_sources_migration', path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with sqlite3.connect(':memory:') as c:
-        migration.up(c)
-        assert c.execute('SELECT count(*) FROM letter_sources').fetchone()[0] == 0
-    with sqlite3.connect(':memory:') as c:
-        c.executescript(
-            'CREATE TABLE letters(id TEXT PRIMARY KEY,task_id TEXT,thread_id TEXT,source_provenance TEXT);'
-            'CREATE TABLE conversations(id TEXT PRIMARY KEY,root_id TEXT,task_id TEXT);'
-        )
-        c.execute("INSERT INTO conversations VALUES('root','root','root-task')")
-        c.execute("INSERT INTO conversations VALUES('child','root',NULL)")
-        c.execute(
-            'INSERT INTO letters VALUES(?,?,?,?)',
-            ('one', 'direct-task', 'child', json.dumps({'tasks': ['frozen-task'], 'threads': ['child']})),
-        )
-        migration.up(c)
-        migration.up(c)
-        assert set(c.execute('SELECT source_type,source_id FROM letter_sources')) == {
-            ('task', 'direct-task'),
-            ('task', 'frozen-task'),
-            ('task', 'root-task'),
-            ('thread', 'child'),
-            ('thread', 'root'),
-        }

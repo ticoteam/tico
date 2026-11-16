@@ -42,24 +42,6 @@ from . import hubdb
 
 LOG = logging.getLogger("tico.flight")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS flight_requests(created_at INTEGER NOT NULL, span INTEGER NOT NULL, route TEXT NOT NULL,
-  caller TEXT NOT NULL, n INTEGER NOT NULL, errors INTEGER NOT NULL, bytes INTEGER NOT NULL, total_ms REAL NOT NULL,
-  p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, span, route, caller)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS flight_slow(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, route TEXT, caller TEXT,
-  actor TEXT, ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER, top TEXT);
-CREATE TABLE IF NOT EXISTS flight_process(created_at INTEGER PRIMARY KEY, cpu REAL, rss INTEGER, threads INTEGER,
-  fds INTEGER, sockets INTEGER, lag_p95 REAL, lag_max REAL, requests INTEGER, queries INTEGER, sql_ms REAL,
-  txns INTEGER, wait_max REAL, hold_max REAL, hold_p95 REAL, locked INTEGER, dropped INTEGER);
-CREATE TABLE IF NOT EXISTS flight_sql(created_at INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL,
-  total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, fingerprint)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS flight_db(created_at INTEGER PRIMARY KEY, bytes INTEGER, wal_bytes INTEGER, free_bytes INTEGER,
-  detail TEXT);
-CREATE TABLE IF NOT EXISTS flight_events(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, kind TEXT NOT NULL,
-  detail TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS flight_events_kind ON flight_events(kind, created_at);
-"""
-
 SLOW_MS = 1000  # a request this slow is logged on its own
 SLOW_PER_MINUTE = 50
 SLOW_KEEP = 5000

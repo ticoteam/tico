@@ -243,7 +243,6 @@ def hold_item(api, bot="ops"):
     from backend import run_backoff
 
     with api.app.state.store.transaction() as c:
-        run_backoff.ensure(c)
         c.execute(
             "INSERT INTO run_backoff(bot,fails,error_class,error) VALUES(?,5,?,?) ON CONFLICT(bot) DO NOTHING",
             (bot, run_backoff.SIGN_IN, "401 unauthorized"),

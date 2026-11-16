@@ -82,20 +82,6 @@ CELL_MAX = 400
 INTERRUPTED = {"code": "interrupted", "message": "The run was cut off; run it again"}
 SHARPEN_TARGET = "market/open-questions"
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS lens_runs (id TEXT PRIMARY KEY, lens TEXT NOT NULL, applies_to TEXT NOT NULL, "
-    "on_draft INTEGER NOT NULL DEFAULT 0, strategy_n INTEGER, status TEXT NOT NULL, "
-    "answers TEXT NOT NULL DEFAULT '{}', result TEXT, applied TEXT NOT NULL DEFAULT '[]', "
-    "sharpen_tasks TEXT NOT NULL DEFAULT '{}', proposal_id TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, "
-    "finished_at TEXT, error TEXT, claimed INTEGER NOT NULL DEFAULT 0)",
-    "CREATE INDEX IF NOT EXISTS lens_runs_created ON lens_runs(created_at)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-
 
 # Test seam: how the job is started.
 def spawn(work):

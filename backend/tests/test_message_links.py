@@ -378,56 +378,19 @@ def test_a_write_outside_store_transaction_is_read_from_its_row_until_the_next_t
     compare(s, world, monkeypatch)
 
 
-def test_backfill_is_batched_idempotent_and_catches_rows_an_older_server_wrote(tmp_path, monkeypatch, booted):
+def test_backfill_is_batched_and_idempotent(tmp_path, monkeypatch, booted):
     s = store(tmp_path, booted)
     world = build(s, 11, steps=50, changes=0)
-    with s.transaction() as c:
-        tail = [world.say(c) for _ in range(10)]
     with s.read() as c:
         before = sorted(map(tuple, c.execute("SELECT * FROM message_links")))
-        top = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
-    # An older server, after a rollback: no triggers, so its rows have no links, are not seen and not dirty.
-    raw = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
-    raw.row_factory = sqlite3.Row
-    for name in ("message_links_insert", "message_links_update", "message_links_delete"):
-        raw.execute("DROP TRIGGER " + name)
-    unlinked = [
-        r[0]
-        for r in raw.execute(
-            "SELECT id FROM messages WHERE id NOT IN (%s) ORDER BY rowid DESC LIMIT 5" % ",".join("?" * len(tail)), tail
-        )
-    ]
-    for table in ("message_links", "message_links_seen"):
-        raw.execute(f"DELETE FROM {table} WHERE message_id IN (%s)" % ",".join("?" * 5), unlinked)
-    # It deletes the newest messages and writes one, which takes a rowid an earlier message had.
-    raw.execute("DELETE FROM messages WHERE id IN (%s)" % ",".join("?" * len(tail)), tail)
-    tid, old = world.tasks[1], "msg-older"
-    raw.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
-    raw.execute(
-        "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-        "VALUES(?,?,'human:ana','human:ben','chat','b',?,'z')",
-        (old, world.rooms[0], json.dumps({"task": tid})),
-    )
-    assert raw.execute("SELECT rowid FROM messages WHERE id=?", (old,)).fetchone()[0] < top
-    raw.close()
-    # The upgrade: migrations put the triggers back and the start backfills every message not seen.
-    again = Store(Settings(db_path=tmp_path / "hub.sqlite"))
-    again.initialize(seed_market=False)
-    with again.read() as c:
-        assert c.execute(
-            "SELECT 1 FROM message_links WHERE message_id=? AND kind='task' AND target=?", (old, tid)
-        ).fetchone()
-        after = sorted(map(tuple, c.execute("SELECT * FROM message_links WHERE message_id<>?", (old,))))
-    assert after == before
-    assert old in [m for m, _ in pages(again, world.rooms[0], tid, "human:ana", 200)[0][:-1]]
-    compare(again, world, monkeypatch)
+    tid = world.tasks[1]
     # From scratch in batches of 7: the same links, every batch commits on its own, and a second pass reads nothing.
-    with again.transaction() as c:
+    with s.transaction() as c:
         c.execute("DELETE FROM message_links")
         c.execute("DELETE FROM message_links_seen")
         c.execute("DELETE FROM registry_metadata WHERE key=?", (message_links.READY,))
     commits = []
-    with again.read() as c:
+    with s.read() as c:
         assert message_links.candidates(c, tid, world.rooms[0]) is None
         c.set_trace_callback(lambda sql: commits.append(sql) if sql == "COMMIT" else None)
         count = message_links.backfill(c, batch=7, span=25)
@@ -435,4 +398,5 @@ def test_backfill_is_batched_idempotent_and_catches_rows_an_older_server_wrote(t
         assert count == c.execute("SELECT count(*) FROM messages").fetchone()[0]
         assert message_links.backfill(c, batch=7) == 0
         assert len(commits) >= -(-count // 7) + 1
-        assert sorted(map(tuple, c.execute("SELECT * FROM message_links WHERE message_id<>?", (old,)))) == before
+        assert sorted(map(tuple, c.execute("SELECT * FROM message_links"))) == before
+    compare(s, world, monkeypatch)

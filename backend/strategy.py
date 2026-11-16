@@ -93,29 +93,11 @@ SOURCES = (TRIPPED, LENS, BRIEFING)  # what may prompt a strategy_draft proposal
 PLAYBOOK = "playbooks/bet-tripped.md"
 GUIDES_DIR = Path(__file__).resolve().parent / "strategy_guides"
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS strategy_versions (id TEXT PRIMARY KEY, n INTEGER UNIQUE, "
-    "status TEXT NOT NULL CHECK (status IN ('draft','published')), guide TEXT NOT NULL DEFAULT 'default', "
-    "summary TEXT NOT NULL DEFAULT '', vision TEXT NOT NULL DEFAULT '', sections TEXT NOT NULL DEFAULT '{}', "
-    "bets TEXT NOT NULL DEFAULT '[]', note TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0, "
-    "updated_at TEXT, updated_by TEXT, published_at TEXT, published_by TEXT)",
-    # The one-draft rule.
-    "CREATE UNIQUE INDEX IF NOT EXISTS strategy_versions_draft ON strategy_versions(status) WHERE status='draft'",
-    "CREATE TABLE IF NOT EXISTS strategy_bets (id TEXT PRIMARY KEY, statement TEXT NOT NULL, "
-    "why TEXT NOT NULL DEFAULT '', rules_out TEXT NOT NULL DEFAULT '', wrong_if TEXT, cites TEXT NOT NULL DEFAULT '[]', "
-    "status TEXT NOT NULL CHECK (status IN ('proposed','active','retired')), since_n INTEGER, until_n INTEGER, "
-    "rank INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
-)
-
 
 def ensure(c):
-    """The tables, the goals column, and once the draft: from the company profile's vision (the vision) and
-    description (what we sell) where an install has them, empty otherwise. Every start brings
+    """Once, the draft: from the company profile's vision (the vision) and description (what we sell) where an
+    install has them, empty otherwise. Every start brings
     company_profile.vision in line with the team's vision (sync_vision), whatever an older release left there."""
-    for statement in SCHEMA:
-        c.execute(statement)
-    H.add_column(c, "goals", "bet_id", "TEXT")
-    c.execute("CREATE INDEX IF NOT EXISTS goals_bet ON goals(bet_id) WHERE bet_id IS NOT NULL")
     if c.execute("SELECT 1 FROM strategy_versions LIMIT 1").fetchone():
         try:
             sync_vision(c)

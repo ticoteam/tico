@@ -83,12 +83,6 @@ HINTS = {
         "exactly, then mail send with --approval set to its send approval, and report invoice_delivery"
     ),
 }
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bookkeeper_seen(
- key TEXT PRIMARY KEY, stamp TEXT NOT NULL, seen_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
- task_id TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY (task_id, key));
-"""
 
 
 def built(c):

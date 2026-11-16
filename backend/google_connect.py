@@ -48,14 +48,6 @@ from .store import H, P, Problem
 
 log = logging.getLogger(__name__)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS google_connects(
- person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT,
- kind TEXT, message TEXT, hint TEXT, can TEXT, client_id TEXT, started_at REAL, created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL, operation_id TEXT, answered TEXT, grant_scopes TEXT, grant_sealed TEXT,
- grant_operation_id TEXT);
-CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
-"""
 # Each connect or disconnect is one operation (`operation_id`, new at each start): the callback's exchange writes its grant
 # only while its operation is still the row's, so a connect replaced or disconnected meanwhile keeps nothing. The grant
 # connected is `grant_sealed` (its refresh token, sealed under google_tokens.context(person, grant_operation_id)), the
@@ -63,10 +55,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects
 # A reconnect leaves them in place until its own grant replaces them, so a sign-in that fails keeps the earlier grant.
 # `answered` is unused: migration 20261112160353 adds it whenever it runs, so the shape keeps it (see the migration
 # 20261116145802_google_grants_on_server).
-
-
-def ensure_schema(c):
-    c.executescript(SCHEMA)
 
 
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"

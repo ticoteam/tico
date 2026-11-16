@@ -8,6 +8,7 @@ from backend.tests.helpers.api import assign, claim, expire, get, post, put, rea
 from backend.tests.helpers.execution_review import aged, sweep
 from backend.enqueue import enqueue_stored
 from backend.tests.helpers.run_view import DEV_563_NOTE, botops_decides, events, task_attempt
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 
 
 def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api):
@@ -139,7 +140,7 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
 def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     machine = runner(api, "ana")
     assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
     tid, first = task_attempt(api, machine, "Archive the bots")
     events(
         api,
@@ -158,7 +159,7 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     assert view["runs"][0]["reason"] == "Computer lost or heartbeat stopped (attempt lease expired)"
     aged(api, first["id"], grace=True)
     assert [d["state"] for d in sweep(api)] == ["queued"]
-    ready(api, machine, ["ops"])
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
     second = claim(api, machine)
     assert second["job_id"] == first["job_id"]
     later, earlier = get(api, f"tasks/{tid}/run-view")["runs"]
@@ -174,7 +175,11 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     assert "events_action_target" in plan, plan
     assert (earlier["id"], earlier["try"], earlier["tries"], earlier["state"]) == (first["id"], 1, 2, "expired")
     assert earlier["next"]["kind"] == "resumed" and earlier["next"]["by"] == H.KEEPER
-    assert earlier["next"]["note"].startswith("Resumed automatically: the interrupted run only read (Read)")
+    # A lapsed lease on a runner that continues its own work (every rc.1 runner advertises capacity_continue_v1) says
+    # the computer lost the run, then names what the run only read.
+    note = earlier["next"]["note"]
+    assert note.startswith("You were interrupted at ") and "lost lease" in note, note
+    assert "Resumed automatically: the interrupted run only read (Read)" in note, note
     assert "Archived one bot" not in json.dumps(earlier), "the hub's own words, never what the stopped run saved"
     # A resume recorded before the hub kept a line for people still shows only its first paragraph.
     from backend.run_view import decision_note

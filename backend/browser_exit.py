@@ -33,32 +33,7 @@ RETENTION_DAYS = 30
 USAGE_PAGE, USAGE_PAGE_MAX = 200, 500
 PORTS = (80, 443)
 LINK_PATH = "/api/v2/runners/me/browser-exit/ws"
-# A runner that advertises this runs a bot's turns through its browser exit (runner-rs/src/browser_exit.rs). Any other
-# runner would ignore the exit and browse from its own address, so a bot with an exit waits for an updated runner
-# (execution.claim_refusal `browser_exit_update`).
-CAPABILITY = "browser_exit_v1"
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}|[0-9A-Fa-f:.]{2,45}")
-
-
-# Bumps a bot's selection generation in the same transaction as any change to the computer it runs on, whichever
-# code path writes the assignment or removes that computer, and an exit's policy generation when its computer is
-# removed.
-TRIGGERS = """
-CREATE TRIGGER IF NOT EXISTS bot_browser_exit_assigned AFTER INSERT ON assignments BEGIN
-  UPDATE bot_browser_exits SET generation=generation+1 WHERE bot=NEW.bot; END;
-CREATE TRIGGER IF NOT EXISTS bot_browser_exit_moved AFTER UPDATE OF runner_id ON assignments
-  WHEN OLD.runner_id IS NOT NEW.runner_id BEGIN
-  UPDATE bot_browser_exits SET generation=generation+1 WHERE bot=NEW.bot; END;
-CREATE TRIGGER IF NOT EXISTS bot_browser_exit_unassigned AFTER DELETE ON assignments BEGIN
-  UPDATE bot_browser_exits SET generation=generation+1 WHERE bot=OLD.bot; END;
-CREATE TRIGGER IF NOT EXISTS browser_exit_computer_removed AFTER UPDATE OF revoked_at ON runners
-  WHEN OLD.revoked_at IS NOT NEW.revoked_at BEGIN
-  UPDATE browser_exits SET generation=generation+1 WHERE runner_id=NEW.id; END;
-CREATE TRIGGER IF NOT EXISTS bot_browser_exit_computer_removed AFTER UPDATE OF revoked_at ON runners
-  WHEN OLD.revoked_at IS NOT NEW.revoked_at BEGIN
-  UPDATE bot_browser_exits SET generation=generation+1
-    WHERE bot IN (SELECT bot FROM assignments WHERE runner_id=NEW.id); END;
-"""
 
 
 def today():
@@ -146,19 +121,6 @@ def generations(c):
         {r[0]: int(r[1]) for r in c.execute("SELECT runner_id,generation FROM browser_exits")},
         {r[0]: int(r[1]) for r in c.execute("SELECT bot,generation FROM bot_browser_exits")},
     )
-
-
-def exits_of(c, bots):
-    """{bot: the computer its browser exit is set on, or None} for every bot in `bots`, read in set queries (bot_exit)."""
-    from .hubdb import chunks
-
-    found = {}
-    for part in chunks(bots):
-        for row in c.execute(
-            f"SELECT bot,runner_id FROM bot_browser_exits WHERE bot IN ({','.join('?' * len(part))})", part
-        ):
-            found[row["bot"]] = row["runner_id"]
-    return {bot: found.get(bot) for bot in bots}
 
 
 def bot_exits(c):

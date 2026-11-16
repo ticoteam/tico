@@ -33,23 +33,6 @@ OPEN_DAYS = 20  # the open occurrences a detail names (the count is always exact
 DETAIL_MARKS = 100  # the satisfied occurrences a detail shows, per row of its chain
 CHAIN_MAX = 50  # the rows of one due date's chain (its edits) a detail walks
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS rule_due_dates(id TEXT PRIMARY KEY, rule_id TEXT NOT NULL, first_due_on TEXT NOT NULL, "
-    "repeats TEXT NOT NULL CHECK (repeats IN ('once','weekly','monthly','quarterly','yearly')), "
-    "timezone TEXT NOT NULL, owner TEXT NOT NULL, routine_id TEXT, replaces TEXT, "
-    "ended_on TEXT, retired_at TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS rule_due_dates_rule ON rule_due_dates(rule_id)",
-    "CREATE INDEX IF NOT EXISTS rule_due_dates_routine ON rule_due_dates(routine_id) WHERE routine_id IS NOT NULL",
-    "CREATE TABLE IF NOT EXISTS rule_due_status(due_date_id TEXT NOT NULL, due_on TEXT NOT NULL, "
-    "satisfied_by TEXT NOT NULL, via TEXT NOT NULL CHECK (via IN ('routine','person')), task_id TEXT, satisfied_at TEXT NOT NULL, "
-    "PRIMARY KEY(due_date_id, due_on))",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-
 
 def default_zone():
     from .updates import ZONE

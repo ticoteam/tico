@@ -134,27 +134,8 @@ _RETIRED_OPTIONS = ("batch_seconds", "batch_scope", "sweep_seconds")
 
 
 def ensure(c):
-    """The hold's columns and trigger, and the move off the wake presets. Unversioned like the other job columns: an
-    older release never reads them, and the trigger is rebuilt whenever its text changes."""
-    H.add_column(c, "jobs", "wake_preset", "TEXT")
-    H.add_column(c, "jobs", "wake_class", "TEXT")
-    H.add_column(c, "jobs", "held", "INTEGER NOT NULL DEFAULT 0")
-    H.add_column(c, "jobs", "hold_until", "TEXT")
-    # Why a claim holds a job it could not start, its Needs-you item, and how many tries in a row failed
-    # (backend/claim_holds.py). Unversioned like the others: an older release never reads them.
-    H.add_column(c, "jobs", "hold_reason", "TEXT")
-    H.add_column(c, "jobs", "hold_task_id", "TEXT")
-    H.add_column(c, "jobs", "hold_streak", "INTEGER NOT NULL DEFAULT 0")
-    # The job whose turn carried this one's notice (a batch's newest, or its digest), for `measures`.
-    H.add_column(c, "jobs", "wake_carrier", "TEXT")
-    # The release policy's own columns (`release`, `release_after`, `released`) come from migration
-    # 20261113061438_job_release_policy, and from store.SCHEMA on a new file.
-    c.execute("CREATE INDEX IF NOT EXISTS jobs_held ON jobs(bot_id,hold_until) WHERE held=1")
-    # The few held jobs still queued, in claim order: what tick reads every pass under the write lock (HELD_*_SQL).
-    c.execute("CREATE INDEX IF NOT EXISTS jobs_held_queued ON jobs(created_at, id) WHERE held=1 AND state='queued'")
-    # The duplicate check seeks a room's messages before the new one by rowid (the index's implicit suffix), not a walk
-    # through every earlier message from the same sender in every room.
-    c.execute("CREATE INDEX IF NOT EXISTS messages_room_rowid ON messages(conversation_id)")
+    """The hold's trigger, rebuilt whenever its text changes, and the move off the wake presets. The hold's columns
+    and indexes are in the schema (backend/migrations)."""
     stored = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='wake_preset_hold'").fetchone()
     if not stored or stored[0] != HOLD_TRIGGER:
         c.execute("DROP TRIGGER IF EXISTS wake_preset_hold")

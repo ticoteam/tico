@@ -148,7 +148,7 @@ def test_an_unsettled_note_with_a_completed_carrier_is_still_read_and_the_catch_
     assert settled(api, n["id"])
 
 
-def test_the_migration_settles_old_notes_of_completed_runs_only(api):
+def test_a_start_settles_unsettled_notes_of_completed_runs_only(api):
     r = setup(api)
     done, failed = note(api, "one"), None
     post(api, "chat/ops", {"text": "First"})
@@ -166,10 +166,8 @@ def test_the_migration_settles_old_notes_of_completed_runs_only(api):
     )
     waiting = note(api, "three")
     store = api.app.state.store
-    with store.transaction() as c:  # a database from before the column
-        c.execute("DROP INDEX notes_waiting")
-        c.execute("DROP INDEX notes_unsettled_carried")
-        c.execute("ALTER TABLE notes DROP COLUMN settled_at")
+    with store.transaction() as c:  # notes no path settled: the start's one pass settles them
+        c.execute("UPDATE notes SET settled_at=NULL")
     store.initialize()
     assert settled(api, done["id"]) and settled(api, failed["id"]) is None and settled(api, waiting["id"]) is None
     with store.read() as c:

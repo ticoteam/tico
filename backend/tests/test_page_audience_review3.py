@@ -491,27 +491,6 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     assert approved(api, "ana-test", file=replacement)["approved"] is True
 
 
-def test_migration_links_name_only_history_before_page_content_is_purged(api):
-    import importlib
-
-    _, attempt = turn(api)
-    tid = post(api, "tasks", {"owner": "ops", "title": "Legacy review", "body": "Review", "private": False})["id"]
-    fid = page(api, attempt, task=tid).json()["page"]["file_id"]
-    with api.app.state.store.transaction() as c:
-        legacy = H.history_event(c, "task", tid, "bot:ops", "file", new="weekly.html")
-        migration = importlib.import_module("backend.migrations.20261105050905_page_tombstones")
-        migration.up(c)
-        migration.up(c)
-        data = json.loads(c.execute("SELECT data FROM history_events WHERE id=?", (legacy,)).fetchone()[0])
-        assert data["page_files"] == [fid]
-    edit(api, fid, {"people": ["ben"]})
-    for deleted in (False, True):
-        if deleted:
-            assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
-        result = get(api, "tasks/" + tid, token="cara-test")
-        assert "weekly.html" not in json.dumps(result) and fid not in json.dumps(result)
-
-
 def test_same_name_upload_never_adopts_deleted_page_bytes_retained_by_a_meeting(api):
     _, attempt = turn(api)
     tid = post(api, "tasks", {"owner": "ops", "title": "Retained review", "body": "Review", "private": False})["id"]

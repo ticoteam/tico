@@ -616,7 +616,7 @@ def health_ready(api, args):
                     "fix": f"tico bot go-live {slug}",
                 }
             )
-        elif bot.get("onboarding_state") in ("needs_setup", "needs_onboarding"):
+        elif bot.get("onboarding_state") == "needs_setup":
             setup.append(slug)
             bucket(slug).append(
                 {

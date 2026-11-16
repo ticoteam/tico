@@ -37,15 +37,6 @@ This module imports nothing from hubdb at load, so hubdb can import it.
 
 import json
 
-SCHEMA = (
-    """CREATE TABLE IF NOT EXISTS task_reconnects(
-  task_id TEXT NOT NULL, key TEXT NOT NULL, bot TEXT NOT NULL, owner TEXT NOT NULL, service TEXT NOT NULL,
-  label TEXT NOT NULL, person TEXT NOT NULL, fix TEXT NOT NULL, message_id TEXT, created_at TEXT NOT NULL,
-  fixed_at TEXT, ended TEXT, woke_at TEXT, PRIMARY KEY(task_id, key))""",
-    "CREATE INDEX IF NOT EXISTS task_reconnects_open ON task_reconnects(key) WHERE fixed_at IS NULL",
-    "CREATE TABLE IF NOT EXISTS google_signin_refusals(account TEXT NOT NULL, service TEXT NOT NULL, created_at TEXT NOT NULL, "
-    "PRIMARY KEY(account, service))",
-)
 WAKE_REF = "reconnected"
 CARD_REF = "reconnect"
 RECENT_S = 900  # a bot's task worked this recently is the one a connector failure stops
@@ -61,11 +52,6 @@ def _H():
     from . import hubdb
 
     return hubdb
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def _present(c):
@@ -145,7 +131,6 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
     one is written to `person` in the task's thread. Only a live task with that owner, and a person who can read it.
     Returns the row, or None."""
     H = _H()
-    ensure(c)
     owner = owner or H.bot_actor(bot)
     row = H.task(c, task_id) if task_id else None
     if (
@@ -748,7 +733,6 @@ def google_report(c, service, refused, listed=(), ok=None):
     (plan v4 P, v5 T: the caller passes only accounts no other fresh computer still fails). Without `ok` (an older
     runner), it works again when no longer listed."""
     H = _H()
-    ensure(c)
     refused = _accounts(refused)
     listed = set(_accounts(listed)) | set(refused)
     for account in refused:

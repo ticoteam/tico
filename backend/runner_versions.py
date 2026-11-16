@@ -17,7 +17,7 @@ from . import releases
 from .store import H
 from . import sources as SRC
 
-MIN_RUNNER_RELEASE = "0.4.0"
+MIN_RUNNER_RELEASE = "0.6.0-rc.1"
 NUDGE_AFTER_S = 3600
 KINDS = ("mac", "linux", "docker")
 LABELS = {
@@ -27,25 +27,6 @@ LABELS = {
     "incompatible": "Incompatible (bots paused)",
     "unknown": "Release not reported",
 }
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS runner_versions(
- runner_id TEXT PRIMARY KEY REFERENCES runners(id), release TEXT NOT NULL DEFAULT '',
- kind TEXT NOT NULL DEFAULT '', update_state TEXT NOT NULL DEFAULT '', update_target TEXT NOT NULL DEFAULT '',
- update_error TEXT NOT NULL DEFAULT '', reported_at TEXT NOT NULL);
-"""
-
-
-def ensure_schema(c):
-    """Columns added after the table first shipped: the commit it runs, since when it has been outdated,
-    and the server release its owner was last told about."""
-    H.add_column(c, "runner_versions", "commit_sha", "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, "runner_versions", "outdated_since", "TEXT")
-    H.add_column(c, "runner_versions", "nudged_at", "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, "runner_versions", "outdated_for", "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, "runner_versions", "update_since", "TEXT")
-    H.add_column(c, "runner_versions", "update_running", "INTEGER")
-    H.add_column(c, "runner_versions", "update_handed_back", "INTEGER")
 
 
 def clean(value):

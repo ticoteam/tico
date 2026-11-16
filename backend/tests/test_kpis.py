@@ -2,10 +2,9 @@
 arithmetic, a person's override, what the Strategy Owner may not do without a confirm, the migration of
 the old KPI rows and the automatic bot KPIs."""
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from backend import botkpis, strategy_bot, hubdb, kpis as K
+from backend import botkpis, strategy_bot, kpis as K
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend import bot_settings as BS
@@ -378,50 +377,6 @@ def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_c
         token=token,
         expected=422,
     )
-
-
-def test_the_kpis_of_the_old_tables_become_links_with_an_improvement_target():
-    conn = sqlite3.connect(":memory:", isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    for i, script in enumerate(hubdb.MIGRATIONS[: hubdb.MIGRATIONS.index(hubdb.KPIS_SCHEMA)]):
-        hubdb._apply(conn, script)
-        conn.execute(f"PRAGMA user_version={i + 1}")
-    conn.execute(
-        "INSERT INTO goals (id, title, owner_id, status, status_note, status_by_id, created_at, created_by_id, updated_at) "
-        "VALUES ('g1','Grow','company','green','On track','human:ana','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')"
-    )
-    conn.execute(
-        "INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by_id) VALUES "
-        "('k1','g1','Signups','signups',500,'2026-01-02T00:00:00Z','human:ana'), "
-        "('k2','g1','NPS','',NULL,'2026-01-02T00:00:00Z','human:ana')"
-    )
-    conn.execute(
-        "INSERT INTO kpi_readings (id, kpi_id, measured_at, value, actor_id, source, note, created_at) VALUES "
-        "('r1','k1','2026-03-01T00:00:00Z',120,'human:ana','measured','from the dashboard','2026-03-02T00:00:00Z'), "
-        "('r2','k1','2026-04-01T00:00:00Z',200,'human:ana','estimate','','2026-04-01T00:00:00Z')"
-    )
-    hubdb.migrate(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS)
-    links = {r["kpi_id"]: dict(r) for r in conn.execute("SELECT * FROM goal_kpis")}
-    assert (links["k1"]["kind"], links["k1"]["target"], links["k1"]["goal_id"]) == ("improve", 500, "g1")
-    assert (links["k2"]["kind"], links["k2"]["target"]) == ("none", None)
-    kpi = dict(conn.execute("SELECT * FROM kpis WHERE id='k1'").fetchone())
-    assert (kpi["owner_id"], kpi["cadence"], kpi["direction"], kpi["definition_version"]) == (
-        "company",
-        "monthly",
-        "up",
-        1,
-    )
-    old = [dict(r) for r in conn.execute("SELECT * FROM kpi_readings ORDER BY id")]
-    assert [(r["value"], r["period_end"], r["collected_at"], r["quality"], r["note"]) for r in old] == [
-        (120, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", "measured", "from the dashboard"),
-        (200, "2026-04-01T00:00:00Z", "2026-04-01T00:00:00Z", "estimate", ""),
-    ]
-    goal = dict(conn.execute("SELECT * FROM goals").fetchone())
-    assert (goal["status"], goal["status_source"]) == ("green", "person")  # a colour somebody set is theirs
-    assert conn.execute("SELECT count(*) FROM kpi_definitions").fetchone()[0] == 2
-    hubdb.migrate(conn)  # and it is safe to run again
-    assert conn.execute("SELECT count(*) FROM goal_kpis").fetchone()[0] == 2
 
 
 def test_archive_restore_recomputes_every_linked_goal_with_its_own_target(api):

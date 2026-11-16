@@ -178,7 +178,7 @@ ALLOWED = {
             "log": None,
         }
     ],
-    "database": {"migration": None, "cloud_migration": None},
+    "database": {"migration": None},
     "features": {},
     # The Beta features this install has on or in use (backend/beta.py), by id.
     "beta": [None],
@@ -564,8 +564,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         runners = _runner_rows(c, runner_versions.load(c), online_ids)
         bots_total = sum(1 for b in H.bots(c) if b.get("state") != "archived")
         routines = c.execute("SELECT count(*) FROM schedules").fetchone()[0]
-        migration = c.execute("PRAGMA user_version").fetchone()[0]
-        cloud = c.execute("SELECT coalesce(max(version),0) FROM cloud_migrations").fetchone()[0]
+        migration = c.execute("SELECT max(version) FROM schema_migrations").fetchone()[0]
         backup = replication.status()
         slack = bool(
             c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone()
@@ -642,7 +641,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         },
         "health": [{"name": x["label"], "status": x["status"]} for x in checks],
         "runners": runners,
-        "database": {"migration": migration, "cloud_migration": cloud},
+        "database": {"migration": migration},
         "features": features,
         "beta": [x for x in beta_on if x in beta.IDS],
         "counts": {"bots": bots_total, "people": len(people.get("people") or []), "routines": routines},

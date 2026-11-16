@@ -523,10 +523,10 @@ files refreshed but cannot record them; the version is reported again after the 
 
 ### From 0.5 to 0.6: every company starts over
 
-Tico 0.6 does not carry tasks over. Every company starts on a new database. A 0.6 server refuses to start on a 0.5
-database that has tasks and changes nothing: "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks
-over: every company starts on a new database. Nothing was changed. Run Tico 0.5 on this database, or set up a new
-company on 0.6."
+Tico 0.6 does not carry tasks over. Every company starts on a new database. A 0.6 server opens only a database that
+Tico 0.6.0-rc.1 or later made, and refuses a 0.5 database without changing it: "This database was made by a Tico older
+than 0.6.0, or not by Tico. Tico 0.6 does not carry tasks over: every company starts on a new database. Nothing was
+changed. Run the release that made it on this database, or set up a new company on 0.6."
 
 ### Moving to Automations (one time)
 

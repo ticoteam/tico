@@ -22,12 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from . import hubdb as H
 from .store import Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS slack_channels(
- key TEXT PRIMARY KEY, channel_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '',
- readers TEXT NOT NULL DEFAULT '[]', post INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '',
- digest_hours REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL DEFAULT '');
-"""
 FILE = "slack-channels.yaml"
 IMPORTED = "slack_channels_imported"
 ID_RE = re.compile(r"^[CG][A-Z0-9]{8,}$")

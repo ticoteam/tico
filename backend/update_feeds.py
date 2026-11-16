@@ -66,25 +66,6 @@ NO_TEMPLATE = "This bot was not made from a template, so there is no template fe
 # Replaced in tests with an httpx.MockTransport so nothing reaches the network.
 TRANSPORT = None
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS feed_updates(
-  id TEXT PRIMARY KEY, seq INTEGER NOT NULL UNIQUE, feed TEXT NOT NULL, category TEXT NOT NULL,
-  template TEXT NOT NULL DEFAULT '', version TEXT NOT NULL, published_at TEXT NOT NULL, summary TEXT NOT NULL,
-  files TEXT NOT NULL DEFAULT '', source_url TEXT NOT NULL, version_url TEXT NOT NULL, action INTEGER NOT NULL,
-  reason TEXT NOT NULL, fetched_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS feed_updates_feed_seq ON feed_updates(feed, seq);
-CREATE TABLE IF NOT EXISTS feed_sources(feed TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, snapshot TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS feed_walks(
-  feed TEXT PRIMARY KEY, next_walk_at TEXT NOT NULL, snapshot TEXT NOT NULL DEFAULT '', pages INTEGER NOT NULL,
-  items TEXT NOT NULL, started_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS feed_cursors(
-  bot TEXT NOT NULL, category TEXT NOT NULL, feed TEXT NOT NULL DEFAULT '', cursor_at TEXT NOT NULL, cursor INTEGER,
-  PRIMARY KEY(bot, category));
-CREATE TABLE IF NOT EXISTS feed_deliveries(
-  bot TEXT NOT NULL, update_id TEXT NOT NULL, category TEXT NOT NULL DEFAULT '', note_id TEXT NOT NULL,
-  delivered_at TEXT NOT NULL, PRIMARY KEY(bot, update_id));
-"""
-
 _state = {"swept": 0.0, "fetched": {}, "retry": {}}
 
 

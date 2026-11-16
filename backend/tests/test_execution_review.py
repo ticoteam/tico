@@ -5,6 +5,7 @@ import json
 import pytest
 from backend.tests.helpers.api import assign, runner, setup_attempt, post, get, expire, ready, claim, headers
 from backend import bot_settings as BS
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 from backend.tests.helpers.execution_review import (
     add_recovery_reviewer,
     aged,
@@ -622,17 +623,16 @@ def test_a_run_that_only_read_resumes_at_once_after_its_runner_restarted(api):
     assert 'finish only what is left' not in body
 
 
-def test_a_run_that_only_read_waits_out_a_lapsed_lease_for_the_runner_to_restore_it(api):
-    machine, message, attempt = restarted_mid_turn(api, [('Read', None)], reported=False)
-    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
+def test_a_run_that_only_read_goes_back_in_line_once_its_lease_lapses_on_an_rc1_runner(api):
+    """Every rc.1 runner advertises capacity_continue_v1, so a lapsed lease whose run only read is resumed at once."""
+    machine, message, attempt = restarted_mid_turn(
+        api, [('Read', None)], reported=False, capabilities=RUNNER_CAPABILITIES
+    )
+    assert job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
     assert review['stopped'] == 'read' and review['acted'] == []  # the card leads with "Try again"
-    # Past the runner's restore window its finished result may still come in: no second run yet.
-    aged(api, attempt['id'])
-    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    aged(api, attempt['id'], grace=True)
     assert [d['state'] for d in sweep(api)] == ['queued']
-    ready(api, machine, ['ops'])
+    ready(api, machine, ['ops'], RUNNER_CAPABILITIES)
     assert 'only read (Read)' in claim(api, machine)['message']['body']
 
 
@@ -1320,24 +1320,23 @@ def capacity_turn(api, monkeypatch, machine, attempt, at, acted=True, continues=
     )
 
 
-def claim_at(api, monkeypatch, machine, at, continues=True):
-    """A claim at `at` by a runner that does (`continues`) or does not advertise capacity continuation."""
+def claim_at(api, monkeypatch, machine, at, continues=True, release=None):
+    """A claim at `at` by a runner that does (`continues`) or does not advertise capacity continuation, reporting
+    `release` when given (the floor is judged on it)."""
     from backend.store import H
 
     monkeypatch.setattr(H, 'now', lambda: at)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runner_states SET last_seen_at=?,awake_since=NULL", (H.now(),))
-    post(
-        api,
-        "runners/heartbeat",
-        {
-            "version": "test",
-            "platform": "test",
-            "readiness": {'ops': True},
-            "capabilities": ['capacity_continue_v1'] if continues else [],
-        },
-        token=machine['token'],
-    )
+    body = {
+        "version": "test",
+        "platform": "test",
+        "readiness": {'ops': True},
+        "capabilities": ['capacity_continue_v1'] if continues else [],
+    }
+    if release:
+        body["release"] = release
+    post(api, "runners/heartbeat", body, token=machine['token'])
     return claim(api, machine)
 
 
@@ -1427,15 +1426,15 @@ def test_a_capacity_continuation_with_a_missing_session_is_held_without_a_silent
     assert claim_at(api, monkeypatch, machine, at(600)) is None
 
 
-def test_a_runner_that_cannot_continue_a_thread_is_never_handed_the_continuation(api, monkeypatch):
+def test_a_runner_from_before_the_floor_is_never_handed_the_continuation(api, monkeypatch):
     machine, message, attempt = setup_attempt(api)
     at = later()
     capacity_turn(api, monkeypatch, machine, attempt, at(0))
-    # A runner from before capacity continuation would ignore `continue_thread` and start the job on a fresh thread.
-    assert claim_at(api, monkeypatch, machine, at(121), continues=False) is None
+    # A runner below the floor cannot continue a thread (it would start the job on a fresh one), so it is refused outright.
+    assert claim_at(api, monkeypatch, machine, at(121), continues=False, release='0.5.9') is None
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
-    following = claim_at(api, monkeypatch, machine, at(130))
+    following = claim_at(api, monkeypatch, machine, at(130), release='0.6.0-rc.1')
     assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
 
 
@@ -2382,7 +2381,10 @@ def test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free(api
     """A busy task or shared lane defers recovery; once free the sweep releases fenced queued work."""
     machine = runner(api)
     assign(api, machine, 'ops')
-    ready(api, machine, ['ops'])
+    ready(api, machine, ['ops'], RUNNER_CAPABILITIES)
+    with api.app.state.store.transaction() as c:
+        # One shared main lane for all of this bot's tasks: rc.1 gives each task its own lane otherwise.
+        BS.write(c, 'ops', {**BS.read(c, 'ops'), 'session': 'bot'})
     stopped = post(api, 'tasks', {'owner': 'ops', 'title': 'Read the notes', 'body': 'Read the notes.'})
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'stopped'}, machine['token'])

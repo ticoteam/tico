@@ -4,6 +4,7 @@ import pytest
 
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt, expire
 from backend.tests.helpers.member_bots import botops, turn, finish
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 from backend import bot_settings as BS
 
 
@@ -12,7 +13,7 @@ def test_interrupted_steered_question_is_not_silently_completed(api):
     post(api, f"attempts/{a['id']}/started", {"thread_id": "thread"}, r["token"])
     # A second bot asks while COO is active.
     assign(api, r, "finance")
-    ready(api, r, ["ops", "finance"])
+    ready(api, r, ["ops", "finance"], capabilities=RUNNER_CAPABILITIES)
     post(api, "chat/finance", {"text": "Ask COO"})
     finance = claim(api, r)
     q = post(
@@ -33,7 +34,7 @@ def test_plain_message_from_another_conversation_does_not_interrupt_running_turn
     r, _, active = setup_attempt(api)
     post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
     assign(api, r, "finance")
-    ready(api, r, ["ops", "finance"])
+    ready(api, r, ["ops", "finance"], capabilities=RUNNER_CAPABILITIES)
     post(api, "chat/finance", {"text": "Send COO a separate update"})
     finance = claim(api, r)
     update = post(
@@ -121,7 +122,7 @@ def two_bots(api):
     r = runner(api)
     for bot in ("ops", "finance"):
         assign(api, r, bot)
-    ready(api, r, ["ops", "finance"])
+    ready(api, r, ["ops", "finance"], capabilities=RUNNER_CAPABILITIES)
     return r
 
 
@@ -149,24 +150,38 @@ def test_deferred_input_moves_to_the_next_run_and_the_first_run_keeps_its_task(a
     with api.app.state.store.transaction() as c:
         packet = H.task_create(c, "bot:finance", "Packet", "Figures.", "bot:ops", private=False, lint=False)
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
-    post(api, "chat/ops", {"text": "Check the public numbers"})
+    # About the packet: the run is in the packet's lane, the only lane its question is delivered in.
+    post(
+        api,
+        "messages",
+        {"to": "ops", "kind": "say", "text": "Check the public numbers", "refs": {"task": packet["id"]}},
+    )
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
     ask = ask_ops(api, r, packet["id"], "Are the packet figures final?")
     assert [m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
     post(api, f"attempts/{first['id']}/inputs/{ask['id']}/ack", {}, r["token"])
     # The run ends without answering or touching the packet task, so its question waits for a later run.
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0}, r["token"])
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "failed", "text": "", "last_seq": 0, "retryable": True},
+        r["token"],
+    )
     with api.app.state.store.read() as c:
+        # Queued again, still on the first run's row until a later run in the packet's lane takes it.
         assert c.execute("SELECT state,attempt_id FROM jobs WHERE message_id=?", (ask["id"],)).fetchone()[:] == (
             "queued",
-            None,
+            first["id"],
         )
-    post(api, "chat/ops", {"text": "One more check"})
+    # About the packet: its run is in the packet's lane, the lane the question waits in, so the question folds into it.
+    post(api, "messages", {"to": "ops", "kind": "say", "text": "One more check", "refs": {"task": packet["id"]}})
     second = claim(api, r, "ops")
     post(api, f"attempts/{second['id']}/started", {"thread_id": "thread-2"}, r["token"])
-    assert [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
-    post(api, f"attempts/{second['id']}/inputs/{ask['id']}/ack", {}, r["token"])
+    taken = [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]]
+    assert ask["id"] in taken
+    for message_id in taken:
+        post(api, f"attempts/{second['id']}/inputs/{message_id}/ack", {}, r["token"])
     assert post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"] == []
     get(api, f"turns/{first['id']}/steps")
     # The first run read the packet question. If the packet later turns private, that run must
@@ -201,19 +216,30 @@ def test_a_deferred_input_moves_to_the_next_run_after_the_history_sweep_indexed_
     with api.app.state.store.transaction() as c:
         packet = H.task_create(c, "bot:finance", "Packet", "Figures.", "bot:ops", private=False, lint=False)
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
-    post(api, "chat/ops", {"text": "Check the public numbers"})
+    # About the packet: the run is in the packet's lane, the only lane its question is delivered in.
+    post(
+        api,
+        "messages",
+        {"to": "ops", "kind": "say", "text": "Check the public numbers", "refs": {"task": packet["id"]}},
+    )
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
     ask = ask_ops(api, r, packet["id"], "Are the packet figures final?")
     assert [m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
     post(api, f"attempts/{first['id']}/inputs/{ask['id']}/ack", {}, r["token"])
-    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "text": "", "last_seq": 0}, r["token"])
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "failed", "text": "", "last_seq": 0, "retryable": True},
+        r["token"],
+    )
     with api.app.state.store.read() as conn:
         read_deps.sweep(conn)
-    post(api, "chat/ops", {"text": "One more check"})
+    # About the packet: its run is in the packet's lane, the lane the question waits in, so the question folds into it.
+    post(api, "messages", {"to": "ops", "kind": "say", "text": "One more check", "refs": {"task": packet["id"]}})
     second = claim(api, r, "ops")
     post(api, f"attempts/{second['id']}/started", {"thread_id": "thread-2"}, r["token"])
-    assert [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]] == [ask["id"]]
+    assert ask["id"] in [m["id"] for m in post(api, f"attempts/{second['id']}/inputs", {}, r["token"])["messages"]]
 
 
 def test_private_task_input_is_not_folded_into_another_tasks_run_and_runs_on_its_own(api):
@@ -410,7 +436,7 @@ def test_a_persons_home_message_carried_by_its_notice_is_redirected_by_that_pers
 
     r = runner(api)
     assign(api, r, "ops")
-    ready(api, r, ["ops"])
+    ready(api, r, ["ops"], capabilities=RUNNER_CAPABILITIES)
     with api.app.state.store.transaction() as c:
         home = threads.home(c, "bot:ops", create=True)["id"]
     # The turn runs in Home, so its first message is a carrier too and the redirect shares its conversation.
@@ -494,7 +520,7 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
     # H.message, which leaves deleted rows out, so every retry of the finish raised a TypeError (a 500 each).
     r = runner(api)
     assign(api, r, "ops")
-    ready(api, r, ["ops"])
+    ready(api, r, ["ops"], capabilities=RUNNER_CAPABILITIES)
     task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
@@ -534,7 +560,7 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
 def test_a_comment_taken_back_before_the_runtime_got_it_is_canceled_not_requeued(api, outcome):
     r = runner(api)
     assign(api, r, "ops")
-    ready(api, r, ["ops"])
+    ready(api, r, ["ops"], capabilities=RUNNER_CAPABILITIES)
     task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
@@ -567,7 +593,7 @@ def _a_turn_started_by_a_comment(api, bot="ops", r=None):
     if r is None:
         r = runner(api)
         assign(api, r, bot)
-        ready(api, r, [bot])
+        ready(api, r, [bot], capabilities=RUNNER_CAPABILITIES)
     task = post(api, "tasks", {"owner": bot, "title": "Review the report", "body": "Please review."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")

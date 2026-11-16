@@ -32,7 +32,8 @@
    "seq": 3,
    "superseded_at": null,
    "to_actor": "human:ana",
-   "wait_s": null
+   "wait_s": null,
+   "wake_key": null
   },
   "outcome": "completed"
  },

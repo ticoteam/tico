@@ -254,7 +254,7 @@ def test_replacing_the_shared_key_for_all_of_them_is_a_credential_administrators
     assert told, "the computers were told to fetch the key again"
 
 
-def test_rights_are_sign_ins_and_an_old_runner_is_asked_to_update(environment):
+def test_rights_are_sign_ins(environment):
     api = setup(environment)
     box = computer(api, "Team box", source="terminal")
     rid = box["runner_id"]
@@ -271,24 +271,13 @@ def test_rights_are_sign_ins_and_an_old_runner_is_asked_to_update(environment):
     )
     call(api, "POST", f"runners/{rid}/keys", {"runtime": "gemini", "secret": "sk-proj-x-0123456789"}, expected=422)
     call(api, "POST", f"runners/{rid}/keys", {"runtime": "codex", "secret": "two\nlines-0123456789"}, expected=422)
-    old = computer(api, "Old box", source="terminal", capabilities=["model_sign_out_v1"])
-    refused = call(api, "POST", f"runners/{old['runner_id']}/keys/clear", {"runtime": "codex"}, expected=409)
-    assert "Update Old box" in refused["error"]["detail"]
-    call(
-        api,
-        "POST",
-        f"runners/{old['runner_id']}/keys",
-        {"runtime": "codex", "secret": "sk-proj-x-0123456789"},
-        expected=409,
-    )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM credentials").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM model_login_cleared").fetchone()[0] == 0
 
 
-def test_botops_never_clears_or_replaces_a_key_and_all_of_them_waits_for_every_computer_to_update(environment):
-    """Clear key stops bots and a new key can too, so BotOps does neither, even with the operator's rights; and "all of
-    them" is refused while any computer on the shared key, online or not, runs a runner that cannot clear it."""
+def test_botops_never_clears_or_replaces_a_key(environment):
+    """Clear key stops bots and a new key can too, so BotOps does neither, even with the operator's rights."""
     from backend.auth import Identity
 
     api = setup(environment)
@@ -309,34 +298,10 @@ def test_botops_never_clears_or_replaces_a_key_and_all_of_them_waits_for_every_c
         who=botops,
         expected=403,
     )
-    old = computer(api, "Old box", source="shared", capabilities=["model_sign_out_v1"])
-    older = computer(api, "Older box", source="shared", capabilities=[])
-    stale = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"}, expected=409)
-    assert stale["error"]["detail"].startswith("Update Old box, Older box to clear"), "every one named, before any job"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_login_cleared").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM model_logins").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM credentials").fetchone()[0] == 1
-    # Offline, an older runner still has nothing that clears its copy when it is back (it never reads the mark), so
-    # it is not marked as if it would.
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE runner_states SET last_seen_at='2026-01-01T00:00:00Z' WHERE runner_id IN (?,?)",
-            (old["runner_id"], older["runner_id"]),
-        )
-    stale = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"}, expected=409)
-    assert stale["error"]["detail"].startswith("Update Old box, Older box to clear")
-    assert "Tools > Keys" in stale["error"]["detail"]
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM model_login_cleared").fetchone()[0] == 0
-    # Updated, an offline computer is marked to clear its copy when it is back.
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE runner_states SET capabilities=? WHERE runner_id IN (?,?)",
-            (json.dumps(CAPABLE), old["runner_id"], older["runner_id"]),
-        )
-    out = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"})["computers"]
-    assert [(c["label"], c["waiting"]) for c in out] == [("Alpha", False), ("Old box", True), ("Older box", True)]
 
 
 def test_replacing_a_shared_key_for_all_of_them_changes_only_the_kind_chosen(environment):
@@ -579,7 +544,7 @@ def test_a_switch_to_an_api_key_that_is_canceled_fails_or_runs_out_leaves_the_su
     untouched(api, box)
 
 
-def test_switch_to_an_api_key_rights_and_an_old_or_offline_computer(environment):
+def test_switch_to_an_api_key_rights_and_an_offline_computer(environment):
     from backend.auth import Identity
 
     api = setup(environment)
@@ -597,11 +562,6 @@ def test_switch_to_an_api_key_rights_and_an_old_or_offline_computer(environment)
         "own login"
         in call(api, "POST", f"runners/{rid}/keys", {**body, "scope": "all"}, expected=422)["error"]["detail"]
     )
-    # A runner that cannot switch to a key would use it next to the subscription: it is asked to update.
-    old = on_subscription(api, "Old box", capabilities=CAPABLE + ["model_switch_type_v1"])
-    refused = call(api, "POST", f"runners/{old['runner_id']}/keys", body, expected=409)
-    assert "Update Old box to switch to an API key" in refused["error"]["detail"]
-    untouched(api, old)
     # On a Mac Claude Code keeps its subscription in the keychain, where a logout that half worked could not be undone.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))

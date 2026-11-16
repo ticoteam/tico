@@ -460,8 +460,7 @@ conversation session stays separate. Before a fallback starts, its pending hando
 its confirmed side session is then saved locally and on the server while the turn is still running. A safe lost lease
 can therefore continue that session once, even before any quota/capacity result. An unconfirmed side session never
 resumes the old primary; unknown effects and final answers keep their settlement safeguards. Late diagnostics cannot
-erase an already recorded continuation decision. The result field is sent only when the server advertises `source_continue`;
-older runners are not handed these continuations. Other turns try the bot's own provider first, so the
+erase an already recorded continuation decision. The result field is sent to every runner the server accepts (each advertises `source_continue_v1`). Other turns try the bot's own provider first, so the
 bot moves back on its own once the limit resets. The owner turns this off in **Settings → Models**
 (*Fall back when a plan runs out*, `auto_fallback`). Company › Campus lists how many bots are on a fallback and
 since when, and how many are limited.

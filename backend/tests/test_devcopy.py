@@ -5,7 +5,6 @@ import re
 import sqlite3
 import stat
 from contextlib import closing
-from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -18,7 +17,6 @@ from backend.execution import Execution
 from backend.finance import actions as finance
 from backend.enqueue import enqueue_stored
 from backend.store import H, Problem, Store
-from backend.tests.helpers.migrations import forget_from
 
 OLD = "2020-01-01T00:00:00.000000Z"
 
@@ -211,8 +209,6 @@ def test_every_table_is_classified(tmp_path, booted):
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))  # and a migration script drops again
     for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):  # and a migration file drops for good
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", source.read_text()))
-    # The Pipelines v3 cut-over drops the old task engine's tables from its own list.
-    dropped |= set(import_module("backend.migrations.20261110054000_pipelines_v3_cutover").OLD_TABLES)
     names -= dropped | {old for old, _new, _wave in renames_data.TABLES}  # an old schema step's name, renamed since
     groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY), set(finance.DEV_COPY_EMPTIED))
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
@@ -335,96 +331,6 @@ def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_
         assert {"audit_log_no_update", "audit_log_no_delete"} <= triggers
 
 
-def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_moves(tmp_path, booted):
-    """devcopy prunes before the copy is migrated: the tables 0053 and 0054 move from keep their rows."""
-    source = source_db(tmp_path, booted)
-    with closing(sqlite3.connect(source)) as c:
-        c.execute("CREATE TABLE turn_usage_segments (turn_id TEXT, position INTEGER, est_cost_usd REAL)")
-        c.execute("CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL)")
-        c.execute("CREATE TABLE usage_pools (scope TEXT PRIMARY KEY, daily_usd REAL)")
-        c.execute("INSERT INTO turn_usage_segments VALUES ('t1', 0, 0.25)")
-        c.execute("INSERT INTO usage_limits VALUES ('sales', 5)")
-        c.execute("INSERT INTO usage_pools VALUES ('company', 80)")
-        c.commit()
-    dest = tmp_path / "copy" / "hub.sqlite"
-    _, loose = devcopy.build(source, dest, days=30)
-    assert loose == []
-    with closing(sqlite3.connect(dest)) as c:
-        assert [
-            c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-            for t in ("turn_usage_segments", "usage_limits", "usage_pools")
-        ] == [1, 1, 1]
-
-
-def test_a_copy_of_a_database_from_before_the_history_move_keeps_its_change_logs_for_the_move(tmp_path, booted):
-    """devcopy prunes before the copy is migrated: the five change logs migration 0064 moves are kept whole (their rows,
-    and a deleted task's trash snapshot of them), so the move still has every row to copy into history_events."""
-    import json
-    from backend.tests.helpers.history_events import OLD, migration
-
-    stamp = "2020-01-01T00:00:00.000000Z"
-    source = source_db(tmp_path, booted)
-    snapshot = json.dumps(
-        {
-            "rows": {
-                "task_events": [
-                    {
-                        "_rowid": 1,
-                        "id": "t9",
-                        "task_id": "task-9",
-                        "field": "status",
-                        "old": "open",
-                        "new": "done",
-                        "actor": "human:ana",
-                        "created_at": stamp,
-                    }
-                ]
-            }
-        }
-    )
-    with closing(sqlite3.connect(source)) as c, c:
-        # Before 0064: no history table, the five logs are there, and the migration has not run.
-        c.execute("DROP TABLE history_events")
-        forget_from(c, "0064_history_events")
-        for statement in OLD:
-            c.execute(statement)
-        c.execute(
-            "INSERT INTO task_events VALUES('t1','task-1','2026-01-01T00:00:00Z','human:ana','status','open',"
-            "'done','',NULL,NULL)"
-        )
-        c.execute("INSERT INTO task_events VALUES('t2','task-1',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)")
-        c.execute(
-            "INSERT INTO goal_events(id, goal_id, created_at, actor, field, old, new, note) "
-            "VALUES('g1','goal-1',?,'human:ana','status','on_track','at_risk','')",
-            (stamp,),
-        )
-        c.execute(
-            "INSERT INTO task_trash(task_id, number, title, status, private, deleted_at, deleted_by, rows) "
-            "VALUES('task-9', 9, 'Gone', 'done', 1, ?, 'human:ana', ?)",
-            (stamp, snapshot),
-        )
-    dest = tmp_path / "copy" / "hub.sqlite"
-    removed, loose = devcopy.build(source, dest, days=30)
-    assert loose == [] and not {"task_events", "goal_events", "task_trash"} & set(removed)
-    with closing(sqlite3.connect(dest)) as c:
-        assert c.execute("SELECT count(*) FROM task_events").fetchone()[0] == 2
-        assert c.execute("SELECT count(*) FROM goal_events").fetchone()[0] == 1
-        assert "task_events" in json.loads(c.execute("SELECT rows FROM task_trash").fetchone()[0])["rows"]
-        # The move the dev server runs on its first start takes every one of them.
-        migration().up(c)
-        assert [r[0] for r in c.execute("SELECT id FROM history_events WHERE subject_type='task' ORDER BY rowid")] == [
-            "t1",
-            "t2",
-        ]
-        assert c.execute("SELECT subject_id, kind, created_at FROM history_events WHERE id='t2'").fetchone() == (
-            "task-1",
-            None,
-            None,
-        )
-        assert c.execute("SELECT id FROM history_events WHERE subject_type='goal'").fetchall() == [("g1",)]
-        assert not {"task_events", "goal_events"} & {r[0] for r in c.execute("SELECT name FROM sqlite_master")}
-
-
 def test_a_lease_less_run_is_kept_only_once_settled(tmp_path, booted):
     """A run with no job (a chat run, or a turn migration 0072 made into an attempts row) has no lease: it is open until
     settled_at. A copy keeps the settled ones and removes the open ones, as it removes a job-backed attempt still running."""
@@ -440,19 +346,3 @@ def test_a_lease_less_run_is_kept_only_once_settled(tmp_path, booted):
     with closing(sqlite3.connect(dest)) as c:
         assert {row[0] for row in c.execute("SELECT id FROM attempts")} == {"done", "chat-done", "recorded"}
     assert removed["attempts"] == 3  # the running job, the old one and chat-open
-
-
-def test_a_copy_keeps_no_turn_whose_attempt_the_cut_removed(tmp_path, booted):
-    """A copy from before migration 0072 keeps turns whole. A turn whose attempts row the cut removed goes with it, so
-    migration 0072 does not bring the pruned run back as a lease-less one."""
-    source = source_db(tmp_path, booted)
-    with closing(sqlite3.connect(source)) as c:
-        c.execute("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, started_at TEXT)")
-        c.executemany("INSERT INTO turns VALUES(?,?,?)", [("done", "sales", H.now()), ("gone", "sales", OLD)])
-        c.commit()
-    dest = tmp_path / "copy" / "hub.sqlite"
-    removed, loose = devcopy.build(source, dest, days=30)
-    assert loose == []
-    with closing(sqlite3.connect(dest)) as c:
-        assert c.execute("SELECT id FROM turns").fetchall() == [("done",)]
-    assert removed["turns"] == 1

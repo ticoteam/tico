@@ -5,7 +5,6 @@ The org here: ops reports to assistant, assistant to Ana (the owner). A cap on (
 from backend import task_caps
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.helpers.migrations import restore_config, forget_from
 from backend.tests.helpers.task_caps import as_bot
 
 
@@ -158,26 +157,3 @@ def test_a_retry_with_a_saved_idempotency_key_replays_instead_of_hitting_the_cap
     assert first.status_code == again.status_code == 200, again.text
     assert again.json() == first.json()
     task(api, "ops-test", "Twice", owner="ana", expected=409)  # a new key is a new send
-
-
-def test_the_upgrade_drops_the_retired_send_table_and_the_log_keeps_counting(api):
-    """An install from before the drop still has task_cap_sends. Migration 0004 removes it at the next start, and a send
-    the cap counts (task_cap_log) still counts after it."""
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("CREATE TABLE task_cap_sends(task_id TEXT PRIMARY KEY, sender TEXT, receiver TEXT, sent_at TEXT)")
-        c.execute(
-            "INSERT INTO task_cap_sends(task_id, sender, receiver, sent_at) VALUES('t0','bot:ops','human:ana',?)",
-            (H.now(),),
-        )
-        # As a file from before 0004 has it: that migration and every later one not run yet. The reruns read
-        # bot_config.config (0061), which 0070 dropped: the column goes back first, as on a file from before 0070.
-        restore_config(c)
-        forget_from(c, "0004")
-    store.initialize(seed_market=False)
-    with store.transaction() as c:
-        tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert "task_cap_sends" not in tables and "task_cap_log" in tables
-        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0004_drop_task_cap_sends'").fetchone()
-        task_caps.record(c, "t1", "bot:ops", "human:ana")
-        assert task_caps.tally(c, "bot:ops", "human:ana") == (1, 0)

@@ -142,26 +142,6 @@ class ClaimFaults:
             self.new_bots.append((bot, exc))
 
 
-# A runner that advertises this runs a bot's task-keyed turns in their own lanes, side by side;
-# for any other runner every turn is in the main lane, one at a time per bot. `task_lanes_v1` was
-# advertised by unreleased main-built runners whose session key treats an unset `session` as the
-# bot thread, so the task-session default would give their lanes one shared provider thread: it
-# is still accepted but means no lanes, and those runners run serially.
-LANES = "task_lanes_v2"
-
-# A runner that advertises this keys a task turn's session and worktree on the claimed task's
-# `session_task_id` (H.session_root: a subtask continues its parent's session). Any other runner keys
-# on the task itself, so for it the server keeps every task, subtasks included, its own lane and session.
-ROOTS = "session_roots_v1"
-
-# A runner that advertises this runs a task's goal as the harness's native goal (chat_goals.task_goal_row):
-# it sets it in the task's session beside the turn's prompt. Any other runner is handed no task-room goal.
-TASK_GOALS = "task_goals_v1"
-
-# A runner that advertises this continues the thread a claim names in `continue_thread` (capacity_continuation). Any
-# other runner ignores the field and would start the job on a fresh thread, so it is never handed such a job.
-CAPACITY_CONTINUE = "capacity_continue_v1"
-
 # A runner that advertises this starts a turn whose claim names `fork_thread` on a fork of that session
 # (`claude --resume <thread> --fork-session`), leaving the original untouched (backend/wake_presets.py, session `fork`).
 # Any other runner is handed no fork and starts the job on a fresh session.
@@ -170,20 +150,6 @@ FORK_SESSION = "fork_session_v1"
 # conversation's saved session as it was (backend/wake_presets.py, session `fresh`). Any other runner is not told,
 # resumes as usual, and the run record then says the session was resumed.
 FRESH_SESSION = "fresh_session_v1"
-
-# A runner that advertises this runs a private live meeting's turns in that meeting's own checkout, read-only on GitHub
-# (runner-rs/src/sessions.rs, private lanes). Any other runner would run them in the bot's checkout and push what they
-# wrote, so it is never handed one: the turn waits for an updated runner (live_meetings `meeting.bot_turn_waiting`).
-PRIVATE_LANES = "private_lanes_v1"
-SOURCE_CONTINUE = "source_continue_v1"
-
-# A runner that advertises this keeps the threads of a bot's chats apart: a public thread's turn never resumes a direct
-# message's provider thread (runner-rs session_key). Any other runner keys a `session: bot` chat on the bot's one thread,
-# so the server gives it each chat's own session instead (start_claimed).
-THREADS = "threads_v1"
-
-# These requests need a fresh provider session and disposable scratch.
-MAKE_PAGE = "make_page"
 
 
 def oks_used(c, bot, since, until=None):
@@ -328,40 +294,10 @@ def capability_set(capabilities_json):
     return frozenset(H._json(capabilities_json, []) or [])
 
 
-def lanes_on(runner):
-    return bool(runner) and LANES in capability_set(runner["capabilities"])
-
-
-def private_lanes_on(runner):
-    return bool(runner) and PRIVATE_LANES in capability_set(runner["capabilities"])
-
-
-def private_job(c, job):
-    """Whether a queued job is a private live meeting's turn (private_lane): only a private_lanes_on runner takes it."""
-    message = H.message(c, job["message_id"])
-    return bool(message and private_lane(c, H.conversation(c, message["conversation_id"])))
-
-
-def roots_on(runner):
-    return bool(runner) and ROOTS in capability_set(runner["capabilities"])
-
-
-def threads_on(runner):
-    return bool(runner) and THREADS in capability_set(runner["capabilities"])
-
-
-def task_goals_on(runner):
-    return bool(runner) and TASK_GOALS in capability_set(runner["capabilities"])
-
-
-def capacity_continue_on(runner):
-    return bool(runner) and CAPACITY_CONTINUE in capability_set(runner["capabilities"])
-
-
-def session_task_id(c, bot, config, task_id, roots):
-    """The task a turn on `task_id` keys its session and lane on: its session root for a runner that reads
-    `session_task_id`, the task itself for any other."""
-    return H.session_root(c, bot, task_id, config) if roots and task_id else task_id
+def session_task_id(c, bot, config, task_id):
+    """The task a turn on `task_id` keys its session and lane on: its session root (H.session_root), so a subtask
+    continues its parent's session."""
+    return H.session_root(c, bot, task_id, config) if task_id else task_id
 
 
 def reply_target(message, conversation, task):
@@ -399,18 +335,16 @@ def work_task_id(message, conversation=None):
     return H.message_task_id(message, conversation)
 
 
-def job_lane(c, bot, config, message, conversation, lanes, roots=False):
-    """The lane a queued message would run in (clients/sessions.py), `main` for a runner without lanes.
-    `config` is the bot's followed config, the one its runner keys sessions on. A subtask's turn runs in
-    its session root's lane, so it and its parent's turns take turns in one session."""
-    if not lanes:
-        return sessions.MAIN_LANE
+def job_lane(c, bot, config, message, conversation):
+    """The lane a queued message would run in (clients/sessions.py). `config` is the bot's followed config, the one
+    its runner keys sessions on. A subtask's turn runs in its session root's lane, so it and its parent's turns take
+    turns in one session."""
     if private := private_lane(c, conversation):
         return private
     return sessions.lane(
         config,
         bot,
-        session_task_id(c, bot, config, work_task_id(message, conversation), roots),
+        session_task_id(c, bot, config, work_task_id(message, conversation)),
         conversation["id"] if conversation else None,
     )
 
@@ -635,7 +569,7 @@ def lift_after_login_switch(c, settings, actor, runner_id, runtime):
 HISTORY_PAGE = 50
 
 
-def lane_history(c, bot, config, history, conversation, lane, roots=False):
+def lane_history(c, bot, config, history, conversation, lane):
     """The part of a room's page a turn in `lane` reads: the messages whose own lane (job_lane) is that
     lane, so the main session never reads task traffic and a task's session never reads the main chat or
     another task. The main chat's quiet task lines (`refs.task_started`, `refs.task_report`) are the main
@@ -653,7 +587,7 @@ def lane_history(c, bot, config, history, conversation, lane, roots=False):
             memo[task_id] = sessions.lane(
                 config,
                 bot,
-                session_task_id(c, bot, config, task_id, roots),
+                session_task_id(c, bot, config, task_id),
                 conversation["id"] if conversation else None,
             )
         return memo[task_id]
@@ -1227,11 +1161,6 @@ def retry_facts(c, job, started, finished):
     # Its harness process died under it (killed or crashed): not the bot's choice, so it resumes once (auto_reconcile).
     died = None if timeout or update else harness_died(c, job['attempt_id'])
     attempt = c.execute('SELECT state,thread_id,runner_id FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
-    computer = (
-        c.execute('SELECT capabilities FROM runners_with_state WHERE id=?', (attempt['runner_id'],)).fetchone()
-        if attempt
-        else None
-    )
     # Only a negotiated strict continuation may bypass the legacy late-result grace. Unknown tools and
     # an already-final answer still need their original safety/settlement path.
     final = c.execute(
@@ -1244,7 +1173,6 @@ def retry_facts(c, job, started, finished):
         and attempt['state'] == 'expired'
         and started
         and attempt['thread_id']
-        and capacity_continue_on(computer)
         and reported
         and not acted
         and not final
@@ -2483,14 +2411,13 @@ def claim_refusal(
     subscription_context=None,
     default=None,
     *,
-    caps=None,
     loads=None,
     ignore_refusals=(),
 ):
     """Why `runner`'s claim passes over all of `bot`'s queued work, or (None, config) when it may look at the bot's
     jobs. A bot at its own "Turns at once" holds its work on every computer ("bot_limit") once nothing else holds it.
-    `caps`: the runner's capability set (capability_set), and `loads`: the rows the checks read for the runner's bots
-    (claim_loads.read), when the caller has them; without them each check reads its own rows as before.
+    `loads` is the rows the checks read for the runner's bots (claim_loads.read), when the caller has them; without
+    them each check reads its own rows as before.
     `ignore_refusals`: diagnostics skip last-boot predicates but still check later holds; admission never uses it."""
     why, config = _claim_refusal(
         c,
@@ -2503,7 +2430,6 @@ def claim_refusal(
         held_bots,
         subscription_context,
         default,
-        caps=caps,
         loads=loads,
         ignore_refusals=ignore_refusals,
     )
@@ -2528,7 +2454,6 @@ def _claim_refusal(
     subscription_context=None,
     default=None,
     *,
-    caps=None,
     loads=None,
     ignore_refusals=(),
 ):
@@ -2536,9 +2461,7 @@ def _claim_refusal(
     (None, config) when it may look at the bot's jobs. The claim (Execution.candidate) and Health (bot_refusal) use
     this one rule, so Health never calls work the claim holds on purpose a Tico bug. `held_bots`: bots the runner
     says are busy (a lane runner sends only the bots whose worktrees it is maintaining) and, for a runner without
-    lanes, every bot with a running turn. `ready` is the computer's readiness document. `caps`, `loads`: see claim_refusal."""
-    if caps is None:
-        caps = capability_set(runner["capabilities"])
+    lanes, every bot with a running turn. `ready` is the computer's readiness document. `loads`: see claim_refusal."""
     if draining:
         return ("moving" if draining == 2 else "draining"), None
     company = loads.company if loads is not None else company_pause.record(c)
@@ -2547,10 +2470,8 @@ def _claim_refusal(
         return "company_paused", None
     if cloud_access.locked(c, loads.access if loads is not None else cloud_access.access(c)):
         return "cloud_locked", None  # a locked Tico Cloud company runs no bot (backend/cloud_access.py)
-    if bot in held_bots:
-        why = "maintaining" if lanes_on(runner) else "lane_held"
-        if why not in ignore_refusals:
-            return why, None
+    if bot in held_bots and "maintaining" not in ignore_refusals:
+        return "maintaining", None
     state = loads.backoff_of(c, bot) if loads is not None else None
     if (why := run_backoff.refusal(c, bot, state)) and not (why == "backoff" and run_backoff.person_waiting(c, bot)):
         return why, None  # waiting out failed runs, or held until a person releases it (backend/run_backoff.py)
@@ -2564,10 +2485,6 @@ def _claim_refusal(
 
     if login_upgrade(runner, ready, bot=bot):
         return "login_upgrade", None
-    if browser_exit.CAPABILITY not in caps and (
-        loads.exit_of(c, bot) if loads is not None else browser_exit.bot_exit(c, bot)
-    ):
-        return "browser_exit_update", None
     record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
@@ -2893,7 +2810,7 @@ def job_message_readable(c, bot, message):
     return privacy.message_readable(c, privacy.make_page_actor(c, "bot:" + bot, message), message)
 
 
-def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, runner=None):
+def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
@@ -2912,8 +2829,6 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         # keeper's carrier of their own message too (task_wakes.may_start).
         return "task_wait"
     refs = message.get("refs") or {}
-    if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
-        return "make_page_upgrade"
     # Whose turn a task is the engine's to say: it writes a task's wake only for the bot whose turn it is and cancels
     # it when the turn moves on (backend/task_wakes.py), so the claim does not judge a task's waits again.
     wanted = check_models.of(c, task_id, job["bot_id"])
@@ -2928,7 +2843,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         return "check_model"  # hold_unrunnable cancels it on the scheduler's next tick
     config = check_models.apply(followed, wanted)
     if (
-        (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation, lanes, roots)) in busy
+        (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation)) in busy
         or (job["bot_id"], task_id) in live
         or filer_live(c, message)
     ):
@@ -3330,6 +3245,8 @@ def prime_job_checks(c, jobs):
             continue
         pairs.add((work_task_id(message, H.conversation(c, message["conversation_id"])), job["bot_id"]))
     check_models.prime(c, pairs)
+    # The session root each job's lane is keyed on (session_task_id), with every ancestor the walk reaches.
+    H.prime_session_roots(c, [task_id for task_id, _ in pairs])
     tasks = sorted({task_id for task_id, _ in pairs if task_id})
     snoozed = {}
     for part in H.chunks(tasks):
@@ -3397,7 +3314,6 @@ def bot_claimable(
             first = min(rows(c, queued_jobs_sql(), (bot,)), key=lambda j: (j["created_at"], j["id"]), default=None)
             return result(why, first["created_at"] if first else None, job=first["id"] if first else None)
         return result(why)
-    lanes, roots = lanes_on(runner), roots_on(runner)
     busy = set(live_lanes(c)) | held_lanes
     followed, refused = follow(c, bot, config), None  # refused: (created, reason) of the oldest held job
     queue = rows(c, queued_jobs_sql(), (bot,))
@@ -3407,10 +3323,8 @@ def bot_claimable(
             why = "scoped"
         elif not job["free"]:
             why = "uncertain" if job["quarantine_free"] else "task_quarantine"
-        elif not private_lanes_on(runner) and private_job(c, job):
-            why = "private_update"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, runner=runner) or (
+            why = job_refusal(c, job, followed, ready, busy, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None
             )
         if why is None or why in ignore_refusals or (oldest and why != "lane_held"):
@@ -3456,7 +3370,6 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, l
         for job in queue:
             yield job, why
         return
-    lanes, roots = lanes_on(runner), roots_on(runner)
     busy = set(live_lanes(c)) | held_lanes
     followed = follow(c, bot, config)
     live = live_tasks(c)
@@ -3465,10 +3378,8 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, l
             why = "scoped"
         elif not job["free"]:
             why = "uncertain" if job["quarantine_free"] else "task_quarantine"
-        elif not private_lanes_on(runner) and private_job(c, job):
-            why = "private_update"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, runner=runner) or (
+            why = job_refusal(c, job, followed, ready, busy, live, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"], loads=loads) else None
             )
         yield job, None if why in ignore_refusals else why
@@ -3842,7 +3753,7 @@ class Execution:
             "browser_exit": browser_exit.sharing(c, who.runner_id),
             # The bots here with an exit set: the runner stops the proxies of the rest.
             "browser_exit_bots": browser_exit.bots_on(c, who.runner_id),
-            # The owner's "Turns at once" (null: automatic). Only a runner with turns_at_once_v1 takes a raised one.
+            # The owner's "Turns at once" (null: automatic, the computer's own capacity).
             "turns_at_once": restart["turns_at_once"] if restart else None,
             **({"worktree_actions_skipped": skipped} if skipped else {}),
             **({"restart": True} if restart and restart["restart_requested_at"] else {}),
@@ -4513,14 +4424,8 @@ class Execution:
         ClaimFaults, which takes each job whose checks raise and moves on to the next candidate, passes over the bot of
         a bot-wide check that raises, and stops picking once CLAIM_HOLDS jobs are held; without it the error
         propagates. `skip`: the job ids a claim has already dropped, which are passed over."""
-        # The runner's flags, parsed once for this pass: every check below reads this set.
-        caps = capability_set(runner["capabilities"])
-        lanes, roots, continues = LANES in caps, ROOTS in caps, CAPACITY_CONTINUE in caps
-        private_lanes = PRIVATE_LANES in caps
-        # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list. A runner
-        # without lanes runs one turn per bot, so any active attempt takes the whole bot.
+        # Taken lanes, each "bot|lane": the server's active attempts and the runner's own busy list.
         busy = set(live_lanes(c))
-        busy_bots = {bot for bot, _ in busy} if not lanes else set()
         mine = {tuple(entry.split("|", 1)) for entry in (body.busy_lanes or ()) if "|" in entry}
         busy |= mine
         # Prefer the bot holding the fewest real places; waiting workers still fence their lanes,
@@ -4536,7 +4441,7 @@ class Execution:
         from .shared_bots import follow
 
         subscription_context = context(c)
-        held_bots = set(body.busy_bots or ()) | busy_bots
+        held_bots = set(body.busy_bots or ())
         # The runner may name its bot by id or slug, as everywhere a bot is named from outside.
         only = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot) if body.bot is not None else None
         bots = []
@@ -4557,13 +4462,7 @@ class Execution:
         # What the per-bot checks read for every one of these bots, in fixed set queries, before the first check
         # (claim_loads). No queued bot, no reads.
         loads = (
-            claim_loads.read(
-                c,
-                self.store.settings,
-                {runner["id"]: runner},
-                [row["bot"] for row in assigned],
-                exits=browser_exit.CAPABILITY not in caps,
-            )
+            claim_loads.read(c, self.store.settings, {runner["id"]: runner}, [row["bot"] for row in assigned])
             if assigned
             else None
         )
@@ -4586,7 +4485,6 @@ class Execution:
                         held_bots,
                         subscription_context,
                         default,
-                        caps=caps,
                         loads=loads,
                     )
                     if why:
@@ -4648,13 +4546,7 @@ class Execution:
                 part = candidates[i : i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
             try:
-                if source_continuation(c, row["id"]) and SOURCE_CONTINUE not in caps:
-                    continue  # old strict-primary runners cannot route a saved fallback
-                if not continues and continuation_thread(c, row["id"]):
-                    continue  # left queued for a runner that continues its thread: this one would start it afresh
-                if not private_lanes and private_job(c, row):
-                    continue  # a private meeting's turn waits for a runner that keeps it out of the bot's checkout
-                why = job_refusal(c, row, followed[row["bot_id"]], ready, busy, lanes, roots, live, runner=runner)
+                why = job_refusal(c, row, followed[row["bot_id"]], ready, busy, live, runner=runner)
                 if why != "unreadable":
                     # The bot's checks ran for this job without raising: the back-off their last failure started ends.
                     self.check_backoff.pop(row["bot_id"], None)
@@ -5122,7 +5014,6 @@ class Execution:
         # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
         check = check_models.of(c, task["id"], row["bot_id"]) if task else None
         # Starting a run does not change the task: it is being worked on while the run is live (task_wakes.live_run).
-        roots, lanes = roots_on(runner), lanes_on(runner)
         # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
         # cannot run here; a check keeps its check model (backend/task_models.py).
         followed, model_record = task_models.pick(
@@ -5131,7 +5022,7 @@ class Execution:
             row["bot_id"],
             followed,
             task["id"] if task else None,
-            session_task_id(c, row["bot_id"], followed, task["id"], roots) if task else None,
+            session_task_id(c, row["bot_id"], followed, task["id"]) if task else None,
             conv["id"],
             who.runner_id,
             row["id"],
@@ -5141,7 +5032,7 @@ class Execution:
         # What really runs this turn: the task's or check's model, or the bot's own after a fallback. A change to
         # the bot's model while the turn is out is told from an effort change by these (ran_another_model).
         handed = providers.bot_choice(c, self.store.settings, followed)
-        lane = job_lane(c, row["bot_id"], followed, msg, conv, lanes, roots)
+        lane = job_lane(c, row["bot_id"], followed, msg, conv)
         token = secrets.token_urlsafe(32)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
         woke, source = run_triggers.of_message(msg)
@@ -5258,16 +5149,6 @@ class Execution:
         # A stateless bot (the Rules Owner): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
             config = {**config, "stateless": True}
-        # A runner without threads_v1 keys every bot-keyed turn on the bot's one provider thread (`session: bot`), so a
-        # chat's turn would resume another thread's session. Its chats get a session each instead (`session: task` with no
-        # task keys on the conversation, runner-rs session_key); a task keeps its own session as before.
-        if (
-            not threads_on(runner)
-            and task is None
-            and config.get("session") in (None, "", "bot")
-            and not config.get("stateless")
-        ):
-            config = {**config, "session": "task"}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `tico conversation show` when it wants to. The
@@ -5289,11 +5170,10 @@ class Execution:
             c,
             bot_who,
             conv["id"],
-            limit=HISTORY_PAGE * (2 if lanes else 1),
+            limit=HISTORY_PAGE * 2,
             since=epoch["updated_at"] if epoch else None,
         )["messages"]
-        if lanes:
-            history = lane_history(c, row["bot_id"], followed, history, conv, lane, roots)[-HISTORY_PAGE:]
+        history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
         conversation = thread_payload(c, conv, msg)
         if conversation and conversation.get("audience_class") == "public":
             from . import threads
@@ -5350,20 +5230,19 @@ class Execution:
             if goal:
                 # Worked as a goal: the runner tells the bot to keep at it until the objective holds.
                 task["goal"] = goal
-            if roots:
-                # The task whose session and worktree this turn continues (H.session_root); the runner keys on it.
-                task["session_task_id"] = session_task_id(c, row["bot_id"], followed, task["id"], roots)
-                root = H.task(c, task["session_task_id"]) if task["session_task_id"] != task["id"] else None
-                if root and readable(root):
-                    # The checkpoint lives on the root: a fresh session starts from where the root stood.
-                    kept = root.get("checkpoint") if not root.get("checkpoint_blocked") else None
-                    task.update(
-                        {
-                            "checkpoint": kept,
-                            "checkpoint_at": root.get("checkpoint_at") if kept else None,
-                            "checkpoint_by_id": root.get("checkpoint_by_id") if kept else None,
-                        }
-                    )
+            # The task whose session and worktree this turn continues (H.session_root); the runner keys on it.
+            task["session_task_id"] = session_task_id(c, row["bot_id"], followed, task["id"])
+            root = H.task(c, task["session_task_id"]) if task["session_task_id"] != task["id"] else None
+            if root and readable(root):
+                # The checkpoint lives on the root: a fresh session starts from where the root stood.
+                kept = root.get("checkpoint") if not root.get("checkpoint_blocked") else None
+                task.update(
+                    {
+                        "checkpoint": kept,
+                        "checkpoint_at": root.get("checkpoint_at") if kept else None,
+                        "checkpoint_by_id": root.get("checkpoint_by_id") if kept else None,
+                    }
+                )
             own_room = conv and conv.get("kind") == "task" and conv.get("task_id") == task["id"]
             from .chat_goals import clear_task_goal, task_goal_row
 
@@ -5376,7 +5255,6 @@ class Execution:
                 goal
                 and own_room
                 and lane != sessions.MAIN_LANE
-                and task_goals_on(runner)
                 and task.get("session_task_id", task["id"]) == task["id"]
             ):
                 # Its own session runs it as the harness's native goal; the runner sets it once per session.
@@ -5397,7 +5275,7 @@ class Execution:
                 + recovery['note'],
             }
         if task and recovery:
-            msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lanes, roots, lane)
+            msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lane)
         # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
         # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
         continue_thread = continuation_thread(c, row['id'])
@@ -5491,8 +5369,7 @@ class Execution:
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
         if making_page:
             history = [msg]
-        # A runner from before task goals would treat a task room's goal as running without ever setting it.
-        chat_goal = current(c, conv["id"]) if not (conv.get("kind") == "task" and not task_goals_on(runner)) else None
+        chat_goal = current(c, conv["id"])
         if chat_goal and (making_page or chat_goal["bot"] != row["bot_id"]):
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
             chat_goal = None
@@ -6249,7 +6126,7 @@ class Execution:
         return msg
 
     @staticmethod
-    def fold_behind(c, row, aid, msg, task_id, followed, lanes, roots, lane):
+    def fold_behind(c, row, aid, msg, task_id, followed, lane):
         """A resumed run takes the work that queued behind it on its task while it was held (verdicts, subtask
         results, comments: the claim's fence, unfenced_sql, kept them back), so no separate turn waits after it to
         read them again (Dev 543). Each joins this turn as an input given in its prompt, already acknowledged, and its
@@ -6273,13 +6150,7 @@ class Execution:
             message = H.message(c, queued["id"])
             if not threads.still_addressed(c, message, "bot:" + row["bot_id"]):
                 continue  # left queued: its own claim settles it
-            if (
-                lanes
-                and job_lane(
-                    c, row["bot_id"], followed, message, H.conversation(c, queued["conversation_id"]), lanes, roots
-                )
-                != lane
-            ):
+            if job_lane(c, row["bot_id"], followed, message, H.conversation(c, queued["conversation_id"])) != lane:
                 continue
             prior = c.execute(
                 "SELECT i.attempt_id,a.state FROM attempt_inputs i JOIN attempts a ON a.id=i.attempt_id "
@@ -6338,11 +6209,6 @@ class Execution:
         if row["state"] != "running":
             raise Problem("not_running", "This attempt is not running", 409)
         if body.source_pending or body.source_continuation:
-            computer = c.execute(
-                'SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)
-            ).fetchone()
-            if SOURCE_CONTINUE not in json.loads(computer[0] or '[]'):
-                raise Problem('capability', 'Saved fallback sessions require source continuation support', 409)
             if body.source_pending:
                 # The primary's thread is no proof of where the fallback is. Fence recovery before launching it.
                 c.execute(
@@ -6414,16 +6280,9 @@ class Execution:
         if "make_page" in (origin.get("refs") or {}):
             return {"messages": []}
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
-        capabilities = c.execute(
-            "SELECT capabilities FROM runners_with_state WHERE id=?", (attempt["runner_id"],)
-        ).fetchone()
-        lanes, roots = lanes_on(capabilities), roots_on(capabilities)
-        if lanes:
-            from .shared_bots import follow
+        from .shared_bots import follow
 
-            followed = follow(
-                c, attempt["bot_id"], json.loads(c.execute(BS.ONE_SQL, (attempt["bot_id"],)).fetchone()[0])
-            )
+        followed = follow(c, attempt["bot_id"], json.loads(c.execute(BS.ONE_SQL, (attempt["bot_id"],)).fetchone()[0]))
         # A task turn whose message stayed in the chat the task moved out of (H.give_task_room) also takes
         # follow-ups from the task's own room; the lane and privacy checks below apply to both.
         task_room = (
@@ -6474,10 +6333,7 @@ class Execution:
             if incoming_task and incoming_task != origin_task and row["kind"] == "notice":
                 continue  # a new task gets its own run, even in the same bot room
             if (
-                lanes
-                and job_lane(
-                    c, attempt["bot_id"], followed, H.message(c, row["id"]), incoming_conversation, lanes, roots
-                )
+                job_lane(c, attempt["bot_id"], followed, H.message(c, row["id"]), incoming_conversation)
                 != attempt["lane"]
             ):
                 continue  # another lane's work is that lane's turn, never folded into this one
@@ -7128,6 +6984,7 @@ class Execution:
         # restart safety judgement: local work may continue, while used OKs and outside actions stay held.
         failure = None
         source_pause = False
+        worked = False  # set only when source_pause is; read only under it
         quota_acted = False
         notice_only = False
         if body.outcome in ('failed', 'interrupted') and not row['stop_requested_at']:
@@ -7183,16 +7040,9 @@ class Execution:
                 aid,
             ),
         )
-        quota_continue = False
-        if source_pause and not body.fallback and row['thread_id'] and worked:
-            computer = c.execute(
-                'SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)
-            ).fetchone()
-            quota_continue = capacity_continue_on(computer)
-            if quota_continue:
-                c.execute(
-                    "UPDATE attempts SET result=json_set(result,'$.quota_continue',json('true')) WHERE id=?", (aid,)
-                )
+        quota_continue = bool(source_pause and not body.fallback and row['thread_id'] and worked)
+        if quota_continue:
+            c.execute("UPDATE attempts SET result=json_set(result,'$.quota_continue',json('true')) WHERE id=?", (aid,))
         if body.outcome == "completed":
             H.notes_settle(c, aid)  # read for good; a failed or interrupted run gives its notes back
         from .performance import stamp_attempt
@@ -7267,13 +7117,7 @@ class Execution:
             and source.harness == body.fallback
             and not notice_only
         ):
-            computer = c.execute(
-                'SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)
-            ).fetchone()
-            if computer and SOURCE_CONTINUE in json.loads(computer[0] or '[]'):
-                c.execute(
-                    "UPDATE attempts SET result=json_set(result,'$.source_continue',json('true')) WHERE id=?", (aid,)
-                )
+            c.execute("UPDATE attempts SET result=json_set(result,'$.source_continue',json('true')) WHERE id=?", (aid,))
         limited = limited and not busy_acted or continues
         if repeated_capacity:
             limited = False

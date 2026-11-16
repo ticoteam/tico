@@ -22,8 +22,10 @@ place, without calling `/start-place` or acknowledging the same start again.
 ## Supported skew
 
 A runner and a server work together when each is on the current or the previous minor release, in either direction:
-a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. `scripts/check_wire_contract.py` checks the
-current contract against each kept release copy in both directions and fails on any break.
+a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. The server's floor (`MIN_RUNNER_RELEASE`,
+0.6.0-rc.1) pauses any runner below it, so 0.5 runners are paused, not served, and the supported window starts at
+0.6.0-rc.1. `scripts/check_wire_contract.py` checks the current contract against each kept release copy in both
+directions and fails on any break.
 
 ## Compatibility rules
 
@@ -63,8 +65,8 @@ an `Option` with that fallback. An answer it cannot read at all is a `protocol` 
 `MIN_RUNNER_RELEASE` in `backend/runner_versions.py` is the oldest runner release the server gives work to. A runner
 below it is paused: its claims answer `{"attempt": null, "paused": "<why>"}`, it logs the reason, and Computers shows it
 as incompatible. It is not refused outright. A runner that does not report a release (a development checkout) is never
-paused. The floor is 0.4.0, the previous minor release, matching the supported window. Raise it with the window at
-each new minor release.
+paused. The floor is 0.6.0-rc.1, the first release candidate of 0.6, the oldest version Tico supports. Raise it with
+the window at each new minor release.
 
 ## Changing the contract
 

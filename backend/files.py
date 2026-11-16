@@ -78,36 +78,6 @@ def raw_media(request, imported=False):
     return BF.is_media(raw_name(dict(request.query_params), imported))
 
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bot_files(
- id TEXT PRIMARY KEY, bot_id TEXT NOT NULL REFERENCES bots(id), scope TEXT NOT NULL,
- identity TEXT NOT NULL, title TEXT NOT NULL, kind TEXT NOT NULL, mime TEXT NOT NULL DEFAULT '',
- locator TEXT NOT NULL, url TEXT, provider TEXT, current_version INTEGER NOT NULL DEFAULT 0,
- state TEXT NOT NULL DEFAULT 'ready', task_id TEXT, conversation_id TEXT,
- first_activity_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
- UNIQUE(bot_id, scope, identity));
-CREATE INDEX IF NOT EXISTS bot_files_recent ON bot_files(bot_id, archived, last_activity_at, id);
-CREATE INDEX IF NOT EXISTS bot_files_task ON bot_files(task_id, archived, locator);
-CREATE TABLE IF NOT EXISTS bot_file_versions(
- file_id TEXT NOT NULL REFERENCES bot_files(id), version INTEGER NOT NULL,
- blob_id TEXT NOT NULL REFERENCES blobs(id), digest TEXT NOT NULL, source_digest TEXT,
- size INTEGER NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, commit_sha TEXT, repo_path TEXT,
- attempt_id TEXT, actor TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(file_id, version));
-CREATE TABLE IF NOT EXISTS bot_file_activity(
- id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL REFERENCES bot_files(id),
- actor TEXT NOT NULL, action TEXT NOT NULL, attempt_id TEXT, task_id TEXT, version INTEGER,
- digest TEXT, created_at TEXT NOT NULL, detail TEXT);
-CREATE INDEX IF NOT EXISTS bot_file_activity_file ON bot_file_activity(file_id, id);
-CREATE TRIGGER IF NOT EXISTS bot_file_activity_append_only BEFORE UPDATE ON bot_file_activity
- BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_activity_no_delete BEFORE DELETE ON bot_file_activity
- BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_versions_immutable BEFORE UPDATE ON bot_file_versions
- BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END;
-CREATE TRIGGER IF NOT EXISTS bot_file_versions_no_delete BEFORE DELETE ON bot_file_versions
- BEGIN SELECT RAISE(ABORT, 'file versions are immutable'); END;
-"""
-
 # pinned / unpinned: a page put on or taken off a place (backend/cards.py), with the place in its detail.
 # reviewed: a verdict on one version from an answer to a review question (backend/file_reviews.py), in its detail.
 ACTIONS = (

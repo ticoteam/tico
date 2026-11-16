@@ -1,10 +1,8 @@
 """A runner's salted device identity survives enrollment and is learned once for legacy registrations."""
 
-import sqlite3
 from hashlib import sha256
 
 from backend.tests.helpers.api import post, runner  # noqa: F401
-from backend.tests.helpers.migrations import boot, fresh, snapshot
 
 DEVICE_ID = sha256(b"acme-device-one").hexdigest()
 
@@ -48,26 +46,3 @@ def test_a_legacy_registration_learns_its_device_once_and_missing_reports_keep_i
                 c.execute("SELECT device_id FROM runners_with_state WHERE id=?", (machine["runner_id"],)).fetchone()[0]
                 == DEVICE_ID
             )
-
-
-def test_upgrade_keeps_existing_computers_unknown_and_reboots_without_changes(tmp_path):
-    path = fresh(tmp_path)
-    with sqlite3.connect(path) as c:
-        c.execute("DROP INDEX runners_device_id")
-        c.execute("ALTER TABLE runners DROP COLUMN device_id")
-        c.execute("DELETE FROM schema_migrations WHERE version='20261105004449_runner_device_id'")
-        c.execute("INSERT INTO humans(id,name) VALUES('h1','Ana')")
-        c.execute(
-            "INSERT INTO runners(id,label,owner_id,token_hash,created_at,platform) "
-            "VALUES('r1','Acme Mac','h1','hash-1','2026-01-01T00:00:00Z','darwin')"
-        )
-    boot(path)
-    with sqlite3.connect(path) as c:
-        assert c.execute("SELECT label,device_id FROM runners_with_state WHERE id='r1'").fetchone() == (
-            "Acme Mac",
-            None,
-        )
-        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-    first = snapshot(path)
-    boot(path)
-    assert snapshot(path) == first

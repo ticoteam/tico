@@ -25,12 +25,6 @@ from fastapi import Request
 from . import models as M
 from .store import H, Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bot_task_tabs (
-  bot TEXT NOT NULL, viewer TEXT NOT NULL DEFAULT '', tabs TEXT NOT NULL,
-  updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY (bot, viewer));
-"""
-
 ACTIVE = ["open"]
 FINISHED = ("done", "closed")
 # Finished tasks a filter shows unless it says Done within: the last two weeks, as Done recently.

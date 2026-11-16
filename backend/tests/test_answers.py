@@ -596,34 +596,6 @@ def test_thumbs_down_count_is_one_bots_in_the_last_thirty_days(c, general):
     assert A.thumbs_down_count(c, "bot:builder", days=60) == 3
 
 
-def test_the_ask_migration_keeps_every_feedback_row_index_and_unique_key():
-    folder = Path(__file__).resolve().parents[1] / "migrations"
-    spec = importlib.util.spec_from_file_location("feedback_ask", folder / "20261110020000_feedback_ask_subject.py")
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    insert = (
-        "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,rating,created_at,updated_at) "
-        "VALUES(?,?,?,?,'bot:builder','down','then','then')"
-    )
-    with sqlite3.connect(":memory:") as conn:
-        conn.executescript((folder / "0041_feedbacks.sql").read_text())
-        conn.execute(insert, ("f1", ANA, "task", "t1"))
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(insert, ("f2", ANA, "ask", "v1:r1"))
-        indexes = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='index' ORDER BY name").fetchall()
-        migration.up(conn)
-        migration.up(conn)  # a table that takes ask already is left as it is
-        assert conn.execute("SELECT rowid, id, subject_type FROM feedbacks").fetchall() == [(1, "f1", "task")]
-        assert (
-            conn.execute("SELECT name, sql FROM sqlite_master WHERE type='index' ORDER BY name").fetchall() == indexes
-        )
-        conn.execute(insert, ("f2", ANA, "ask", "v1:r1"))
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(insert, ("f3", ANA, "ask", "v1:r1"))  # one row per person and subject
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute(insert, ("f4", ANA, "page", "p1"))
-
-
 def test_a_thumb_on_an_ask_shows_in_the_feedback_routes_to_whoever_reads_its_task(api, monkeypatch):
     store = api.app.state.store
     with store.transaction() as conn:

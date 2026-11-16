@@ -10,7 +10,7 @@
   "Not in directory" and the Suggest step reads (backend/skill_suggestions.py).
 
 Spec: emp-tico-open-source reports/2026-11-05-company-skills/spec.md §4 Bots and §5. Tables:
-backend/migrations/20261106061559_company_skills.sql.
+backend/migrations/baseline.sql.
 """
 
 import json

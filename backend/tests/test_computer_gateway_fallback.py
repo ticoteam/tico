@@ -27,7 +27,7 @@ def computer(api, bot="ops", signed_in=False, label="Studio Mac", bot_ready=None
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "isolated": True,

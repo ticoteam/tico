@@ -6,7 +6,6 @@ task."""
 
 import base64
 import json
-from pathlib import Path
 
 import httpx
 import pytest
@@ -347,27 +346,6 @@ def test_a_paused_legal_bot_falls_back_to_owner(api, hq, mail):
     assert task(api, items(api)["141"]["task_id"])["owner_id"] == "human:ana"
 
 
-def test_mail_grants_upgrade_preserves_existing_letters_and_owner_routing(api, hq, mail):
-    letter(api, "151", "legal")
-    deliver(hq, "151")
-    service(api).tick()
-    drain(api)
-    before = items(api)
-    migration = Path(__file__).resolve().parents[1] / "migrations/20261105040742_postal_mail_grants_and_routing.sql"
-    with api.app.state.store.transaction() as c:
-        c.execute("DROP TABLE postal_mail_grants")
-        c.execute("DROP TABLE postal_mail_settings")
-        H._apply(c, migration.read_text())
-        assert c.execute("SELECT count(*) FROM postal_mail_grants").fetchone()[0] == 0
-    assert items(api) == before
-    assert get(api, "postal/settings")["settings"]["legal_bot_id"] is None
-    letter(api, "152", "legal")
-    deliver(hq, "152")
-    service(api).tick()
-    drain(api)
-    assert task(api, items(api)["152"]["task_id"])["owner_id"] == "human:ana"
-
-
 def test_mail_grants_are_paged(api):
     put(api, "postal/addresses/all/grants/bot/ops", {})
     put(api, "postal/addresses/all/grants/person/cara", {})
@@ -509,16 +487,6 @@ def test_mail_bots_reject_chat_only_hosts_in_the_server_and_picker_data(api):
     first = get(api, "postal/bots?limit=1")
     second = get(api, "postal/bots?limit=1&after=" + first["next"])
     assert first["bots"][0]["id"] != second["bots"][0]["id"]
-
-
-def test_mail_migration_replay_keeps_routing_and_grant_attribution(api):
-    put(api, "postal/settings", {"legal_bot_id": "ops"})
-    put(api, "postal/addresses/all/grants/bot/ops", {})
-    before = get(api, "postal/settings"), get(api, "postal/addresses/all/grants")
-    migration = Path(__file__).resolve().parents[1] / "migrations/20261105040742_postal_mail_grants_and_routing.sql"
-    with api.app.state.store.transaction() as c:
-        H._apply(c, migration.read_text())
-    assert (get(api, "postal/settings"), get(api, "postal/addresses/all/grants")) == before
 
 
 def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
@@ -843,61 +811,6 @@ def test_a_filing_that_rolls_back_keeps_its_read_on_the_cap_and_leaves_nothing_b
     assert (items(api)["442"]["status"], items(api)["442"]["error"]) == ("new", "daily_cap")
 
 
-def test_an_upgrade_keeps_the_days_reads_against_the_cap(api, hq, mail, monkeypatch):
-    from backend import postal_mail_schema
-
-    monkeypatch.setattr(P, "READS_PER_DAY", 2)
-    for ident in ("431", "432", "433"):
-        letter(api, ident, "other")
-        deliver(hq, ident)
-    service(api).tick()
-    with api.app.state.store.transaction() as c:  # V2: two letters read in the last hour, no ledger yet
-        c.execute("UPDATE mail_items SET read_at=? WHERE external_id IN ('431','432')", (H.shift(H.now(), hours=-1),))
-        c.execute("DROP TABLE mail_reads")
-        H._apply(c, postal_mail_schema.V3)
-    api.app.state.postal_mail.process(items(api)["433"]["id"])
-    assert (items(api)["433"]["status"], items(api)["433"]["error"]) == ("new", "daily_cap")
-
-
-def test_bills_filed_before_they_were_private_go_private_once(api, hq, mail):
-    from backend import postal_mail_schema
-
-    for ident, kind in (
-        ("421", "bill"),
-        ("422", "government_tax"),
-        ("423", "financial"),
-        ("424", "legal"),
-        ("425", "other"),
-    ):
-        letter(api, ident, kind)
-        deliver(hq, ident)
-    service(api).tick()
-    drain(api)
-    got = {i: r["task_id"] for i, r in items(api).items()}
-    with api.app.state.store.transaction() as c:
-        got["sub"] = H.task_create(
-            c, H.KEEPER, "Pay the water bill", "", "bot:finance", parent_id=got["421"], lint=False, deduplicate=False
-        )["id"]
-    with api.app.state.store.transaction() as c:  # filed by the build before V2: the company could read them
-        c.execute("UPDATE tasks SET private=0, visibility='public'")  # (legal mail someone made public since)
-        c.execute("DELETE FROM mail_private_backfill")
-        H._apply(c, postal_mail_schema.V3)
-    api.app.state.postal_mail.backfill_private()
-
-    def private():
-        with api.app.state.store.read() as c:
-            return {i: c.execute("SELECT private FROM tasks WHERE id=?", (t,)).fetchone()[0] for i, t in got.items()}
-
-    assert private() == {"421": 1, "422": 1, "423": 1, "424": 0, "425": 0, "sub": 1}
-    with api.app.state.store.transaction() as c:
-        assert c.execute("SELECT count(*) FROM mail_private_backfill").fetchone()[0] == 0
-        c.execute(
-            "UPDATE tasks SET private=0, visibility='public' WHERE id=?", (got["421"],)
-        )  # public again, on purpose
-    api.app.state.postal_mail.backfill_private()
-    assert private()["421"] == 0
-
-
 def test_addresses_and_orders_go_to_tico_gateway(api, hq, mail):
     listed = get(api, "postal/addresses")
     assert listed["addresses"][0]["state"] == "DE" and listed["orders"][0]["order_id"] == "mo_0"
@@ -923,62 +836,6 @@ def test_a_rehearsal_never_orders_a_real_address(api, hq, mail):
     )
     assert refused.status_code == 503 and refused.json()["error"]["code"] == "rehearsal"
     assert mail.orders == [] and not any(path.startswith("/v1/gateway/mail/") for _, path in mail.calls)
-
-
-def test_a_bill_deleted_before_the_backfill_comes_back_private(api, hq, mail):
-    from backend import postal_mail_schema, task_delete
-
-    letter(api, "441", "bill")
-    deliver(hq, "441")
-    service(api).tick()
-    drain(api)
-    task_id = items(api)["441"]["task_id"]
-    with api.app.state.store.transaction() as c:
-        sub, moved, shredded = (
-            H.task_create(c, H.KEEPER, title, "", "bot:finance", parent_id=task_id, lint=False, deduplicate=False)["id"]
-            for title in ("Pay it", "File it", "Shred it")
-        )
-        other = H.task_create(c, H.KEEPER, "Office upkeep", "", "bot:finance", lint=False, deduplicate=False)["id"]
-    with api.app.state.store.transaction() as c:  # filed public by the build before V2, then deleted
-        c.execute("UPDATE tasks SET private=0, visibility='public'")
-        assert task_delete.delete_tasks(c, [task_id], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
-        for each in (moved, shredded):  # moved under another task since; one of them deleted too
-            c.execute(
-                "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'parent',?)",
-                (each, other, H.now()),
-            )
-        assert task_delete.delete_tasks(c, [shredded], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
-        c.execute("DELETE FROM mail_private_backfill")
-        H._apply(c, postal_mail_schema.V3)
-    api.app.state.postal_mail.backfill_private()
-    with api.app.state.store.transaction() as c:
-        assert task_delete.restore_tasks(c, [task_id, shredded])["restored"] == [task_id, shredded]
-    assert (task(api, task_id)["private"], task(api, task_id)["visibility"]) == (1, "private")
-    assert task(api, sub)["private"] == 1  # its subtask, kept live, goes private with it
-    assert task(api, moved)["private"] == task(api, shredded)["private"] == 0  # now another task's, not the bill's
-
-
-def test_a_subtask_deleted_before_the_backfill_comes_back_private_under_its_bill(api, hq, mail):
-    from backend import postal_mail_schema, task_delete
-
-    letter(api, "451", "bill")
-    deliver(hq, "451")
-    service(api).tick()
-    drain(api)
-    task_id = items(api)["451"]["task_id"]
-    with api.app.state.store.transaction() as c:
-        sub = H.task_create(c, H.KEEPER, "Pay it", "", "bot:finance", parent_id=task_id, lint=False, deduplicate=False)[
-            "id"
-        ]
-    with api.app.state.store.transaction() as c:  # both public before V2; the subtask deleted, the bill not
-        c.execute("UPDATE tasks SET private=0, visibility='public' WHERE id IN (?,?)", (task_id, sub))
-        assert task_delete.delete_tasks(c, [sub], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
-        c.execute("DELETE FROM mail_private_backfill")
-        H._apply(c, postal_mail_schema.V3)
-    api.app.state.postal_mail.backfill_private()
-    with api.app.state.store.transaction() as c:
-        assert task_delete.restore_tasks(c, [sub])["restored"] == [sub]
-    assert (task(api, task_id)["private"], task(api, sub)["private"], task(api, sub)["visibility"]) == (1, 1, "private")
 
 
 class Grouped(Decide):

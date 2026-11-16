@@ -75,29 +75,6 @@ from .task_rights import represents as task_represents, participant as task_part
 from . import task_roles as TRo
 from . import run_triggers as RT
 from . import status_values as SV
-from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
-from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
-from backend.subscriptions_schema import SCHEMA as SUBSCRIPTIONS_SCHEMA
-from backend.triggers_schema import SCHEMA as TRIGGERS_SCHEMA, SIGNING_SCHEMA as TRIGGER_SIGNING_SCHEMA
-from backend.rules_schema import SCHEMA as RULE_EVENTS_SCHEMA
-from backend.triggers_incoming_schema import (
-    SCHEMA as TRIGGERS_INCOMING_SCHEMA,
-    CONSUMER_SCHEMA as TRIGGERS_CONSUMER_SCHEMA,
-)
-from backend.hook_relay_schema import SCHEMA as HOOK_RELAY_SCHEMA
-from backend.webhooks_schema import SCHEMA as WEBHOOKS_SCHEMA
-from backend.sleep_idle_schema import SCHEMA as SLEEP_IDLE_SCHEMA
-from backend.tico_notices_schema import SCHEMA as TICO_NOTICES_SCHEMA
-from backend.postal_mail_schema import (
-    SCHEMA as POSTAL_MAIL_SCHEMA,
-    V2 as POSTAL_MAIL_V2_SCHEMA,
-    V3 as POSTAL_MAIL_V3_SCHEMA,
-)
-from backend.webhooks_v2_schema import SCHEMA as WEBHOOKS_V2_SCHEMA
-from backend.webhooks_v3_schema import SCHEMA as WEBHOOKS_V3_SCHEMA
-from backend.webhooks_v4_schema import SCHEMA as WEBHOOKS_V4_SCHEMA
-from backend.webhooks_v5_schema import SCHEMA as WEBHOOKS_V5_SCHEMA
-from backend.webhooks_v6_schema import SCHEMA as WEBHOOKS_V6_SCHEMA
 from . import bot_settings as BS
 from . import sources as SRC
 
@@ -246,12 +223,9 @@ CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
 TASK_STATUSES = ("open", "done", "closed")
 ACTIVE_STATUSES = ("open",)  # not yet finished
 TASK_ENDED = {"done": "marked done", "closed": "closed"}
-# The numbered start-up step that seeded the old General type's steps (PIPELINES_SCHEMA) reads this list, as it was.
-STEP_STATUSES = ("open", "doing", "review", "ready", "done", "closed")
 # The product lane is retired. Old rows may still say 'product' (so it is
 # still a lane to read and filter), but every new or moved task is company work.
 TASK_LANES = ("company", "product")
-LANE_TEAMS = ("product", "engineering")  # store.py's one-time lane migration (history)
 # People who may move any task: change its state, rank, lane, owner, labels, parent, blockers or
 # parent. Keyed on the roster team in
 # registry/people.yaml, so adding a mover is a roster edit. The environment owner always may.
@@ -280,768 +254,7 @@ QUARANTINE_AT = 10  # rule 8: repeated refusals in a day that hold the task/chat
 QUARANTINE_TOTAL_AT = 3 * QUARANTINE_AT  # rule 8: any refusals in a day, repeated or not (a loop over new targets)
 NOTICE_DAYS = 14  # how long a notice stays in the inbox
 
-# ----------------------------------------------------------------------------- schema
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bots (
-  id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
-  cwd TEXT, host TEXT DEFAULT 'keeper', thread_id TEXT, token_hash TEXT,
-  state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);
-
-CREATE TABLE IF NOT EXISTS humans (
-  id TEXT PRIMARY KEY, name TEXT, email TEXT, slack_id TEXT, teams TEXT);
-
-CREATE TABLE IF NOT EXISTS conversations (
-  id TEXT PRIMARY KEY, kind TEXT, subject TEXT, task_id TEXT, participants TEXT,
-  created_at TEXT, last_message_at TEXT, closed_at TEXT);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY, conversation_id TEXT REFERENCES conversations(id),
-  sender_id TEXT, recipient_id TEXT, kind TEXT, body TEXT, refs TEXT, in_reply_to TEXT,
-  created_at TEXT, delivered_at TEXT, read_at TEXT, expires_at TEXT, wait_s INTEGER);
-
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY, title TEXT, body TEXT, requester_id TEXT, owner_id TEXT, status TEXT,
-  due_at TEXT, parent_id TEXT, conversation_id TEXT,
-  created_at TEXT, updated_at TEXT, done_at TEXT, closed_at TEXT, closed_by_id TEXT, note TEXT);
-
-CREATE TABLE IF NOT EXISTS task_events (
-  id TEXT PRIMARY KEY, task_id TEXT REFERENCES tasks(id), created_at TEXT, actor TEXT,
-  field TEXT, old TEXT, new TEXT, note TEXT);
-
-CREATE TABLE IF NOT EXISTS approvals (
-  id TEXT PRIMARY KEY, kind TEXT, task_id TEXT, message_id TEXT, payload TEXT,
-  payload_hash TEXT, requested_by_id TEXT, decided_by_id TEXT, decision TEXT,
-  decided_at TEXT, consumed_at TEXT, created_at TEXT);
-
-CREATE TABLE IF NOT EXISTS bot_status (
-  bot TEXT PRIMARY KEY, state TEXT, focus TEXT, task_id TEXT, changed_at TEXT, last_turn_at TEXT,
-  last_result TEXT, next_due_at TEXT, open_tasks INTEGER DEFAULT 0, needs_human INTEGER DEFAULT 0,
-  updated_at TEXT);
-
-CREATE TABLE IF NOT EXISTS bot_status_history (
-  id TEXT PRIMARY KEY, bot TEXT, state TEXT, focus TEXT, task_id TEXT,
-  started_at TEXT, ended_at TEXT, reason TEXT, by TEXT);
-
-CREATE TABLE IF NOT EXISTS schedules (
-  id TEXT PRIMARY KEY, bot TEXT, cron TEXT, title TEXT, playbook TEXT,
-  last_fired_at TEXT, next_due_at TEXT);
-
-CREATE TABLE IF NOT EXISTS turns (
-  id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, trigger TEXT,
-  message_id TEXT, task_id TEXT, exit TEXT, summary TEXT);
-
-CREATE TABLE IF NOT EXISTS deltas (
-  id TEXT PRIMARY KEY, turn_id TEXT, seq INTEGER, kind TEXT, text TEXT, created_at TEXT);
-
-CREATE TABLE IF NOT EXISTS rate_limits (
-  runtime TEXT PRIMARY KEY, used_percent REAL, window_minutes INTEGER,
-  resets_at TEXT, updated_at TEXT);
-
-CREATE TABLE IF NOT EXISTS refusals (
-  id TEXT PRIMARY KEY, created_at TEXT, actor TEXT, rule TEXT, detail TEXT, severity TEXT);
-
-CREATE TABLE IF NOT EXISTS events (
-  id TEXT PRIMARY KEY, created_at TEXT, actor TEXT, action TEXT, target TEXT, detail TEXT);
-
-CREATE INDEX IF NOT EXISTS messages_to_delivered ON messages(recipient_id, delivered_at);
-CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id, created_at);
-CREATE INDEX IF NOT EXISTS events_ts ON events(created_at);
-CREATE INDEX IF NOT EXISTS deltas_turn ON deltas(turn_id, seq);
-CREATE INDEX IF NOT EXISTS refusals_actor_ts ON refusals(actor, created_at);
-CREATE INDEX IF NOT EXISTS status_history_bot ON bot_status_history(bot, started_at);
-CREATE INDEX IF NOT EXISTS turns_bot_started ON turns(bot, started_at);
-"""
-
-from .meetings_schema import (
-    MEETING_BRAIN_SCHEMA,
-    MEETING_COMMENTS_SCHEMA,
-    MEETING_ITEMS_SCHEMA,
-    MEETING_SCHEMA,
-    RECORDING_SOURCES_SCHEMA,
-    MEETING_REVIEW_SCHEMA,
-    LIVE_MEETINGS_SCHEMA,
-    LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-    LIVE_MEETINGS_CHAT_ROUTING_SCHEMA,
-    LIVE_MEETING_ACCESS_SCHEMA,
-    LIVE_MEETINGS_CLIENT_SCHEMA,
-    LIVE_MEETINGS_MODEL_SCHEMA,
-    LIVE_MEETING_BOT_CONVERSATION_SCHEMA,
-    LIVE_MEETING_TURN_RETRY_SCHEMA,
-)
-
-# Goals and KPIs (backend/goals.py). A task may name the goal
-# it serves; the column is optional and nothing requires it.
-GOALS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS goals (
-  id TEXT PRIMARY KEY, title TEXT NOT NULL, owner_id TEXT NOT NULL, parent_id TEXT,
-  body TEXT NOT NULL DEFAULT '', status TEXT, status_note TEXT NOT NULL DEFAULT '',
-  status_by_id TEXT, status_at TEXT, rank INTEGER,
-  last_read_at TEXT, last_read_by_id TEXT,
-  created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS goals_owner ON goals(owner_id);
-CREATE INDEX IF NOT EXISTS goals_parent ON goals(parent_id);
-
-CREATE TABLE IF NOT EXISTS goal_events (
-  id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, created_at TEXT NOT NULL, actor TEXT NOT NULL,
-  field TEXT NOT NULL, old TEXT, new TEXT, note TEXT NOT NULL DEFAULT '');
-CREATE INDEX IF NOT EXISTS goal_events_goal ON goal_events(goal_id, created_at);
-
-CREATE TABLE IF NOT EXISTS kpis (
-  id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT '',
-  target REAL, created_at TEXT NOT NULL, created_by_id TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS kpis_goal ON kpis(goal_id);
-
-CREATE TABLE IF NOT EXISTS kpi_readings (
-  id TEXT PRIMARY KEY, kpi_id TEXT NOT NULL, measured_at TEXT NOT NULL, value REAL NOT NULL,
-  actor_id TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'measured', note TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS kpi_readings_kpi ON kpi_readings(kpi_id, measured_at);
-ALTER TABLE tasks ADD COLUMN goal_id TEXT;
-"""
-
-# KPIs as records of their own, and how goals are coloured (backend/kpis.py, backend/goals.py). A KPI
-# no longer belongs to one goal: `goal_kpis` links a goal to a KPI and holds the target (an improvement
-# from a baseline to a value by a deadline, or a range to stay inside). Readings keep the business time
-# (`period_start`/`period_end`) apart from `collected_at`, and a correction is a new reading that
-# `supersedes` the old one. The old `kpis.goal_id` and `kpis.target` are copied into `goal_kpis` here; migration 0044
-# drops `goal_id` (and its index), and `kpis.target` stays, read by nothing. Rows that existed before this migration
-# are recognised by `owner IS NULL`.
-KPIS_SCHEMA = """
-ALTER TABLE kpis ADD COLUMN slug TEXT;
-ALTER TABLE kpis ADD COLUMN definition TEXT NOT NULL DEFAULT '';
-ALTER TABLE kpis ADD COLUMN direction TEXT NOT NULL DEFAULT 'up';
-ALTER TABLE kpis ADD COLUMN cadence TEXT NOT NULL DEFAULT 'weekly';
-ALTER TABLE kpis ADD COLUMN owner_id TEXT;
-ALTER TABLE kpis ADD COLUMN source_note TEXT NOT NULL DEFAULT '';
-ALTER TABLE kpis ADD COLUMN definition_version INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE kpis ADD COLUMN updated_at TEXT;
-ALTER TABLE kpi_readings ADD COLUMN period_start TEXT;
-ALTER TABLE kpi_readings ADD COLUMN period_end TEXT;
-ALTER TABLE kpi_readings ADD COLUMN collected_at TEXT;
-ALTER TABLE kpi_readings ADD COLUMN evidence TEXT NOT NULL DEFAULT '';
-ALTER TABLE kpi_readings ADD COLUMN quality TEXT NOT NULL DEFAULT 'measured';
-ALTER TABLE kpi_readings ADD COLUMN definition_version INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE kpi_readings ADD COLUMN supersedes TEXT;
-CREATE INDEX IF NOT EXISTS kpi_readings_supersedes ON kpi_readings(supersedes);
-ALTER TABLE goals ADD COLUMN status_source TEXT;
-ALTER TABLE goals ADD COLUMN suggest_status TEXT;
-ALTER TABLE goals ADD COLUMN suggest_note TEXT;
-ALTER TABLE goals ADD COLUMN suggest_at TEXT;
-ALTER TABLE goal_events ADD COLUMN status_by TEXT;
-ALTER TABLE goal_events ADD COLUMN status_source TEXT;
-
-CREATE TABLE IF NOT EXISTS goal_kpis (
-  id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, kpi_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'none',
-  baseline REAL, baseline_at TEXT, target REAL, deadline TEXT, min REAL, max REAL,
-  created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by_id TEXT NOT NULL,
-  UNIQUE (goal_id, kpi_id));
-CREATE INDEX IF NOT EXISTS goal_kpis_kpi ON goal_kpis(kpi_id);
-
-CREATE TABLE IF NOT EXISTS kpi_definitions (
-  id TEXT PRIMARY KEY, kpi_id TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, actor TEXT NOT NULL,
-  name TEXT NOT NULL, definition TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '',
-  direction TEXT NOT NULL, cadence TEXT NOT NULL, source_note TEXT NOT NULL DEFAULT '',
-  UNIQUE (kpi_id, version));
-
-CREATE TABLE IF NOT EXISTS goal_checkins (
-  id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, kpi_id TEXT, created_at TEXT NOT NULL, author TEXT NOT NULL,
-  sender_id TEXT NOT NULL, body TEXT NOT NULL, signal TEXT);
-CREATE INDEX IF NOT EXISTS goal_checkins_goal ON goal_checkins(goal_id, created_at);
-
-CREATE TABLE IF NOT EXISTS goal_proposals (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL, goal_id TEXT, kpi_id TEXT, payload TEXT NOT NULL DEFAULT '{}',
-  reason TEXT NOT NULL DEFAULT '', proposed_by TEXT NOT NULL, proposed_at TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending', decided_by TEXT, decided_at TEXT, decision_note TEXT NOT NULL DEFAULT '',
-  result TEXT);
-CREATE INDEX IF NOT EXISTS goal_proposals_status ON goal_proposals(status, proposed_at);
-
-UPDATE kpi_readings SET period_end=measured_at, period_start=measured_at, collected_at=created_at WHERE period_end IS NULL;
-UPDATE kpi_readings SET quality='estimate' WHERE source='estimate' AND quality='measured' AND supersedes IS NULL AND period_start=period_end;
-UPDATE kpis SET owner_id=COALESCE((SELECT owner_id FROM goals WHERE goals.id=kpis.goal_id), 'company'),
-  cadence='monthly', updated_at=created_at WHERE owner_id IS NULL;
-INSERT OR IGNORE INTO goal_kpis (id, goal_id, kpi_id, kind, target, created_at, created_by_id, updated_at, updated_by_id)
-  SELECT id, goal_id, id, CASE WHEN target IS NULL THEN 'none' ELSE 'improve' END, target, created_at, created_by_id,
-         created_at, created_by_id FROM kpis WHERE goal_id != '' AND goal_id IN (SELECT id FROM goals);
-INSERT OR IGNORE INTO kpi_definitions (id, kpi_id, version, created_at, actor, name, definition, unit, direction, cadence, source_note)
-  SELECT id || ':1', id, 1, created_at, created_by_id, name, definition, unit, direction, cadence, source_note FROM kpis;
-UPDATE goals SET status_source='person' WHERE status IS NOT NULL AND status_source IS NULL;
-UPDATE goal_events SET status_by=actor, status_source='person' WHERE field='status' AND status_source IS NULL;
-"""
-
-KPI_ARCHIVE_SCHEMA = """
-ALTER TABLE kpis ADD COLUMN archived_at TEXT;
-ALTER TABLE kpis ADD COLUMN archived_by_id TEXT;
-"""
-
-# The shared market model (backend/market.py).
-# Six tables plus an FTS index. Rows are retired, merged or ended, never deleted.
-MARKET_SCHEMA = """
-CREATE TABLE IF NOT EXISTS market_entities (
-  id TEXT PRIMARY KEY,
-  type TEXT NOT NULL,
-  name TEXT NOT NULL,
-  aliases TEXT NOT NULL DEFAULT '[]',
-  external_ids TEXT NOT NULL DEFAULT '{}',
-  tier TEXT,
-  summary TEXT NOT NULL DEFAULT '',
-  properties TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'active',
-  merged_into TEXT,
-  last_verified_at TEXT,
-  created_at TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  updated_at TEXT NOT NULL);
-
-CREATE TABLE IF NOT EXISTS market_edges (
-  id TEXT PRIMARY KEY,
-  src TEXT NOT NULL,
-  rel TEXT NOT NULL,
-  dst TEXT NOT NULL,
-  valid_from_on TEXT,
-  valid_until_on TEXT,
-  confidence TEXT NOT NULL DEFAULT 'medium',
-  properties TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS market_edges_src ON market_edges(src, rel);
-CREATE INDEX IF NOT EXISTS market_edges_dst ON market_edges(dst, rel);
-CREATE INDEX IF NOT EXISTS market_edges_until ON market_edges(valid_until_on);
-
-CREATE TABLE IF NOT EXISTS market_evidence (
-  id TEXT PRIMARY KEY,
-  source_url TEXT NOT NULL DEFAULT '',
-  source_kind TEXT NOT NULL DEFAULT 'other',
-  captured_at TEXT,
-  captured_by TEXT NOT NULL,
-  quote TEXT NOT NULL DEFAULT '',
-  our_read TEXT NOT NULL DEFAULT '',
-  blob_id TEXT);
-
-CREATE TABLE IF NOT EXISTS market_citations (
-  claim_kind TEXT NOT NULL,
-  claim_id TEXT NOT NULL,
-  evidence_id TEXT NOT NULL,
-  PRIMARY KEY (claim_kind, claim_id, evidence_id));
-CREATE INDEX IF NOT EXISTS market_citations_evidence ON market_citations(evidence_id);
-
-CREATE TABLE IF NOT EXISTS market_insights (
-  id TEXT PRIMARY KEY,
-  reported_by TEXT NOT NULL,
-  reported_at TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  about TEXT NOT NULL DEFAULT '',
-  claim TEXT NOT NULL DEFAULT '',
-  source_url TEXT NOT NULL DEFAULT '',
-  quote TEXT NOT NULL DEFAULT '',
-  confidence TEXT NOT NULL DEFAULT 'medium',
-  urgent INTEGER NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'new',
-  resolution TEXT NOT NULL DEFAULT '',
-  applied_events TEXT NOT NULL DEFAULT '[]',
-  resolved_at TEXT,
-  resolved_by TEXT,
-  filed_task TEXT);
-CREATE INDEX IF NOT EXISTS market_insights_status ON market_insights(status, reported_at);
-
-CREATE TABLE IF NOT EXISTS market_events (
-  id TEXT PRIMARY KEY,
-  subject_kind TEXT NOT NULL,
-  subject_id TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  actor TEXT NOT NULL,
-  field TEXT NOT NULL,
-  old TEXT,
-  new TEXT,
-  insight_id TEXT,
-  note TEXT NOT NULL DEFAULT '');
-CREATE INDEX IF NOT EXISTS market_events_subject ON market_events(subject_kind, subject_id, created_at);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS market_fts USING fts5(
-  kind UNINDEXED,
-  ref UNINDEXED,
-  name,
-  aliases,
-  summary,
-  quote,
-  our_read,
-  tokenize = 'unicode61 remove_diacritics 1');
-
-CREATE TRIGGER IF NOT EXISTS market_entities_ai AFTER INSERT ON market_entities BEGIN
-  INSERT INTO market_fts(kind, ref, name, aliases, summary, quote, our_read)
-  VALUES ('entity', new.id, new.name, new.aliases, new.summary, '', '');
-END;
-CREATE TRIGGER IF NOT EXISTS market_entities_ad AFTER DELETE ON market_entities BEGIN
-  DELETE FROM market_fts WHERE kind='entity' AND ref=old.id;
-END;
-CREATE TRIGGER IF NOT EXISTS market_entities_au AFTER UPDATE ON market_entities BEGIN
-  DELETE FROM market_fts WHERE kind='entity' AND ref=old.id;
-  INSERT INTO market_fts(kind, ref, name, aliases, summary, quote, our_read)
-  VALUES ('entity', new.id, new.name, new.aliases, new.summary, '', '');
-END;
-CREATE TRIGGER IF NOT EXISTS market_evidence_ai AFTER INSERT ON market_evidence BEGIN
-  INSERT INTO market_fts(kind, ref, name, aliases, summary, quote, our_read)
-  VALUES ('evidence', new.id, '', '', '', new.quote, new.our_read);
-END;
-CREATE TRIGGER IF NOT EXISTS market_evidence_ad AFTER DELETE ON market_evidence BEGIN
-  DELETE FROM market_fts WHERE kind='evidence' AND ref=old.id;
-END;
-CREATE TRIGGER IF NOT EXISTS market_evidence_au AFTER UPDATE ON market_evidence BEGIN
-  DELETE FROM market_fts WHERE kind='evidence' AND ref=old.id;
-  INSERT INTO market_fts(kind, ref, name, aliases, summary, quote, our_read)
-  VALUES ('evidence', new.id, '', '', '', new.quote, new.our_read);
-END;
-"""
-
-# A person's reply closes whatever that bot asked them. `answered_by` is the message that did it.
-REPLY_ANSWERS_ASKS = """
-ALTER TABLE messages ADD COLUMN answered_by_id TEXT;
--- Stays after step 6d: sender and recipient lookups use it (teammate_access, triggers, assistant, auth).
-CREATE INDEX IF NOT EXISTS messages_open_asks ON messages(recipient_id, sender_id, kind, answered_by_id);
-"""
-
-# A market insight names what it was filed from in `source_ref`, once per reporter. (The listening tables this once
-# made are gone: backend/migrations/20261111190425_listening_feed.py.)
-LISTENING_SCHEMA = """
-ALTER TABLE market_insights ADD COLUMN source_ref TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS market_insights_source_ref
-  ON market_insights(reported_by, source_ref) WHERE source_ref IS NOT NULL;
-"""
-
-# Usage (backend/usage.py): what a run's tokens were, on which model, and what they cost at list price.
-# `billing` is `subscription` for a run on a ChatGPT or Claude sign-in, whose cost is an API-equivalent
-# and not money spent. Every statement is safe to run twice.
-USAGE_SCHEMA = """
-ALTER TABLE turns ADD COLUMN input_tokens INTEGER;
-ALTER TABLE turns ADD COLUMN cached_tokens INTEGER;
-ALTER TABLE turns ADD COLUMN output_tokens INTEGER;
-ALTER TABLE turns ADD COLUMN model TEXT;
-ALTER TABLE turns ADD COLUMN provider TEXT;
-ALTER TABLE turns ADD COLUMN est_cost_usd REAL;
-ALTER TABLE turns ADD COLUMN billing TEXT;
-CREATE INDEX IF NOT EXISTS turns_started ON turns(started_at);
-"""
-
-# Spend limits (backend/usage_limits.py): a bot's own daily and monthly cap in estimated USD (null: follow the
-# company default), and the warnings already sent, one per bot, period, limit and level.
-USAGE_LIMITS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS usage_limits (
-  bot TEXT PRIMARY KEY, daily_usd REAL, monthly_usd REAL, updated_at TEXT, updated_by TEXT);
-CREATE TABLE IF NOT EXISTS usage_alerts (
-  bot TEXT NOT NULL, period TEXT NOT NULL, level INTEGER NOT NULL, sent TEXT NOT NULL,
-  PRIMARY KEY (bot, period, level));
-"""
-
-TAGS_TABLES_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]';
-CREATE TABLE IF NOT EXISTS tags (
-  id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, label TEXT NOT NULL,
-  metadata TEXT NOT NULL DEFAULT '{}', markdown TEXT NOT NULL DEFAULT '',
-  is_template INTEGER NOT NULL DEFAULT 0, template_id TEXT REFERENCES tags(id),
-  owner TEXT, version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS task_tags (
-  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  tag_id TEXT NOT NULL REFERENCES tags(id), PRIMARY KEY(task_id, tag_id));
-CREATE INDEX IF NOT EXISTS task_tags_tag ON task_tags(tag_id, task_id);
-"""
-
-TAGS_BACKFILL = """
-INSERT OR IGNORE INTO tags(id,key,label,created_at,updated_at)
-  SELECT 'tag-'||lower(hex(randomblob(16))), value, value,
-         strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
-  FROM (SELECT DISTINCT value FROM tasks, json_each(tasks.labels) WHERE type='text' AND value<>'');
-INSERT OR IGNORE INTO task_tags(task_id,tag_id)
-  SELECT tasks.id,tags.id FROM tasks,json_each(tasks.labels) old
-  JOIN tags ON tags.key=old.value;
-"""
-
-TAGS_SCHEMA = TAGS_TABLES_SCHEMA + TAGS_BACKFILL
-
-GENERAL_TYPE = "general"
 GENERAL_PIPELINE = "general"  # the pipeline a task goes into when none is named
-# Numbered step 14 made the old engine's task types and steps. A database that ran it has them until the Pipelines v3
-# cut-over drops them; a new database never makes them (only a database with no tasks runs these steps). The two
-# columns stay: a shipped migration file reads them, and the cut-over drops them with the old tasks table.
-PIPELINES_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN type_id TEXT;
-ALTER TABLE tasks ADD COLUMN step_id TEXT;
-"""
-
-TASK_LINKS_V2_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
-  kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created_at TEXT NOT NULL,
-  pr_sha TEXT, pr_merged_at TEXT);
-ALTER TABLE task_links ADD COLUMN repo TEXT;
-ALTER TABLE task_links ADD COLUMN number INTEGER;
-ALTER TABLE task_links ADD COLUMN branch TEXT;
-ALTER TABLE task_links ADD COLUMN computer_id TEXT;
-ALTER TABLE task_links ADD COLUMN path TEXT;
-ALTER TABLE task_links ADD COLUMN checks TEXT;
-ALTER TABLE task_links ADD COLUMN mergeable TEXT;
-ALTER TABLE task_links ADD COLUMN review_state TEXT;
-ALTER TABLE task_links ADD COLUMN pending_comments INTEGER;
-ALTER TABLE task_links ADD COLUMN detail TEXT;
-ALTER TABLE task_links ADD COLUMN updated_at TEXT;
-CREATE INDEX IF NOT EXISTS task_links_repo_number ON task_links(repo,number);
-UPDATE task_links SET repo=substr(url,20,instr(url,'/pull/')-20),
-  number=CAST(substr(url,instr(url,'/pull/')+6) AS INTEGER), updated_at=created_at
-  WHERE kind='pr' AND url LIKE 'https://github.com/%/pull/%' AND repo IS NULL;
-
-"""
-
-# Migration 20 is the storage engineer's schema; reviews append migration 21.
-from .storage_schema import SCHEMA as STORAGE_SCHEMA
-
-TASK_REVIEW_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_file_reviews(
- file_id TEXT NOT NULL, version INTEGER NOT NULL, note TEXT,
- ask_message_id TEXT REFERENCES messages(id), comment_id TEXT REFERENCES messages(id),
- PRIMARY KEY(file_id,version));
-"""
-
-# Each task's team-wide number, kept for good. (This step also numbered the old engine's types and ranked tasks in
-# their steps; a new database never makes those.)
-NUMBERS_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN number INTEGER;
-CREATE UNIQUE INDEX IF NOT EXISTS tasks_number ON tasks(number);
-"""
-
-# Existing records have no reliable sensitivity marker. Preserve them privately on upgrade;
-# legacy inserts that omit the new field also fail closed. Current creates specify the default.
-TASK_PRIVACY_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN private INTEGER NOT NULL DEFAULT 1 CHECK (private IN (0,1));
-"""
-
-# The person a bot's `waiting` task waited on, until step 6b of threads + tasks: migration
-# 20261106112609_derived_waiting turns each into a question task and drops the column (question_tasks.waiting_on).
-WAITING_ON_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN waiting_on TEXT;
-"""
-
-# Every task-to-task relationship (backend/task_relations.py). Migration 30 creates the table, moves
-# tasks.parent_id and tasks.blocked_by into it and drops both columns (task_relations.migrate).
-TASK_RELATIONS_SCHEMA = TR.SCHEMA
-
-# Immutable primary/fallback usage reports; append to preserve existing installations.
-USAGE_SEGMENTS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS turn_usage_segments (
-  turn_id TEXT NOT NULL REFERENCES turns(id), position INTEGER NOT NULL,
-  input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER,
-  model TEXT, provider TEXT, est_cost_usd REAL, billing TEXT,
-  runtime TEXT, harness TEXT, effort TEXT, profile TEXT,
-  PRIMARY KEY(turn_id, position));
-"""
-
-# A subtask a bot runs on another model (backend/check_models.py); append to preserve existing installations.
-CHECK_MODELS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_check_models (
-  task_id TEXT PRIMARY KEY REFERENCES tasks(id), runtime TEXT NOT NULL, model TEXT NOT NULL,
-  harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', role TEXT NOT NULL, created_by TEXT, created_at TEXT);
-"""
-
-# What the Strategy Owner has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
-# KPI or proposal, kind and person, naming the task that asks it; append to preserve existing installations.
-GOAL_ASKS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS goal_asks (
-  kind TEXT NOT NULL, ref TEXT NOT NULL, owner TEXT NOT NULL, task_id TEXT NOT NULL, created_at TEXT NOT NULL,
-  PRIMARY KEY (kind, ref, owner));
-CREATE INDEX IF NOT EXISTS goal_asks_task ON goal_asks(task_id);
-"""
-
-# What woke a run and whether it changed anything (backend/run_triggers.py); append to preserve existing installations.
-# A run from before this has NULLs, which `run_weekly` in hub sql reads as `unknown`.
-RUN_TRIGGERS_SCHEMA = """
-ALTER TABLE turns ADD COLUMN trigger_kind TEXT;
-ALTER TABLE turns ADD COLUMN trigger_source TEXT;
-ALTER TABLE turns ADD COLUMN writes INTEGER;
-ALTER TABLE turns ADD COLUMN outcome TEXT;
-ALTER TABLE turns ADD COLUMN did_nothing INTEGER;
-"""
-
-# What a run is for (backend/run_triggers.py); the migration fills it on every run already recorded.
-RUN_PURPOSE_SCHEMA = """
-ALTER TABLE turns ADD COLUMN purpose TEXT;
-"""
-
-# The one person a private task with no person on it could reach, before its reader list (migration
-# 20261105213649_task_readers turns it into a reader and drops the column).
-TASK_GUEST_SCHEMA = """
-ALTER TABLE tasks ADD COLUMN guest TEXT;
-"""
-
-# Why a run left its session for a fresh one (runner-rs/src/rotate.rs; backend/run_triggers.py rotation): `tokens` or
-# `turns`, NULL for a run that resumed or started fresh for any other reason. Append to preserve existing installations.
-RUN_ROTATION_SCHEMA = """
-ALTER TABLE turns ADD COLUMN rotated TEXT;
-"""
-
-# Whether a run resumed its provider session or started a new one, and why (`turns.session_kind` resumed|new,
-# `turns.session_why`; backend/run_triggers.py session), and the one-shot mark that makes a thread's next run compact
-# its session before it starts after a prompt too large to send (backend/run_backoff.py compact_first). Append to
-# preserve existing installations.
-RUN_SESSION_SCHEMA = """
-ALTER TABLE turns ADD COLUMN session_kind TEXT;
-ALTER TABLE turns ADD COLUMN session_why TEXT;
-CREATE TABLE IF NOT EXISTS compact_first(
-  bot TEXT NOT NULL, conversation_id TEXT NOT NULL, marked_at TEXT NOT NULL, taken_by TEXT,
-  PRIMARY KEY(bot, conversation_id));
-"""
-
-# The Strategy Owner's merged asks (backend/strategy_merge.py): each original item in a person's Needs you that one
-# Strategy Owner item stands for, and what became of it.
-STRATEGY_MERGES_SCHEMA = """
-CREATE TABLE IF NOT EXISTS strategy_merges (
-  merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
-  how TEXT NOT NULL DEFAULT 'asked', ask_id TEXT,
-  state TEXT NOT NULL DEFAULT 'merged', created_at TEXT NOT NULL, settled_at TEXT, note TEXT NOT NULL DEFAULT '',
-  PRIMARY KEY (merged_into, original));
-CREATE INDEX IF NOT EXISTS strategy_merges_original ON strategy_merges(original, state);
-CREATE INDEX IF NOT EXISTS strategy_merges_person ON strategy_merges(person, created_at);
-"""
-
-# The Strategy Owner log (backend/strategy_acts.py): each decision it made alone at level 3, or each thing it proposed
-# because it stays the owner's, and its Undo. Every task event one decision (or its Undo) wrote carries its action id.
-STRATEGY_ACTIONS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS strategy_actions (
-  id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
-  goal_id TEXT, state TEXT NOT NULL, proposal_task TEXT, note TEXT NOT NULL DEFAULT '',
-  changes TEXT NOT NULL DEFAULT '{}', undone_at TEXT, undone_by TEXT, undo TEXT);
-CREATE INDEX IF NOT EXISTS strategy_actions_created ON strategy_actions(created_at);
-ALTER TABLE task_events ADD COLUMN action_id TEXT;
-CREATE INDEX IF NOT EXISTS task_events_action ON task_events(action_id);
-"""
-
-# One login per AI tool per computer (backend/subscriptions.py): a bot's own subscription choice goes, and the bot
-# runs on its computer's login. The table and the computers' profile reports stay, unread, for one release.
-ONE_LOGIN_PER_COMPUTER_SCHEMA = """
-DELETE FROM subscription_assignments WHERE scope='bot';
-"""
-
-# The market by spend (backend/market_spend.py): sized segments, player figures and the team's own sources. Rows are
-# retired or rejected, never deleted. A size's evidence is a list of market_evidence ids.
-MARKET_SPEND_SCHEMA = """
-CREATE TABLE IF NOT EXISTS market_sizes (
-  id TEXT PRIMARY KEY,
-  segment_id TEXT NOT NULL,
-  dimension TEXT NOT NULL DEFAULT 'offering',
-  basis TEXT NOT NULL DEFAULT 'product',
-  year INTEGER NOT NULL,
-  spend_usd REAL NOT NULL,
-  low_usd REAL NOT NULL,
-  high_usd REAL NOT NULL,
-  growth_pct REAL,
-  method TEXT NOT NULL,
-  arithmetic TEXT NOT NULL DEFAULT '',
-  formula TEXT,
-  params TEXT NOT NULL DEFAULT '{}',
-  evidence_ids TEXT NOT NULL DEFAULT '[]',
-  confidence TEXT NOT NULL DEFAULT 'medium',
-  overlaps TEXT NOT NULL DEFAULT '',
-  spread TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'proposed',
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS market_sizes_segment ON market_sizes(segment_id, dimension, year, status);
-
-CREATE TABLE IF NOT EXISTS market_figures (
-  id TEXT PRIMARY KEY,
-  entity_id TEXT NOT NULL,
-  segment_id TEXT NOT NULL,
-  metric TEXT NOT NULL,
-  value REAL,
-  text TEXT NOT NULL DEFAULT '',
-  kind TEXT NOT NULL,
-  as_of TEXT NOT NULL,
-  evidence_id TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS market_figures_segment ON market_figures(segment_id, entity_id);
-
-CREATE TABLE IF NOT EXISTS market_sources (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  covers TEXT NOT NULL DEFAULT '[]',
-  access TEXT NOT NULL,
-  reliability TEXT NOT NULL,
-  how TEXT NOT NULL DEFAULT '',
-  url TEXT,
-  created_by TEXT NOT NULL,
-  created_at TEXT NOT NULL);
-"""
-
-# Task caps (backend/task_caps.py, redesign/CONTRACT.md §1): the cap per sender and manager, every send (kept per task,
-# so a hand-over counts too), and the caps a bot proposes for a person to approve.
-TASK_CAPS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_caps(sender TEXT, receiver TEXT, per_day INTEGER, updated_at TEXT, updated_by TEXT,
-  PRIMARY KEY(sender, receiver));
-"""
-
-# Every task cap send is kept (backend/task_caps.py): one row per task, sender, receiver and time, so a hand-over adds a
-# send and never replaces the one before it.
-TASK_CAP_LOG_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_cap_log(task_id TEXT NOT NULL, sender TEXT NOT NULL, receiver TEXT NOT NULL,
-  sent_at TEXT NOT NULL, PRIMARY KEY(task_id, sender, receiver, sent_at));
-CREATE INDEX IF NOT EXISTS task_cap_log_pair ON task_cap_log(sender, receiver, sent_at);
-"""
-
-# A pull request's last activity (CONTRACT section 6, PR find): the time of its newest GitHub pull_request, review or
-# review comment event. NULL on rows from before it, which read as their creation (automation_actions FIND).
-TASK_LINK_ACTIVITY_SCHEMA = """
-ALTER TABLE task_links ADD COLUMN activity_at TEXT;
-"""
-
-# Task trigger tables (rule_task_runs, rule_task_state) were added to RULE_EVENTS_SCHEMA after it shipped, so an
-# install that ran it earlier never got them and every task trigger failed quietly. Every statement is IF NOT EXISTS.
-RULE_TASK_TABLES_SCHEMA = (
-    "-- rule_task_runs, rule_task_state for installs that ran RULE_EVENTS_SCHEMA first\n" + RULE_EVENTS_SCHEMA
-)
-
-# The model one task's runs use (backend/task_run_models.py), kept apart from task_check_models: a check holds when its
-# model cannot run, and this falls back to the bot's own model. One row per task; appended so existing installs get it.
-TASK_RUN_MODELS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_run_models (
-  task_id TEXT PRIMARY KEY REFERENCES tasks(id), runtime TEXT NOT NULL, model TEXT NOT NULL,
-  harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT, compact_at INTEGER);
-"""
-
-# Browser exits (backend/browser_exit.py): a computer's owner shares its internet with chosen bots under a daily byte
-# cap; a bot browses through one such computer; what went through, per day, bot and hostname, is kept 30 days.
-# `generation` fences the relay's grants read before a change: an exit's policy (bumped with each change and when the
-# computer is removed), a bot's selection (its exit, cleared to NULL rather than deleted so the number only grows, and
-# the computer it runs on, bumped in the same transaction as the assignment by browser_exit.TRIGGERS, which
-# store.initialize creates once the execution tables exist). The relay's usage batches are recorded once each: per relay
-# boot, the highest batch sequence recorded (`browser_exit_marks`).
-BROWSER_EXITS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS browser_exits (
-  runner_id TEXT PRIMARY KEY, sharing INTEGER NOT NULL DEFAULT 0, bots TEXT NOT NULL DEFAULT '[]',
-  daily_cap_bytes INTEGER NOT NULL DEFAULT 5000000000, generation INTEGER NOT NULL DEFAULT 1,
-  changed_by TEXT, changed_at TEXT);
-CREATE TABLE IF NOT EXISTS bot_browser_exits (
-  bot TEXT PRIMARY KEY, runner_id TEXT, generation INTEGER NOT NULL DEFAULT 1, set_by TEXT, set_at TEXT);
-CREATE TABLE IF NOT EXISTS browser_exit_usage (
-  runner_id TEXT NOT NULL, day TEXT NOT NULL, bot TEXT NOT NULL, host TEXT NOT NULL,
-  bytes INTEGER NOT NULL DEFAULT 0, tunnels INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(runner_id, day, bot, host));
-CREATE INDEX IF NOT EXISTS browser_exit_usage_day ON browser_exit_usage(day);
-CREATE TABLE IF NOT EXISTS browser_exit_marks (boot TEXT PRIMARY KEY, seq INTEGER NOT NULL);
-"""
-
-
-# Growth (backend/growth.py) and the brand page (backend/brand.py). The brand keeps one draft row (id 1, with a revision
-# so two editors never overwrite each other) and numbered published versions. The idea and go-to-market tables are
-# gone: backend/migrations/0035_growth_rethink.py dropped the ones an older database still had, so this step creates
-# only what is live.
-# A cohort with no channel is the Unknown row: SQLite treats NULLs as distinct in UNIQUE, so the one-row-per-month
-# rule is an expression index over coalesce(channel_id, '').
-GROWTH_SCHEMA = """
-CREATE TABLE IF NOT EXISTS brand_drafts (
-  id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 0,
-  updated_by TEXT, updated_at TEXT);
-CREATE TABLE IF NOT EXISTS brand_versions (
-  id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}', note TEXT NOT NULL DEFAULT '',
-  published_by TEXT, published_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS gtm_sources (
-  id TEXT PRIMARY KEY, truth_for TEXT NOT NULL, system TEXT NOT NULL,
-  reach_kind TEXT NOT NULL CHECK(reach_kind IN ('mcp','credential','url','person')), reach_ref TEXT NOT NULL DEFAULT '',
-  may TEXT NOT NULL DEFAULT '', owner_ref TEXT, created_at TEXT NOT NULL, retired_at TEXT);
-CREATE TABLE IF NOT EXISTS growth_channels (
-  id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-  track TEXT NOT NULL DEFAULT 'performance' CHECK(track IN ('performance','brand')),
-  stage TEXT NOT NULL DEFAULT 'idea' CHECK(stage IN ('idea','testing','scaling','paused')),
-  owner_ref TEXT, budget_month REAL, source_id TEXT, why TEXT NOT NULL DEFAULT '', guardrail_kpi_id TEXT,
-  guardrail_max REAL, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, retired_at TEXT);
-CREATE TABLE IF NOT EXISTS growth_cohorts (
-  id TEXT PRIMARY KEY, channel_id TEXT, month TEXT NOT NULL, spend REAL, bot_cost REAL, new_customers INTEGER,
-  kept_d30 REAL, kept_d90 REAL, kept_d180 REAL, revenue_month REAL, margin_pct REAL,
-  quality TEXT NOT NULL DEFAULT 'actual' CHECK(quality IN ('actual','estimate')), sources TEXT NOT NULL DEFAULT '{}',
-  updated_by TEXT, updated_at TEXT NOT NULL);
-CREATE UNIQUE INDEX IF NOT EXISTS growth_cohorts_month ON growth_cohorts(coalesce(channel_id, ''), month);
-CREATE TABLE IF NOT EXISTS growth_settings (
-  id INTEGER PRIMARY KEY CHECK(id=1), unit TEXT NOT NULL DEFAULT 'customers', revenue_month REAL, margin_pct REAL);
-ALTER TABLE kpis ADD COLUMN parent_kpi_id TEXT;
-ALTER TABLE kpis ADD COLUMN growth_role TEXT;
-ALTER TABLE kpis ADD COLUMN stage TEXT;
-ALTER TABLE kpis ADD COLUMN loop_name TEXT;
-ALTER TABLE kpis ADD COLUMN loop_step INTEGER;
-"""
-
-
-MIGRATIONS = [
-    SCHEMA,
-    MEETING_SCHEMA,
-    MEETING_ITEMS_SCHEMA,  # index i takes user_version from i
-    MEETING_BRAIN_SCHEMA,
-    MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
-    GOALS_SCHEMA,
-    RECORDING_SOURCES_SCHEMA,
-    MARKET_SCHEMA,
-    REPLY_ANSWERS_ASKS,
-    LISTENING_SCHEMA,
-    KPIS_SCHEMA,
-    USAGE_SCHEMA,
-    USAGE_LIMITS_SCHEMA,
-    TAGS_SCHEMA,
-    PIPELINES_SCHEMA,
-    CHAT_GOALS_SCHEMA,
-    REPOSITORIES_SCHEMA,
-    TASK_LINKS_V2_SCHEMA,
-    SUBSCRIPTIONS_SCHEMA,
-    STORAGE_SCHEMA,
-    TASK_REVIEW_SCHEMA,
-    MEETING_REVIEW_SCHEMA,
-    NUMBERS_SCHEMA,
-    TASK_PRIVACY_SCHEMA,
-    USAGE_SEGMENTS_SCHEMA,
-    KPI_ARCHIVE_SCHEMA,
-    WAITING_ON_SCHEMA,
-    LIVE_MEETINGS_SCHEMA,
-    LIVE_MEETINGS_ROUTING_LIMITS_SCHEMA,
-    LIVE_MEETINGS_CHAT_ROUTING_SCHEMA,
-    TASK_RELATIONS_SCHEMA,
-    TRIGGERS_SCHEMA,
-    TRIGGER_SIGNING_SCHEMA,
-    CHECK_MODELS_SCHEMA,
-    GOAL_ASKS_SCHEMA,
-    RUN_TRIGGERS_SCHEMA,
-    TASK_GUEST_SCHEMA,
-    STRATEGY_MERGES_SCHEMA,
-    ONE_LOGIN_PER_COMPUTER_SCHEMA,
-    RUN_PURPOSE_SCHEMA,
-    RUN_ROTATION_SCHEMA,
-    LIVE_MEETING_ACCESS_SCHEMA,
-    STRATEGY_ACTIONS_SCHEMA,
-    MARKET_SPEND_SCHEMA,
-    RULE_EVENTS_SCHEMA,
-    TRIGGERS_INCOMING_SCHEMA,
-    HOOK_RELAY_SCHEMA,
-    WEBHOOKS_SCHEMA,
-    SLEEP_IDLE_SCHEMA,
-    TICO_NOTICES_SCHEMA,
-    WEBHOOKS_V2_SCHEMA,
-    WEBHOOKS_V3_SCHEMA,
-    WEBHOOKS_V4_SCHEMA,
-    WEBHOOKS_V5_SCHEMA,
-    WEBHOOKS_V6_SCHEMA,
-    RUN_SESSION_SCHEMA,
-    TASK_CAPS_SCHEMA,
-    TASK_CAP_LOG_SCHEMA,
-    TASK_LINK_ACTIVITY_SCHEMA,
-    RULE_TASK_TABLES_SCHEMA,
-    TASK_RUN_MODELS_SCHEMA,
-    LIVE_MEETINGS_CLIENT_SCHEMA,
-    LIVE_MEETINGS_MODEL_SCHEMA,
-    LIVE_MEETING_BOT_CONVERSATION_SCHEMA,
-    LIVE_MEETING_TURN_RETRY_SCHEMA,
-    POSTAL_MAIL_SCHEMA,
-    POSTAL_MAIL_V2_SCHEMA,
-    POSTAL_MAIL_V3_SCHEMA,
-    TRIGGERS_CONSUMER_SCHEMA,
-    GROWTH_SCHEMA,
-    BROWSER_EXITS_SCHEMA,
-]
-# The list ends here, at user_version 71 (migrations.MIN_BRIDGE_USER_VERSION): every later persistent change is a file in
-# backend/migrations.
 
 
 class Refused(Exception):
@@ -1318,7 +531,7 @@ def leave_wal_for_litestream(conn):
     return conn
 
 
-def connect(path=None, adopt_legacy=False):
+def connect(path=None):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
     Precedence: the `path` argument, then `$HUB_DB`, then `<projects>/runtime/hub.db`.
@@ -1342,38 +555,11 @@ def connect(path=None, adopt_legacy=False):
     conn.execute(f"PRAGMA synchronous={synchronous('NORMAL')}")
     conn.execute(f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT}")
     try:
-        migrate(conn, adopt_legacy=adopt_legacy)
+        migrate(conn)
     except Exception:
         conn.close()
         raise
     return conn
-
-
-class UnknownDatabase(RuntimeError):
-    """The file has Tico's tables but no version record: not a database this code made."""
-
-
-def backfill_credential_uses(conn):
-    """Once: each credential's newest use per (actor, bot), from the events log (the rule credentials.record_use
-    applies from now on: a bot's run or a computer sent it, never a person's reveal). One grouped read: a per-credential
-    loop measured 62 s cold on TIDY against 16 s for this (2 s each warm). Reads events by (target, action)."""
-    if conn.execute("SELECT 1 FROM registry_metadata WHERE key='credential-use-backfill'").fetchone():
-        return
-    known = {row[0] for row in conn.execute("SELECT id FROM credentials")}
-    rows = conn.execute(
-        "SELECT target, actor, COALESCE(NULLIF(CASE WHEN detail LIKE '{%' "
-        "THEN json_extract(detail,'$.bot') END,''), "
-        "CASE WHEN actor LIKE 'bot:%' THEN substr(actor,5) END, '') AS bot, MAX(created_at) "
-        "FROM events WHERE action IN ('credential.revealed','credential.sent_to_computer') "
-        "AND actor NOT LIKE 'human:%' GROUP BY target, actor, bot"
-    ).fetchall()
-    # The newest event row of a pair is both its newest use and the last one logged.
-    conn.executemany(
-        "INSERT INTO credential_uses(credential_id,actor,bot,used_at,logged_at) VALUES(?,?,?,?,?) "
-        "ON CONFLICT(credential_id,actor,bot) DO UPDATE SET used_at=MAX(used_at,excluded.used_at),logged_at=MAX(logged_at,excluded.logged_at)",
-        [(target, actor, bot or '', at, at) for target, actor, bot, at in rows if at and target in known],
-    )
-    conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
 
 
 # The task rows every task read reads, as a table: `SELECT * FROM {TASKS} tasks`. It is the table itself.
@@ -1383,316 +569,12 @@ TASKS = "tasks"
 SNOOZED = "EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=%s.id AND sz.ended_at IS NULL)"
 
 
-def add_column(conn, table, column, declaration):
-    """ALTER TABLE ... ADD COLUMN unless the column is there: SQLite has no IF NOT EXISTS for it."""
-    if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
-
-
-ADD_COLUMN = re.compile(r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)\s+([^;]+);", re.I)
-
-
-def _statements(script):
-    """The complete statements of a script (a trigger body keeps its inner semicolons)."""
-    buffer = ""
-    for line in script.splitlines(keepends=True):
-        buffer += line
-        if sqlite3.complete_statement(buffer):
-            yield buffer.strip()
-            buffer = ""
-    if buffer.strip():
-        yield buffer.strip()
-
-
-# The logs migration 0064 moved into history_events. A numbered step that names one is skipped on a file that already
-# has the history table (one whose version was set back, as the upgrade tests do), so the step neither fails on the
-# missing table nor brings it back empty beside the table that replaced it.
-MOVED_TO_HISTORY = re.compile(r"\b(task_events|goal_events|market_events)\b")
-# A numbered step's statement on the old run tables. Migration 0072 moved them into attempts (with turn_usage_segments
-# already gone to usage_facts, migration 0053), so on a file it has reached a step that names them has nothing to do.
-OLD_RUN_TABLES = re.compile(r"(?:\bON|\bTABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+(turns|turn_usage_segments)\b", re.I)
-
-
-def _runs_merged(conn):
-    """True once migration 0072 has moved the runs: no turns table, but attempts. A fresh file has neither yet, so its
-    numbered steps create turns and migration 0072 moves it."""
-    names = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('turns','attempts')")
-    }
-    return "attempts" in names and "turns" not in names
-
-
-def _apply(conn, script):
-    moved = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_events'").fetchone()
-    for statement in _statements(script):
-        if moved and MOVED_TO_HISTORY.search(statement):
-            continue
-        if OLD_RUN_TABLES.search(statement) and _runs_merged(conn):
-            continue
-        match = ADD_COLUMN.fullmatch(statement)
-        if match:
-            add_column(conn, *match.groups())
-        else:
-            conn.execute(statement)
-
-
-def _refuse_foreign(conn):
-    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if tables & {"bots", "tasks", "messages"} and "cloud_migrations" not in tables:
-        raise UnknownDatabase(
-            "This database file has Tico-like tables but no version record (user_version 0, no "
-            "cloud_migrations table), so it is not one this Tico made. Refusing to start: point "
-            "TICO_DB at an empty path or a Tico database, or restore a snapshot."
-        )
-
-
-def migrate(conn, adopt_legacy=False):
-    """Apply every migration the file has not seen, by `PRAGMA user_version`.
-
-    Each migration is one transaction with its version bump, so a failure leaves the file at
-    the version it had; every statement is also safe to run twice (IF NOT EXISTS, guarded
-    ADD COLUMN), so a file that has the change but an older version simply catches up.
-    `adopt_legacy` is for `manage.migrate_legacy`, whose source has no version record.
-    A database made by Tico 0.5 (it has tasks and has not had the cut-over) is refused before anything is written."""
+def migrate(conn):
+    """Bring the file to this code's schema: the baseline on a new file, then each migration file it has not run
+    (backend/migrations). A database below the compatibility floor is refused before anything is written."""
     from . import migrations
 
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version == 0 and not adopt_legacy:
-        _refuse_foreign(conn)
-    migrations.refuse_old_tasks(conn)
-    if version < len(MIGRATIONS):
-        # A file from before the bridge (the legacy import; preflight refuses one otherwise) runs the numbered steps
-        # below on its old shape, and they name today's columns, so it takes the cleanup's column renames first. A file
-        # at the bridge gets them from their migration files (backend/migrations/0013_rails_renames_wave1.py), and a new
-        # file has no tables to rename.
-        from .migrations import renames
-
-        renames.apply_now(conn)
-    from .flight import begin
-
-    for i in range(version, len(MIGRATIONS)):
-        done = begin(conn)
-        try:
-            if i == 23:
-                migrate_task_privacy(conn)
-            elif i == 30:
-                TR.migrate(conn)
-            elif i == 39:
-                _apply(conn, MIGRATIONS[i])
-                if _runs_merged(conn):
-                    RT.backfill(conn)
-                else:
-                    RT.backfill(conn, "turns", "bot")
-            else:
-                _apply(conn, MIGRATIONS[i])
-            conn.execute(f"PRAGMA user_version={i + 1}")
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            done()
-    # The migration files (backend/migrations) run next, before every CREATE, ALTER and add_column below and in the
-    # module schema code: those name the current columns, so a rename must land first or they would add an empty
-    # column beside the old one.
     migrations.apply(conn)
-    # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0047's.
-    # Deleted tasks wait here until restored or purged (backend/task_delete.py).
-    from .task_delete import ensure as ensure_task_trash
-
-    ensure_task_trash(conn)
-    # Reconnect cards: a task waits for a person to fix a missing or refused account (backend/reconnects.py).
-    from .reconnects import ensure as ensure_reconnects
-
-    ensure_reconnects(conn)
-    # Recruiting seats: org-chart roles with no bot yet (backend/lifecycle.py).
-    from .lifecycle import ensure as ensure_seats
-
-    ensure_seats(conn)
-    # A task's lane and its place in its owner's queue. The cloud store backfills rank and lane once (its migration
-    # 29); here the columns simply exist.
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
-    if "lane" not in columns:
-        conn.execute("ALTER TABLE tasks ADD COLUMN lane TEXT NOT NULL DEFAULT 'company'")
-    if "rank" not in columns:
-        conn.execute("ALTER TABLE tasks ADD COLUMN rank REAL")
-    if "labels" not in columns:
-        conn.execute("ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
-    # Every task-to-task relationship; idempotent, so a database at any version catches up.
-    TR.migrate(conn)
-    # Who is on a task, by role (task_roles).
-    TRo.migrate(conn)
-    # The due-date routine occurrence a task is for, "<automation_id>:<due_on>" (backend/automation_actions.py).
-    add_column(conn, "tasks", "occurrence", "TEXT")
-    # The step of the routine that opened it: one task per occurrence per producing step (task_create).
-    add_column(conn, "tasks", "occurrence_step", "TEXT")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS tasks_occurrence_step ON tasks(occurrence, occurrence_step) "
-        "WHERE occurrence IS NOT NULL"
-    )
-    # The rule due date an occurrence's run was fired for (backend/rule_due.py marks it when the task completes).
-    add_column(conn, "tasks", "rule_due_id", "TEXT")
-    task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
-    if "private" in task_columns:
-        if "readers" in task_columns:
-            # The few private tasks: their parties, which every privacy-checked read loads (backend/row_clock.py PARTIES,
-            # backend/privacy_index.py), and a bot's private tasks for its status rows (task_privacy.status_tasks_sql)
-            # with the two columns those read beyond the parties. The predicate matches both queries word for word and
-            # the index holds every column they read, so no body is read.
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_private_status ON tasks("
-                "id, requester_id, owner_id, readers, private, status) WHERE private IS NOT 0"
-            )
-            # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
-            # answered from an index alone: the table's pages hold every body, and these reads need none of them.
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_queue_cover ON tasks("
-                "rank, created_at, id, owner_id, requester_id, private, readers)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_owner_status_cover ON tasks("
-                "owner_id, status, id, requester_id, private, readers)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS tasks_requester_status_cover ON tasks("
-                "requester_id, status, id, owner_id, private, readers)"
-            )
-    # privacy_index.conversation_tasks is `SELECT id, task_id FROM conversations`, on every task list.
-    # The conversation row holds participants, and the primary key scan reads those pages.
-    conn.execute("CREATE INDEX IF NOT EXISTS conversations_id_task ON conversations(id, task_id)")
-    # Status and provenance reads stay indexed as question and task history grows.
-    conn.execute("CREATE INDEX IF NOT EXISTS messages_reply_kind ON messages(in_reply_to, kind)")
-    conn.execute("CREATE INDEX IF NOT EXISTS messages_from_kind ON messages(sender_id, kind)")
-    # A task comment its author changed or took back (task_comment_edit, task_comment_delete). Checked on
-    # every start rather than numbered, so no migration number collides with another branch's.
-    add_column(conn, "messages", "edited_at", "TEXT")
-    add_column(conn, "messages", "deleted_at", "TEXT")
-    # An old ask made moot, or moved to a question task by the asks migration (question_tasks.move_asks).
-    add_column(conn, "messages", "superseded_at", "TEXT")
-    # Where a task stood after its last completed turn (execution.complete), so a fresh session picks
-    # it up from there.
-    add_column(conn, "tasks", "checkpoint", "TEXT")
-    add_column(conn, "tasks", "checkpoint_at", "TEXT")
-    add_column(conn, "tasks", "checkpoint_by_id", "TEXT")
-    # Where the task stood by the others' changes when that checkpoint was left (wake_rules.state_of, token saving 3/9).
-    add_column(conn, "tasks", "checkpoint_state", "TEXT")
-    # Set once a turn in the task's own session took in another private task: that session may
-    # carry it from then on, so no later turn's reply becomes the checkpoint (execution.complete).
-    add_column(conn, "tasks", "checkpoint_blocked", "INTEGER NOT NULL DEFAULT 0")
-    # The Tico account a person signed in with (backend/oidc.py person): the issuer and its subject id. An install
-    # matches the account id before the email, so a changed address keeps the same person. NULL until their first
-    # sign-in with an account; one account is one person.
-    add_column(conn, "humans", "idp_issuer", "TEXT")
-    add_column(conn, "humans", "idp_sub", "TEXT")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS humans_idp ON humans(idp_issuer, idp_sub) WHERE idp_sub IS NOT NULL"
-    )
-    from .roadmaps import migrate as migrate_roadmaps
-
-    migrate_roadmaps(conn)
-    # A bot's unread backlog, read newest first a page at a time on every inbox read (inbox_pages).
-    conn.execute(UNREAD_INDEX)
-    # The keeper's meeting inputs, the few messages a room's meeting provenance is read from (live_privacy.Sources) on
-    # nearly every privacy check: the room index read every message of the room for them, millions of times a week.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS messages_live_meeting_input ON messages(conversation_id, created_at) "
-        "WHERE json_extract(refs,'$.live_meeting.turn_id') IS NOT NULL"
-    )
-    # The questions a comment answered, reopened when it is deleted (`task_comment_delete`, inside the write
-    # transaction): without it that lookup read every message.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS messages_answered_by ON messages(answered_by_id) WHERE answered_by_id IS NOT NULL"
-    )
-    # The media check visits blobs often; an unindexed version lookup multiplies both histories.
-    conn.execute("CREATE INDEX IF NOT EXISTS bot_file_versions_blob_media ON bot_file_versions(blob_id,media_state)")
-    # The media poll's pending rows, a handful even when blobs number in the tens of thousands.
-    conn.execute("CREATE INDEX IF NOT EXISTS blob_media_pending ON blob_media(blob_id) WHERE media_state='pending'")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS bot_file_versions_pending ON bot_file_versions(blob_id) WHERE media_state='pending'"
-    )
-    # Quiet notes (`tico note`): a line left for a bot's next run, asking nothing. `carried_by` is
-    # the attempt that took it there; a canceled note never goes.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY, from_actor TEXT NOT NULL, "
-        "to_actor TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, carried_by TEXT, "
-        "canceled_at TEXT, canceled_by TEXT)"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS notes_to_created ON notes(to_actor, created_at)")
-    # A bot-to-bot message that could wait (backend/bot_to_bot.py) rides to the next run as a note linked to it.
-    add_column(conn, "notes", "message_id", "TEXT")
-    # `settled_at`: the carrying run completed, so the note is read for good. It only narrows the waiting scan to
-    # recent notes; NOTE_WAITING_SQL still asks the carrier, so a note no path settled is merely slower, never lost.
-    # Both indexes hold unsettled rows only, so they stay small however many notes a bot has been sent.
-    add_column(conn, "notes", "settled_at", "TEXT")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS notes_waiting ON notes(to_actor, created_at, id) "
-        "WHERE canceled_at IS NULL AND settled_at IS NULL"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS notes_unsettled_carried ON notes(carried_by) "
-        "WHERE carried_by IS NOT NULL AND settled_at IS NULL"
-    )
-    # A deferred item and its deadline (backend/delivery.py). No foreign keys: a row outlives a deleted task or
-    # message and is settled `moot` by the next pass. `conversation_id` '' is the bot's next turn of any kind.
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS deferrals(id TEXT PRIMARY KEY, bot TEXT NOT NULL, kind TEXT NOT NULL, "
-        "item TEXT NOT NULL, conversation_id TEXT NOT NULL DEFAULT '', task_id TEXT, due_at TEXT, "
-        "created_at TEXT NOT NULL, fired_job TEXT, settled_at TEXT, how TEXT, attempt TEXT)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS deferrals_waiting ON deferrals(bot, conversation_id) WHERE settled_at IS NULL"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS deferrals_due ON deferrals(due_at) WHERE settled_at IS NULL AND due_at IS NOT NULL"
-    )
-    # The hot queries in backend/delivery.py: a claim finds its carried rows by attempt, a run's end finds the deadline
-    # runs still open by fired_job, and a stalled task checks for a deferral by item. Settled rows stay (no pruning yet),
-    # so only the attempt index is not partial to unsettled rows.
-    conn.execute("CREATE INDEX IF NOT EXISTS deferrals_attempt ON deferrals(attempt) WHERE attempt IS NOT NULL")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS deferrals_fired ON deferrals(fired_job) WHERE settled_at IS NULL AND fired_job IS NOT NULL"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS deferrals_item ON deferrals(item, kind) WHERE settled_at IS NULL")
-    conn.execute("CREATE INDEX IF NOT EXISTS tasks_owner_rank ON tasks(owner_id, rank)")
-    conn.execute("CREATE INDEX IF NOT EXISTS tasks_lane_status_rank ON tasks(lane,status,rank,created_at)")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS tasks_active_lane_rank ON tasks("
-        "lane,(rank IS NULL),rank,created_at,id) WHERE status='open'"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
-        "lane,COALESCE(closed_at,done_at,updated_at,created_at) DESC,id DESC) "
-        "WHERE status IN ('done','closed')"
-    )
-    conn.execute("DROP INDEX IF EXISTS tasks_due_active")  # the due-date reminder pass it served is gone
-    # A task's history and the Tasks page's stats read history_events through the indexes its migration made
-    # (backend/migrations/0064_history_events.py).
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
-        conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,created_at DESC)")
-    # A tag's attach events (the tag list, privacy_index.tags): only ~6k rows of a 2M-row events table, read with
-    # their detail. Partial and covering, so the list's IN(...) reads a few dense pages, not one row per event.
-    conn.execute("CREATE INDEX IF NOT EXISTS events_tag_attach ON events(target, detail) WHERE action='tag.attach'")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), "
-        "kind TEXT NOT NULL, url TEXT NOT NULL, title TEXT, state TEXT, added_by TEXT, created_at TEXT NOT NULL, "
-        "pr_sha TEXT, pr_merged_at TEXT)"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS task_links_task ON task_links(task_id)")
-    # A computer's worktrees (worktrees.inventory, on every heartbeat): a seek to its rows, not a scan of every
-    # worktree link ever kept. Partial, so it holds worktree rows only.
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS task_links_worktree_computer ON task_links(computer_id) WHERE kind='worktree'"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, "
-        "value TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor, key))"
-    )
-    # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
-    from . import message_links
-
-    message_links.ensure(conn)
     # The pipelines every company has (General), made when missing on every start, and given their manager once that
     # bot exists (backend/pipeline_settings.py). Here, so a hub opened without the cloud store has them too.
     from . import pipeline_settings
@@ -1707,7 +589,6 @@ def migrate(conn, adopt_legacy=False):
         except BaseException:
             conn.execute("ROLLBACK")
             raise
-    return len(MIGRATIONS)
 
 
 def _row(row):
@@ -2736,7 +1617,7 @@ def _learner(conn, actor):
         )
 
 
-# The retired Health Monitor's slug (archived by backend/migrations/0096_retire_health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
+# The retired Health Monitor's slug (a migration archived it). Its id is its slug, so its actor is bot:health-monitor.
 HEALTH_MONITOR = "health-monitor"
 
 
@@ -3906,83 +2787,6 @@ def bot_repository_name(conn, ref):
     return repo if re.fullmatch(r"[A-Za-z0-9._-]+", repo or "") else str(declared["folder"])
 
 
-def migrate_task_privacy(conn):
-    """Classify pre-privacy rows from stored roster/config identities; keep ambiguity private."""
-    had_privacy = 'private' in {row[1] for row in conn.execute('PRAGMA table_info(tasks)')}
-    _apply(conn, TASK_PRIVACY_SCHEMA)
-    if not had_privacy:
-        humans = {row[0] for row in conn.execute('SELECT id FROM humans')}
-        bots = {row[0] for row in conn.execute('SELECT slug FROM bots')}
-        # Numbered step 23 runs on a file from before migration 0070 (the declaration still in bot_config.config);
-        # the store's cloud step 57 runs after the migrations (the declaration in bot_settings).
-        if not _has_table(conn, 'bot_config'):
-            configs = {}
-        elif 'config' in {row[1] for row in conn.execute('PRAGMA table_info(bot_config)')}:
-            configs = {row[0]: _json(row[1]) for row in conn.execute('SELECT bot,config FROM bot_config')}
-        else:
-            configs = {
-                row[0]: _json(row[1])
-                for row in conn.execute(f'SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN}')
-            }
-
-        def sensitive_or_unknown(actor):
-            if actor == KEEPER:
-                return False
-            if is_human(actor):
-                return actor_id(actor) not in humans
-            if not is_bot(actor) or actor_id(actor) not in bots:
-                return True
-            slug, seen = actor_id(actor), set()
-            while slug not in seen:
-                seen.add(slug)
-                config = configs.get(slug)
-                if not isinstance(config, dict):
-                    return True
-                if config.get('shared_from'):
-                    slug = str(config['shared_from'])
-                    continue
-                setting = config.get('private_tasks_default')
-                if 'private_tasks_default' in config and not isinstance(setting, bool):
-                    return True
-                return setting if setting is not None else config.get('template') == 'general-counsel'
-            return True
-
-        rows = _rows(
-            conn.execute(
-                'SELECT id,requester_id,owner_id,'
-                + (
-                    'parent_id'
-                    if 'parent_id' in {r[1] for r in conn.execute('PRAGMA table_info(tasks)')}
-                    else TR.parent_sql() + ' AS parent_id'
-                )
-                + ' FROM tasks'
-            )
-        )
-        private = {
-            row['id']
-            for row in rows
-            if sensitive_or_unknown(row['requester_id']) or sensitive_or_unknown(row['owner_id'])
-        }
-        ids = {row['id'] for row in rows}
-        children = {}
-        for row in rows:
-            children.setdefault(row['parent_id'], []).append(row['id'])
-            if row['parent_id'] and row['parent_id'] not in ids:
-                private.add(row['id'])
-        pending = list(private)
-        while pending:
-            for child in children.get(pending.pop(), []):
-                if child not in private:
-                    private.add(child)
-                    pending.append(child)
-        conn.executemany(
-            'UPDATE tasks SET private=? WHERE id=?', [(int(row['id'] in private), row['id']) for row in rows]
-        )
-    add_column(conn, 'conversations', 'scope', "TEXT NOT NULL DEFAULT 'direct'")
-    for row in _rows(conn.execute('SELECT * FROM tasks WHERE private IS NULL OR private<>0')):
-        isolate_private_task(conn, row)
-
-
 def isolate_private_task(conn, row):
     """Move tracked task messages intact out of broader rooms and revoke former thread members."""
     if not task_private(conn, row):
@@ -4698,6 +3502,28 @@ def session_root(conn, bot, task_id, config=None):
     return root
 
 
+SESSION_ROOT_ROW_SQL = "SELECT id,owner_id,requester_id,private FROM tasks WHERE id=?"
+
+
+def prime_session_roots(conn, task_ids):
+    """What session_root reads for these tasks and every ancestor it can reach, one query a level for all of them (their
+    parents by prime_ancestry, their rows here), so each job's walk in this snapshot reads none of them again. Without a
+    read snapshot it reads nothing: the walk then reads for itself."""
+    from .read_cache import cache, prime
+
+    if cache(conn) is None:
+        return
+    met = TR.prime_ancestry(conn, task_ids)
+    rows = {}
+    for part in chunks(sorted(met)):
+        for row in conn.execute(
+            "SELECT id,owner_id,requester_id,private FROM tasks WHERE id IN (%s)" % ",".join("?" * len(part)),
+            part,
+        ):
+            rows[row["id"]] = row
+    prime(conn, SESSION_ROOT_ROW_SQL, {(tid,): rows.get(tid) for tid in met})
+
+
 def _same_readers(conn, one, other):
     """Whether two tasks may share a session: both public, or both private with every party of each able to
     read the other, so nothing one session turn says reaches a reader of either task who could not read both."""
@@ -5385,12 +4211,7 @@ def _refresh_comment_replies(conn, msg):
         return value
 
     # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
-    rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None
-    if rows is None:  # not indexed yet: an older file, or before its first start's backfill finished
-        rows = conn.execute(
-            "SELECT rowid,response FROM idempotency WHERE binding IS NULL AND instr(response,?)>0", (msg["id"],)
-        ).fetchall()
-    for row in rows:
+    for row in idempotency_messages.quoting(conn, msg["id"]):
         conn.execute(
             "UPDATE idempotency SET response=? WHERE rowid=?",
             (_dump(refresh(_json(row["response"], {}))), row["rowid"]),
@@ -6531,7 +5352,7 @@ def stop_ended_work(conn, actor, task_id, status):
 
 
 # ----------------------------------------------------------------------------- history
-# What happened to each thing, one row per change, in `history_events` (backend/migrations/0064_history_events.py):
+# What happened to each thing, one row per change, in `history_events` (backend/migrations/baseline.sql):
 # a task's, a goal's, the company profile's, the strategy's and the market graph's. `kind` is the field that changed
 # (or what happened), `old`/`new` its values, `data` a JSON object of the type's own extras. A task's rows read the
 # way its old `task_events` rows did through TASK_EVENT_COLUMNS, so its history keeps its shape in every answer.
@@ -7102,7 +5923,7 @@ def notes_settle(conn, attempt_id):
     conn.execute("UPDATE notes SET settled_at=? WHERE carried_by=? AND settled_at IS NULL", (now(), attempt_id))
 
 
-def notes_settle_catch_up(conn, limit=500):
+def notes_settle_catch_up(conn, limit: int | None = 500):
     """Settle up to `limit` notes whose carrier completed but no path marked them (None settles them all: the
     migration's one pass). Reads the small unsettled-carried index, so it is cheap on every scheduler tick, and
     a note it leaves for the next pass stays correct, since waiting is still decided by the carrier. Returns the count."""
@@ -7832,12 +6653,6 @@ def undelivered(conn, to_actor=None, limit=200):
     return out
 
 
-# A message still waiting for its recipient: not yet delivered, or not yet read. The partial index repeats these terms
-# word for word, or SQLite does not use it (`inbox_pages`).
-UNREAD_TERMS = "(delivered_at IS NULL OR read_at IS NULL) AND deleted_at IS NULL"
-UNREAD_INDEX = (
-    "CREATE INDEX IF NOT EXISTS messages_unread_to ON messages(recipient_id, created_at) WHERE " + UNREAD_TERMS
-)
 # The inbox reads deliveries (backend/threads.py): a message addressed to the reader, or reaching them another way (a
 # mention, a DM), still waiting. The addressee's row follows the message's delivered_at/read_at. The terms repeat the
 # partial index message_deliveries_waiting word for word, or SQLite does not use it.
