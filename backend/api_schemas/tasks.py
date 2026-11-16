@@ -350,7 +350,10 @@ SCHEMAS.update(
             required=["tasks", "next_offset", "cursor"],
             actors=ACTORS,
         ),
-        "TaskResult": obj({"task": ref("Task")}),
+        "TaskResult": obj(
+            {"task": ref("Task"), "private_readers": "s"},
+            ["task"],
+        ),  # private_readers: a private task's filer is told who else reads it (backend/private_readers.py)
         "TaskMergeResult": obj({"task": ref("Task"), "closed": ref("Task"), "note": "s"}),
         "TaskMergeChecks": obj(
             {

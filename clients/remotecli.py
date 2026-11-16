@@ -1286,6 +1286,9 @@ def main(args, who=None, fields=None):
 
     try:
         result = run(args, who)
+        if isinstance(result, dict) and result.get("private_readers"):
+            # A private task's filer reads, first, who else reads it as it moves (backend/private_readers.py).
+            print("tico: " + str(result["private_readers"]), file=sys.stderr)
         if fields:
             from clients import profiles
 

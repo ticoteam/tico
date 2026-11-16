@@ -490,21 +490,27 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
         }});
     } else if (key === 'visible') {
       const now = taskVisibleNow(task);
-      const items = (['team', 'public', 'private'] as TaskVisible[]).filter(k => k === now || taskVisibleChoices(task, taskPropRights(task)).includes(k))
-        .map(k => ({value: k, text: VISIBLE_WORDS[k], checked: k === now, html: `<span>${esc(VISIBLE_WORDS[k])}</span>`}));
-      propMenu(d, b, {label: 'Visible to', items, onPick: it => {
-        const to = it.value as TaskVisible;
-        if (to === now) return;
-        if (to === 'private') {
-          // Private opens the people picker once it is saved.
-          void Promise.resolve(save('visible', {private: true})).then(ok => {
-            if (ok) setTimeout(() => ($('[data-prop="readers"]', d) as HTMLElement | null)?.click(), 0);
-          });
-        } else if (now === 'private') {
-          void save('visible', {private: false});
-          if (to === 'public') void save('visible', {visibility: 'public'});
-        } else void save('visible', {visibility: to === 'public' ? 'public' : 'private'});
-      }});
+      const offered = (['team', 'public', 'private'] as TaskVisible[]).filter(k => k === now || taskVisibleChoices(task, taskPropRights(task)).includes(k));
+      // In a pipeline, Private says who still reads it as it moves (Product #449); the menu opens without it on a miss.
+      const note = offered.includes('private') && now !== 'private' && task.pipeline_id
+        ? pipelinePrivateReaders(task.pipeline_id, {task: String(task.id)}).then(r => r.line, () => null) : Promise.resolve(null);
+      void note.then(line => {
+        const items = offered.map(k => ({value: k, text: VISIBLE_WORDS[k], checked: k === now,
+          html: k === 'private' && line ? `<span class="prop-vis"><span>${esc(VISIBLE_WORDS[k])}</span><span class="prop-vis-note">${esc(line)}</span></span>` : `<span>${esc(VISIBLE_WORDS[k])}</span>`}));
+        propMenu(d, b, {label: 'Visible to', items, onPick: it => {
+          const to = it.value as TaskVisible;
+          if (to === now) return;
+          if (to === 'private') {
+            // Private opens the people picker once it is saved.
+            void Promise.resolve(save('visible', {private: true})).then(ok => {
+              if (ok) setTimeout(() => ($('[data-prop="readers"]', d) as HTMLElement | null)?.click(), 0);
+            });
+          } else if (now === 'private') {
+            void save('visible', {private: false});
+            if (to === 'public') void save('visible', {visibility: 'public'});
+          } else void save('visible', {visibility: to === 'public' ? 'public' : 'private'});
+        }});
+      });
     } else if (key === 'readers') {
       const have = new Set([...(task.readers || []), task.owner_id, task.requester_id]);
       const items = threadAddable().filter(it => !have.has(it.actor)).map(it => ({value: it.actor, text: it.label ?? '',

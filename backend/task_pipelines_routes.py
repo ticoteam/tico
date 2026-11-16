@@ -57,6 +57,40 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
         with store.read() as c:
             return {"pipeline": record(c, who, pipeline_id)}
 
+    @app.get(
+        "/api/v2/pipelines/{pipeline_id}/private-readers",
+        **api_v2(
+            "Pipelines",
+            "getPipelinePrivateReaders",
+            "Who else reads a private task as it moves through the pipeline, said before it is filed",
+        ),
+    )
+    def pipeline_private_readers(
+        request: Request, pipeline_id: str, owner: str = "", parent: str = "", task: str = ""
+    ) -> dict[str, Any]:
+        """Who else reads a private task as it moves through this pipeline, said before it is filed (Product #449):
+        for a new task for `owner` (under `parent`), when it would be private; for an existing `task`, as if it were
+        made private. `{"private", "line"}`, `line` None when nobody else reads it. It never refuses a filing."""
+        from . import hubdb, private_readers as PR
+
+        H: Any = hubdb  # untyped module
+
+        who: Any = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            if not pipeline_settings.read(c, pipeline_id):
+                raise Problem("not_found", "No such pipeline", 404)
+            if task:
+                row: Any = H.task(c, auth.task(c, who, auth.resolve_task(c, who, task))["id"])
+                found = PR.readers(c, pipeline_id, [row.get("requester_id"), *H.task_readers(row)])
+                return {"private": True, "line": found["line"] if found else None}
+            above: Any = H.task(c, auth.task(c, who, auth.resolve_task(c, who, parent))["id"]) if parent else None
+            target = (H.resolve_actor(c, owner) or None) if owner else None
+            if not PR.will_be_private(c, who.actor, target, None, above, pipeline_id):
+                return {"private": False, "line": None}
+            found = PR.readers(c, pipeline_id, [who.actor])
+            return {"private": True, "line": found["line"] if found else None}
+
     @app.post(
         "/api/v2/pipelines/{pipeline_id}",
         **api_v2(
