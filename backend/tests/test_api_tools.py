@@ -257,7 +257,7 @@ def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_se
     assert len(tools) == 3  # the password and the model keys are no tool's
     rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
     assert {"api:" + tid, "api:" + keys[own], "api:" + keys[second]} <= set(rows)
-    assert rows["api:" + keys[own]]["status"]["text"] == "Key on computers"
+    assert rows["api:" + keys[own]]["status"]["text"] == "Not checked" and not rows["api:" + keys[own]]["needs_you"]
     # A key a bot already uses from its computer's files (the file migration) stays on computers, known service or not.
     with api.app.state.store.transaction() as c:
         c.execute(

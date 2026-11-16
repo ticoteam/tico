@@ -180,6 +180,7 @@ EMPTY = (
     "tool_checks",
     "tool_calls",
     "tool_oauth_states",  # an MCP tool's sign-in on its way: its sealed PKCE verifier
+    "tool_settings",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
     "model_subscriptions",
     "computer_subscriptions",

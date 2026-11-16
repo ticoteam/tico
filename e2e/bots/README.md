@@ -41,6 +41,8 @@ also checks the raw value is in no transcript, turn event, runner log or table; 
   vendor gets the real key, and the vendor's echo of it never reaches the run.
 - **Username and password key through the proxy as Basic**: the vendor gets `user:key`.
 - **File credential**: the turn gets a 0600 file, the vendor accepts its bytes, and the file is gone after the turn.
+- **A tool's Settings** (key on computers and through the proxy): its address and region arrive beside the key, the
+  address reaches the vendor, and a bot saying the region is not masked (a setting is not a secret).
 - **Remote MCP server in bot.yaml** with `Bearer ${VAR}`, key on computers (Claude and Codex): initialize, tools/list
   and a tools/call succeed, and the value is never on Claude Code's command line.
 - **The same MCP server with its key Tico holds** (a proxied tool, and a computer tool at Read with only a Read and

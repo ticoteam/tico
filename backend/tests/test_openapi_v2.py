@@ -316,6 +316,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     seen = call("getApiTool", "get", "/api/v2/api-tools/" + tool["id"])
     assert seen["private"] and [r["why"] for r in seen["seen_by"]] == ["Owner", "Listed"]
     call("listApiToolActivity", "get", "/api/v2/api-tools/%s/activity" % tool["id"])
+    assert call("getToolVendor", "get", "/api/v2/tool-vendors/close-crm")["rows"][0]["keys"] == []
     assert any(r.get("private") for r in call("listToolIndex", "get", "/api/v2/tool-index")["rows"])
 
 

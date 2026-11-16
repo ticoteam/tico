@@ -27,8 +27,9 @@ def _transaction(store):
         yield c
 
 
-def run(store, onboarding, telemetry):
-    """Each job has its own transaction; a failure is captured and the next job still runs."""
+def run(store, onboarding, telemetry, vault=None):
+    """Each job has its own transaction; a failure is captured and the next job still runs. `vault` (the app's) reads
+    stored keys for the jobs that need a value."""
     settings = store.settings
     # A company from before the Librarian was built in gets it on update, once it can run it. Only an update
     # adds them; until this runs, a page shows the company as it was before the update.
@@ -85,3 +86,12 @@ def run(store, onboarding, telemetry):
             validate_gate.sweep(c)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("validate_sweep", exc)
+    # Once: a stored key that is a tool's setting (a host, a region, a profile) becomes that setting, on a tool each of
+    # its holders still gets it from (backend/tool_settings.py move_once). It reads values, so it needs the vault.
+    if vault is not None:
+        try:
+            from . import tool_settings
+
+            tool_settings.move_once(store, vault)
+        except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+            telemetry.capture("tool_settings_move", exc)

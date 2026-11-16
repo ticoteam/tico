@@ -208,6 +208,29 @@ def test_a_proxied_username_and_password_key_reaches_the_vendor_as_basic(api, ve
     nowhere(api, computer, conversation, SECRET)
 
 
+# ---- a tool's settings
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+@pytest.mark.parametrize("delivery", ["computer", "proxy"])
+def test_a_tools_settings_reach_the_turn_beside_its_key_and_using_them_works(api, vendor, computer, delivery):
+    """Tools > Acme Vendor > Settings: its address and region, plain values. A bot at Read gets both beside the key, on
+    computers and through the proxy alike; the address it got reaches the vendor, and saying the region is not masked
+    the way a key is."""
+    api_tool(api, delivery=delivery)
+    post(api, f"api-tools/{TOOL}/settings", {"name": "ACME_VENDOR_URL", "value": vendor.url})
+    post(api, f"api-tools/{TOOL}/settings", {"name": "ACME_VENDOR_REGION", "value": "eu-west-1"})
+    level(api, "ops", "read")
+    computer.start()
+    base = "$ACME_VENDOR_URL" if delivery == "computer" else "$" + URL_ENV
+    answer, uses, conversation = turn(api, computer, f"CALL bearer {ENV} {base}/bearer", "ECHO ACME_VENDOR_REGION")
+    call = one(uses, "call")
+    assert (call["environ"]["ACME_VENDOR_URL"], call["environ"]["ACME_VENDOR_REGION"]) == (vendor.url, "eu-west-1")
+    assert call["status"] == 200 and [s["status"] for s in vendor.calls("/bearer")] == [200]
+    assert "The value of ACME_VENDOR_REGION is eu-west-1." in answer["body"]
+    nowhere(api, computer, conversation, SECRET)
+
+
 # ---- a file credential
 
 

@@ -178,6 +178,111 @@ def match(env="", name="", service=""):
     return None
 
 
+# Words that start many tools' names without naming who makes them ("API key", "Prod Raygun"): never a vendor.
+NOT_VENDORS = frozenset(
+    "api key keys token tokens secret the my our new old test tests prod production dev staging stage main default "
+    "internal tico hub read write readonly admin bot bots company team service account".split()
+)
+# One vendor under several names: a service, a variable's prefix or a word that is another's (GH_TOKEN is GitHub's,
+# GOOGLE_ADS_* and GSC_* are Google's, Meta Ads is Meta's).
+VENDOR_ALIASES = {
+    "gh": "github",
+    "github-app": "github",
+    "gsc": "google",
+    "gcp": "google",
+    "gmail": "google",
+    "google-ads": "google",
+    "google-calendar": "google",
+    "google-drive": "google",
+    "google-workspace": "google",
+    "google-workspace-admin": "google",
+    "adwords": "google",
+    "meta-ads": "meta",
+    "facebook": "meta",
+    "fb": "meta",
+    "s3": "aws",
+    "amazon": "aws",
+    "close": "close-crm",
+    "hf": "hugging-face",
+    "huggingface": "hugging-face",
+    "postgresql": "postgres",
+}
+VENDOR_NAMES = {"google": "Google", "meta": "Meta", "aws": "AWS", "github": "GitHub", "slack": "Slack"}
+# Second-level labels that are part of a country's public suffix (acme.co.uk): the vendor is the label before them.
+SHARED_SUFFIXES = frozenset(("co", "com", "org", "net", "ac", "gov", "edu"))
+
+
+def vendor_word(text: str) -> str:
+    """The first word of a tool's name or variable as a vendor id ("Raygun production" -> raygun), or ""."""
+    words = _words(text)
+    first: str = words[0] if words else ""
+    word: str = VENDOR_ALIASES.get(first) or first
+    return word if len(word) >= 3 and not word.isdigit() and word not in NOT_VENDORS else ""
+
+
+def _known():
+    from backend.bot_tools import SERVICE_NAMES
+
+    return {VENDOR_ALIASES.get(k, k) for k in (*SERVICES, *SERVICE_NAMES, *VENDOR_ALIASES)}
+
+
+def _domain(host):
+    """A host's registrable domain, near enough: its last two labels, three under a shared suffix (acme.co.uk)."""
+    host = str(host or "").strip().lower().split("//")[-1].split("/")[0].split(":")[0].strip(".")
+    labels = [x for x in host.split(".") if x]
+    if len(labels) >= 3 and labels[-2] in SHARED_SUFFIXES:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def service_for_host(host):
+    """The vendor a site or an API address belongs to: the known service whose address shares its domain
+    (app.close.com -> close-crm), else the domain's own name (app.raygun.com -> raygun). "" for an IP or a bare host."""
+    domain = _domain(host)
+    if "." not in domain or domain.replace(".", "").isdigit():
+        return ""
+    for key, row in SERVICES.items():
+        if row["base_url"] and _domain(row["base_url"]) == domain:
+            return VENDOR_ALIASES.get(key, key)
+    return vendor_word(domain.split(".")[0])
+
+
+def vendor_of(service: str = "", name: str = "", envs: "tuple[str, ...] | list[str]" = (), host: str = "") -> str:
+    """The vendor Tools lists a tool under: one row a vendor, its tools on the vendor's page. Its `service` first (what
+    a person set, or a known service; "aws-production" is AWS's and "google-ads" Google's), else a known service or
+    vendor its name or a key's variable names, by any word (TIDY_AWS_READONLY is AWS's, GH_TOKEN GitHub's), else its
+    name's or variable's first word ("Raygun production" -> raygun), else its address's domain (raygun.com -> raygun).
+    "" when nothing says: the tool is then its own row."""
+    known = _known()
+    service = str(service or "").strip().lower()
+    if service:
+        own = VENDOR_ALIASES.get(service, service)
+        first = vendor_word(own.split("-")[0])
+        return own if own in known or not first or first not in known else first
+    texts = [t for t in (name, *envs) if t]
+    for text in texts:
+        found = match(env=text) or match(name=text)
+        if found:
+            return VENDOR_ALIASES.get(found, found)
+    for text in texts:
+        for word in _words(text):
+            word = VENDOR_ALIASES.get(word, word)
+            if word in known:
+                return word
+    for text in texts:
+        if vendor_word(text):
+            return vendor_word(text)
+    return service_for_host(host) if host else ""
+
+
+def vendor_name(vendor):
+    """How Tools names a vendor: Google, AWS, a known service's own name, else its id in words (raygun -> Raygun)."""
+    from backend.bot_tools import service_name
+
+    vendor = str(vendor or "").strip().lower()
+    return VENDOR_NAMES.get(vendor) or (SERVICES.get(vendor) or {}).get("name") or service_name(vendor)
+
+
 def is_tool_key(kind, env, name, source, stored, on_computers):
     """Whether a stored credential is a tool's key: an `api_key` or `token` with a value. Not a tool's: a model key (its
     variable, or a name with none set, is a providers.RUNTIME_KEY_NAMES name: a runtime's CLI reads it directly, so it
