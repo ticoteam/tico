@@ -211,7 +211,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await win.locator('[data-task-more]').click();
     const menu = page.locator('.prop-pop:popover-open');
     await menu.waitFor({timeout: t(15000)});
-    assert.deepEqual((await menu.locator('.tl-mi').allInnerTexts()).map(s => s.replace(/^\S+\s+/, '').trim()), ['Copy link'], 'the task ⋯ holds only what a viewer can use');
+    assert.deepEqual((await menu.locator('.tl-mi').allInnerTexts()).map(s => s.replace(/^\S+\s+/, '').trim()), ['Copy link', 'Copy session ID'], 'the task ⋯ holds only what a viewer can use');
     assert.deepEqual(await writesShown(page), [], 'the task ⋯ offers nothing that writes');
     await menu.locator('.tl-mi', {hasText: 'Copy link'}).click();
     await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 1, null, {timeout: t(15000)});
