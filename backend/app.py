@@ -283,10 +283,12 @@ def create_app(settings=None):
 
         # TICO_START_JOBS=inline (the tests, conftest.py) runs them before serving, as a start did before.
         if os.environ.get("TICO_START_JOBS") == "inline":
-            start_jobs.run(store, onboarding, telemetry)
+            start_jobs.run(store, onboarding, telemetry, app.state.vault)
             start_jobs_task = None
         else:
-            start_jobs_task = asyncio.create_task(asyncio.to_thread(start_jobs.run, store, onboarding, telemetry))
+            start_jobs_task = asyncio.create_task(
+                asyncio.to_thread(start_jobs.run, store, onboarding, telemetry, app.state.vault)
+            )
         stop = asyncio.Event()
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
         inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
@@ -5514,6 +5516,9 @@ def create_app(settings=None):
     from . import website_tools
 
     website_tools.install(app, store, auth, settings)  # Tools: website tools and their accounts
+    from . import tool_settings
+
+    tool_settings.install(app, store)  # Tools: an API tool's Settings, its non-secret values
     from . import tool_proxy
 
     tool_proxy.install(app, store)

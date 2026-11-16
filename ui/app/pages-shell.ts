@@ -283,6 +283,7 @@ function toolsRoute(r: string): boolean {
   if (!rdUnder(path, TOOLS_ROUTE)) return false;
   const parts = path.slice(TOOLS_ROUTE.length).split('/').filter(Boolean).map(p => { try { return decodeURIComponent(p); } catch { return p; } });
   if (!parts.length) { pageTools(); return true; }
+  if (parts[0] === 'vendor' && parts[1]) { void pageToolVendor(parts[1]); return true; }
   if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   if (parts[0] === 'website' && parts[1]) { void pageToolWebsite(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   // Keys was its own page; a tool's keys are on the tool's page now: the list with Keys' filters, a tool, or a key.

@@ -2,7 +2,8 @@
    tab, #/tools/api/<id>/activity. An API tool holds one key a level (Read, Read and write); who may use it is a level a
    person or bot, which the hub turns into grants on the right key (PUT /api/v2/api-tools/<id>/access/<subject>). Its
    calls go through Tico's proxy and are logged (delivery 'proxy'), or the key sits on the bots' computers ('computer',
-   what every tool migrated from before was) until someone moves it to the proxy. A check is an authenticated GET to
+   what every tool migrated from before was) until someone moves it to the proxy. Its Settings are plain variables
+   (a host, a region) every run that can use it gets: POST …/settings {name, value}, PATCH|DELETE …/settings/<id>. A check is an authenticated GET to
    its check path every 30 minutes; the page shows the last 24. Limits per action are not built yet: the card says so.
    Reads GET /api/v2/api-tools/<id> ({tool, keys, access, checks, recent, status, can_manage}) and
    GET …/activity?result=&cursor= ({rows, next}: newest first, a page at a time). A row is a call through the proxy
@@ -26,7 +27,10 @@ const TA_AUTH: [string, string][] = [['bearer', 'Bearer token'], ['basic_user', 
   ['header', 'Header'], ['query', 'Query parameter']];
 const TA_CHECKS = 24;
 
-interface ToolApiAccess {subject: string; kind: string; name?: string | null; level?: string; fixed?: boolean; last_used_at?: string | null}
+// `read_not_enforced`: a bot at Read holds a Read and write key that nothing can hold to reads (backend/api_tools.py).
+interface ToolApiAccess {subject: string; kind: string; name?: string | null; level?: string; fixed?: boolean; last_used_at?: string | null; read_not_enforced?: boolean}
+// The mark on such a row: a warning, its reason on hover.
+const TA_READ_NOT_ENFORCED = '<span class="nav-icon tt-warn" role="img" aria-label="Read not enforced: this key can write" title="Read not enforced: this key can write" data-ta-read-not-enforced>warning</span>';
 interface ToolApiSeen {subject: string; kind: string; id?: string; name?: string | null; why: string}
 interface ToolApiCall {
   id?: string; kind?: string; at?: string | null; method?: string; path?: string; bot?: string | null; actor?: string;
@@ -35,6 +39,8 @@ interface ToolApiCall {
 interface ToolApiPage {rows?: ToolApiCall[]; next?: string | null}
 interface ToolApiKey {id: string; name: string; preview?: string | null; access_level: string; expires_on?: string | null;
   last_used_at?: string | null; created_at?: string | null}
+// A tool's setting: a plain variable every run holding a level on the tool gets (backend/tool_settings.py).
+interface ToolApiSetting {id: string; name: string; value: string}
 interface ToolApiCheck {ok: boolean; checked_at?: string | null; status_code?: number | string | null; detail?: string | null}
 interface ToolApiTool {
   id?: string; name: string; base_url?: string | null; check_path?: string | null; auth_scheme?: string | null;
@@ -44,7 +50,7 @@ interface ToolApiAudienceIn {people?: string[]; teams?: string[]; bots?: string[
 interface ToolApiAudience {everyone: boolean; people: string[]; teams: string[]; bots: string[]}
 interface ToolApiData {
   tool: ToolApiTool; status?: ToolsStatus; private?: boolean; can_manage?: boolean; can_set_audience?: boolean;
-  access?: ToolApiAccess[]; seen_by?: ToolApiSeen[]; audience?: ToolApiAudienceIn | null; keys?: ToolApiKey[];
+  access?: ToolApiAccess[]; seen_by?: ToolApiSeen[]; audience?: ToolApiAudienceIn | null; keys?: ToolApiKey[]; settings?: ToolApiSetting[];
   recent?: ToolApiCall[]; checks?: ToolApiCheck[]; mcp?: ToolMcp | null;
 }
 interface ToolApiPerson {id: string; name?: string; email?: string | null; hidden?: boolean; archived?: boolean}
@@ -53,7 +59,7 @@ interface ToolApiState {
   run: number; id: string; tab: string | undefined; data: ToolApiData | null; fin: ToolApiFinance | null;
   act: {rows: ToolApiCall[]; cursor: string; result: string};
 }
-interface ToolApiFormFields {name: string; base_url: string; auth_scheme: string; check_path: string}
+interface ToolApiFormFields {name: string; service: string; base_url: string; auth_scheme: string; check_path: string}
 
 let TA: ToolApiState | null = null;   // {run, id, tab, data, act: {rows, cursor, result}}
 const taPeople = (): ToolApiPerson[] => S.people || [];
@@ -100,7 +106,7 @@ function taDrawHead(): void {
   root.querySelector('[data-ta-head]').innerHTML = `<header class="tt-title"><span class="tt-tile lg" aria-hidden="true"><span class="nav-icon">api</span></span>
       <div class="tt-title-text"><h1>${esc(tool.name)}${state.data.private ? TOOLS_PRIVATE : ''}</h1><p class="muted">${esc(sub)}</p></div>
       <div class="tt-title-act">${toolsPill(status)}${tool.base_url && (tool.check_path || state.data.mcp) ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}${
-        manage ? '<button type="button" class="ghost small" data-ta-settings>Settings</button>' : ''}</div></header>
+        manage ? '<button type="button" class="ghost small" data-ta-settings>Edit</button>' : ''}</div></header>
     <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
       `<a href="${href}" data-ta-tab="${k}"${(state.tab || 'overview') === k ? ' class="ph-tab cur" aria-current="page"' : ' class="ph-tab"'}>${label}</a>`).join('')}</nav>`;
 }
@@ -111,14 +117,14 @@ function taDrawOverview(): void {
   if (!d) return;
   if (formBusy(body)) return;   // a half-typed Add stays put
   body.innerHTML = `<div class="tt-cols"><div class="tt-col">${taWhoCard(d)}${taRecentCard(d)}</div>
-    <div class="tt-col">${d.can_set_audience ? taSeeCard(d) : ''}${taFinanceSlot(d)}${tmCard(d)}${d.mcp?.auth === 'oauth' ? '' : taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
+    <div class="tt-col">${d.can_set_audience ? taSeeCard(d) : ''}${taFinanceSlot(d)}${tmCard(d)}${d.mcp?.auth === 'oauth' ? '' : taKeysCard(d)}${taSettingsCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
   const finSlot: HTMLElement | null = body.querySelector('[data-ta-finance]');
   taFinanceBind(finSlot);
 }
 function taWhoCard(d: ToolApiData): string {
   const manage = d.can_manage;
   const rows = (d.access || []).map(a => `<tr data-ta-subject-row="${esc(a.subject)}"${a.fixed ? ' data-ta-fixed' : ''}>
-      <td class="tt-who-name">${taFace(a)}<span>${esc(a.name || a.subject)}${a.kind === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span></td>
+      <td class="tt-who-name">${taFace(a)}<span>${esc(a.name || a.subject)}${a.kind === 'bot' ? ' <span class="muted">· bot</span>' : ''}</span>${a.read_not_enforced ? TA_READ_NOT_ENFORCED : ''}</td>
       <td>${manage && !a.fixed ? `<div class="theme-seg" role="radiogroup" aria-label="Level for ${esc(a.name)}">${TA_LEVELS.map(([k, label]) =>
         `<button type="button" role="radio" aria-checked="${a.level === k}" data-ta-level="${k}" data-ta-subject="${esc(a.subject)}">${label}</button>`).join('')}</div>` : esc(taLevelName(a.level))}</td>
       <td class="muted tt-used">${a.last_used_at ? esc(ago(a.last_used_at)) : ''}</td>
@@ -194,6 +200,32 @@ function taKeysCard(d: ToolApiData): string {
     ${rows || '<p class="muted" data-ta-no-keys>No keys yet.</p>'}
     <dl class="tt-kv">${row('Calls', calls)}${keys.length ? row('Expires', expires) : ''}${row('Added', added && `<span title="${esc(fmt(added))}">${esc(ago(added))}</span>`)}${
       row('Last used', used && `<span title="${esc(fmt(used))}">${esc(ago(used))}</span>`)}</dl></section>`;
+}
+// Settings: the tool's plain values (a host, a region, a project id), each a variable every run that can use the tool
+// gets. Shown in the clear; changed by whoever manages the tool. No card when there are none and nothing to add.
+function taSettingsCard(d: ToolApiData): string {
+  const manage = d.can_manage, settings = d.settings || [];
+  if (!settings.length && !manage) return '';
+  const rows = settings.map(v => `<div class="tt-key tt-setting" data-ta-setting="${esc(v.id)}"><span class="nav-icon" aria-hidden="true">tag</span>
+      <span class="tt-key-name"><b class="mono">${esc(v.name)}</b> <span class="mono tt-setting-value">${esc(v.value)}</span></span>
+      <span class="tt-key-acts">${manage ? `<button type="button" class="linkish" data-ta-setting-edit="${esc(v.id)}">Edit</button><button type="button" class="linkish danger" data-ta-setting-delete="${esc(v.id)}">Remove</button>` : ''}</span></div>`).join('');
+  return `<section class="card" id="tool-settings"><header><h2>Settings</h2>${manage ? '<button type="button" class="ghost small settings-head-act" data-ta-setting-add>Add</button>' : ''}</header>
+    ${rows}</section>`;
+}
+// Add a setting, or change one: its variable and value. A value that looks like a key is refused by the hub.
+function taSettingDialog(setting: ToolApiSetting | null | undefined): void {
+  const state = TA;
+  if (!state) return;
+  const dialog = whDialog(setting ? setting.name : 'Add setting', `<label>Name<input name="name" maxlength="100" required autocomplete="off" spellcheck="false" placeholder="ACME_HOST" pattern="[A-Z_][A-Z0-9_]*" value="${esc(setting?.name || '')}"></label>
+    <label>Value<input name="value" maxlength="2000" required autocomplete="off" spellcheck="false" placeholder="eu.acme.example" value="${esc(setting?.value || '')}"></label>`,
+    `<button class="primary" type="submit">${setting ? 'Save' : 'Add'}</button>`);
+  whSubmit(dialog, async (data: FormData) => {
+    const body = {name: String(data.get('name') || '').trim(), value: String(data.get('value') || '').trim()};
+    if (setting) await patch(taPath(state.id, '/settings/' + encodeURIComponent(setting.id)), body);
+    else await post(taPath(state.id, '/settings'), body);
+    dialog.close(); toast(setting ? 'Saved' : 'Added');
+    await taLoad(); if (TA === state) taDrawOverview();
+  });
 }
 // The last 24 checks, oldest first: a square each, green when it worked.
 function taCheckCard(d: ToolApiData): string {
@@ -298,6 +330,13 @@ async function taClick(ev: Event): Promise<void> {
   if (b.dataset.taRotate) return taKeyDialog((state.data.keys || []).find(k => k.id === b.dataset.taRotate));
   if (b.hasAttribute('data-ta-key-add')) return taKeyDialog(null);
   if (b.hasAttribute('data-ta-expires')) return taExpiresDialog();
+  if (b.hasAttribute('data-ta-setting-add')) return taSettingDialog(null);
+  if (b.dataset.taSettingEdit) return taSettingDialog((state.data.settings || []).find(v => v.id === b.dataset.taSettingEdit));
+  if (b.dataset.taSettingDelete) {
+    const setting = (state.data.settings || []).find(v => v.id === b.dataset.taSettingDelete);
+    if (!await settingsConfirm({title: `Remove ${setting?.name || 'this setting'}?`, text: 'Runs stop getting it.', ok: 'Remove'})) return;
+    return write(() => writeRequest('DELETE', taPath(id, '/settings/' + encodeURIComponent(String(b.dataset.taSettingDelete)))));
+  }
   if (b.dataset.taKeyDelete) {
     const key = (state.data.keys || []).find(k => k.id === b.dataset.taKeyDelete);
     if (!await settingsConfirm({title: `Remove ${key?.name || 'this key'}?`, text: 'Calls that used it stop working.', ok: 'Remove'})) return;
@@ -464,11 +503,12 @@ async function taReveal(cid: string): Promise<void> {
 }
 
 // ----------------------------------------------------------------- Add tool › API, and a tool's Settings
-// One form for both: name, address, where the key goes and the check path. Settings sends only what changed.
+// One form for both: name, vendor, address, where the key goes and the check path. Edit sends only what changed.
 function taToolForm(tool?: ToolApiTool | null): string {
   const t: Partial<ToolApiTool> = tool || {}, scheme = String(t.auth_scheme || 'bearer'), [kind = '', named = ''] = scheme.split(/:(.*)/s);
   const auth = TA_AUTH.some(([k]) => k === kind) ? kind : 'bearer';
   return `<label>Name<input name="name" maxlength="80" required autocomplete="off" placeholder="Acme CRM" value="${esc(t.name || '')}"></label>
+    <label>Vendor<input name="service" maxlength="60" autocomplete="off" spellcheck="false" placeholder="acme" value="${esc(t.service || '')}"></label>
     <label>Base URL<input name="base_url" type="url" maxlength="300" autocomplete="off" spellcheck="false" placeholder="https://api.acme.example" value="${esc(t.base_url || '')}"></label>
     <label>Key goes in<select name="auth_scheme">${TA_AUTH.map(([k, label]) => `<option value="${k}"${k === auth ? ' selected' : ''}>${label}</option>`).join('')}</select></label>
     <label data-ta-auth-name${['header', 'query'].includes(auth) ? '' : ' hidden'}>Header or parameter name<input name="auth_name" maxlength="100" autocomplete="off" spellcheck="false" placeholder="X-Api-Key" value="${esc(named)}"></label>
@@ -481,11 +521,11 @@ function taToolFields(data: FormData): ToolApiFormFields {
     if (!name) throw new Error('Name the header or parameter.');
     auth += ':' + name;
   }
-  return {name: String(data.get('name') || '').trim(), base_url: String(data.get('base_url') || '').trim(), auth_scheme: auth,
+  return {name: String(data.get('name') || '').trim(), service: String(data.get('service') || '').trim().toLowerCase(), base_url: String(data.get('base_url') || '').trim(), auth_scheme: auth,
     check_path: String(data.get('check_path') || '').trim()};
 }
 function taToolDialog(tool?: ToolApiTool | null) {
-  const dialog = whDialog(tool ? 'Settings' : 'Add API', taToolForm(tool), `<button class="primary" type="submit">${tool ? 'Save' : 'Add'}</button>`);
+  const dialog = whDialog(tool ? 'Edit' : 'Add API', taToolForm(tool), `<button class="primary" type="submit">${tool ? 'Save' : 'Add'}</button>`);
   const scheme = dialog.querySelector<HTMLSelectElement>('[name=auth_scheme]'), named = dialog.querySelector<HTMLElement>('[data-ta-auth-name]');
   if (!scheme || !named) return dialog;
   scheme.onchange = () => { named.hidden = !['header', 'query'].includes(scheme.value); };
@@ -495,7 +535,7 @@ function toolsApiCreate(): void {
   const dialog = taToolDialog(null);
   whSubmit(dialog, async (data: FormData) => {
     const f = taToolFields(data);
-    const made = await post('/v2/api-tools', {name: f.name, base_url: f.base_url || undefined, auth_scheme: f.auth_scheme,
+    const made = await post('/v2/api-tools', {name: f.name, service: f.service || undefined, base_url: f.base_url || undefined, auth_scheme: f.auth_scheme,
       check_path: f.check_path || undefined});
     dialog.close(); toast('Added');
     location.hash = made?.id ? '#/tools/api/' + encodeURIComponent(made.id) : TOOLS_ROUTE;   // the tool, as POST /api-tools answers it

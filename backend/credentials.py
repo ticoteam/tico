@@ -1018,9 +1018,12 @@ def install_credentials(app, store, delegate=None, propose=None):
             stored = c.execute(
                 "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!='' AND kind!='login'"
             ).fetchall()
+            from . import tool_settings
+
             for bot, names in bots.items():
                 held = granted(c, 'bot:' + bot)
                 names.extend(r['env'] for r in stored if r['id'] in held)
+                names.extend(n for n in tool_settings.names(c, held) if n not in names)
             return {'bots': bots}
 
     @app.post('/api/v2/runner-credential-migration')
@@ -1049,22 +1052,10 @@ def install_credentials(app, store, delegate=None, propose=None):
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(hub_pending), HUB_MIGRATION))
             subject = 'bot:' + bot
             label = (H.bot(c, bot) or {}).get('slug') or bot
-            for item in body.credentials:
-                if item.env.startswith('HUB_') and not supports_hub:
-                    continue
-                if not first and not item.env.startswith('HUB_'):
-                    continue  # the bot migrated before: only the HUB_ keys 0.2.30 could not take
-                if item.env in RESERVED_ENV or item.env.startswith(RESERVED_PREFIXES):
-                    raise Problem('env', 'A Computer setting cannot be granted as a Credential', 422)
-                # Even a revoked grant wins over an old file: migration never resurrects access.
-                if c.execute(
-                    'SELECT 1 FROM credentials v JOIN credential_grants g ON g.credential_id=v.id '
-                    'WHERE v.env=? AND g.subject=?',
-                    (item.env, subject),
-                ).fetchone():
-                    continue
-                from . import api_tools
+            from . import api_tools, tool_settings
 
+            def keep(item):
+                """The variable as a key the bot is granted: one credential per value, shared by grant."""
                 value, gid, now = item.value.get_secret_value(), H.new_id(), H.now()
                 # Bots on one computer often hold the same value (one Slack token, one AWS profile): it becomes ONE
                 # credential, shared by grant, never a copy per bot. Never on a key of an Only listed tool.
@@ -1082,7 +1073,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                         {'env': item.env, 'bot': bot, 'grant': gid, 'shared': True},
                     )
                     api_tools.ensure_tool(c, who, shared, from_computer=True)
-                    continue
+                    return
                 cid = H.new_id()
                 ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
                 taken = c.execute('SELECT 1 FROM credentials WHERE name=?', (item.env,)).fetchone()
@@ -1109,6 +1100,29 @@ def install_credentials(app, store, delegate=None, propose=None):
                 )
                 H.event(c, who.actor, 'credential.migrated', cid, {'env': item.env, 'bot': bot, 'grant': gid})
                 api_tools.ensure_tool(c, who, cid, from_computer=True)  # already in use from the computer
+
+            later = []
+            for item in body.credentials:
+                if item.env.startswith('HUB_') and not supports_hub:
+                    continue
+                if not first and not item.env.startswith('HUB_'):
+                    continue  # the bot migrated before: only the HUB_ keys 0.2.30 could not take
+                if item.env in RESERVED_ENV or item.env.startswith(RESERVED_PREFIXES):
+                    raise Problem('env', 'A Computer setting cannot be granted as a Credential', 422)
+                # Even a revoked grant wins over an old file: migration never resurrects access.
+                if c.execute(
+                    'SELECT 1 FROM credentials v JOIN credential_grants g ON g.credential_id=v.id '
+                    'WHERE v.env=? AND g.subject=?',
+                    (item.env, subject),
+                ).fetchone():
+                    continue
+                if item.kind != 'file' and tool_settings.is_setting(item.env, item.value.get_secret_value()):
+                    later.append(item)  # after the keys: a setting goes on a tool one of them is a key of
+                    continue
+                keep(item)
+            for item in later:
+                if not tool_settings.import_for_bot(c, who, bot, item.env, item.value.get_secret_value()):
+                    keep(item)
             if first:
                 pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(pending), FILE_MIGRATION))
@@ -1394,6 +1408,10 @@ def install_credentials(app, store, delegate=None, propose=None):
             from .mcp_connect import runtime_servers
 
             servers = runtime_servers(c, values)
+            # The settings of each tool it holds a key of (backend/tool_settings.py): plain values, after the keys.
+            from . import tool_settings
+
+            values += tool_settings.runtime_items(c, held, {v['env'] for v in values if v.get('env')})
             return {
                 'credentials': values,
                 **({'mcp_servers': servers} if servers else {}),
@@ -1449,7 +1467,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                     "SELECT id FROM credentials WHERE ciphertext IS NOT NULL AND env!='' AND kind!='login'"
                 )
             ):
-                return {'credentials': []}
+                from . import tool_settings
+
+                return {'credentials': tool_settings.runtime_items(c, held)}
         with store.transaction() as c:
             placed(c)
             values = []
@@ -1488,6 +1508,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                         {'bot': bot, 'runner': who.runner_id, 'use': 'watcher'},
                         windowed=True,
                     )
+            from . import tool_settings
+
+            values += tool_settings.runtime_items(c, held, {v['env'] for v in values})
             return {'credentials': values}
 
     @app.get('/api/v2/runner-model-credentials')

@@ -10,8 +10,14 @@ backend/tool_proxy.py) asks `key_for` which key a caller's call uses, and `subje
 
 A tool's `delivery` says how its key reaches a run: `proxy` (the server adds the key to each call, the key never
 leaves it) or `computer` (the value goes to the run's environment, as every key did before Tools). Tools made from the
-keys that existed before (the migration 20261105220550) are `computer` until a person moves them, and show "Key on
-computers" under Needs you.
+keys that existed before (the migration 20261105220550) are `computer` until a person moves them. How a key reaches a
+run is never a problem: it puts no tool under Needs you (Tools marks a proxied tool with a lock instead).
+
+A tool also holds Settings, its non-secret values (a host, a region, a project id), each delivered as a variable to
+every run that holds a level on the tool (backend/tool_settings.py). Tools lists one row a vendor (`vendor` on a row,
+`tool_services.vendor_of`: the tool's `service`, which a person may set, else its name, its keys' variables or its
+address), and `GET /api/v2/tool-vendors/{vendor}` answers a vendor's page in one read: its rows, an API tool's with its
+keys, levels and settings. Mailboxes, Tico's numbers and addresses and Tico's own tools have no vendor.
 
 A check is one authenticated GET to the tool's `check_path` with each stored key: 2xx is Working, 401/403 Key rejected,
 anything else (a timeout, a refused address, a 500) Check failed. A 401 is never "reachable". The scheduler checks every
@@ -60,6 +66,7 @@ from pydantic import ConfigDict, Field, SecretStr
 
 from . import mcp_connect
 from . import tool_services as TS
+from . import tool_settings
 from .credentials import CredentialWrite, administrator, effective_grant, owned, require_admin
 from .models import AccessAudience, Contract
 from .store import H, Problem, encode
@@ -220,9 +227,9 @@ def latest_checks(c, tool_id):
 
 
 def status(tool, keys, checks, today=None):
-    """{tone, text, needs_you} for an API tool. Worst first: no stored key, a failed check, an expired key; then the
-    key still on computers and a key expiring within EXPIRING_DAYS (Needs you, not broken); then Working once every
-    stored key passed its last check, else Not checked."""
+    """{tone, text, needs_you} for an API tool. Worst first: no stored key, a failed check, an expired key; then a key
+    expiring within EXPIRING_DAYS (Needs you, not broken); then Working once every stored key passed its last check, else
+    Not checked. How its key reaches runs (`delivery`) is never one of them."""
     today = today or _today()
     stored = [k for k in keys if k["ciphertext"] is not None]
     if not stored:
@@ -236,8 +243,6 @@ def status(tool, keys, checks, today=None):
     left = [d for d in (_days_left(k["expires_on"], today) for k in stored) if d is not None]
     if left and min(left) < 0:
         return {"tone": "fail", "text": "Key expired", "needs_you": True}
-    if tool["delivery"] == "computer":
-        return {"tone": "wait", "text": "Key on computers", "needs_you": True}
     if left and min(left) <= EXPIRING_DAYS:
         n = min(left)
         return {
@@ -630,6 +635,7 @@ def _key_view(c, who, key, admin, admins):
 def _tool_view(tool):
     return {
         **{k: tool[k] for k in ("id", "name", "service", "base_url", "auth_scheme", "check_path", "delivery")},
+        "vendor": TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"] or _field(tool, "mcp_url") or ""),
         "private": _field(tool, "audience") is not None,
     }
 
@@ -689,6 +695,7 @@ def detail(c, who, tool_id, admins, auth=None):
     out = {
         "tool": _tool_view(tool),
         "keys": [_key_view(c, who, k, admin, admins) for k in keys],
+        "settings": tool_settings.listing(c, tool_id),
         "access": access_rows(c, who, tool_id, admins, auth) + (finance_rows(c, tool_id) if admin else []),
         "checks": checks,
         "recent": recent,
@@ -1173,6 +1180,7 @@ def delete_tool(c, who, tool_id, admins, kind="api"):
     refuse_finance_key(c, keys)  # before anything goes
     for key_id in keys:
         _drop_key(c, who, key_id)
+    tool_settings.drop_tool(c, tool_id)
     c.execute("DELETE FROM tool_calls WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tool_checks WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tool_oauth_states WHERE tool_id=?", (tool_id,))
@@ -1437,6 +1445,13 @@ def _api_rows(c, who, admins, view):
                 who_total=len(people),
                 needs_you=state["needs_you"],
                 service=tool["service"],
+                vendor=TS.vendor_of(
+                    tool["service"],
+                    tool["name"],
+                    [k["env"] for k in keys if k["env"]],
+                    tool["base_url"] or _field(tool, "mcp_url") or "",
+                ),
+                delivery=tool["delivery"],
                 private=tool["audience"] is not None,
             )
         )
@@ -1648,7 +1663,38 @@ def index_rows(c, who, auth, settings, admins):
     rows += _mailbox_rows(c, who, view)
     rows += _connection_rows(view)
     rows += _declared_rows(c, who, view, covered, envs)
+    for row in rows:
+        if "vendor" not in row:
+            row["vendor"] = (
+                BUILT_IN_VENDORS.get(row["kind"], "")
+                if row["kind"] != "declared"
+                else TS.vendor_of(row.get("service", ""), row["name"])
+            )
+        if row["vendor"]:
+            row["vendor_name"] = TS.vendor_name(row["vendor"])
     return rows
+
+
+# The connections that are a vendor's: the GitHub App is GitHub's and Slack's app Slack's. Mailboxes, numbers, mailing
+# mail, meeting importers, Listening and webhooks are no vendor's: each stays its own row.
+BUILT_IN_VENDORS = {"github": "github", "slack": "slack"}
+
+
+def vendor_page(c, who, auth, settings, admins, vendor):
+    """`GET /api/v2/tool-vendors/{vendor}`: everything the reader may see of one vendor, as its Tools rows, each API
+    tool's with its keys, who can use it at which level and its settings (`detail`). A vendor with nothing the reader
+    may see is a 404, as a tool is."""
+    vendor = str(vendor or "").strip().lower()
+    rows = [r for r in index_rows(c, who, auth, settings, admins) if vendor and r.get("vendor") == vendor]
+    if not rows:
+        raise Problem("not_found", "No such vendor", 404)
+    out = []
+    for row in rows[:INDEX_LIMIT_MAX]:
+        if row["kind"] == "api":
+            page = detail(c, who, row["id"][len("api:") :], admins, auth)
+            row = row | {k: page[k] for k in ("tool", "keys", "access", "settings", "can_manage")}
+        out.append(row)
+    return {"vendor": vendor, "name": TS.vendor_name(vendor), "rows": out}
 
 
 def index_page(c, who, auth, settings, admins, limit=INDEX_LIMIT_MAX, cursor=""):
@@ -1704,6 +1750,13 @@ def install(app, store, auth, settings):
         Listening, outgoing webhook and declared tool the caller may see, with its status and who can use it."""
         with store.read_transaction() as c:
             return index_page(c, request.state.identity, auth, settings, vault().admins, limit, cursor)
+
+    @app.get("/api/v2/tool-vendors/{vendor}")
+    def tool_vendor(request: Request, vendor: str):
+        """One vendor's page on Tools: its website logins, MCP servers, API tools (keys, levels, settings) and the
+        connections that are its, as the reader may see them."""
+        with store.read_transaction() as c:
+            return vendor_page(c, request.state.identity, auth, settings, vault().admins, vendor)
 
     @app.get("/api/v2/api-tools/{tool_id}")
     def get_api_tool(request: Request, tool_id: str):

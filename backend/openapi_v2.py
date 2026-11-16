@@ -8129,6 +8129,15 @@ STABLE.extend(
             'ToolIndex',
         ),
         (
+            '/api/v2/tool-vendors/{vendor}',
+            'get',
+            'Tools',
+            'getToolVendor',
+            "One vendor's page: its rows on Tools (website logins, MCP servers, API tools, its connections), an API "
+            "tool's with its keys (never a value), who can use it at which level and its settings",
+            'ToolVendor',
+        ),
+        (
             '/api/v2/api-tools/{tool_id}',
             'get',
             'Tools',
@@ -8191,6 +8200,20 @@ SCHEMAS['ToolIndexRow'] = obj(
         'needs_you': 'b',
         'href': 's',
         'private': {'type': 'boolean', 'description': 'An API tool whose Who can see it is Only listed'},
+        'service': {
+            'type': 'string',
+            'description': "An API or website tool's service, as stored (a person may set it)",
+        },
+        'vendor': {
+            'type': 'string',
+            'description': "Who makes it (google, aws, raygun); Tools lists one row a vendor. Empty for a row that is "
+            'no vendor\'s (a mailbox, a number, Tico\'s own)',
+        },
+        'vendor_name': {'type': 'string', 'description': 'The vendor, by name'},
+        'delivery': {
+            'enum': ['proxy', 'computer'],
+            'description': 'An API tool: proxy when Tico holds its key and adds it to each call',
+        },
     },
     required=['id', 'kind', 'name', 'detail', 'way', 'status', 'who', 'who_total', 'needs_you', 'href'],
 )
@@ -8201,6 +8224,7 @@ SCHEMAS['ToolIndex'] = obj(
         'next': 'n',
     }
 )
+SCHEMAS['ToolVendor'] = obj({'vendor': 's', 'name': 's', 'rows': items(ref('ToolIndexRow'))})
 SCHEMAS['ApiToolSettings'] = obj(
     {
         'id': 's',
@@ -8229,6 +8253,10 @@ SCHEMAS['ApiTool'] = obj(
                 required=['id', 'name', 'preview', 'access_level'],
             )
         ),
+        'settings': items(
+            obj({'id': 's', 'name': 's', 'value': 's', 'updated_at': 's'}),
+        )
+        | {'description': 'Non-secret values (a host, a region), each a variable every run that holds a level gets'},
         'access': items(
             obj(
                 {

@@ -36,6 +36,7 @@ from pydantic import ConfigDict, Field, SecretStr
 
 from . import api_tools as api_tools_module
 from . import credentials as credentials_module
+from . import tool_services as TS
 from . import totp as T
 from .models import ID, AccessAudience, Contract
 from .store import H as hubdb, Problem
@@ -943,6 +944,7 @@ def index_rows(c: Any, who: Any, auth: Any, admins: Iterable[str]) -> list[dict[
                 p for p in listed if p["kind"] != "bot" or cast(dict[str, Any], seen.get(p["id"]) or {}).get("see")
             ]
         sites = sites_of(tool)
+        vendor = TS.vendor_of(tool["service"], tool["name"], host=sites[0] if sites else "")
         out.append(
             api_tools._index_row(
                 "website:" + tool["id"],
@@ -956,6 +958,8 @@ def index_rows(c: Any, who: Any, auth: Any, admins: Iterable[str]) -> list[dict[
                 who_total=len(listed),
                 needs_you=state["tone"] == "fail" or state["label"] == "Needs you",
                 private=tool["audience"] is not None,
+                service=tool["service"],
+                vendor=vendor,
             )
         )
     return out

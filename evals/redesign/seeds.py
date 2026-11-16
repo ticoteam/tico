@@ -3,6 +3,7 @@ server runs (harness.Org) and makes one piece of state a browser test starts fro
 Seeds run in the order given. A seed returns False when it skipped itself because the route it needs is not built yet;
 otherwise it returns None."""
 
+import datetime
 import json
 
 SEEDS = {}
@@ -521,7 +522,8 @@ def tools(world):
     Read and write key; the Engineering Lead at Read and Omar at Read and write. One run of the Lead's, as a runner runs
     it, takes its proxy token from credential-runtime and makes two calls through the proxy: a GET (sent) and a POST
     (refused: at Read with only the full key, only GET goes through). Then a read key is added, the Lead's Read moves to
-    it, and Dana runs Check now. And Ledger export: a key with no address, on computers, so under Needs you.
+    it, and Dana runs Check now. And Ledger export: a key with no address, on computers, that ends in five days, so
+    under Needs you (how a key reaches runs never is).
     The vendor runs in this process: the proxy's transport (app.state.tool_proxy_transport) and the check's send
     (api_tools.send_check), the two test seams, answer as _vendor, and egress.resolve gives VENDOR_HOST a public address,
     so the product's own checks run unchanged, nothing leaves the machine, and nothing in the product is switched for
@@ -610,7 +612,14 @@ def tools(world):
         world.api(
             "post",
             f"/api/v2/api-tools/{ledger}/keys",
-            {"name": "Key", "value": "ledger-test-0003", "access_level": "read_write"},
+            {
+                "name": "Key",
+                "value": "ledger-test-0003",
+                "access_level": "read_write",
+                "expires_on": (
+                    datetime.datetime.now(datetime.timezone.utc).date() + datetime.timedelta(days=5)
+                ).isoformat(),
+            },
             who=DANA,
         ),
         "ledger key",
