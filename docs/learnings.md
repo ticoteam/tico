@@ -130,9 +130,10 @@ The requester is the bot's nearest human manager (the first person above it in i
 roster), else the company owner. The task is filed as a dream, with a `dream.auto` event under the system actor and
 its reason ("Auto dream: 23 turns and 2 corrections from people since 2026-10-28") as the first line of its body. The
 panel shows that reason under the status line. Its instructions say nobody is waiting: the bot applies and commits what
-it can settle, and only if it needs the requester it asks at most three business questions in one message, then makes a
-second commit when they are answered. The requester did not start the dream, so the question is what they answer, and
-it goes through the same exemption from ask ingest. **Automations › Maintenance** switches it off. Its **Run now** starts
+it can settle, commits, and finishes without waiting. Only if it needs the requester does it ask, at most three business
+questions, each its own task with one ask (`skills/add-to-flow`), never on the dream: they reach the requester's Flow
+like any bot's question, with a plain title instead of the dream's instructions, and the answer reaches the bot on that
+task. A dream a person starts still asks on the dream itself, answered on the panel. **Automations › Maintenance** switches it off. Its **Run now** starts
 the Dream step only when that step is due, as the schedule does; the bot rules above still apply.
 
 ## Learn (beta)

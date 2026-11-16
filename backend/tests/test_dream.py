@@ -164,10 +164,14 @@ def test_asking_answering_and_the_dreams_own_commit(api):
 def test_the_dream_asks_one_question_per_ask_and_waits_for_each_answer(api):
     """The v3 ask rule takes one decision per ask, and a bot has one open ask on a task (C15): the dream's instructions
     say both, numbered questions in one ask are refused, and each question asked in turn is taken and shown."""
-    for auto in (False, True):
-        text = dream_module.instructions("Ben", "Oct 20", auto=auto)
-        assert "one question per ask" in text and "one ask at a time" in text and "At most 3 asks" in text
-        assert "in ONE" not in text and "Number them" not in text
+    text = dream_module.instructions("Ben", "Oct 20")
+    assert "one question per ask" in text and "one ask at a time" in text and "At most 3 questions" in text
+    assert "in ONE" not in text and "Number them" not in text
+    # Nobody watches an auto dream: its questions are their own tasks in Ben's Flow (skills/add-to-flow), never on the
+    # dream, whose body is these instructions; it finishes without waiting.
+    auto = dream_module.instructions("Ben", "Oct 20", auto=True)
+    assert "skills/add-to-flow/SKILL.md" in auto and "never on this task" in auto and "At most 3 questions" in auto
+    assert "Do not wait for answers" in auto and "one ask at a time" not in auto
     tid = dream(api)["dream"]["task"]
     with api.app.state.store.transaction() as c:
         try:
