@@ -1067,6 +1067,7 @@ ENTRIES = TEAM_RULES + [
         "bots/{bot}/cloud-machine",
         value="json",
         card=_card("bots"),
+        bot_card="#/bot/{bot}/settings",  # its Computer rows, where Size is
         words="cloud machine shared own size xlarge large bigger machine more room cpu always on pause after minutes "
         "computer grow storage disk",
     ),

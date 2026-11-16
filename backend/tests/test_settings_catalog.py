@@ -118,6 +118,20 @@ def ENTRY(key):  # noqa: N802
     return settings_catalog.entry(key)
 
 
+def test_a_cloud_machine_size_is_found_by_its_words_and_named_for_a_bot_opens_that_bots_own_settings(api):
+    for words in ("size", "xlarge", "bigger machine", "more room"):
+        keys = [s["key"] for s in get(api, "settings/catalog?q=" + words)["settings"]]
+        assert {"bot.cloud_machine", "cloud.shared_machine"} <= set(keys), words
+    # Named for a bot (its Size row is on the bot's own Settings, Computer), the link opens that page; a search with no
+    # bot named opens Settings > Bots, whose bot editor holds the same rows.
+    own = get(api, "settings/catalog/bot.cloud_machine?bot=ops")["setting"]
+    assert own["card"].endswith("#/bot/ops/settings")
+    assert get(api, "settings/catalog/bot.cloud_machine")["setting"]["card"].endswith("#/settings/bots")
+    assert (
+        settings_catalog.refusal(ENTRY("bot.cloud_machine"), "", {"bot": "a b"}).extra["link"] == "#/bot/a%20b/settings"
+    )
+
+
 def test_a_member_changes_a_direct_setting_through_botops_and_the_reply_names_the_value(api, botops):
     ana = turn(api, botops, person="ana-test", text="Set the release to 09:30")
     err, done = mcp(api, "tico_settings_set", {"key": "release.times", "value": "09:30"}, ana["token"])

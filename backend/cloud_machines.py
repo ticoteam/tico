@@ -3317,7 +3317,7 @@ def install(app, settings, store, auth, execution, mutate):
                 return {"offered": False, "sizes": [], "caps": {}, "shared": None}
             return {
                 "offered": True,
-                "sizes": with_advice(sizes(c)) or [{"name": n} for n in SIZES],
+                "sizes": with_advice(sizes(c) or [{"name": n} for n in SIZES]),
                 "caps": listed_caps(c),
                 "shared": shared_view(c),
             }

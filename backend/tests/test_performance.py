@@ -594,6 +594,7 @@ def test_repeated_overloads_with_the_same_bot_advise_its_own_large_machine_on_a_
     }
     both = P.advice([over("reviewer-1", "reviewer-2", "ops")] * 3, busiest)
     assert both["text"] == "Give reviewer-1 and reviewer-2 their own Large machine."
+    assert both["bots"] == ["reviewer-1", "reviewer-2"]  # two links at most, as the sentence names
     # One overload, no bot in every one, a hidden bot only, or nobody else on the computer: no advice.
     assert P.advice([over("reviewer-1")], busiest) is None
     assert P.advice([over("ops"), over("builder")], busiest) is None
