@@ -76,7 +76,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       };
     });
     const now = Date.now(), at = (mins: number) => new Date(now - mins * 60000).toISOString();
-    const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: false};
+    const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true};
     const bots = [{name: 'editor', display_name: 'Editor', host: 'keeper', status: 'active', can_chat: true}];
     const url = (id: string, n: number, part = '') => `/api/v2/files/${id}${part}?v=${n}`;
     const version = (id: string, n: number, over: Record<string, unknown>) => ({n, size: 2048, mime: '', sha256: 'x' + n, created_at: at(200 - n * 30), by: 'bot:editor', comment_id: null, note: null,
@@ -129,7 +129,7 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       const req = route.request(), u = new URL(req.url()), p = u.pathname;
       const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (u.origin === 'https://img.example.com') { requested.push(u.href); return route.fulfill({contentType: 'image/png', body: p.includes('mood') ? AMBER : TEAL}); }
-      if (u.origin !== 'http://tico-ui.test') return route.abort();
+      if (u.origin !== 'https://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
@@ -217,7 +217,8 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       for (const [sw, cw] of r.dialogs) assert(sw <= cw + 1, `${where}: a dialog scrolls sideways ${JSON.stringify(r)}`);
     };
 
-    await page.goto('http://tico-ui.test/#/tasks');
+    // https: an upload copies each file with crypto.subtle (api.ts memoryBody), which only a secure page has.
+    await page.goto('https://tico-ui.test/#/tasks');
     await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading);
 
     // ---- the strip: one tile per file at its newest version, sized, a skeleton until the thumb arrives
