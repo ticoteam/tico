@@ -62,7 +62,9 @@ function sha256Digest(data: ArrayBuffer): ArrayBuffer {
   for (let at = 0; at < tail.length; at += 64) state = sha256Block(state, tailView, at, w);
   const out = new ArrayBuffer(32);
   const outView = new DataView(out);
-  state.forEach((word, i) => outView.setUint32(i * 4, word));
+  state.forEach((word, i) => {
+    outView.setUint32(i * 4, word);
+  });
   return out;
 }
 
