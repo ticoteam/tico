@@ -7,7 +7,7 @@ from backend import automations, reach, report_managers, task_caps, usage
 from backend import hubdb as H
 from backend.auth import Identity
 from backend.store import Problem
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
 
 
 def started(environment):

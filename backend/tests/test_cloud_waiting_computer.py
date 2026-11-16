@@ -10,7 +10,7 @@ import uuid
 from backend import cloud_access, task_wakes, waiting_on
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
-from backend.tests.helpers.sample_company import booted, environment, rows, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, rows, signed_in  # noqa: F401
 
 
 def _cloud_company(environment, monkeypatch):

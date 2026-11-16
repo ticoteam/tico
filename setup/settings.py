@@ -178,7 +178,7 @@ class Settings:
     owner_link_hash: str = ""  # sha256 of the owner's first sign-in link; the link itself is only in a 0600 file here
     # sha256 of the setup handoff secret from TICO_SETUP_HANDOFF (hosted.read_handoff); the secret is never kept here
     setup_handoff_hash: str = ""
-    preset: str = ""  # recommended: the sample company, subscriptions plus Gateway, Support
+    preset: str = ""  # recommended: subscriptions plus Gateway, Support
     support: str = ""  # with the preset: on, or off with --no-support
     gateway_invite: str = ""
     inbound_key: str = ""  # existing company Inbox credential; setup never issues one
@@ -292,7 +292,6 @@ class Settings:
             # The same choices as scripts/install.sh --recommended, read on the server's first start.
             e.update(
                 TICO_INSTALL_PRESET="recommended",
-                TICO_SAMPLE_COMPANY="on",
                 TICO_MODELS_PRESET="subscriptions-gateway",
                 TICO_SUPPORT=self.support or "on",
                 TICO_GATEWAY_INVITE=self.gateway_invite,
@@ -304,16 +303,14 @@ class Settings:
                 TICO_COMPANY_FILE_S3_REGION=self.plan_bucket_region or self.aws_region,
                 TICO_COMPANY_FILE_SHA256=self.plan_sha256(),
                 TICO_COMPANY_FILE=f"{contract.COMPANY_FILE_MOUNT}/{contract.COMPANY_FILE_NAME}",
-                TICO_SAMPLE_COMPANY="off",
             )
         elif self.company_file_data and self.target in ("ssh", "local"):
             e.update(
                 TICO_COMPANY_FILE=f"{contract.COMPANY_FILE_MOUNT}/{contract.COMPANY_FILE_NAME}",
                 TICO_COMPANY_FILE_SHA256=self.plan_sha256(),
-                TICO_SAMPLE_COMPANY="off",
             )
         elif self.company_file_data:
-            e.update(TICO_COMPANY_FILE_B64=self.company_file_data, TICO_SAMPLE_COMPANY="off")
+            e["TICO_COMPANY_FILE_B64"] = self.company_file_data
         if self.inbound_key:
             e["TICO_INBOUND_KEY"] = self.inbound_key
         if self.inbound_url:

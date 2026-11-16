@@ -7,13 +7,12 @@ import pytest
 from backend import company_file as C
 from backend import pipeline_presets_more as more
 from backend import routines
-from backend.tests.helpers.sample_company import (  # noqa: F401
+from backend.tests.helpers.fresh_install import (  # noqa: F401
     booted,
     environment,
     machine,
     rows,
     signed_in,
-    start,
 )
 
 
@@ -62,21 +61,15 @@ def company_file(api):
     assert done.status_code == 200, done.text
 
 
-def sample(api):
-    done = start(api)
-    assert done.status_code == 200, done.text
-
-
 # Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps). With no
 # Manager for the team, the General Manager stands in (pipeline_settings.preset: the ladder).
 MANAGERS = {
     "onboarding": {"product": "product-manager"},
     "company_file": {"product": "general-manager"},
-    "sample": {"product": "general-manager"},
 }
 
 
-@pytest.mark.parametrize("first_run", [onboarding, company_file, sample])
+@pytest.mark.parametrize("first_run", [onboarding, company_file])
 def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_nothing(environment, first_run):
     api = environment()
     _providers(api)

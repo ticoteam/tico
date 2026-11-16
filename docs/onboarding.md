@@ -27,8 +27,6 @@ hidden, and the anonymous usage-count notice is not shown; it appears on the fir
 Tasks), and counting starts only once it has been shown ([PRIVACY.md](../PRIVACY.md)). The owner's tour is marked seen
 when the team is created; **Take the tour** in the account menu replays it.
 
-The [sample company](sample-company.md) is not offered in setup; it is an install option (`TICO_SAMPLE_COMPANY`).
-
 ### A company file
 
 If you already chose a team on the public setup page, **I have a company file** on the Your team step takes its YAML.
@@ -217,8 +215,8 @@ second). It reaches no computer.
 - **Everything else picked is a Recruiting seat** (`seats` on the record: `{pick: seat id}`), with the reviewed name as its
   title, a job description from the card and the reviewed instructions, the reporting line picked (a pick under another pick
   reports to that seat) and the pick's group. No bot, repository, computer slot or BotOps task exists for it. The bullets
-  below about starters and other templates describe a bot made from a template: the sample company's, and from a seat once
-  someone picks a bot for it.
+  below about starters and other templates describe a bot made from a template: from a seat once someone picks a bot for
+  it.
 - **No AI provider and no computer are needed.** The team is created first. With no provider chosen a bot names no runtime or model and
   follows the team default, so it runs once a provider is added in Settings > Models. With no computer enrolled the bots stay
   `planned`; when the owner's computer enrolls, the bots are placed on it and activated.

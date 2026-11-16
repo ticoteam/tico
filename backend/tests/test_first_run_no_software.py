@@ -7,7 +7,7 @@ import pytest
 from backend import redesign_migration
 from backend import system_routines as SR
 from backend.maintenance_steps import check_health
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
 
 SOFTWARE = ("product", "engineering")
 # The Managers of the teams every company has: each runs its team's pipelines.

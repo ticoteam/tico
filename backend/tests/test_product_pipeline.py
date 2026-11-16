@@ -11,13 +11,14 @@ import pytest
 from backend import answers as A
 from backend import pipeline_presets_more as more
 from backend import pipeline_settings as PS
+from backend import stage_rules as SR
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend import validate_gate as G
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.product_engineering_presets import PPM, _answers, _role_bot, _seat, _team, legacy_pair
-from backend.tests.helpers.sample_company import booted, environment, rows, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, rows, signed_in  # noqa: F401
 from backend.tests.helpers.stage_inputs import _link_pr, _push
 
 ANA, BEN = X.ANA, "human:ben"
@@ -232,6 +233,65 @@ def test_not_validated_sends_the_task_back_to_build_in_the_same_task(c):
     moved = G.not_validated(c, task["id"], ANA, "The cart is gone after a day.")
     assert (moved["stage_id"], moved["owner_id"]) == ("product-build", OWNER)
     assert not c.execute("SELECT 1 FROM links WHERE from_task_id=?", (task["id"],)).fetchone(), "nothing is filed"
+
+
+# ----------------------------------------------------------------------------- Owner on the team
+BUILD_STAGES = ["product-build", "product-fixes-1", "product-fixes-2"]
+
+
+def _in_groups(c, placed):
+    """Each bot in its group, as the org chart places it: {group id: (name, [slugs])}."""
+    from backend import groups as GR
+
+    roster = GR._roster(c)
+    for gid, (name, _) in placed.items():
+        GR.ensure(roster, gid, name)
+    GR._save(c, roster)
+    for gid, (_, slugs) in placed.items():
+        for slug in slugs:
+            GR.move_bot(c, slug, gid)
+
+
+def test_a_new_company_gets_owner_on_the_team_on_products_build_and_fixes_and_it_acts(c):
+    """Owner on the team was made only on Engineering, which a company set up from 0.6 never has: it had no such rule.
+    It is made on Product's build stages, and a bot outside the Product team loses Build as the task enters it."""
+    _product(c)
+    rule = SR.get(c, SR.OWNER_ON_TEAM)
+    assert (rule["pipeline_id"], rule["stages"], rule["status"]) == ("product", BUILD_STAGES, "active")
+    _role_bot(c, "grower", "growth-owner")
+    _in_groups(c, {"product": ("Product", [PPM, "pm"]), "growth": ("Growth", ["grower"])})
+    _past_merge(c)
+    outside = H.task_create(c, ANA, "Saved carts", PITCH, "bot:grower", pipeline="product", lint=False)
+    moved = E.move(c, outside["id"], "product-build", ANA, "On")
+    assert moved["owner_id"] is None
+    assert E.move(c, _task(c)["id"], "product-build", ANA, "On")["owner_id"] == OWNER  # the feature owner keeps it
+
+
+def test_a_company_that_started_without_the_rule_gets_it_at_its_next_start(c):
+    _product(c)
+    c.execute("DELETE FROM stage_rules WHERE id=?", (SR.OWNER_ON_TEAM,))  # as a start before this fix left it
+    PS.ensure_presets(c)
+    assert SR.get(c, SR.OWNER_ON_TEAM)["stages"] == BUILD_STAGES
+
+
+def test_owner_on_the_team_on_a_retired_engineering_moves_to_product_unless_its_stages_were_changed(c):
+    _pair_company(c)
+    assert SR.get(c, SR.OWNER_ON_TEAM)["pipeline_id"] == "engineering"
+    PS.add_preset(c, ANA, PS.PRODUCT, "features", "Features", "F")
+    PS.ensure_presets(c)
+    assert SR.get(c, SR.OWNER_ON_TEAM)["pipeline_id"] == "engineering", "Engineering is still in use"
+    PS.retire(c, ANA, "product")  # the pair's Product first: it files into Engineering
+    PS.retire(c, ANA, "engineering")
+    PS.ensure_presets(c)
+    rule = SR.get(c, SR.OWNER_ON_TEAM)
+    assert (rule["pipeline_id"], rule["stages"]) == ("features", BUILD_STAGES)
+    # One whose stages a company changed is its own: it stays.
+    c.execute(
+        "UPDATE stage_rules SET pipeline_id='engineering', stages=? WHERE id=?",
+        ('["engineering-review-1"]', SR.OWNER_ON_TEAM),
+    )
+    PS.ensure_presets(c)
+    assert SR.get(c, SR.OWNER_ON_TEAM)["pipeline_id"] == "engineering"
 
 
 # ----------------------------------------------------------------------------- a company that has the pair

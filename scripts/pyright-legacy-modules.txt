@@ -461,7 +461,6 @@ backend/runner_states.py
 backend/runner_versions.py
 backend/runner_wire.py
 backend/runs.py
-backend/sample_company.py
 backend/scheduler.py
 backend/scim.py
 backend/screen.py

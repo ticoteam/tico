@@ -333,8 +333,6 @@ def load(c):
         "selected": dict(stored.get("selected") or {}),
         "completed": stored.get("completed") or None,
         "assigned_to": stored.get("assigned_to") or None,
-        # When the company started as the sample company (backend/sample_company.py): when, by whom, what it made.
-        "sample": stored.get("sample") or None,
         "company_import": stored.get("company_import") or None,
         # {pick: seat id}: the roles setup laid out as Recruiting seats (`Onboarding.complete`).
         "seats": dict(stored.get("seats") or {}),
@@ -771,13 +769,11 @@ class Onboarding:
         elif reports_to == slug:
             raise Problem("hierarchy", "A bot cannot report to itself", 422)
 
-    def complete(self, c, who, models=None, seats=True, finish=True):
+    def complete(self, c, who, seats=True, finish=True):
         """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (BotOps, the
         Librarian, the Strategy Owner and the Assistant) are created as bots, Active from day one, and every other role is
         laid out as a Recruiting seat with its reporting line: no bot, repository, computer slot or BotOps task until
-        someone recruits it. `seats` False creates every pick as a bot, as the sample company does
-        (backend/sample_company.py). `models` names the model a new bot runs on, by slug, in place of its card's (the
-        sample company spreads its bots over two subscriptions); a model whose provider is off is ignored.
+        someone recruits it. `seats` False creates every pick as a bot (tests that need the bots themselves).
 
         A new company's first completion ends with the finish every setup path shares (company_import.finish_new_company:
         the live seats' bots). With no role picked at all, its chart is the default one
@@ -809,8 +805,6 @@ class Onboarding:
         for slug, choice in plan.items():
             raw = cards.get(choice["template"])
             card = render(raw, names, choice["display_name"]) if raw else {}
-            if (models or {}).get(slug):
-                card["model"] = models[slug]
             starter = bool(card.get("starter")) and not card.get("bootstrap")
             reports_to = str(choice.get("reports_to") or "") or (home if starter else "")
             found = H.resolve_bot(c, reports_to) if reports_to and not reports_to.startswith("human:") else None
@@ -971,14 +965,6 @@ class Onboarding:
         }
         return {**laid, **lifecycle.lay_out(c, who.actor, rows)}
 
-    def start_sample(self, c, who):
-        """POST /api/v2/setup/sample: this new company becomes Tico's sample company
-        (backend/sample_company.py). The owner only; refused once the company is set up."""
-        self._owner(who)
-        from . import sample_company
-
-        return sample_company.load(self, c, who)
-
     def _make_starter(self, c, who, slug, template, rank=None):
         """A starter template's bot, as first run creates it: it records the template and its version,
         waits for the computer to materialize its repository (`materialize`), seeds its first routine
@@ -997,14 +983,13 @@ class Onboarding:
         self._seed_routines(c, who, slug, template)
         H.event(c, who.actor, "bot.needs_onboarding", slug, {"template": template})
 
-    def onboarded(self, c, who, slug, arm=True, summary=""):
+    def onboarded(self, c, who, slug, summary=""):
         """Mark onboarding complete: a person above the bot on the org chart (its manager, their managers, the owner)
         says it is done learning, so it becomes Active, its routines run and its work is claimed (backend/lifecycle.py).
         The bot's own call is its "I'm ready" (`lifecycle.ready`) and changes no stage, except for a bot whose card
         goes live after its setup (`live_after_setup`, the growth channel packs): its own call completes onboarding, as
         a seat bot goes live with no person step, so the ideas its setup files next are not refused. A member's bot
-        counts toward their limit from here on, so the limit is checked now. `arm` False leaves its first routine off
-        (the sample company's bots, set up by the sample's own answers)."""
+        counts toward their limit from here on, so the limit is checked now."""
         slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         if not H.bot(c, slug):
             raise Problem("not_found", "Bot not found", 404)
@@ -1072,7 +1057,7 @@ class Onboarding:
         H.setup_finished(c, slug)
         # A bot whose setup was never started (Finish with defaults on Overview) gets its routines as Start setup
         # would have given them; once only, so ones already armed or turned off by a person are left alone.
-        armed = self.arm_routines(c, who, slug) if arm else []
+        armed = self.arm_routines(c, who, slug)
         return {
             "bot": slug,
             "onboarding_state": ONBOARDED,
@@ -1208,8 +1193,8 @@ class Onboarding:
         up), the Assistant's routines it never had, General's manager once the General Manager exists
         (pipeline_settings.ensure_presets), BotOps' daily "Sweep stuck tasks" once BotOps is active, and the models of
         the bots that follow the company's plans (plan_models.follow). Every start
-        runs it (start_jobs), and so do the end of every first run (complete(), a company file's import, the sample
-        company) and a computer's enrollment, so none of it waits for the next start. Each step is idempotent and leaves
+        runs it (start_jobs), and so do the end of every first run (complete(), a company file's import) and a
+        computer's enrollment, so none of it waits for the next start. Each step is idempotent and leaves
         what a person changed alone.
 
         Each step runs in its own savepoint. `failed(step, exc)` takes a step's failure and the next step runs; with no

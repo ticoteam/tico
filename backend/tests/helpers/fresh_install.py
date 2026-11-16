@@ -1,7 +1,6 @@
-"""Shared set-up for the sample company tests: the seeded registry, the booted hub, the signed-in environment
-and the enroll helpers. Tests import these names; the tests themselves stay in test_sample_company.py."""
+"""A fresh install for tests: the seeded registry, the booted hub, the signed-in environment and the enroll
+helpers."""
 
-import re
 import shutil
 import uuid
 from pathlib import Path
@@ -10,11 +9,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
-from backend import onboarding as O
-from backend import sample_company
 from backend.app import create_app
-from backend.auth import Identity
-from backend.company_file import from_yaml
 from backend.config import Settings
 from backend.store import H, encode
 from backend import bot_settings as BS
@@ -30,12 +25,6 @@ PEOPLE = {
 # What a fresh environment seeds (templates/environment-registry/employees.yaml): the assistant and BotOps, planned.
 SEED = {"assistant": {"name": "assistant", "status": "planned"}, "botops": {"name": "botops", "status": "planned"}}
 TOKEN = "local-owner-secret-token-0123456789"
-ROLE_BOTS = {
-    "head-of-product": "claude",
-    "feature-owner": "codex",
-    "support-agent": "codex",
-    "content-marketer": "codex",
-}
 
 
 def settings_for(tmp_path, **overrides):
@@ -111,10 +100,6 @@ def signed_in():
     return {"Authorization": "Bearer " + TOKEN, "Idempotency-Key": str(uuid.uuid4())}
 
 
-def start(api):
-    return api.post("/api/v2/setup/sample", json={}, headers=signed_in())
-
-
 def machine(api):
     code = api.post("/api/v2/enrollments", json={"operator": "owner"}, headers=signed_in()).json()["code"]
     return api.post(
@@ -127,8 +112,3 @@ def machine(api):
 def rows(api, sql, args=()):
     with api.app.state.store.read() as c:
         return [dict(row) for row in c.execute(sql, args)]
-
-
-def bot_ids(api):
-    """Bot slug to bot id: a bot the sample makes has a generated id, and the tables name bots by it."""
-    return {row["slug"]: row["id"] for row in rows(api, "SELECT id,slug FROM bots")}

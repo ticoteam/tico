@@ -334,7 +334,7 @@ def test_a_company_file_becomes_the_servers_starter_plan(ready):
     d = ready.root / "companies" / "boatyard"
     env = envfile.parse((d / ".env").read_text())
     plan = d / "company-file" / "plan.b64"
-    assert env["TICO_TEAM_NAME"] == "Boatyard Marine" and env["TICO_SAMPLE_COMPANY"] == "off"
+    assert env["TICO_TEAM_NAME"] == "Boatyard Marine"
     assert env["TICO_COMPANY_FILE"] == "/run/tico/company-file/plan.b64" and "TICO_COMPANY_FILE_B64" not in env
     assert stat.S_IMODE(plan.stat().st_mode) == 0o600 and (str(plan), 10001, 10001) in ready.system.chowns
     assert ready(*add_args(ready))["changed"] is False  # left out again: the saved plan stays

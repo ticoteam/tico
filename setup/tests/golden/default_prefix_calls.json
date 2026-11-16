@@ -1,6 +1,6 @@
 {
  "_recorded_on": {
-  "setup_digest": "b9644324e545fa66f9cfb78a91b632ac9ba7cb7e84ec113e23282ea97c9e3773"
+  "setup_digest": "e602579c6b0d4e08ead4fc40a4c8d53e91cd5360696be7c34e9baab02da73679"
  },
  "install": [
   [
@@ -299,7 +299,6 @@
      "TICO_OIDC_ISSUER",
      "TICO_OWNER_EMAIL",
      "TICO_PORT",
-     "TICO_SAMPLE_COMPANY",
      "TICO_TEAM_NAME",
      "TICO_UPDATER_URL"
     ]
@@ -989,7 +988,6 @@
      "TICO_OIDC_ISSUER",
      "TICO_OWNER_EMAIL",
      "TICO_PORT",
-     "TICO_SAMPLE_COMPANY",
      "TICO_TEAM_NAME",
      "TICO_UPDATER_URL"
     ]

@@ -17,7 +17,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.company_file import starter
 from backend.store import H, Problem, encode
-from backend.tests.helpers.sample_company import (
+from backend.tests.helpers.fresh_install import (
     OWNER_EMAIL,
     PEOPLE,
     SEED,
@@ -574,9 +574,7 @@ def test_import_never_replaces_an_existing_paused_employee(environment):
     [(False, False), (True, True)],
     ids=["owner-api-reverse-builtins", "installer-bootstrap-new-parent-chain"],
 )
-def test_install_bootstrap_lays_out_the_chosen_chart_once_and_never_falls_back_to_sample(
-    tmp_path, through_new_parent, bootstrap
-):
+def test_install_bootstrap_lays_out_the_chosen_chart_once(tmp_path, through_new_parent, bootstrap):
     from clients.environments import seed_registry
 
     seed_registry(
@@ -599,7 +597,7 @@ def test_install_bootstrap_lays_out_the_chosen_chart_once_and_never_falls_back_t
                 headers=signed_in(),
             )
             assert applied.status_code == 200, applied.text
-    settings.company_file_data, settings.sample_company = starter.pack(text), True
+    settings.company_file_data = starter.pack(text)
     with TestClient(create_app(settings)) as api:
         assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} == BUILTINS
         assert seat_lines(api) == {
@@ -629,11 +627,11 @@ def test_install_bootstrap_lays_out_the_chosen_chart_once_and_never_falls_back_t
 
 
 @pytest.mark.parametrize("broken", ["unreadable", "conflicting-id", "empty-file", "oversized-file"])
-def test_a_chosen_chart_that_fails_to_import_is_shown_to_the_owner_and_no_sample_takes_its_place(
+def test_a_chosen_chart_that_fails_to_import_is_shown_to_the_owner_and_nothing_takes_its_place(
     tmp_path, monkeypatch, broken
 ):
-    """Spec acceptance 2 (first-v1 rule): the server starts with the built-ins only, nothing of the file is left, no
-    sample company is made, and the owner sees why on first run and on Health. A later import that works clears it.
+    """Spec acceptance 2 (first-v1 rule): the server starts with the built-ins only, nothing of the file is left, and
+    the owner sees why on first run and on Health. A later import that works clears it.
     A file setup copied to the server (TICO_COMPANY_FILE) that is empty, missing or too big is such a failure too."""
     from backend.config import Settings
     from clients.environments import seed_registry
@@ -654,7 +652,6 @@ def test_a_chosen_chart_that_fails_to_import_is_shown_to_the_owner_and_no_sample
     next(b for b in conflicting["bots"] if b["template"] == "accounts-payable-specialist")["id"] = (
         "assistant"  # the Assistant's own slug
     )
-    settings.sample_company = True
     if broken.endswith("-file"):
         plan = tmp_path / "plan.b64"
         if broken == "empty-file":
@@ -680,7 +677,7 @@ def test_a_chosen_chart_that_fails_to_import_is_shown_to_the_owner_and_no_sample
         record = api.get("/api/v2/setup", headers=signed_in()).json()
         failed = record["company_import_failed"]
         assert failed and failed["reason"] and failed["at"]
-        assert record["sample"] is None and record["company_import"] is None
+        assert record["company_import"] is None
         assert not rows(api, "SELECT id FROM seats")
         assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} <= BUILTINS
         assert api.get("/api/v2/config", headers=signed_in()).json()["onboarding_needed"] is True
@@ -1094,7 +1091,7 @@ def test_imported_goals_show_on_goals_with_their_owner_and_measure(tmp_path, env
         app = create_app(settings)
         app.state.store.initialize()
         app.state.store.seed()
-        settings.company_file_data, settings.sample_company = starter.pack(text), True
+        settings.company_file_data = starter.pack(text)
         with TestClient(create_app(settings)) as api:
             imported_goals_on_goals_page(api, text)
     else:
@@ -1204,7 +1201,7 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
         app = create_app(settings)
         app.state.store.initialize()
         app.state.store.seed()
-        settings.company_file_data, settings.sample_company = starter.pack(text), True
+        settings.company_file_data = starter.pack(text)
         with TestClient(create_app(settings)) as api:
             renamed_assistant_goals_on_goals_page(api, owners)
     else:

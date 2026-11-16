@@ -12,7 +12,7 @@ import pytest
 
 from backend.tests.helpers import ticket_journey as J
 from backend.tests.helpers.fake_github import FakeGitHub
-from backend.tests.helpers.sample_company import booted, environment  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment  # noqa: F401
 from backend.tests.live import live  # noqa: F401
 from evals.never_stuck.fake_jev import FakeJev
 
@@ -349,8 +349,21 @@ def test_an_owner_that_keeps_stopping_goes_to_the_manager_who_can_settle_it(co):
     def settle(*argv):
         manager.cli("task", *argv, "--version", manager.version(task))
 
-    settle("reassign", task, "reviewer-1", "-m", "The owner is stuck.")
-    assert co.task(task)["owner_id"] == co.actor("reviewer-1"), f"the reassign did not take. {co.line(task)}"
+    # Owner on the team refuses a bot outside Product (a reviewer); the Manager may take it itself.
+    code, out, err = manager.cli(
+        "task",
+        "reassign",
+        task,
+        "reviewer-1",
+        "-m",
+        "The owner is stuck.",
+        "--version",
+        manager.version(task),
+        ok=False,
+    )
+    assert code != 0 and "Owner on the team" in out + err, f"a reviewer took Build: {out}{err}"
+    settle("reassign", task, "product-manager", "-m", "The owner is stuck.")
+    assert co.task(task)["owner_id"] == co.actor("product-manager"), f"the reassign did not take. {co.line(task)}"
     settle("reassign", task, co.owner, "-m", "Back to its owner.")
     settle("snooze", task, "--until", "2099-01-01", "-m", "Waits for a grant.")
     manager.cli("task", "unsnooze", task)
@@ -364,7 +377,7 @@ def test_an_owner_that_keeps_stopping_goes_to_the_manager_who_can_settle_it(co):
     )
     assert code != 0 and "only a person can close it" in out + err, f"the Manager closed a person's request: {out}{err}"
     manager.end()
-    co.clean(expected=("only a person can close it",))
+    co.clean(expected=("only a person can close it", "Owner on the team"))
 
 
 def test_qa_files_a_product_bug_for_its_areas_feature_owner(co):
