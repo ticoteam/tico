@@ -484,13 +484,14 @@ def test_the_migration_ends_computer_held_grants_with_one_reconnect_and_drops_th
 def test_the_migration_also_upgrades_a_file_from_before_the_module_added_its_own_columns():
     migration = importlib.import_module("backend.migrations.20261116145802_google_grants_on_server")
     conn = sqlite3.connect(":memory:")
-    conn.execute(  # the shape of an early file: no scopes or operation columns, which the module once added itself
+    conn.execute(  # an early file (after the renames): no scopes or operation columns, which the module once added itself
         "CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, "
-        "oauth_state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, "
-        "holder TEXT, started REAL, created TEXT NOT NULL, updated TEXT NOT NULL, pending_hash TEXT, grant_hash TEXT)"
+        "oauth_state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, "
+        "holder TEXT, started_at REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, pending_hash TEXT, "
+        "grant_hash TEXT)"
     )
     conn.execute(
-        "INSERT INTO google_connects(person_id,mailbox,status,grant_hash,created,updated) "
+        "INSERT INTO google_connects(person_id,mailbox,status,grant_hash,created_at,updated_at) "
         "VALUES('cara','cara@acme.example','connected','h1','t','t')"
     )
     migration.up(conn)
@@ -570,6 +571,35 @@ def test_a_calendar_write_refused_before_google_is_posted_failed_not_unknown(tmp
     path, body = hub.results[0]
     assert path == "connectors/calendar/actions/act-1/result" and body["status"] == "failed"
     assert "refused" in body["error"]
+
+
+def test_an_id_token_that_is_missing_malformed_or_unverified_names_nobody():
+    from backend.tests.helpers.google_connect import id_token
+
+    assert google_connect.signed_in_as({"id_token": id_token()}) == BOX
+    for token in (None, "not-a-jwt", "a.!!!.c", "a." + "e30" + ".c", id_token(verified=False)):
+        assert google_connect.signed_in_as({"id_token": token}) == "", token
+
+
+def test_the_door_refuses_an_unknown_service_or_purpose_and_a_mailbox_nothing_covers(app):
+    for service, scopes in (("drive", "read"), ("gmail", "admin")):
+        with pytest.raises(Problem) as wrong:
+            door(app, service=service, scopes=scopes)
+        assert wrong.value.code == "scope"
+    with pytest.raises(Problem) as nobody:
+        door(app, "someone@other.example")
+    assert nobody.value.code == "not_connected"
+    google_tokens.forget()
+
+
+def test_a_grant_without_calendar_access_is_refused_a_calendar_read_before_google(app, monkeypatch):
+    google = signed_in(app, scope="openid " + G + "gmail.readonly")
+    monkeypatch.setattr(google_connect, "post_token", google)
+    asked = len(google.calls)
+    with pytest.raises(Problem) as refused:
+        door(app, service="calendar")
+    assert refused.value.code == "scope" and "no Google Calendar access" in refused.value.detail
+    assert len(google.calls) == asked
 
 
 def test_the_mail_cli_scopes_match_the_server_s():
