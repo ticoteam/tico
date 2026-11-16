@@ -527,6 +527,7 @@
    "app/vault.ts",
    "app/tools.ts",
    "app/tools-api.ts",
+   "app/tools-mcp.ts",
    "app/redesign-library.ts",
    "app/tools-website.ts",
    "app/who-picker.ts"

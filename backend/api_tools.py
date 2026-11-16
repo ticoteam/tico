@@ -17,7 +17,9 @@ A check is one authenticated GET to the tool's `check_path` with each stored key
 anything else (a timeout, a refused address, a 500) Check failed. A 401 is never "reachable". The scheduler checks every
 proxied tool with a check path every CHECK_EVERY on a background thread; "Check now" runs one at once. A check sends
 the key only to the tool's own https address, pinned to the public IP it resolved to (backend/egress.py), and nothing
-about a key but its tool and id is logged or stored.
+about a key but its tool and id is logged or stored. A tool with an MCP address (`mcp_url`, backend/mcp_connect.py) is a
+remote MCP server: its check is MCP's initialize and tools/list instead, and it may sign in over OAuth rather than hold
+a pasted key.
 
 Who may do what, the vault's rules: a credential administrator (`credentials.administrator`) manages every tool and
 sees every row. Anyone else reads the page of a tool they hold a grant on or added a key to, sees only their own
@@ -56,6 +58,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import Query, Request
 from pydantic import ConfigDict, Field, SecretStr
 
+from . import mcp_connect
 from . import tool_services as TS
 from .credentials import CredentialWrite, administrator, effective_grant, owned, require_admin
 from .models import AccessAudience, Contract
@@ -223,11 +226,13 @@ def status(tool, keys, checks, today=None):
     today = today or _today()
     stored = [k for k in keys if k["ciphertext"] is not None]
     if not stored:
-        return {"tone": "fail", "text": "No key", "needs_you": True}
+        # An MCP tool that signs in (backend/mcp_connect.py) is waiting for its sign-in, not for a key.
+        return {"tone": "fail", "text": "Not signed in" if _field(tool, "mcp_oauth") else "No key", "needs_you": True}
     last = [checks.get(k["id"]) for k in stored]
     failed = [r for r in last if r is not None and not r["ok"]]
     if failed:
-        return {"tone": "fail", "text": _check_text(False, failed[0]["status_code"]), "needs_you": True}
+        text = failed[0]["detail"] if failed[0]["detail"] == "Sign in again" else None
+        return {"tone": "fail", "text": text or _check_text(False, failed[0]["status_code"]), "needs_you": True}
     left = [d for d in (_days_left(k["expires_on"], today) for k in stored) if d is not None]
     if left and min(left) < 0:
         return {"tone": "fail", "text": "Key expired", "needs_you": True}
@@ -677,6 +682,7 @@ def detail(c, who, tool_id, admins, auth=None):
         "can_manage": admin,
         "private": _field(tool, "audience") is not None,
         "can_set_audience": False,
+        "mcp": mcp_connect.view(c, tool, keys) if _field(tool, "mcp_url") else None,
     }
     if may_set_audience(c, who, tool, admins, auth):
         out.update(can_set_audience=True, audience=audience_of(tool), seen_by=seen_by(c, tool, auth))
@@ -785,13 +791,21 @@ def check_tool(store, vault, tool_id):
     """Check each stored key of the tool and record a tool_checks row for it; the rows written, worst first."""
     with store.transaction() as c:  # decrypt may reseal an old value in place
         tool = tool_row(c, tool_id)
-        if not tool["base_url"] or not tool["check_path"]:
+        if _field(tool, "mcp_url"):
+            mcp = True
+        elif not tool["base_url"] or not tool["check_path"]:
             raise Problem(
                 "check",
                 f"{tool['name']} has no check. Set its address and check path in Tools > {tool['name']} > Settings",
                 409,
             )
-        stored = [(k, vault.cipher.decrypt(c, k)) for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+        else:
+            mcp = False
+        stored = (
+            [] if mcp else [(k, vault.cipher.decrypt(c, k)) for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+        )
+    if mcp:  # initialize and tools/list, with a sign-in's access token when it signs in
+        return mcp_connect.check(store, vault, tool_id)
     if not stored:
         raise Problem("check", f"{tool['name']} has no stored key. Add one in Tools > {tool['name']} > Keys", 409)
     results = [(key, *_check_one(tool, key, secret)) for key, secret in stored]
@@ -827,7 +841,7 @@ def due(c, now=None):
     return [
         r[0]
         for r in c.execute(
-            "SELECT t.id FROM tools t WHERE t.delivery='proxy' AND t.base_url<>'' AND t.check_path<>'' "
+            "SELECT t.id FROM tools t WHERE t.delivery='proxy' AND t.base_url<>'' AND (t.check_path<>'' OR t.mcp_url<>'') "
             "AND EXISTS(SELECT 1 FROM credentials k WHERE k.tool_id=t.id AND k.ciphertext IS NOT NULL) "
             "AND coalesce((SELECT max(checked_at) FROM tool_checks k WHERE k.tool_id=t.id),'')<? ORDER BY t.id",
             (cutoff,),
@@ -1020,6 +1034,8 @@ def update_tool(c, who, tool_id, body, admins, auth=None):
     merged = tool | fields
     if merged["delivery"] == "proxy" and not merged["base_url"]:
         raise Problem("delivery", f"Set {tool['name']}'s address before moving it to the proxy", 422)
+    if merged["delivery"] == "computer" and _field(tool, "mcp_oauth"):
+        raise Problem("delivery", f"{tool['name']} signs in: its tokens stay with Tico, so it stays on the proxy", 422)
     if merged == tool:
         return _tool_view(tool_row(c, tool_id))
     c.execute(
@@ -1144,6 +1160,7 @@ def delete_tool(c, who, tool_id, admins, kind="api"):
         _drop_key(c, who, key_id)
     c.execute("DELETE FROM tool_calls WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tool_checks WHERE tool_id=?", (tool_id,))
+    c.execute("DELETE FROM tool_oauth_states WHERE tool_id=?", (tool_id,))
     c.execute("DELETE FROM tools WHERE id=?", (tool_id,))
     H.event(c, who.actor, "tool.deleted", tool_id, {"name": tool["name"], "keys": len(keys)})
     return {"deleted": True, "id": tool_id}

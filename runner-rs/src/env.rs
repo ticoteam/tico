@@ -206,6 +206,8 @@ pub struct Vault {
     pub browser_exit: Option<crate::browser_exit::Admission>,
     /// The granted tools whose calls go through the Tico tool proxy (backend/tool_proxy.py): for the prompt's line.
     pub tools: Vec<ProxiedTool>,
+    /// The MCP servers the turn's grants bring, with no bot.yaml entry (crate::mcp::granted).
+    pub mcp: Vec<Value>,
 }
 
 /// A tool the turn calls through the Tico proxy: the key's variable holds a proxy token, `url_env` the proxy address.
@@ -470,6 +472,13 @@ pub async fn environment_with(
                 env.insert(key.to_string(), value);
             }
             vault_keys.insert(key.to_string());
+        }
+        // A granted MCP tool's server (backend/mcp_connect.py), passed when its variable reached the turn.
+        let (servers, problems) =
+            crate::mcp::granted(&granted["mcp_servers"], ctx.url, &vault.names);
+        vault.mcp = servers;
+        for line in problems {
+            crate::util::diagnostic(&format!("Tico runner: {bot}: {line}"));
         }
         // A company subscription the claim handed this turn: after the grants, so it decides how the runtime signs in.
         vault.subscriptions = crate::model_subscriptions::apply(

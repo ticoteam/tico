@@ -29,6 +29,14 @@ CONTEXT = {'application': 'tico-credentials'}
 # run, a computer's environment or a list with a value: only a signed-in person's reveal (the password alone) and the
 # browser commands that type it. The 2FA key never leaves this process.
 LOGIN = 'login'
+# An MCP tool's OAuth sign-in (backend/mcp_connect.py): its tokens are sealed here, never revealed or edited, and reach a
+# run only as a proxy token.
+OAUTH = 'oauth'
+# The credentials a run or a watcher may be handed: never a website account, and a sign-in only through the proxy.
+RUN_ROWS = (
+    "SELECT * FROM credentials WHERE kind!='login' AND (kind!='oauth' OR tool_id IN "
+    "(SELECT id FROM tools WHERE delivery='proxy')) ORDER BY id"
+)
 # A shared website account available to current and future bots, without releasing its value to their turns.
 BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
@@ -600,6 +608,8 @@ class Vault:
             raise Problem(
                 'website_account', "This is a website account; use Replace login on its website tool in Tools.", 409
             )
+        if old and old['kind'] == OAUTH:
+            raise Problem('sign_in', 'This is a sign-in; sign in again on its tool in Tools.', 409)
         if old and body.expected_revision != old['revision']:
             raise Problem('version_conflict', 'Credential changed; refresh before saving', 409)
         if not old and body.expected_revision is not None:
@@ -868,6 +878,8 @@ class Vault:
         found = c.execute('SELECT * FROM credentials WHERE id=?', (cid,)).fetchone()
         if found is not None and found['kind'] == LOGIN:
             return self.reveal_login(c, who, found)
+        if found is not None and found['kind'] == OAUTH:
+            raise Problem('forbidden', 'A sign-in is never shown: its tokens stay with Tico', 403)
         if who.role in ('human', 'owner', 'bot') and effective_grant(c, cid, who.actor) is None:
             require_seen(c, who, cid, self.admins)
         if not permitted(c, who, cid, self.admins):
@@ -1337,7 +1349,7 @@ def install_credentials(app, store, delegate=None, propose=None):
 
             proxied = tool_proxy.proxied_tools(c)
             # A website account never reaches a run: its browser commands type it (backend/website_tools.py).
-            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY id"):
+            for row in c.execute(RUN_ROWS):
                 if row['ciphertext'] is not None and row['id'] in held:
                     tool, way = held_at_read(c, proxied, row, who.actor)
                     if way == 'skip':
@@ -1378,8 +1390,13 @@ def install_credentials(app, store, delegate=None, propose=None):
             from .model_subscriptions import run_values
 
             subscriptions = run_values(c, vault, who, subscription_runtime)
+            # Each held key of an MCP tool brings its server, with no bot.yaml entry (backend/mcp_connect.py).
+            from .mcp_connect import runtime_servers
+
+            servers = runtime_servers(c, values)
             return {
                 'credentials': values,
+                **({'mcp_servers': servers} if servers else {}),
                 **({'subscriptions': subscriptions} if subscriptions else {}),
                 **(
                     {'subscription_activated': any(s['runtime'] == subscription_runtime for s in subscriptions)}
@@ -1440,7 +1457,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             from . import tool_proxy
 
             proxied = tool_proxy.proxied_tools(c)
-            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY id"):
+            for row in c.execute(RUN_ROWS):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
                     tool, way = held_at_read(c, proxied, row, 'bot:' + bot)
                     if way == 'skip':

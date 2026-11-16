@@ -9,7 +9,12 @@ proxy scrubs it), else 401:
 - `/basic`: `Authorization: Basic base64(<username>:<key>)`
 - `/file`: a POST whose body is the expected file's bytes (a client certificate, say)
 - `/mcp`: a minimal streamable-HTTP MCP server (initialize, notifications, tools/list, tools/call) behind
-  `Authorization: Bearer <key>`
+  `Authorization: Bearer <key>`, or an access token its OAuth server issued
+- with `oauth`, that OAuth server, as an MCP server's (backend/mcp_connect.py): `/mcp` answers 401 with a
+  `resource_metadata` challenge, `/.well-known/oauth-protected-resource/mcp` and
+  `/.well-known/oauth-authorization-server` describe it, `/register` registers a client (RFC 7591), `/authorize` (a GET,
+  the person's browser) approves at once and redirects with a code, and `/token` swaps a code checked against its PKCE
+  challenge, or a refresh token, for a new access token
 - `/login`: a sign-in form POST (username, password, code), the code an RFC 6238 TOTP of the account's 2FA key
 
 It binds 127.0.0.1 on a free port. `proxy_transport` is what the Tools proxy sends through in these tests: the proxy
@@ -25,7 +30,7 @@ import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 
@@ -48,9 +53,10 @@ class Vendor:
     """The stub service. `seen` holds one dict per request: route, method, status, user agent, the Host header, and
     `shown` (what was presented as the credential, kept in this process only so a test can say what was wrong)."""
 
-    def __init__(self, key, username="", file_body=b"", login=None):
+    def __init__(self, key, username="", file_body=b"", login=None, oauth=False):
         self.key, self.username, self.file_body = key, username, file_body
         self.login = login or {}  # {"username", "password", "totp"}
+        self.oauth, self.codes, self.access, self.refreshes = oauth, {}, set(), set()
         self.seen = []
         self.lock = threading.Lock()
         vendor = self
@@ -101,6 +107,8 @@ class Vendor:
             elif route == "/mcp":
                 status, answer, extra, more = self._mcp(request.headers, method, body)
                 shown = more.pop("shown", "")
+            elif self.oauth and (route.startswith("/.well-known/") or route in ("/register", "/authorize", "/token")):
+                status, answer, extra = self._oauth(route, parse_qs(parts.query), body)
             elif route == "/login":
                 status, answer = self._login(body)
         except Exception as exc:  # a broken request is a 400 here, never a dead server thread
@@ -150,8 +158,12 @@ class Vendor:
             return 405, {"error": "POST only"}, {}, {"shown": shown}
         message = json.loads(body or b"{}")
         rpc = message.get("method", "")
-        if shown != self.key:
-            return 401, {"error": "bad credential"}, {}, {"shown": shown, "rpc": rpc}
+        if shown != self.key and shown not in self.access:
+            challenge = {}
+            if self.oauth:
+                metadata = f"https://{HOST}/.well-known/oauth-protected-resource/mcp"
+                challenge = {"WWW-Authenticate": f'Bearer resource_metadata="{metadata}"'}
+            return 401, {"error": "bad credential"}, challenge, {"shown": shown, "rpc": rpc}
         if "id" not in message:  # a notification
             return 202, None, {}, {"shown": shown, "rpc": rpc}
         if rpc == "initialize":
@@ -186,6 +198,41 @@ class Vendor:
             )
         return 200, {"jsonrpc": "2.0", "id": message["id"], "result": result}, extra, {"shown": shown, "rpc": rpc}
 
+    def _oauth(self, route, query, body):
+        base = f"https://{HOST}"
+        if route == "/.well-known/oauth-protected-resource/mcp":
+            return 200, {"resource": base + "/mcp", "authorization_servers": [base]}, {}
+        if route == "/.well-known/oauth-authorization-server":
+            meta = {
+                "issuer": base,
+                "authorization_endpoint": base + "/authorize",
+                "token_endpoint": base + "/token",
+                "registration_endpoint": base + "/register",
+                "code_challenge_methods_supported": ["S256"],
+            }
+            return 200, meta, {}
+        if route == "/register":
+            return 201, {"client_id": "acme-vendor-client", "redirect_uris": json.loads(body)["redirect_uris"]}, {}
+        if route == "/authorize":
+            code = f"acme-vendor-code-{len(self.codes) + 1}"
+            self.codes[code] = query["code_challenge"][0]
+            back = query["redirect_uri"][0] + "?" + urlencode({"code": code, "state": query["state"][0]})
+            return 302, None, {"Location": back}
+        if route == "/token":
+            form = {k: v[0] for k, v in parse_qs(body.decode()).items()}
+            if form.get("grant_type") == "authorization_code":
+                digest = hashlib.sha256(form.get("code_verifier", "").encode()).digest()
+                if self.codes.pop(form.get("code"), None) != base64.urlsafe_b64encode(digest).rstrip(b"=").decode():
+                    return 400, {"error": "invalid_grant"}, {}
+            elif form.get("grant_type") != "refresh_token" or form.get("refresh_token") not in self.refreshes:
+                return 400, {"error": "invalid_grant"}, {}
+            n = len(self.access) + 1
+            access, refresh = f"acme-synthetic-oauth-access-{n}", f"acme-synthetic-oauth-refresh-{n}"
+            self.access.add(access)
+            self.refreshes = {refresh}
+            return 200, {"access_token": access, "refresh_token": refresh, "expires_in": 3600}, {}
+        return 404, {"error": "not found"}, {}
+
     def _login(self, body):
         form = {k: v[0] for k, v in parse_qs(body.decode()).items()}
         want = self.login
@@ -207,12 +254,20 @@ class Vendor:
         return _ToVendor(self.port)
 
 
-class _ToVendor(httpx.AsyncBaseTransport):
+class _ToVendor(httpx.AsyncBaseTransport, httpx.BaseTransport):
     """A connection of its own per call, read whole: the proxy closes its client (and so this transport) after every
-    call, and a later call must still get through."""
+    call, and a later call must still get through. Synchronous too, for the server's own MCP probe, check and sign-in
+    (backend/mcp_connect.py `TRANSPORT`)."""
 
     def __init__(self, port):
         self.port = port
+
+    def handle_request(self, request):
+        request.url = request.url.copy_with(scheme="http", host="127.0.0.1", port=self.port)
+        with httpx.HTTPTransport() as inner:
+            response = inner.handle_request(request)
+            body = response.read()
+        return httpx.Response(response.status_code, headers=response.headers, content=body)
 
     async def handle_async_request(self, request):
         request.url = request.url.copy_with(scheme="http", host="127.0.0.1", port=self.port)

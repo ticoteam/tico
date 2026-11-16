@@ -100,6 +100,7 @@ from .github_app import CALLBACK_PATH as GITHUB_APP_CALLBACK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
 from .listening import PUSH_PATH as LISTENING_PUSH_PATH
 from .tool_proxy import PREFIX as TOOL_PROXY_PATH
+from .mcp_connect import CALLBACK_PATH as MCP_SIGN_IN_PATH
 from .store import H, P, Problem, Store, encode
 from . import bot_settings as BS
 from . import bot_status_routes, computers_routes
@@ -915,9 +916,10 @@ def create_app(settings=None):
                 except Problem as exc:
                     # GitHub's return for the App's setup (backend/github_app.py) comes in the browser, which may hold no owner
                     # session: only the missing identity passes, and the route parks the code. Any other refusal stands.
+                    # So does an MCP tool's sign-in return (backend/mcp_connect.py): its one-time state is its only right.
                     if (
                         exc.code != "identity"
-                        or request.url.path != GITHUB_APP_CALLBACK_PATH
+                        or request.url.path not in (GITHUB_APP_CALLBACK_PATH, MCP_SIGN_IN_PATH)
                         or request.method != "GET"
                     ):
                         raise
@@ -5525,6 +5527,9 @@ def create_app(settings=None):
     from . import tool_proxy
 
     tool_proxy.install(app, store)
+    from . import mcp_connect
+
+    mcp_connect.install(app, store)  # Tools: remote MCP servers, by token or OAuth sign-in
     from . import browser_commands
 
     browser_commands.install(app, store, auth, mutate)  # website tools' browser: bots' verbs, computers, live view

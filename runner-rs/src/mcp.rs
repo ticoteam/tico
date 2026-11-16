@@ -6,7 +6,7 @@
 //! configured. Where the harness reads `${VAR}` itself (Claude Code, Gemini CLI, Codex's env headers) the
 //! placeholder goes through untouched, so no value lands on a command line or in a file.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -349,6 +349,76 @@ pub fn servers_for_run(
                             "headers": mcp.get("headers").cloned().unwrap_or(json!({})), "env": entry_env(&entry)}));
     }
     (servers, problems)
+}
+
+/// The MCP servers a run's grants bring (credential-runtime's `mcp_servers`, backend/mcp_connect.py): one per granted
+/// MCP tool, with no bot.yaml entry. Each is held to bot.yaml's rules (clean_mcp: its header uses only its own `env`
+/// as a placeholder), and passed only when that variable reached this turn (`held`). A proxied one's address is the
+/// tool proxy's path on the address this runner reaches the server by, as a proxied key's (env.rs `proxied_tool`).
+/// (servers, problems), servers shaped as `servers_for_run`'s.
+pub fn granted(items: &Value, server: &str, held: &BTreeSet<String>) -> (Vec<Value>, Vec<String>) {
+    let (mut servers, mut problems) = (vec![], vec![]);
+    for item in items.as_array().into_iter().flatten() {
+        let label = text_of(&item["tool"]);
+        let service = text_of(&item["name"]).trim().to_lowercase();
+        let env = text_of(&item["env"]);
+        if service.is_empty() {
+            continue;
+        }
+        let label = if label.is_empty() {
+            service.clone()
+        } else {
+            label
+        };
+        if env.is_empty() || !held.contains(&env) {
+            problems.push(format!(
+                "{label}: MCP server not passed, its key did not reach this turn"
+            ));
+            continue;
+        }
+        let url = text_of(&item["url"]);
+        let proxied = item["proxied"] == true;
+        let (checked, url) = if proxied {
+            let Some(at) = url.find("/api/v2/tool-proxy/") else {
+                problems.push(format!(
+                    "{label}: MCP server not passed, its address is not Tico's tool proxy"
+                ));
+                continue;
+            };
+            let path = &url[at..];
+            let base = if server.is_empty() {
+                &url[..at]
+            } else {
+                server.trim_end_matches('/')
+            };
+            // The proxy is Tico's own address (plain http inside a Docker network, say): its path is what is checked.
+            (
+                format!("https://tico.invalid{path}"),
+                format!("{base}{path}"),
+            )
+        } else {
+            (url.clone(), url)
+        };
+        let block =
+            json!({"url": checked, "transport": item["transport"], "headers": item["headers"]});
+        match clean_mcp(&block, &env) {
+            Ok(m) => servers.push(json!({"name": server_name(&service), "service": service, "url": url,
+                                         "transport": m["transport"], "headers": m.get("headers").cloned().unwrap_or(json!({})),
+                                         "env": env})),
+            Err(why) => problems.push(format!("{label}: MCP server not passed. {why}")),
+        }
+    }
+    (servers, problems)
+}
+
+/// bot.yaml's servers, then each granted one whose name bot.yaml does not already use: bot.yaml wins on a name.
+pub fn merge(mut servers: Vec<Value>, granted: &[Value]) -> Vec<Value> {
+    for s in granted {
+        if !servers.iter().any(|d| d["name"] == s["name"]) {
+            servers.push(s.clone());
+        }
+    }
+    servers
 }
 
 /// (name, transports, why) for a harness (mcp_servers.SUPPORT): its manifest's `mcp_transports` and
@@ -750,6 +820,51 @@ mod tests {
             "{problems:?}"
         );
         assert!(problems[0].ends_with("in Tools > Linear"));
+    }
+
+    #[test]
+    fn a_granted_server_reaches_the_run_on_this_runners_address_and_bot_yaml_wins_a_name() {
+        let items = json!([
+            {"name": "acme-errors", "tool": "Acme Errors", "transport": "http", "env": "ACME_ERRORS_MCP_TOKEN",
+             "url": "https://tico.acme.example/api/v2/tool-proxy/acme-errors/mcp", "proxied": true,
+             "headers": {"Authorization": "Bearer ${ACME_ERRORS_MCP_TOKEN}"}},
+            {"name": "acme-docs", "tool": "Acme Docs", "transport": "http", "env": "ACME_DOCS_MCP_TOKEN",
+             "url": "https://docs.acme.example/mcp", "proxied": false, "headers": {"X-Key": "${ACME_DOCS_MCP_TOKEN}"}},
+            {"name": "acme-sneaky", "tool": "Acme Sneaky", "transport": "http", "env": "ACME_SNEAKY_MCP_TOKEN",
+             "url": "https://sneaky.acme.example/mcp", "headers": {"X-Key": "${HOME}"}},
+            {"name": "acme-missing", "tool": "Acme Missing", "transport": "http", "env": "ACME_MISSING_MCP_TOKEN",
+             "url": "https://missing.acme.example/mcp", "headers": {}}
+        ]);
+        let held: BTreeSet<String> = [
+            "ACME_ERRORS_MCP_TOKEN",
+            "ACME_DOCS_MCP_TOKEN",
+            "ACME_SNEAKY_MCP_TOKEN",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (servers, problems) = granted(&items, "http://server:8080/", &held);
+        assert_eq!(
+            servers
+                .iter()
+                .map(|s| text_of(&s["url"]))
+                .collect::<Vec<_>>(),
+            [
+                "http://server:8080/api/v2/tool-proxy/acme-errors/mcp",
+                "https://docs.acme.example/mcp"
+            ]
+        );
+        assert_eq!(text_of(&servers[0]["name"]), "acme_errors");
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems[0].starts_with("Acme Sneaky: MCP server not passed."));
+        assert_eq!(
+            problems[1],
+            "Acme Missing: MCP server not passed, its key did not reach this turn"
+        );
+        let declared = vec![json!({"name": "acme_errors", "url": "https://from.bot.yaml/mcp"})];
+        let merged = merge(declared, &servers);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(text_of(&merged[0]["url"]), "https://from.bot.yaml/mcp");
     }
 
     #[test]

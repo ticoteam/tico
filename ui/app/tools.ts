@@ -412,7 +412,7 @@ function toolsAddItems(): [string, string, string][] {
   const admin = settingsIsAdmin();
   const kinds: InboxKind[] = Object.values(INBOX_KINDS).filter((k: InboxKind) => k.add && (!k.add.admin || admin)).sort((a: InboxKind, b: InboxKind) => a.order - b.order);
   return [
-    ...(S.me?.credential_access || admin ? [['api', 'API', 'api'], ['website', 'Website', 'travel_explore']] as [string, string, string][] : []),
+    ...(S.me?.credential_access || admin ? [['api', 'API', 'api'], ['mcp', 'MCP server', 'hub'], ['website', 'Website', 'travel_explore']] as [string, string, string][] : []),
     ...kinds.map((k): [string, string, string] => ['kind:' + k.key, k.add?.label || k.label, TOOLS_ICONS[k.key] || 'mail']),
     ['webhook', 'Outgoing webhook', 'open_in_new'],
     ...(VAULT?.can_manage ? [['key', 'Key', 'key_vertical']] as [string, string, string][] : []),
@@ -421,6 +421,7 @@ function toolsAddItems(): [string, string, string][] {
 function toolsAdd(item: string): void {
   if (item === 'api') { toolsApiCreate(); return; }
   if (item === 'website') { toolsWebsiteCreate(); return; }
+  if (item === 'mcp') { toolsMcpCreate(); return; }
   if (item === 'webhook') { location.hash = WH_HOOKS_ROUTE; void whHookDialog(null); return; }
   if (item === 'key') { vaultEdit(); return; }
   INBOX_KINDS[item.slice(5)]?.add?.open(inboxesCtx(IB.run));
