@@ -219,6 +219,21 @@ def store_pools_close(pooled_connections_closed):
     connection_guard.close_stores()
 
 
+@pytest.fixture(autouse=True)
+def no_cached_google_tokens():
+    """The Google token caches are process-wide (backend/google_workspace.py and backend/google_tokens.py), and one
+    worker runs many tests in one process. Tests reuse ids (the Workspace key is always `wsk-1` at revision 1), so a
+    token one test minted answered the next test's request from memory and its fake Google saw no call. Each test starts
+    and ends with both caches empty. The import stays in the body, as the `api` fixture's does."""
+    from backend import google_tokens, google_workspace
+
+    google_workspace.forget_tokens()
+    google_tokens.forget()
+    yield
+    google_workspace.forget_tokens()
+    google_tokens.forget()
+
+
 def pytest_runtest_logreport(report):
     """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
     if report.when == "teardown":
