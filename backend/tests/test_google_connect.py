@@ -267,6 +267,12 @@ def test_an_answer_wider_than_asked_and_a_refused_refresh_give_no_token(app, mon
     with pytest.raises(Problem) as wide:
         door(app)
     assert "ya29.wide" not in wide.value.detail
+    # The over-wide grant is ended at Google, and the connection asks the person to connect again.
+    assert google.uris[-1] == google_connect.REVOKE_URI and google.calls[-1] == {"token": "1//grant"}
+    seen = get(app, "mail/google", "cara-test")
+    assert seen["status"] == "failed" and seen["kind"] == "revoked" and seen["message"]
+    assert row(app)["grant_sealed"] is None and authority(app) != "personal"
+    signed_in(app)  # connected again for the refusals below
     for error, kind, status in (("invalid_grant", "signin", 403), ("admin_policy_enforced", "admin_policy", 403)):
         monkeypatch.setattr(google_connect, "post_token", FakeGoogle(error=error))
         with pytest.raises(Problem) as refused:
@@ -296,6 +302,35 @@ def test_tokens_are_cached_per_grant_and_a_new_grant_or_app_never_reuses_one(app
     assert moved.value.extra["kind"] == "reconnect"
 
 
+def test_a_connect_for_another_mailbox_ends_the_old_grant_and_never_serves_it_for_the_new_one(app, monkeypatch):
+    signed_in(app)
+    real = google_connect.mailbox_for
+    monkeypatch.setattr(google_connect, "mailbox_for", lambda c, pid: ("cara.new@acme.example", real(c, pid)[1]))
+    google = FakeGoogle({"access_token": "ya29.old", "expires_in": 3599})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    start(app)  # her mailbox is another one now: she starts connecting it
+    assert google.calls == [{"token": "1//grant"}] and google.uris == [google_connect.REVOKE_URI]
+    stored = row(app)
+    assert stored["mailbox"] == "cara.new@acme.example" and stored["grant_sealed"] is None
+    for box in (BOX, "cara.new@acme.example"):
+        assert authority(app, box) != "personal"
+        with pytest.raises(Problem):
+            door(app, box)
+
+
+def test_a_grant_opens_only_for_the_mailbox_it_was_issued_for(app):
+    signed_in(app)
+    cara = row(app)
+    with app.app.state.store.transaction() as c:  # the mailbox column changed under a live grant
+        c.execute("UPDATE google_connects SET mailbox='cara.new@acme.example' WHERE person_id='cara'")
+    with pytest.raises(Problem):
+        door(app, "cara.new@acme.example")
+    with app.app.state.store.read() as c:
+        assert google_tokens.unseal(c, cara) == "1//grant"
+        with pytest.raises(Problem):
+            google_tokens.unseal(c, dict(cara, mailbox="cara.new@acme.example"))
+
+
 def test_a_failed_reconnect_keeps_the_earlier_grant(app, monkeypatch):
     signed_in(app)
     signed_in(app, refresh_token="1//stray", email="ben@acme.example")  # another account signed in
@@ -305,6 +340,27 @@ def test_a_failed_reconnect_keeps_the_earlier_grant(app, monkeypatch):
     monkeypatch.setattr(google_connect, "post_token", google)
     door(app)
     assert google.calls[-1]["refresh_token"] == "1//grant"
+
+
+class DisconnectsMeanwhile(FakeGoogle):
+    """Google answers the exchange only after the person has pressed Disconnect."""
+
+    def __init__(self, api, answer):
+        super().__init__(answer)
+        self.api = api
+
+    def __call__(self, fields, uri=google_connect.TOKEN_URI):
+        if fields.get("grant_type") == "authorization_code":
+            post(self.api, "mail/google/disconnect", {}, "cara-test")
+        return super().__call__(fields, uri)
+
+
+def test_a_disconnect_during_the_first_exchange_revokes_the_grant_google_then_gives(app):
+    google = signed_in(app, google=DisconnectsMeanwhile(app, grant_answer(refresh_token="1//late")))
+    assert google.uris == [google_connect.TOKEN_URI, google_connect.REVOKE_URI]
+    assert google.calls[-1] == {"token": "1//late"}
+    stored = row(app)
+    assert stored["status"] == "disconnected" and stored["grant_sealed"] is None
 
 
 class ConnectsAgainMeanwhile(FakeGoogle):
@@ -318,6 +374,13 @@ class ConnectsAgainMeanwhile(FakeGoogle):
         if fields.get("grant_type") == "authorization_code":
             start(self.api)
         return super().__call__(fields, uri)
+
+
+def test_a_first_connect_replaced_during_its_exchange_revokes_the_losing_grant(app):
+    google = signed_in(app, google=ConnectsAgainMeanwhile(app, grant_answer(refresh_token="1//late")))
+    assert google.uris == [google_connect.TOKEN_URI, google_connect.REVOKE_URI]
+    assert google.calls[-1] == {"token": "1//late"}
+    assert row(app)["status"] == "signing_in" and row(app)["grant_sealed"] is None
 
 
 def test_an_exchange_answered_after_its_connect_was_replaced_keeps_nothing_and_revokes_nothing(app, caplog):

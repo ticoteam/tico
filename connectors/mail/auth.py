@@ -189,11 +189,12 @@ def workspace_credentials(mailbox, scopes=None):
 def credentials(mailbox, scopes=None, path=None, key_only=False):
     """A credential that acts as `mailbox`. Requires the google-auth library.
 
-    Order: the runner's supervisor (a turn); a grant made here with a team's own Desktop client (a refused grant never
-    falls back); then, when the runner gave this process its way to the server, the server's token for that mailbox
-    (`workspace_credentials`), which the server takes from the person's Connect Google grant or the Workspace key: a
-    grant this computer kept from before the server held it is not used, and neither is a key file for such a
-    mailbox; and last, this computer's key file."""
+    Order: the runner's supervisor (a turn); then, whenever the runner gave this process its way to the server, the
+    server's token for that mailbox and nothing on this computer (`workspace_credentials`): the server holds every
+    credential, applies a person's own grant before the Workspace key and gives a read-only grant only its read scopes,
+    so no key file or grant copy here may answer for a mailbox first. Only a mail CLI run by hand, without that way,
+    uses a grant made here with a team's own Desktop client (a refused grant never falls back) or this computer's key
+    file."""
     if not key_only and path is None:
         granted = supervisor_token(mailbox, scopes)
         if granted:
@@ -203,12 +204,11 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
             if isinstance(granted.get("scopes"), list):  # a connected account: what it granted
                 creds._tico_granted = [str(s) for s in granted["scopes"]]
             return creds
-    found = oauth.grant(mailbox, oauth.grants_path(path) if path else None)
-    server = oauth.broker_configured()
-    if found and not (server and found.get("broker") == "server"):
-        return person_credentials(mailbox, found, scopes)
-    if server and (found or not key_file_present(path)):
+    if oauth.broker_configured():  # the supervisor's own mint (key_only) too
         return workspace_credentials(mailbox, scopes)
+    found = oauth.grant(mailbox, oauth.grants_path(path) if path else None)
+    if found:
+        return person_credentials(mailbox, found, scopes)
     try:
         from google.oauth2 import service_account
     except ImportError:

@@ -150,7 +150,7 @@ def personal(api, person, mailbox, status="connected", grant="1//g1", client=Non
 
     operation = "gc_" + person
     with api.app.state.store.transaction() as c:
-        sealed = google_tokens.seal(c, person, operation, grant) if grant else None
+        sealed = google_tokens.seal(c, person, operation, mailbox, grant) if grant else None
         c.execute(
             "INSERT INTO google_connects(person_id,mailbox,status,operation_id,grant_operation_id,grant_sealed,"
             "grant_scopes,client_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",

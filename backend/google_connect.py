@@ -162,6 +162,10 @@ MESSAGES = {
         "Connect again and leave the box to read your email ticked.",
     ),
     "scope": ("Google granted more access than Tico asks for, so nothing was connected.", "Connect again."),
+    "revoked": (
+        "Google gave Tico more access than it asked for, so Tico ended this connection and revoked it at Google.",
+        "Connect Google again.",
+    ),
     "code_rejected": ("Google refused the sign-in code.", "Codes work once and expire in minutes: connect again."),
     "network": ("Tico's server could not reach Google to finish the sign-in.", "Try again in a few minutes."),
 }
@@ -445,6 +449,8 @@ def install(app, store, mutate):
     settings = store.settings
     from . import google_tokens, reconnects
 
+    google_tokens.use_store(store)
+
     def person_view(c, who):
         pid = require_self(who)
         mailbox, _ = mailbox_for(c, pid)
@@ -490,7 +496,9 @@ def install(app, store, mutate):
             return failed(row, kind)
         scopes = granted_scopes(answer, client[2])
         with store.transaction() as c:
-            sealed = google_tokens.seal(c, row["person_id"], row["operation_id"], answer["refresh_token"])
+            sealed = google_tokens.seal(
+                c, row["person_id"], row["operation_id"], row["mailbox"], answer["refresh_token"]
+            )
             kept = c.execute(
                 "UPDATE google_connects SET status='connected',kind=NULL,message=NULL,hint=NULL,can=?,client_id=?,"
                 "grant_scopes=?,grant_sealed=?,grant_operation_id=operation_id,updated_at=? "
@@ -506,12 +514,23 @@ def install(app, store, mutate):
                 ),
             ).rowcount
             if not kept:
-                # The person connected again or disconnected while Google answered. The grant is dropped here, not
-                # revoked at Google, where one client and one person share one grant: that would end the newer one too.
-                log.warning("google connect: operation %s is no longer current", row["operation_id"])
+                now = c.execute("SELECT * FROM google_connects WHERE person_id=?", (row["person_id"],)).fetchone()
+            else:
+                H.event(c, "human:" + row["person_id"], "mail.google.connected", row["mailbox"], {})
+                reconnects.google_connected(c, row["mailbox"])  # its tasks' reconnect cards end now
                 return
-            H.event(c, "human:" + row["person_id"], "mail.google.connected", row["mailbox"], {})
-            reconnects.google_connected(c, row["mailbox"])  # its tasks' reconnect cards end now
+        # The person disconnected, or connected again, while Google answered: this grant lost and is not kept. It is
+        # revoked at Google, unless the row still holds a live grant for the same mailbox from the same app: one
+        # client and one person share one grant at Google, so revoking would end that one too.
+        log.warning("google connect: operation %s is no longer current", row["operation_id"])
+        live = (
+            now is not None
+            and now["grant_sealed"] is not None
+            and now["client_id"] == client[0]
+            and str(now["mailbox"]).lower() == str(row["mailbox"]).lower()
+        )
+        if not live:
+            revoke_at_google(answer["refresh_token"])
 
     @app.get("/api/v2/mail/google")
     def google_status(request: Request):
@@ -525,8 +544,10 @@ def install(app, store, mutate):
 
     @app.post("/api/v2/mail/google/connect")
     def google_connect(request: Request, body: M.Empty):
+        who = request.state.identity
+        ended = {}
+
         def work(c):
-            who = request.state.identity
             pid = require_self(who)
             client = oauth_client(c, settings)
             if client is None:
@@ -554,7 +575,19 @@ def install(app, store, mutate):
                 "code_challenge_method": "S256",
             }
             now = H.now()
-            # A grant connected before stays in use until this sign-in's own grant replaces it.
+            held = c.execute("SELECT * FROM google_connects WHERE person_id=?", (pid,)).fetchone()
+            if held and held["grant_sealed"] and str(held["mailbox"]).lower() != mailbox.lower():
+                # Their mailbox is another one now: the grant for the old one ends here, so it never serves the new.
+                try:
+                    ended["refresh"] = google_tokens.unseal(c, dict(held))
+                except Problem:
+                    pass  # a grant that cannot be opened cannot be revoked; it is forgotten all the same
+                c.execute(
+                    "UPDATE google_connects SET can=NULL,client_id=NULL,grant_scopes=NULL,grant_sealed=NULL,"
+                    "grant_operation_id=NULL WHERE person_id=?",
+                    (pid,),
+                )
+            # A grant connected before for this mailbox stays in use until this sign-in's own grant replaces it.
             c.execute(
                 "INSERT INTO google_connects(person_id,mailbox,status,oauth_state,verifier,operation_id,started_at,"
                 "created_at,updated_at) VALUES(?,?,'signing_in',?,?,?,?,?,?) "
@@ -566,7 +599,10 @@ def install(app, store, mutate):
             H.event(c, who.actor, "mail.google.connect.start", mailbox, {})
             return {"auth_url": AUTH_URI + "?" + urllib.parse.urlencode(query), "mailbox": mailbox}
 
-        return mutate(request, body, work)
+        answer = mutate(request, body, work)
+        if ended.get("refresh"):
+            revoke_at_google(ended.pop("refresh"))  # after the write, outside the lock
+        return answer
 
     @app.get(CALLBACK, include_in_schema=False)
     def google_callback(request: Request, state: str = "", code: str = "", error: str = ""):

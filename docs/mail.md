@@ -625,7 +625,8 @@ Reconnect and revoke:
   again** once; the copy left on the computer is no longer used.
 
 Where the grant is kept: in the server's database, sealed with its credential key (`google_connects.grant_sealed`) under
-a context that names the person and the connect, so a sealed grant copied to another row opens nowhere. No token or
+a context that names the person, the connect and the mailbox, so a sealed grant copied to another row, or kept
+after the person's mailbox changed, opens nowhere. Connecting another mailbox ends the old grant and revokes it. No token or
 refresh token reaches a response, a log, an event or `tico sql` (the table is closed to it). Every Gmail and Calendar
 call on the server takes its token from one place (`backend/google_tokens.py`), which picks the person's grant over
 the Workspace key; a message bot's run still gets an hour-long token for one mailbox the server named for it, and
@@ -654,8 +655,9 @@ company's own app made also holds `gmail.modify` and `calendar.events` if Google
 write before Google is asked. Each connect has its own id: a grant Google gives a sign-in the person has since replaced
 or disconnected is not kept, and the grant connected before stays until a new connect finishes. Mail sent from such a
 mailbox goes out from the server's own send queue, as Whole Workspace mail does.
-A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and refreshes on
-the computer as before.
+A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and is used only by
+a mail CLI run by hand: under the runner, every mailbox's token comes from the server, never from a key file or grant
+on the computer.
 
 On a computer holding grants made there with `--client-file`, `scripts/mail.sh google status` lists the connected accounts and what each may
 do (never a token). `scripts/mail.sh google revoke --mailbox <address>` removes that account's grant from this computer

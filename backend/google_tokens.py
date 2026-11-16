@@ -3,8 +3,10 @@
 
 `authority` (backend/google_workspace.py) picks the credential, and a person's own grant always wins:
 - `personal`: the person's Connect Google grant, kept on this server sealed (`google_connects.grant_sealed`, context
-  `google-connect:<person_id>:<grant_operation_id>`, so a ciphertext copied to another row opens nowhere). The refresh
-  goes through Google with the OAuth client that issued the grant, and asks only for scopes the grant holds.
+  `google-connect:<person_id>:<grant_operation_id>:<mailbox>`, so a ciphertext copied to another row, or a row whose
+  mailbox changed, opens nowhere: a grant serves only the mailbox it was issued for). The refresh goes through Google
+  with the OAuth client that issued the grant, and asks only for scopes the grant holds. An answer wider than asked
+  ends the grant at Google and asks the person to connect again.
 - `workspace`: the Workspace key mints a token impersonating the mailbox (`google_workspace.mint`).
 - anything else is refused: no credential covers the mailbox.
 
@@ -40,6 +42,7 @@ WORKSPACE_SCOPES = google_workspace.WORKSPACE_SCOPES
 PERMISSIONS = cast("tuple[str, ...]", google_workspace.PERMISSIONS)
 
 _LOCK = threading.Lock()
+_STORE: list[Any] = []  # the server's store (`use_store`), for the one write the door makes: ending a bad grant
 # (person, grant operation, client, service, scopes) -> (answer, expiry in epoch seconds)
 _CACHE: OrderedDict[tuple[str, str, str, str, tuple[str, ...]], tuple[Json, float]] = OrderedDict()
 
@@ -70,13 +73,19 @@ def _google_token(client: tuple[str, str, str], fields: Json) -> Json:
     return cast("Callable[[tuple[str, str, str], Json], Json]", google_connect.google_token)(client, fields)
 
 
-def context(person_id: str, operation_id: str) -> str:
-    """The seal context of a person's grant: it binds the ciphertext to its row and to the connect that made it."""
-    return f"{SEALED_PREFIX}{person_id}:{operation_id}"
+def use_store(store: Any) -> None:
+    """The server's store, set when the routes install (backend/google_connect.py)."""
+    _STORE[:] = [store]
 
 
-def seal(c: Conn, person_id: str, operation_id: str, refresh_token: str) -> str:
-    return str(_cipher().seal(c, context(person_id, operation_id), refresh_token))
+def context(person_id: str, operation_id: str, mailbox: str) -> str:
+    """The seal context of a person's grant: it binds the ciphertext to its row, the connect that made it and the
+    mailbox it was issued for."""
+    return f"{SEALED_PREFIX}{person_id}:{operation_id}:{str(mailbox).strip().lower()}"
+
+
+def seal(c: Conn, person_id: str, operation_id: str, mailbox: str, refresh_token: str) -> str:
+    return str(_cipher().seal(c, context(person_id, operation_id, mailbox), refresh_token))
 
 
 def unseal(c: Conn, row: Json) -> str:
@@ -87,16 +96,18 @@ def unseal(c: Conn, row: Json) -> str:
     stored = str(row.get("grant_sealed") or "")
     if not stored.startswith(cast("str", SEALED)):
         raise Problem("vault_unavailable", "A stored secret could not be decrypted", 503)
-    return str(_cipher().unseal(c, context(str(row["person_id"]), str(row["grant_operation_id"])), stored))
+    where = context(str(row["person_id"]), str(row["grant_operation_id"]), str(row["mailbox"]))
+    return str(_cipher().unseal(c, where, stored))
 
 
 def grant_row(c: Conn, mailbox: str) -> Json | None:
-    """The live personal grant for `mailbox`, or None."""
+    """The live personal grant issued for `mailbox`, or None."""
+    box = str(mailbox or "").strip().lower()
     found = c.execute(
-        "SELECT * FROM google_connects WHERE lower(mailbox)=? AND grant_sealed IS NOT NULL LIMIT 1",
-        (str(mailbox or "").strip().lower(),),
+        "SELECT * FROM google_connects WHERE lower(mailbox)=? AND grant_sealed IS NOT NULL LIMIT 1", (box,)
     ).fetchone()
-    return dict(found) if found else None
+    row = dict(found) if found else None
+    return row if row and str(row["mailbox"]).strip().lower() == box else None
 
 
 def covered(c: Conn, mailbox: str) -> bool:
@@ -219,8 +230,13 @@ def _personal(c: Conn, row: Json, service: str, scopes: str) -> Json:
         ) from None
     returned = set(str(answer.get("scope") or "").split()) - IDENTITY_NAMES
     if returned - wanted:
+        _end(c, row, refresh)
         raise Problem(
-            "google_refused", "Google answered with more access than was asked for", 403, extra={"kind": "error"}
+            "google_refused",
+            f"Google answered with more access than was asked for, so Tico ended {mailbox}'s connection. Connect "
+            "Google again in Tools > Settings > Email.",
+            403,
+            extra={"kind": "revoked"},
         )
     lifetime = int(answer.get("expires_in") or 3600)
     out: Json = {
@@ -233,6 +249,40 @@ def _personal(c: Conn, row: Json, service: str, scopes: str) -> Json:
         while len(_CACHE) > CACHE_SIZE:
             _CACHE.popitem(last=False)
     return dict(out)
+
+
+def _end(c: Conn, row: Json, refresh: str) -> None:
+    """End a grant Google answered wider than asked: revoked at Google (best effort), forgotten here, and the person is
+    asked to connect again (kind `revoked`)."""
+    cast("Callable[[str], bool]", google_connect.revoke_at_google)(refresh)
+    person, operation = str(row["person_id"]), str(row["grant_operation_id"])
+    with _LOCK:
+        for key in [key for key in _CACHE if key[:2] == (person, operation)]:
+            del _CACHE[key]
+    if not _STORE:
+        return
+    store = _STORE[0]
+
+    def forget_grant() -> None:
+        from .store import H
+
+        with store.transaction() as w:
+            changed = w.execute(
+                "UPDATE google_connects SET status='failed',kind='revoked',message=NULL,hint=NULL,can=NULL,"
+                "grant_sealed=NULL,grant_scopes=NULL,grant_operation_id=NULL,updated_at=? "
+                "WHERE person_id=? AND grant_operation_id=?",
+                (H.now(), person, operation),
+            ).rowcount
+            if changed:
+                event = cast("Callable[..., object]", H.event)
+                event(w, "human:" + person, "mail.google.connect.failed", row["mailbox"], {"kind": "revoked"})
+
+    if getattr(c, "write_transaction", False):
+        # The caller holds the write lock (an automation's action) and rolls back on the refusal that follows, so the
+        # grant is forgotten in its own transaction once that lock is free.
+        threading.Thread(target=forget_grant, name="google-grant-end", daemon=True).start()
+    else:
+        forget_grant()
 
 
 def described(scopes: list[str]) -> list[str]:
