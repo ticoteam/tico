@@ -113,13 +113,14 @@ hard-coded; delete our own machinery before adding more; when unsure, run the mo
 
 Tracked as Tico tasks:
 
-- **b62349cb** (Tasks Product Owner): keep-warm pings mostly land on sessions that are not resumed; skip stages whose
-  turn is a person's (see "First post-change read").
+- **Keep warm is being removed** (ticoteam/tico #3811, Chris, open Nov 16): its visible "ok" replies buried real
+  questions, and about 2.5% of 1,579 pings were followed by real work within the hour. Before that, **b62349cb**
+  (Tasks Product Owner) asked to skip stages whose turn is a person's; Chris answered no on Nov 16 (task a7881084).
+  Once #3811 ships, check 9 is retired and the 1–8 h resume write becomes the number to watch.
 - Done since Nov 14: **37d4ed7b** (Models Owner, Gateway turns load Tico tools on demand), **729e445c** (Performance
   Owner, the usage-limit fallback resumes its side session). Closed: **c99a4b8c** (UI Owner, read-once rule and
   subagents line in custom bots' AGENTS.md).
 - **28434211** (Performance Owner): owns this page and the weekly review routine.
-- **Keep-warm pings on Codex** rely on wording alone, because Codex has no per-turn limit.
 - **Cache audit:** measure cache writes on back-to-back warm resumes, including an effort change.
 
 ## First post-change read: Nov 14 09:30Z to Nov 15 02:13Z
@@ -149,6 +150,40 @@ two Builders out of both windows.
   b62349cb.
 - Too early: tokens per merged PR, the code-bot tool list, reviews from the diff (Reviewer 1 median 552k per run on 8
   runs).
+
+## Week 1 read: Nov 9–16 (Monday 00:00Z to Monday 00:00Z)
+
+The turns feed holds this week only from Nov 12 (the collector started then; the feed returns each bot's newest 200
+turns), and nothing for Nov 2–9, so there is **no week-on-week comparison** yet. The whole-week ratio (0.5M tokens
+per merged PR, 698 PRs) is not valid: its PRs span seven days, its tokens four. Fair reads use the post-change
+window, Nov 14 02:13Z to Nov 16 00:00Z (45.8 h), against the baseline above.
+
+| | Baseline, Nov 13 09:30Z–Nov 14 02:13Z | After, Nov 14 02:13Z–Nov 16 00:00Z |
+|---|---|---|
+| Engineering-bot tokens per merged PR | 1.52M (91 PRs) | 1.64M (43 PRs), not fair: see below |
+| Input-equivalent tokens per hour / per run | 11.5M / 240k | 4.3M / 181k |
+| Est. cost per hour | $24 | $9.7 |
+| Cost split: cache reads / writes / output / fresh | 55% / 26% / 13% / 7% | 56% / 31% / 13% / 0% |
+| Context per call, median / p90 | 89k / 213k | 66k / 183k |
+| Builders' context, median / p90 / max | 115k / 299k / 554k | 133k / 231k / 262k |
+| New sessions | 68% of runs | 37% |
+| Did nothing | 12.0% of runs, 7.1% of spend | 1.0%, 0.8% |
+| Fallback runs | 272 | 1 |
+| Runs over compact limit +10% | 15 | 0 (max 265k) |
+| Keep-warm pings | none | 472, 2.9% of spend |
+| Model mix | Opus 82%, Codex and Gateway 18% | Opus 100% |
+
+- **Not fair yet:** Builder and Builder 2 have had no turns since Nov 14 (paused 08:09Z) and it was a weekend.
+  Merged PRs per day fell from about 150 (Nov 11–13) to 40, 14 and 13 (Nov 14–16).
+- **Holding:** compaction, skip-no-model runs, fallback (Codex gone), new-session share.
+- **Watch:** warm resumes within the hour write a median 20.2k vs 18.8k (n=157); Reviewer runs average 473k
+  vs 294k, context median 107k vs 97k, on a weekend's few reviews.
+- **Keep warm** stayed under 5% over the window but went to 5.9% in the 24 h to Nov 16 15:00Z, and its 1–8 h resumes
+  wrote a median 52k vs 100k before. It is being removed (#3811).
+- Costliest tasks after the change are long Product tasks run pitch to production in one session; on several, about
+  half of the runs were keep-warm pings (for example 33 of 66 runs on one task).
+- Guard, open-to-merge time of merged PRs (ticoteam/tico): median 1.3 h, p90 26.7 h this week vs 0.7 h and 11.2 h the
+  week before, with Builders paused for the last two days. Review rounds and QA bounces are not in the turns feed.
 
 ## Weekly review (Performance Owner)
 
