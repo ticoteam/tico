@@ -4,6 +4,9 @@ Callers check mailbox access before asking for a token. Every token comes from t
 the Workspace key or the person's own Connect Google grant. `send` delivers one frozen email the send queue has already
 permitted (backend/email_sending.py `drain`); it never retries. Only the token caches survive a call;
 the connector's pure normalizer supplies the same message fields without loading Google client libraries.
+
+Drafts are found again by the Message-ID Tico gave them (`draft_find`, Gmail's `rfc822msgid:` search over drafts), so a
+retried draft or automation action finds the draft it made instead of making a second one.
 """
 
 import base64
@@ -38,6 +41,9 @@ MUTABLE_SYSTEM_LABELS = frozenset(("INBOX", "UNREAD", "STARRED", "IMPORTANT"))
 PROTECTED_LABELS = frozenset(("TRASH", "SPAM", "SENT", "DRAFT", "DRAFTS"))
 
 
+ATTACHMENT_MAX_BYTES = 6 * 1024 * 1024  # one attachment read through Tico; a bigger one is opened in Gmail
+
+
 def gmail_call(url, *, token, data=None):
     """(status, JSON object), or status 0 when Gmail cannot answer. Tests replace this function."""
     request = urllib.request.Request(url, headers={"Accept": "application/json", "Authorization": "Bearer " + token})
@@ -62,6 +68,20 @@ def gmail_call(url, *, token, data=None):
     except (ValueError, UnicodeError):
         return 0, {}
     return (status, body) if isinstance(body, dict) else (0, {})
+
+
+def gmail_delete_call(url, *, token):
+    """The HTTP status of one DELETE, or 0 when Gmail cannot answer. Tests replace this function."""
+    request = urllib.request.Request(url, method="DELETE", headers={"Authorization": "Bearer " + token})
+    try:
+        with urllib.request.urlopen(request, timeout=SECONDS) as answer:
+            return answer.status
+    except urllib.error.HTTPError as refused:
+        with refused:
+            refused.close()
+            return refused.code
+    except (OSError, ValueError):
+        return 0
 
 
 def _call(mailbox, path, token, *, data=None, **query):
@@ -405,3 +425,86 @@ def send(mailbox, token, raw, thread_id=""):
     if 400 <= status < 500:
         return "failed", "", f"Gmail refused the email (HTTP {status}); nothing was sent"
     return "unknown", "", "Gmail did not confirm delivery"
+
+
+def payload(c, mailbox, message_id):
+    """One message as Gmail has it (format full): its parts tree, for the attachments a message carries."""
+    raw = _get(mailbox, "messages/" + urllib.parse.quote(message_id, safe=""), _token(c, mailbox), format="full")
+    if not isinstance(raw, dict) or not raw.get("id"):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete message; try again", 502, retryable=True)
+    return raw
+
+
+def raw_message(c, mailbox, message_id):
+    """The message's own bytes (format raw): what a DKIM check reads."""
+    found = _get(mailbox, "messages/" + urllib.parse.quote(message_id, safe=""), _token(c, mailbox), format="raw").get(
+        "raw"
+    )
+    if not isinstance(found, str) or not found:
+        raise Problem("gmail_unavailable", "Gmail returned no raw message; try again", 502, retryable=True)
+    try:
+        return base64.urlsafe_b64decode(found + "=" * (-len(found) % 4))
+    except (ValueError, TypeError) as bad:
+        raise Problem("gmail_unavailable", "Gmail returned an unreadable message", 502) from bad
+
+
+def attachment(c, mailbox, message_id, attachment_id):
+    """One attachment's base64url data and size, at most ATTACHMENT_MAX_BYTES."""
+    found = _get(
+        mailbox,
+        "messages/"
+        + urllib.parse.quote(message_id, safe="")
+        + "/attachments/"
+        + urllib.parse.quote(attachment_id, safe=""),
+        _token(c, mailbox),
+    )
+    data, size = found.get("data"), found.get("size")
+    if not isinstance(data, str):
+        raise Problem("gmail_unavailable", "Gmail returned an attachment without data; try again", 502, retryable=True)
+    return {"data": data, "size": size if isinstance(size, int) and size >= 0 else 0}
+
+
+def _draft(found):
+    message = found.get("message") if isinstance(found, dict) else None
+    if not isinstance(message, dict) or not found.get("id") or not message.get("id"):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete draft; try again", 502, retryable=True)
+    return {"id": str(found["id"]), "message": str(message["id"]), "thread": str(message.get("threadId") or "")}
+
+
+def draft_find(c, mailbox, message_id):
+    """The draft whose Message-ID header is `message_id` (with its angle brackets), as {id, message, thread}, or None."""
+    page = _get(mailbox, "drafts", _token(c, mailbox), q="rfc822msgid:" + message_id.strip("<>"), maxResults=1)
+    rows = page.get("drafts") or []
+    if not isinstance(rows, builtins.list):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
+    return _draft(rows[0]) if rows else None
+
+
+def draft_create(c, mailbox, raw, thread_id=""):
+    """A new Gmail draft of this MIME (base64url), in `thread_id` when it answers one: {id, message, thread}."""
+    if len(raw) > INLINE_RAW_MAX:
+        raise Problem("gmail_size", "This draft is too large to write through Tico; write it in Gmail", 413)
+    message = {"raw": raw, **({"threadId": thread_id} if thread_id else {})}
+    return _draft(_call(mailbox, "drafts", _token(c, mailbox, write=True), data={"message": message}))
+
+
+def draft_raw(c, mailbox, draft_id):
+    """A draft's MIME (base64url) and thread, as Gmail holds it now: what a send of the draft freezes."""
+    found = _get(mailbox, "drafts/" + urllib.parse.quote(draft_id, safe=""), _token(c, mailbox), format="raw")
+    message = found.get("message") if isinstance(found, dict) else None
+    if not isinstance(message, dict) or not isinstance(message.get("raw"), str) or not message["raw"]:
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete draft; try again", 502, retryable=True)
+    return {"raw": message["raw"].rstrip("="), "thread": str(message.get("threadId") or "")}
+
+
+def draft_delete(c, mailbox, draft_id):
+    """Discard one draft. True when Gmail deleted it, False when it was already gone."""
+    url = BASE + urllib.parse.quote(mailbox, safe="") + "/drafts/" + urllib.parse.quote(draft_id, safe="")
+    status = gmail_delete_call(url, token=_token(c, mailbox, write=True))
+    if status in (200, 204):
+        return True
+    if status == 404:
+        return False
+    if status in (401, 403):
+        raise Problem("gmail_refused", "Gmail refused this change; check the connection and Gmail access", 403)
+    raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)

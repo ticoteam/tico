@@ -4,9 +4,9 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 # Acme morning mail brief for the owner, Tue 2026-09-29
 
 Sample output for Acme, a fictional team. Every sender, subject and message id is invented. Filing is
-Off, so nothing has been labelled, archived or sent, and drafts are dry runs.
+Off, so nothing has been labelled, archived or sent; drafts wait in Gmail Drafts.
 
-**Headline: 41 in the inbox, the rules would settle 29. 3 need you today, 4 drafts are ready, 2 were routed.**
+**Headline: 41 in the inbox, the inbox automation would settle 29. 3 need you today, 4 drafts are ready, 2 were routed.**
 
 ## Needs you today
 - `18f2c9a3b4d5e6f7` The accountant asks you to approve the quarterly filing by Thursday (a deadline and
@@ -29,12 +29,12 @@ Off, so nothing has been labelled, archived or sent, and drafts are dry runs.
 - `18f2c9a3b4d5e705` a candidate's follow-up. Task created for the recruiting coordinator.
 
 ## Would file (if you turn filing on): 3
-Newsletters the rules did not catch. Ids are on the task; none has been touched.
+Newsletters the inbox automation did not catch. Ids are on the task; none has been touched.
 
 ## Could not read
 Nothing. The full inbox was read at 07:31.
 
 ## Sources
-- Mailbox owner@acme.example, untriaged listing with decisions, read 2026-09-29 07:31
+- Mailbox owner@acme.example, inbox and its Message automation's runs, read 2026-09-29 07:31
 - `playbooks/inbox-preferences.md`, `knowledge/voice.md`, read 2026-09-29
 ```

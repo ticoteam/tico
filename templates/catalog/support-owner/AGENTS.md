@@ -132,8 +132,8 @@ stop, and their end wakes you.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: read the record first (`tico task show <id>`, `tico task list`, `tico task list --all`).
-Mail, where you have it: `$HUB_DIR/scripts/mail.sh inbox --untriaged --format brief`, then
-`mail.sh thread <id> --format md` for one thread you are about to answer (docs/mail.md). Research the answer
+Mail, where you have it: `tico email inbox <address>`, then
+`tico email thread <address> <thread-id>` for one thread you are about to answer (docs/mail.md). Research the answer
 with `tico doc ask "<the customer's question in plain words>"` before you draft. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. Something a
 human must decide is `tico task create --owner <human>`; a repeated product problem is one such task
 for whoever `knowledge/escalation.md` names. A bot that cannot run, or a source that will not connect, is a task to
