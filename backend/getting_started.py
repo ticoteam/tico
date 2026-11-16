@@ -10,7 +10,7 @@ Those live in the person's `preferences` row, so each person has their own.
 import json
 import sqlite3
 
-from . import cloud_machines, model_login, providers
+from . import cloud_machines, model_login, providers, runner_online
 from .statuses import PARKED_SQL
 from .store import H, Problem, encode, readiness_document
 from . import bot_settings as BS
@@ -19,7 +19,6 @@ PREFERENCE = "onboarding.progress"
 BOTOPS = "botops"
 LIBRARIAN = "librarian"
 MARKET_TASK = "Set up the market map"
-ONLINE_SECONDS = 120
 # The checklist items a person may skip. GitHub is not one: without it a bot's repository cannot be made.
 OPTIONAL = ("subscription",)
 
@@ -72,15 +71,6 @@ def change_state(c, who, body):
 
 
 # ------------------------------------------------------------------ live checks
-def _online_runners(c):
-    since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    return c.execute(
-        "SELECT id,label,readiness FROM runners_with_state WHERE revoked_at IS NULL "
-        "AND last_seen_at>? ORDER BY last_seen_at DESC",
-        (since,),
-    ).fetchall()
-
-
 _wanted_runtimes = providers.wanted_runtimes
 
 
@@ -223,7 +213,7 @@ def _item(key, label, done, why, href="", tab="", optional=False, action="", log
 
 def checklist(c, who, settings, github):
     record = providers.load(c, settings)
-    runners = _online_runners(c)
+    runners = runner_online.online_rows(c)
     wanted = _wanted_runtimes(record)
     signed = _signed_in_runtime(runners, wanted, c)
     login = (providers.PROVIDER_BY_RUNTIME.get(next(iter(sorted(wanted)), ""), {}) or {}).get("login", "")

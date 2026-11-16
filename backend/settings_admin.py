@@ -13,6 +13,7 @@ from . import strategy_bot
 from . import message_bots as MessageBots
 from . import bot_access as BA
 from . import models as M
+from . import runner_online
 from . import placement
 from . import providers
 from . import rooms
@@ -1311,7 +1312,7 @@ class SettingsAdmin:
             raise Problem("not_found", "Computer is not registered", 404)
         if who.role != "owner" and runner["owner_id"] != H.actor_id(who.actor):
             raise Problem("forbidden", "Bot administrators may use only their own registered computers", 403)
-        if not runner["last_seen_at"] or runner["last_seen_at"] <= H.shift(H.now(), seconds=-60):
+        if not runner_online.is_online(runner["last_seen_at"]):
             raise Problem("runner_not_ready", "The destination computer is offline", 409)
         # A runner reports only on bots already assigned to it, so a bot's first placement has
         # nothing to be ready yet: assigning it is what makes the runner set its repository up.

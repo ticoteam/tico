@@ -17,6 +17,7 @@ from clients import gateway, sessions
 from . import access as Access
 from . import cloud_access, start_places
 from . import lifecycle
+from . import runner_online
 from . import bot_access as A
 from . import models as M
 from . import changelog as CL
@@ -562,7 +563,7 @@ def prime_machines(c, slugs):
 
 def machine(c, bot):
     from .agents import presence
-    from .execution import AWAKE_GAP, Execution  # local: keeps execution out of the selector's fan-in
+    from .execution import Execution  # local: keeps execution out of the selector's fan-in
     from .screen import listing as screen_listing
 
     external = presence(c, bot)
@@ -572,9 +573,7 @@ def machine(c, bot):
     if not row:
         return {"online": False, "awake": False, "ready": False, "machine": None}
     now = H.now()
-    online = bool(
-        not row["revoked_at"] and row["last_seen_at"] and row["last_seen_at"] > H.shift(now, seconds=-AWAKE_GAP)
-    )
+    online = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
     # Online is contact; awake is contact that has lasted. A machine waking for a few seconds
     # is online and takes no work, so say which of the two a queued request is waiting for.
     awake = online and Execution.awake(row["awake_since"], now)
@@ -1141,7 +1140,7 @@ def operation_issues(c, who, auth):
         ).fetchall()
         busy = runner_busy_many(c, [row["id"] for row in runners])  # every computer's running turns in one read
         for row in runners:
-            online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
+            online = runner_online.is_online(row["last_seen_at"])
             if online and not runner_version_supported(row["version"]):
                 add(
                     "runner_version",
@@ -1210,7 +1209,7 @@ def operation_issues(c, who, auth):
         # reports every 10 minutes.
         if c.execute(
             "SELECT 1 FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
-            (H.shift(H.now(), seconds=-60),),
+            (runner_online.cutoff(),),
         ).fetchone():
             for service, label, limit in (("connector:calendar", "Calendar", 15), ("connector:mail", "Mail", 90)):
                 row = c.execute(
@@ -2897,6 +2896,8 @@ def install_views(app, store, auth, mutate, task_view):
                 hidden = set() if manage else unseen
                 bots = [bot for bot in placed.get(row["id"]) or [] if bot not in hidden]
                 value = dict(row)
+                # Online is decided here (backend/runner_online.py); the UI reads this flag, not its own clock.
+                value["online"] = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
                 value["turn_counts"] = turn_counts[row["id"]]
                 value["turn_summary"] = describe(value["turn_counts"])
                 value["release"] = runner_versions.view(fleet.get(row["id"])).get("release") or ""
@@ -3504,7 +3505,6 @@ def runnable_choices(c, who, auth, settings):
     this person manages (backend/readiness.py `can_run`, via health.runtime_choice). A harness not listed is not refused."""
     from .harnesses import HARNESS_BY_ID
     from .health import _movable, runtime_choice
-    from .getting_started import _online_runners
 
     enabled = providers.load(c, settings)["enabled"]
     harnesses = sorted(
@@ -3517,7 +3517,7 @@ def runnable_choices(c, who, auth, settings):
             if not (HARNESS_BY_ID.get(h) or {}).get("external")
         }
     )
-    computers = _movable(c, who, {r["id"] for r in _online_runners(c)})
+    computers = _movable(c, who, {r["id"] for r in runner_online.online_rows(c)})
     tico = {
         model["id"]
         for model in providers.MODEL_CATALOG

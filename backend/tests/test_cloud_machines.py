@@ -3710,10 +3710,10 @@ def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
     )
     claude = next(r for r in shared_row["runtimes"] if r["name"] == "claude")
     assert claude["plan"] == "subscription" and claude["ready"] and not claude["signable"]
-    from backend import getting_started
+    from backend import getting_started, runner_online
 
     with cloud.store.read() as c:
-        online = getting_started._online_runners(c)
+        online = runner_online.online_rows(c)
         assert getting_started._signed_in_runtime(online, {"claude"}, c) == "claude"
         assert getting_started._login_target(online, {"claude"}, c) is None
     add(cloud.api, "codex_login", codex_file(), name="ChatGPT")

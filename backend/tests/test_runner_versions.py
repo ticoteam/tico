@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend import releases, runner_versions
+from backend import releases, runner_online, runner_versions
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401
 
 
@@ -220,7 +220,7 @@ def test_queued_work_says_it_waits_for_the_computer_to_update_only_once_the_comp
     # Health names the hold and how long it has run; it is still not a queue_idle Tico bug (PR 623).
     with store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
-        online = {x["id"] for x in health._online_runners(c)}
+        online = {x["id"] for x in runner_online.online_rows(c)}
         assert {row["reason"] for row in health._waiting(c, online)[2]} == {"updating"}
         found = {f["check_id"]: f for f in maintenance_health.findings(c, store.settings)}
     assert "queue_idle" not in found

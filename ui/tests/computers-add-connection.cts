@@ -24,7 +24,7 @@ const shot = async (locator: Locator, name: string) => { if (SHOTS) await locato
     const now = Date.now(), at = (ms: number) => new Date(now + ms).toISOString();
     const tool = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0', managed: true, state: 'idle', wanted: true, pinned: false, update_available: false, detail: ''});
     const box = {id: 'box', label: 'Team box', owner_id: 'ana', bots: ['writer'], platform: 'linux', version: '0.3.53',
-      last_seen_at: at(-3000), readiness_at: at(-60000), needed_runtimes: ['codex'], bot_runtimes: ['codex'],
+      last_seen_at: at(-3000), online: true, readiness_at: at(-60000), needed_runtimes: ['codex'], bot_runtimes: ['codex'],
       readiness: {runtimes: {codex: {installed: true, authenticated: 'missing'}, claude: {installed: true, authenticated: 'missing'},
         grok: {installed: false}},
         harnesses: {codex: tool('Codex', 'codex'), claude: tool('Claude Code', 'claude')}},
@@ -129,6 +129,7 @@ const shot = async (locator: Locator, name: string) => { if (SHOTS) await locato
 
     // Offline: Add connection waits for the computer.
     box.last_seen_at = at(-3 * 3600000);
+    box.online = false;
     await page.evaluate(() => loadSettings());
     await detail.locator('[data-computer-offline]').waitFor();
     assert.equal(await detail.locator('[data-add-connection]:enabled').count(), 0);

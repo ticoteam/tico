@@ -33,6 +33,7 @@ from . import (
     wake_presets,
     wake_rules,
 )
+from . import runner_online
 from . import task_privacy as privacy
 from . import (
     browser_exit,
@@ -4738,8 +4739,7 @@ class Execution:
             if (
                 not target
                 or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
-                or not target['last_seen_at']
-                or target['last_seen_at'] < H.shift(H.now(), seconds=-90)
+                or not runner_online.is_online(target['last_seen_at'])
                 or not self.awake(target['awake_since'], H.now())
                 or runner_versions.paused(c, rid)
                 or cloud_machines.held(c, rid)

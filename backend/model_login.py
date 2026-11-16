@@ -44,6 +44,7 @@ import re
 
 from clients import harness_manifests as manifests
 
+from . import runner_online
 from .store import H, Problem
 from . import bot_settings as BS
 
@@ -112,7 +113,6 @@ VERDICTS = {
     "connect": ("failed",),
 }
 MAX_LINES, MAX_LINE = 12, 200
-ONLINE_SECONDS = 60
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
 
 # The runner redacts before it reports; this is the same rule again because the server does not
@@ -302,7 +302,7 @@ def _handles_keys(runner):
 
 
 def _online(runner):
-    return bool(runner["last_seen_at"]) and runner["last_seen_at"] >= H.shift(H.now(), seconds=-ONLINE_SECONDS)
+    return runner_online.is_online(runner["last_seen_at"])
 
 
 def _removes(runner):

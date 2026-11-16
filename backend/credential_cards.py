@@ -29,7 +29,7 @@ from pydantic import Field, SecretStr
 from .auth import validate_identity
 from .credentials import CredentialWrite, administrator, admin_names as _admin_names, ask_admin_detail, owned
 from .models import Contract, ID
-from . import reconnects
+from . import reconnects, runner_online
 from .store import H, Problem
 
 ENV = r"^[A-Z_][A-Z0-9_]{0,99}$"
@@ -58,7 +58,6 @@ from clients.access_entry import RESERVED_PREFIXES as RESERVED_ENV_PREFIXES, RES
 
 RESERVED_ENV = _RESERVED | {"OPENROUTER_API_KEY", "OP_SERVICE_ACCOUNT_TOKEN"}
 IMPORT_EXPIRES_S = 600
-ONLINE_S = 120
 
 
 class CredentialRequest(Contract):
@@ -688,7 +687,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             ).fetchone()
             if not place:
                 raise Problem("no_computer", "That bot is not on a computer, so there is no secrets file to read", 409)
-            if not place["last_seen_at"] or place["last_seen_at"] < H.shift(H.now(), seconds=-ONLINE_S):
+            if not runner_online.is_online(place["last_seen_at"]):
                 raise Problem(
                     "offline", f"{place['label']}, where that bot runs, is offline; try again when it is back", 409
                 )
