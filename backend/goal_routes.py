@@ -1040,7 +1040,9 @@ def install(app, store, auth, mutate, settings):
             row = G.goal(c, p["goal_id"]) if p["goal_id"] else None
             if row:
                 watch.append(row["id"])
-            step(f"/api/v2/proposals/{p['id']}/decide", {"decision": raw["decision"]})
+            # rc.1 clients reject any other spelling in a read-back step (their goal save whitelist accepts only
+            # goal-proposals/.../decide, kept below as an alias): keep this one until the floor moves past rc.1.
+            step(f"/api/v2/goal-proposals/{p['id']}/decide", {"decision": raw["decision"]})
             about = bold(row["title"]) if row else q((K.kpi(c, p["kpi_id"]) or {}).get("name") or "")
             text = (
                 ("Accept" if raw["decision"] == "confirm" else "Turn down")

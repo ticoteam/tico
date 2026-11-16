@@ -729,7 +729,8 @@ def proposal_decide(api, args):
     body = {"decision": args["decision"], "note": args.get("note") or ""}
     if args.get("option") is not None:
         body["option"] = int(args["option"])
-    path = "proposals"
+    # The rc.1 spelling for an on-behalf-of decide (the frozen fixture pins it); the server serves both.
+    path = "goal-proposals" if args.get("on_behalf_of") else "proposals"
     return _asked(api, args).post(f"{path}/{args['id']}/decide", body, key=_key(args))["proposal"]
 
 
