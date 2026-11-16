@@ -552,7 +552,7 @@ def test_same_timestamp_backlog_keeps_the_newest_notice_when_ids_sort_backwards(
         assert all(H.message(c, message) for message in messages)
 
 
-def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_runner(api, monkeypatch):
+def test_negotiated_fallback_continuation_keeps_its_provider(api, monkeypatch):
     from backend.tests.helpers.login_holds import two_bots
 
     machine = two_bots(api, monkeypatch)
@@ -588,19 +588,6 @@ def test_negotiated_fallback_continuation_keeps_its_provider_and_refuses_an_old_
         fallback_off(c, "ops")
         login_holds.record(c, machine['runner_id'], '', 'fake', H.now(), reset='2026-10-19T09:00:00.000000Z')
     at(monkeypatch, '2026-10-19T07:01:00.000000Z', api)
-    post(
-        api,
-        'runners/heartbeat',
-        {'version': 'test', 'platform': 'test', 'readiness': {'ops': True}, 'capabilities': ['capacity_continue_v1']},
-        machine['token'],
-    )
-    assert claim(api, machine) is None  # old runners know only primary-session continuation
-    post(
-        api,
-        'runners/heartbeat',
-        {'version': 'test', 'platform': 'test', 'readiness': {'ops': True}, 'capabilities': caps},
-        machine['token'],
-    )
     again = claim(api, machine)
     assert again and again['job_id'] == first['job_id']
     assert again['continue_thread'] == 'fallback-thread' and again['source_continuation'] == saved

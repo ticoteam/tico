@@ -58,21 +58,6 @@ def test_a_bot_uses_all_places_and_next_place_goes_to_the_bot_with_fewest(api):
     assert claim(api, machine)["lane"] == "task:" + tasks[4]["id"]
 
 
-def test_a_runner_without_lanes_runs_one_turn_per_bot(api):
-    machine = task_bot(api, lanes=False)
-    new_task(api, "first"), new_task(api, "second")
-    assert claim(api, machine)["lane"] == "main"
-    assert claim(api, machine) is None
-
-
-def test_a_main_built_runner_advertising_task_lanes_v1_runs_serially(api):
-    """Its session key reads an unset `session` as the bot thread, so its lanes would share one thread."""
-    machine = task_bot(api, lanes=True, capability="task_lanes_v1")
-    new_task(api, "first"), new_task(api, "second")
-    assert claim(api, machine)["lane"] == "main"
-    assert claim(api, machine) is None
-
-
 def test_a_finished_lane_leaves_the_bot_running_and_stop_names_the_turn(api):
     machine = task_bot(api, lanes=True)
     new_task(api, "first"), new_task(api, "second")

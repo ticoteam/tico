@@ -5,6 +5,7 @@ is its own thread tree with its own provider session (clients/sessions.py root k
 
 from backend.tests.helpers.api import assign, claim, post, ready, runner
 from backend.tests.helpers.session_clear import clear, finish
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 
 
 def test_a_clear_moves_the_epoch_every_later_turn_carries_and_starts_history_after_it(api):
@@ -69,13 +70,15 @@ def test_a_clear_with_no_chat_yet_is_a_no_op(api):
         assert not c.execute("SELECT 1 FROM session_epochs").fetchone()
 
 
-def test_a_runner_without_threads_gets_each_chat_its_own_session_not_the_bots_shared_thread(api):
-    """A runner that lacks threads_v1 keys a `session: bot` turn on the bot's one provider thread, which every chat
-    shares. Its chat turns are sent as `session: task` instead, so each conversation keeps its own session."""
-    old = runner(api)
-    assign(api, old, "ops")
-    ready(api, old, ["ops"])
-    post(api, "chat/ops", {"text": "Old runner question"})
-    turn = claim(api, old)
-    assert turn["config"]["session"] == "task", "an older runner: one session per chat"
-    finish(api, old, turn)
+def test_a_runner_with_threads_keys_each_chat_on_its_own_thread_not_the_bots_shared_one(api):
+    """Every runner at or above the floor advertises threads_v1: it keys a chat turn on the chat's own thread tree, the
+    turn names that thread's root, and the server sends no `session` override, so no chat shares the bot's one provider
+    thread."""
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
+    post(api, "chat/ops", {"text": "Threaded runner question"})
+    turn = claim(api, machine)
+    assert "session" not in turn["config"], "native threads: the server sends no session override"
+    assert turn["conversation"]["root_id"], "the chat's own thread root keys its session"
+    finish(api, machine, turn)

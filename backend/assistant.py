@@ -2095,16 +2095,6 @@ def install(app, store, auth, mutate, onboarding):
                 and str(row["lease_until"] or "") > H.now()
             )
             state = "made" if made else "making" if active else "failed"
-            if not made and row["state"] == "queued":
-                from .execution import MAKE_PAGE, capability_set
-
-                computer = c.execute(
-                    "SELECT r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
-                    "WHERE a.bot=?",
-                    (row["bot_id"],),
-                ).fetchone()
-                if computer and MAKE_PAGE not in capability_set(computer["capabilities"]):
-                    state = "update_required"
             return {"make_page": {"message_id": row["id"], "conversation_id": row["conversation_id"], "state": state}}
 
     # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like

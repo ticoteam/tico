@@ -5,6 +5,7 @@ import json
 
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 from runner_support import state
 from backend import bot_settings as BS
 
@@ -104,7 +105,7 @@ def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_
         assert H.session_root(c, "ops", public) == public
 
 
-def roots_runner(api, capabilities):
+def roots_runner(api):
     with api.app.state.store.transaction() as c:
         config = BS.read(c, 'ops')
         BS.write(c, 'ops', {**config, 'session': 'task'})
@@ -113,14 +114,14 @@ def roots_runner(api, capabilities):
     post(
         api,
         "runners/heartbeat",
-        {"version": "test", "platform": "test", "readiness": {"ops": True}, "capabilities": capabilities},
+        {"version": "test", "platform": "test", "readiness": {"ops": True}, "capabilities": RUNNER_CAPABILITIES},
         token=machine["token"],
     )
     return machine
 
 
 def test_a_subtask_turn_runs_in_its_parents_lane_and_session_and_links_and_checkpoints_the_parent(api):
-    machine = roots_runner(api, ["task_lanes_v2", "session_roots_v1"])
+    machine = roots_runner(api)
     (parent,) = tasks(api, ("bot:ops", None))
     first = claim(api, machine)
     assert first["lane"] == "task:" + parent and first["task"]["session_task_id"] == parent
@@ -163,7 +164,7 @@ def test_a_subtask_turn_runs_in_its_parents_lane_and_session_and_links_and_check
 
 
 def test_subtasks_a_bot_files_for_itself_from_one_turn_start_in_their_own_lanes_side_by_side(api):
-    machine = roots_runner(api, ["task_lanes_v2", "session_roots_v1"])
+    machine = roots_runner(api)
     post(
         api,
         "runners/heartbeat",
@@ -195,11 +196,27 @@ def test_subtasks_a_bot_files_for_itself_from_one_turn_start_in_their_own_lanes_
         )
 
 
-def test_an_older_runner_and_subtask_session_own_keep_each_subtask_its_own_session(api):
-    machine = roots_runner(api, ["task_lanes_v2"])
+def test_a_subtask_keeps_its_own_session_and_lane_beside_its_parent(api):
+    machine = roots_runner(api)
     (parent,) = tasks(api, ("bot:ops", None))
-    assert claim(api, machine)["lane"] == "task:" + parent
+    plan = claim(api, machine)
+    assert plan["lane"] == "task:" + parent
+    post(api, f"attempts/{plan['id']}/started", {"thread_id": "t-parent"}, machine["token"])
+    # Two turns at once on this computer, and this bot's subtasks keep sessions of their own (subtask_session: own).
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "readiness": {"ops": True},
+            "capacity": 2,
+            "capabilities": RUNNER_CAPABILITIES,
+        },
+        token=machine["token"],
+    )
     with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "subtask_session": "own"})
         sub = H.task_create(c, "human:ana", "Step 1 of the launch", "Do this step.", "bot:ops", parent_id=parent)["id"]
     assert claim(api, machine)["lane"] == "task:" + sub, "beside its parent's running turn, in a lane of its own"
     with api.app.state.store.read() as c:

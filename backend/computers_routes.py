@@ -62,7 +62,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 return execution.heartbeat(c, request.state.identity, body, live_tasks=selected if unchanged else None)
 
             result = mutate(request, body, work)
-        # No bot list: every runner the server accepts (0.4.0 on) reads its bots from GET runners/assignments when a
+        # No bot list: every runner the server accepts (0.6.0-rc.1 on) reads its bots from GET runners/assignments when a
         # `runner` change of kind "assignments" tells it to, and never read this one (at 53 bots it was ~0.5 MB a beat).
         # Kept as an empty list for the 0.5.0 and 0.6.0 contracts, which require the field (contracts/runner/releases).
         result["assignments"] = []

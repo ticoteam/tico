@@ -81,7 +81,7 @@ def test_a_computer_holds_one_subscription_per_runtime_of_the_right_kind(api):
     setup(api)
     company(api)
     m = machine(api)
-    old = machine(api, takes=False, bot="cpo", label="Old Mac")
+    old = machine(api, bot="cpo", label="Old Mac")
     first, second = add(api, name="One")["id"], add(api, name="Two")["id"]
     chatgpt = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     give(api, m, "codex", first, expected=422)  # a Claude login for Codex
@@ -95,10 +95,9 @@ def test_a_computer_holds_one_subscription_per_runtime_of_the_right_kind(api):
     assert sorted((a["runner_id"], a["runtime"], a["subscription_id"]) for a in state["assignments"]) == sorted(
         [(m["runner_id"], "claude", second), (m["runner_id"], "codex", chatgpt), (old["runner_id"], "claude", second)]
     )
-    assert state["capable"] == [m["runner_id"]]  # the old one needs an update
     computers = {s["id"]: s["computers"] for s in listed(api)}
     assert computers[first] == [] and sorted(computers[second]) == sorted([m["runner_id"], old["runner_id"]])
-    assert effect(api, m) == second and effect(api, old) is None
+    assert effect(api, m) == second and effect(api, old) == second
     give(api, m, "claude", None)
     assert effect(api, m) is None and len(get(api, "computer-subscriptions")["assignments"]) == 2
 
@@ -183,18 +182,6 @@ def test_a_plan_added_on_a_company_with_several_computers_waits_for_the_person_t
     add(api)
     assert effect(api, m) is None and given_events(api) == []
     assert listed(api)[0]["computers"] == [] and listed(api)[0]["usage"]["reason"] == "Not on a computer yet"
-
-
-def test_an_older_computer_runs_on_its_own_login_as_before(api):
-    setup(api)
-    company(api)
-    on(api, "ops", "claude", "claude-sonnet-5-5")
-    m = machine(api, signed_in=True, takes=False)
-    give(api, m, "claude", add(api)["id"])
-    post(api, "chat/ops", {"text": "Summarize the Acme account."})
-    turn = claim(api, m)
-    assert turn and turn["config"]["runtime"] == "claude" and "subscriptions" not in turn
-    assert "subscriptions" not in get(api, "credential-runtime", turn["token"])
 
 
 def test_handing_a_turn_its_subscription_is_not_a_write(api):
@@ -319,7 +306,7 @@ def test_a_held_subscription_falls_to_the_gateway_under_the_gateway_choice_and_w
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "isolated": True,
@@ -432,64 +419,6 @@ def test_removing_a_subscription_in_use_confirms_then_takes_it_off_every_compute
     assert r.status_code == 200 and r.json()["stopped"] == 1 and r.json()["computers"] == 2
     assert listed(api) == [] and get(api, "computer-subscriptions")["assignments"] == []
     assert post(api, f"attempts/{turn['id']}/renew", {}, m["token"])["stop"] is True
-
-
-def test_an_older_computer_on_its_own_login_is_left_alone_by_give_remove_and_a_refusal(api):
-    setup(api)
-    company(api)
-    on(api, "ops", "claude", "claude-sonnet-5-5")
-    on(api, "cpo", "claude", "claude-sonnet-5-5")
-    old = machine(api, signed_in=True, takes=False, label="Old Mac")  # runs Claude on its own login
-    m = machine(api, bot="cpo", claude="rejected")
-    message = post(api, "chat/ops", {"text": "Summarize the Acme account."})
-    turn = claim(api, old)
-    assert turn and "subscriptions" not in turn
-    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-own"}, old["token"])
-
-    def untouched():
-        with api.app.state.store.read() as c:
-            epoch = c.execute(
-                "SELECT epoch FROM session_epochs WHERE conversation_id=?", (message["conversation_id"],)
-            ).fetchone()
-            assert c.execute("SELECT state,stop_requested_at FROM attempts WHERE id=?", (turn["id"],)).fetchone()[
-                :
-            ] == ("running", None)
-        assert not epoch
-        assert not post(api, f"attempts/{turn['id']}/renew", {}, old["token"]).get("stop")
-
-    sid = add(api)["id"]
-    # Giving it: recorded (it signs in with it once updated), no confirm, nothing stopped, no session reset.
-    done = give(api, old, "claude", sid)
-    assert (done["subscription_id"], done["stopped"], done["sessions_reset"]) == (sid, 0, 0)
-    untouched()
-    # A refusal on a capable computer given the same subscription resets only that computer's sessions.
-    give(api, m, "claude", sid)
-    post(api, "chat/cpo", {"text": "Price the Acme plan."})
-    other = claim(api, m)
-    assert other["subscriptions"][0]["id"] == sid
-    post(api, f"attempts/{other['id']}/started", {"thread_id": "t-sub"}, m["token"])
-    post(
-        api,
-        f"attempts/{other['id']}/complete",
-        {
-            "outcome": "failed",
-            "last_seq": 0,
-            "auth_rejected": {"runtime": "claude", "reason": "OAuth token has expired"},
-        },
-        m["token"],
-    )
-    assert listed(api)[0]["status"] == "needs_reconnect"
-    untouched()
-    # Removing it: no confirm (nothing on the older computer stops), both computers counted as taken off.
-    r = api.delete(f"/api/v2/model-subscriptions/{sid}", headers=headers())
-    assert r.status_code == 200 and r.json()["stopped"] == 0 and r.json()["computers"] == 2
-    assert get(api, "computer-subscriptions")["assignments"] == []
-    untouched()
-    # Taking one off an older computer is the same: recorded only.
-    again = add(api, name="Again")["id"]
-    give(api, old, "claude", again)
-    assert give(api, old, "claude", None)["stopped"] == 0
-    untouched()
 
 
 def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api):
@@ -670,7 +599,7 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [MS.CAPABILITY, "task_lanes_v2", "session_roots_v1"],
+            "capabilities": ["model_subscriptions_v1", "task_lanes_v2", "session_roots_v1"],
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {
@@ -682,7 +611,7 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
         },
         token=m["token"],
     )
-    old = machine(api, takes=False, bot="cpo", label="Old Mac")
+    old = machine(api, bot="cpo", label="Old Mac")
     with api.app.state.store.read() as c:
         assert can_run(c, "ops", "codex")["can_run"] is False
     give(api, m, "codex", sid)
@@ -690,8 +619,6 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
     with api.app.state.store.read() as c:
         # The subscription is its Codex sign-in for every check (a move, a task model, a check model, Health) ...
         assert can_run(c, "ops", "codex")["can_run"] is True
-        # ... but not on a runner too old to take one.
-        assert can_run(c, "cpo", "codex")["can_run"] is False
     parent = post(api, "tasks", {"owner": "ops", "title": "Ship the import fix", "body": "Open the PR."})
     turn = claim(api, m)
     assert turn["task"]["id"] == parent["id"]
@@ -1127,7 +1054,7 @@ def test_automatic_fallback_uses_company_codex_without_a_local_login(api, mode):
         )
         choice = execution.fallback_choice(c, api.app.state.store.settings, m["runner_id"], "ops", config)
         assert choice == ((login_holds.subscription_login(sid), "codex") if eligible else None)
-    values = get(api, "credential-runtime", turn["token"]).get("subscriptions", [])
+    values = get(api, "credential-runtime?subscription_runtime=codex", turn["token"]).get("subscriptions", [])
     assert [(v["runtime"], v["id"]) for v in values] == ([("codex", sid)] if eligible else [])
     if eligible:
         assert json.loads(values[0]["value"])["tokens"]["account_id"] == "acct-1"
@@ -1229,7 +1156,7 @@ def test_live_primary_survives_unused_automatic_login_changes_but_active_fallbac
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE runner_states SET capabilities=? WHERE runner_id=?",
-            (encode([MS.CAPABILITY, "model_subscription_activation_v1"]), m["runner_id"]),
+            (encode(["model_subscriptions_v1", "model_subscription_activation_v1"]), m["runner_id"]),
         )
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     give(api, m, "codex", sid)
@@ -1281,7 +1208,7 @@ def test_automatic_login_is_rechecked_at_activation(api, blocked):
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE runner_states SET capabilities=? WHERE runner_id=?",
-            (encode([MS.CAPABILITY, "model_subscription_activation_v1"]), m["runner_id"]),
+            (encode(["model_subscriptions_v1", "model_subscription_activation_v1"]), m["runner_id"]),
         )
     sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     give(api, m, "codex", sid)
@@ -1322,15 +1249,17 @@ def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fa
         with api.app.state.store.transaction() as c:
             c.execute(
                 "UPDATE runner_states SET capabilities=? WHERE runner_id=?",
-                (encode([MS.CAPABILITY, MS.ACTIVATION_CAPABILITY]), m["runner_id"]),
+                (encode(["model_subscriptions_v1", "model_subscription_activation_v1"]), m["runner_id"]),
             )
             config = BS.read(c, 'ops')
             config["fallback"] = {"harness": "codex", "model": "gpt-6.1-sol"}
             BS.write(c, 'ops', config)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
-    assert "activate" not in turn["subscriptions"][0]
-    assert get(api, "credential-runtime", turn["token"])["subscriptions"][0]["id"] == sid
+    # A legacy automatic fallback is handed lazily, so its first delivery activates the restart fence; a named fallback
+    # is one of the bot's own runtimes and is not.
+    assert turn["subscriptions"][0].get("activate", False) is (not named)
+    assert get(api, "credential-runtime?subscription_runtime=codex", turn["token"])["subscriptions"][0]["id"] == sid
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-legacy"}, m["token"])
     assert give(api, m, "codex", None, expected=409)["error"]["running"] == 1
     assert give(api, m, "codex", None, confirm=True)["stopped"] == 1
@@ -1426,9 +1355,9 @@ def login_window(used, resets_in, reported_ago=timedelta(0)):
     return window_reading(used, resets_in, reported_ago, origin="login")
 
 
-def beat(api, m, profiles, *, takes=True, logins=True, signed_in=True, runtime="claude"):
+def beat(api, m, profiles, *, logins=True, signed_in=True, runtime="claude"):
     """A heartbeat: each login profile's runtimes as the computer reports them. `logins` names its default login (a
-    computer that does not names none); `takes` says it can take a subscription."""
+    computer that does not names none)."""
     readiness = {
         "schema_version": 1,
         "bots": {"ops": {"runtime": runtime, "ready": True}},
@@ -1436,7 +1365,7 @@ def beat(api, m, profiles, *, takes=True, logins=True, signed_in=True, runtime="
     }
     if logins:
         readiness["computer_profile"] = "own"
-    capabilities = ([MS.CAPABILITY] if takes else []) + (["computer_logins_v1"] if logins else [])
+    capabilities = ["model_subscriptions_v1"] + (["computer_logins_v1"] if logins else [])
     return post(
         api,
         "runners/heartbeat",
@@ -1470,7 +1399,7 @@ def home_beat(api, m, **runtimes):
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [MS.CAPABILITY, "computer_logins_v1"],
+            "capabilities": ["model_subscriptions_v1", "computer_logins_v1"],
             "readiness": {
                 "schema_version": 1,
                 "bots": {"ops": {"runtime": next(iter(runtimes), "claude"), "ready": True}},
@@ -1505,8 +1434,8 @@ def test_a_plan_says_why_it_shows_no_usage_yet(api):
     company(api)
     sid = add(api)["id"]
     assert usage_of(api, sid) == NO_COMPUTER
-    # An older computer signs in with its own login, so its windows are not this plan's: it is only given the plan.
-    old = machine(api, takes=False, label="Old Mac")
+    # A computer that does not report its own login's windows (no computer_logins_v1) is only given the plan.
+    old = machine(api, label="Old Mac")
     give(api, old, "claude", sid)
     assert usage_of(api, sid)["reason"] == "Update the computer to see usage"
     m = runner(api, label="Plan Mac")

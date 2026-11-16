@@ -20,7 +20,7 @@ class Loads:
     `runners` is {id: runners row}; `holds` is every login hold ({key: stored value}), so a missing key is no hold."""
 
     def __init__(
-        self, record, plain, access, given, runners, status, waits, limits, backoff, exits, held, holds, company=None
+        self, record, plain, access, given, runners, status, waits, limits, backoff, held, holds, company=None
     ):
         self.record = record  # providers.load(c, settings): the company's choice, the environment's seed included
         self.plain = plain  # providers.load(c): the same without the seed (for_claim reads it so); None if unread
@@ -31,7 +31,6 @@ class Loads:
         self.waits = waits  # {bot: the Gateway's wait, a dict}
         self.limits = limits  # {bot: own usage limits, as usage_limits.own returns them}
         self.backoff = backoff  # {bot: run_backoff row as a dict, {} when none}
-        self.exits = exits  # {bot: browser exit's computer or None}; None when not read
         self.held = held  # {bot: turns it holds on every computer}
         self.holds = holds  # {login-hold key: stored value}
         self.company = company  # company_pause.record(c): the company's pause on record, None while it runs
@@ -82,13 +81,6 @@ class Loads:
 
         return run_backoff.get(c, bot)
 
-    def exit_of(self, c, bot):
-        if self.exits is not None and bot in self.exits:
-            return self.exits[bot]
-        from . import browser_exit
-
-        return browser_exit.bot_exit(c, bot)
-
     def held_of(self, c, bot):
         if bot in self.held:
             return self.held[bot]
@@ -101,11 +93,10 @@ class Loads:
         return _dict(self.holds.get(key))
 
 
-def read(c, settings, runners, bots, *, exits=True):
+def read(c, settings, runners, bots):
     """The Loads for `bots` (their ids) and `runners` ({id: runners row}), in fixed set queries: the company's values
-    once, then each bot's rows in chunks of 500 bots (one statement while there are fewer). `exits`: whether the
-    browser exits are read (a computer that does not advertise browser_exit_v1 needs them)."""
-    from . import providers, cloud_access, usage_limits, run_backoff, browser_exit, start_places
+    once, then each bot's rows in chunks of 500 bots (one statement while there are fewer)."""
+    from . import providers, cloud_access, usage_limits, run_backoff, start_places
     from . import model_subscriptions, company_pause
     from .hubdb import chunks
     from .execution import GATEWAY_WAIT
@@ -143,7 +134,6 @@ def read(c, settings, runners, bots, *, exits=True):
         waits,
         usage_limits.own_many(c, bots),
         run_backoff.get_many(c, bots),
-        browser_exit.exits_of(c, bots) if exits else None,
         start_places.held_counts(c, bots),
         holds,
         company_pause.record(c),

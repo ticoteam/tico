@@ -59,8 +59,7 @@ account's value. A refresh is the same account: a run still going that reads aft
 its record moves with it (`run_values`), so its write-back and its verdict (`turn_rejected`, `turn_worked`) match
 what it ran on.
 
-Only a runner that says it can (`CAPABILITY`) is handed subscriptions; an older one runs as before and the page says it
-needs an update. One computer is one trust group: every bot on a computer runs as the same OS user there (SECURITY.md).
+One computer is one trust group: every bot on a computer runs as the same OS user there (SECURITY.md).
 
 A run the provider refuses on a subscription marks it `needs_reconnect` and leaves the computer's own login alone: it is
 passed over until someone saves a new value (Reconnect), and a run on it that completes marks it working. Only a run on
@@ -79,8 +78,6 @@ from . import hubdb as H
 from .models import Contract, ID
 from .store import Problem, readiness_document
 
-CAPABILITY = "model_subscriptions_v1"
-ACTIVATION_CAPABILITY = "model_subscription_activation_v1"
 STATUSES = ("new", "working", "needs_reconnect")
 MAX_SUBSCRIPTIONS = 200
 MAX_VALUE = 64 * 1024
@@ -262,11 +259,6 @@ def row(c, sid):
     return H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (sid,)) if _present(c) else None
 
 
-def runner_takes(runner):
-    caps = H._json(runner["capabilities"], []) if runner else []
-    return CAPABILITY in (caps or [])
-
-
 def _given(c):
     """{(runner_id, runtime): subscription (no value)} for every computer given one, read once per snapshot: the claim
     asks for every bot on every poll, and most installs have none. A computer given a person's plans (`person`) names
@@ -405,7 +397,7 @@ def in_effect(c, runner_id, runtime, loads=None):
         from .read_cache import one
 
         runner = one(c, RUNNER_CAPABILITIES_SQL, (runner_id,))
-    return sub if runner_takes(runner) else None
+    return sub if runner else None
 
 
 def passed_over(c, runner_id, runtime, loads=None):
@@ -680,12 +672,7 @@ def _plan_usage(c, sub, runtime, ctx):
         return _reason("Not on a computer yet")
     if sub["status"] == "needs_reconnect":
         return _reason("Reconnect to see usage")
-    readers = [
-        g
-        for g in computers
-        if runner_takes(runners[g["runner_id"]])
-        and computer_logins(runners[g["runner_id"]], ctx["ready"][g["runner_id"]])
-    ]
+    readers = [g for g in computers if computer_logins(runners[g["runner_id"]], ctx["ready"][g["runner_id"]])]
     if not readers:
         return _reason("Update the computer to see usage")
     now = datetime.now(timezone.utc)
@@ -884,11 +871,7 @@ def assignments(c):
                     "set": state,
                 }
             )
-    capable = [
-        r["id"]
-        for r in c.execute("SELECT id,capabilities FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id")
-        if runner_takes(r)
-    ]
+    capable = [r["id"] for r in c.execute("SELECT id FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id")]
     people = {}
     for runtime in RUNTIMES:
         for owner, plans in plan_owners(c, runtime).items():
@@ -1051,11 +1034,10 @@ def _signed_in_with(c, sid):
     return [
         (g["runner_id"], g["runtime"])
         for g in c.execute(
-            "SELECT g.runner_id,g.runtime,r.capabilities FROM computer_subscriptions g "
+            "SELECT g.runner_id,g.runtime FROM computer_subscriptions g "
             "JOIN runners_with_state r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id, g.runtime",
             (sid,),
         ).fetchall()
-        if runner_takes(g)
     ]
 
 
@@ -1301,8 +1283,7 @@ def give(c, settings, who, body):
             "stopped": 0,
             "sessions_reset": 0,
         }
-    takes = runner_takes(runner)
-    if takes and not body.confirm:
+    if not body.confirm:
         plan = _plan(c, settings, body.runner_id, body.runtime)
         if plan["running"]:
             _confirm(plan)
@@ -1319,7 +1300,7 @@ def give(c, settings, who, body):
         _set(c, body.runner_id, body.runtime, want, who.actor)
     else:
         c.execute("DELETE FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (body.runner_id, body.runtime))
-    done = _restart(c, settings, body.runner_id, body.runtime) if takes else {"stopped": 0, "sessions_reset": 0}
+    done = _restart(c, settings, body.runner_id, body.runtime)
     if person:
         action, target = "subscription.person_given", person
     else:
@@ -1562,7 +1543,7 @@ def for_claim(c, runner, config, loads=None):
             continue  # a subscription authenticates a CLI; it cannot install one
         sub = in_effect(c, runner["id"], runtime, loads=loads)
         if sub:
-            lazy = runtime not in own and ACTIVATION_CAPABILITY in (H._json(runner["capabilities"], []) or [])
+            lazy = runtime not in own
             out.append({"runtime": runtime, "subscription": sub, "activate": lazy})
     return out
 
@@ -1793,11 +1774,7 @@ def _connect_computers(c, runtime, who=None):
     found = []
     for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         report = readiness_document(runner["readiness"]).get("runtimes") or {}
-        if (
-            model_login.connects(runner)
-            and model_login._online(runner)
-            and (report.get(runtime) or {}).get("installed")
-        ):
+        if model_login._online(runner) and (report.get(runtime) or {}).get("installed"):
             found.append(runner)
     found.sort(key=lambda r: r["last_seen_at"] or "", reverse=True)
     found.sort(key=lambda r: (r["owner_id"] != me, r["id"] in busy))

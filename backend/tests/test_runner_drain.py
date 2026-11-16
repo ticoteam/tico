@@ -2,6 +2,7 @@
 
 from backend import runner_versions
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 
 
 def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_turn(api):
@@ -10,7 +11,7 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
     attempts, tasks = [], []
     for bot in bots:
         assign(api, machine, bot)
-    ready(api, machine, bots)
+    ready(api, machine, bots, capabilities=RUNNER_CAPABILITIES)
     for bot in bots:
         tasks.append(
             post(api, "tasks", {"owner": bot, "title": "Check the synthetic report", "body": "Use only fixture data."})
@@ -56,7 +57,7 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
         {
             "version": "test",
             "platform": "test",
-            "release": "0.4.0",
+            "release": "0.6.0-rc.1",
             "readiness": {b: True for b in bots},
             "update": {"state": "waiting", "running": 1, "handed_back": 3},
         },
@@ -70,14 +71,14 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
         assert runner_versions.holding_since(c, machine["runner_id"])
     post(api, f"attempts/{running['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
     # The replacement runner reports no active drain; the three original jobs can be claimed again.
-    ready(api, machine, bots)
+    ready(api, machine, bots, capabilities=RUNNER_CAPABILITIES)
     post(
         api,
         "runners/heartbeat",
         {
             "version": "test",
             "platform": "test",
-            "release": "0.4.0",
+            "release": "0.6.0-rc.1",
             "readiness": {b: True for b in bots},
             "update": {"state": "idle"},
         },
@@ -91,7 +92,7 @@ def test_drain_requeues_three_unstarted_claims_and_waits_only_for_the_started_tu
 def test_a_capped_turn_resumes_its_session_without_checkpointing_partial_output_and_stop_still_wins(api):
     machine = runner(api)
     assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
     task = post(api, "tasks", {"owner": "ops", "title": "Prepare a synthetic report", "body": "Use only fixture data."})
     attempt = claim(api, machine, "ops")
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "saved-thread"}, machine["token"])

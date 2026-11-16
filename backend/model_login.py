@@ -54,8 +54,7 @@ RUNTIMES = manifests.with_capability("browser_sign_in")
 PASTE_RUNTIMES = manifests.with_capability("paste_code")
 SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
 CONNECT_RUNTIMES = manifests.with_capability("subscription_connect")
-# What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
-# handed another kind: it would start a sign-in instead.
+# What a row asks the runner to do.
 KINDS = (
     "sign_in",
     "switch",
@@ -68,21 +67,10 @@ KINDS = (
     "to_key",
     "connect",
 )
-SIGN_OUT_CAPABILITY = "model_sign_out_v1"
-# A runner that clears and uses a computer's key (runner-rs/src/login.rs); an older one is asked to update first.
-KEYS_CAPABILITY = "model_keys_v1"
 KEY_KINDS = ("clear_key", "use_key", "to_key")
 # The kinds that check a key staged in the vault for them (backend/computer_keys.py store/confirm/discard).
 KEY_JOBS = ("use_key", "to_key")
 KEY_JOBS_SQL = "kind IN ('use_key','to_key')"
-# A runner that can take a computer login off its key once a subscription works there (runner-rs/src/login.rs).
-SWITCH_TYPE_CAPABILITY = "model_switch_type_v1"
-# A runner that can take a named subscription off the computer (runner-rs/src/login.rs run_remove).
-REMOVE_CAPABILITY = "model_remove_v1"
-# A runner that can move a computer login off its subscription onto a key (`to_key`, runner-rs/src/login.rs).
-SWITCH_TO_KEY_CAPABILITY = "model_switch_to_key_v1"
-# A runner that can sign a plan in for a company subscription (`connect`, runner-rs/src/login.rs).
-CONNECT_CAPABILITY = "model_connect_v1"
 # The kinds that sign in on the side and have a commit point (`finishing`).
 SIDE_KINDS = ("switch", "to_subscription")
 # A removal has a commit point too: the bots check is made again there, before anything is signed out or deleted.
@@ -285,32 +273,8 @@ def _login(c, rid, lid):
     return row
 
 
-def _signs_out(runner):
-    return SIGN_OUT_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
-def _switches_type(runner):
-    return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
-def _switches_to_key(runner):
-    return SWITCH_TO_KEY_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
-def _handles_keys(runner):
-    return KEYS_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
 def _online(runner):
     return runner_online.is_online(runner["last_seen_at"])
-
-
-def _removes(runner):
-    return REMOVE_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
-
-
-def connects(runner):
-    return CONNECT_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _queue(c, who, runner, runtime, profile, kind, what):
@@ -346,21 +310,6 @@ def _queue(c, who, runner, runtime, profile, kind, what):
         raise Problem("state", f"Something else is running on {profile} on that computer; wait for it to finish", 409)
     if not _online(runner):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
-    if (
-        kind != "sign_in"
-        and not _signs_out(runner)
-        or kind in KEY_KINDS
-        and not _handles_keys(runner)
-        or kind == "to_subscription"
-        and not _switches_type(runner)
-        or kind == "remove"
-        and not _removes(runner)
-        or kind == "to_key"
-        and not _switches_to_key(runner)
-        or kind == "connect"
-        and not connects(runner)
-    ):
-        raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
     c.execute(
@@ -560,8 +509,6 @@ def _share_with(c, who, runner_ids, credential_id, here, runtime):
                 "subscription from here, so it cannot take the shared key until it is back",
                 409,
             )
-        if not _signs_out(row):
-            raise Problem("runner_version", f"Update {row['label']} to use the shared key from here", 409)
     now = H.now()
     allowed = names(runtime)
     for row in rows:
@@ -1092,7 +1039,6 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
                 "id": row["id"],
                 "label": row["label"],
                 "online": _online(row),
-                "updated": _handles_keys(row),
                 "may": _may(c, who, row, auth),
             }
             for row in _shared_users(c, runner, runtime)
@@ -1169,14 +1115,6 @@ def clear_key(c, who, rid, runtime, scope="this", auth=None):
             "forbidden",
             "You cannot change the key on " + ", ".join(refused) + "; clear it on this computer only, or ask an admin",
             403,
-        )
-    # Offline too: an older runner has no clear_key handler, so a mark left for it would never clear its copy.
-    stale = [row["label"] for row in rows if not _handles_keys(row)]
-    if stale:
-        raise Problem(
-            "runner_version",
-            "Update " + ", ".join(stale) + " to clear its key from here, or delete the shared key in Tools > Keys",
-            409,
         )
     out = []
     for row in rows:

@@ -18,6 +18,7 @@ from backend import models as M
 from backend.store import H
 from backend.tests.helpers.api import assign, headers, post, runner  # noqa: F401  (the api fixture)
 from backend.tests.helpers.events import live  # noqa: F401  (a listening server for the event stream)
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 from scripts import check_wire_contract as W
 
 CONTRACT = W.load()
@@ -160,29 +161,17 @@ def readiness(bot):
 
 
 def heartbeat_body(bot):
-    """A heartbeat as runner-rs/src/runner.rs `maintain` builds it on a Docker runner following a release."""
+    """A heartbeat as runner-rs/src/runner.rs `maintain` builds it on a Docker runner following a release (rc.1:
+    `version` is the protocol version, `release` the build's, sent while following the server's release)."""
     return {
-        "version": "0.5.0",
+        "version": "0.5.4",
         "platform": "Linux-6.8-x86_64",
         "capacity": 4,
-        "capabilities": [
-            "task_lanes_v2",
-            "session_roots_v1",
-            "task_goals_v1",
-            "capacity_continue_v1",
-            "source_continue_v1",
-            "model_sign_out_v1",
-            "model_keys_v1",
-            "model_switch_type_v1",
-            "model_remove_v1",
-            "model_switch_to_key_v1",
-            "turns_at_once_v1",
-            "private_lanes_v1",
-        ],
+        "capabilities": list(RUNNER_CAPABILITIES),
         "readiness": readiness(bot),
         "mail_agent_instructions": {},
         "agent_instructions": {},
-        "release": "0.5.0",
+        "release": "0.6.0-rc.1",
         "kind": "docker",
         "update": {"state": "idle", "target": "", "error": ""},
         "profiles": [],
@@ -338,7 +327,8 @@ def test_the_committed_requests_are_the_servers_models():
 
 
 def kept():
-    return [path for _, path in W.window(W.releases())]
+    # A copy below the minimum runner release is not served any more (runner_versions.MIN_RUNNER_RELEASE, 0.6.0-rc.1).
+    return [path for version, path in W.window(W.releases()) if version >= (0, 6, 0)]
 
 
 def test_the_contract_is_compatible_both_ways_with_every_release_in_the_window():
@@ -366,6 +356,8 @@ def test_an_old_runners_requests_still_drive_this_server(api):
         old = W.load(path)["wire"]
         computer = runner(api, label="Runner " + path.name)
         assign(api, computer, "ops", generation=current_generation(api, "ops"))
+        # The computer reports its release first, as every runner does: a computer that never did is not served.
+        post(api, "runners/heartbeat", heartbeat_body("ops"), token=computer["token"])
         aid = ""
         for name, case in TURN:
             recorded = json.loads((path / W.FIXTURES / ("%s.%s.json" % (name, case))).read_text())

@@ -33,10 +33,6 @@ RETENTION_DAYS = 30
 USAGE_PAGE, USAGE_PAGE_MAX = 200, 500
 PORTS = (80, 443)
 LINK_PATH = "/api/v2/runners/me/browser-exit/ws"
-# A runner that advertises this runs a bot's turns through its browser exit (runner-rs/src/browser_exit.rs). Any other
-# runner would ignore the exit and browse from its own address, so a bot with an exit waits for an updated runner
-# (execution.claim_refusal `browser_exit_update`).
-CAPABILITY = "browser_exit_v1"
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}|[0-9A-Fa-f:.]{2,45}")
 
 
@@ -125,19 +121,6 @@ def generations(c):
         {r[0]: int(r[1]) for r in c.execute("SELECT runner_id,generation FROM browser_exits")},
         {r[0]: int(r[1]) for r in c.execute("SELECT bot,generation FROM bot_browser_exits")},
     )
-
-
-def exits_of(c, bots):
-    """{bot: the computer its browser exit is set on, or None} for every bot in `bots`, read in set queries (bot_exit)."""
-    from .hubdb import chunks
-
-    found = {}
-    for part in chunks(bots):
-        for row in c.execute(
-            f"SELECT bot,runner_id FROM bot_browser_exits WHERE bot IN ({','.join('?' * len(part))})", part
-        ):
-            found[row["bot"]] = row["runner_id"]
-    return {bot: found.get(bot) for bot in bots}
 
 
 def bot_exits(c):

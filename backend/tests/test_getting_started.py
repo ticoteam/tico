@@ -117,7 +117,7 @@ def report_claude(api, m, claude):
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [subs.MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {"claude": claude, "codex": {"installed": True, "authenticated": "missing"}},
