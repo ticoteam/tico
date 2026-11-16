@@ -10,9 +10,10 @@
    the stage's rules (stage-rules.ts); then Flow's mark and how many items in the stage wait on the person opens Flow on
    the stage (decide.ts decideStageOpen); there is no mark where none wait. On a phone the rules mark sits at the end of the stage
    tabs. The columns scroll sideways in their own box, a fade on each edge that has more beyond it; a stage with no
-   tasks is as tall as its header. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
-   search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
-   file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
+   tasks is as tall as its header. A stage draws its first 50 tasks, then "Show 250 more" for the rest of it (PV_CAP); a
+   draw changes only the columns that changed (pvPaint), so a flood of live changes does not draw the whole board. The
+   page (tasks-page.ts) owns the header, loading the pipeline and its tasks, search, filter, the archive and opening a
+   task (any [data-task] element); it calls the hooks set at the end of this file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -31,7 +32,16 @@ interface PvState {
   /** Where the columns were scrolled (scrollLeft, scrollTop), put back after each draw. */
   x: number;
   y: number;
+  /** The stages whose every card is shown (Show N more); the others show their first PV_CAP. */
+  open: Set<string>;
+  /** What was last drawn in the root, so a draw changes only what changed. */
+  drawn: PvDrawn | null;
 }
+/** The view as last drawn: its element, what it was drawn as (the layout and the stages), the bar, and each column's header
+ * and cards by stage (columns), or the whole view's HTML (the list, a phone). */
+interface PvDrawn { el: Element; frame: string; bar: string; cols: Map<string, {head: string; body: string}>; whole: string }
+/** A stage draws its first PV_CAP cards and says how many more: a column of 300 is not 300 cards. */
+const PV_CAP = 50;
 
 let PV: PvState | null = null;
 const PV_BOUND = new WeakSet<HTMLElement>();
@@ -69,7 +79,7 @@ function pvScrollKeep(pipelineId: string, x: number): void {
 function pvStateFor(rec: PipelineRec): PvState {
   if (PV && PV.rec.id === rec.id) return PV;
   PV = {rec, tasks: [], opts: {layout: 'columns', phone: false, q: '', filters: {}}, root: null,
-    stage: pvStageKept(rec.id), moving: new Map(), bar: null, x: pvScrollKept(rec.id), y: 0};
+    stage: pvStageKept(rec.id), moving: new Map(), bar: null, x: pvScrollKept(rec.id), y: 0, open: new Set(), drawn: null};
   return PV;
 }
 
@@ -192,12 +202,26 @@ const pvRowHTML = (t: TaskAny): string => pvBlocked(t) ? taskRowHTML({...t, snoo
 
 const pvSearching = (opts: PvOpts): boolean => !!opts.q.trim() || taskFiltersOn(opts.filters);
 
-function pvColumnsHTML(state: PvState): string {
+/** A stage's tasks drawn as `each` draws one: its first PV_CAP, then Show N more, unless it was opened in full. */
+function pvStageItemsHTML(state: PvState, stageId: string, tasks: TaskAny[], each: (t: TaskAny) => string): string {
+  const all = state.open.has(stageId) || tasks.length <= PV_CAP, rest = all ? 0 : tasks.length - PV_CAP;
+  return (all ? tasks : tasks.slice(0, PV_CAP)).map(each).join('')
+    + (rest ? `<button type="button" class="ghost pv-more" data-pv-more="${esc(stageId)}">Show ${rest} more</button>` : '');
+}
+
+/** A column's header and cards, apart: the board draws again only the parts that changed (pvPaint). */
+const pvColHeadHTML = (state: PvState, stage: PipelineStageRec): string =>
+  `${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}`;
+const pvColBodyHTML = (state: PvState, stage: PipelineStageRec): string =>
+  pvStageItemsHTML(state, stage.id ?? '', pvInStage(state, stage.id ?? ''), pvCardHTML);
+
+/** The columns; `parts` takes each column's header and cards, by stage. */
+function pvColumnsHTML(state: PvState, parts?: Map<string, {head: string; body: string}>): string {
   const cols = state.rec.stages.map(stage => {
-    const id = stage.id ?? '';
-    const cards = pvInStage(state, id).map(pvCardHTML).join('');
-    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}</header>
-      <div class="pv-col-body">${cards}</div></section>`;
+    const id = stage.id ?? '', head = pvColHeadHTML(state, stage), body = pvColBodyHTML(state, stage);
+    parts?.set(id, {head, body});
+    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${head}</header>
+      <div class="pv-col-body">${body}</div></section>`;
   }).join('');
   return `<div class="pv-cols" data-pv-drag>${cols}</div>`;
 }
@@ -208,7 +232,7 @@ function pvListHTML(state: PvState): string {
     const rows = pvInStage(state, stage.id ?? '');
     if (!rows.length && searching) return '';
     return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}</h2>
-      <div class="pv-rows">${rows.map(pvRowHTML).join('')}</div></section>`;
+      <div class="pv-rows">${pvStageItemsHTML(state, stage.id ?? '', rows, pvRowHTML)}</div></section>`;
   }).join('');
   return groups || '<p class="pv-empty muted">Nothing found</p>';
 }
@@ -233,7 +257,7 @@ function pvPhoneHTML(state: PvState): string {
       + `${esc(stage.name)} <span class="tnum">${esc(pvStageCount(state, stage))}</span>${pvTabDotHTML(stage)}</button>`;
   }).join('');
   // The column's cards (task #220); an empty stage says so in one line (style guide: empty lists say so in one line).
-  const rows = pvInStage(state, shown).map(pvCardHTML).join('')
+  const rows = pvStageItemsHTML(state, shown, pvInStage(state, shown), pvCardHTML)
     || `<p class="pv-empty muted">${pvSearching(state.opts) ? 'Nothing found' : 'Nothing here'}</p>`;
   // A phone has no tooltip: a limited stage whose tasks wait on a person says so in one muted line above its cards.
   // No ▶ beside the tabs: the header's ▶ Review opens the open stage's items (tasks-page.ts tasksReview).
@@ -256,9 +280,46 @@ function pvBarHTML(bar: PvBar | null): string {
     <button type="button" class="ghost" data-pv-bar-x aria-label="Close">✕</button></div>`;
 }
 
-function pvHTML(state: PvState): string {
-  const body = state.opts.phone ? pvPhoneHTML(state) : state.opts.layout === 'columns' ? pvColumnsHTML(state) : pvListHTML(state);
+function pvHTML(state: PvState, parts?: Map<string, {head: string; body: string}>): string {
+  const body = state.opts.phone ? pvPhoneHTML(state) : state.opts.layout === 'columns' ? pvColumnsHTML(state, parts) : pvListHTML(state);
   return `<div class="pv${state.opts.phone ? ' pv-is-phone' : ''}">${pvBarHTML(state.bar)}${body}</div>`;
+}
+
+/** Draws the view into `root`, changing only what changed since the last draw there: the columns keep their elements,
+ * and a column whose header or cards changed has only that part drawn again (a live flood of task changes touches a
+ * few columns, not the whole board). The list and a phone are drawn whole, and only when they changed. */
+function pvPaint(state: PvState, root: HTMLElement): void {
+  const was = state.drawn, el = root.firstElementChild, columns = !state.opts.phone && state.opts.layout === 'columns';
+  const frame = `${state.opts.phone ? 'phone' : state.opts.layout}|${state.rec.stages.map(s => `${s.id ?? ''}:${s.name}`).join('|')}`;
+  const bar = pvBarHTML(state.bar);
+  if (columns && was && el && was.el === el && was.frame === frame && !was.whole) {
+    const cols = el.querySelector(':scope > .pv-cols');
+    const found = state.rec.stages.map(stage => {
+      const col = cols?.querySelector<HTMLElement>(`:scope > [data-pv-col="${CSS.escape(stage.id ?? '')}"]`);
+      return {stage, head: col?.querySelector<HTMLElement>(':scope > .pv-col-head'), body: col?.querySelector<HTMLElement>(':scope > .pv-col-body')};
+    });
+    if (found.every(f => f.head && f.body && was.cols.has(f.stage.id ?? ''))) {
+      if (bar !== was.bar) {
+        el.querySelector(':scope > .pv-bar')?.remove();
+        if (bar) el.insertAdjacentHTML('afterbegin', bar);
+        was.bar = bar;
+      }
+      for (const {stage, head, body} of found) {
+        const kept = was.cols.get(stage.id ?? '')!, h = pvColHeadHTML(state, stage), b = pvColBodyHTML(state, stage);
+        if (h !== kept.head) { head!.innerHTML = h; kept.head = h; }
+        if (b !== kept.body) { body!.innerHTML = b; kept.body = b; }
+      }
+      return;
+    }
+  }
+  const parts = new Map<string, {head: string; body: string}>(), html = pvHTML(state, parts);
+  if (!columns && was && el && was.el === el && was.whole === html) return;
+  // A phone's stage tabs keep where they were scrolled to.
+  const left = root.querySelector('.pv-tabs')?.scrollLeft || 0;
+  root.innerHTML = html;
+  const tabs = root.querySelector('.pv-tabs');
+  if (tabs && left) tabs.scrollLeft = left;
+  state.drawn = root.firstElementChild ? {el: root.firstElementChild, frame, bar, cols: parts, whole: columns ? '' : html} : null;
 }
 
 /** The columns drawn in the view's root now; null in the list and on a phone. */
@@ -304,7 +365,7 @@ function pvDraw(state: PvState): void {
   pvScrollRead(state);
   const field = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
   const text = field?.value ?? '', typing = !!field && document.activeElement === field;
-  root.innerHTML = pvHTML(state);
+  pvPaint(state, root);
   pvScrollRestore(state);
   pvTabsEdges(root);
   const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
@@ -326,6 +387,8 @@ function pvClick(state: PvState, ev: MouseEvent): void {
   if (play) { void decideStageOpen(play.dataset['pvPlay'] ?? ''); return; }
   const tab = target.closest<HTMLElement>('[data-pv-tab]');
   if (tab) { pvStageShow(state, tab.dataset['pvTab'] ?? ''); return; }
+  const more = target.closest<HTMLElement>('[data-pv-more]');
+  if (more) { state.open.add(more.dataset['pvMore'] ?? ''); pvDraw(state); return; }
   if (target.closest('[data-pv-bar-x]')) { state.bar = null; pvDraw(state); return; }
   const wake = target.closest<HTMLElement>('[data-pv-unsnooze]');
   if (wake) { ev.stopPropagation(); pvUnsnooze(state, wake.dataset['pvUnsnooze'] ?? ''); }
@@ -435,19 +498,26 @@ function pvRefusedBar(t: TaskAny, stageId: string, stageName: string, error: unk
 
 // ---------------------------------------------------------------- the page's hooks
 
+/** The view's state for what the page gives it: the pipeline, its open tasks and how to show them. */
+function pvTake(rec: PipelineRec, tasks: TaskAny[], opts: PvOpts): PvState {
+  const again = PV?.rec.id === rec.id;
+  const state = pvStateFor(rec);
+  // The page may be about to replace the columns: take where they are scrolled while they are still there.
+  if (again) pvScrollRead(state);
+  state.rec = rec;
+  state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
+  state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
+  // A move the read already shows is no longer drawn by hand.
+  if (state.moving.size) {
+    const stageOf = new Map(state.tasks.map(t => [t.id, t.stage_id]));
+    for (const [id, to] of state.moving) if (stageOf.get(id) === to) state.moving.delete(id);
+  }
+  return state;
+}
+
 TASK_PAGE_HOOKS.pipeline = {
-  html(rec, tasks, opts) {
-    const again = PV?.rec.id === rec.id;
-    const state = pvStateFor(rec);
-    // The page is about to replace the columns: take where they are scrolled while they are still there.
-    if (again) pvScrollRead(state);
-    state.rec = rec;
-    state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
-    state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
-    // A move the read already shows is no longer drawn by hand.
-    for (const [id, to] of state.moving) if (state.tasks.find(t => t.id === id)?.stage_id === to) state.moving.delete(id);
-    return pvHTML(state);
-  },
+  html(rec, tasks, opts) { return pvHTML(pvTake(rec, tasks, opts)); },
+  draw(root, rec, tasks, opts) { pvPaint(pvTake(rec, tasks, opts), root); },
   bind(root, rec) {
     const state = pvStateFor(rec);
     state.root = root;

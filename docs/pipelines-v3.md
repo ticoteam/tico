@@ -1643,6 +1643,7 @@ Rules:
 - Filters: Owner, Waiting on, Stage, Asked by, Tag, Due, Late, Pushed past. "What can Sam do?" is Waiting on: Sam.
 - Done and Closed are not columns. They are behind the archive button, with Snoozed.
 - The play button shows only when something in this pipeline needs you.
+- A stage shows its first 50 boxes, then "Show 250 more", which shows the rest of that stage. Its number counts them all.
 
 ### S8. A stage's header
 
