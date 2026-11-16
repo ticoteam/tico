@@ -216,11 +216,6 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
 - **On enter:** nothing, "file a linked task into pipeline X", or "queue the PRs to merge". There are no other actions. A
   stage that files a task always has Linked work done among its requirements.
 - **Expected time** and **limit** (how many tasks fit). The first stage of a pipeline has no limit.
-- **Keep warm for up to N hours:** a setting on the pipeline (`keep_warm_hours`, default 8, 0 is off) that a stage may
-  set for itself (empty: the pipeline's). While a task is in a work stage that does not leave by hand, each bot's
-  session on it that has been idle 45 to 55 minutes gets one short "nothing to do" turn, which reads the session's
-  cache and keeps it warm for the next real run. It stops when the task leaves the active stages, N hours after the
-  bot's last real run on it, or when that session ran on a fallback model (backend/keep_warm.py).
 
 That gives three kinds of stage, and no others:
 
@@ -860,7 +855,7 @@ software?" (a blank answer is yes); an untouched one is retired when it answers 
 
 ### Product
 
-From a pitch to something checked in production, in one task. Manager: the Product Manager bot. Keep warm: 8 hours.
+From a pitch to something checked in production, in one task. Manager: the Product Manager bot.
 Preset `features`, id `product` (`pipeline_settings.PRODUCT`).
 
 Stages: Pitch → Spec → Related input → OK spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release →
@@ -873,7 +868,7 @@ purpose names the company skill it runs on: write-a-pitch, write-a-spec, build-a
 fix-review-findings, make-the-qa-page, validate-in-production.
 
 One feature owner, the task's assignee, holds every stage but the reviews, QA and Merge, in one task and one session
-(`session: task`, kept warm while it holds a stage ahead). A task filed with no assignee waits in Pitch for the manager
+(`session: task`). A task filed with no assignee waits in Pitch for the manager
 to pick one; the owner a task leaves an assignee-held stage with becomes its assignee if it has none. After the
 pipeline's first stage, a reassign names who holds that visit only: the assignee holds the stages after it, and a stage
 rule that refuses the assignee leaves only that stage with nobody (Tico Team, Nov 14: Build fell to the Engineering

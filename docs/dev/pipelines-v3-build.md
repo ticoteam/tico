@@ -37,13 +37,12 @@ All in `backend/migrations/20261110010000_pipelines_v3.py`. Times are `H.now()` 
 
 ```
 pipelines     id, name, goal, prefix, manager_id, owner_id, private (0|1), factory_id, preset,
-              settings_version, created_at, updated_at, retired_at, keep_warm_hours (0-24, default 8)
+              settings_version, created_at, updated_at, retired_at
               unique name and unique prefix among rows not retired
 stages        id, pipeline_id, position, kind (work|done|closed), name, purpose, owner, by_hand (0|1),
               requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes, expected_bots_only (0|1),
               on_enter (json), created_at, updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
-stage_keep_warm stage_id, hours (0-24): a stage's own keep-warm hours; no row is the pipeline's (backend/keep_warm.py)
 requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
               who_oks (none|people_only|people_with_exceptions), person_id, added_by_id, by_bot (0|1),
               line, shows (json), choices (json), position, created_at, withdrawn_at

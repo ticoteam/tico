@@ -540,6 +540,7 @@ KEEP = (
             "rules",
             "stage_rules",
             "stage_pick_turns",
+            # Keep-warm's old per-stage setting (removed): unread, left until every install ran the migration that made it.
             "stage_keep_warm",
             "run_backoff",
             "runners",

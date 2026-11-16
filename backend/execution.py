@@ -6994,8 +6994,12 @@ class Execution:
         # A turn a carrier started answers the message it carries (reply_source): its sender, in its thread.
         source = reply_source(c, msg)
         carried = source is not None and source["id"] != msg["id"]
+        # Keep-warm turns are gone. One still out on a computer at the upgrade answers its hidden notice ("ok"): nothing
+        # is posted for it, and its text stays on the run.
+        kept_warm = row["purpose"] == "keep warm"
         if (
             body.text
+            and not kept_warm
             and body.outcome == "completed"
             and msg["deleted_at"] is None
             and source is not None
