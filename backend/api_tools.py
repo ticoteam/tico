@@ -635,7 +635,7 @@ def _key_view(c, who, key, admin, admins):
 def _tool_view(tool):
     return {
         **{k: tool[k] for k in ("id", "name", "service", "base_url", "auth_scheme", "check_path", "delivery")},
-        "vendor": TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"]),
+        "vendor": TS.vendor_of(tool["service"], tool["name"], host=tool["base_url"] or _field(tool, "mcp_url") or ""),
         "private": _field(tool, "audience") is not None,
     }
 
@@ -1446,7 +1446,10 @@ def _api_rows(c, who, admins, view):
                 needs_you=state["needs_you"],
                 service=tool["service"],
                 vendor=TS.vendor_of(
-                    tool["service"], tool["name"], [k["env"] for k in keys if k["env"]], tool["base_url"]
+                    tool["service"],
+                    tool["name"],
+                    [k["env"] for k in keys if k["env"]],
+                    tool["base_url"] or _field(tool, "mcp_url") or "",
                 ),
                 delivery=tool["delivery"],
                 private=tool["audience"] is not None,

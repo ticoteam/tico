@@ -200,10 +200,19 @@ def test_tools_list_one_row_a_vendor_and_a_vendors_page_holds_its_website_mcp_to
     ]
     google = [keyed(api, "GSC_SERVICE_ACCOUNT", "GSC_SERVICE_ACCOUNT"), "api:" + tool(api, "Google Ads")["id"]]
     github = keyed(api, "GH_TOKEN", "GH_TOKEN")
+    # An MCP server joins its vendor by its address, whatever it is named.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,updated_at,"
+            "mcp_url) VALUES('errors-mcp','Errors MCP','','','bearer','','proxy','human:ana',?,?,?)",
+            ("2026-11-16T00:00:00Z", "2026-11-16T00:00:00Z", "https://api.raygun.com/v3/mcp"),
+        )
+    mcp = "api:errors-mcp"
     rows = {r["id"]: r for r in get(api, "tool-index")["rows"]}
-    vendors = {i: rows[i]["vendor"] for i in [prod, staging, "website:" + site["id"], *aws, *google, github]}
+    vendors = {i: rows[i]["vendor"] for i in [prod, staging, mcp, "website:" + site["id"], *aws, *google, github]}
     assert vendors == {
         prod: "raygun",
+        mcp: "raygun",
         staging: "raygun",
         "website:" + site["id"]: "raygun",
         **dict.fromkeys(aws, "aws"),
@@ -213,7 +222,7 @@ def test_tools_list_one_row_a_vendor_and_a_vendors_page_holds_its_website_mcp_to
     assert rows[prod]["vendor_name"] == "Raygun" and rows[aws[0]]["vendor_name"] == "AWS"
     # The vendor's page, in one read: the website, the MCP token and the key, each API tool with its keys and settings.
     page = get(api, "tool-vendors/raygun")
-    assert page["name"] == "Raygun" and {r["id"] for r in page["rows"]} == {prod, staging, "website:" + site["id"]}
+    assert page["name"] == "Raygun" and {r["id"] for r in page["rows"]} == {prod, staging, mcp, "website:" + site["id"]}
     by_id = {r["id"]: r for r in page["rows"]}
     assert [k["env"] for k in by_id[prod]["keys"]] == ["RAYGUN_MCP_TOKEN"]
     assert [(v["name"], v["value"]) for v in by_id[staging]["settings"]] == [("RAYGUN_REGION", "eu")]

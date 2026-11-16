@@ -305,8 +305,8 @@ changes that).
 
 A tool's **vendor** is its `service` when one is set (a credential administrator types it on the tool's Edit; a known
 service sets it itself; `aws-production` is AWS's and `google-ads` Google's), else a known vendor any word of its name or
-its keys' variables names (`TIDY_AWS_READONLY` is AWS's, `GH_TOKEN` GitHub's, `GSC_*` Google's), else its name's first
-word ("Raygun production"), else its address's or site's domain (`raygun.com`). The GitHub App and Slack rows are
+its keys' variables names (`TIDY_AWS_READONLY` is AWS's, `GH_TOKEN` GitHub's, `GSC_*` Google's), else its address's,
+MCP server's or site's domain (`raygun.com`), else its name's first word ("Raygun production"). The GitHub App and Slack rows are
 GitHub's and Slack's.
 
 **Settings** are a tool's non-secret values: a host, a region, a profile, a project id, a bucket. Each is a variable and

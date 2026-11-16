@@ -1399,10 +1399,6 @@ def install_credentials(app, store, delegate=None, propose=None):
                             **vault.reveal(c, who, row['id']),
                         }
                     )
-            # The settings of each tool it holds a key of (backend/tool_settings.py): plain values, after the keys.
-            from . import tool_settings
-
-            values += tool_settings.runtime_items(c, held, {v['env'] for v in values if v.get('env')})
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
             # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
             from .model_subscriptions import run_values
@@ -1412,6 +1408,10 @@ def install_credentials(app, store, delegate=None, propose=None):
             from .mcp_connect import runtime_servers
 
             servers = runtime_servers(c, values)
+            # The settings of each tool it holds a key of (backend/tool_settings.py): plain values, after the keys.
+            from . import tool_settings
+
+            values += tool_settings.runtime_items(c, held, {v['env'] for v in values if v.get('env')})
             return {
                 'credentials': values,
                 **({'mcp_servers': servers} if servers else {}),

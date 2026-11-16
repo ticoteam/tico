@@ -251,7 +251,8 @@ def vendor_of(service: str = "", name: str = "", envs: "tuple[str, ...] | list[s
     """The vendor Tools lists a tool under: one row a vendor, its tools on the vendor's page. Its `service` first (what
     a person set, or a known service; "aws-production" is AWS's and "google-ads" Google's), else a known service or
     vendor its name or a key's variable names, by any word (TIDY_AWS_READONLY is AWS's, GH_TOKEN GitHub's), else its
-    name's or variable's first word ("Raygun production" -> raygun), else its address's domain (raygun.com -> raygun).
+    address's domain (an MCP server at api.raygun.com is Raygun's), else its name's or variable's first word ("Raygun
+    production" -> raygun).
     "" when nothing says: the tool is then its own row."""
     known = _known()
     service = str(service or "").strip().lower()
@@ -269,10 +270,13 @@ def vendor_of(service: str = "", name: str = "", envs: "tuple[str, ...] | list[s
             word = VENDOR_ALIASES.get(word, word)
             if word in known:
                 return word
+    by_host = service_for_host(host) if host else ""
+    if by_host:
+        return by_host
     for text in texts:
         if vendor_word(text):
             return vendor_word(text)
-    return service_for_host(host) if host else ""
+    return ""
 
 
 def vendor_name(vendor):
