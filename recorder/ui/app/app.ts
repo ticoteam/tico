@@ -42,10 +42,10 @@ type FormText = 'microphone' | 'transcription_url' | 'transcription_model' | 'tr
 type FormFlag = 'calendar' | 'meeting_audio' | 'streaming';
 /** The plain text fields of S.ui an input's data-model names. */
 type TextModel =
-  'search' | 'ask' | 'addItem' | 'ownerQuery' | 'shareQuery' | 'tq' | 'legacy' | 'key' | 'xai' | 'editDraft' | 'taskQuery' | 'taskKind';
+  'search' | 'ask' | 'addItem' | 'ownerQuery' | 'shareQuery' | 'tq' | 'key' | 'xai' | 'editDraft' | 'taskQuery' | 'taskKind';
 type Ui = {
   search: string; ask: string; addItem: string; ownerQuery: string; shareQuery: string; tq: string; signin: string | null;
-  legacy: string; key: string; xai: string;
+  key: string; xai: string;
   editLine: { id: string; seq: number } | null; editDraft: string; editInitial: string; removeLine: { id: string; seq: number } | null;
   hot: number; mention: Mention | null; address: boolean;
   pop: Pop | null; tsearch: boolean; showAudio: boolean; confirm: string | null; hideSide: boolean;
@@ -53,7 +53,7 @@ type Ui = {
   form: SettingsDraft | null; saving: boolean; titleDraft: string | null; notesDraft: string | null; prevPage: Page; stick: boolean;
   // Set once used.
   signingDesktop?: string; profiled?: boolean; adding?: boolean; createOk?: string | null; copied?: boolean;
-  screen?: ScreenDraft | null; focusNext?: string | null; tTop?: number; hitKey?: string; hit?: number; importOpen?: boolean;
+  screen?: ScreenDraft | null; focusNext?: string | null; tTop?: number; hitKey?: string; hit?: number;
 };
 interface AppState {
   page: Page;
@@ -113,7 +113,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     hash: { library: '', meeting: '', transcript: '', settings: '' },
     statusKey: '',
     ui: {
-      search: '', ask: '', addItem: '', ownerQuery: '', shareQuery: '', tq: '', signin: null, legacy: '', key: '', xai: '',
+      search: '', ask: '', addItem: '', ownerQuery: '', shareQuery: '', tq: '', signin: null, key: '', xai: '',
       editLine: null, editDraft: '', editInitial: '', removeLine: null, // { id, seq }: a draft or question belongs to one meeting
       hot: 0, mention: null, address: false,
       pop: null, tsearch: false, showAudio: false, confirm: null, hideSide: false,
@@ -1252,7 +1252,6 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     html += `</div></div>`;
     // Updates: version, Check for updates, Move to Applications (update.ts).
     html += window.ticoUpdateRow?.(st.update) || '';
-    html += `<div class="settings-group"><details class="more" ${S.ui.importOpen ? 'open' : ''} data-details="importOpen"><summary>${icon('right', 12)}Import an older recorder library</summary><div class="inset" style="margin-top:8px"><div class="line">${field('legacy', 'Folder path')}<button class="btn" data-act="import" ${st.busy || s.recording ? 'disabled' : ''}>Import</button></div></div></details></div>`;
     const dirty = formDirty();
     const foot = S.status.message || (!S.status.speech || f.speech_source === 'own' ? 'Keys are kept in the macOS keychain.' : '');
     html += `<div class="settings-foot"><span class="grow">${esc(foot)}</span><button class="btn" data-act="back" ${dirty ? '' : 'hidden'}>Cancel</button><button class="btn primary" data-act="save-settings" ${dirty && !st.busy ? '' : 'disabled'}>Save</button></div>`;
@@ -1967,7 +1966,6 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     signin: () => { const address = model('signin').trim(); if (address) { S.ui.signingDesktop = ''; act('sign_in', { address }); } },
     'sign-out': (el) => act('sign_out', { id: el.dataset.id! }),
     'make-default': (el) => { S.ui.pop = null; act('make_default', { id: el.dataset.id! }); },
-    import: () => { const directory = S.ui.legacy.trim(); if (directory) act('import_legacy', { directory }); },
     'save-settings': () => {
       S.ui.saving = true;
       act('save_settings', { form: { ...S.ui.form, key: S.ui.key, xai_key: S.ui.xai } });
@@ -2083,9 +2081,6 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
       else render();
     }
   });
-  document.addEventListener('toggle', (event) => {
-    if ((event.target as HTMLDetailsElement).dataset?.details) S.ui[(event.target as HTMLDetailsElement).dataset.details as 'importOpen'] = (event.target as HTMLDetailsElement).open;
-  }, true);
   document.addEventListener('focusout', async (event) => {
     const el = event.target as HTMLInputElement;
     if (el.dataset.sharedField) { const id = el.closest<HTMLElement>('[data-shared-item]')!.dataset.sharedItem!; if (!sharedDraft(id).error) await sharedSave(id); }

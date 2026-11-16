@@ -515,7 +515,6 @@ export interface Commands {
   sign_in: { args: { address: string }; reply: unknown };
   sign_in_desktop: { args: { url?: string | null }; reply: unknown };
   make_default: { args: { id: string }; reply: unknown };
-  import_legacy: { args: { directory: string }; reply: unknown };
   confirm_connect: { args: None; reply: unknown };
   dismiss_connect: { args: None; reply: unknown };
   confirm_record: { args: None; reply: unknown };
