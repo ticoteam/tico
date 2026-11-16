@@ -458,7 +458,8 @@ class SyncExpired(Exception):
     """Google no longer knows this sync token (410): list the calendar in full again."""
 
 
-SYNC_PAGES = 40  # pages of one sync; a full list of a busy calendar fits, a runaway one is cut off
+class PageExpired(Exception):
+    """Google refused the page token a listing was continuing from: start that listing again."""
 
 
 def _change(item: Json) -> Json | None:
@@ -482,37 +483,40 @@ def _change(item: Json) -> Json | None:
     }
 
 
-def changes(c: Conn, as_mailbox: str, calendar_id: str, sync_token: str | None) -> tuple[list[Json], str]:
-    """(changed events, next sync token) on one calendar, read as `as_mailbox`. With a token: what changed since it,
-    cancelled ones included; without: every event now on the calendar (a series once, its moved instances apart).
-    Raises SyncExpired when Google answers 410 for the token."""
+def changes_page(
+    c: Conn, as_mailbox: str, calendar_id: str, sync_token: str | None, page_token: str | None = None
+) -> tuple[list[Json], str | None, str | None]:
+    """One page of what changed on a calendar, read as `as_mailbox`: (events, next page token, next sync token). With
+    a sync token: what changed since it, cancelled ones included; without: every event now on the calendar (a series
+    once, its moved and cancelled instances apart). The sync token comes with the last page only. Raises SyncExpired
+    when Google answers 410 for the sync token, PageExpired when it refuses the page token."""
     token = _read_token(c, as_mailbox)
-    path = "calendars/" + _quote(calendar_id) + "/events"
     query: dict[str, Any] = (
         {"syncToken": sync_token, "maxResults": LIMIT_MAX}
         if sync_token
         else {"showDeleted": "false", "maxResults": LIMIT_MAX}
     )
-    out: list[Json] = []
-    cursor: object = None
-    for _ in range(SYNC_PAGES):
-        url = BASE + path + "?" + urllib.parse.urlencode({**query, **({"pageToken": cursor} if cursor else {})})
-        status, page = gcal_call(url, token=token)
-        page = _dict(page)
-        if status == 410 and sync_token:
-            raise SyncExpired()
-        if status not in (200, 201) or "error" in page:
-            _raise(status, page, False)
-        if not isinstance(page.get("items", []), list):
-            raise Problem("gcal_unavailable", "Google Calendar returned an incomplete page; try again", 502, True)
-        out.extend(row for row in map(_change, map(_dict, _list(page.get("items")))) if row)
-        cursor = page.get("nextPageToken")
-        if not cursor:
-            following = page.get("nextSyncToken")
-            if not isinstance(following, str) or not following:
-                raise Problem("gcal_unavailable", "Google Calendar gave no sync token; try again", 502, True)
-            return out, following
-    raise Problem("gcal_size", "This Google calendar has too many changes to read at once", 502, True)
+    if page_token:
+        query["pageToken"] = page_token
+    url = BASE + "calendars/" + _quote(calendar_id) + "/events?" + urllib.parse.urlencode(query)
+    status, page = gcal_call(url, token=token)
+    page = _dict(page)
+    if status == 410 and sync_token:
+        raise SyncExpired()
+    if page_token and status in (400, 410):
+        raise PageExpired()
+    if status not in (200, 201) or "error" in page:
+        _raise(status, page, False)
+    if not isinstance(page.get("items", []), list):
+        raise Problem("gcal_unavailable", "Google Calendar returned an incomplete page; try again", 502, True)
+    items = [row for row in map(_change, map(_dict, _list(page.get("items")))) if row]
+    following = page.get("nextPageToken")
+    if isinstance(following, str) and following:
+        return items, following, None
+    synced = page.get("nextSyncToken")
+    if not isinstance(synced, str) or not synced:
+        raise Problem("gcal_unavailable", "Google Calendar gave no sync token; try again", 502, True)
+    return items, None, synced
 
 
 def time_zone(c: Conn, as_mailbox: str) -> str | None:
@@ -640,9 +644,13 @@ def _send(send_updates: str) -> str:
 
 
 def _written(raw: Json, as_mailbox: str, calendar_id: str) -> Json:
+    """A write's answer as an occurrence, plus `google_sequence`: the version Google gave this write, so the watcher
+    takes exactly that version as Tico's own (the routes drop the key before answering)."""
     row = normalize(raw, as_mailbox, calendar_id, access_role="owner")
     if row is None:
         raise Problem("gcal_unavailable", "Google Calendar returned an incomplete event; try again", 502, True)
+    if isinstance(raw.get("sequence"), int):
+        row["google_sequence"] = raw["sequence"]
     return row
 
 

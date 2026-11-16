@@ -122,14 +122,15 @@ Track **reach** owns: `reach_settings.book TEXT` (null = inherit; 'anyone' | 'ne
   (google_workspace authority), i.e. this person's home is Google.
 - Errors: `Problem` codes `gcal_refused` 403, `not_found` 404, `gcal_unavailable` 502/503 retryable, like gmail_live.
 - Every token comes from `google_tokens.token(c, mailbox, 'calendar', write=...)`, the server's one token door.
-- `changes(c, as_mailbox, calendar_id, sync_token) -> (items, next_token)`: the sync-token read the watcher uses
-  (raises `SyncExpired` on 410).
+- `changes_page(c, as_mailbox, calendar_id, sync_token, page_token=None) -> (items, next_page, next_sync)`: one
+  page of the sync-token read the watcher uses (raises `SyncExpired` on 410, `PageExpired` for a refused page token).
 
 `backend/gcal_watch.py` (google): the watcher, a drain worker. Every ~90 s per calendar whose home is Google it asks
 Google what changed (sync token) and emits `calendar.event.created|changed|cancelled` for changes made in Google
 itself, the same events and shape (`{calendar_id: 'google:<id>', home, occurrence_id}`, subject = the event or its
-series) Tico's own Google writes emit. Deduped on calendar, event and sequence; a 410 re-lists and diffs; Tico's own
-writes are marked (`own_write`) so they are not announced twice.
+series) Tico's own Google writes emit. Deduped on calendar, event (an instance by its own id) and sequence; a 410
+re-lists and diffs; Tico's own writes are recorded at the version Google gave them (`own_write`), so only another
+version is news. A listing saves its page each write and goes on from it in the next pass.
 
 `backend/calendar_derived.py` (derived): read-only, from existing tables.
 - `runs(c, bot_ids, start_utc, end_utc, now) -> list[dict]`: one occurrence per `attempts` row overlapping the window

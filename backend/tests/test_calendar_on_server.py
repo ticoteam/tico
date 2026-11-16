@@ -33,6 +33,7 @@ class FakeCalendar:
     def __init__(self, monkeypatch, *addresses):
         self.addresses, self.events, self.log, self.version = set(addresses), {a: {} for a in addresses}, [], 0
         self.expired, self.down, self.refuse, self.calls, self.minted = set(), False, False, [], []
+        self.page_size, self.bad_pages = 1000, set()
         monkeypatch.setattr(gcal_live, "connected", lambda c, address: address in self.addresses)
         monkeypatch.setattr(gcal_live, "gcal_call", self.call)
         monkeypatch.setattr(gcal_watch, "CHECK_SECONDS", 0)
@@ -89,8 +90,19 @@ class FakeCalendar:
                 ids = dict.fromkeys(e for v, c, e in self.log if v > since and c == cal)
                 items = [self.events[cal][e] for e in ids]
             else:
-                items = [e for e in self.events[cal].values() if e["status"] != "cancelled"]
-            return 200, {"items": items, "accessRole": "owner", "nextSyncToken": f"t{self.version}"}
+                # As Google lists without deleted events: the cancelled instances of a live series still come back.
+                items = [
+                    e for e in self.events[cal].values() if e["status"] != "cancelled" or e.get("recurringEventId")
+                ]
+            if query.get("pageToken") in self.bad_pages:
+                return 400, {"reason": "invalid"}
+            offset = int(query.get("pageToken", "p0")[1:])
+            answer = {"items": items[offset : offset + self.page_size], "accessRole": "owner"}
+            if offset + self.page_size < len(items):
+                answer["nextPageToken"] = f"p{offset + self.page_size}"
+            else:
+                answer["nextSyncToken"] = f"t{self.version}"
+            return 200, answer
         if method == "POST" and path.endswith("/events"):
             eid = data.get("id") or f"made{self.version}"
             more = {"hangoutLink": "https://meet.google.com/abc-defg-hij"} if data.get("conferenceData") else {}
@@ -119,6 +131,9 @@ def google(monkeypatch, api):
             c.execute(
                 "INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)", (pid, pid.title(), f"{pid}@acme.example")
             )
+    from backend import connectors
+
+    connectors.forget_live()  # the 60 s read cache is per process: no test sees another's calendar
     return FakeCalendar(monkeypatch, ANA)
 
 
@@ -219,6 +234,117 @@ def test_google_down_keeps_the_token_and_a_refusal_reaches_reconnects(api, googl
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM google_signin_refusals WHERE service='calendar'").fetchone()
     assert watch_row(api)["check_error"] is None and actions(api) == [("created", "e2")]  # caught up, once
+
+
+class OnePage:
+    """A drain budget with room for `pages` pages of one listing: the pass asks once before the calendar, then once
+    after each page."""
+
+    def __init__(self, pages=1):
+        self.pages, self.asked = pages, 0
+
+    def left(self):
+        self.asked += 1
+        return self.asked <= self.pages
+
+
+def test_a_google_edit_after_ticos_own_write_is_announced_and_the_write_never_is(api, google):
+    tick(api)
+    booked = post(api, "calendar/appointments", {**BOOKING, "attendees": []})["action"]
+    eid = booked["result"]["event_id"]
+    google.put(ANA, eid, sequence=1)  # moved in Google before the watcher's next look
+    tick(api)
+    assert actions(api) == [("created", eid), ("changed", eid)]
+    with api.app.state.store.transaction() as c:  # long after: Tico's own version is still not news
+        c.execute("UPDATE calendar_watch_events SET updated_at='2000-01-01T00:00:00Z'")
+    google.expired.add(watch_row(api)["sync_token"])
+    tick(api)
+    tick(api)
+    assert actions(api) == [("created", eid), ("changed", eid)]
+
+
+def test_ticos_write_to_one_instance_is_its_own_not_its_series(api, google):
+    from types import SimpleNamespace
+
+    from backend import calendar_api
+
+    google.put(ANA, "s1", recurrence=["RRULE:FREQ=WEEKLY"])
+    tick(api)
+    first = {"dateTime": stamp(SOON + timedelta(days=7))}
+    raw = google.put(ANA, "s1_x", sequence=1, recurringEventId="s1", originalStartTime=first)
+    written = gcal_live._written(raw, ANA, ANA)  # what gcal_live.patch answers for that instance
+    assert written["event_id"] == "s1" and written["google_sequence"] == 1
+    with api.app.state.store.transaction() as c:
+        caller = {"actor": "bot:ops", "kind": "bot", "id": "ops"}
+        calendar_api._record_google(c, SimpleNamespace(actor="bot:ops"), caller, "changed", written, ANA, None)
+    tick(api)
+    assert actions(api) == [("changed", "s1")]  # Tico's own announcement, once; the watcher adds nothing
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT event_id,sequence FROM calendar_watch_events ORDER BY event_id").fetchall()
+    assert [(r["event_id"], r["sequence"]) for r in rows] == [("s1", 0), ("s1_x", 1)]
+
+
+def test_a_future_cancelled_instance_is_kept_so_a_later_list_does_not_announce_it_again(api, google):
+    google.put(ANA, "s1", recurrence=["RRULE:FREQ=WEEKLY"])
+    tick(api)
+    google.version += 1
+    later = {"dateTime": stamp(SOON + timedelta(days=60))}
+    google.events[ANA]["s1_y"] = {
+        "id": "s1_y",
+        "status": "cancelled",
+        "recurringEventId": "s1",
+        "originalStartTime": later,
+    }
+    google.log.append((google.version, ANA, "s1_y"))
+    tick(api)
+    assert actions(api) == [("cancelled", "s1")]
+    with api.app.state.store.transaction() as c:  # long after the cancellation, before its time
+        c.execute("UPDATE calendar_watch_events SET updated_at='2000-01-01T00:00:00Z'")
+    tick(api)
+    google.expired.add(watch_row(api)["sync_token"])
+    tick(api)
+    assert actions(api) == [("cancelled", "s1")]
+
+
+def test_a_long_listing_goes_on_where_the_budget_stopped_and_tells_what_went_at_its_end(api, google):
+    google.page_size = 2
+    for n in range(5):
+        google.put(ANA, f"e{n}")
+    gcal_watch.tick(api.app.state.store, budget=OnePage())
+    row = watch_row(api)
+    assert row["page_token"] == "p2" and row["list_mode"] == "seed" and not row["watching_since_at"]
+    gcal_watch.tick(api.app.state.store, budget=OnePage())
+    gcal_watch.tick(api.app.state.store, budget=OnePage())
+    row = watch_row(api)
+    assert row["page_token"] is None and row["sync_token"] and row["watching_since_at"]
+    starts = [c for c in google.calls if c[0] == "GET" and c[1].endswith("/events") and "pageToken" not in c[2]]
+    assert len(starts) == 1  # one listing, never started again
+    del google.events[ANA]["e4"]
+    google.put(ANA, "e5")
+    google.expired.add(row["sync_token"])
+    gcal_watch.tick(api.app.state.store, budget=OnePage())
+    assert actions(api) == []  # a cancellation is told only once the whole list is in
+    google.down = True
+    tick(api)  # a failure keeps the place
+    google.down = False
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE calendar_watches SET checked_at='2000-01-01T00:00:00Z'")
+    tick(api)
+    assert sorted(actions(api)) == [("cancelled", "e4"), ("created", "e5")]
+    relists = [c for c in google.calls if c[1].endswith("/events") and not {"pageToken", "syncToken"} & set(c[2])]
+    assert len(relists) == 2  # the seed and the relist, each started once
+
+
+def test_a_page_token_google_refuses_starts_that_listing_again(api, google):
+    google.page_size = 2
+    for n in range(3):
+        google.put(ANA, f"e{n}")
+    gcal_watch.tick(api.app.state.store, budget=OnePage())
+    google.bad_pages.add(watch_row(api)["page_token"])
+    google.page_size = 10
+    tick(api)
+    row = watch_row(api)
+    assert row["page_token"] is None and row["sync_token"] and actions(api) == []
 
 
 def test_a_calendar_no_longer_on_google_stops_being_watched(api, google):

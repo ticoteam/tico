@@ -904,7 +904,14 @@ def install_connectors(app, store, execution, mutate):
                 if result.get("event_id"):
                     from . import calendar_events, gcal_watch
 
-                    gcal_watch.own_write(c, address, result["event_id"])
+                    written = raw or {}
+                    gcal_watch.own_write(
+                        c,
+                        address,
+                        result["event_id"],
+                        sequence=written.get("sequence") if isinstance(written.get("sequence"), int) else None,
+                        end=(written.get("end") or {}).get("dateTime") or row["end"],
+                    )
                     calendar_events.emit(
                         c,
                         actor,
