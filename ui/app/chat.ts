@@ -154,7 +154,6 @@ interface ChatState {
   liveCid?: string | null | undefined;
   waitTimer?: number | undefined;
   openFolds?: Set<string> | undefined;
-  openSide?: Set<string | undefined> | undefined;
   openSteps?: Set<string | null | undefined> | undefined;
   steps?: Record<string, string> | undefined;
   dismissed?: string | undefined;
@@ -752,18 +751,15 @@ function chatSideHeadHTML(m: ChatMessage) {
   const head = chatSideHead(m);
   return head ? `<b>${esc(head)}</b>` : '';
 }
-// About two lines at phone width: longer text, or more than one line of it, gets "Show more".
-const CHAT_SIDE_SHORT = 110;
-// One side item, at most two lines; a longer one opens in place with "Show more", with its files.
+// One side item: its words in full, then its files on cloud (as a message's are), then "Earlier messages" where a
+// bot-to-bot preview has older messages behind it.
 function chatSideItemHTML(m: ChatMessage) {
-  const text = plainActors(m.body || ''), long = text.length > CHAT_SIDE_SHORT || /\n/.test(text.trim());
-  const open = long && V2C?.openSide?.has(m.id);
+  const text = plainActors(m.body || '');
   const when = m.created_at ? `<time class="chat-time" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
-  return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
+  return `<div class="cs-item" data-message="${esc(m.id || '')}">
     <div class="cs-head">${chatSideHeadHTML(m)}${when}</div>
-    ${messageMd(`cs-text md${open ? '' : ' clamp'}`, text, m.sender_id, {shortLinks: true})}${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
-    ${long ? `<button type="button" class="link cs-more" data-cs-more="${esc(m.id || '')}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>` : ''}${
-      m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
+    ${messageMd('cs-text md', text, m.sender_id, {shortLinks: true})}${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
+    ${m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
 }
 // A run of side items is one muted line: one item reads as itself, more as "12 updates · Dots, BotOps, tasks · 2h".
 function chatSideHTML(messages: ChatMessage[], slug: string | undefined) {
@@ -893,7 +889,6 @@ function v2WithBotTalk(state: ChatState, messages: ChatMessage[]) {
   }
   return out.concat(talk.slice(t));
 }
-const shownById = (state: ChatState, id: string | undefined) => state.messages.find(m => m.id === id) || (state.botTalk || []).find(m => m.id === id);
 // Scrolled up when something new lands: a small pill above the composer takes you to it (ui/app/stick-scroll.ts).
 // Only the conversation counts, and a reply as it streams in; a side item joins its folded line without a pill.
 const v2Latest = (state: ChatState) => state.lastMain ? state.lastMain.id + (state.live?.text ? ':live' : '') : '';
@@ -925,15 +920,6 @@ function v2ChatRender(state: ChatState) {
       if (conv && V2C === state) {
         conv.disabled = true;
         void v2BotsOpen(state, String(conv.dataset.botsOpen)).catch(error => { conv.disabled = false; toast(errorMessage(error, ''), true); });
-        return;
-      }
-      const more = target?.closest<HTMLElement>('[data-cs-more]');
-      if (more && V2C === state) {
-        const id = more.dataset.csMore, item = more.closest('.cs-item'), shown = shownById(state, id);
-        state.openSide ||= new Set();
-        state.openSide[state.openSide.has(id) ? 'delete' : 'add'](id);
-        if (!item || !shown) throw new Error('the side item is gone');
-        item.outerHTML = chatSideItemHTML(shown);
         return;
       }
       if (!target?.closest('[data-pending-dismiss]') || V2C !== state) return;

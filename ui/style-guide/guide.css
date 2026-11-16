@@ -516,7 +516,6 @@
 
 /* Page title; chat window marks */
 .sg-page .rv-ph-top{padding:0;border:0;margin:0}
-.sg-page :is(.rv-chatwin,.rv-tw) .cs-text.clamp{-webkit-line-clamp:10;line-clamp:10;max-height:none}
 .sg-page .th-head .rv-quote-in{display:inline-flex;align-items:center;gap:4px;min-width:0;flex:0 1 auto;margin:0;padding:0 6px;min-height:0;border:0;border-radius:6px;background:none;color:var(--muted);font-size:var(--t-xs)}
 .sg-page .th-head .rv-quote-in .nav-icon{font-size:14px;width:14px;height:14px}
 .sg-page .th-head .rv-quote-in .th-quote-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
