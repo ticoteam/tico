@@ -21,7 +21,7 @@ from typing import Any, NoReturn, cast
 
 from connectors.mail import calendar as mail_calendar
 
-from . import google_tokens, google_workspace
+from . import google_connect, google_tokens, google_workspace
 from .store import Problem
 
 Json = dict[str, Any]
@@ -166,9 +166,19 @@ def _write_token(c: Conn, mailbox: str) -> str:
 
 
 def connected(c: Conn, address: str) -> bool:
-    """Whether this address's calendar home is Google: the company key covers it, is active, and was delegated a
-    calendar scope, and the person has no Connect Google grant of their own (that keeps the computer path)."""
-    if _authority(c, address) != "workspace":
+    """Whether this address's calendar home is Google, read on the server: the person's own Connect Google grant holds
+    the calendar read scope (a personal grant wins), or the company key covers the address, is active, and was
+    delegated a calendar scope."""
+    kind = _authority(c, address)
+    if kind == "personal":
+        row = cast("Callable[[Conn, str], Json | None]", google_tokens.grant_row)(c, address)
+        if row is None:
+            return False
+        scopes = cast("Callable[[str, str | None], set[str]]", google_connect.refresh_scopes)(
+            "calendar", row.get("grant_scopes")
+        )
+        return google_connect.G + "calendar.events.readonly" in scopes
+    if kind != "workspace":
         return False
     held = set(_authorized(_active(c)))
     return any(set(table["calendar"]) <= held for table in (WORKSPACE_SCOPES, READ_ONLY_SCOPES))

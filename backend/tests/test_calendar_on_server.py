@@ -28,13 +28,28 @@ SOON = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=2)
 
 class FakeCalendar:
     """Google Calendar as gcal_live reaches it: events per calendar, a change log behind sync tokens `t<version>`,
-    tokens Google has forgotten (`expired`, answered 410), and `down` (no answer at all)."""
+    tokens Google has forgotten (`expired`, answered 410), and `down` (no answer at all). The Workspace key covers
+    `addresses` (its mint is faked); `own_grant` puts one of them on its person's own Connect Google grant instead,
+    which the real token door refreshes (Google's token endpoint faked)."""
 
     def __init__(self, monkeypatch, *addresses):
         self.addresses, self.events, self.log, self.version = set(addresses), {a: {} for a in addresses}, [], 0
         self.expired, self.down, self.refuse, self.calls, self.minted = set(), False, False, [], []
-        self.page_size, self.bad_pages = 1000, set()
-        monkeypatch.setattr(gcal_live, "connected", lambda c, address: address in self.addresses)
+        self.page_size, self.bad_pages, self.personal = 1000, set(), set()
+        self.monkeypatch = monkeypatch
+        authority, connected = W.authority, gcal_live.connected
+
+        def covered(c, address):
+            if address in self.personal:
+                return authority(c, address)
+            return "workspace" if address in self.addresses else authority(c, address)
+
+        monkeypatch.setattr(W, "authority", covered)
+        monkeypatch.setattr(
+            gcal_live,
+            "connected",
+            lambda c, address: connected(c, address) if address in self.personal else address in self.addresses,
+        )
         monkeypatch.setattr(gcal_live, "gcal_call", self.call)
         monkeypatch.setattr(gcal_watch, "CHECK_SECONDS", 0)
 
@@ -43,6 +58,20 @@ class FakeCalendar:
             return {"access_token": SECRET}
 
         monkeypatch.setattr(W, "mint", mint)
+
+    def own_grant(self, api, person, mailbox, scopes):
+        """`mailbox` is connected with `person`'s own Connect Google grant holding `scopes`, held on the server."""
+        from backend import google_connect
+        from backend.tests.helpers.google_connect import CLIENT, FakeGoogle
+        from backend.tests.helpers.google_workspace import personal
+
+        settings = api.app.state.store.settings
+        self.monkeypatch.setattr(settings, "google_oauth_client_id", CLIENT)
+        self.monkeypatch.setattr(settings, "google_oauth_client_secret", "tico-secret")
+        personal(api, person, mailbox, client=CLIENT, scopes=json.dumps(scopes))
+        self.refreshes = FakeGoogle({"access_token": SECRET, "expires_in": 3599, "scope": ""})
+        self.monkeypatch.setattr(google_connect, "post_token", self.refreshes)
+        self.personal.add(mailbox)
 
     def put(self, cal, eid, *, start=SOON, sequence=0, status="confirmed", **more):
         self.version += 1
@@ -134,6 +163,7 @@ def google(monkeypatch, api):
     from backend import connectors
 
     connectors.forget_live()  # the 60 s read cache is per process: no test sees another's calendar
+    google_tokens.forget()
     return FakeCalendar(monkeypatch, ANA)
 
 
@@ -494,28 +524,46 @@ def test_change_calendar_off_refuses_a_booking_before_google(api, google):
     assert google.posts() == []
 
 
-def test_a_personal_grant_is_refused_at_the_token_door_before_google(monkeypatch, api, google):
-    monkeypatch.setattr(W, "authority", lambda c, mailbox: "personal")
+def test_a_personal_connect_google_calendar_is_read_watched_and_booked_on_the_server(api, google):
+    from backend import google_connect as GC
+
+    google.own_grant(api, "ana", ANA, GC.READ_SCOPES + GC.ACT_SCOPES)
     with api.app.state.store.read() as c:
-        for write in (False, True):
-            with pytest.raises(Problem) as refused:
-                google_tokens.token(c, ANA, "calendar", write=write)
-            assert refused.value.code == "not_connected" and refused.value.status == 403
-        with pytest.raises(Problem):
-            gcal_live.insert(
-                c, ANA, ANA, {"title": "x", "start": BOOKING["start"], "end": BOOKING["end"], "actor": "a"}
-            )
-    assert google.minted == [] and google.calls == []
+        assert gcal_live.connected(c, ANA) and gcal_watch.watched(c) == [ANA]
+    google.put(ANA, "e1")
+    tick(api)
+    google.put(ANA, "e2")
+    tick(api)
+    assert actions(api) == [("created", "e2")]
+    read = get(api, "calendar/appointments?calendar=" + ANA)
+    assert read["stale"] is False and {e["event_id"] for e in read["events"]} == {"e1", "e2"}
+    booked = post(api, "calendar/appointments", {**BOOKING, "attendees": []})["action"]
+    assert booked["status"] == "succeeded" and len(google.posts()) == 1
+    assert google.minted == []  # never the Workspace key: the person's own grant wins
+    asked = {call["scope"] for call in google.refreshes.calls}
+    assert asked == {GC.G + "calendar.events", " ".join(sorted(GC.SERVICE_SCOPES["calendar"]))}
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM connector_snapshots").fetchone()
 
 
-def test_the_token_door_mints_read_only_for_reads_and_full_for_writes(api, google):
+def test_a_read_only_personal_grant_refuses_a_booking_before_google(api, google):
+    from backend import google_connect as GC
+
+    google.own_grant(api, "ana", ANA, GC.READ_SCOPES)
+    booked = post(api, "calendar/appointments", {**BOOKING, "attendees": []})["action"]
+    assert booked["status"] == "failed" and "read_only" in booked["error"]
+    assert google.posts() == [] and google.minted == []
+    assert all(call["scope"] != GC.G + "calendar.events" for call in google.refreshes.calls)
+
+
+def test_a_calendar_the_server_holds_no_credential_for_is_refused_not_queued(api, google):
+    google.addresses.clear()
+    read = get(api, "calendar/appointments?calendar=" + ANA)
+    assert (read["events"], read["stale"], read["error"]) == ([], True, "not_connected")
+    refused = api.post("/api/v2/calendar/appointments", json=BOOKING, headers=headers())
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "not_connected"
     with api.app.state.store.read() as c:
-        google_tokens.token(c, ANA, "calendar")
-        google_tokens.token(c, ANA, "calendar", write=True)
-    assert [m[2] for m in google.minted] == [
-        tuple(W.READ_ONLY_SCOPES["calendar"]),
-        tuple(W.WORKSPACE_SCOPES["calendar"]),
-    ]
+        assert not c.execute("SELECT 1 FROM calendar_actions").fetchone()
 
 
 def test_no_google_token_reaches_an_answer_an_event_or_a_row(api, google):

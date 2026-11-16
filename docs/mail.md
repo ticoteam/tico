@@ -276,8 +276,8 @@ tico_calendar_status(id="<action id>")
 
 The schedule call makes the Google event on the server and queues its invitation as an email (through the send
 rules, OKs and undo window). Only a status of `succeeded` means the Google event exists and its invitation is
-queued; `unknown` (Google never answered) must be inspected before retrying. A calendar that only a person's own
-Connect Google reaches is still booked by their computer, which reports `pending` and `running` until it is done.
+queued; `unknown` (Google never answered) must be inspected before retrying. The server reads and books with the
+person's own Connect Google grant when they have one, else the Workspace key; a calendar neither reaches is refused.
 Changes made to a Google calendar anywhere, in Google included, reach automations as `calendar.event.created`,
 `calendar.event.changed` and `calendar.event.cancelled`, the same events Tico's own calendar sends. This standing calendar grant does not enable Gmail
 reading, drafting or sending. The equivalent shell commands are `tico calendar list`,

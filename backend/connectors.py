@@ -139,31 +139,18 @@ def forget_live(address=None):
             _LIVE.pop(address, None)
 
 
-def appointments_view(c, address, person_id):
-    """The appointments answer for one calendar: live from Google when its home is Google, else the snapshot a
-    computer published for a personal Connect Google grant. A Google failure answers stale with its kind, never an
-    error page, so the Recorder and the native view keep their last list."""
-    if gcal_live.connected(c, address):
-        try:
-            at, events = live_appointments(c, address)
-        except Problem as failed:
-            return {"calendar": address, "events": [], "updated_at": None, "stale": True, "error": failed.code}
-        return {"calendar": address, "events": events, "updated_at": at, "version": 1, "stale": False}
-    row = (
-        c.execute("SELECT * FROM connector_snapshots WHERE kind='calendar' AND owner=?", (person_id,)).fetchone()
-        if person_id
-        else None
-    )
-    if not row:
-        return {"calendar": address, "events": [], "updated_at": None, "stale": True}
-    payload = json.loads(row["payload"])
-    return {
-        "calendar": address,
-        "events": payload["events"],
-        "updated_at": row["updated_at"],
-        "version": row["version"],
-        "stale": row["updated_at"] < H.shift(H.now(), seconds=-180),
-    }
+def appointments_view(c, address):
+    """The appointments answer for one calendar, read live from Google with the server's credential for it (the
+    person's own Connect Google grant or the Workspace key). A calendar the server holds none for, or a Google
+    failure, answers stale with its kind, never an error page, so the Recorder and the native view keep their last
+    list."""
+    if not gcal_live.connected(c, address):
+        return {"calendar": address, "events": [], "updated_at": None, "stale": True, "error": "not_connected"}
+    try:
+        at, events = live_appointments(c, address)
+    except Problem as failed:
+        return {"calendar": address, "events": [], "updated_at": None, "stale": True, "error": failed.code}
+    return {"calendar": address, "events": events, "updated_at": at, "version": 1, "stale": False}
 
 
 class CalendarSnapshot(M.Contract):
@@ -506,16 +493,9 @@ def install_connectors(app, store, execution, mutate):
     def targets(request: Request):
         with store.read() as c:
             runner, named, owned = reader(c, request.state.identity)
-            # Calendar sync follows the same ownership as mail, including known Workspace mailboxes without a bot.
-            # A calendar whose home is Google is read live on the server, so a computer reads only the ones a person's
-            # own Connect Google grant reaches.
-            people = [
-                {"id": box["person_id"], "email": box["address"]}
-                for box in google_rights.visible(c, runner["id"], named, owned=owned)
-                if box["person_id"] and not gcal_live.connected(c, box["address"])
-            ]
-        # `hours` is what a computer from before `days` reads; a newer one reads from the start of today for `days`.
-        return {"people": people, "hours": 24, "days": SNAPSHOT_DAYS, "refresh_seconds": 45}
+        # Every calendar is read live on the server now: a computer is given none to read. `hours` is what a computer
+        # from before `days` reads.
+        return {"people": [], "hours": 24, "days": SNAPSHOT_DAYS, "refresh_seconds": 45}
 
     @app.post("/api/v2/connectors/calendar/snapshots")
     def publish(request: Request, body: CalendarPublish):
@@ -713,18 +693,18 @@ def install_connectors(app, store, execution, mutate):
         with store.read() as c:
             person, address = calendar_person(c, calendar)
             calendar_allowed(c, who, address, person)
-            view = appointments_view(c, address, person["id"])
+            view = appointments_view(c, address)
         with store.transaction() as c:
             H.event(c, who.actor, "calendar.read", address, {})
         return view
 
     @app.post("/api/v2/calendar/appointments")
     def schedule_appointment(request: Request, body: CalendarAppointmentCreate):
-        """Book one appointment. On a calendar whose home is Google it is made on Google in this request, without
+        """Book one appointment, made on Google in this request with the server's credential for the calendar, without
         Google's own invitations: an invitation is Tico's email, frozen with its Meet link and queued through the
         send rules and approvals (calendar_action_id). The calendar_actions row is the receipt, settled here; an
-        answer Google did not give is `unknown`, never retried. A calendar only a computer reaches queues the action
-        for that computer, as before."""
+        answer Google did not give is `unknown`, never retried. A calendar the server holds no credential for is
+        refused; no computer books one."""
         who = request.state.identity
         if who.role not in ("bot", "human", "owner"):
             raise Problem("identity", "Only a bot or person may schedule an appointment", 403)
@@ -735,14 +715,13 @@ def install_connectors(app, store, execution, mutate):
             calendar_allowed(c, who, address, person, change=True)
             if not workspace.permissions(c)["change_calendar"]:
                 raise Problem("company_off", CALENDAR_OFF, 403)
-            live = gcal_live.connected(c, address)
             if body.attendees:
                 from . import mailbox_access
                 from .email_sending import effective
 
                 if effective(c, address, H.actor_id(who.actor) if who.role == "bot" else "")["mode"] == "never":
                     raise Problem("policy", "Never blocks this inbox's invitations", 403)
-                if live and not mailbox_access.may(c, who.actor, address)["send"]:
+                if not mailbox_access.may(c, who.actor, address)["send"]:
                     # The invitation is an email from this inbox: one that could not be queued is refused now, before
                     # anything is made on Google.
                     raise Problem("forbidden", "Inviting people from that calendar needs Send on its inbox", 403)
@@ -768,6 +747,13 @@ def install_connectors(app, store, execution, mutate):
                         + " is not. Put the time in a draft for a person to send",
                         403,
                     )
+            if not gcal_live.connected(c, address):
+                raise Problem(
+                    "not_connected",
+                    "Tico can't reach that calendar: connect Google for it in Tools > Settings > Email",
+                    403,
+                    extra={"kind": "not_connected"},
+                )
             action_id, now = H.new_id(), H.now()
             c.execute(
                 "INSERT INTO calendar_actions(id,requested_by,calendar_email,summary,start,end,"
@@ -783,14 +769,13 @@ def install_connectors(app, store, execution, mutate):
                     encode(body.attendees),
                     body.description,
                     1 if body.add_meet else 0,
-                    "running" if live else "pending",
+                    "running",
                     now,
                     now,
-                    now if live else None,
+                    now,
                 ),
             )
-            if live:
-                made["id"] = action_id
+            made["id"] = action_id
             H.event(
                 c,
                 who.actor,
@@ -1198,10 +1183,10 @@ def install_connectors(app, store, execution, mutate):
             if not person or not person["email"]:
                 return {"events": [], "updated_at": None, "stale": True}
             try:
-                person_row, address = calendar_person(c, person["email"])
+                _person, address = calendar_person(c, person["email"])
             except Problem:
                 return {"events": [], "updated_at": None, "stale": True}
-            view = appointments_view(c, address, person_row["id"])
+            view = appointments_view(c, address)
             view.pop("calendar", None)
             return view
 

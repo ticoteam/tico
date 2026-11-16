@@ -5,7 +5,8 @@ A drain worker (backend/drains.py `calendar_watch`). Each pass checks the Google
 ago or more: Google's `events.list` with the calendar's sync token answers what changed since the last check, and each
 change is announced once through backend/calendar_events.py, the way Tico's own calendar announces its writes, so an
 automation reacts the same whatever the calendar's home. Watched: the primary calendar of every mailbox whose calendar
-home is Google (`gcal_live.connected`: the Workspace key covers it with a calendar scope), read as that mailbox.
+home is Google (`gcal_live.connected`: the person's own Connect Google grant or the Workspace key reaches it with a
+calendar scope), read as that mailbox through the token door (backend/google_tokens.py).
 
 - First check: the calendar is listed in full to learn what is on it. Nothing is announced; changes from then on are.
 - An event not seen before is `created` (a moved or changed instance of a known series is `changed`); a new sequence is
@@ -89,7 +90,10 @@ def watched(c: sqlite3.Connection) -> list[str]:
         email = str(person.get("email") or "").strip().lower()
         if email and "@" in email and not person.get("hidden"):
             found.add(email)
-    return sorted(address for address in found if gcal.connected(c, address))
+    # A person's own Connect Google grant, which may be for an address that is not their roster email.
+    for row in c.execute("SELECT mailbox FROM google_connects WHERE grant_sealed IS NOT NULL").fetchall():
+        found.add(str(row["mailbox"] or "").strip().lower())
+    return sorted(address for address in found if "@" in address and gcal.connected(c, address))
 
 
 def _plan(store: Any) -> list[Row]:
