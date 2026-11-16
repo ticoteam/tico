@@ -43,8 +43,9 @@ also checks the raw value is in no transcript, turn event, runner log or table; 
 - **File credential**: the turn gets a 0600 file, the vendor accepts its bytes, and the file is gone after the turn.
 - **Remote MCP server in bot.yaml** with `Bearer ${VAR}`, key on computers (Claude and Codex): initialize, tools/list
   and a tools/call succeed, and the value is never on Claude Code's command line.
-- **The same MCP server with its key on the proxy**: expected to fail (strict xfail) until a proxied key works for
-  MCP. Today the header carries the run's `tpx1.` token and the vendor refuses it.
+- **The same MCP server with its key Tico holds** (a proxied tool, and a computer tool at Read with only a Read and
+  write key): the run holds a proxy token, the server is reached through the proxy and the vendor gets the real key;
+  at Read only the set-up, the listing and the read-only tool go through.
 - **Website login with password and 2FA**: `tico browser open`, `tico login fill` (username, password, code) and a
   submit click sign in to a stub form that checks an RFC 6238 code; the password and the 2FA key are in no turn
   environment, command output or record. The company browser host is the test standing in for Chrome (pytest launches
@@ -55,3 +56,18 @@ also checks the raw value is in no transcript, turn event, runner log or table; 
 Run it locally (one cargo build of `runner-rs`, then about two minutes):
 
     python3 -m pytest -q -n 0 -m slow runner_support/tests/test_credential_delivery.py
+
+## Live auth matrix
+
+`runner_support/tests/test_credential_live.py` runs the same machinery against real public test services instead of
+the stub: one scenario per kind of auth Tico can hand a bot today (bearer, Basic and Digest on httpbin, Basic through
+the proxy on postman-echo, API keys in a header and the query through the proxy on reqres.in and NASA, a client
+certificate file on client.badssl.com, an AWS SigV4 key pair on play.min.io, OAuth 1.0a and Hawk on postman-echo,
+GitHub's documented webhook signature, an IMAP login on test.rebex.net, a session cookie on DummyJSON, and DeepWiki's
+MCP server with no auth). Each checks that the good credential works, that the service refuses a wrong one, and
+that the value shows nowhere. Only published test credentials or synthetic values; a service that is down or rate
+limited skips its scenario. It calls the internet, so it never runs unless asked:
+
+    TICO_LIVE_AUTH=1 python3 -m pytest -q -n 2 -m slow runner_support/tests/test_credential_live.py
+
+[docs/auth-types.md](../../docs/auth-types.md) maps every auth type to how a person hands it over and its scenario.

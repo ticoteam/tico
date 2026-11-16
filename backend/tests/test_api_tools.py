@@ -216,6 +216,22 @@ def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):
         assert c.execute("SELECT count(*) FROM credentials WHERE tool_id=?", (tid,)).fetchone()[0] == 0
 
 
+def test_a_webhook_or_signing_secret_of_a_known_service_is_no_tools_key_and_reaches_the_bot_as_itself(api):
+    """A bot checks a delivery's signature with the secret itself: put on GitHub's or Stripe's proxied tool, the run
+    would hold a proxy token in its place and every signature would fail."""
+    setup(api)
+    made = [
+        post(api, "credentials", {"name": "GitHub webhook secret", "env": "GITHUB_WEBHOOK_SECRET", "secret": SECRET_R}),
+        post(api, "credentials", {"name": "Stripe", "env": "STRIPE_WEBHOOK_SECRET", "secret": SECRET_R + "-2"}),
+        post(api, "credentials", {"name": "Slack signing secret", "env": "ACME_SLACK", "secret": SECRET_R + "-3"}),
+    ]
+    with api.app.state.store.read() as c:
+        assert [c.execute("SELECT tool_id FROM credentials WHERE id=?", (m["id"],)).fetchone()[0] for m in made] == [
+            None
+        ] * 3
+        assert c.execute("SELECT count(*) FROM tools").fetchone()[0] == 0
+
+
 def test_a_key_stored_outside_tools_gets_a_tool_on_the_proxy_only_for_a_known_service(api):
     """Settings' vault (and a chat card, and a computer's migration) store through the vault: each tool key lands on a
     tool in the same write. A known service's key fills that service's tool while it has no Read and write key."""

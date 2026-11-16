@@ -183,7 +183,9 @@ def is_tool_key(kind, env, name, source, stored, on_computers):
     variable, or a name with none set, is a providers.RUNTIME_KEY_NAMES name: a runtime's CLI reads it directly, so it
     belongs to the model setup and never goes through the proxy), a computer's
     key or shared model login (`on_computers`: a computer_keys row or a grant to the computers; or a `computers:`
-    source), Finance's bank logins (`finance`), a bot's own `HUB_` key back into Tico, passwords and files."""
+    source), Finance's bank logins (`finance`), a bot's own `HUB_` key back into Tico, a webhook or signing secret
+    (`STRIPE_WEBHOOK_SECRET`, "Slack signing secret": the bot checks signatures with the value itself, it is never sent
+    to the vendor, so a proxy token in its place would break it), passwords and files."""
     from backend.providers import RUNTIME_KEY_NAMES
 
     env, source = env or "", source or ""
@@ -195,6 +197,7 @@ def is_tool_key(kind, env, name, source, stored, on_computers):
         and not env.startswith("HUB_")
         and not source.startswith("computers:")
         and source != "finance"
+        and not {"webhook", "signing"} & set(_words(env) + _words(name))
     )
 
 
