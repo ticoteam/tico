@@ -399,30 +399,6 @@ def humanize(text, names=None):
     return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").strip()
 
 
-def completion_result(c, notice):
-    """The result a task-done notice reports: the owner's newest comment on the task that has visuals, written before
-    the notice and after the task's previous done or closed notice (a reopened task's earlier visuals are not this
-    result), or None. A comment is what the task page shows, so the link lands on it."""
-    task_id = H._task_ref(notice["refs"].get("task"))  # a list names its first task (hubdb._task_ref)
-    if not task_id:
-        return None
-    owner = notice["refs"]["task_completion"]["owner"]
-    since = (
-        c.execute(
-            "SELECT MAX(created_at) FROM messages WHERE id<>? AND created_at<=? AND deleted_at IS NULL "
-            f"AND {H.task_ref_sql('refs')} AND json_extract(refs,'$.task_completion') IS NOT NULL",
-            (notice["id"], notice["created_at"], task_id, task_id),
-        ).fetchone()[0]
-        or ""
-    )
-    found = [
-        m
-        for m in H.task_comments(c, task_id)
-        if m["sender_id"] == owner and since < m["created_at"] <= notice["created_at"] and visuals.elsewhere("", m)
-    ]
-    return found[-1] if found else None
-
-
 def slack_escape(text):
     """Text as Slack's parser must see it: `&`, `<` and `>` escaped, so a bot's `<!channel>` is
     shown as text rather than paging the channel and "x < y" survives."""
@@ -1737,9 +1713,8 @@ class Gateway:
                 dict(r)
                 for r in c.execute(
                     "SELECT m.id,m.body,m.conversation_id,m.sender_id,m.recipient_id,m.created_at FROM messages m "
-                    "WHERE m.kind IN ('say','ask','answer','notice') AND m.sender_id LIKE 'bot:%' "
+                    "WHERE m.kind IN ('say','notice') AND m.sender_id LIKE 'bot:%' "
                     "AND m.recipient_id LIKE 'human:%' AND m.deleted_at IS NULL "
-                    "AND json_extract(m.refs,'$.task_completion') IS NULL "
                     "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
                     "AND NOT EXISTS (SELECT 1 FROM slack_threads t WHERE t.conversation_id=m.conversation_id "
                     "AND (t.channel NOT LIKE 'D%' OR t.recipient_actor=m.recipient_id)) "
@@ -1819,8 +1794,8 @@ class Gateway:
             rows = c.execute(
                 "SELECT m.id,m.body,m.in_reply_to,m.recipient_id,m.conversation_id,m.created_at,t.channel,t.thread_ts,t.bot FROM messages m "
                 "JOIN slack_threads t ON t.conversation_id=m.conversation_id AND m.sender_id='bot:'||t.bot "
-                "WHERE m.created_at>t.created_at AND m.kind IN ('say','ask','answer','notice') AND m.recipient_id LIKE 'human:%' "
-                "AND m.deleted_at IS NULL AND json_extract(m.refs,'$.task_completion') IS NULL "
+                "WHERE m.created_at>t.created_at AND m.kind IN ('say','notice') AND m.recipient_id LIKE 'human:%' "
+                "AND m.deleted_at IS NULL "
                 "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) ORDER BY m.created_at LIMIT 50"
             ).fetchall()
             people = roster(c) if rows else None
@@ -1885,132 +1860,13 @@ class Gateway:
             return True
         return bool(mapped["recipient_actor"]) and mapped["recipient_actor"] == person
 
-    def task_completions(self):
-        """Completion notices use the same durable post queue, sent by the Tico app."""
-        if not self.settings.slack_gateway_enabled:
-            return 0
-        with self.store.read() as c:
-            pending = [
-                dict(r)
-                for r in c.execute(
-                    "SELECT m.* FROM messages m WHERE m.recipient_id LIKE 'human:%' "
-                    "AND json_extract(m.refs,'$.task_completion.notify')=1 "
-                    "AND COALESCE(json_extract(m.refs,'$.task_completion.checked'),0)=0 "
-                    "AND (json_extract(m.refs,'$.task_completion.retry_after') IS NULL "
-                    "OR json_extract(m.refs,'$.task_completion.retry_after')<=?) "
-                    "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
-                    "ORDER BY m.created_at LIMIT 20",
-                    (self.clock(),),
-                )
-            ]
-        queued = 0
-        for message in pending:
-            pid = message["recipient_id"][6:]
-            with self.store.read() as c:
-                if not privacy.public_message(c, H.message(c, message["id"])):
-                    continue
-                person = P.person(pid, roster(c))
-                channel = self.im_channel(c, pid)
-                slack_id = str((H.human(c, pid) or {}).get("slack_id") or (person or {}).get("slack_id") or "").strip()
-                if not slack_id:
-                    linked = c.execute(
-                        "SELECT user_id FROM slack_events WHERE actor=? AND state IN ('routed','recorded') "
-                        "ORDER BY received_at DESC LIMIT 1",
-                        (message["recipient_id"],),
-                    ).fetchone()
-                    slack_id = linked["user_id"] if linked else ""
-            if (
-                not person
-                or person.get("hidden")
-                or person.get("directory_left")
-                or person.get("sign_in") is False
-                or not slack_id
-            ):
-                self.completion_checked(message["id"])
-                continue
-            if person.get("notify_slack_task_done") is False:
-                self.completion_checked(message["id"])
-                continue
-            # Verify the mapping against the pinned workspace and the current roster. An old
-            # DM or a manually supplied Slack id must never send task details outside the team.
-            with self.store.read() as c:
-                verified, _, denied = self.verify_sender(c, {"user_id": slack_id})
-            if denied or not verified or verified["id"] != pid:
-                self.completion_checked(message["id"], retry=bool(denied and denied.startswith("users.info:")))
-                continue
-            if not channel:
-                try:
-                    channel = str(self.slack.conversations_open(slack_id).get("id") or "")
-                except (SlackError, SlackUnreachable) as exc:
-                    LOG.warning("Could not open a task notification DM for %s: %s", pid, type(exc).__name__)
-                    self.completion_checked(
-                        message["id"], retry=True, seconds=getattr(exc, "retry_after", None) or RETRY_SECONDS
-                    )
-                    continue
-            if not channel or not channel.startswith("D"):
-                self.completion_checked(message["id"])
-                continue
-            with self.store.transaction() as c:
-                completion = json.loads(message["refs"])["task_completion"]
-                owner = completion["owner"]
-                who = H.human(c, owner) if H.is_human(owner) else H.bot(c, owner)
-                name = (who or {}).get("name") or (who or {}).get("display_name") or H.actor_id(owner)
-                title = message["body"].splitlines()[0]
-                text = title + "\nby " + name
-                if completion.get("note"):
-                    text += "\n" + completion["note"]
-                now = self.clock()
-                queued += c.execute(
-                    "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
-                    "VALUES(?,?, '', '',?,'ready',?,?,?)",
-                    (message["id"], channel, text, now, now, message["recipient_id"]),
-                ).rowcount
-        return queued
-
-    def completion_checked(self, message_id, retry=False, seconds=RETRY_SECONDS):
-        with self.store.transaction() as c:
-            if retry:
-                c.execute(
-                    "UPDATE messages SET refs=json_set(refs,'$.task_completion.retry_after',?) WHERE id=?",
-                    (H.shift(self.clock(), seconds=seconds), message_id),
-                )
-            else:
-                c.execute(
-                    "UPDATE messages SET refs=json_set(refs,'$.task_completion.checked',1) WHERE id=?", (message_id,)
-                )
-
     def rendered(self, c, post):
         """What Slack shows: the reply, then the footer that names the bot even where customize is not honoured."""
         message = H.message(c, post["message_id"]) or {}
-        about = None
-        if post["bot"]:
-            conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
-            about = H.message_task_id(message, conv)
-            line = visuals.elsewhere(self.settings.public_url, message, about)
-        else:
-            # A task-done notice carries no visuals of its own: the line is the result's, linked to that comment.
-            result = completion_result(c, message)
-            line = result and visuals.elsewhere(
-                self.settings.public_url, result, H._task_ref(message["refs"].get("task"))
-            )
+        conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
+        about = H.message_task_id(message, conv)
+        line = visuals.elsewhere(self.settings.public_url, message, about)
         seen = "\n<" + slack_escape(line["url"]) + "|" + line["label"] + ">" if line else ""
-        if not post["bot"]:
-            task_id = H._task_ref(message["refs"].get("task"))
-            link = (
-                (
-                    "\n<"
-                    + slack_escape(self.settings.public_url + "/#/task/" + urllib.parse.quote(task_id, safe=""))
-                    + "|Open task>"
-                )
-                if task_id
-                else ""
-            )
-            return {
-                "text": slack_escape(str(post["text"])[:POST_CHARS]) + seen + link,
-                "username": None,
-                "icon_emoji": None,
-                "icon_url": None,
-            }
         bot = H.bot(c, post["bot"]) or {}
         name = bot.get("display_name") or bot.get("slug") or post["bot"]
         config = entries(c).get(post["bot"]) or {}
@@ -2562,7 +2418,6 @@ class Gateway:
                     self.finish(c, event, "failed", reason=f"{type(exc).__name__}: {exc}")
                 out.append({"event_id": event["event_id"], "state": "failed"})
         out.extend(self.offer())
-        self.task_completions()
         self.originate()
         self.mirror()
         posts = self.deliver()

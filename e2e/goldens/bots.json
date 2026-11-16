@@ -7,8 +7,6 @@
         "write": true
       },
       "agent": null,
-      "app_delivery": null,
-      "app_delivery_app": null,
       "assignment": null,
       "bot_contact": "open",
       "bot_owners": [
@@ -109,8 +107,6 @@
         "write": true
       },
       "agent": null,
-      "app_delivery": null,
-      "app_delivery_app": null,
       "assignment": null,
       "bot_contact": "open",
       "bot_owners": [
@@ -216,8 +212,6 @@
         "write": true
       },
       "agent": null,
-      "app_delivery": null,
-      "app_delivery_app": null,
       "assignment": null,
       "bot_contact": "open",
       "bot_owners": [
@@ -318,8 +312,6 @@
         "write": true
       },
       "agent": null,
-      "app_delivery": null,
-      "app_delivery_app": null,
       "assignment": null,
       "bot_contact": "open",
       "bot_owners": [
@@ -420,8 +412,6 @@
         "write": true
       },
       "agent": null,
-      "app_delivery": null,
-      "app_delivery_app": null,
       "assignment": null,
       "bot_contact": "open",
       "bot_owners": [
@@ -522,8 +512,6 @@
         "write": true
       },
       "agent": null,
-      "app_delivery": null,
-      "app_delivery_app": null,
       "assignment": {
         "bot": "ops",
         "generation": 1,
@@ -649,8 +637,6 @@
         "write": true
       },
       "agent": null,
-      "app_delivery": null,
-      "app_delivery_app": null,
       "assignment": null,
       "bot_contact": "open",
       "bot_owners": [

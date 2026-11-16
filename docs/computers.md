@@ -8,7 +8,7 @@ Re-enrolling the same physical computer can leave an older registration behind. 
 registration after more than 24 hours offline only when a newer, active registration has the same reported device
 identity, owner, name and platform, and was enrolled or contacted Tico after the old registration's last contact.
 The old registration must have no assigned bots, cloud machine, shared browser access, saved or reported sign-ins,
-keys, subscriptions, profiles or app delivery. Computers with an unknown device identity stay listed. The runner
+keys, subscriptions or profiles. Computers with an unknown device identity stay listed. The runner
 reports an app-salted hash of the OS device identity; the raw identity stays on the computer.
 
 **Settings → Models** holds the company's model settings:
@@ -91,7 +91,7 @@ a claim ends. A turn claimed past the limit holds no place: its start is refused
 login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
 other work can start beside it. Waiting for
 a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
-take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
+take the last start reservation together. Codex's shared ChatGPT login does not queue turns
 ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 
 ### Builds at once

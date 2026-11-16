@@ -42,13 +42,13 @@ ALWAYS_WAKE = (
     ("task_turn", "a task in a pipeline is the bot's to work: the one task engine's wake (backend/task_wakes.py)"),
     ("person", "a person's message or comment, or a notice of a person's own act (an OK, a move)"),
     ("manager", "a task comment from a party’s org-chart manager"),
-    ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
+    ("ask", "a steer: an instruction to the bot while it works"),
     ("approval", "an instruction or a structured question: a command, a run now, an OK asked or given"),
     ("needs_action", "a message its sender flagged needs-action (or a flag that is not plainly true or false)"),
     ("mention", "another bot's message that @mentions the bot (addressed: it goes by the message's way)"),
-    ("reply", "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on (wait_s)"),
+    ("reply", "a reply to a message the bot flagged needs-action, or to one it waits on (wait_s)"),
 )
-ALWAYS_KINDS = frozenset({"ask", "answer", "steer"})
+ALWAYS_KINDS = frozenset({"steer"})
 # References that make a message more than news: a decision, a question, an instruction.
 ALWAYS_REFS = frozenset({"approval", "questions", "command", "run_now"})
 FLAG = "needs_action"
@@ -86,7 +86,6 @@ NEWS_REFS = frozenset(
         FLAG,
         "trigger",
         "trigger_source",
-        "task_completion",
         CAUSED_BY,
         "rule",
         "news",
@@ -138,16 +137,16 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
 
 
 def _awaited_reply(conn, target, in_reply_to):
-    """Whether a reply answers something `target` waits on: its own ask, a message it flagged needs-action, or one
-    it sent with wait_s. True when the parent cannot be read."""
+    """Whether a reply answers something `target` waits on: a message it flagged needs-action, or one it sent with
+    wait_s. True when the parent cannot be read."""
     try:
-        parent = conn.execute("SELECT sender_id,kind,refs,wait_s FROM messages WHERE id=?", (in_reply_to,)).fetchone()
+        parent = conn.execute("SELECT sender_id,refs,wait_s FROM messages WHERE id=?", (in_reply_to,)).fetchone()
     except Exception:  # noqa: BLE001 - fail open
         return True
     if not parent:
         return True
     return parent["sender_id"] == target and bool(
-        parent["kind"] == "ask" or parent["wait_s"] or '"' + FLAG + '": true' in str(parent["refs"] or "")
+        parent["wait_s"] or '"' + FLAG + '": true' in str(parent["refs"] or "")
     )
 
 

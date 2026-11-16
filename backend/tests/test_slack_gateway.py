@@ -720,6 +720,21 @@ def _a_task_reply_names_and_links_its_task(gateway, hub):
     )
 
 
+def test_a_bot_post_is_shaped_from_its_message_its_task_and_its_visuals(gateway, hub):
+    """`rendered` reads the reply's own room for the task it is about: the visual line links to that message in the
+    task, and the footer names the task."""
+    task, reply = task_reply(hub, False, [visual()], title="Q4 numbers")
+    with hub.read() as c:
+        shaped = gateway.rendered(c, {"message_id": reply, "bot": "legal", "text": "Here is the quarter."})
+    base = gateway.settings.public_url
+    assert shaped["username"] == "Legal"
+    assert shaped["text"] == (
+        "Here is the quarter.\n\n"
+        f"<{base}/?task={task}&amp;message={reply}|1 visual - view in Tico>"
+        f"\n\n(sent from Legal on <{base}/#/task/{task}|Q4 numbers>)"
+    )
+
+
 def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):
     """The link would only open for the task's readers, but nothing of a private task goes out in the first place:
     not the text, not the line, not its ids."""

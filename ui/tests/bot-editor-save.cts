@@ -90,10 +90,10 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
         }
         if (what === 'archive') return json({bot: 'helper', archived: true});
         if (what === 'transitions' && refuseTransition) return json({error: {detail: 'Bot configuration changed; refresh before saving'}}, 409);
-        if (what === 'transitions') return json({id: 'tr-1', bot: 'helper', kind: 'model', state: 'preparing'});
+        if (what === 'transitions') return json({id: 'tr-1', bot: 'helper', kind: 'model', state: 'applied'});
       }
-      if (p === '/api/v2/settings/transitions/tr-1') return json({id: 'tr-1', bot: 'helper', kind: 'model', state: 'preparing',
-        progress: {prepared: 0, total: 1}, target: {harness: 'codex', model: 'gpt-6-1-sol', effort: 'high'}});
+      if (p === '/api/v2/settings/transitions/tr-1') return json({id: 'tr-1', bot: 'helper', kind: 'model', state: 'applied',
+        target: {harness: 'codex', model: 'gpt-6-1-sol', effort: 'high'}});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
       if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
       if (p === '/api/employees') return json(bots);
@@ -214,14 +214,14 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     assert.equal(await editor.isVisible(), true, 'no definition-only close');
     assert.deepEqual(calls as unknown[], [], 'Cancel saves nothing');
     assert.equal((await held('model')).model, 'gpt-6-1-sol', 'the pick is still there');
-    // Prepare change: the definition, then the model transition from the revision the definition made.
+    // Change: the definition, then the model transition from the revision the definition made.
     await save();
     await transition.locator('[data-confirm-prepare]').click();
     await closed();
     assert.deepEqual(calls.map(c => c.what), ['definition', 'transitions']);
     assert.deepEqual(calls[1]!.body as unknown, {kind: 'model', model: 'gpt-6-1-sol', effort: 'high', harness: 'codex',
       expected_generation: 7, expected_revision: 10});
-    await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
+    await page.waitForFunction(() => /now uses/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
     await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector<HTMLDialogElement>('#transition-dialog')!.close(); });
 
     // Model and Fallback both pending, and the transition is refused after the Fallback and the definition saved.
@@ -242,7 +242,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
     await closed();
     assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]), [['definition', 12], ['transitions', 13]],
       'Save again does not resend the saved Fallback');
-    await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
+    await page.waitForFunction(() => /now uses/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
     await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector<HTMLDialogElement>('#transition-dialog')!.close(); });
 
     // Model, compact-at and turns at once changed: nothing is posted until Save bot, then all
@@ -264,7 +264,7 @@ declare function settingsChoiceFromValue(value: string): {harness: string; model
       'Save bot saves every held change, chaining the revision');
     assert.deepEqual(calls[1]!.body, {turns_at_once: 5, expected_revision: 14});
     assert.equal(calls[2]!.body.compact_at, 100000);
-    await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
+    await page.waitForFunction(() => /now uses/.test(document.querySelector<HTMLElement>('#transition-dialog')?.innerText || ''));
     await page.evaluate(() => { clearInterval(SETTINGS_TRANSITION_TIMER); document.querySelector<HTMLDialogElement>('#transition-dialog')!.close(); });
 
     // Archive bot asks first and names who gets the work; Cancel archives nothing and leaves the editor open.

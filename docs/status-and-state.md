@@ -179,7 +179,7 @@ Transitions:
 | open | the attempt's outcome, or `canceled` | the attempt ends (`execution.py`) | job still on this attempt |
 | `uncertain`, `canceled`, `queued` | `completed` | a late result (`settleable`, `settles_late`) | see the operation-identity table |
 | `queued` | `completed` | a person answers before any bot runs (`bot_status_routes.py`) | `AND state='queued'` |
-| open | `canceled` | stop, task closed, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`) | |
+| open | `canceled` | stop, task closed, duplicate wake, quota or wake presets (`delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`) | |
 
 ### attempts.state
 
@@ -552,11 +552,11 @@ Without a CHECK (values are whatever the code writes):
   `bot_transition_checkpoints.state`, `model_logins.state`, `oauth_grants.state`, `cloud_machines.state`, `computer_keys.state`,
   `seats.request_state`, `seat_requests.state`, `service_jobs.state`, `slack_events.state`, `slack_posts.state`,
   `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `listening_items.status`, `support_tickets.status`,
-  `rule_suggestions.status`, `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
+  `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
   `mail_items.state`, `mail_items.status`, `market_*.status`, `inbound_inboxes.state`, `bills_inbound.state`,
   `learning_runs.status`, `lens_runs.status`, `listening_sources.status`, `flight_slow.status`, `redesign_migrations.state`,
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
-  `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,
+  `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`,
   `trigger_bodies.outcome`, `trigger_deliveries.outcome`, `webhook_attempts.status`, `org_rule_holds.reviewer`, `kpis.stage`
   (the funnel stage from `backend/growth.py`), `status_source` and `status_by` in a goal's `history_events.data` (event history).
 

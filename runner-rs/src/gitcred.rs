@@ -244,7 +244,7 @@ fn accept(
 }
 
 impl CredentialSocket {
-    /// Listen in a private temporary directory, as `credential_socket.serve` does without isolation.
+    /// Without isolation, listen in a private temporary directory.
     /// Under isolation (or with TICO_RUNNER_CRED_SOCKET) it is a fixed path the bot user owns.
     pub fn serve(client: Client, cache: Arc<TokenCache>) -> std::io::Result<CredentialSocket> {
         let named = std::env::var("TICO_RUNNER_CRED_SOCKET")

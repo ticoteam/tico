@@ -1,8 +1,8 @@
 """A bot's GitHub token, from the supervisor, without the runner's registration.
 
 git's credential helper runs inside a turn, as the turn's user, which must not be able to read
-runner.json (runner_support/isolation.py). So the supervisor listens on a Unix socket and the helper
-asks it: it sends the turn's attempt token, and gets a GitHub token for the bot that attempt
+runner.json (runner_support/isolation.py). So the supervisor (runner-rs/src/gitcred.rs) listens on a Unix socket
+and the helper asks it with the client calls below: it sends the turn's attempt token, and gets a GitHub token for the bot that attempt
 belongs to, minted with the runner's registration. The socket has no other question: it cannot
 name a bot, so an attempt never gets another bot's token, an attempt that has ended gets nothing,
 and the runner's own token never crosses it.
@@ -19,19 +19,10 @@ bot may open when it handed the attempt out; any other mailbox, and any attempt 
 """
 
 import json
-import os
 import socket
-import socketserver
-import threading
-import tempfile
-from pathlib import Path
-
-from .outage import log
 
 SOCKET_ENV = "TICO_CRED_SOCKET"
-DEFAULT_PATH = "/run/tico-runner/git-credential.sock"
 MAX_LINE = 4096
-MAIL_SERVICES = ("gmail", "calendar")
 
 
 def _server_rejects_token_purpose(exc):
@@ -56,192 +47,6 @@ def _server_rejects_token_purpose(exc):
             "extra_forbidden",
         )
     )
-
-
-class Server:
-    """Serves `mint(bot, repository)` to the attempt registered for that bot; repository is optional."""
-
-    def __init__(self, path, mint, mail=None, refresh=None, mint_git=None):
-        self.path, self.mint, self.mail = str(path), mint, mail
-        self.attempts, self.mailboxes, self.lock = {}, {}, threading.Lock()
-        self.server = None
-        self.redactors = {}
-        self.issued = {}
-        self.directory = None
-        self.refresh = refresh
-        self.mint_git = mint_git
-
-    def register(self, attempt_token, bot, mailboxes=()):
-        with self.lock:
-            self.attempts[attempt_token] = bot
-            self.issued[attempt_token] = set()
-            self.mailboxes[attempt_token] = {str(m).strip().lower() for m in mailboxes or ()}
-
-    def unregister(self, attempt_token):
-        with self.lock:
-            self.attempts.pop(attempt_token, None)
-            self.mailboxes.pop(attempt_token, None)
-            self.redactors.pop(attempt_token, None)
-            self.issued.pop(attempt_token, None)
-
-    def set_redactor(self, attempt_token, redactor):
-        with self.lock:
-            redactor.add(self.issued.pop(attempt_token, ()))
-            self.redactors[attempt_token] = redactor
-
-    def answer(self, line):
-        try:
-            asked = json.loads(line)
-            token = asked.get("token")
-        except (ValueError, AttributeError):
-            return {"error": "bad request"}
-        with self.lock:
-            bot = self.attempts.get(token) if isinstance(token, str) and token else None
-            allowed = self.mailboxes.get(token, set())
-        if not bot:
-            return {"error": "unknown attempt"}
-        if "mail" in asked:
-            return self.answer_mail(bot, allowed, asked["mail"])
-        try:
-            repository = asked.get("repository")
-            if repository is not None and not isinstance(repository, str):
-                return {"error": "bad repository"}
-            purpose = asked.get("purpose", "turn")
-            if purpose not in ("turn", "git"):
-                return {"error": "bad purpose"}
-            mint = self.mint_git if purpose == "git" and self.mint_git else self.mint
-            granted = mint(bot, repository) if repository else mint(bot)
-            if asked.get('refresh'):
-                if not granted or not repository or not self.refresh:
-                    return {'error': 'mirror refresh unavailable'}
-                return self.refresh(repository, granted)
-        except Exception as exc:
-            if getattr(exc, "status", 0):
-                # The hub's refusal names the cause (App not installed on it, outside the organization): a failed
-                # clone shows it rather than a bare exception name.
-                from .git_credentials import token_problem
-
-                return {"error": f"{type(exc).__name__}: {token_problem(exc, repository)}"}
-            return {"error": type(exc).__name__}
-        if not granted:
-            return {"error": "no token"}
-        with self.lock:
-            if token not in self.attempts:
-                return {"error": "unknown attempt"}
-            redactor = self.redactors.get(token)
-            if redactor:
-                redactor.add([granted])
-            else:
-                self.issued.setdefault(token, set()).add(granted)
-        return {"token": granted}
-
-    def answer_mail(self, bot, allowed, asked):
-        service = asked.get("service") if isinstance(asked, dict) else None
-        mailbox = str(asked.get("mailbox") or "").strip().lower() if isinstance(asked, dict) else ""
-        if not self.mail or service not in MAIL_SERVICES:
-            return {"error": "no mail access"}
-        if not allowed:
-            return {"error": "no mailbox", "mailboxes": []}
-        if mailbox not in allowed:
-            return {"error": "not this bot's mailbox", "mailboxes": sorted(allowed)}
-        try:
-            granted = self.mail(service, mailbox)
-        except Exception as exc:
-            return {"error": type(exc).__name__}
-        if not granted:
-            return {"error": "no token"}
-        reply = {"token": granted["token"], "expiry": granted.get("expiry", "")}
-        if isinstance(granted.get("scopes"), list):  # a connected account: the turn refuses what it did not grant
-            reply["scopes"] = granted["scopes"]
-        return reply
-
-    def start(self):
-        outer = self
-
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(self):
-                self.request.settimeout(20)
-                try:
-                    reply = outer.answer(self.rfile.readline(MAX_LINE))
-                    self.wfile.write(json.dumps(reply).encode() + b"\n")
-                except OSError:
-                    pass
-
-        class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-            daemon_threads = True
-
-        path = Path(self.path)
-        path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-        path.unlink(missing_ok=True)
-        self.server = UnixServer(self.path, Handler)
-        # Whoever holds an attempt token may ask; the file mode only keeps strangers' processes out.
-        from . import isolation
-
-        os.chmod(self.path, 0o600)
-        isolation.chown(self.path)
-        threading.Thread(target=self.server.serve_forever, name="credential-socket", daemon=True).start()
-        return self
-
-    def stop(self):
-        if self.server:
-            self.server.shutdown()
-            self.server.server_close()
-            Path(self.path).unlink(missing_ok=True)
-            if self.directory:
-                self.directory.cleanup()
-
-
-def serve(client, path=None, mail=None, refresh=None):
-    """The supervisor's server: `client` is the runner's own, `mail`
-    (service, mailbox) -> {"token", "expiry"} mints Gmail access."""
-    from . import isolation
-
-    path = path or os.environ.get("TICO_RUNNER_CRED_SOCKET")
-    directory = None
-    if not isolation.enabled() and not path:
-        directory = tempfile.TemporaryDirectory(prefix="tico-credentials-", dir="/tmp")
-        path = str(Path(directory.name) / "credential.sock")
-    path = path or os.environ.get("TICO_RUNNER_CRED_SOCKET") or DEFAULT_PATH
-
-    def mint(bot, repository=None):
-        from .git_credentials import hub_token, select_token
-
-        granted = hub_token(client, {"bot": bot})
-        return select_token(granted, repository)
-
-    legacy_purpose_servers = set()
-    purpose_lock = threading.Lock()
-    server_key = str(getattr(client, "url", None) or id(client))
-
-    def mint_git(bot, repository=None):
-        from .git_credentials import hub_token, select_token
-
-        with purpose_lock:
-            legacy_server = server_key in legacy_purpose_servers
-        if legacy_server:
-            granted = hub_token(client, {"bot": bot})
-        else:
-            try:
-                granted = hub_token(client, {"bot": bot, "purpose": "git"})
-            except Exception as exc:
-                if not _server_rejects_token_purpose(exc):
-                    raise
-                with purpose_lock:
-                    legacy_purpose_servers.add(server_key)
-                # Older servers default an omitted purpose to turn. Retry once, then remember
-                # that schema for this server so every later git request uses its supported body.
-                granted = hub_token(client, {"bot": bot})
-        return select_token(granted, repository)
-
-    try:
-        server = Server(path, mint, mail, refresh, mint_git=mint_git).start()
-        server.directory = directory
-        return server
-    except OSError as exc:
-        if directory:
-            directory.cleanup()
-        log(f"Tico runner: no credential socket at {path} ({type(exc).__name__}); turns keep their start-of-turn token")
-        return None
 
 
 def request(path, attempt_token, timeout=20, repository=None, purpose="turn"):

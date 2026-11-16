@@ -648,14 +648,8 @@ impl Runner {
         let assignments = self.assignments_seen();
         let candidates = readiness_candidates(&assignments);
         // A built-in bot is set up from the catalog first; any other (or one whose history is on GitHub) is fetched.
-        // A bot delivered through an app has no repository to fetch.
-        let with_repositories: Vec<Value> = candidates
-            .iter()
-            .filter(|e| crate::appdriver::delivery(&e["config"]).is_none())
-            .cloned()
-            .collect();
-        crate::product_files::bootstrap_missing(&self.config, &with_repositories).await;
-        self.fetch_missing(&with_repositories).await;
+        crate::product_files::bootstrap_missing(&self.config, &candidates).await;
+        self.fetch_missing(&candidates).await;
         // A checkout fetched just now is closed to other bots' leased turns before any turn of its own runs.
         let workspace = self.config.projects_dir();
         let _ =
@@ -723,9 +717,6 @@ impl Runner {
         // to a server that takes it (`readiness_browser`): an older one refuses the whole heartbeat.
         if crate::fallback::server_takes_browser() {
             readiness_doc["browser"] = crate::browser::readiness();
-        }
-        if let Some(apps) = crate::appdriver::readiness(&candidates) {
-            readiness_doc["appdriver"] = apps; // only on a Mac with app delivery (crate::appdriver)
         }
         if full {
             // A low workspace volume starts the safe clean-up in the background; its last run is reported.
@@ -1249,8 +1240,6 @@ impl Runner {
         tokio::spawn(crate::idle_load::run_loop(self.clone()));
         tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
-        tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));
-        tokio::spawn(crate::appdriver::run_loop(self.clone()));
         let mut clock = Clock {
             polled: [None; crate::events::CHANNELS.len()],
             next_claim: None,

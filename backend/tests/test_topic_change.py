@@ -547,7 +547,6 @@ def test_never_checked_when_the_chat_is_shared_off_goaled_busy_a_task_chat_has_f
     drain()
 
     task = post(api, "tasks", {"owner": "ops", "title": "Look into it", "body": "The login bug"})
-    post(api, f"tasks/{task['id']}/chat", {"text": UNRELATED})
     post(api, "chat/ops", {"text": UNRELATED, "refs": {"task": task["id"]}})
     quiet("a task chat")
     drain()

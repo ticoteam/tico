@@ -5857,7 +5857,7 @@ _DELIVERIES_SQL = (
     "state,revision,delivered_at,read_at,created_at,updated_at) SELECT lower(hex(randomblob(16))),m.id,"
     "m.recipient_id,m.conversation_id,m.conversation_id,"
     "CASE WHEN COALESCE(json_extract(CASE WHEN json_valid(m.refs) THEN m.refs END,'$.quiet'),0) "
-    "THEN 'defer' ELSE 'queue' END, CASE WHEN m.kind='ask' THEN 'ask' ELSE 'addressed' END,"
+    "THEN 'defer' ELSE 'queue' END, 'addressed',"
     "CASE WHEN m.sender_id LIKE 'bot:%' THEN 'bot' WHEN m.sender_id LIKE 'human:%' THEN 'human' "
     "ELSE 'keeper' END, CASE WHEN m.delivered_at IS NOT NULL THEN 'delivered' ELSE 'pending' END,0,"
     "m.delivered_at,m.read_at,m.created_at,? FROM messages m WHERE m.rowid>? AND m.rowid<=? "

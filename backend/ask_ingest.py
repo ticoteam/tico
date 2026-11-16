@@ -353,18 +353,6 @@ def structured_text(questions, text):
     return f"{head}\n\n{body[:room]}" if room > 0 and body else head
 
 
-def _judged_text(refs, message_text, task):
-    """What a question was judged with, as replayed. A task question (`refs.task_question`, set by the server when it
-    writes the question) was judged with the body its task was filed with, which the ask message does not carry: the
-    question's line stands in for a body that was not given. Any other question judged its message text."""
-    questions = refs.get("questions")
-    first = questions[0] if isinstance(questions, list) and questions and isinstance(questions[0], dict) else {}
-    if not task or refs.get("task_question") is not True:
-        return message_text
-    body = str(task.get("body") or "")
-    return "" if body.strip() == str(first.get("question") or "").strip() else body
-
-
 def _call(qset, own, items, asker, person_name, title, text, asked=None):
     """(state, questions, criteria) of the one call about one item. `asked` is the item's structured questions as
     stored (refs.questions), or None."""
@@ -905,12 +893,11 @@ _OWNER_THEN = (
 
 def replay_items(c, person, start, end, assistant_bot=None):
     """What bots put on this person between `start` and `end`, oldest first, as the gate would have seen each: tasks
-    filed for them and questions asked of them (on a task or loose). The owner then comes from the owner history
+    filed for them. The owner then comes from the owner history
     (`_OWNER_THEN`), today's owner where a task never changed hands. A merged task, or an older item the check kept
     with its bot, is found by its ask row for this person as well. Refusals have no saved text or ref to replay.
-    Each ask row with a surviving item is one placement, listed on its own day. Bot owner changes to the person are also placements when the check was off and wrote no ask row. A
-    question carries its structured questions (refs.questions); a task row carries none, its questions are the ask
-    messages replayed beside it."""
+    Each ask row with a surviving item is one placement, listed on its own day. Bot owner changes to the person are also
+    placements when the check was off and wrote no ask row."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
     # A task counts on the day it was filed for them, while they owned it, unless the gate judged that filing: an ask row
     # for them written no later than the task's first owner change leaves the filing to the second branch. That branch
@@ -947,37 +934,7 @@ def replay_items(c, person, start, end, assistant_bot=None):
             (person, start, end, skip, person, person, start, end, skip, person, skip, start, end, person),
         )
     ]
-    for m in H._rows(
-        c.execute(
-            "SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
-            "AND superseded_at IS NULL AND sender_id LIKE 'bot:%' AND sender_id<>?",
-            (person, start, end, skip),
-        )
-    ):
-        msg = H.message(c, m["id"]) or m
-        tid = H.message_task_id(msg)
-        task = H.task(c, tid) if tid else None
-        title = (task or {}).get("title", "") if tid else ""
-        body = str(m.get("body") or "")
-        refs = H._json(m.get("refs"), {}) or {}
-        out.append(
-            {
-                "kind": "question" if tid else "loose",
-                "ref": tid or m["id"],
-                "asker": m["sender_id"],
-                "title": title or body.strip().split("\n")[0][:300],
-                "text": _judged_text(refs, body, task),
-                "asked": refs.get("questions"),
-                "created_at": m["created_at"],
-            }
-        )
     return sorted(out, key=lambda it: it["created_at"])
-
-
-def _leave_out(it):
-    """The task a replayed item leaves out of its own plate: a task is itself, so it does not count itself. A question
-    is about a task already on the plate, which counts there once, as the live gate counted it."""
-    return it["ref"] if it["kind"] == "task" else ""
 
 
 def load_at(c, person, at, leave_out=""):
@@ -1004,12 +961,10 @@ def open_items_at(c, person, at, leave_out="", asker=""):
 
 
 def _shown(c, viewer, person, it, can_read=None):
-    """Whether `viewer` may read a replayed item's title: the person their own tasks and questions, and a task the
-    check kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read, never
-    a bot's question to the person outside any task. `can_read(c, task)` is the full task-read policy for the viewer
-    (auth.task_row: a private task's readers, Read on every bot it involves); without it, privacy alone decides."""
-    if it["kind"] == "loose":
-        return viewer in (None, person)
+    """Whether `viewer` may read a replayed item's title (each is a task): the person their own tasks, and a task the
+    check kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read.
+    `can_read(c, task)` is the full task-read policy for the viewer (auth.task_row: a private task's readers, Read on
+    every bot it involves); without it, privacy alone decides."""
     task = H.task(c, it["ref"])
     if not task:
         return False
@@ -1037,8 +992,8 @@ def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, view
         prepared = [
             (
                 it,
-                load_at(c, person, it["created_at"], _leave_out(it)),
-                open_items_at(c, person, it["created_at"], _leave_out(it), it["asker"]),
+                load_at(c, person, it["created_at"], it["ref"]),
+                open_items_at(c, person, it["created_at"], it["ref"], it["asker"]),
                 _bot_line(c, it["asker"]),
                 _shown(c, viewer, person, it, can_read),
             )

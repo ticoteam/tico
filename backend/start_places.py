@@ -16,19 +16,15 @@ CREATE TABLE IF NOT EXISTS start_places(
 
 
 def restore_waits(c):
-    """An upgrade preserves the same legacy waits the live event reader recognises."""
-    from .login_waits import wait
-
+    """An upgrade gives every leased attempt without one a start place, waiting on nothing."""
     H.add_column(c, "start_places", "managed", "INTEGER NOT NULL DEFAULT 0")
     for row in c.execute(
-        "SELECT a.id,a.created_at FROM attempts a WHERE a.state='leased' "
+        "SELECT a.id FROM attempts a WHERE a.state='leased' "
         "AND NOT EXISTS(SELECT 1 FROM start_places p WHERE p.attempt_id=a.id)"
     ).fetchall():
-        payload = wait(c, row['id'])
-        reason = ('shared login' if payload.get('login') else 'pre-start requirements') if payload else ''
         c.execute(
             "INSERT INTO start_places(attempt_id,start_until,wait_reason,waiting_since) VALUES(?,?,?,?)",
-            (row['id'], None, reason, row['created_at'] if reason else None),
+            (row['id'], None, '', None),
         )
 
 

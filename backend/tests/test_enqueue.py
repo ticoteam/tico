@@ -155,32 +155,15 @@ def test_a_group_room_queues_the_addressed_bot(api):
     assert _written(api, at) == [("human:ana", coo, "say", True), (H.KEEPER, ops, "notice", True)]
 
 
-def _external(api, harness="hermes", computer=None):
-    with api.app.state.store.transaction() as c:
-        config = {"name": "ops", "runtime": "fake", "status": "active", "harness": harness}
-        if computer:
-            config["app_delivery"] = {"computer": computer}
-        BS.write(c, "ops", config)
-
-
-def test_an_external_agents_bot_gets_no_job_unless_a_registered_computer_delivers_it(api):
+def test_an_external_agents_bot_gets_no_job(api):
     ops = _bot(api, "ops")
-    r, _, _attempt = setup_attempt(api)
-    for computer, revoked, queued in (
-        (None, False, False),
-        (r["runner_id"], False, True),
-        ("no-such-computer", False, False),
-        (r["runner_id"], True, False),
-    ):
-        _external(api, computer=computer)
-        if revoked:
-            with api.app.state.store.transaction() as c:
-                c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), r["runner_id"]))
-        at = _since(api)
-        with api.app.state.store.transaction() as c:
-            conv = H.open_conversation(c, "human:ana", ["human:ana", ops], kind="chat")
-            H._write_message(c, "human:ana", ops, "Hello", conv, "say", {}, None, None)
-        assert _written(api, at) == [("human:ana", ops, "say", queued)], (computer, revoked)
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {"name": "ops", "runtime": "fake", "status": "active", "harness": "hermes"})
+    at = _since(api)
+    with api.app.state.store.transaction() as c:
+        conv = H.open_conversation(c, "human:ana", ["human:ana", ops], kind="chat")
+        H._write_message(c, "human:ana", ops, "Hello", conv, "say", {}, None, None)
+    assert _written(api, at) == [("human:ana", ops, "say", False)]
 
 
 def test_an_imported_transcript_queues_nothing(api):
@@ -226,7 +209,8 @@ def test_a_bot_hand_off_held_as_a_note_queues_nothing(api):
 
 
 # The trigger as the last release that had it defined it (backend/store.py before migration 0052), kept here as the
-# oracle `enqueue` is checked against row for row on the odd inputs the product's writers never produce.
+# oracle `enqueue` is checked against row for row on the odd inputs the product's writers never produce (less its
+# retired exception for a bot delivered through a desktop app).
 _HARNESSES = "'hermes','openclaw','grokbot','dots','muse'"
 _LEGACY_TRIGGER = (
     "CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
@@ -234,9 +218,7 @@ _LEGACY_TRIGGER = (
     "AND COALESCE(json_extract(NEW.refs,'$.live.kind'), '') NOT IN ('transcript','decision','tool') "
     "AND COALESCE(json_extract(NEW.refs,'$.quiet'), 0) = 0 "
     "AND NOT EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.recipient_id,5) AND "
-    "json_extract(config,'$.harness') IN (" + _HARNESSES + ") AND NOT EXISTS ("
-    "SELECT 1 FROM runners r WHERE r.id=json_extract(config,'$.app_delivery.computer') "
-    "AND r.revoked_at IS NULL)) BEGIN "
+    "json_extract(config,'$.harness') IN (" + _HARNESSES + ")) BEGIN "
     "INSERT INTO jobs(id,message_id,bot_id,created_at) "
     "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END"
 )
@@ -244,8 +226,8 @@ _LEGACY_TRIGGER = (
 
 _DECLARED = (
     ("inbox", {"harness": "hermes"}),
-    ("desk", {"harness": "openclaw", "app_delivery": {"computer": "mac"}}),
-    ("gone", {"harness": "dots", "app_delivery": {"computer": "old-mac"}}),
+    ("desk", {"harness": "openclaw"}),
+    ("gone", {"harness": "dots"}),
     ("ops", {"harness": "claude"}),
 )
 

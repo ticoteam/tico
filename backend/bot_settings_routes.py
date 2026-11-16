@@ -293,14 +293,6 @@ def register(
         with store.read() as c:
             return settings_admin.get(c, request.state.identity, transition_id)
 
-    @app.post("/api/v2/settings/transitions/{transition_id}/apply-without-checkpoint")
-    def force_transition(request: Request, transition_id: str, body: M.BotTransitionApply):
-        return mutate(request, body, lambda c: settings_admin.force(c, request.state.identity, transition_id))
-
-    @app.post("/api/v2/settings/transitions/{transition_id}/cancel")
-    def cancel_transition(request: Request, transition_id: str, body: M.Empty):
-        return mutate(request, body, lambda c: settings_admin.cancel(c, request.state.identity, transition_id))
-
     @app.get("/api/v2/settings/history")
     def settings_history(request: Request, limit: int = 100, bot: str = "", before: str = ""):
         # One snapshot for the bots and the changes, so the people and bot rules it reads are computed once for it.

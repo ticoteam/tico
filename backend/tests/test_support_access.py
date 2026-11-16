@@ -315,7 +315,6 @@ def test_full_access_keeps_the_owners_lasting_changes_and_neither_tier_opens_a_p
         ("PUT", "/api/v2/slack/tokens"),
         ("PUT", "/api/v2/directory"),
         ("GET", "/api/v2/assistant"),
-        ("GET", "/api/v2/tasks/t1/chat"),
         ("GET", "/api/v2/calendar/upcoming"),
     ):
         r = api.request(method, path, json={}, headers=app_token)
@@ -326,7 +325,6 @@ def test_full_access_keeps_the_owners_lasting_changes_and_neither_tier_opens_a_p
     full_token = bearer(start(api, tier="full").json())
     for method, path in (
         ("GET", "/api/v2/assistant"),
-        ("GET", "/api/v2/tasks/t1/chat"),
         ("GET", "/api/v2/calendar/upcoming"),
     ):
         r = api.request(method, path, headers=full_token)

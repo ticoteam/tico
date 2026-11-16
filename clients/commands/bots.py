@@ -75,10 +75,6 @@ def bot_archive(api, args):
             "(its template's changes), tico (Tico releases); [] for none",
         },
         "status": {"type": "string", "enum": ["active", "paused", "planned"]},
-        "app_delivery": _s(
-            "A Grok Bot only: the id of your own computer whose Grok app delivers its messages, "
-            "or `off` for the daily sync alone"
-        ),
     },
     required=("slug",),
     writes=True,
@@ -113,10 +109,6 @@ def bot_set(api, args):
     }
     if args.get("new_slug"):
         change["slug"] = args["new_slug"]
-    if args.get("app_delivery"):
-        change["app_delivery"] = (
-            None if args["app_delivery"] == "off" else {"computer": args["app_delivery"], "app": "grok"}
-        )
     return api.post(
         f"bots/{args['slug']}/definition",
         {**change, "expected_revision": row["revision"], **({"on_behalf_of": on_behalf} if delegated else {})},

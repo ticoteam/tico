@@ -15,7 +15,6 @@ from clients import gateway, sessions
 from . import (
     start_places,
     org_turns,
-    app_delivery,
     check_models,
     learned,
     rooms,
@@ -2003,11 +2002,8 @@ def reset_cooldown(c, attempt_id, finished, cooldown, resets_at=None):
     return cooldown
 
 
-LOGIN_CLASS_LABELS = {"release-blocker": "release", "critical-path": "review"}
-
-
 def finished_before_start(c, row):
-    """Whether a turn that has not started (it waits for its shared login: runner-rs/src/login_turns.rs) is for a task
+    """Whether a turn that has not started (it waits before it starts: start_places) is for a task
     that was marked done or closed after the message that started it: it is skipped rather than run. A person's own
     message is never skipped: their words still get an answer."""
     if row["state"] != "leased":
@@ -2060,41 +2056,6 @@ def held_before_start(c, row):
 
     message = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
     return bool(message) and not task_wakes.may_start(c, message[0], attempt=row["id"])
-
-
-def login_class(c, task, msg, routine):
-    """The class a turn waits in for a shared login that serves one turn at a time: "release" for a task labelled
-    release-blocker, "review" for one labelled critical-path and for a turn a person's own message started, "other"
-    for the rest. A routine's or a timed wake's turn is "other" whatever its labels, so standing watches never jump the
-    queue. The labels count on the task or on the work it serves (its parents)."""
-    msg = msg or {}
-    person = H.in_person_name(msg)
-    if routine or (not person and (msg.get("refs") or {}).get("wake")):
-        return "other"
-    labels = set(H.task_labels(task))
-    if task:
-        # Tags are set when a task is made, so a sub-task filed without one takes its class from the work it
-        # serves: its parents, and the same for the task whose session it continues.
-        from .task_relations import ancestors
-
-        ids = set()
-        for one in {task["id"], task.get("session_task_id") or task["id"]}:
-            ids |= {one, *ancestors(c, one)}
-        ids.discard(task["id"])
-        if ids:
-            marks = ",".join("?" * len(ids))
-            labels |= {
-                r[0]
-                for r in c.execute(
-                    f"SELECT tags.key FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
-                    f"WHERE task_tags.task_id IN ({marks})",
-                    tuple(ids),
-                )
-            }
-    for label, cls in LOGIN_CLASS_LABELS.items():
-        if label in labels:
-            return cls
-    return "review" if person else "other"
 
 
 def limit_until(c, bot, since):
@@ -3017,7 +2978,7 @@ def obsolete_notices_sql(c):
     still owes that person its answer; on the engine nothing wakes a bot about a Done or Closed task, and
     task_wakes.may_start holds it, so Health and the claim say the same), a pull request's checks result for a head no open pull request on the task is at any more (a newer push
     supersedes it), and a self-filed task's "New task" notice while the task is snoozed and its filing turn has ended.
-    A turn that started and yielded (a drain's time limit, a shared login's hold cap) is never one of them: it is the
+    A turn that started and yielded (a drain's time limit) is never one of them: it is the
     rest of a turn already under way, often the one that finished the task, and canceling it left the bot's status on
     "queued to continue" with nothing queued (Dev 684). The idle claim asks the same question: when it counted notices
     the claim keeps, every claim from that computer went on to the write lock for nothing. It goes from this computer's
@@ -3931,9 +3892,7 @@ class Execution:
             )
             if row['owner_id'] != runner['owner_id'] and runner['owner_id'] != owner and not takes:
                 continue
-            config = app_delivery.job_config(
-                providers.fill(company, follow(c, row['bot'], json.loads(row['config']), configs.get))
-            )
+            config = providers.fill(company, follow(c, row['bot'], json.loads(row['config']), configs.get))
             # Runner wire (backend/runner_wire.py): the stored text under its old name, beside the decoded `config`.
             result.append(
                 {
@@ -5290,8 +5249,6 @@ class Execution:
         config = models_preset.with_gateway_inputs(config)
         # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).
         config = providers.with_compact_default(config)
-        # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
-        config = app_delivery.job_config(config)
         if held:
             config = {**config, "primary_held": held.get("until") or H.now()}
         # The thread's last run failed on a prompt too large to send: this one compacts its session before it runs, once
@@ -5551,8 +5508,8 @@ class Execution:
                 "routine": routine,
                 "id": aid,
                 "deferred": deferred,
-                # Which waiting turn takes a shared one-turn login first (runner-rs/src/login_turns.rs).
-                "login_class": login_class(c, task, msg, routine),
+                # The retired login queue's class: 0.6.x runners require the field (contracts/runner/wire.json).
+                "login_class": "other",
                 "recovery": {
                     "resume_session": restart_reported(c, row["attempt_id"])
                     or bool(cut_by_update(c, row["attempt_id"]))
@@ -6099,8 +6056,6 @@ class Execution:
         # The runner renews every few seconds, so a person's Stop rides on the answer it already reads. A turn whose
         # task ended meanwhile, or that the engine holds now, is stopped while it waits before starting; one preparing
         # or under way runs on.
-        from .login_waits import wait
-
         benched = quarantine_stops.stopped_by(c, row)
         return {
             "lease_until": until,
@@ -6110,7 +6065,7 @@ class Execution:
                 if row["stop_requested_at"]
                 or row["state"] == "leased"
                 and start_refused(c, aid)
-                or (wait(c, aid) or start_places.is_waiting(c, aid))
+                or start_places.is_waiting(c, aid)
                 and held_before_start(c, row)
                 else {}
             ),
@@ -6658,8 +6613,6 @@ class Execution:
 
         revoked = row["bot_id"] == H.RULES_OWNER and counsel.revoked_page_run(c, aid)
         seq = row["last_seq"]
-        from .login_waits import stored
-
         # Fetch only the sequences in this bounded request, not the attempt's output history.
         existing_events = {
             r["seq"]: (r["kind"], r["payload"])
@@ -6674,7 +6627,7 @@ class Execution:
         last_event = None
         now = H.now()
         for event in body.events:
-            clean = {"text": counsel.REMOVED_PAGE} if revoked else stored(event.kind, event.payload)
+            clean = {"text": counsel.REMOVED_PAGE} if revoked else event.payload
             payload = encode(clean)
             existing = existing_events.get(event.seq)
             if existing:
@@ -6695,18 +6648,12 @@ class Execution:
         c.executemany("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)", inserts)
         # A big output's few fields the status line reads, so it never decodes the output (backend/step_briefs.py).
         step_briefs.record(c, aid, briefs)
-        # Managed workers report waits through start-place. Their delayed status stream cannot revoke a grant.
-        # Legacy workers use the same latest-event predicate here as on restart, including clears and opt-outs.
+        # Managed workers report waits through start-place. Their delayed status stream cannot revoke a grant; a legacy
+        # worker's event clears the wait it reported before.
         if row["state"] == "leased" and row["lease_until"] > now and not start_places.managed(c, aid):
-            from .login_waits import wait
-
-            pending = wait(c, aid)
-            if pending:
-                start_places.waiting(c, aid, "shared login" if pending.get("login") else "pre-start requirements")
-            else:
-                c.execute(
-                    "UPDATE start_places SET wait_reason='',waiting_since=NULL WHERE attempt_id=? AND managed=0", (aid,)
-                )
+            c.execute(
+                "UPDATE start_places SET wait_reason='',waiting_since=NULL WHERE attempt_id=? AND managed=0", (aid,)
+            )
         if last_event is not None:
             from . import run_diagnostics
 
@@ -6912,8 +6859,8 @@ class Execution:
         # NOT_ISOLATED). Settled now, so the bot says why once rather than its lease lapsing into a retry.
         # Likewise a turn sent away from a held login (`primary_held`) that found no fallback ready after all: nothing
         # ran, and it goes back to wait out the hold (backend/login_holds.py after_turn).
-        # And a turn stopped while it waited for its shared login: older runners report failed, newer ones interrupted.
-        # Either settles the Stop. A task done or closed meanwhile (`skipped`) also ends its waiting turn.
+        # And a turn stopped while it waited before it started, failed or interrupted: either settles the Stop.
+        # A task done or closed meanwhile (`skipped`) also ends its waiting turn.
         skipped = body.outcome == "interrupted" and not row["stop_requested_at"] and held_before_start(c, row)
         # A private meeting's turn its computer could make no copy of the repository for (runner-rs
         # sessions::PRIVATE_COPY_FAILED) never started, and would fail alike on every retry: it ends here, and the
@@ -7027,8 +6974,6 @@ class Execution:
                 ),
             ).fetchone()
             task = H.task(c, work_task_id(source, conv)) if work_task_id(source, conv) else None
-            # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
-            same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
             # A reply the turn already sent (a tool message) is not posted again; the rule check's verdict on the final
             # text still applies (held, the run keeps only the note), so `posting` decides only the post.
             posting = not already and not same
@@ -8075,9 +8020,9 @@ class Execution:
                 claimed=row['created_at'],
             )
         elif yielded:
-            # Paused at its hold cap so another turn could use the shared login: it is back in the queue and
-            # continues next, so the bot is idle with the pause line, not crashed until the continuation starts.
-            from .login_waits import paused
+            # Paused for an update: it is back in the queue and continues next, so the bot is idle with the pause
+            # line, not crashed until the continuation starts.
+            from .run_diagnostics import paused
 
             settle_status(
                 c,

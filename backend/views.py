@@ -22,9 +22,8 @@ from . import models as M
 from . import changelog as CL
 from . import releases
 from . import visuals
-from . import app_delivery, login_holds, needs_lane, providers, runner_versions, runs
+from . import login_holds, needs_lane, providers, runner_versions, runs
 from .runs import LIVE as LIVE_RUN_STATES
-from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import bot_rows, bot_stops, run_triggers
 
@@ -220,7 +219,6 @@ def computer_details(c, row, who, auth):
     readiness = readiness_document(value.get("readiness"))
     access = auth.bot_accesses(c, who)
     assigned = assignments_by_runner(c)[1].get(row["id"]) or set()
-    shared = shared_logins(c, row["id"], readiness, assigned, access)
     readiness["bots"] = {
         bot: {k: v for k, v in report.items() if k != "tools"}
         for bot, report in readiness.get("bots", {}).items()
@@ -244,23 +242,7 @@ def computer_details(c, row, who, auth):
         "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
         "services": [],
         "services_scope": "team",
-        "shared_logins": shared,
     }
-
-
-def subscription_login(runtime, detail):
-    """Whether a sign-in detail names a subscription login, as the runner bills it (runner-rs/src/execute.rs
-    billing_for): "Signed in ..." naming the harness's `subscription_marker` and no API key."""
-    from .harnesses import harness_caps
-
-    marker = str(harness_caps(runtime).get("subscription_marker") or "").lower()
-    detail = str(detail or "")
-    return (
-        bool(marker)
-        and detail.lower().startswith("signed in")
-        and marker in detail.lower()
-        and not re.search(r"(?i)api[ _-]?key", detail)
-    )
 
 
 def assignments_by_runner(c):
@@ -284,54 +266,6 @@ def assignments_by_runner(c):
     if values is not None:
         values["views.assignments_by_runner"] = (ordered, active)
     return ordered, active
-
-
-def shared_logins(c, runner_id, readiness, assigned, access, names=None):
-    """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
-    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). Codex opts out and is
-    omitted: its bots run concurrently on one ChatGPT login. One row per login: its
-    runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
-    it and the ones this reader may see. A key login runs its bots side by side and is left out.
-
-    `names` is `{connection_id: display_name}` from `subscription_identity.display_names` when the caller already
-    loaded every rename (Operations listing).
-    """
-    from .harnesses import harness_caps
-    from .subscription_identity import connection_id, identity
-
-    runtimes = readiness.get("runtimes") or {}
-    logins = {}
-    for bot, report in (readiness.get("bots") or {}).items():
-        if bot not in assigned or not isinstance(report, dict):
-            continue
-        runtime, profile = str(report.get("runtime") or ""), str(report.get("profile") or "")
-        if not harness_caps(runtime).get("one_turn_per_login"):
-            continue
-        row = runtimes.get(runtime) or {}
-        login = ((row.get("profiles") or {}).get(profile) if profile and row.get("profiles") else row) or {}
-        if not subscription_login(runtime, login.get("detail")):
-            continue
-        logins.setdefault((runtime, profile), []).append(bot)
-    rows = []
-    for (runtime, profile), bots in sorted(logins.items()):
-        if len(bots) <= 1:
-            continue
-        if not profile:
-            label = ""
-        elif names is not None:
-            label = names.get(connection_id(runner_id, profile)) or profile
-        else:
-            label = identity(c, runner_id, profile)["display_name"]
-        rows.append(
-            {
-                "runtime": runtime,
-                "profile": profile,
-                "display_name": label,
-                "count": len(bots),
-                "bots": sorted(b for b in bots if (access.get(b) or {}).get("read")),
-            }
-        )
-    return rows
 
 
 SERVICE_NAMES = {"connector:calendar": "Calendar Tool", "connector:mail": "Mail Tool"}
@@ -1348,17 +1282,6 @@ def operation_issues(c, who, auth):
                     + " hours ago; check backup.log and the timers on the server.",
                     action="Check backup.log and the server timers.",
                 )
-        for row in c.execute("SELECT id,bot,error FROM bot_transitions WHERE state='failed'"):
-            # A version conflict means settings already moved; the failed checkpoint is leftover.
-            if "while the checkpoint was being prepared" in (row["error"] or ""):
-                continue
-            add(
-                "settings",
-                "A prepared settings change failed",
-                row["error"] or "Review or cancel the change.",
-                bot=row["bot"],
-                action="Review or cancel the failed change in Settings → Bots.",
-            )
     return issues
 
 
@@ -1527,8 +1450,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
     far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session); `people` also takes the
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
-    A run waiting for memory or its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
-    name the bot holding it."""
+    A run waiting for memory says so in `waiting` and its label."""
     person = H.in_person_name_sql()
     which = (
         f"AND (j.bot_id=? OR {person}) "
@@ -1588,10 +1510,6 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             label = "Reply failed — your message is saved"
         waiting = None
         if state in ("leased", "running") and job["attempt_id"]:
-            # Before it starts, or after: a fallback hop takes its own login once the turn has started.
-            from .login_waits import waiting as login_wait
-
-            waiting = login_wait(c, job["attempt_id"], job["bot_id"], who, auth)
             if state == "leased" and (job["start_wait_reason"] or "").startswith(start_places.MEMORY_HOLD):
                 waiting = "Waiting: " + job["start_wait_reason"]
             label = waiting or label
@@ -1656,33 +1574,6 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         if state in ("leased", "running") and job["attempt_started_at"]:
             execution["started_at"] = job["attempt_started_at"]  # the chat counts the turn's time from it
     return execution
-
-
-# What needs a person, in the order they work it. Work that traces back to a person leads: a person asked for it,
-# or it hangs under a task a person asked for. Work bots made for themselves or each other follows, unless it is
-# pressing: due within a day or overdue, or waiting PRESSING_DAYS (DECISIVE_DAYS for an approval or a question,
-# which holds its bot up). Within a tier the decisive kinds lead, then the queue in rank order, oldest first.
-PRESSING_DAYS = 3
-DECISIVE_DAYS = 1
-# A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {
-    "approval": 0,
-    "question": 1,
-    "ask": 1,
-    "waiting": 1,
-    "setup": 1,
-    "declined": 2,
-    "stale": 3,
-    "task": 3,
-    "report": 4,
-    # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
-    # mention or an unread DM is a person's to read.
-    "thread_ask": 1,
-    "thread_held": 1,
-    "thread_capped": 1,
-    "thread_mention": 2,
-    "thread_dm": 2,
-}
 
 
 _VISIBLE_TASK_SQL = f"SELECT * FROM {H.TASKS} tasks WHERE id=? AND (%s)"
@@ -1754,16 +1645,6 @@ def person_origin(c, row, visible_sql, me=None):
         if H.is_human(parent["requester_id"]):
             return parent["requester_id"]
     return None
-
-
-def pressing(it, now=None):
-    """A bot's item that may go ahead of a person's: due within a day or overdue, or waiting long enough."""
-    now = now or H.now()
-    due = it.get("due_at")
-    if due and str(due) <= H.shift(now, days=1):
-        return True
-    days = DECISIVE_DAYS if KIND_RANK.get(it.get("kind"), 9) <= 1 else PRESSING_DAYS
-    return bool(it.get("created_at")) and str(it["created_at"]) <= H.shift(now, days=-days)
 
 
 CHECKOUT_BEHIND_HOURS = 1
@@ -1856,32 +1737,6 @@ def checkout_issue(add, row, busy=0):
             restart_issue(add, row, busy, since=stamp)
     elif checkout.get("running") and checkout.get("head") and checkout["running"] != checkout["head"]:
         restart_issue(add, row, busy)
-
-
-DUE_SOON_DAYS = 7
-
-
-def needs_order(kind, created, rank=None, person=None, urgent=False, ask_missing=False, due=None):
-    """Needs you is the person's queue. A card still waiting for its bot to say what it needs goes last, whatever
-    else it is; above that, what is overdue or due within DUE_SOON_DAYS first, soonest first (a date further off
-    does not jump the queue); then what traces back to a person, or presses; then within that what blocks a bot (an
-    approval, a question), then declined work, then their own tasks in rank order."""
-    soon = str(due) if due and str(due) <= H.shift(H.now(), days=DUE_SOON_DAYS) else ""
-    return (
-        1 if ask_missing else 0,
-        0 if soon else 1,
-        soon,
-        0 if person or urgent else 1,
-        KIND_RANK.get(kind, 9),
-        rank if rank is not None else float("inf"),
-        str(created or ""),
-    )
-
-
-def deadline(item):
-    """When the card is due: a person's task's due date. A bot's own task's due is when it looks again, not a date
-    anyone owes it by."""
-    return item.get("due_at") if item.get("kind") != "approval" and not H.is_bot(item.get("owner_id")) else None
 
 
 def _clip(text, n=280):
@@ -2783,9 +2638,6 @@ def install_views(app, store, auth, mutate, task_view):
                         lifecycle.stage(config.get("onboarding_state")) == lifecycle.ONBOARDING
                         and lifecycle.may_complete(auth, c, who, slug)
                     ),
-                    # Labelled as on the bot list, so its computer is named to one who cannot see it.
-                    "app_delivery": app_delivery.view(c, config),
-                    "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime"))),
                     "cloud_machine": None
                     if cloud_rows is None or location.get("agent")
                     else cloud_machines.shown(
@@ -3022,10 +2874,6 @@ def install_views(app, store, auth, mutate, task_view):
 
             # One pass for every computer's own keys (not one SELECT per runner).
             keys_by_runner = listing_by_runner(c)
-            from .subscription_identity import display_names
-
-            # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
-            login_names = display_names(c)
             from . import cloud_machines
 
             # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
@@ -3172,11 +3020,6 @@ def install_views(app, store, auth, mutate, task_view):
                         "keys": keys,
                         "shared_keys": shared,
                         "shared_with": shared_with,
-                        # The sign-ins several of its bots share, which they take turns on (counting only
-                        # the bots this reader may see).
-                        "shared_logins": shared_logins(
-                            c, row["id"], value["readiness"], assigned_here - hidden, access, names=login_names
-                        ),
                         "bot_runtimes": sorted(run_on.get(row["id"], ())),
                         "update": runner_versions.view(fleet.get(row["id"])),
                         "harness_actions": harness_recent.get(row["id"]) or [],
@@ -3648,77 +3491,6 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             return fleet_snapshot(c, auth, request.state.identity, task_view)
 
-    def task_chat(c, who, tid, text=None, expected_recipient=None):
-        human_only(who)
-        task = auth.task(c, who, tid)
-        candidates = [task["owner_id"], task["requester_id"], H.task_origin(c, task)]
-        # No assistant fallback since its chat was retired: a task with no bot has nobody to chat to.
-        slug = next(
-            (
-                H.actor_id(p)
-                for p in candidates
-                if str(p).startswith("bot:") and auth.visible_bot(c, who, H.actor_id(p)) and H.bot(c, H.actor_id(p))
-            ),
-            None,
-        )
-        if slug:
-            from .shared_bots import route
-
-            slug = H.actor_id(route(c, who.actor, "bot:" + slug))
-        if H.task_private(c, task) and slug and not H.task_private_readable(c, "bot:" + slug, task):
-            slug = None
-        bot = (H.bot(c, slug) if slug else None) or {}
-        allowed = bool(slug) and may_chat(c, auth, who, slug)
-        conv = rooms.chat_room(c, auth, who, slug) if allowed else None
-        if H.task_private(c, task) and conv:
-            conv = auth.conversation(c, who, task["conversation_id"])
-        message = None
-        if text is not None:
-            if expected_recipient:
-                expected_recipient = (H.resolve_bot(c, expected_recipient) or {}).get("id", expected_recipient)
-            if expected_recipient and expected_recipient != slug:
-                raise Problem("recipient_changed", "Task ownership changed; refresh before sending", 409)
-            if not slug:
-                raise Problem(
-                    "no_bot",
-                    "No bot owns or asked for this task; assign it to a bot to discuss it, or comment on the task",
-                    409,
-                )
-            if not allowed:
-                auth.require_write(c, who, slug)
-                raise Problem("forbidden", "This bot takes requests in its own Assistant room, not here", 403)
-            privacy.require_destination(c, who, "bot:" + slug, conv["id"], {"task": tid})
-            message = H.say(c, who.actor, "bot:" + slug, text, conversation_id=conv["id"], refs={"task": tid})
-            c.execute(
-                "INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
-                (tid, "bot:" + slug, who.actor, message["id"], H.shift(H.now(), hours=24)),
-            )
-        tagged = [
-            m for m in (privacy.page(c, who, conv["id"])["messages"] if conv else []) if H.message_task_id(m) == tid
-        ]
-        recipient = (
-            {
-                "id": slug,
-                "slug": bot.get("slug") or slug,
-                "name": bot.get("display_name") or bot.get("slug") or slug,
-                "can_chat": allowed,
-            }
-            if slug
-            else None
-        )
-        return {"bot": slug, "recipient": recipient, "conversation": conv, "message": message, "messages": tagged}
-
-    @app.get("/api/v2/tasks/{tid}/chat")
-    def task_chat_read(request: Request, tid: str):
-        with store.read() as c:
-            return task_chat(c, request.state.identity, tid)
-
-    @app.post("/api/v2/tasks/{tid}/chat")
-    def task_chat_write(request: Request, tid: str, body: M.TaskChat):
-        return mutate(
-            request, body, lambda c: task_chat(c, request.state.identity, tid, body.text, body.expected_recipient)
-        )
-
     @app.post("/api/employees/{bot}/session/clear")
     def clear_session(request: Request, bot: str, body: M.Empty):
         who = request.state.identity
@@ -3734,20 +3506,6 @@ def install_views(app, store, auth, mutate, task_view):
                 raise Problem("busy", "Wait for this conversation's current turn to finish", 409)
             clear_chat_session(c, auth.settings, who.actor, bot_id, conv["id"])
             return {"cleared": True, "conversation_id": conv["id"]}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/page-chat")
-    def page_chat(request: Request, body: M.PageChat):
-        who = request.state.identity
-        human_only(who)
-
-        def work(c):
-            if not body.task_id:
-                raise Problem("validation", "Page chat covers a single task", 422)
-            if not body.text.strip():
-                raise Problem("validation", "Write a message about this task", 422)
-            return task_chat(c, who, body.task_id, body.text)
 
         return mutate(request, body, work)
 
