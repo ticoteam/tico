@@ -1,9 +1,9 @@
 """Growth in demo mode: the numbers page tells one season's story from one model, the weekly routine's runs are its
 history and its next run is the next Monday, and the paid test that loses is closed: a dropped idea. The store's customer
-export, loaded after the last run, makes the Retention card compute its cohorts, and they agree with the typed rows."""
+export, loaded when the demo is built, makes the Retention card compute its cohorts, and they agree with the typed rows."""
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import time_machine
@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend import demo
 from backend.app import create_app
+from backend.demo_sections import growth as growth_demo
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)  # a Friday, so the Monday runs of the window are all past
 CHANNELS = ["creator-videos", "online-store", "marketplace", "retail-partners", "paid-ads", "unknown"]
@@ -192,3 +193,24 @@ def test_the_demo_growth_tells_its_story(built, numbers, subtests):
     ):
         with subtests.test(check.__name__):
             check(built)
+
+
+def test_a_month_whose_day_30_has_filled_sends_every_stop_on_any_build_day():
+    """The demo is built on the real clock, so on every day of a year the export sends each lost customer's stop day
+    once their month's day 30 has filled, and the computed share is the typed one (day 30 filling between the last
+    Monday and the build day once left those customers kept, and asked an owner to choose)."""
+    day = datetime(2026, 1, 1, 18, 30, tzinfo=timezone.utc)
+    while day.year == 2026:
+        start, runs = growth_demo.window(day)
+        people = growth_demo.customers(growth_demo.model(start, runs))
+        today = day.astimezone(growth_demo.ZONE).date()
+        sent = {row["customer key"]: row["churned"] for row in growth_demo.export_rows(people, today)}
+        months = {}
+        for person in people:
+            months.setdefault((person["channel"], f"{person['day']:%Y-%m}"), []).append(person)
+        for group in months.values():
+            if max(p["day"] for p in group) + timedelta(days=30) > today:
+                continue  # not yet: Growth shows when day 30 fills
+            kept = sum(1 for p in group if sent[p["key"]] is None)
+            assert round(kept * 100 / len(group), 1) == growth_demo.kept_share(group), (day, group[0]["channel"])
+        day += timedelta(days=1)

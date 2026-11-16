@@ -10,7 +10,7 @@ The growth model counts revenue per customer per month. A unit's sale is spread 
 is about $25 a month over a year, and a Scene Library plan adds about $6), so each channel's monthly revenue stands for
 one sale. The report says so.
 
-After the last Monday run Ana loads the store's customer export (one row per customer, from the same daily model) in
+When the demo is built Ana loads the store's customer export (one row per customer, from the same daily model) in
 Growth, so the Retention card computes each cohort from customers and cuts it by channel, segment or plan. The routine's
 typed day-30 share is the same customers' share, so a typed actual never differs from the computed figure and no owner is
 asked to choose.
@@ -295,12 +295,13 @@ CONTENT = {
             ],
         },
     ],
-    # The store's customer export Ana loads after the last run: keys, a segment and a plan per customer. Every tenth
-    # buyer is a business, and three in ten (the subscribers' share of units) take the Scene Library plan. Of the
-    # customers a cohort loses by day 30, one in five is a subscriber.
+    # The store's customer export Ana loads when the demo is built: keys, a segment and a plan per customer. About one
+    # buyer in eleven is a business, and three in ten (the subscribers' share of units) take the Scene Library plan, so
+    # both segments hold both plans. Of the customers a cohort loses by day 30, one in five is a subscriber.
     "customers": {
         "key": "ACME-{:05d}",
         "segments": ("home", "business"),
+        "business_every": 11,
         "plans": ("lights-only", "scene-library"),
         "churn_days": (6, 28),  # the first and last day after buying that a lost customer stops
         "subscriber_digits": (3, 6, 9),  # a buyer's last digit in the export's order: Scene Library
@@ -363,7 +364,8 @@ def model(start, runs):
 def customers(days):
     """One row per unit sold, from the daily model: each day's units of a channel are that day's new customers. A month's
     lost customers (its share not kept to day 30) are spread evenly through the month: `lost` says whether one stops
-    paying before day 30, and `stops` on which day."""
+    paying before day 30, and `stops` on which day. Buyers with no source tag are lost at the lowest channel's rate, so
+    the Unknown row never reads as kept better than every channel."""
     conf = CONTENT["customers"]
     home, business = conf["segments"]
     lights, scenes = conf["plans"]
@@ -377,7 +379,7 @@ def customers(days):
                     "key": conf["key"].format(10001 + i),
                     "day": row["day"],
                     "channel": slug,
-                    "segment": business if i % 10 == 0 else home,
+                    "segment": business if i % conf["business_every"] == 0 else home,
                     "plan": scenes if i % 10 in conf["subscriber_digits"] else lights,
                     "lost": False,
                     "stops": None,
@@ -385,10 +387,9 @@ def customers(days):
                 rows.append(made)
                 months.setdefault((row["day"].strftime("%Y-%m"), slug), []).append(made)
     low, high = conf["churn_days"]
+    lowest = min(kept.values())
     for (_, slug), group in months.items():
-        if slug not in kept:
-            continue  # Unknown: no source tag, and no retention typed for it
-        lost = round(len(group) * (100 - kept[slug]) / 100)
+        lost = round(len(group) * (100 - kept.get(slug, lowest)) / 100)
         from_scenes = lost // conf["subscriber_churn"]
         for plan, n in ((conf["plans"][1], from_scenes), (conf["plans"][0], lost - from_scenes)):
             members = [r for r in group if r["plan"] == plan]
@@ -404,20 +405,25 @@ def kept_share(rows):
     return round(sum(1 for r in rows if not r["lost"]) * 100 / len(rows), 1) if rows else None
 
 
-def load_customers(b, people, last):
-    """Ana loads the store's customer export in Growth. A customer whose stop day is still ahead is still paying."""
-    rows = [
+def export_rows(people, today):
+    """The customer export as of `today`. A customer whose stop day is still ahead is still paying. Every stop falls by
+    day 28, so a month whose day 30 has filled has all its stops sent, and its computed share is the typed one."""
+    return [
         {
             "customer key": r["key"],
             "became customer": r["day"].isoformat(),
             "channel": r["channel"],
             "segment": r["segment"],
             "plan": r["plan"],
-            "churned": r["stops"].isoformat() if r["stops"] and r["stops"] < last else None,
+            "churned": r["stops"].isoformat() if r["stops"] and r["stops"] <= today else None,
         }
         for r in people
     ]
-    b.call("POST", "growth/customers", {"rows": rows})
+
+
+def load_customers(b, people):
+    """Ana loads the store's customer export in Growth at the build moment, the day Growth computes its figures from."""
+    b.call("POST", "growth/customers", {"rows": export_rows(people, b.now.astimezone(ZONE).date())})
 
 
 def month_rows(days, cutoff):
@@ -722,7 +728,7 @@ def seed(b):
             )
     for k, monday in enumerate(runs):
         steps.append((moment(monday, 7), lambda k=k, monday=monday: weekly(b, s, days, runs, k, monday, people)))
-    steps.append((moment(last, 11), lambda: load_customers(b, people, last)))
+    steps.append((b.now, lambda: load_customers(b, people)))
     steps.append((b.now, lambda: schedule(b, s)))
     for when, work in sorted(steps, key=lambda step: step[0]):
         b.clock.at = when
