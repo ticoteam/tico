@@ -245,7 +245,7 @@ def print_top(counts, total_files):
 
 
 def base_name(file, old):
-    """The name a file had at the base ref: a .ts file that renamed a .js file (scripts/ui_flip.py) keeps the .js count."""
+    """The name a file had at the base ref: a .ts file that renamed a .js file keeps the .js count."""
     if file.endswith(".ts") and file not in old and file[:-3] + ".js" in old:
         return file[:-3] + ".js"
     return file
