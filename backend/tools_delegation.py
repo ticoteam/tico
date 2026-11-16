@@ -1,3 +1,4 @@
+# pyright: strict
 """Tools changes a built-in makes for the person who asked it: the Tools Owner and the Assistant act with that person's
 rights, the way BotOps does (backend/botops_act.py, app.py `delegated_identity`), so a request for access gets done
 instead of bouncing back to the person.
@@ -12,9 +13,16 @@ refused (`botops_act.secret_in_request`), and a value reaches the vault only thr
 """
 
 import re
+from typing import Any
 
-from .botops_act import API, _routes
-from .store import H
+from . import botops_act as botops_act_module
+from .store import H as hub_helpers
+
+# Untyped neighbours, typed as Any at the door (as backend/tool_settings.py does).
+botops_act: Any = botops_act_module
+H: Any = hub_helpers
+Body = Any  # a request body as JSON: a dict, or anything a client sent
+API = "/api/v2/"
 
 # The `via` the Tools Owner's writes for a person carry (every event and history row the request writes says so).
 VIA = "tools-owner"
@@ -25,7 +33,7 @@ _S = r"[^/]+"
 # The Tools changes a person may ask the Tools Owner or their Assistant for, each checked with the person's own rights by
 # its route: give or take back a key, set a level, share a website account, add or change a tool and its settings, and
 # a bot's bot.yaml `tools:` entries. A key's value, its reveal and deleting a tool or a key stay the person's own tap.
-ROUTES = _routes(
+ROUTES: list[tuple[str, re.Pattern[str]]] = botops_act._routes(
     ("GET", r"credentials"),  # the person's key list, to find the key they named (names and grants, never a value)
     ("POST", rf"credentials/{_S}/grants"),
     ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
@@ -45,33 +53,28 @@ ROUTES = _routes(
 _GRANT_SUBJECT = re.compile(API + rf"(api-tools/{_S}/access|website-tools/{_S}/accounts/{_S}/access)/({_S})")
 
 
-def route(method, path):
+def route(method: str, path: str) -> bool:
     """Whether this call is a Tools change a built-in makes for the person who asked it."""
-    from .botops_act import normalize
-
-    path, method = normalize(path), str(method or "").upper()
+    path, method = botops_act.normalize(path) or "", str(method or "").upper()
     return bool(path) and any(m == method and p.fullmatch(path) for m, p in ROUTES)
 
 
-def subject_of(path, body):
+def subject_of(path: str, body: Body) -> str:
     """The person or bot a grant or level change is for (`bot:<id or slug>`, `human:<id>`), or "" for any other change."""
-    from .botops_act import normalize
-
-    path = normalize(path) or ""
+    path = str(botops_act.normalize(path) or "")
     found = _GRANT_SUBJECT.fullmatch(path)
     if found:
         return found.group(found.lastindex or 0)
     if re.fullmatch(API + rf"credentials/{_S}/grants", path) and isinstance(body, dict):
-        return str(body.get("subject") or "")
+        fields: dict[str, Any] = body  # pyright: ignore[reportUnknownVariableType] - a JSON object's keys are text
+        return str(fields.get("subject") or "")
     return ""
 
 
-def for_bots_only(method, path, body):
+def for_bots_only(method: str, path: str, body: Body) -> bool:
     """Whether the change gives or sets access only for a bot (or takes a grant back, or changes no one's access): a
     person's own access and every computer's stay their own tap in Tools, as they do for BotOps."""
-    from .botops_act import normalize
-
-    path = normalize(path) or ""
+    path = str(botops_act.normalize(path) or "")
     subject = subject_of(path, body)
     if _GRANT_SUBJECT.fullmatch(path):
         return subject.startswith("bot:") or not subject.startswith(("human:", "person:", "computer"))
@@ -80,33 +83,35 @@ def for_bots_only(method, path, body):
     return True
 
 
-def to_itself(c, agent, path, body):
+def to_itself(c: Any, agent: str, path: str, body: Body) -> bool:
     """Whether a grant or level change is for `agent` itself: the Tools Owner connects keys for others and holds none."""
     subject = subject_of(path, body)
     if not subject.startswith("bot:"):
         return False
-    return "bot:" + ((H.resolve_bot(c, subject) or {}).get("id") or H.actor_id(subject)) == agent
+    found: Any = H.resolve_bot(c, subject) or {}
+    return "bot:" + str(found.get("id") or H.actor_id(subject)) == agent
 
 
-def tools_owner(c):
+def tools_owner(c: Any) -> str | None:
     """The Tools page's own owner (`bot:<id>`), never the General Manager standing in, or None."""
     from . import page_owners
 
-    return page_owners.owner(c, "tools", fallback=False)
+    owner: Any = page_owners.owner(c, "tools", fallback=False)
+    return str(owner) if owner else None
 
 
-def is_tools_owner(c, actor):
+def is_tools_owner(c: Any, actor: str) -> bool:
     return bool(actor) and str(actor).startswith("bot:") and tools_owner(c) == actor
 
 
-def via_of(agent):
+def via_of(agent: str) -> str:
     """The `via` a write carries when `agent` (BotOps or the Tools Owner) makes it with a person's rights."""
     return "botops" if agent == "bot:" + H.FLEET_MAINTAINER else VIA
 
 
-def name_of(c, agent):
+def name_of(c: Any, agent: str) -> str:
     """How a person reads the acting built-in: BotOps, or the Tools page owner's name."""
     if agent == "bot:" + H.FLEET_MAINTAINER:
         return "BotOps"
-    bot = H.bot(c, H.actor_id(agent)) or {}
-    return bot.get("display_name") or bot.get("slug") or "the Tools Owner"
+    bot: Any = H.bot(c, H.actor_id(agent)) or {}
+    return str(bot.get("display_name") or bot.get("slug") or "the Tools Owner")
