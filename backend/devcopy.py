@@ -432,6 +432,7 @@ KEEP = (
             "flight_requests",
             "flight_slow",
             "flight_sql",
+            "flight_web",
             "provenance_clock",
             "roster_clock",
             "row_clock",

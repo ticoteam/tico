@@ -252,10 +252,37 @@ flight recorder's background thread through autocommit reads, finished before th
 Opening Health or metrics reads recorded samples and does not trigger a page scan.
 
 Owners, admins and the team's bots read it at `GET /api/v2/system/metrics?minutes=60&section=all` (a bot's slow requests
-leave out who made them; `section`: any of `requests,slow,process,sql,db,events`), with `tico health metrics` or `tico_health_metrics`, and see the
+leave out who made them; `section`: any of `requests,slow,process,sql,db,events,web`), with `tico health metrics` or `tico_health_metrics`, and see the
 last hour under **Performance** on the Health page. `since` and `until` (epoch seconds, `until` excluded) read one window
 instead of the last `minutes`, and `routes` lists up to 500 routes instead of 25: the load gate (`bench/load_gate`) reads
-each steady window this way. `GET /api/v2/ops/timing` still answers with the last 300 requests per route since the start.
+each steady window this way. Each route row and the totals give `p99` beside `p50` and `p95`. `caller` (`human`, `bot`,
+`runner`, `service` or `anonymous`; `tico health metrics --caller human`) counts only that kind of caller's requests and
+ranks the routes by its count, so people's routes are not hidden behind bots' and runners'; the browsers' own timing
+sends (`POST /api/v2/web-timings`) count in the totals and are listed apart as `web_timings`.
+`GET /api/v2/ops/timing` still answers with the last 300 requests per route since the start.
+
+### People's browser timings
+
+Every page measures two numbers in the person's own browser and sends them to this server, whatever the PostHog and
+Sentry settings, and to no other host (`ui/observability.ts`, `vitals`): `lcp`, how long the first screen took to draw
+(Largest Contentful Paint; once per page load, for the screen it landed on, and only when the page was visible from the
+start), and `inp`, the slowest click or key press of each screen visit (Interaction to Next Paint, read from the
+browser's event timings). A visit ends when the person moves to another screen or hides the page; the readings go in
+one `sendBeacon` to `POST /api/v2/web-timings`; a visit a screen change ended waits up to a second for the click
+that changed the screen, which the browser reports after the next paint. Before any click or key press, a screen
+change is the app moving an old link on at load: the load's LCP goes with the screen the person lands on. The browser's own Back and Forward
+buttons are not a press in the page, so a visit they end before any press carries the LCP on in the same way (no
+interaction, so no INP is lost). INP is the click's own time to the next paint: a screen that is slow to draw after
+the click shows in its route's server p99, not in INP. Browsers without these APIs send nothing.
+
+Only a person's session may send (bots and runners get 403). Each reading is a metric, a screen template (`/home`,
+`/task/:task`, `/thread/:thread`: the app's screen and a placeholder for its page, never a full address or an id; the
+list is `WEB_SCREENS` in `backend/flight.py`, kept the same as `SCREENS` in `ui/observability.ts`) and a value from 0 to 60,000 ms; anything else refuses the whole request.
+The server keeps only the value's histogram bucket per minute, metric and screen (`flight_web`): never who sent it,
+the device, the address, the element or the browser. One person sends at most 120 readings a minute; the rest are
+dropped and counted (`web.dropped`). Minutes become hours after two days and go after 14, as request rows do. The
+`web` section of `GET /api/v2/system/metrics` gives, per metric and screen, `n`, `p50`, `p75`, `p95`, `p99` and
+`max_ms`.
 
 With the recorder enabled, `Server-Timing` includes `sql` and `wait` durations alongside `auth` and `app`.
 Place GETs also include `prep`, `cards` and up to eight slowest `card-<template>` totals (repeated kinds summed; `card-page` for page pins, `card-hidden` for pins the caller can't read), capped at 300 added bytes.
