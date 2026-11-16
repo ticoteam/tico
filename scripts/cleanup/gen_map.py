@@ -2,7 +2,7 @@
 
 The schema is read from backend/tests/fixtures/schema_pre_cleanup.sql (a fresh database at the base commit, before
 any rename). On a newer main, rebuild that fixture from main first (`--refresh-fixture`, run on a tree without the
-renames), then run this again and re-run scripts/cleanup/rename.py.
+renames), then run this again.
 
 The rules are cleanup-spec.md's; every judgment call lives in the tables below (OVERRIDES, M3, WAVE3), never in
 hand edits of the YAML, so the map regenerates the same way every time.
