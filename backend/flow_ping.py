@@ -40,17 +40,20 @@ def text(name: str) -> str:
 
 
 def _skipped(bot: Row) -> bool:
-    # BotOps fixes bots and the Assistant is the person's own: neither has questions of the company's work to ask.
+    # BotOps fixes bots and the Assistant is the person's own: neither has questions of the company's work to ask. A
+    # bot that cannot take a message (planned, archived: H.say refuses it) is no target either, so it never stops the
+    # ping to the rest.
     assistant = R.helpers()[-1]
-    return bot.get("state") == "archived" or str(bot.get("slug") or bot["id"]) in ("botops", assistant)
+    takes = bot.get("state") in ("active", *H.HELD_STATES)
+    return not takes or str(bot.get("slug") or bot["id"]) in ("botops", assistant)
 
 
 def targets(c: Any, person: str, hidden: set[str], scope: str = "reports", ident: str | None = None) -> list[Row]:
-    """The bots a ping in `scope` reaches, by name: those the person may read (`hidden`: the slugs they may not)."""
+    """The bots a ping in `scope` reaches, by name: those the person may read (`hidden`: the bot ids they may not)."""
     if scope not in SCOPES:
         raise Problem("invalid", "Ping your reports, one bot or one team", 422)
     ctx: Any = R.context(c)
-    rows: list[Row] = [b for b in ctx["bots"].values() if not _skipped(b) and (b.get("slug") or b["id"]) not in hidden]
+    rows: list[Row] = [b for b in ctx["bots"].values() if not _skipped(b) and b["id"] not in hidden]
     if scope == "bot":
         found = H.resolve_bot(c, ident or "")
         rows = [b for b in rows if found and b["id"] == found["id"]]

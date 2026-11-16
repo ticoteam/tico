@@ -166,7 +166,8 @@ const decideOkStale = (v: AskOkView, it: NeedsEntry) => v.page !== decidePage(it
 const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.items.has(k));
 const decideCurrent = (st: DecState) => st.at && !st.gone.has(st.at) ? st.items.get(st.at) || null : null;
 /** The items a walk takes: a stage's only that stage's, a pipeline's those in its stages. */
-const decideInWalk = (st: DecState, it: NeedsEntry) => (!st.bots.length || st.bots.includes(needsBotOf(it) || '')) && (st.stage
+// A bot's or a team's walk (its ping not the reports') takes only those bots' items: none for a team with no bots.
+const decideInWalk = (st: DecState, it: NeedsEntry) => (st.ping.scope === 'reports' || st.bots.includes(needsBotOf(it) || '')) && (st.stage
   ? (st.stage === DEC_OTHER ? !decideStageName(needsStageOf(it)) : needsStageOf(it) === st.stage)
   : !st.pipeline || decidePipelineOf(needsStageOf(it))?.id === st.pipeline);
 const decidePipelines = () => (typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || [];

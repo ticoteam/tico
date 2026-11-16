@@ -70,3 +70,26 @@ def test_only_people_ping_and_only_bots_they_may_read(api):
     assert ping(api, "cara-test", expected=404, scope="bot", id="ops")["error"]["code"] == "not_found"
     assert pings(api, "ops") == []
     assert names(ping(api, scope="bot", id="ops")["pinged"]) == ["ops"]  # the owner reads every bot
+
+
+def test_a_renamed_bot_the_person_may_not_read_is_not_pinged(api):
+    """The unreadable set is bot ids: a bot whose slug is not its id (renamed, or made with a UUID id) is still kept
+    out of a ping by someone who may not read it."""
+    from backend.store import H
+    from backend.tests.helpers.api import restrict
+
+    with api.app.state.store.transaction() as c:
+        H.rename_bot(c, "ops", "renamed-ops")
+        restrict(c, "ops", people=["ana"])
+    assert ping(api, "cara-test", expected=404, scope="bot", id="renamed-ops")["error"]["code"] == "not_found"
+    assert pings(api, "ops") == []
+
+
+def test_a_report_still_being_set_up_is_left_out_and_the_rest_are_pinged(api):
+    """A planned bot cannot take a message (H.say refuses it), so it is not a target: one new report never stops the
+    ping to the others."""
+    chart(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='planned' WHERE id='scout'")
+    got = ping(api)  # Ana's reports: Scout (planned) and the bots with no manager
+    assert "scout" not in names(got["pinged"]) and got["pinged"]

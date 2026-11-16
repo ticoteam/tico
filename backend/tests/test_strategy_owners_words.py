@@ -91,13 +91,22 @@ def test_the_strategy_owner_publishes_on_the_owners_words_and_the_note_says_whos
     assert history(api, "published")[-1]["from"] == {"task": task, "person": "human:ana"}
 
 
-def test_a_task_filed_for_the_owner_from_their_words_counts_as_theirs(api):
-    """Their Assistant hands the Strategy Owner a task filed for them, quoting them: its body is their words."""
+def test_a_task_body_never_counts_as_the_owners_words(api):
+    """A body is text the owning bot can write or rewrite (filed "for" the owner, or edited after), so it proves
+    nothing: only the owner's own comments and answers on the task do."""
     goal_manager(api, level=2)
     as_bot(api, "strategy-owner")
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Update who we serve", SAID, G.AUTO_ACTOR, lint=False)
-    assert draft(api, {"sections": {"serve": "Small landlords."}, "task": task["id"]})["draft"]
+        filed = H.task_create(c, "human:ana", "Update who we serve", SAID, G.AUTO_ACTOR, lint=False)
+        empty = H.task_create(c, "human:ana", "Question", "", G.AUTO_ACTOR, lint=False)
+    assert (
+        draft(api, {"sections": {"serve": "Small landlords."}, "task": filed["id"]}, 422)["error"]["code"] == "invalid"
+    )
+    r = api.post(f"/api/v2/tasks/{empty['id']}", json={"body": SAID, "version": empty["version"]}, headers=headers(BOT))
+    assert r.status_code == 200, r.text
+    assert (
+        draft(api, {"sections": {"serve": "Small landlords."}, "task": empty["id"]}, 422)["error"]["code"] == "invalid"
+    )
 
 
 def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_strategy(api):

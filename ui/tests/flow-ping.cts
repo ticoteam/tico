@@ -5,7 +5,8 @@ import type {Route} from 'playwright';
 // - a pinged bot's question coming into Needs you comes on screen by itself;
 // - Flow narrowed to one bot (its page's Flow mark, decideBotsFlow) shows that bot's items alone, names it in the
 //   crumb, and its ping asks that bot;
-// - a ping that found no bots says so and offers the button again.
+// - a ping that found no bots says so and offers the button again;
+// - a team with no bots opens on All done, not on everyone's items.
 // FLOW_SHOTS=<folder> saves All done, Asking your bots and the narrowed Flow at phone size.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -105,6 +106,16 @@ const question = (n: number, bot: string, line: string): Item => {
     // ---- 4. Nobody to ask: said, and the button comes back.
     await ping.waitFor();
     assert.deepEqual(pings.at(-1), {scope: 'bot', id: 'pm'});
+
+    await dialog.locator('[data-dc="close"]').first().click();
+
+    // ---- 5. A team with no bots: its Flow walks nothing (All done), not everyone's items.
+    needs = [question(5, 'bot:ops', 'Rotate the keys tonight?')];
+    await page.evaluate('v2Refresh()');
+    await page.locator('[data-need="r5"]').waitFor();
+    await page.evaluate("decideBotsFlow(document.body, [], 'Empty', {scope: 'group', id: 'empty'})");
+    await dialog.getByText('All done').waitFor();
+    assert.equal(await dialog.getByText('Rotate the keys tonight?').count(), 0, 'an empty team walks no one’s items');
 
     // The page fits a phone: nothing scrolls sideways.
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways scroll');

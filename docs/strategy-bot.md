@@ -61,7 +61,7 @@ Over the API, `GET /api/v2/strategy-bot` shows `name`, `regular_checks`, `level`
 
 The [Strategy](strategy.md) page is the Strategy Owner's first job. At every level it **proposes**; you write the draft and
 the bets, and you publish. The one exception is your own words: when you tell it what the strategy should say (answering
-its question, or through your Assistant), it updates the sections and bets your words are about and publishes, with the
+its question or commenting on its task; a task's body never counts, since a bot can write it), it updates the sections and bets your words are about and publishes, with the
 history and the version's note saying they were your words. It notes your answer in its memory too, but the strategy is
 where it lands.
 

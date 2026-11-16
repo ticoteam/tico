@@ -1112,9 +1112,9 @@ def save_asked_vision(c, actor, task_id, text):
 
 def owners_words(c, actor, task_id):
     """The Strategy Owner writes the draft or publishes only on what the owner told it: a task of its own on which the
-    owner wrote at least VISION_MIN_WORDS words (comments, answers to its asks such as a get-aligned question, or the
-    body of a task filed for them from their message, as their Assistant hands one over). Returns whose words, for the
-    history: {task, person}."""
+    owner wrote at least VISION_MIN_WORDS words: their own comments and answers to its asks, such as a get-aligned
+    question. Never the task's body: the bot can write that (filed "for" them, or edited after). Returns whose words,
+    for the history: {task, person}."""
     from . import goals as G
     from . import reach
     from . import strategy_bot
@@ -1128,10 +1128,7 @@ def owners_words(c, actor, task_id):
         not person
         or not task
         or actor not in (task.get("owner_id"), task.get("requester_id"))
-        or not _vision_long_enough(
-            _owner_wrote(c, task["id"], person)
-            + (" " + _words(task["body"]) if task.get("requester_id") == person else "")
-        )
+        or not _vision_long_enough(_owner_wrote(c, task["id"], person))
     ):
         raise Problem(
             "invalid",
