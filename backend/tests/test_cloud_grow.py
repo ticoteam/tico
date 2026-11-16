@@ -183,6 +183,9 @@ def test_xlarge_is_offered_but_not_recommended_and_says_why_with_hqs_prices():
         "Costs about as much as three Large machines ($0.25/h vs $0.09/h). "
         "For more room, give busy bots their own Large machine."
     )
+    # HQ's prices change without a release: under one and a half Large prices it never counts "1 Large machines".
+    cheap = CM.with_advice([*real[:3], {**real[3], "usd_per_hour": 0.12}])
+    assert cheap[-1]["note"].startswith("Costs more than a Large machine ($0.12/h vs $0.09/h).")
     # Before HQ lists CPUs, or without Large in the list, nothing is marked.
     assert all(s["recommended"] for s in CM.with_advice([{"name": "xlarge"}, {"name": "default"}]))
 

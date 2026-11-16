@@ -806,12 +806,12 @@ def size_note(offered, name):
     price, top_price = here.get("usd_per_hour"), top.get("usd_per_hour")
     if not price or not top_price:
         return f"Costs more than {cloud_size_name(RECOMMENDED_TOP)} machines. {advice}"
+    prices = f"(${_hourly(price)}/h vs ${_hourly(top_price)}/h)"
     many = round(price / top_price)
+    if many < 2:  # HQ's prices can change without a release: never "about as much as 1 Large machines"
+        return f"Costs more than a {cloud_size_name(RECOMMENDED_TOP)} machine {prices}. {advice}"
     count = NUMBER_WORDS.get(many, str(many))
-    return (
-        f"Costs about as much as {count} {cloud_size_name(RECOMMENDED_TOP)} machines "
-        f"(${_hourly(price)}/h vs ${_hourly(top_price)}/h). {advice}"
-    )
+    return f"Costs about as much as {count} {cloud_size_name(RECOMMENDED_TOP)} machines {prices}. {advice}"
 
 
 def _hourly(usd):
