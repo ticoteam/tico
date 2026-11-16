@@ -193,6 +193,31 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     assert.match(await dialog.locator('.dc-thing').innerText(), /Your area and its products\./, 'its body, open');
     assert.equal(await dialog.locator('.dc-thing details, .dc-thing summary').count(), 0, 'no chevron');
     await chatTab.click();
+    // ⋯ is a sheet from the bottom edge: a grab line, full-width rows apart from the page, a dim backdrop over the rest;
+    // a tap on the backdrop closes it, and so does Esc.
+    await dialog.locator('.dc-side [data-key] [data-dc="ask-more"]').click();
+    const sheet = dialog.locator('.dc-askw .dc-snz');
+    await sheet.waitFor();
+    const look = await sheet.evaluate(e => {
+      const r = e.getBoundingClientRect(), grab = getComputedStyle(e, '::before'), dim = getComputedStyle(e.parentElement!, '::before');
+      const rows = [...e.querySelectorAll<HTMLElement>('.dc-mi')].map(m => [m.getBoundingClientRect().width, m.getBoundingClientRect().height]);
+      return {x: r.left, w: r.width, bottom: r.bottom, grab: [grab.width, grab.height], dim: [dim.position, dim.backgroundColor], rows};
+    });
+    assert.ok(look.x === 0 && look.w === 390 && look.bottom === 844, `the sheet is full width at the bottom (${JSON.stringify(look)})`);
+    assert.deepEqual(look.grab, ['36px', '4px'], 'it has a grab line');
+    assert.ok(look.dim[0] === 'fixed' && /rgba\(0, 0, 0, 0\.5\)/.test(look.dim[1]!), `a dim backdrop (${look.dim})`);
+    assert.ok(look.rows.every(([w, h]) => w === 390 && h! >= 52), `full-width 52 px rows (${JSON.stringify(look.rows)})`);
+    if (process.env.FLOW_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.screenshot({path: require('node:path').join(process.env.FLOW_SHOTS, 'more-sheet-phone.png')});
+    }
+    await page.mouse.click(195, 200);
+    await sheet.waitFor({state: 'detached'});
+    assert.equal(await dialog.isVisible(), true, 'a tap on the backdrop closes the sheet, not Flow');
+    await dialog.locator('.dc-side [data-key] [data-dc="ask-more"]').click();
+    await sheet.waitFor();
+    await page.keyboard.press('Escape');
+    await sheet.waitFor({state: 'detached'});
     // Approve with comments: the words and a file in the box, put back from a draft, go with the approval as its note.
     await composer.fill('Ship it');
     await chat.locator('.p-file').setInputFiles({name: 'proof.txt', mimeType: 'text/plain', buffer: Buffer.from('ok')});

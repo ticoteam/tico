@@ -3314,6 +3314,11 @@ def _shown_title(c, v, row):
     other stored title shows as stored."""
     title = row.get("subject") or ""
     parent_id = row.get("parent_message_id")
+    if not parent_id and row.get("kind") == "task" and row.get("task_id"):
+        # A task's own room is named by its task as it is now: one made with no title, or before a rename, would
+        # otherwise read as its people or "Thread" (the chat's box said "Message Thread").
+        task = H.task_untagged(c, row["task_id"])
+        return str((task or {}).get("title") or "") or title
     if not parent_id or (title and not _derived_title(c, parent_id, title)):
         return title
     parent = H.message(c, parent_id, include_deleted=True)

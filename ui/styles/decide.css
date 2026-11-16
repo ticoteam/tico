@@ -285,6 +285,15 @@ button.dc-jev{cursor:pointer}
 .dc-chat .th-newline{display:none}
 .dc-msg-ask .dc-q{margin:0 0 4px}
 .dc-msg-ask .dc-why{margin:0 0 8px;color:var(--muted)}
+/* one line under the ask's question: what changed, Jev's take, what the stage said; cut, its whole in the title */
+.dc-msg-ask .dc-one{margin:0 0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* a Validate or QA OK's verdict: up to 3 short check rows; Proof opens the Proof tab (a phone's; wide, the page is
+   beside the chat) */
+.dc-checks{margin:4px 0 6px;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.dc-checks li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-proof-link{display:none}
+/* your note on the version before, above the ask: a message of yours, as the thread draws one */
+.dc-msg-said .dc-when{color:var(--muted);font-size:var(--t-xs,var(--t-sm))}
 /* "Getting ready to flow": over the first item for well under a second; the item under it is drawn and takes every
    tap and key (no pointer events here). None with reduced motion (decideStart). */
 .dc-start{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--bg);color:var(--muted);pointer-events:none;animation:dc-start .6s ease-in forwards}
@@ -383,8 +392,17 @@ button.dc-jev{cursor:pointer}
   /* 9. words on an OK: the arrow sends a comment alone, so it goes quiet; the forward button is the filled one */
   .decide.dc-typed-ok .dc-chat .p-send{background:none;border:1px solid var(--line);color:var(--muted)}
   /* 12. ⋯ opens as a sheet from the bottom edge, full-width 52 px rows */
-  .dc-askw .dc-snz{position:fixed;left:0;right:0;bottom:0;top:auto;z-index:20;width:auto;max-width:none;margin:0;padding:8px 0 calc(8px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;box-shadow:0 -8px 24px rgba(0,0,0,.35)}
-  .dc-askw .dc-snz .dc-mi{width:100%;min-height:52px;padding:0 20px;text-align:left}
+  .dc-askw .dc-snz{position:fixed;left:0;right:0;bottom:0;top:auto;z-index:20;width:auto;max-width:none;margin:0;padding:8px 0 calc(8px + env(safe-area-inset-bottom));border:0;border-top:1px solid var(--line);border-radius:16px 16px 0 0;background:var(--bg);box-shadow:0 -8px 24px rgba(0,0,0,.35)}
+  /* its grab line */
+  .dc-askw .dc-snz::before{content:'';flex:none;align-self:center;width:36px;height:4px;margin:0 0 8px;border-radius:2px;background:var(--line)}
+  /* a dim backdrop over the rest of the screen: a tap on it closes the sheet (decideClick) */
+  .dc-askw:has(>.dc-snz)::before{content:'';position:fixed;inset:0;z-index:19;background:rgba(0,0,0,.5)}
+  /* the top bar stacks apart from the side (the undo in Tico's line): it gets the same dim, and a tap on it closes too */
+  .decide:has(.dc-askw>.dc-snz) .dc-head{position:relative}
+  .decide:has(.dc-askw>.dc-snz) .dc-head::after{content:'';position:absolute;inset:0;z-index:5;background:rgba(0,0,0,.5)}
+  .dc-askw .dc-snz .dc-mi{width:100%;min-height:52px;padding:0 20px;border-radius:0;text-align:left}
+  .dc-askw .dc-snz .dc-mi+.dc-mi{border-top:1px solid var(--line)}
+  .decide.dc-chatmode .dc-proof-link{display:inline-flex;align-items:center;min-height:44px;font-weight:600}
   .dc-chat>.thv-card .thv-scroll,.dc-chat>.thv-card .thv-composer{padding-left:16px;padding-right:16px}
   .decide.dc-chatmode .dc-side>[data-key]{padding:8px 16px calc(8px + env(safe-area-inset-bottom))}
   .decide.dc-chatmode .dc-side>[data-key]>.dc-acts:last-child{position:static;padding:0;border:0;background:none}

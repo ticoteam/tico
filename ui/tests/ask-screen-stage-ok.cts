@@ -83,8 +83,9 @@ const pages: Record<string, string> = {
       // On a phone the page is in the Task tab; each item opens on Chat.
       const read = async () => { if (label === 'phone') await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click(); };
 
-      // The first ask: its own page, headed by its task.
-      await dialog.locator('.dc-q', {hasText: 'Talk to the right bot from a pipeline board'}).waitFor();
+      // The first ask: its own page, its task's title over the chat (a phone's tabs row), asking "OK the spec?".
+      await dialog.locator('.dc-tabs-t', {hasText: 'Talk to the right bot from a pipeline board'}).waitFor({state: 'attached'});
+      assert.match(await dialog.locator('.dc-msg-ask .dc-q').innerText(), /^OK the \w+\?$/, `${label}: the ask asks its question`);
       await read();
       await frame.waitFor();
       assert.match(await frame.getAttribute('srcdoc') ?? '', /Board chat proposals/);
@@ -97,7 +98,7 @@ const pages: Record<string, string> = {
       // The second ask, same requirement id: its own page at its own version, never the first one's.
       if (label === 'phone') await page.keyboard.press('ArrowRight');     // ‹ › are left off on a phone
       else await dialog.locator('[data-dc="next"]').click();
-      await dialog.locator('.dc-q', {hasText: 'Images in bot chat: paste fails'}).waitFor();
+      await dialog.locator('.dc-tabs-t', {hasText: 'Images in bot chat: paste fails'}).waitFor({state: 'attached'});
       await read();
       await dialog.locator('iframe.dc-page[title="Version 3"]').waitFor();
       assert.equal(await frame.count(), 1);
@@ -109,7 +110,7 @@ const pages: Record<string, string> = {
       // The third ask's page is Markdown: drawn as Markdown, never as raw text in the frame, and its script never runs.
       if (label === 'phone') await page.keyboard.press('ArrowRight');
       else await dialog.locator('[data-dc="next"]').click();
-      await dialog.locator('.dc-q', {hasText: 'Paste retries'}).waitFor();
+      await dialog.locator('.dc-tabs-t', {hasText: 'Paste retries'}).waitFor({state: 'attached'});
       await read();
       const doc = dialog.locator('.dc-page-md');
       await doc.waitFor();
@@ -122,16 +123,16 @@ const pages: Record<string, string> = {
       if (shots) await page.screenshot({path: path.join(shots, `stage-ok-${label}-3.png`)});
       if (label === 'phone') await page.keyboard.press('ArrowLeft');
       else await dialog.locator('[data-dc="prev"]').click();
-      await dialog.locator('.dc-q', {hasText: 'Images in bot chat: paste fails'}).waitFor();
+      await dialog.locator('.dc-tabs-t', {hasText: 'Images in bot chat: paste fails'}).waitFor({state: 'attached'});
       await read();
       await dialog.locator('iframe.dc-page[title="Version 3"]').waitFor();
 
       if (label === 'desktop') {
         // Approve answers this task's ask with this page; the first ask is still the first task's, with its own page.
         await dialog.locator('[data-dc="approve"]:not([disabled])').click();
-        await dialog.locator('.dc-q', {hasText: 'Paste retries'}).waitFor();
+        await dialog.locator('.dc-tabs-t', {hasText: 'Paste retries'}).waitFor({state: 'attached'});
         await dialog.locator('[data-dc="prev"]').click();
-        await dialog.locator('.dc-q', {hasText: 'Talk to the right bot from a pipeline board'}).waitFor();
+        await dialog.locator('.dc-tabs-t', {hasText: 'Talk to the right bot from a pipeline board'}).waitFor({state: 'attached'});
         assert.deepEqual(writes.find(w => w.p === `/api/v2/tasks/t-b/asks/${RID}/answer`)?.body, {value: 'ok', page_version: 'pb@3', version: 3});
         assert.match(await frame.getAttribute('srcdoc') ?? '', /Board chat proposals/);
         await dialog.locator('[data-dc="approve"]:not([disabled])').click();

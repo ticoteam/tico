@@ -85,6 +85,8 @@ const VIEW = {width: 390, height: 844};
       if (at === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);
       if (at === `/api/v2/tasks/t-a/asks/${RID}/rounds`) return json({rounds, notices: []});
       if (at === '/api/v2/tasks/t-a') return json({task: {...brief('t-a', TITLE), conversation_id: 'c-a'}});
+      // The task's room, named by its task as the server names it (backend/threads.py _shown_title).
+      if (at === '/api/v2/threads/c-a/timeline') return json({thread: {id: 'c-a', title: TITLE, audience: 'task', task_id: 't-a', me: {can_post: true}}, messages: [], next_cursor: null});
       if (at === '/api/v2/flow/opinions') {
         const ids = (JSON.parse(r.postData() || '{}') as {items: string[]}).items;
         return json({opinions: ids.map(id => ready ? {id, state: 'ready', pick: 'send_back', line: LINE, note: NOTE, score: 60}
@@ -215,6 +217,7 @@ const VIEW = {width: 390, height: 844};
       check(Math.round((await say.boundingBox())!.height) >= 44, 'the line is a 44 px target');
       if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-line-open.png')});
       check(await dialog.locator('.dc-chat .p-text').inputValue() === '', 'Tico never types for the person');
+      check(await dialog.locator('.dc-chat .p-text').getAttribute('placeholder') === `Message ${TITLE}`, `the box is named for the task (${await dialog.locator('.dc-chat .p-text').getAttribute('placeholder')})`);
       if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-after.png')});
     }
     await p.close();

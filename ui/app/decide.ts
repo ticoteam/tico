@@ -43,6 +43,8 @@ interface AskOkView {
       kept on the face when the rounds replace the ask's line. */
   notices: string[];
 }
+/** The person's note on the version before, sent back: a chat message of theirs above the ask. */
+interface DecNote { version: number; at: string; text: string }
 /** One version of a page on a page requirement, as backend/page_rounds.py gives it. */
 interface DecRound {
   file_id: string;
@@ -1043,7 +1045,7 @@ function decideRoundAnswer(r: DecRound, last: boolean): string {
     "Changes since vK", which marks the page's changed blocks (a dot on the control while on). Then What changed in vN,
     Your note on vN−1, Your points; each part is left out when it has nothing to say. */
 function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], version: number, notices: string[] = [], tag = '',
-  since: DecSince | null = null, by = ''): {sub: string; body: string} {
+  since: DecSince | null = null, by = ''): {sub: string; body: string; line: string; points: string; note: DecNote | null} {
   let at = decideRoundAt(rounds, version);
   if (at < 0) at = rounds.length - 1;
   const now = rounds[at]!, me = myActor(), menu = st.open.has(`${it.id}:vmenu`);
@@ -1078,14 +1080,16 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
     parts.push(`<section class="dc-part"><h4>What changed in v${now.version}</h4>${decideClampHTML(st, it, 'changed', now.note)}</section>`);
   }
   const before = at > 0 ? rounds[at - 1]! : null, back = before ? decideAnswerOf(before, me) : undefined;
+  const note = before && back?.answer === 'no' && back.note ? {version: before.version, at: back.at, text: back.note} : null;
   if (before && back?.answer === 'no' && back.note) {
     parts.push(`<section class="dc-part"><h4>Your note on v${before.version} <span class="dc-when">${esc(shortDate(back.at))}</span></h4>${decideClampHTML(st, it, 'note', back.note)}</section>`);
   }
-  if (now.answered.length) {
-    parts.push(`<section class="dc-part"><h4>Your points</h4><ul class="dc-points">${now.answered.map(p =>
-      `<li data-done="${p.done}"><span class="dc-mark" aria-label="${p.done ? 'Done' : 'Not done'}">${p.done ? '✓' : '✗'}</span><span><b>${esc(p.point)}</b> ${esc(p.why)}</span></li>`).join('')}</ul></section>`);
-  }
-  return {sub, body: parts.join('')};
+  const points = now.answered.length ? `<ul class="dc-points">${now.answered.map(p =>
+    `<li data-done="${p.done}"><span class="dc-mark" aria-label="${p.done ? 'Done' : 'Not done'}">${p.done ? '✓' : '✗'}</span><span><b>${esc(p.point)}</b> ${esc(p.why)}</span></li>`).join('')}</ul>` : '';
+  if (points) parts.push(`<section class="dc-part"><h4>Your points</h4>${points}</section>`);
+  // The chat's ask (decideAskBubbleHTML): one line of what changed, else Jev's take; the points; the note goes above it.
+  const one = now.changed.length ? now.changed.join('; ') : (now.note || '').split('\n')[0]!.trim() || now.jev.reason || '';
+  return {sub, body: parts.join(''), line: one, points, note};
 }
 /** A question's head (#3786): the question once, in full, then one dense meta line: who asked, when, the task (#N ↗).
     In a box of its own, so a phone never pins this line as it pins a page's (decide.css). */
@@ -1704,19 +1708,53 @@ function decideAskBubbleHTML(st: DecState, it: NeedsEntry): string {
     earlier?.stage ? `<span>${esc(earlier.stage)}</span>` : '', earlier ? `<span>v${earlier.version}</span>` : ''].filter(Boolean).join(dot) + tag;
   const parts = page && okView?.rounds ? decideRoundsHTML(st, it, okView.rounds, page.version, okView.notices, tag, okView.since, who) : null;
   const why = it.ask?.brief?.why ? `<p class="dc-why">${esc(it.ask.brief.why)}</p>` : '';
-  // A page's OK with its rounds read: the page's title, then its own meta line (who, stage, version, date, Jev, the task)
-  // as the byline, then what changed and your notes (decideRoundsHTML).
-  if (parts) return `<div class="dc-msg dc-msg-ask"><h3 class="dc-q dc-q-page">${esc(it.task?.title || it.line)}</h3>${parts.sub}${why}${parts.body}</div>`;
-  // A page's OK names the task; what the stage said after "ready for your OK" (Jev's reason, a send back) goes under it.
+  const one = (t: string) => t ? `<p class="dc-said dc-one" title="${esc(t)}">${esc(t)}</p>` : '';
+  // A page's OK with its rounds read: its own meta line (who, stage, version, Jev, the task) as the byline, the
+  // question, one line of what changed (else Jev's take) and your points; your note on the version before is your
+  // message above it, not in it.
+  if (parts) {
+    return decideNoteMsgHTML(parts.note) + `<div class="dc-msg dc-msg-ask">${parts.sub}<div class="dc-msg-b"><h3 class="dc-q dc-q-ask">${esc(decidePageQuestion(it))}</h3>`
+      + `${one(parts.line)}${parts.points}${why}</div></div>`;
+  }
+  // A Validate or QA OK: the question, then the verdict (up to 3 check rows, else one line) and Proof, which opens the
+  // Proof tab on a phone. A long review is the asker's message above it.
+  if (decideCheckedOk(it) || earlier) {
+    const long = it.line.length > DEC_ASK_SHORT || /\n/.test(it.line), q = long ? decidePageQuestion(it) : it.line;
+    const checks = (it.ask?.brief?.details || []).map(d => String(d).trim()).filter(d => d && d.length <= DEC_ASK_SHORT).slice(0, 3);
+    const verdict = checks.length ? `<ul class="dc-checks">${checks.map(c => `<li>${esc(c)}</li>`).join('')}</ul>` : one(it.ask?.brief?.why || '');
+    const proof = '<button type="button" class="linkish dc-proof-link" data-dc="tab" data-dc-tab="task">Proof</button>';
+    return (long ? decideSaidMsgHTML(who, it.since || '', it.line) : '')
+      + `<div class="dc-msg dc-msg-ask"><div class="dc-meta dc-ask-meta dc-msg-by">${by}</div><div class="dc-msg-b"><h3 class="dc-q dc-q-ask">${esc(q)}</h3>`
+      + `${verdict}${proof}</div></div>`;
+  }
+  // A page's OK before its rounds are read: the question, and what the stage said after "ready for your OK" (Jev's
+  // reason, a send back) as its one line.
   const title = page ? it.task?.title || '' : '';
   const said = title ? it.line.replace(/^.*?, ready for your OK\.?\s*/, '').replace(/\s*OK [^()]* \(version \d+\)$/, '').trim() : '';
-  const q = decideKind(it) === 'question' ? decideQuestionOf(it) : title || it.line;
+  const q = decideKind(it) === 'question' ? decideQuestionOf(it) : page ? decidePageQuestion(it) : it.line;
   // An action's OK says what will happen in the ask itself, so Approve is never blind; a page stays in Task.
   const act = decideKind(it) === 'ok' ? decideReceiptHTML(st.ok.get(decideOkKey(it))) : '';
   return `<div class="dc-msg dc-msg-ask"><div class="dc-meta dc-ask-meta dc-msg-by">${by}</div><div class="dc-msg-b"><h3 class="dc-q dc-q-ask">${esc(q)}</h3>`
-    + `${said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : ''}${act}${why}${decideChoicesHTML(st, it)}</div></div>`
-
+    + `${said && said !== title ? one(said) : ''}${act}${why}${decideChoicesHTML(st, it)}</div></div>`;
 }
+/** An ask's line longer than this is a review, not a question: it goes above the ask as the asker's message. */
+const DEC_ASK_SHORT = 120;
+/** A page's OK as a question: "OK the spec?", from the line ("Spec for X, ready for your OK") or the stage's name. */
+function decidePageQuestion(it: NeedsEntry): string {
+  const what = /^(.+?) for .+, ready for your OK/.exec(it.line)?.[1] || decideEarlier(it)?.stage || decideStageName(it.task?.stage_id) || 'page';
+  return `OK the ${/^[A-Z]{2,}\b/.test(what) ? what : what.toLowerCase()}?`;
+}
+/** A message of someone's in the task's chat, drawn as the thread draws one, for words that belong there and not in the
+    ask: none when the thread holds the same words already. */
+function decideSaidMsgHTML(actor: string, at: string, text: string, extra = ''): string {
+  if (!text.trim() || DEC_CHAT?.view?.messages.some(m => (m.body || '').trim() === text.trim())) return '';
+  const mine = actor === myActor();
+  return `<div class="th-msg dc-msg-said${mine ? ' th-mine' : ''}"><div class="th-av">${actorAvatar(actor, 28)}</div><div class="th-main">`
+    + `<div class="th-head"><span class="th-who">${esc(mine ? 'You' : actorLabel(actor))}</span>${at ? `<time datetime="${esc(at)}">${esc(shortDate(at))}</time>` : ''}${extra}</div>`
+    + `<div class="th-body md">${md(text)}</div></div></div>`;
+}
+/** Your note on the version before, sent back: your message above the page's ask. */
+const decideNoteMsgHTML = (n: DecNote | null) => n ? decideSaidMsgHTML(myActor(), n.at, n.text, `<span class="dc-when">on v${n.version}</span>`) : '';
 /** What an action's OK will do (decide-content.ts's heading; an email's subject and who it goes to): a payment, an
     email, a webhook. Null for a spec, a file or a letter's proof (pages, in the second tab) and a stage's OK. */
 function decideAction(v: AskOkView | undefined): {line: string; amount: string; facts: string; verb: string} | null {
@@ -1885,7 +1923,8 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   if (!el?.closest('.dc-where')) decideMenu(false);
   // A click off Snooze's open menu only closes it: never an answer under it by a tap that meant to dismiss.
   if (st.more === 'snooze' && !el?.closest('.dc-snzw')) { decideSnoozeClose(st); return; }
-  if (st.more === 'ask' && !el?.closest('.dc-askw')) { decideAskMoreClose(st); return; }
+  // Outside ⋯'s menu, or on a phone's dim backdrop (drawn by .dc-askw itself), closes it.
+  if (st.more === 'ask' && (!el?.closest('.dc-askw') || el.classList.contains('dc-askw'))) { decideAskMoreClose(st); return; }
   const at = decideCurrent(st);
   // The version menu closes on any click but its control's own.
   const vmenu = at ? `${at.id}:vmenu` : '';
@@ -1930,7 +1969,9 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   if (what === 'tab') {
     // A phone's Chat and Task tabs: the task's chat, or the task itself, open.
     $('.decide')?.classList.toggle('dc-on-task', b.dataset.dcTab === 'task');
-    b.parentElement?.querySelectorAll('[role="tab"]').forEach(t => { t.setAttribute('aria-selected', String(t === b)); });
+    document.querySelectorAll('.decide .dc-tabs [role="tab"]').forEach(t => { t.setAttribute('aria-selected', String((t as HTMLElement).dataset.dcTab === b.dataset.dcTab)); });
+    // The ask's Proof link hides with the chat: the focus goes to the tab it opened.
+    if (b.getAttribute('role') !== 'tab') ($(`.decide .dc-tabs [role="tab"][data-dc-tab="${b.dataset.dcTab}"]`) as HTMLElement | null)?.focus();
     return;
   }
   if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
