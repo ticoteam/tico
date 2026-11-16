@@ -12,6 +12,18 @@ the new shape.
 """
 
 GONE = ("pending_hash", "grant_hash", "pending_scopes", "holder", "runner_id", "code", "answered")
+# The columns backend/google_connect.py reads that an older file may lack: before this, the module's startup code added
+# some of them itself (`grant_scopes`, the operation columns), so a file from before those steps has none of them.
+ADDED = (
+    "kind",
+    "message",
+    "hint",
+    "client_id",
+    "operation_id",
+    "grant_scopes",
+    "grant_sealed",
+    "grant_operation_id",
+)
 
 
 def up(conn):
@@ -19,7 +31,7 @@ def up(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(google_connects)")}
     if not columns:
         return
-    for column in ("grant_sealed", "grant_operation_id"):
+    for column in ADDED:
         if column not in columns:
             conn.execute(f"ALTER TABLE google_connects ADD COLUMN {column} TEXT")
     conn.execute(
@@ -28,12 +40,15 @@ def up(conn):
     )
     if "grant_hash" in columns:
         conn.execute(
-            "UPDATE google_connects SET status='disconnected',kind='reconnect',message=NULL,hint=NULL,can=NULL "
+            "UPDATE google_connects SET status='disconnected',kind='reconnect',message=NULL,hint=NULL "
             "WHERE grant_hash IS NOT NULL AND status NOT IN ('signing_in','disconnected')"
         )
+    # A code a computer was finishing ends; the sign-in nonce and verifier go with it where the file has them.
+    spent = ",".join(f"{name}=NULL" for name in ("oauth_state", "verifier") if name in columns)
     conn.execute(
-        "UPDATE google_connects SET status='failed',kind='expired',message=NULL,hint=NULL,oauth_state=NULL,"
-        "verifier=NULL WHERE status IN ('ready','finishing')"
+        "UPDATE google_connects SET status='failed',kind='expired',message=NULL,hint=NULL"
+        + ("," + spent if spent else "")
+        + " WHERE status IN ('ready','finishing')"
     )
     # Nothing a computer held is used again: the scopes and client of those grants go with them.
     conn.execute("UPDATE google_connects SET grant_scopes=NULL,client_id=NULL WHERE grant_sealed IS NULL")

@@ -481,6 +481,28 @@ def test_the_migration_ends_computer_held_grants_with_one_reconnect_and_drops_th
     migration.up(conn)  # a second run changes nothing
 
 
+def test_the_migration_also_upgrades_a_file_from_before_the_module_added_its_own_columns():
+    migration = importlib.import_module("backend.migrations.20261116145802_google_grants_on_server")
+    conn = sqlite3.connect(":memory:")
+    conn.execute(  # the shape of an early file: no scopes or operation columns, which the module once added itself
+        "CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, "
+        "oauth_state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, "
+        "holder TEXT, started REAL, created TEXT NOT NULL, updated TEXT NOT NULL, pending_hash TEXT, grant_hash TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO google_connects(person_id,mailbox,status,grant_hash,created,updated) "
+        "VALUES('cara','cara@acme.example','connected','h1','t','t')"
+    )
+    migration.up(conn)
+    assert conn.execute("SELECT status,kind,grant_sealed FROM google_connects").fetchone() == (
+        "disconnected",
+        "reconnect",
+        None,
+    )
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(google_connects)")}
+    assert set(migration.ADDED) <= columns and not columns & set(migration.GONE)
+
+
 def test_a_connection_the_migration_ended_asks_once_to_connect_again(app):
     with app.app.state.store.transaction() as c:
         c.execute(

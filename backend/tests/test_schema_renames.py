@@ -186,6 +186,12 @@ DROPPED_INDEXES |= {
     "invariants_doing",
 }
 DROPPED_TRIGGERS |= {"changes_attempts_carried"}
+# Dropped by backend/migrations/20261116145802_google_grants_on_server.py: Connect Google grants live on the server, so
+# the computer handoff's table and columns go.
+_GRANTS = importlib.import_module("backend.migrations.20261116145802_google_grants_on_server")
+RETIRED.add("google_mail_holders")
+DROPPED_INDEXES.add("sqlite_autoindex_google_mail_holders_1")
+DROPPED |= {("google_connects", column) for column in _GRANTS.GONE}
 
 
 @pytest.fixture(scope="module")
