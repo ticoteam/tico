@@ -42,7 +42,6 @@ interface SelfPerson extends Omit<Partial<import('./api').Person>, 'id'> {
   email?: string;
   /** owner or viewer from /api/me; a bot's own session (/api/v2/me, account_routes.py) says bot, and a human says human. */
   role: 'owner' | 'viewer' | 'human' | 'bot';
-  local: boolean;
   registered?: boolean;
   bot_admin?: boolean;
   credential_access?: boolean;

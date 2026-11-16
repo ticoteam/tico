@@ -2658,8 +2658,6 @@ def install_views(app, store, auth, mutate, task_view):
                 "company_domains": domains_,
                 "member_bot_limit": Access.load_access(c, store.settings)["member_bot_limit"],
                 "role": "owner" if who.role == "owner" else "viewer",
-                "local": False,
-                "cloud": True,
                 "registered": True,
                 "chat_bots": bots,
                 "developer": P.is_developer(H.actor_id(who.actor), r),
@@ -3014,7 +3012,6 @@ def install_views(app, store, auth, mutate, task_view):
 
             # `machines` is the older name of `computers`, kept for older clients.
             return {
-                "cloud": True,
                 "computers": machines,
                 "machines": machines,
                 # Cloud machines not enrolled yet (being made, starting, failed): listed before they are computers.
@@ -3081,6 +3078,7 @@ def install_views(app, store, auth, mutate, task_view):
                     "title": title if len(title) <= 80 else title[:79].rstrip() + "\u2026",
                 }
                 (queued if row["state"] == "queued" else active).append(item)
+            # The desktop app (app/src/hub.rs) and the account dot (ui/app/heartbeat.ts) read `cloud` here, so it stays.
             return {
                 "cloud": True,
                 "last_tick": tick,
@@ -3352,7 +3350,6 @@ def install_views(app, store, auth, mutate, task_view):
             ):
                 session = None
             return {
-                "cloud": True,
                 "current": True,
                 "runtime": runtime,
                 "model": model,
