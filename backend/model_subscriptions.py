@@ -400,6 +400,31 @@ def in_effect(c, runner_id, runtime, loads=None):
     return sub if runner else None
 
 
+def held_plan(c, runner_id, runtime, loads=None):
+    """The login of the company plan given this computer for `runtime` while its usage limit passes it over and the
+    computer has no sign-in of its own for that runtime to run on instead (no Gateway either: that is the claim's
+    models_preset.plans_out), or None. A turn then waits on that plan's hold (execution.login_key), and its first turn
+    after the reset is the hold's probe."""
+    from . import login_holds
+    from .models_preset import computer_falls_back, signed_in
+
+    given = loads.given if loads is not None else _given(c)
+    sub = given.get((runner_id, runtime)) if given else None
+    if not sub or sub.get("person") or not sub.get("id") or not _held(c, sub["id"], runtime, loads):
+        return None
+    if computer_falls_back(c, runner_id):
+        return None  # its turns run on the Gateway meanwhile
+    if loads is not None:
+        runner = loads.runner_of(c, runner_id, live=True)
+    else:
+        from .read_cache import one
+
+        runner = one(c, "SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,))
+    if not runner or signed_in(readiness_document(runner["readiness"]), runtime):
+        return None
+    return login_holds.subscription_login(sub["id"])
+
+
 def passed_over(c, runner_id, runtime, loads=None):
     """Whether this computer is given a plan (or a person's plans) for `runtime` and every one is passed over now: at
     its usage limit or needing reconnecting. Its turns then run on its own login, else wait, unless the computer falls

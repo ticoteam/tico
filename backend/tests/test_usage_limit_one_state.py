@@ -64,8 +64,8 @@ def outage(api, machine, attempt):
 
 
 # (id, on a Tico model, how the turn ends, when the hold ends, the bot shows Rate limited, exactly one probe after the
-# end). The Gateway's cap, its address block and its outage keep their own per-bot wait, with no probe: every queued job
-# may start once it ends.
+# end). The Gateway is one login (login_holds.GATEWAY): its cap, its address block and its outage hold it, and after
+# them one probe tries it, as for any login.
 LIMITS = [
     ("named_reset", False, dict(errors=(CLAUDE,)), "2026-10-15T12:40:00.000000Z", True, True),
     ("quota_backoff", False, dict(errors=(QUOTA,)), H.shift(HIT, seconds=1800), True, True),
@@ -76,11 +76,11 @@ LIMITS = [
         dict(errors=(GATEWAY_RATE,), limit_resets_at=H.shift(HIT, seconds=42)),
         H.shift(HIT, seconds=42),
         True,
-        False,
+        True,
     ),
-    ("gateway_cap", True, dict(errors=(GATEWAY_CAP,)), "2026-11-01T00:00:01.000000Z", True, False),
+    ("gateway_cap", True, dict(errors=(GATEWAY_CAP,)), "2026-11-01T00:00:01.000000Z", True, True),
     ("gateway_credit", True, dict(errors=(GATEWAY_CREDIT,)), H.shift(HIT, seconds=G.OUT_OF_CREDIT_WAIT), True, True),
-    ("gateway_down", True, None, H.shift(HIT, seconds=60), False, False),
+    ("gateway_down", True, None, H.shift(HIT, seconds=60), False, True),
 ]
 
 
@@ -177,7 +177,8 @@ def test_a_bot_moved_to_another_computer_leaves_the_old_logins_limit_behind(api,
     moved = claim(api, other, "ops")
     assert moved and moved["bot"] == "ops"
     done(api, other, moved)
-    # Back on the first computer, its login is still held until the reset it named.
+    # Back on the first computer, its login is still held until the reset it named, and the bot shows it.
     assign(api, machine, "ops", generation=2)
+    assert state(api) == "limited"
     ready(api, machine, ["ops"])
     assert claim(api, machine, "ops") is None

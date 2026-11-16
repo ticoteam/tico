@@ -126,7 +126,7 @@ def sync(c, settings):
             counts[key] = counts.get(key, 0) + row['n']
     for row in queued:
         # Reuse wake batching's history/digest carrier; retries retain their own jobs and checkpoints.
-        if execution.cooling_off(c, row['bot_id']):
+        if execution.cooling_off(c, settings, row['bot_id']):
             batch_waiters(c, row['bot_id'])
     for (raw,) in c.execute(
         'SELECT value FROM registry_metadata WHERE key LIKE ?', (login_holds.PREFIX + '%',)

@@ -421,121 +421,82 @@ def model_choice(c, settings, bot):
 
 def model_change_hold(c, settings, bot):
     """Why the model a limited bot was just moved to waits too, or "": its login on the bot's computer is held
-    (backend/login_holds.py), or the bot's last limit was the Tico AI Gateway's and the new model is a Tico model on
-    the same company key. Only then does the bot stay Rate limited after the move (Dev 353)."""
+    (backend/login_holds.py), "gateway" when that login is the Tico AI Gateway's (the new model is a Tico model on the
+    same company key). Only then does the bot stay Rate limited after the move (Dev 353)."""
     hold = own_login_hold(c, settings, bot)
     if (hold.get("until") or "") > H.now():
-        return "login"
-    model = model_choice(c, settings, bot)[1]
-    last = last_limit(c, bot)
-    if (
-        last
-        and gateway_connection.is_tico(model)
-        and any(
-            gateway.cap_reached(e) or gateway.out_of_credit(e) or gateway.run_code(e) == gateway.RATE_LIMITED
-            for e in limit_errors(c, last["id"])
-        )
-    ):
-        return "gateway"
+        return "gateway" if hold.get("profile") == login_holds.GATEWAY else "login"
     return ""
 
 
 def lift_after_model_change(c, settings, actor, bot, was):
     """A person moved the bot from `was` (model_choice before the change) to another model: a usage limit that was the
     old model's lifts, and the new model starts on the queued work now. A turn still out on the old model keeps the bot
-    at work (settle_status). When the new model waits on the same spent login or Gateway key (model_change_hold), the
-    bot stays Rate limited and says so. An effort-only change leaves the bot on the spent model: nothing lifts."""
-    status = H.status(c, bot) or {}
-    if status.get("state") != "limited" or model_choice(c, settings, bot) == tuple(was):
+    at work. When the new model waits on the same spent login or Gateway key (model_change_hold), the bot stays Rate
+    limited and says so. An effort-only change leaves the bot on the spent model: nothing lifts."""
+    if (H.status(c, bot) or {}).get("state") != "limited" or model_choice(c, settings, bot) == tuple(was):
         return
     why = model_change_hold(c, settings, bot)
-    if why:
-        shared = "the same login" if why == "login" else "the same Tico AI Gateway key"
-        H.status_set(
-            c,
-            actor,
-            bot,
-            state="limited",
-            focus=f"Model changed; the new model uses {shared}, which is still at its usage limit",
-            reason="Model changed",
-        )
-        return
-    out = c.execute(
-        "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)
-    ).fetchone()
-    H.status_set(
+    shared = "the same Tico AI Gateway key" if why == "gateway" else "the same login"
+    relieve(
         c,
+        settings,
         actor,
         bot,
-        state="running" if out else "idle",
-        focus="Working on other tasks" if out else "Model changed; queued work resumes",
-        reason="Model changed",
+        "Model changed",
+        held=f"Model changed; the new model uses {shared}, which is still at its usage limit",
+        free="Model changed; queued work resumes",
     )
 
 
 def lift_after_connection_change(c, settings, actor, bot):
     """The bot's connection changed (it moved to another computer, so another login; a computer's login was switched
     to another account): a usage limit it showed was the previous login's. Only a hold on the login it runs on now
-    counts (backend/login_holds.py): with none the bot is free and its queued work starts now; with one it stays
-    Rate limited and names that hold's end. A turn still out keeps the bot at work (settle_status)."""
-    if (H.status(c, bot) or {}).get("state") != "limited":
-        return
-    why = model_change_hold(c, settings, bot)
-    if why == "login" and fallback_takes(c, settings, bot):
-        why = ""  # the named or default fallback runs the turn now (fallback_choice), so the held login does not
-    if why:
-        until = own_login_hold(c, settings, bot).get("until") or ""
-        if why == "login" and until:
-            # The bot stays held on its own login until that login's hold ends (a replaced plan's later deadline is no
-            # longer the one): the claim releases these at this time (wake_presets.release_quota_resets).
-            c.execute(
-                "UPDATE jobs SET hold_until=? WHERE bot_id=? AND state='queued' AND held=1 "
-                "AND wake_class='quota-reset' AND hold_reason IS NULL",
-                (until, bot),
-            )
-        H.status_set(
-            c,
-            actor,
-            bot,
-            state="limited",
-            focus=(
-                "Connection changed; the new login is at its usage limit"
-                + (f" until {until[11:16]} UTC" if why == "login" and until else "")
-                if why == "login"
-                else "Connection changed; the Tico AI Gateway key is still at its usage limit"
-            ),
-            reason="Connection changed",
-        )
-        return
+    counts (backend/login_holds.py): with none the bot is free and its queued work starts now; with one (and no
+    fallback to take the turn) it shows Rate limited and names that hold's end."""
+    hold = own_login_hold(c, settings, bot)
+    until = hold.get("until") or ""
+    held = (
+        "Connection changed; the Tico AI Gateway key is still at its usage limit"
+        if hold.get("profile") == login_holds.GATEWAY
+        else "Connection changed; the new login is at its usage limit"
+        + (f" until {until[11:16]} UTC" if until > H.now() else "")
+    )
+    relieve(c, settings, actor, bot, "Connection changed", held=held, free="Connection changed; queued work resumes")
+
+
+def relieve(c, settings, actor, bot, reason, held="", free=""):
+    """The one way a bot's usage-limit status follows the login holds after something changed them (Try now, another
+    connection or model, a hold that ran out): it shows Rate limited exactly while cooling_off says its next turn
+    waits. `held` is its line while a hold still keeps it waiting (empty: its status is left as it is), `free` its line
+    once none does. Returns whether it is free. A queued job an older server held for its login's reset (wake_class
+    'quota-reset', no longer written) is let go here as well: the login's hold does that waiting now."""
     c.execute(
         "UPDATE jobs SET held=0,hold_until=NULL WHERE bot_id=? AND state='queued' AND wake_class='quota-reset' "
         "AND hold_reason IS NULL",
         (bot,),
     )
-    out = c.execute(
-        "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)
-    ).fetchone()
-    H.status_set(
-        c,
-        actor,
-        bot,
-        state="running" if out else "idle",
-        focus="Working on other tasks" if out else "Connection changed; queued work resumes",
-        reason="Connection changed",
-    )
-
-
-def fallback_takes(c, settings, bot):
-    """Whether the bot's named or default fallback takes its turn on its computer now: the same answer the claim gives
-    (fallback_choice), on the config a claim runs (shared_bots.follow)."""
-    from .shared_bots import follow
-
-    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
-    if not place or not place["runner_id"]:
+    if cooling_off(c, settings, bot):
+        if held:
+            H.status_set(c, actor, bot, state="limited", focus=held, reason=reason)
         return False
-    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-    config = follow(c, bot, json.loads(row[0]) if row and row[0] else {})
-    return fallback_choice(c, settings, place["runner_id"], bot, config) is not None
+    if (H.status(c, bot) or {}).get("state") == "limited":
+        out = c.execute(
+            "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)
+        ).fetchone()
+        until = own_login_hold(c, settings, bot).get("until") or ""
+        if free and until > H.now():
+            # Its own login is still held, but a fallback takes its turns (login_refusal).
+            free = f"Its login is at its usage limit until {until[11:16]} UTC; queued work runs on its fallback"
+        H.status_set(
+            c,
+            actor,
+            bot,
+            state="running" if out else "idle",
+            focus="Working on other tasks" if out else free,
+            reason=reason,
+        )
+    return True
 
 
 def lift_limited_on_computer(c, settings, actor, runner_id, runtime):
@@ -1994,14 +1955,14 @@ def limit_until(c, bot, since):
     return hold.get('until') or H.shift(since, seconds=limit_cooldown(c, bot))
 
 
-def release_limits(c):
-    """Lift each usage limit whose hold has passed: the bot shows it is back, and the status change tells
-    its computer to ask for the queued work now rather than at its next backup poll."""
+def release_limits(c, settings):
+    """Lift each Rate limited status no hold keeps waiting any more (cooling_off): the bot shows it is back, and the
+    status change tells its computer to ask for the queued work now rather than at its next backup poll."""
     for row in c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited'").fetchall():
-        if row["changed_at"] and limit_until(c, row["bot"], row["changed_at"]) > H.now():
-            continue
-        settle_status(c, row["bot"], "idle", "Usage limit lifted; queued work resumes")
-        H.event(c, H.KEEPER, "limit.released", row["bot"], {"since": row["changed_at"]})
+        if relieve(
+            c, settings, H.KEEPER, row["bot"], "Usage limit lifted", free="Usage limit lifted; queued work resumes"
+        ):
+            H.event(c, H.KEEPER, "limit.released", row["bot"], {"since": row["changed_at"]})
 
 
 def hop_failed(c, attempt_id, result, began, ended):
@@ -2080,15 +2041,13 @@ def empty_fallback_interruption(c, settings, row, result):
     )
 
 
-def hold_job_until_reset(c, row, hold, reason):
-    """Keep an established empty retry visibly held until its known reset, outside wake batching."""
+def note_reset_wait(c, row, hold, reason):
+    """Record that a requeued turn waits for its login's known reset. The login's hold is what keeps it waiting
+    (login_refusal): the bot's own login with no fallback for it (`stuck`, `failed_fallback`), or the saved session's
+    own login (source_continuation). The job itself is never held: one hold, one probe after it."""
     until = hold.get('until') or ''
     if not hold.get('reset') or until <= H.now():
         return
-    c.execute(
-        "UPDATE jobs SET held=1,hold_until=?,wake_class='quota-reset' WHERE id=? AND state='queued'",
-        (until, row['job_id']),
-    )
     # A claim that ran nowhere inherits the existing deadline, not another default cooldown.
     c.execute("UPDATE attempts SET result=json_set(result,'$.limit_resets_at',?) WHERE id=?", (until, row['id']))
     H.event(
@@ -2117,7 +2076,7 @@ def limit_lifted(c, settings, bot, attempt_id, finished):
     hold = own_login_hold(c, settings, bot)
     named = [login_holds.reset_from_text(error, finished) for error in limit_errors(c, attempt_id)]
     if (
-        not cooling_off(c, bot)
+        not cooling_off(c, settings, bot)
         and (hold.get("until") or "") <= now
         and not any(at and at > H.parse_ts(now) for at in named)
     ):
@@ -2152,34 +2111,47 @@ def person_wrote_since(c, bot, since):
     )
 
 
-def cooling_off(c, bot, loads=None):
-    """Whether a usage limit, or the wait after the Tico AI Gateway was unavailable, still holds the bot: its status is
-    `limited` and the cooldown has not passed (or the Gateway's wait has not), and no person has written to it since
-    (a person's message is worth one try). Asked once a bot in a snapshot: Health asks for a limited bot's twice.
-    `loads`: the claim's rows (claim_loads), which are read once per pass and so are not memoized here."""
-    if loads is not None:
-        return _cooling_off(c, bot, loads)
-    from .read_cache import value
+def cooling_off(c, settings, bot, loads=None):
+    """Whether a usage limit keeps the bot's next turn waiting: the claim's own answer (claim_refusal), from the login
+    holds alone (backend/login_holds.py). The login its turn would sign in with (its own, a company subscription's, or
+    the Gateway's) is held, or another job's probe turn is out on it, and no fallback is ready to take the turn; or the
+    turn would run on the Gateway while its subscription is not signed in here (gateway_wait) and the Gateway is held.
+    A person who has written since a hold with no named reset began gets one try (primary_hold). The bot's Rate limited
+    status is this answer's display: release_limits lifts it when this turns False."""
+    from .read_cache import one
+    from .shared_bots import follow
 
-    return value(c, ("cooling_off", bot), lambda: _cooling_off(c, bot))
-
-
-def _cooling_off(c, bot, loads=None):
-    from .repositories import metadata
-
-    status = (loads.status_of(c, bot) if loads is not None else H.status(c, bot)) or {}
-    wait = loads.wait_of(c, bot) if loads is not None else metadata(c, GATEWAY_WAIT + bot)
-    if wait.get("until") and wait["until"] > H.now() and not person_wrote_since(c, bot, wait.get("since") or ""):
-        return True
-    return bool(
-        status.get("state") == "limited"
-        and status.get("changed_at")
-        and limit_until(c, bot, status["changed_at"]) > H.now()
-        and not person_wrote_since(c, bot, status["changed_at"])
-    )
+    place = one(c, "SELECT runner_id FROM assignments WHERE bot=?", (bot,))
+    row = one(c, BS.ONE_SQL, (bot,))
+    if not place or not place["runner_id"] or not row:
+        return False
+    runner = loads.runner_of(c, place["runner_id"]) if loads is not None else one(c, RUNNER_SQL, (place["runner_id"],))
+    config = follow(c, bot, json.loads(row[0] or "{}"))
+    if runner is not None and gateway_waits(c, settings, runner, config, loads):
+        return bool(gateway_wait(c, runner["id"], bot, loads))
+    return bool(login_refusal(c, settings, place["runner_id"], bot, config, loads=loads))
 
 
-GATEWAY_WAIT = "gateway-unavailable:"
+def gateway_waits(c, settings, runner, config, loads=None, ready=None):
+    """Whether the claim runs the bot's next turn on the Gateway because its subscription is not signed in on `runner`
+    yet (models_preset.waiting), and its plans there have not run out."""
+    record = loads.record if loads is not None else providers.load(c, settings)
+    filled = providers.fill(record, config)
+    ready = readiness_document(runner["readiness"]) if ready is None else ready
+    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled, loads))
+    return models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
+
+
+def gateway_wait(c, runner_id, bot, loads=None, strict=False):
+    """Why a turn on the Gateway waits ("held", "probing"), or None: its one login's hold (login_holds.GATEWAY), as
+    primary_hold judges a bot's own login, a person's message being worth one try. `strict` (the claim, which answers
+    for all of the bot's jobs at once here): a probe out on the Gateway holds every other turn, the bot's own too."""
+    gw, rt = login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME
+    why = login_holds.holding(c, runner_id, gw, rt, loads=loads) if strict else login_wait(c, runner_id, gw, rt, bot)
+    hold = login_holds.get(c, runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, loads)
+    if why == "held" and not hold.get("reset") and person_wrote_since(c, bot, hold.get("since") or ""):
+        return None
+    return why
 
 
 def clear_limits(c, settings, actor, bot):
@@ -2208,18 +2180,16 @@ def clear_limits(c, settings, actor, bot):
             )
             if runtime(r[0]) == mine
         ]
+    runner = c.execute(RUNNER_SQL, (place["runner_id"],)).fetchone() if place and place["runner_id"] else None
     for slug in bots:
-        if place and place["runner_id"]:
+        if runner:
             # The plan behind the login was just renewed: its hold ends for every bot on it, but only one queued job
             # tries it until that turn's result (login_holds.try_now), so a plan still spent sees one turn, not a burst.
-            login_holds.try_now(c, *login_key(c, settings, place["runner_id"], slug, config(slug)))
-        if (H.status(c, slug) or {}).get("state") == "limited":
-            H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
-        c.execute(
-            "UPDATE jobs SET held=0,hold_until=NULL WHERE bot_id=? AND state='queued' "
-            "AND wake_class='quota-reset' AND hold_reason IS NULL",
-            (slug,),
-        )
+            login_holds.try_now(c, *login_key(c, settings, runner["id"], slug, config(slug)))
+            if gateway_waits(c, settings, runner, config(slug)):
+                # Its turns run on the Gateway until its subscription is signed in here: that is the login to try.
+                login_holds.try_now(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
+        relieve(c, settings, actor, slug, "Try now")
         H.event(c, actor, "limit.cleared", slug, {"from": bot, "runtime": mine})
     return len(bots)
 
@@ -2489,10 +2459,10 @@ def _claim_refusal(
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
     covers = model_subscriptions.covered_runtimes(c, runner, filled, loads)
-    ready = model_subscriptions.covered(ready, covers)
     # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
     # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out).
-    waits = models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
+    waits = gateway_waits(c, settings, runner, config, loads, ready)
+    ready = model_subscriptions.covered(ready, covers)
     access = loads.access if loads is not None else cloud_access.access(c)
     if cloud_access.frozen(c, access) and (gateway_connection.is_tico(filled.get("model")) or waits):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
@@ -2520,9 +2490,8 @@ def _claim_refusal(
         mine = loads.limit_of(c, bot) if loads is not None else None
         if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default, mine=mine):
             return "limit", None
-        return (
-            ("cooling_off", None) if cooling_off_here(c, settings, runner, bot, config, loads=loads) else (None, config)
-        )
+        # The turn runs on the Gateway: its hold, and its one probe, decide (gateway_wait).
+        return ("cooling_off", None) if gateway_wait(c, runner["id"], bot, loads, strict=True) else (None, config)
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         why = "not_ready" if reported else "readiness_unknown"
@@ -2539,13 +2508,8 @@ def _claim_refusal(
     mine = loads.limit_of(c, bot) if loads is not None else None
     if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default, mine=mine):
         return "limit", None
-    # While the bot's own login is held, that hold decides (login_refusal), so a ready fallback can take the turn;
-    # otherwise the bot's own cooldown does, as for a limit its fallback met.
-    if (
-        cooling_off_here(c, settings, runner, bot, config, subscription_context, loads=loads)
-        and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context, loads=loads)
-        or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context, loads=loads)
-    ):
+    # A hold on the login the turn would sign in with decides (login_refusal), so a ready fallback can take the turn.
+    if login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context, loads=loads):
         # Already-started fallback work continues its own login even if new fallbacks have since been disabled.
         pending = c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued' AND held=0", (bot,))
         if not any(
@@ -2572,20 +2536,6 @@ def signed_in_by_lapsed_plan(ready, check, covers):
     own = (row.get("profiles") or {}).get("")
     row = own if isinstance(own, dict) else row
     return check.get("sign_in") == "ready" and row.get("authenticated") == "missing"
-
-
-def cooling_off_here(c, settings, runner, bot, config, ctx=None, loads=None):
-    """cooling_off for a turn of `bot` on `runner`, judged on the login that turn would sign in with. A limit met on a
-    company subscription holds that subscription (backend/login_holds.py `sub:<id>`), which the computer then passes
-    over (model_subscriptions.in_effect): the turn runs on the computer's own login or the Gateway instead, so the
-    subscription's cooldown does not keep it waiting. That login's own hold, if any, still decides (login_refusal)."""
-    if not cooling_off(c, bot, loads):
-        return False
-    last = last_limit(c, bot)
-    held = str((login_holds.for_attempt(c, last["id"]) if last else {}).get("profile") or "")
-    if held.startswith(login_holds.SUBSCRIPTION) and runner:
-        return login_key(c, settings, runner["id"], bot, config, ctx, loads)[1] == held
-    return True
 
 
 def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None, loads=None):
@@ -2676,11 +2626,14 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
         ]
     for choice in rows:
         if providers.gateway_model(choice["model"]):
-            # Signs in with the turn's relay: no login of its own to hold, but only where bots run as their own user
-            # (a company row is listed only then; one the bot names is checked here).
+            # Signs in with the turn's relay, on the company's Gateway login, only where bots run as their own user (a
+            # company row is listed only then; one the bot names is checked here).
             if not models_preset.runs_gateway(ready):
                 continue
-            return "", choice["runtime"]
+            why = login_wait(c, runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, bot, job_id)
+            if why == "held":
+                continue
+            return None if why else (login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
         subscribed = model_subscriptions.in_effect(c, runner_id, choice["runtime"])
         if signed.get("installed") is not True or (not subscribed and signed.get("authenticated") != "ready"):
@@ -2694,9 +2647,15 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
 
 
 def login_key(c, settings, runner_id, bot, config, ctx=None, loads=None):
-    """(runner, login, runtime) of the bot's own login, as holds key it (login_holds.canonical)."""
-    runtime = providers.bot_choice(c, settings, config, record=loads.record if loads is not None else None)[0]
-    return runner_id, login_holds.canonical(c, runner_id, "", runtime, loads=loads), runtime
+    """(runner, login, runtime) of the bot's own login, as holds key it (login_holds.canonical): the Gateway's one login
+    (login_holds.GATEWAY) for a bot on a Tico model, and a company plan held at its limit while the computer has no
+    login of its own for the runtime (model_subscriptions.held_plan)."""
+    runtime, model = providers.bot_choice(c, settings, config, record=loads.record if loads is not None else None)
+    if gateway_connection.is_tico(model):
+        return runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME
+    login = login_holds.canonical(c, runner_id, "", runtime, loads=loads)
+    # A held plan passed over for a computer login that is not signed in: the turn waits on the plan's hold.
+    return runner_id, (login or model_subscriptions.held_plan(c, runner_id, runtime, loads) or ""), runtime
 
 
 def unfenced_sql():
@@ -5163,6 +5122,9 @@ class Execution:
             tier,
             falls_back=models_preset.computer_falls_back(c, runner["id"]),
         )
+        if config.get("waiting_for_sign_in"):
+            # Moved to the Gateway for this turn: after a hold on it ends, this is the Gateway's one probe.
+            login_holds.take_probe(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, row["id"])
         config = models_preset.with_gateway_inputs(config)
         # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).
         config = providers.with_compact_default(config)
@@ -7195,6 +7157,8 @@ class Execution:
             tico_error = next((error for error in limit_errors(c, aid) if gateway.run_code(error)), "")
             if tico_error and gateway_connection.ran_tico(gateway_connection.handed(c, aid), body):
                 tico_code = gateway.run_code(tico_error)
+        # Whether a Tico model ended the turn: its limit, or its success, is the Gateway login's (login_holds.after_turn).
+        ran_gateway = gateway_connection.ran_tico(gateway_connection.handed(c, aid), body)
         gateway_connection.forget(c, aid)
         silent = False
         # A continuation already acted in its earlier turn: a quiet missing-session failure is held, never retried.
@@ -7479,16 +7443,9 @@ class Execution:
                 (int(body.tokens_in), H.now(), row["bot_id"], runtime, model, row["thread_id"]),
             )
         login_hold = {}
-        # The Tico AI Gateway's cap and address block are the company key's, not a provider login's: they keep their
-        # own waits (reset_cooldown).
-        gateway_wait = tico_code == gateway.RATE_LIMITED or any(gateway.cap_reached(e) for e in limit_errors(c, aid))
-        if (
-            not check
-            and not superseded
-            and not stopped
-            and not gateway_wait
-            and (limited or body.outcome == "completed")
-        ):
+        if not check and not superseded and not stopped and (limited or body.outcome == "completed"):
+            # The Tico AI Gateway's cap, rate limit and pause for want of credit hold the Gateway's one login, for its
+            # own wait (login_holds.gateway_until), never the computer's.
             login_hold = login_holds.after_turn(
                 c,
                 row["runner_id"],
@@ -7499,8 +7456,10 @@ class Execution:
                 aid,
                 H.now(),
                 hopped=fallback_mark(json.loads(config[0] or "{}") if config else {}) if hopped else None,
+                primary_gateway=gateway_connection.is_tico(model),
+                ended_gateway=ran_gateway,
             )
-        elif check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+        elif check and not stopped and (limited or body.outcome == "completed"):
             # A check's own schedule stays its own (check_models.hold below), but a company subscription it signed in
             # with is one login on every computer given it: its limit holds it there too, and a check that worked on it
             # clears it.
@@ -7508,8 +7467,9 @@ class Execution:
                 c, row["runner_id"], row["bot_id"], "", runtime, body, aid, H.now(), subscriptions_only=True
             )
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
+            # The primary's hold keeps the bot off that fallback until it ends (`failed_fallback`, `stuck`).
             login_hold = (
-                hold_job_until_reset(
+                note_reset_wait(
                     c,
                     row,
                     own_login_hold(c, self.store.settings, row['bot_id']),
@@ -7532,9 +7492,7 @@ class Execution:
                 )
             )
         ):
-            hold_job_until_reset(
-                c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.'
-            )
+            note_reset_wait(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
         # A turn signed in with a company subscription: a refusal is that subscription's, never the computer's login.
         subscription = (
             model_subscriptions.turn_rejected(
@@ -7677,7 +7635,7 @@ class Execution:
                     "retry_after": retry,
                 },
             )
-        elif limited and ran and not gateway_wait:
+        elif limited and ran:
             # The task model's limit is not the bot's: its login is held (after_turn above), the bot's chat, routines
             # and other work go on on its own model, and its next task turns run there until the hold ends.
             hit = H.now()
@@ -7853,12 +7811,21 @@ class Execution:
                 stop=aid if not requeue else None,
             )
         elif silent and tico_code == gateway.UNAVAILABLE:
-            from .repositories import save_metadata
-
             hit = H.now()
             tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
             retry = H.shift(hit, seconds=GATEWAY_BACKOFF * 2 ** max(tries - 1, 0))
-            save_metadata(c, GATEWAY_WAIT + row["bot_id"], {"since": hit, "until": retry})
+            # The Gateway is down for every Tico turn, not this bot's alone: its one login waits, then one probe.
+            login_holds.record(
+                c,
+                row["runner_id"],
+                login_holds.GATEWAY,
+                login_holds.GATEWAY_RUNTIME,
+                hit,
+                attempt_id=aid,
+                bot=row["bot_id"],
+                error=tico_error,
+                until=retry,
+            )
             settle_status(
                 c,
                 row["bot_id"],
@@ -7945,7 +7912,7 @@ class Execution:
                 claimed=row["created_at"],
                 stop=aid if not healthy else None,
             )
-        # A Gateway outage keeps its own doubling wait (GATEWAY_WAIT) and is Tico's, not the bot's: it never holds a bot.
+        # A Gateway outage holds the Gateway's login for its doubling wait and is Tico's, not the bot's: no run backoff.
         outage = silent and tico_code == gateway.UNAVAILABLE
         self.account_failure(
             c, row, body, aid, conv, failure, counts=not (stopped or limited or busy or yielded or outage)
@@ -8403,7 +8370,7 @@ class Execution:
 
     def release_limits(self, c):
         """Runs from the scheduler's tick: lift each usage limit whose hold has passed."""
-        release_limits(c)
+        release_limits(c, self.store.settings)
 
     def release_deploy_drains(self, c):
         """Undrain the bots a deploy drained and never gave back.

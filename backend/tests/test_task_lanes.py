@@ -129,7 +129,9 @@ def test_a_quota_reset_in_one_lane_holds_when_a_pre_limit_lane_finishes(api, mon
     monkeypatch.setattr(H, "now", lambda: H.shift(now, hours=3))
     with api.app.state.store.read() as c:
         assert H.status(c, "ops")["state"] == "limited"
-        assert cooling_off(c, "ops"), "a pre-limit lane finishing cannot discard the provider's reset"
+        assert cooling_off(c, api.app.state.store.settings, "ops"), (
+            "a pre-limit lane finishing cannot discard the provider's reset"
+        )
 
 
 @pytest.mark.parametrize("restore", [False, True])
@@ -161,7 +163,9 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
     else:
         post(api, f"attempts/{two['id']}/started", {"thread_id": two["lane"]}, machine["token"])
     with api.app.state.store.read() as c:
-        assert cooling_off(c, "ops"), "starting an already-leased lane must not lift another lane's limit"
+        assert cooling_off(c, api.app.state.store.settings, "ops"), (
+            "starting an already-leased lane must not lift another lane's limit"
+        )
     assert claim(api, machine) is None
     post(
         api,
@@ -170,7 +174,9 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
         machine["token"],
     )
     with api.app.state.store.read() as c:
-        assert cooling_off(c, "ops"), "the lane was leased before the limit even if it started afterwards"
+        assert cooling_off(c, api.app.state.store.settings, "ops"), (
+            "the lane was leased before the limit even if it started afterwards"
+        )
         assert c.execute("SELECT state FROM jobs WHERE id=?", (one["job_id"],)).fetchone()[0] == "queued"
     assert claim(api, machine) is None
     # The existing explicit recovery path remains usable, without discarding the waiting work.
