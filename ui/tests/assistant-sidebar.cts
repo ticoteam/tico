@@ -35,8 +35,8 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/tasks') return json({tasks: [], next_offset: null, cursor: 'c1'});
-    // The person's chat with the Assistant is a 1:1 DM: its unread is counted on the Assistant in Team (`bot_dms`).
-    if (p === '/api/v2/threads' && method === 'GET') return json({attention: [], threads: [], dms: [], bot_dms: state.unread ? {'bot:assistant': state.unread} : {}, next_cursor: null});
+    // The person's chat with the Assistant is a 1:1 DM: its unread is counted on the Assistant in Team (the rail's `dms`).
+    if (p === '/api/v2/threads/rail' && method === 'GET') return json({pinned: [], threads: [], catch_up: 0, catch_up_ids: [], next_cursor: null, dms: state.unread ? {'bot:assistant': state.unread} : {}});
     if (p === '/api/v2/threads/room1/read-all' && method === 'POST') { state.readAll.push(p); state.unread = 0; return json({thread_id: 'room1'}); }
     if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'assistant', name: 'Assistant', can_turn_on: false,
       room_id: 'room1', messages: chat, has_more: false, next_before: null, execution: null, actions: {}, pending: []});
