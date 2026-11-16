@@ -13,6 +13,8 @@
 // - the editor offers every kind, a page's and In a release's settings, and a stage's On entering list (its Limit and
 //   actions, the owner change among them, as rows; + Rule and + Action), and saves them as the record stores them;
 // - a task's row for a stage's OK is its title alone, met or not; what it waits on is its tooltip.
+// - in the list, each run of empty stages (even one) is one line of stage chips in its place, and a pipeline with nothing
+//   open is one empty state with New task; neither while searching, nor while more tasks are still to be read (#500).
 // Run: node ui/tests/pipeline-view-unit.cts
 'use strict';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -54,6 +56,8 @@ const ctx = vm.createContext({
   SR_ROW_ICONS: {rule: 'gavel', act: 'bolt', req: 'task_alt', lock: 'lock'},
   srMarkHTML: (cls: string, icon: string) => `<span class="sr-m ${cls}">${icon}</span>`,   // stage-rules.ts: one mark for a rule, one for an action
   needsStageCount: () => 0,   // nothing waits on the person here: no stage's ▶ (stage-review.cts draws them)
+  EMPTY_ART: {pipeline: '<svg class="ea-art" aria-hidden="true"></svg>'},   // empty-art.ts: the empty pipeline's picture
+  tasksViewOnly: () => false,   // tasks-page.ts: a bot's read-only view of the app
 });
 for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'org-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
   vm.runInContext(transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: file});
@@ -95,7 +99,9 @@ if (!view) throw new Error('the view sets its hook on the page');
 }
 {
   const list = view.html(rec(), TASKS, opts({layout: 'list'}));
-  assert.equal((list.match(/class="pv-group"/g) || []).length, 3, 'the list keeps an empty stage while nothing is searched');
+  assert.equal((list.match(/class="pv-group"/g) || []).length, 2, 'an empty stage has no header in the list');
+  assert.match(list, /<div class="pv-fold" role="group" aria-label="Empty stages: In development"><button type="button" class="pv-chip" data-pv-settings="dev"/,
+    'an empty stage after the last task is a chip');
   const found = view.html(rec(), TASKS, opts({layout: 'list', q: 'refund'}));
   assert.equal((found.match(/class="pv-group"/g) || []).length, 1, 'searching hides the stages with nothing found');
   assert.match(found, /Refund flow/);
@@ -117,6 +123,54 @@ if (!view) throw new Error('the view sets its hook on the page');
   pv.stage = was;
   assert.match(empty, /class="pv-tab on" data-pv-tab="dev"/);
   assert.match(empty, /<p class="pv-empty muted">Nothing here<\/p>/);
+}
+
+// ---- the list folds empty stages (#500)
+{
+  const five = rec({stages: [stage('a', 'Pitch'), stage('b', 'Spec'), stage('c', 'Build'), stage('d', 'Review'), stage('e', 'Fixes'),
+    stage('f', 'QA'), stage('g', 'Merge'), stage('h', 'Validate')]});
+  const at = (...ids: string[]) => ids.map((id, i) => task(`r${i}`, `Row ${i}`, id));
+  const folds = (html: string) => [...html.matchAll(/<div class="pv-fold" role="group" aria-label="Empty stages: ([^"]*)">(.*?)<\/div>/g)].map(m => m[1]);
+  const heads = (html: string) => [...html.matchAll(/<span class="pv-stage-name">([^<]*)</g)].map(m => m[1]);
+  // Runs before the first task, between tasks and after the last: each one line, in its place; one empty stage alone too.
+  const html = view.html(five, at('c', 'e'), opts({layout: 'list'}));
+  assert.deepEqual(folds(html), ['Pitch, Spec', 'Review', 'QA, Merge, Validate']);
+  assert.deepEqual(heads(html), ['Build', 'Fixes'], 'only stages with tasks keep a header');
+  assert.ok(html.indexOf('Empty stages: Pitch') < html.indexOf('>Build<') && html.indexOf('>Build<') < html.indexOf('Empty stages: Review')
+    && html.indexOf('Empty stages: Review') < html.indexOf('>Fixes<') && html.indexOf('>Fixes<') < html.indexOf('Empty stages: QA'), 'each run sits in its place');
+  assert.match(html, /<button type="button" class="pv-chip" data-pv-settings="a" title="Edit Pitch">Pitch<\/button>/, 'a chip opens its stage, names only');
+  assert.doesNotMatch(folds(html).join(''), /\d/, 'no number on a chip');
+  const plainChips = view.html(rec({...five, may_change: false}), at('c'), opts({layout: 'list'}));
+  assert.match(plainChips, /<span class="pv-chip">Pitch<\/span>/, 'plain text for whoever may not change the pipeline');
+  assert.doesNotMatch(plainChips, /<button[^>]*pv-chip/);
+  // A stage whose only task is snoozed or blocked is not empty.
+  const asleep = view.html(five, [task('s1', 'Asleep', 'b', {snoozed: true}), task('s2', 'Blocked', 'd', {blocked_by: [{id: 'x', number: 9}]})], opts({layout: 'list'}));
+  assert.deepEqual(heads(asleep), ['Spec', 'Review']);
+  // Nothing open: one picture, one line, New task; no stage names.
+  const none = view.html(five, [], opts({layout: 'list'}));
+  assert.match(none, /<div class="empty-state pv-none"><svg class="ea-art" aria-hidden="true"><\/svg><p>No open tasks in Product<\/p><button type="button" class="ghost" data-pv-new aria-keyshortcuts="c">New task<\/button><\/div>/);
+  assert.doesNotMatch(none, /pv-chip|pv-stage-name/);
+  ctx.tasksViewOnly = () => true;
+  const readOnly = view.html(five, [], opts({layout: 'list'}));
+  ctx.tasksViewOnly = () => false;
+  assert.match(readOnly, /No open tasks in Product/);
+  assert.doesNotMatch(readOnly, /data-pv-new/, 'no New task in the read-only view');
+  // A search or filter that finds nothing: Nothing found, no chips, no empty state.
+  for (const o of [{q: 'zzz'}, {filters: {owner: ['bot:nobody']}}]) {
+    const found = view.html(five, at('c'), opts({layout: 'list', ...o}));
+    assert.match(found, /Nothing found/);
+    assert.doesNotMatch(found, /pv-fold|pv-none/);
+  }
+  // More tasks still to read: every stage keeps its header, nothing is called empty.
+  const paged = view.html(five, at('c'), opts({layout: 'list', more: true}));
+  assert.equal(heads(paged).length, 8);
+  assert.doesNotMatch(paged, /pv-fold|pv-none/);
+  assert.doesNotMatch(view.html(five, [], opts({layout: 'list', more: true})), /pv-none/);
+  // The columns and the phone do not fold.
+  for (const o of [{layout: 'columns'}, {phone: true}, {layout: 'list', phone: true}]) {
+    for (const tasks of [at('c'), []]) assert.doesNotMatch(view.html(five, tasks, opts(o)), /pv-fold|pv-none/, JSON.stringify(o));
+  }
+  assert.equal((view.html(five, at('c'), opts({layout: 'columns'})).match(/class="pv-col"/g) || []).length, 8, 'empty columns keep their place');
 }
 
 // ---- a card (task #220): two lines of title, who asked, time in this stage, the owner's face when someone else owns it

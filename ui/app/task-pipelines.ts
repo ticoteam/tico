@@ -20,7 +20,8 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-interface PvOpts { layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters }
+/** more: the page holds only the first page of open tasks, so a stage may look empty while its tasks are unread. */
+interface PvOpts { layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters; more?: boolean }
 /** A move the engine refused, shown above the stages: a push past to confirm with a why, or the engine's reason. */
 interface PvBar { taskId: string; to: string; push: boolean; text: string }
 interface PvState {
@@ -253,14 +254,38 @@ function pvColumnsHTML(state: PvState, parts?: Map<string, {head: string; body: 
 }
 
 function pvListHTML(state: PvState): string {
-  const searching = pvSearching(state.opts);
-  const groups = state.rec.stages.map(stage => {
+  const searching = pvSearching(state.opts), stages = state.rec.stages;
+  // With tasks still unread a stage may look empty and not be: every stage keeps its header.
+  const folding = !searching && !state.opts.more;
+  // Nothing open in any stage: one picture, one line and one action (principle 07). A search or a filter that finds
+  // nothing keeps "Nothing found" below.
+  if (folding && stages.every(st => !pvInStage(state, st.id ?? '').length)) {
+    const add = tasksViewOnly() ? '' : '<button type="button" class="ghost" data-pv-new aria-keyshortcuts="c">New task</button>';
+    return `<div class="empty-state pv-none">${EMPTY_ART.pipeline}<p>No open tasks in ${esc(state.rec.name)}</p>${add}</div>`;
+  }
+  // A run of empty stages, even a run of one, folds into one quiet line of stage chips in its place, so the order of
+  // the stages still reads; each chip opens its stage's editor, as a header does. While searching they are left out.
+  const out: string[] = [];
+  let run: PipelineStageRec[] = [];
+  const fold = (): void => {
+    if (run.length) {
+      const chips = run.map(st => state.rec.may_change
+        ? `<button type="button" class="pv-chip" data-pv-settings="${esc(st.id ?? '')}" title="${esc(`Edit ${st.name}`)}">${esc(st.name)}</button>`
+        : `<span class="pv-chip">${esc(st.name)}</span>`).join('');
+      out.push(`<div class="pv-fold" role="group" aria-label="${esc(`Empty stages: ${run.map(st => st.name).join(', ')}`)}">${chips}</div>`);
+    }
+    run = [];
+  };
+  for (const stage of stages) {
     const rows = pvInStage(state, stage.id ?? '');
-    if (!rows.length && searching) return '';
-    return `<section class="pv-group${stage.side ? ' side' : ''}" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvColHeadHTML(state, stage)}</h2>
-      <div class="pv-rows">${pvStageItemsHTML(state, stage.id ?? '', rows, pvRowHTML)}</div></section>`;
-  }).join('');
-  return groups || '<p class="pv-empty muted">Nothing found</p>';
+    if (!rows.length && folding) { run.push(stage); continue; }
+    if (!rows.length && searching) continue;
+    fold();
+    out.push(`<section class="pv-group${stage.side ? ' side' : ''}" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvColHeadHTML(state, stage)}</h2>
+      <div class="pv-rows">${pvStageItemsHTML(state, stage.id ?? '', rows, pvRowHTML)}</div></section>`);
+  }
+  fold();
+  return out.join('') || '<p class="pv-empty muted">Nothing found</p>';
 }
 
 /** On a phone's stage tab, a dot when items there wait on the person; it sits in the tab's own padding, so a tab is
@@ -424,6 +449,7 @@ function pvClick(state: PvState, ev: MouseEvent): void {
   const rules = target.closest<HTMLElement>('[data-sr-open]');
   // the stage's rules mark: its editor, at its Rules (read only for whoever may not change the pipeline)
   if (rules) { void openPipelineEditor(state.rec.id, rules.dataset['srOpen'] ?? '', 'rules'); return; }
+  if (target.closest('[data-pv-new]')) { openTaskCreate('', {pipeline: state.rec.id}); return; }
   const settings = target.closest<HTMLElement>('[data-pv-settings]');
   if (settings) { void openPipelineEditor(state.rec.id, settings.dataset['pvSettings'] ?? ''); return; }
   const colMenu = target.closest<HTMLElement>('[data-pv-col-menu]');
@@ -551,7 +577,7 @@ function pvTake(rec: PipelineRec, tasks: TaskAny[], opts: PvOpts): PvState {
   const state = pvStateFor(rec);
   state.whole = true;   // as `html` draws it; pvPaint says otherwise
   state.rec = rec;
-  state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
+  state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters, more: !!opts.more};
   state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
   // A move the read already shows is no longer drawn by hand.
   if (state.moving.size) {

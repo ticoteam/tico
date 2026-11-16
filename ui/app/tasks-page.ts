@@ -554,7 +554,7 @@ function tasksRender(state: TasksPageState | null) {
   if (p && hooks && board) {
     // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound
     // to: only the stages that changed (task-pipelines.ts).
-    const opts = {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches};
+    const opts = {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches, more: state.more};
     TASKS_DRAWN.delete(body);
     if (hooks.draw) hooks.draw(body, p, state.tasks, opts);
     else body.innerHTML = hooks.html(p, state.tasks, opts);
