@@ -495,8 +495,10 @@ function dashHeadDraw(state: DashState, head: HTMLElement) {
   const own = DASH_PLACES[state.place];
   const adds = on ? '<button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>'
     + (!own || own.pages() ? '<button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button>' : '') : '';
+  // A team's Flow: its bots' items alone, and All done pings them (decideBotsFlow).
+  const flow = v?.kind === 'team' && !on ? `<button type="button" class="ghost dash-flow" data-dash-flow aria-label="Flow" title="Flow">${flowMarkHTML(16)}</button>` : '';
   const parts: [PageHeadPart, string][] = [
-    ['tools', (own?.tools?.(state) || '') + audience + adds],
+    ['tools', (own?.tools?.(state) || '') + flow + audience + adds],
     ['primary', on ? '<button type="button" class="primary ph-go" data-dash-mode="done">Done</button>' : ''],
     ['more', (own?.more?.(state) || '') + (edit && !on ? '<button type="button" data-dash-mode="edit">Edit</button>' : '') + PAGE_HEAD_COPY],
   ];
@@ -509,6 +511,16 @@ function dashHeadDraw(state: DashState, head: HTMLElement) {
     pageHeadSet(head, part, html);
   }
   DASH_HEAD_PARTS.set(head, drawn);
+}
+// A team's bots and those of the teams under it, as actors (the server's ping takes the same set, backend/flow_ping.py).
+function dashTeamBots(gid: string): string[] {
+  const groups = S.orgGroups || [], bots = new Set<string>();
+  const walk = (id: string): void => {
+    for (const slug of groups.find(g => g.id === id)?.bots || []) bots.add('bot:' + slug);
+    for (const g of groups) if (g.parent === id) walk(g.id);
+  };
+  walk(gid);
+  return [...bots];
 }
 // What dashHeadDraw last set in each header, by part.
 const DASH_HEAD_PARTS = new WeakMap<HTMLElement, Partial<Record<PageHeadPart, string>>>();
@@ -658,6 +670,8 @@ function dashWire(state: DashState) {
     const add = eventElement(ev)?.closest<HTMLElement>('[data-dash-add]');
     if (add) return void (add.dataset.dashAdd === 'card' ? dashCardForm(state, -1) : dashPageForm(state));
     if (eventElement(ev)?.closest('[data-dash-audience]')) return void dashAccessEdit(state);
+    const flow = eventElement(ev)?.closest<HTMLElement>('[data-dash-flow]'), v = state.view;
+    if (flow && v?.kind === 'team' && v.group) return void decideBotsFlow(flow, dashTeamBots(v.group), v.name || 'Team', {scope: 'group', id: v.group});
   });
   root.addEventListener('keydown', ev => {
     const grip = eventElement(ev)?.closest('[data-dash-grip]'); if (!grip) return;

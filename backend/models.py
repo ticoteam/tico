@@ -855,6 +855,7 @@ class StrategyDraft(Contract):
     summary: str | None = Field(default=None, max_length=2000)
     vision: str | None = Field(default=None, max_length=2000)
     sections: dict | None = None  # {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any
+    task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
 class StrategyVision(Contract):
@@ -868,6 +869,7 @@ class StrategyVision(Contract):
 class StrategyPublish(Contract):
     note: str = Field(default="", max_length=2000)
     revision: int
+    task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
 class StrategyDraftFrom(Contract):
@@ -902,6 +904,7 @@ class StrategyBetCreate(Contract):
     status: Literal["proposed", "active", "retired"] = "proposed"
     rank: int | None = None
     revision: int | None = None  # the draft's, when the writer wants a stale page refused
+    task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
 class StrategyBetUpdate(Contract):
@@ -913,6 +916,7 @@ class StrategyBetUpdate(Contract):
     status: Literal["proposed", "active", "retired"] | None = None
     rank: int | None = None
     revision: int | None = None
+    task: str | None = Field(default=None, max_length=128)  # the Strategy Owner's: the task holding the owner's words
 
 
 class MarketEvidenceCreate(Contract):

@@ -179,6 +179,21 @@ never a task's title, a page or anyone's name.
 `POST /api/v2/flow/suggestions` answers at once, `ready` or `pending` (ask again); `/{id}/add`, `/undo`, `/dismiss`
 and `/feedback` act on one. Added rules do not show in the stage editor yet.
 
+**Want more? Ping your bots.** All done offers this button: each bot you manage gets one message from you pointing
+at Tico's `skills/get-aligned/SKILL.md`, and the screen says "Asking your bots" while their questions come in. A bot
+reads what is written down first and asks only what would change what it does next: at most three, each its own task
+of its own with one free-form ask to you, so they arrive in Flow as they are filed. Asking nothing is a good result.
+The Flow mark on a bot's page, or a team's, opens Flow on that bot's (or team's bots') items only, and its ping goes to
+them, whoever manages them. A pinged bot asks the person who pinged it, for a day, even when they are not its manager
+([Reach](reach.md)); a bot that uses the skill unprompted asks its own supervisor. A supervisor bot answers only from a
+recorded rule or decision, citing it, and otherwise passes the question up as asked. When the answer comes, the bot
+updates what it owns first, in the section the answer belongs to (the Strategy Owner, the strategy's sections), then
+remembers it (`memory/decisions.md` or its learnings), and closes the question's task. A setup-made bot that reports to
+the owner ends its own "Set yourself up" task with the skill, once, for them ([Onboarding](onboarding.md)); no ping is
+ever automatic after that. `POST /api/v2/flow/ping` takes `scope` (`reports`, `bot` or `group`) and `id`, and
+reaches only bots you may read, never BotOps or the Assistant; a bot you pinged in the last 10 minutes is listed as
+`recent` and not messaged again. There is no CLI or MCP command for it yet.
+
 ## Sub-tasks
 
 A task waits on the tasks it files. File one with `tico task file --parent <id> "title"` (yours unless `--owner`), or

@@ -41,6 +41,8 @@ function botMoreItemsHTML(slug: string, lockable: boolean): string {
   const tasks = botTabs(slug).includes('tasks') ? `<a class="bot-mi bot-mi-tasks" href="${base}/tasks" data-bot-mtab="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>` : '';
   return tasks + (lockable ? '<button type="button" class="bot-mi bot-mi-phone" data-bot-incognito aria-pressed="false"><span class="nav-icon" aria-hidden="true">lock</span>Incognito</button>' : '')
     + '<button type="button" class="bot-mi bot-mi-phone" data-bot-members hidden><span class="nav-icon" aria-hidden="true">groups</span>Members</button>'
+    // Flow on this bot, in ⋯ on a phone, whose line has no room for its mark (#bot-flow).
+    + (botLimited(botRow(slug)) ? '' : `<button type="button" class="bot-mi bot-mi-phone" data-bot-flow>${flowMarkHTML(16)}Flow</button>`)
     + `<div class="bot-mgroup" role="group" aria-label="Details">${views.map(t => `<a class="bot-mi" href="${base}/${t}" data-bot-mtab="${t}">${BOT_DETAIL_LABELS[t]}</a>`).join('')}</div>`
     + '<div class="bot-mgroup" id="bot-dm-arch-host" role="group" aria-label="Private chat" hidden></div>';
 }
@@ -271,6 +273,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
     ${lockable ? `<button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span class="bi-label">Incognito</span></button>` : ''}
+    ${limited ? '' : `<button type="button" class="bot-flow" id="bot-flow" aria-label="Flow" title="Flow">${flowMarkHTML(18)}</button>`}
     ${pageHeadMore(botMoreItemsHTML(slug, lockable), 'bot-more-btn', 'bot-more-menu')}
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
@@ -410,6 +413,7 @@ async function pageBot(slug: string, tab: string | undefined) {
   const moreMenu: HTMLElement = $('#bot-more-menu');
   moreMenu.addEventListener('click', (ev: MouseEvent) => {
     if (eventElement(ev)?.closest('[data-bot-incognito]')) incognitoFlip();
+    if (eventElement(ev)?.closest('[data-bot-flow]')) $('#bot-flow')?.click();
     // Members in ⋯ is the chat's own Members button, out of the phone's line: the thread's handler opens it.
     // The list closes and ⋯ takes the focus first, so the dialog gives the focus back to ⋯ when it closes.
     if (eventElement(ev)?.closest('[data-bot-members]')) {
@@ -428,6 +432,9 @@ async function pageBot(slug: string, tab: string | undefined) {
   if (lockable) void botDmArchiveLoad(slug);
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
+  // Flow on this bot's items alone; its All done pings this bot, whoever manages it.
+  const flow = $('#bot-flow');
+  if (flow) flow.onclick = () => void decideBotsFlow(flow, ['bot:' + slug], botDisplayName(slug), {scope: 'bot', id: slug});
   $('#bot-detail-tabs').onkeydown = (event: KeyboardEvent & {currentTarget: HTMLElement}) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const buttons = [...event.currentTarget.querySelectorAll('button')];

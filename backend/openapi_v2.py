@@ -1322,6 +1322,18 @@ STABLE = [
         "FlowSuggestion",
     ),
     (
+        "/api/v2/flow/ping",
+        "post",
+        "Needs you",
+        "pingFlowBots",
+        "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), "
+        "`bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; "
+        "never BotOps or the Assistant. Each gets one message from you pointing at the get-aligned skill; its questions "
+        "come back as tasks of its own, each with one ask to you, in your Needs you. A bot you pinged in the last 10 "
+        "minutes is listed in `recent` and not messaged again. Calls no model",
+        "FlowPinged",
+    ),
+    (
         "/api/v2/meetings",
         "get",
         "Meetings",
@@ -3878,6 +3890,12 @@ SCHEMAS = {
         }
     ),
     "FlowSuggestion": obj({"suggestion": ref("FlowSuggestionRow")}),
+    "FlowPinged": obj(
+        {
+            "pinged": items(obj({"id": "s", "name": "s"})),
+            "recent": items(obj({"id": "s", "name": "s"})),
+        }
+    ),
     "FlowSuggestionRow": obj(
         {
             "id": "s",
@@ -7788,7 +7806,8 @@ STABLE.extend(
             'put',
             'Strategy',
             'updateStrategyDraft',
-            'Owner only: change the draft, only the fields sent; a stale revision answers 409',
+            'The owner, or the Strategy Owner naming `task`, a task of its own the owner wrote on (their words; the '
+            'history keeps whose): change the draft, only the fields sent; a stale revision answers 409',
             None,
         ),
         (
@@ -7804,7 +7823,8 @@ STABLE.extend(
             'post',
             'Strategy',
             'publishStrategy',
-            'Owner only: the draft becomes the next numbered version',
+            'The owner, or the Strategy Owner naming `task` as for the draft: the draft becomes the next numbered '
+            'version, and its note says whose words it was',
             None,
         ),
         (
@@ -7824,13 +7844,20 @@ STABLE.extend(
             'What changed between two published versions',
             None,
         ),
-        ('/api/v2/strategy/bets', 'post', 'Strategy', 'addStrategyBet', 'Owner only: a new bet', None),
+        (
+            '/api/v2/strategy/bets',
+            'post',
+            'Strategy',
+            'addStrategyBet',
+            "Owner only, or the Strategy Owner on the owner's words (`task`: its task they wrote them on): a new bet",
+            None,
+        ),
         (
             '/api/v2/strategy/bets/{bet_id}',
             'post',
             'Strategy',
             'updateStrategyBet',
-            'Owner only: change a bet, only the fields sent',
+            "Owner only, or the Strategy Owner on the owner's words (`task`): change a bet, only the fields sent",
             None,
         ),
         (

@@ -352,9 +352,12 @@ def view(c, auth, who):
     published version's bets only. No guide prompts: they are GET /strategy/guides."""
     from . import goal_routes
 
+    from . import goals as G
+
     editor = goal_routes.company_editor(who)
     published = current(c)
-    mine = draft(c) if editor else None
+    # The Strategy Owner reads the draft too: it writes it on the owner's words (owners_words).
+    mine = draft(c) if editor or who.actor == G.AUTO_ACTOR else None
     if editor:
         listed = [b for b in bets(c) if b["status"] != "retired"]
         listed += [
@@ -367,9 +370,9 @@ def view(c, auth, who):
         listed = list((published or {}).get("bets") or [])
     gid = (mine or published or {}).get("guide") or DEFAULT_GUIDE
     linked = goals_by_bet(c, auth, who, [b["id"] for b in listed])
-    # The draft is the owner's: a bot never reads an unpublished "What we won't do".
+    # The draft is the owner's and their scribe's: no other bot reads an unpublished "What we won't do".
     return {
-        **({"draft": mine} if editor else {}),
+        **({"draft": mine} if mine is not None else {}),
         "current": published,
         "bets": listed,
         "label": guide(gid)["bets_label"],
@@ -532,10 +535,11 @@ def _merge_sections(c, actor, stored, sent):
     return out
 
 
-def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=None, sections=None):
+def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=None, sections=None, words=None):
     """Save what changed on the draft, only the fields sent ("" clears one). `revision` is the draft's revision the
     writer read; another one answers 409. None skips the check: a confirmed proposal and the Goals page's vision
-    write the draft as it is now."""
+    write the draft as it is now. `words`: whose words the Strategy Owner wrote it from (owners_words), kept in the
+    history."""
     H._writer(c, actor)
     row = draft(c)
     _check_revision(c, row, revision)
@@ -554,7 +558,7 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
     if not changes:
         return row
     _bump(c, actor, row, changes)
-    _event(c, actor, "draft", {"old": {k: row[k] for k in changes}, "new": changes})
+    _event(c, actor, "draft", {"old": {k: row[k] for k in changes}, "new": changes, **_whose(words)})
     if ("vision" in changes or "summary" in changes) and not current(c):
         # Before the first publish the draft's vision is the team's (vision()), so its history goes beside the
         # description's (GET /company/history); after it, an unpublished vision stays the owner's until publish.
@@ -676,8 +680,19 @@ def _bet_revision(c, actor, revision):
 
 
 def add_bet(
-    c, actor, statement, why="", rules_out="", wrong_if=None, cites=None, status="proposed", rank=None, revision=None
+    c,
+    actor,
+    statement,
+    why="",
+    rules_out="",
+    wrong_if=None,
+    cites=None,
+    status="proposed",
+    rank=None,
+    revision=None,
+    words=None,
 ):
+    """`words`: whose words the Strategy Owner added it on (owners_words), kept in the history."""
     H._writer(c, actor)
     statement = _clean(c, actor, statement, STATEMENT_MAX, "statement", one_line=True)
     if not statement:
@@ -707,7 +722,7 @@ def add_bet(
         ":status, NULL, NULL, :rank, :created_at, :updated_at, :updated_by)",
         {**row, "wrong_if": dumps(row["wrong_if"]) if row["wrong_if"] else None, "cites": dumps(row["cites"])},
     )
-    _event(c, actor, "bet.add", {"id": row["id"], "new": {k: row[k] for k in SNAPSHOT if k != "id"}})
+    _event(c, actor, "bet.add", {"id": row["id"], "new": {k: row[k] for k in SNAPSHOT if k != "id"}, **_whose(words)})
     H.event(c, actor, "strategy.bet", row["id"], {"status": status})
     return bet(c, row["id"]), _bet_revision(c, actor, revision)
 
@@ -724,8 +739,9 @@ def update_bet(
     status=None,
     rank=None,
     revision=None,
+    words=None,
 ):
-    """Only the fields sent. `wrong_if` sent empty ({}) clears it; so does `cites` sent as []."""
+    """Only the fields sent. `wrong_if` sent empty ({}) clears it; so does `cites` sent as []. `words` as add_bet's."""
     H._writer(c, actor)
     row = bet(c, bet_id)
     if not row:
@@ -764,7 +780,7 @@ def update_bet(
         "updated_by=:updated_by WHERE id=:id",
         {**stored, "updated_at": H.now(), "updated_by": actor, "id": bet_id},
     )
-    _event(c, actor, "bet.update", {"id": bet_id, "old": {k: row[k] for k in changes}, "new": changes})
+    _event(c, actor, "bet.update", {"id": bet_id, "old": {k: row[k] for k in changes}, "new": changes, **_whose(words)})
     H.event(c, actor, "strategy.bet", bet_id, {"fields": sorted(changes)})
     return bet(c, bet_id), _bet_revision(c, actor, revision)
 
@@ -853,15 +869,15 @@ def _snapshot(row):
     return {k: row[k] for k in SNAPSHOT}
 
 
-def publish(c, actor, note="", revision=None):
+def publish(c, actor, note="", revision=None, words=None):
     """Stamp the draft as version n with every bet that is not retired, open a fresh draft, emit `strategy.published`,
-    and file the realignment card when bets with goals were retired or rewritten. The owner's own call (the route
-    checks). Refused without an active bet and a "What we won't do", or when nothing changed since the last
-    version."""
+    and file the realignment card when bets with goals were retired or rewritten. The owner's own call, or the
+    Strategy Owner's on the owner's `words` (the route checks; the note and the history say whose). Refused without an
+    active bet and a "What we won't do", or when nothing changed since the last version."""
     H._writer(c, actor)
     row = draft(c)
     _check_revision(c, row, revision)
-    note = _clean(c, actor, note, NOTE_MAX, "note", one_line=True)
+    note = _clean(c, actor, _from_note(c, note, words), NOTE_MAX, "note", one_line=True)
     snapshot = [_snapshot(b) for b in bets(c) if b["status"] != "retired"]
     if not any(b["status"] == "active" for b in snapshot):
         H.refuse(c, actor, "lint", "publish with at least one active bet")
@@ -904,7 +920,7 @@ def publish(c, actor, note="", revision=None):
         _vision_event(c, actor, last["vision"], row["vision"])
     sync_vision(c)
     settle_vision(c)
-    _event(c, actor, "published", {"n": n, "note": note})
+    _event(c, actor, "published", {"n": n, "note": note, **_whose(words)})
     H.event(c, actor, "strategy.publish", f"v{n}", {"n": n})
     published = version(c, n)
     H.hook(
@@ -1092,6 +1108,48 @@ def save_asked_vision(c, actor, task_id, text):
     )
     update_draft(c, actor, vision=clean)
     return vision(c, editor=True)
+
+
+def owners_words(c, actor, task_id):
+    """The Strategy Owner writes the draft or publishes only on what the owner told it: a task of its own on which the
+    owner wrote at least VISION_MIN_WORDS words: their own comments and answers to its asks, such as a get-aligned
+    question. Never the task's body: the bot can write that (filed "for" them, or edited after). Returns whose words,
+    for the history: {task, person}."""
+    from . import goals as G
+    from . import reach
+    from . import strategy_bot
+
+    if actor != G.AUTO_ACTOR:
+        raise Problem("forbidden", f"Only the {strategy_bot.name(c)} writes the strategy on the owner's words", 403)
+    person = reach.owner(c)
+    task = H.task(c, task_id) if task_id else None
+    who = (H.actor_name(c, person) if person else "") or "the owner"
+    if (
+        not person
+        or not task
+        or actor not in (task.get("owner_id"), task.get("requester_id"))
+        or not _vision_long_enough(_owner_wrote(c, task["id"], person))
+    ):
+        raise Problem(
+            "invalid",
+            f"Name a task of yours (`task`) where {who} told you what to change; write only what they said",
+            422,
+        )
+    return {"task": task["id"], "person": person}
+
+
+def _whose(words):
+    """A history entry's `from` when the Strategy Owner wrote on the owner's words (owners_words)."""
+    return {"from": words} if words else {}
+
+
+def _from_note(c, note, words):
+    """A publish on the owner's words says whose, in the note the versions list shows."""
+    if not words:
+        return note
+    title = (H.task(c, words["task"]) or {}).get("title") or "a task"
+    said = f"From {H.actor_name(c, words['person']) or 'the owner'}'s words on “{title}”"
+    return f"{note} ({said})" if note else said
 
 
 def card_view(c, proposal):
@@ -1297,11 +1355,14 @@ def install(app, store, auth, mutate):
     def reader(who):
         auth.domain(who)
 
-    def editor(c, who):
-        """The owner on their own click; a bot, the Strategy Owner included, proposes and the owner confirms."""
+    def editor(c, who, task=None):
+        """The owner on their own click, or the Strategy Owner acting on the owner's words on `task` (owners_words:
+        returns whose, for the history). Any other bot proposes and the owner confirms."""
         auth.domain(who)
         if goal_routes.company_editor(who):
-            return
+            return None
+        if who.role == "bot" and task:
+            return owners_words(c, who.actor, task)
         if who.role == "bot":
             raise Problem(
                 "forbidden",
@@ -1326,9 +1387,11 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(c, who)
+            words = editor(c, who, body.task)
             return {
-                "draft": update_draft(c, who.actor, body.revision, body.guide, body.summary, body.vision, body.sections)
+                "draft": update_draft(
+                    c, who.actor, body.revision, body.guide, body.summary, body.vision, body.sections, words=words
+                )
             }
 
         return mutate(request, body, work)
@@ -1351,8 +1414,8 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            editor(c, who)
-            return publish(c, who.actor, body.note, body.revision)
+            words = editor(c, who, body.task)
+            return publish(c, who.actor, body.note, body.revision, words=words)
 
         return mutate(request, body, work)
 
@@ -1386,11 +1449,11 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/strategy/bets")
     def strategy_bet_add(request: Request, body: M.StrategyBetCreate):
-        """Owner only: a new bet, proposed unless said otherwise."""
+        """Owner only, or the Strategy Owner on the owner's words (`task`): a new bet, proposed unless said otherwise."""
         who = request.state.identity
 
         def work(c):
-            editor(c, who)
+            words = editor(c, who, body.task)
             row, revision = add_bet(
                 c,
                 who.actor,
@@ -1402,6 +1465,7 @@ def install(app, store, auth, mutate):
                 body.status,
                 body.rank,
                 body.revision,
+                words=words,
             )
             return {"bet": row, "revision": revision}
 
@@ -1409,11 +1473,12 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/strategy/bets/{bet_id}")
     def strategy_bet_update(request: Request, bet_id: str, body: M.StrategyBetUpdate):
-        """Owner only: change a bet, only the fields sent, its rank and its status included."""
+        """Owner only, or the Strategy Owner on the owner's words (`task`): change a bet, only the fields sent, its rank
+        and its status included."""
         who = request.state.identity
 
         def work(c):
-            editor(c, who)
+            words = editor(c, who, body.task)
             row, revision = update_bet(
                 c,
                 who.actor,
@@ -1426,6 +1491,7 @@ def install(app, store, auth, mutate):
                 body.status,
                 body.rank,
                 body.revision,
+                words=words,
             )
             return {"bet": row, "revision": revision}
 

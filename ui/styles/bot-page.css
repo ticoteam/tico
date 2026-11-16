@@ -116,6 +116,11 @@ button.linkish{border:0;background:none;padding:0;color:var(--link);cursor:point
   /* the lock is Incognito in ⋯ here, and the chat's Members too: back, the bot, Chat, Tasks and ⋯ fill the line */
   #bot-top>.bot-incognito,#bot-top-acts [data-thv-members]{display:none}
 }
+/* Flow on this bot alone (decideBotsFlow): a quiet mark beside ⋯ */
+.bot-flow{order:3;flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;min-width:32px;height:32px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.bot-flow:hover{color:var(--ink);background:var(--hover)}
+@media (max-width:1099px){.bot-flow{order:2}}
+@media (max-width:760px){.bot-flow{display:none}}   /* the phone's line is full: Flow is in ⋯ there */
 .bot-switch{display:none}
 .bot-switch button{flex:none;border:0;border-radius:7px;background:none;padding:5px 10px;color:var(--muted);font-weight:600;font-size:var(--t-base);cursor:pointer}
 .bot-switch button.cur{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}

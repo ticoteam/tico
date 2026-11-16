@@ -228,7 +228,13 @@ def start_setup(c: sqlite3.Connection, onboarding: Any, bot: str) -> str | None:
     names = cast("dict[str, Any]", cast("Any", O).load(c).get("names") or {})
     company = str(names.get("company_name") or "").strip()
     body = setup_brief(company, setup_files(catalog, template), _stages(c, bot))
-    by = "bot:botops" if cast("Any", H).bot(c, "botops") else "human:" + str(onboarding.auth.owner_id(c))
+    owner = "human:" + str(onboarding.auth.owner_id(c))
+    if onboarding.auth.owner_id(c):
+        from . import flow_ping
+
+        line = flow_ping.on_setup(c, owner, bot)  # the setup's one automatic ping, for the owner's reports only
+        body += "\n\n" + line if line else ""
+    by = "bot:botops" if cast("Any", H).bot(c, "botops") else owner
     task = cast("dict[str, Any]", cast("Any", H).task_create(c, by, "Set yourself up", body, "bot:" + bot, top=True))
     declared[SELF_SETUP] = H.now()
     onboarding._write_config(c, bot, declared)
