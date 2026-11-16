@@ -1844,9 +1844,11 @@ def test_a_busy_process_is_reported_by_its_tico_name_only(environment, readers, 
 
 
 def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment, monkeypatch):
-    monkeypatch.setenv("TICO_VERSION", "0.4.45")
+    """Below the runner floor (0.6.0-rc.1) a computer's bots are paused, so it is bad. At or above the floor but behind
+    the server it still works, so it is a warning."""
+    monkeypatch.setenv("TICO_VERSION", "0.6.0-rc.2")
     api, runner = built(environment)
-    for release, severity in [("0.0.9", "bad"), ("0.4.40", "warn")]:
+    for release, severity in [("0.0.9", "bad"), ("0.4.40", "bad"), ("0.6.0-rc.1", "warn")]:
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
             c.execute(
