@@ -388,9 +388,9 @@ def test_a_goal_closed_since_the_card_was_filed_is_listed_closed_and_left_alone(
     post(api, f"goals/{goals[0]['id']}/status", {"status": "done", "note": "Signed"})
     [card] = [p for p in get(api, "proposals")["proposals"] if p["id"] == card["id"]]
     assert card["closed_goals"] == [goals[0]["id"]]
-    out = post(
-        api, f"proposals/{card['id']}/decide", {"decision": "confirm", "moves": {goals[0]["id"]: "retire"}}
-    )["proposal"]
+    out = post(api, f"proposals/{card['id']}/decide", {"decision": "confirm", "moves": {goals[0]["id"]: "retire"}})[
+        "proposal"
+    ]
     assert out["result"]["goals"] == {goals[0]["id"]: "closed", goals[1]["id"]: "kept"}
     assert get(api, f"goals/{goals[0]['id']}")["goal"]["status"] == "done"
     assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."

@@ -346,9 +346,9 @@ def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_c
     assert get(api, f"goals/{goal['id']}", "ben-test")["goal"]["kpis"][0]["link"]["target"] == 70
     post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=token, expected=403)
     post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
-    done = post(
-        api, f"proposals/{proposal['id']}/decide", {"decision": "confirm", "note": "Agreed"}, token="ben-test"
-    )["proposal"]
+    done = post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm", "note": "Agreed"}, token="ben-test")[
+        "proposal"
+    ]
     assert (done["status"], done["decided_by"]) == ("confirmed", "human:ben")
     assert get(api, f"goals/{goal['id']}", "ben-test")["goal"]["kpis"][0]["link"]["target"] == 60
     post(api, f"proposals/{proposal['id']}/decide", {"decision": "reject"}, token="ben-test", expected=422)  # once

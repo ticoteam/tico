@@ -27,9 +27,7 @@ def test_no_leave_it_rejects_at_once_and_its_decider_adds_the_reason_afterwards(
     done = post(api, f"proposals/{p['id']}/decide", {"decision": "reject"})["proposal"]
     assert (done["status"], done["decision_note"], done["may_reason"]) == ("rejected", "", True)
     # One line: spaces and line breaks fold into single spaces.
-    saved = post(api, f"proposals/{p['id']}/note", {"note": "  no billing yet,\n don't track   revenue "})[
-        "proposal"
-    ]
+    saved = post(api, f"proposals/{p['id']}/note", {"note": "  no billing yet,\n don't track   revenue "})["proposal"]
     assert (saved["decision_note"], saved["may_reason"]) == (REASON, False)
     listed = rejected(api, goal_id=goal["id"])[p["id"]]  # what hub proposal list --status rejected prints
     assert (listed["decision_note"], listed["may_reason"]) == (REASON, False)
