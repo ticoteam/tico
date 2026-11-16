@@ -66,9 +66,6 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--visual-origin", help="isolated HTTPS visual origin; empty clears, without acquiring DNS authority"
     )
-    p.add_argument(
-        "--visual-same-origin", choices=("0", "1"), help="explicitly retain or disable legacy same-origin visuals"
-    )
     p.add_argument("--caddy-visuals", choices=("0", "1"), help="explicit local Caddy visual serving; default off")
     p.add_argument(
         "--reader-origin",

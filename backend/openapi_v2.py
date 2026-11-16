@@ -1909,14 +1909,6 @@ STABLE = [
         "CompanyHistory",
     ),
     (
-        "/api/v2/strategy-owner/turn-on",
-        "post",
-        "Goals",
-        "turnOnGoalManager",
-        "Owner only: add the Strategy Owner from the catalog or restore it, and activate it",
-        None,
-    ),
-    (
         "/api/v2/goals",
         "get",
         "Goals",
@@ -5420,15 +5412,6 @@ STABLE.extend(
             "FinanceSources",
         ),
         (
-            "/api/v2/finance/webhook-deliveries",
-            "get",
-            "Finance",
-            "listFinanceWebhookDeliveries",
-            "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
-            "sources; the ordinary trigger routes refuse them",
-            "FinanceWebhookDeliveries",
-        ),
-        (
             "/api/v2/finance/access",
             "get",
             "Finance",
@@ -5436,15 +5419,6 @@ STABLE.extend(
             "Who can see what in Finance: teams, each teammate's default, grants and rights, whether the caller may grant "
             "them more (may_grant), private lines, the defaults",
             "FinanceAccess",
-        ),
-        (
-            "/api/v2/finance/payments",
-            "get",
-            "Finance",
-            "listFinancePayments",
-            "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
-            "finance admin",
-            "FinancePayments",
         ),
         (
             "/api/v2/finance/transfers",
@@ -5490,14 +5464,6 @@ STABLE.extend(
             None,
         ),
         (
-            "/api/v2/finance/recipients",
-            "get",
-            "Finance",
-            "listFinanceRecipients",
-            "Current payment recipients, last 4 only, for teammates who may pay",
-            "FinanceRecipients",
-        ),
-        (
             "/api/v2/finance/mercury-users",
             "get",
             "Finance",
@@ -5507,22 +5473,6 @@ STABLE.extend(
             "FinanceMercuryUsers",
         ),
         (
-            "/api/v2/finance/reconciliations",
-            "get",
-            "Finance",
-            "listFinanceReconciliations",
-            "Reconciliations of the money accounts the caller sees, and how far each is locked",
-            "FinanceReconciliations",
-        ),
-        (
-            "/api/v2/finance/statements",
-            "get",
-            "Finance",
-            "listFinanceStatements",
-            "Bank and card statements for the money accounts the caller sees",
-            "FinanceStatements",
-        ),
-        (
             "/api/v2/finance/statements/preview",
             "post",
             "Finance",
@@ -5530,16 +5480,6 @@ STABLE.extend(
             "Review a bank or card statement file before it posts: each row New or Already in Tico, its vendor and "
             "attribution, and the tie-out. Writes only a short-lived preview token",
             "FinanceStatementReview",
-        ),
-        (
-            "/api/v2/finance/rules",
-            "get",
-            "Finance",
-            "listFinanceRules",
-            "Finance gate and posting rules with their kind, priority, words, condition, outcome, examples and latest runs, "
-            "for teammates who may write "
-            "them; external_rule_id lists those linked to one external rule",
-            "FinanceRules",
         ),
         (
             "/api/v2/finance/attribution-rules",
@@ -5668,23 +5608,6 @@ STABLE.extend(
             "FinanceSearch",
         ),
         (
-            "/api/v2/purchase-orders",
-            "get",
-            "Finance",
-            "listPurchaseOrders",
-            "Purchase orders the caller sees (payables), newest first, by status, vendor and a search over number, memo and "
-            "vendor name, with a cursor",
-            "PurchaseOrders",
-        ),
-        (
-            "/api/v2/purchase-orders/{po_id}",
-            "get",
-            "Finance",
-            "getPurchaseOrder",
-            "One purchase order with its lines and what each line has billed",
-            "PurchaseOrder",
-        ),
-        (
             "/api/v2/estimates",
             "get",
             "Finance",
@@ -5694,28 +5617,12 @@ STABLE.extend(
             "Estimates",
         ),
         (
-            "/api/v2/estimates/{estimate_id}",
-            "get",
-            "Finance",
-            "getEstimate",
-            "One estimate with its lines; each line says whether it is taxable",
-            "Estimate",
-        ),
-        (
             "/api/v2/locations",
             "get",
             "Finance",
             "listLocations",
             "Locations by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
             "Locations",
-        ),
-        (
-            "/api/v2/locations/{location_id}",
-            "get",
-            "Finance",
-            "getLocation",
-            "One location, archived or not",
-            "LocationOne",
         ),
         (
             "/api/v2/items",
@@ -5849,15 +5756,6 @@ STABLE.extend(
             "updateFinanceAdAccount",
             "Pick the bot an ad account's spend counts for, or null for none (finance admins)",
             "FinanceAdAccount",
-        ),
-        (
-            "/api/v2/finance/expenses",
-            "get",
-            "Finance",
-            "getFinanceExpenses",
-            "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass "
-            "view_as",
-            "FinanceReport",
         ),
         (
             "/api/v2/finance/lines/{account_id}",
@@ -6224,61 +6122,6 @@ SCHEMAS.update(
             },
             required=["token", "expires_at", "tie", "rows"],
         ),
-        "FinancePayments": obj(
-            {
-                "payments": items(
-                    obj(
-                        {
-                            "id": "s",
-                            "status": {
-                                "type": "string",
-                                "enum": [
-                                    "queued",
-                                    "sending",
-                                    "awaiting_bank_approval",
-                                    "submitted",
-                                    "settled",
-                                    "returned",
-                                    "failed",
-                                    "canceled",
-                                    "unknown",
-                                ],
-                            },
-                            "amount": {"type": ["integer", "null"]},
-                            "currency": "s",
-                            "method": "s",
-                            "memo": "s",
-                            "obligation": "n",
-                            "mode": "s",
-                            "recipient": {
-                                "type": ["object", "null"],
-                                "properties": {
-                                    "id": {"type": "string"},
-                                    "name": {"type": "string"},
-                                    "last4": {"type": ["string", "null"]},
-                                    "version": {"type": "integer"},
-                                },
-                            },
-                            "account": {
-                                "type": ["object", "null"],
-                                "properties": {
-                                    "id": {"type": "string"},
-                                    "code": {"type": "string"},
-                                    "name": {"type": "string"},
-                                },
-                            },
-                            "money_account_id": "s",
-                            "created_by": "s",
-                            "created_at": "s",
-                            "settled_at": "n",
-                            "error": "n",
-                        },
-                        required=["id", "status", "amount", "currency"],
-                    )
-                ),
-                "next_cursor": "n",
-            }
-        ),
         "FinanceTransfers": obj(
             {
                 "transfers": items(
@@ -6349,100 +6192,6 @@ SCHEMAS.update(
                 ),
             }
         ),
-        "FinanceRecipients": obj(
-            {
-                "recipients": items(
-                    obj(
-                        {
-                            "id": "s",
-                            "name": "s",
-                            "method": "s",
-                            "last4": "n",
-                            "version": "i",
-                            "replaces_id": "n",
-                            "known": "b",
-                            "synced": "b",
-                            "created_at": "s",
-                        },
-                        required=["id", "name", "method", "version"],
-                    )
-                )
-            }
-        ),
-        "FinanceReconciliations": obj(
-            {
-                "reconciliations": items(
-                    obj(
-                        {
-                            "id": "s",
-                            "money_account_id": "s",
-                            "statement_end": "s",
-                            "statement_balance": "i",
-                            "difference": "i",
-                            "status": {"type": "string", "enum": ["open", "done", "undone"]},
-                            "cleared_total": "i",
-                            "cleared": "i",
-                            "statement_id": "n",
-                            "created_by": "s",
-                            "created_at": "s",
-                            "undone_at": "n",
-                        },
-                        required=[
-                            "id",
-                            "money_account_id",
-                            "statement_end",
-                            "statement_balance",
-                            "difference",
-                            "status",
-                        ],
-                    )
-                ),
-                "locked_through": {"type": "object", "additionalProperties": {"type": ["string", "null"]}},
-            }
-        ),
-        "FinanceStatements": obj(
-            {
-                "statements": items(
-                    obj(
-                        {
-                            "id": "s",
-                            "money_account_id": "s",
-                            "start_date": "n",
-                            "end_date": "s",
-                            "starting_balance": {"type": ["integer", "null"]},
-                            "ending_balance": "i",
-                            "currency": "s",
-                            "source": "s",
-                        },
-                        required=["id", "money_account_id", "end_date", "ending_balance"],
-                    )
-                )
-            }
-        ),
-        "FinanceRules": obj(
-            {
-                "rules": items(
-                    obj(
-                        {
-                            "id": "s",
-                            "kind": {"type": "string", "enum": ["gate", "posting"]},
-                            "priority": "i",
-                            "name": "s",
-                            "words": "s",
-                            "when": "o",
-                            "outcome": "o",
-                            "examples": items({"type": "object", "additionalProperties": True}),
-                            "external_rule_id": "n",
-                            "owner": "s",
-                            "active": "b",
-                            "created_at": "s",
-                            "runs": items(obj({"action_id": "n", "outcome": "n", "at": "s"})),
-                        },
-                        required=["id", "name", "when", "outcome"],
-                    )
-                )
-            }
-        ),
         "FinanceLineAttribution": obj(
             {
                 "line_id": "s",
@@ -6510,23 +6259,6 @@ SCHEMAS.update(
         ),
         "FinanceMercuryUsers": obj(
             {"users": items(obj({"id": "s", "name": "s", "connection_id": "s", "email": "n", "updated_at": "s"}))}
-        ),
-        "FinanceWebhookDeliveries": obj(
-            {
-                "deliveries": items(
-                    obj(
-                        {
-                            "trigger": "s",
-                            "delivery": "s",
-                            "received_at": "s",
-                            "type": "s",
-                            "via": "s",
-                            "outcome": "s",
-                            "body": "s",
-                        }
-                    )
-                )
-            }
         ),
         "FinanceAdAccount": obj(
             {
@@ -6885,34 +6617,12 @@ SCHEMAS.update(
             },
             required=["id", "number", "contact", "date", "status", "currency", "total", "memo"],
         ),
-        "PurchaseOrders": obj(
-            {"orders": items(ref("FinanceOrderRow")), "next_cursor": "n"}, required=["orders", "next_cursor"]
-        ),
-        "PurchaseOrder": {
-            "allOf": [
-                ref("FinanceOrderRow"),
-                obj(
-                    {"lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
-                    required=["lines"],
-                ),
-            ]
-        },
         "Estimates": obj(
             {"estimates": items(ref("FinanceOrderRow")), "next_cursor": "n"}, required=["estimates", "next_cursor"]
         ),
-        "Estimate": {
-            "allOf": [
-                ref("FinanceOrderRow"),
-                obj(
-                    {"lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
-                    required=["lines"],
-                ),
-            ]
-        },
         "Locations": obj(
             {"locations": items(ref("Location")), "next_cursor": "n"}, required=["locations", "next_cursor"]
         ),
-        "LocationOne": obj({"location": ref("Location")}, required=["location"]),
         "Location": obj(
             {"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n"},
             required=["id", "name", "kind", "address"],

@@ -347,7 +347,7 @@ def test_budgets_read_at_a_date_show_the_version_in_effect_then(books):
         assert (amount(), amount("2026-12-15"), amount("2026-11-15")) == (1_000, 3_000, 1_000)
 
 
-def test_view_as_reaches_lines_expenses_and_budgets_and_only_for_the_owner(api):
+def test_view_as_reaches_lines_and_budgets_and_only_for_the_owner(api):
     store = api.app.state.store
     with store.transaction() as c:
         from backend.finance import actions as FA
@@ -355,7 +355,7 @@ def test_view_as_reaches_lines_expenses_and_budgets_and_only_for_the_owner(api):
         assert FA.ensure_setup(c, store.settings.owner_email)
         open_views(c)  # ben sees his own expenses, so viewing as him reads something
         line = account(c, "6100")
-    for path in (f"finance/lines/{line}", "finance/expenses", "finance/budgets"):
+    for path in (f"finance/lines/{line}", "finance/budgets"):
         get(api, f"{path}?view_as=human:ben")
         get(api, f"{path}?view_as=human:ana", token="ben-test", expected=403)
     assert get(api, "finance/budgets?at=2026-12-15")["on"] == "2026-12-15"
@@ -747,7 +747,6 @@ def test_only_a_request_that_returns_a_private_line_leaves_a_row_and_only_one(ap
         ("GET", "/api/v2/finance/search?kind=entry"),
         ("GET", "/api/v2/finance/tax/sales-tax.csv?year=2026"),
         ("GET", "/api/v2/finance/close/2026-10"),
-        ("GET", "/api/v2/finance/webhook-deliveries"),
         ("GET", f"/api/v2/finance/actions/{done.action_id}"),
         ("POST", "/api/v2/finance/actions"),
     ):

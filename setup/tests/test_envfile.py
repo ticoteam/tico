@@ -150,7 +150,6 @@ def test_explicit_runtime_clears_cannot_resurrect_and_caddy_needs_explicit_opt_i
         'TICO_PUBLIC_URL': 'https://t.example.com',
         'TICO_HQ_URL': 'https://hq.acme.example',
         'TICO_VISUAL_ORIGIN': 'https://files.acme.example',
-        'TICO_VISUAL_SAME_ORIGIN': '0',
         'TICO_CADDY_VISUALS': '0',
     }
     base = s(front_door='cloudflared').public()
@@ -160,7 +159,6 @@ def test_explicit_runtime_clears_cannot_resurrect_and_caddy_needs_explicit_opt_i
         'public_url',
         'hq_url',
         'visual_origin',
-        'visual_same_origin',
         'caddy_visuals',
     ):
         base.pop(name)
@@ -177,8 +175,6 @@ def test_explicit_runtime_clears_cannot_resurrect_and_caddy_needs_explicit_opt_i
             '',
             '--visual-origin',
             '',
-            '--visual-same-origin',
-            '0',
             '--caddy-visuals',
             '0',
         ]
@@ -190,14 +186,14 @@ def test_explicit_runtime_clears_cannot_resurrect_and_caddy_needs_explicit_opt_i
             getattr(restored, field) == ''
             for field in ('domain_aliases', 'cors_origins', 'public_url', 'hq_url', 'visual_origin')
         )
-        assert restored.visual_same_origin == restored.caddy_visuals == '0'
+        assert restored.caddy_visuals == '0'
     external = s(visual_origin='https://cdn.acme.example')
     assert external.to_env().get('TICO_CADDY_VISUALS', '') == ''
     external.caddy_visuals = '1'
     assert external.to_env()['TICO_CADDY_VISUALS'] == '1'
     # Caddy accepts a validated loopback endpoint; only alias mode requires a DNS runner hostname.
     for url in ('http://127.0.0.1:8765/', 'https://[::1]:8765/'):
-        external.runner_url, external.visual_same_origin = url, '0'
+        external.runner_url = url
         assert external.to_env()['TICO_RUNNER_URL'] == url
         assert external.to_env()['TICO_CADDY_VISUALS'] == '1'
         external.front_door, external.caddy_visuals = 'cloudflared', '0'
@@ -208,7 +204,7 @@ def test_explicit_runtime_clears_cannot_resurrect_and_caddy_needs_explicit_opt_i
     external.runner_url = 'http://127.0.0.1:8765/not-root'
     with pytest.raises(MissingInput, match='root runner URL'):
         external.to_env()
-    external.runner_url, external.visual_same_origin = '', ''
+    external.runner_url = ''
     external.front_door = 'cloudflared'
     with pytest.raises(MissingInput, match='needs Caddy'):
         external.to_env()
@@ -221,4 +217,4 @@ def test_explicit_runtime_clears_cannot_resurrect_and_caddy_needs_explicit_opt_i
     with pytest.raises(MissingInput, match='separate visual origin'):
         external.to_env()
     external.caddy_visuals = '0'
-    assert external.to_env()['TICO_CADDY_VISUALS'] == '0' and external.visual_same_origin == ''
+    assert external.to_env()['TICO_CADDY_VISUALS'] == '0'

@@ -77,7 +77,6 @@ RUNTIME_ENV = {
     "cors_origins": "TICO_CORS_ORIGINS",
     "hq_url": "TICO_HQ_URL",
     "visual_origin": "TICO_VISUAL_ORIGIN",
-    "visual_same_origin": "TICO_VISUAL_SAME_ORIGIN",
     "caddy_visuals": "TICO_CADDY_VISUALS",
     "runner_url": "TICO_RUNNER_URL",
     "gateway_url": "TICO_GATEWAY_URL",
@@ -95,7 +94,6 @@ RUNTIME_FLAGS = (
     "cors_origins",
     "hq_url",
     "visual_origin",
-    "visual_same_origin",
     "caddy_visuals",
     "reader_origin",
 )
@@ -189,7 +187,6 @@ class Settings:
     cors_origins: str = ""
     hq_url: str = ""
     visual_origin: str = ""
-    visual_same_origin: str = ""
     caddy_visuals: str = ""
     reader_origin: str = ""  # the Company page's own HTTPS origin (docs/company-page.md); Caddy serves it
     runner_url: str = ""  # passive endpoint preservation is not DNS authority
@@ -496,9 +493,8 @@ def validate_runtime(s: Settings, *, final=True, new_public=False, new_hq=False,
         value = getattr(s, name)
         if not isinstance(value, str) or any(ord(c) < 32 or ord(c) == 127 for c in value):
             raise MissingInput(f"{key}: saved setting contains invalid characters; correct or clear it")
-    for name in ("visual_same_origin", "caddy_visuals"):
-        if getattr(s, name) not in ("", "0", "1"):
-            raise MissingInput(f"{RUNTIME_ENV[name]}: expected 0 or 1")
+    if s.caddy_visuals not in ("", "0", "1"):
+        raise MissingInput(f"{RUNTIME_ENV['caddy_visuals']}: expected 0 or 1")
     if s.public_url:
         public = endpoint(s.public_url, "TICO_PUBLIC_URL", origin=True, https=new_public)
         try:
@@ -562,10 +558,8 @@ def validate_runtime(s: Settings, *, final=True, new_public=False, new_hq=False,
     if any(f"https://{host}" not in origins for host in hosts):
         raise MissingInput("TICO_CORS_ORIGINS: explicitly list each app alias origin before routing it")
     if s.caddy_visuals == "1":
-        if s.front_door != "caddy" or not visual or s.visual_same_origin == "1":
-            raise MissingInput(
-                "TICO_CADDY_VISUALS=1 needs Caddy and a separate visual origin with same-origin rendering disabled"
-            )
+        if s.front_door != "caddy" or not visual:
+            raise MissingInput("TICO_CADDY_VISUALS=1 needs Caddy and a separate visual origin")
         if endpoint(s.visual_origin, "TICO_VISUAL_ORIGIN", origin=True, https=True).port not in (None, 443):
             raise MissingInput("TICO_CADDY_VISUALS=1 requires the standard HTTPS visual port")
 
