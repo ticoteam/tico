@@ -136,8 +136,11 @@ def sync(c, settings):
             continue
         source = login_holds.key(hold['runner_id'], hold.get('profile'), hold['runtime'])
         count = counts.get((hold['runner_id'], hold.get('profile') or '', hold['runtime']), 0)
-        kind = f"{hold['runtime'].capitalize()} " + (
-            'provider capacity' if hold.get('capacity') else 'subscription quota'
+        kind = (
+            'Tico AI Gateway'
+            if hold.get('profile') == login_holds.GATEWAY
+            else f"{hold['runtime'].capitalize()} "
+            + ('provider capacity' if hold.get('capacity') else 'subscription quota')
         )
         observe(c, source, kind, waiting=count, until=hold.get('until'), since=hold.get('since'))
         seen.add(PREFIX + hashlib.sha256(source.encode()).hexdigest()[:32])

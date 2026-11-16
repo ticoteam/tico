@@ -2132,12 +2132,12 @@ def cooling_off(c, settings, bot, loads=None):
     return bool(login_refusal(c, settings, place["runner_id"], bot, config, loads=loads))
 
 
-def gateway_waits(c, settings, runner, config, loads=None, ready=None):
+def gateway_waits(c, settings, runner, config, loads=None):
     """Whether the claim runs the bot's next turn on the Gateway because its subscription is not signed in on `runner`
-    yet (models_preset.waiting), and its plans there have not run out."""
+    yet (models_preset.waiting), and its plans there have not run out: _claim_refusal's `waits`."""
     record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
-    ready = readiness_document(runner["readiness"]) if ready is None else ready
+    ready = readiness_document(runner["readiness"])
     ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled, loads))
     return models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
 
@@ -2459,10 +2459,11 @@ def _claim_refusal(
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
     covers = model_subscriptions.covered_runtimes(c, runner, filled, loads)
-    # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
-    # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out).
-    waits = gateway_waits(c, settings, runner, config, loads, ready)
     ready = model_subscriptions.covered(ready, covers)
+    # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
+    # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out). Read the same way
+    # as gateway_waits.
+    waits = models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
     access = loads.access if loads is not None else cloud_access.access(c)
     if cloud_access.frozen(c, access) and (gateway_connection.is_tico(filled.get("model")) or waits):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys

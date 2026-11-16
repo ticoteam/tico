@@ -171,14 +171,13 @@ def test_work_fenced_behind_an_interrupted_run_on_its_task(api):
 
 
 def test_a_bot_cooling_off_after_a_usage_limit(api):
+    from backend import login_holds
+
     machine = task_bot(api, lanes=True)
     new_task(api, "first")
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO bot_status(bot,state,changed_at,updated_at) VALUES('ops','limited',?,?) "
-            "ON CONFLICT(bot) DO UPDATE SET state='limited',changed_at=excluded.changed_at",
-            (H.now(), H.now()),
-        )
+        # The login's hold decides, not the bot's status: a usage limit met on the login it signs in with.
+        login_holds.record(c, machine["runner_id"], "", "fake", H.now(), error="Usage limit")
     says(api, machine, "cooling_off")
 
 
