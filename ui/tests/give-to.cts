@@ -240,6 +240,7 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.evaluate(() => v2NeedsRead());
   await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 't-ny'));
   assert.equal(await page.evaluate(i => decideOpen('t-ny', [i]), item), true);
+  await page.locator('.decide [data-dc="ask-more"]').click();  // Give to… waits in ⋯, as on an ask
   await page.locator('.decide [data-dc="give"]').click();
   const field = page.locator('.decide button[data-give-to]'), give = page.locator('.decide [data-dc="give-to"]');
   assert.equal(await field.locator('.gv-name').textContent(), 'Give to…');
@@ -278,6 +279,7 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.equal(await page.evaluate(i => decideOpen('t-body', [i]), bodyItem), true);
   await page.locator('.decide .dc-md').waitFor();
   assert.equal(reads, 1, 'the screen read the task once');
+  await page.locator('.decide [data-dc="ask-more"]').click();  // Give to… waits in ⋯, as on an ask
   await page.locator('.decide [data-dc="give"]').click();
   await field.click();
   await pop.waitFor();

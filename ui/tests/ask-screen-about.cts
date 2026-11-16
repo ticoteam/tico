@@ -8,16 +8,19 @@
 // - a long question: itself once, in full, never on the left, its task the background there; Ask back (in ⋯) posts a
 //   comment and keeps the question (ask-screen-question.cts has the rest of a question's screen);
 // - the text shows a skeleton until its one read comes, and the next item's text is read ahead;
-// - at 1040 px Done · Snooze · Give to… and Skip sit on one line in light and dark; at 390 px the buttons are 44 px tall
-//   and Skip is reachable.
-// Fixtures only (tasks-page.cts).
+// - at 1040 px Done, the snooze icon and ⋯ sit on one line, as an ask's row does, with Give to… and Skip in ⋯ (it opens
+//   and closes by keyboard); at 390 px the buttons and those menu items are 44 px tall and Skip is reachable.
+// Fixtures only (tasks-page.cts). FLOW_SHOTS_DIR=build/flow-shots writes own-task-phone.png and own-task-phone-open.png.
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
+const fs: typeof import('node:fs') = require('node:fs');
 const {open, fixtures, task, brief, needsOf} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
 declare function decideOpen(id?: string): boolean;
 
 const card = (page: Page) => page.locator('#need-card[open]');
+const SHOTS = process.env.FLOW_SHOTS_DIR ? path.resolve(process.env.FLOW_SHOTS_DIR) : '';
 const LONG = 'Can you confirm the p95 latency budget for the checkout API is still 300 ms after the cache change, or should the validation use the new 450 ms figure from the load test?';
 const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
@@ -79,15 +82,28 @@ function world(over: {title?: string} = {}) {
         // The next item that shows a task's text (t-8) is read ahead.
         assert.ok(reads.some(r => r.endsWith('/t-8')), `the next item is read ahead: ${reads.join(', ')}`);
 
-        // The action row: one line, 36 px, Skip after the buttons.
+        // The action row: an ask's pattern on one line, Done (36 px) then the snooze icon and ⋯ at the right.
         const row = card(page).locator('.dc-acts-row');
-        const boxes = await row.locator('button').evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return {t: e.textContent, y: r.top + r.height / 2, h: r.height}; }));
-        assert.deepEqual(boxes.map(b => b.t), ['Done', 'Snooze', 'Give to…', 'Skip']);
+        const boxes = await row.locator('button').evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return {t: (e as HTMLElement).dataset.dc, y: r.top + r.height / 2, h: r.height}; }));
+        assert.deepEqual(boxes.map(b => b.t), ['done', 'snooze', 'ask-more']);
         assert.ok(boxes.every(b => Math.abs(b.y - boxes[0]!.y) < 2), `one line: ${JSON.stringify(boxes)}`);
-        assert.ok(boxes.slice(0, 3).every(b => Math.abs(b.h - 36) < 1), `36 px buttons: ${JSON.stringify(boxes)}`);
+        assert.ok(Math.abs(boxes[0]!.h - 36) < 1, `a 36 px Done: ${JSON.stringify(boxes)}`);
+        assert.equal(await row.locator('[data-dc="snooze"]').getAttribute('aria-label'), 'Snooze', 'the icon an ask has');
+        assert.equal(await card(page).locator('[data-dc="give"], [data-dc="skip"]').count(), 0, 'Give to… and Skip wait in ⋯');
         assert.ok(await row.evaluate(el => el.scrollWidth <= el.clientWidth), 'the row does not overflow');
-        const side = (await card(page).locator('.dc-side').boundingBox())!, skipAt = (await row.locator('[data-dc="skip"]').boundingBox())!;
-        assert.ok(skipAt.x + skipAt.width <= side.x + side.width, 'Skip ends inside the side pane');
+        const side = (await card(page).locator('.dc-side').boundingBox())!, moreAt = (await row.locator('[data-dc="ask-more"]').boundingBox())!;
+        assert.ok(moreAt.x + moreAt.width <= side.x + side.width, '⋯ ends inside the side pane');
+        // ⋯ by keyboard: Enter opens it on Give to…, ↓ moves to Skip, Esc closes it with focus back on ⋯.
+        await row.locator('[data-dc="ask-more"]').focus();
+        await page.keyboard.press('Enter');
+        assert.deepEqual(await row.locator('[role="menuitem"]').allInnerTexts(), ['Give to…', 'Skip']);
+        assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Give to…');
+        await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Skip');
+        await page.keyboard.press('Escape');
+        assert.equal(await row.locator('[role="menuitem"]').count(), 0, 'Esc closes ⋯');
+        assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.dc), 'ask-more');
+        assert.ok(await card(page).isVisible(), 'and only ⋯: the view stays open');
 
         // Reply to PM: a comment that names PM; the item stays; the box clears and says Sent.
         assert.equal(await card(page).locator('.dc-reply .dc-notes span').innerText(), 'Reply to PM');
@@ -250,7 +266,17 @@ function world(over: {title?: string} = {}) {
       try {
         await page.evaluate(() => { decideOpen('task:t-3'); });
         await card(page).locator('.dc-md').waitFor({timeout: 5000});
-        for (const sel of ['[data-dc="done"]', '[data-dc="snooze"]', '[data-dc="give"]', '[data-dc="skip"]', '[data-dc="reply"]', '[data-dc="go"]']) {
+        for (const sel of ['[data-dc="done"]', '[data-dc="snooze"]', '[data-dc="ask-more"]', '[data-dc="reply"]', '[data-dc="go"]']) {
+          const box = (await card(page).locator(sel).boundingBox())!;
+          assert.ok(box.height >= 44, `${sel} is ${box.height} px tall on a phone`);
+        }
+        if (SHOTS) {
+          await page.locator('.dc-start').waitFor({state: 'detached', timeout: 5000});  // the start cover, gone
+          fs.mkdirSync(SHOTS, {recursive: true}); await page.screenshot({path: path.join(SHOTS, 'own-task-phone.png')});
+        }
+        await card(page).locator('[data-dc="ask-more"]').click();
+        if (SHOTS) await page.screenshot({path: path.join(SHOTS, 'own-task-phone-open.png')});
+        for (const sel of ['[data-dc="give"]', '[data-dc="skip"]']) {
           const box = (await card(page).locator(sel).boundingBox())!;
           assert.ok(box.height >= 44, `${sel} is ${box.height} px tall on a phone`);
         }
