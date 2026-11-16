@@ -3,7 +3,7 @@ import type {Route} from 'playwright';
 // ask answered in its task's chat (decide.ts decideChatMount):
 // - Tico's line is a callout under the bar with a caret at the mark, only once the line is ready, inside the bar; it
 //   wraps to two lines and is never cut; a thumb down stands for its leading "Send back.", the whole line its name;
-// - two tabs, Chat (where it opens) and Task; Task shows the page, which fills the screen
+// - two tabs, Chat and Spec, where an OK opens; Spec shows the page, which fills the screen
 //   down to the row (no short box that cuts it), its text sized for a phone (an h1 near 22 px, side padding);
 // - it opens clean: no blocks marked and no diff; the version control in the ask's one meta line lists each version
 //   and "Changes since v2", which marks the changed blocks;
@@ -102,7 +102,7 @@ const VIEW = {width: 390, height: 844};
     await p.locator('#task-play').click();
     const dialog = p.locator('#need-card');
     const frame = dialog.locator('.dc-thing iframe.dc-page').first();
-    await dialog.locator('[data-dc-vmenu]').waitFor();
+    await dialog.locator('[data-dc-vmenu]').waitFor({state: 'attached'});
     await dialog.locator('.dc-start').waitFor({state: 'detached'}).catch(() => {});
     await p.waitForTimeout(300);
 
@@ -110,11 +110,9 @@ const VIEW = {width: 390, height: 844};
     const say = dialog.locator('.dc-say');
     check(!await say.isVisible(), 'no empty callout while Tico is working');
 
-    // The task folds to its title; Read the spec opens the page, which fills the screen down to the row.
-    // Two tabs, Chat (open) and Task: the page is in Task.
-    check(await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').getAttribute('aria-selected') === 'true', 'Chat is the tab it opens on');
-    check(!await dialog.locator('.dc-thing').isVisible(), 'the page is in the Task tab');
-    await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click();
+    // Two tabs, Chat and Spec: an OK opens on its Spec, the page filling the screen down to the row.
+    check(await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').getAttribute('aria-selected') === 'true', 'an OK opens on its Spec tab');
+    check(!await dialog.locator('.dc-chat').isVisible(), 'the chat is in the Chat tab');
     await dialog.locator('.dc-thing .dc-doc').first().waitFor();
     const hasFrame = await frame.count() > 0;
     check(hasFrame, 'the page opens as the page, not a diff');

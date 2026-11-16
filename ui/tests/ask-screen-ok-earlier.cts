@@ -3,7 +3,7 @@ import type {Route} from 'playwright';
 // Tico Team's task #72 showed only its title, and Tico's line said "Ask shows no release content".
 // - It shows the task's page from the earlier stage (the QA page, at its version), not the task's title and text;
 // - the ask, as the asker's last message in the task's chat, says who asked, when, that stage, the page's version and
-//   the task (#72 ↗), on desktop and phone, where the page is in the Proof tab; under the question the verdict, as up to
+//   the task (#72 ↗), on desktop and phone, where the OK opens on its Proof tab; under the question the verdict, as up to
 //   3 short check rows (the ask's brief details), and on a phone Proof, which opens the Proof tab;
 // - Approve stays on and answers the OK alone (no page version: it is not a page's OK);
 // - an OK the server gave no earlier page (none, or one the reader may not open) shows the task's title and text.
@@ -80,7 +80,12 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
       const dialog = page.locator('#need-card');
       const frame = dialog.locator('iframe.dc-page');
 
-      // OK release on #72: the QA page, and the ask's one byline in the chat.
+      // OK release on #72: the QA page, and the ask's one byline in the chat. On a phone an OK opens on its Proof tab.
+      if (label === 'phone') {
+        await frame.waitFor();
+        assert.equal(await dialog.locator('[role="tab"][data-dc-tab="task"]').getAttribute('aria-selected'), 'true', 'an OK opens on its Proof tab');
+        await dialog.locator('[role="tab"][data-dc-tab="chat"]').click();
+      }
       await dialog.locator('.dc-q', {hasText: 'OK the release'}).waitFor();
       // The verdict in the ask: up to 3 short check rows, no long review; Proof (a phone's) opens the Proof tab.
       assert.deepEqual(await dialog.locator('.dc-msg-ask .dc-checks li').allInnerTexts(), ['Checks pass at 9f3c2a1', 'Cart kept when the tab closes', 'No console errors']);
@@ -106,7 +111,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
       // #73: the server gave no page this reader may open: the task's title and text, as before.
       if (label === 'phone') await page.keyboard.press('ArrowRight');
       else await dialog.locator('[data-dc="next"]').click();
-      if (label === 'phone') { await dialog.locator('.dc-q', {hasText: 'OK the dark mode'}).or(dialog.locator('.dc-msg-ask')).first().waitFor(); await dialog.locator('[role="tab"][data-dc-tab="task"]').click(); }
+      // (On a phone it opens on its Task tab.)
       await dialog.locator('.dc-thing .dc-title', {hasText: 'Dark mode toggle'}).waitFor();
       assert.equal(await frame.count(), 0);
       assert.match(await dialog.locator('.dc-thing').innerText(), /A toggle in Settings for dark mode/);

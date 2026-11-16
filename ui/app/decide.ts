@@ -1675,7 +1675,7 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     if (cid) {
       DEC_CHAT.view = threadMount(el, {id: cid, card: true, header: false,
         tail: () => { const now = DEC && decideCurrent(DEC); return now && now.id === it.id ? decideAskBubbleHTML(DEC!, now) : ''; },
-        send: (text, files) => decideChatSend(st, text, files), typed: decideChatTyped});
+        send: (text, files) => decideChatSend(st, text, files), typed: decideChatTyped, reach: false});   // no "To <name>" line
     } else el.innerHTML = `<div class="thv-list">${decideAskBubbleHTML(st, it)}</div>`;   // until the task's read lands
   } else if (DEC_CHAT.view) thvDraw(DEC_CHAT.view, {parts: ['list']});
   else host.querySelector('.dc-chat .thv-list')!.innerHTML = decideAskBubbleHTML(st, it);

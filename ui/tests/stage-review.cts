@@ -23,6 +23,11 @@ type Task = import('./tasks-page.cts').Task;
 type Requirement = import('../types/api').TaskRequirement;
 
 const PHONE = {width: 390, height: 844};
+/** A phone's Chat tab, where an OK's chat is (it opens on its document); nothing on a wide screen. */
+async function chatTab(page: import('playwright').Page) {
+  const tab = page.locator('#need-card [data-dc="tab"][data-dc-tab="chat"]');
+  if (await tab.isVisible()) await tab.click();
+}
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
 const waiting = {state: 'person' as const, who: 'human:ana', line: 'Waiting on Ana', since: ago(60), until: null, ask: true, requirement_id: null};
 
@@ -192,6 +197,7 @@ async function walkOnAPhone(browser: Browser) {
   assert.equal(await question(page), before, 'and the item on screen stays');
   // A reply in the task's chat sends it back with the words. The server never had the late OK, so the read after the
   // answer takes it out (answered elsewhere, it leaves): the stage is done, and the menu walks Review's items.
+  await chatTab(page);
   await page.locator('#need-card .dc-chat .p-text').fill('Name the stage in the top bar.');
   await page.locator('#need-card .dc-chat .p-send').click();
   await page.locator('#need-card .dc-done h2').waitFor();
@@ -283,6 +289,7 @@ async function phonePolish(browser: Browser) {
     r = await smallTargets(page, '#need-card');
     assert.deepEqual(r.small, [], 'the review screen, an OK: 44 px');
     // With the keyboard up (the visible height cut to 420 px), Approve stays on screen.
+    await chatTab(page);
     await page.locator('#need-card .dc-chat .p-text').focus();
     await page.evaluate(`document.documentElement.style.setProperty('--chat-viewport-height', '420px')`);
     const acts = await page.locator('#need-card [data-dc="approve"]').boundingBox();

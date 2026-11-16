@@ -150,6 +150,8 @@ const taskPage = (page: Page) => page.locator('#task-modal[open] .tmodal-title')
       const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, tasks: fixtures()});
       try {
         await page.evaluate(() => { void taskModalOpen('t-1'); });
+        // An OK opens on its document tab: the chat is the Chat tab.
+        await card(page).locator('[data-dc="tab"][data-dc-tab="chat"]').click();
         await card(page).locator('.dc-chat .p-text').waitFor({timeout: 5000});
         await card(page).locator('.dc-chat .p-text').fill('A note typed on a phone. '.repeat(8));
         for (const what of ['.dc-chat .p-text', '[data-dc="approve"]', '[data-dc="snooze"]']) {

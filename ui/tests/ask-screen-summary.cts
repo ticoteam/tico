@@ -135,18 +135,18 @@ async function firstScreenClean(page: Page, label: string) {
     await page.locator('#task-play').click();
     const dialog = page.locator('#need-card');
     const ready = () => dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
-    // On a phone each item opens on Chat; the full content is in the second tab.
-    const second = () => dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click();
+    // On a phone an OK opens on its second tab, the full content; its ask is in the Chat tab.
+    const taskTab = dialog.locator('[data-dc="tab"][data-dc-tab="task"]'), chatTab = dialog.locator('[data-dc="tab"][data-dc-tab="chat"]');
+    const second = () => taskTab.click();
     const open = async (rid: string, chat = false) => {
       const line = OKS[rid]!.line;
-      const chatTab = dialog.locator('[data-dc="tab"][data-dc-tab="chat"]');
-      if (await chatTab.isVisible()) await chatTab.click();
       // The item on screen first: a count taken before it is drawn would step past the one asked for.
-      await dialog.locator('.dc-q').first().waitFor();
+      await dialog.locator('.dc-q').first().waitFor({state: 'attached'});
       if (!(await dialog.locator('.dc-q', {hasText: line}).count())) await dialog.locator('[data-dc="next"]').click();
-      await dialog.locator('.dc-q', {hasText: line}).waitFor();
+      await dialog.locator('.dc-q', {hasText: line}).waitFor({state: 'attached'});
       await ready();
-      if (!chat) await second();
+      assert.equal(await taskTab.getAttribute('aria-selected'), 'true', `${rid}: an OK opens on its document`);
+      if (chat) await chatTab.click();
     };
     const details = async (rid: string) => {
       const toggle = dialog.locator('.dc-details > summary');
@@ -158,7 +158,13 @@ async function firstScreenClean(page: Page, label: string) {
     };
 
     // r1, at 390 px: Finance's sentence first, dollars, names; the content under Details.
-    await open('r1', true);
+    await open('r1');
+    if (process.env.FLOW_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.waitForTimeout(400);
+      await page.screenshot({path: require('node:path').join(process.env.FLOW_SHOTS, 'phone-action-invoice-tab.png')});
+    }
+    await chatTab.click();
     // On a phone what will happen is a small receipt in the ask, on Chat: the amount large, then the line and its facts;
     // the forward button says it: Pay $1,920.00. The second tab is the Invoice, with Details.
     const receipt = dialog.locator('.dc-chat .dc-msg-ask .dc-receipt');
@@ -171,8 +177,6 @@ async function firstScreenClean(page: Page, label: string) {
       await dialog.locator('.dc-start').waitFor({state: 'detached'});
       await page.waitForTimeout(400);
       await page.screenshot({path: require('node:path').join(process.env.FLOW_SHOTS, 'phone-action-receipt.png')});
-      await second();
-      await page.screenshot({path: require('node:path').join(process.env.FLOW_SHOTS, 'phone-action-invoice-tab.png')});
     }
     await second();
     let text = await firstScreenClean(page, 'payment');
@@ -231,7 +235,7 @@ async function firstScreenClean(page: Page, label: string) {
 
     // r8: a stats board: its tico:stat-board link and the hash in it are not on the first screen. Approve moves on to it
     // by itself; clicking Next before it shows would skip it.
-    await dialog.locator('.dc-q', {hasText: OKS.r8!.line}).waitFor();
+    await dialog.locator('.dc-q', {hasText: OKS.r8!.line}).waitFor({state: 'attached'});
     await ready();
     await second();
     text = await firstScreenClean(page, 'board');
