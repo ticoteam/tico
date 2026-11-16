@@ -68,10 +68,35 @@ UPGRADE_TESTS = (
 # - CLI_SPEC parses every CLI command's example through hubcli.parser(): an example that names a file it reads
 #   (`--file signups.csv`) fails it when the test writes no stand-in for that kind of file (#3598, fixed by #3684).
 #   A change under clients/commands/ picks it.
+# - UI_SHELL_SIZE builds the whole UI bundle and fails when a cold open of Home downloads more JavaScript than its ceiling
+#   (backend/ui_bundle.py SHELL_JS_CEILING, P05b). Any UI source, ui/parts.json, a vendor script, the bundler, the UI
+#   build or the npm lockfile (esbuild's version decides the minified bytes) can move that number: each picks it.
+#   Between P05's two pull requests the shell crept from 341 to 383 KB with no check noticing.
 ROWS_SCHEMA = "backend/tests/test_rows_schema.py"
 RELEASE_SHOTS = "scripts/tests/test_release_shots.py"
 CLI_SPEC = "clients/tests/test_cli_spec.py"
 CLI_COMMANDS = "clients/commands/"
+UI_SHELL_SIZE = "backend/tests/test_ui_shell_size.py"
+UI_SHELL_INPUTS = (
+    "backend/ui_bundle.py",
+    "backend/ui_build.py",
+    "backend/ui_compression.py",
+    "scripts/build-ui.cjs",
+    "package.json",
+    "package-lock.json",
+)
+
+
+def moves_ui_shell(name):
+    """A path whose change can change what a cold open of Home downloads (UI_SHELL_SIZE): UI code, its page list or
+    parts list, a vendor script, or what builds and serves them. UI tests, baselines and docs cannot."""
+    if name in UI_SHELL_INPUTS:
+        return True
+    if not name.startswith("ui/") or name.startswith(SHOT_IGNORED) or name.endswith(".md"):
+        return False
+    return name.endswith((".ts", ".js", ".mjs", ".html", ".json"))
+
+
 SCHEMA_LINE = re.compile(
     r"\b(?:CREATE|ALTER|DROP)\s+TABLE\b|\b(?:ADD|DROP|RENAME)\s+COLUMN\b|\b(?:TEXT|INTEGER|REAL|BLOB|NUMERIC)\b"
 )
@@ -1253,7 +1278,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a file under MIGRATIONS, or a backend module whose diff from `base`
        to `head` changes a schema line (schema_changes), runs ROWS_SCHEMA; a ui/ file the release-shot harness lists
-       that is added or gone runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC.
+       that is added or gone runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC; a path that can move what a
+       cold open of Home downloads (moves_ui_shell) runs UI_SHELL_SIZE.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -1457,6 +1483,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     if any(n.startswith(CLI_COMMANDS) for n in names) and (root / CLI_SPEC).is_file():
         guards.add(CLI_SPEC)
         notes.append("rule 9: a CLI command change runs the CLI spec test")
+    if any(moves_ui_shell(n) for n in names) and (root / UI_SHELL_SIZE).is_file():
+        guards.add(UI_SHELL_SIZE)
+        notes.append("rule 9: a UI, bundler or UI build change runs the cold-open size ceiling")
     python |= guards
     if any(n in CI_INPUTS for n in names) and not browser:
         browser.add(SMOKE_SCRIPT)

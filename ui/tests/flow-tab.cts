@@ -1,5 +1,5 @@
 import type {Page} from 'playwright';
-// Offline browser check of Flow's way in (ui/app/decide.ts decideFlow, flowTabPaint), against a fake of the new routes:
+// Offline browser check of Flow's way in (ui/app/decide.ts decideFlow, tasks.ts flowTabPaint), against a fake of the new routes:
 // - at phone width the bar is Team, Flow, Assistant, Tasks, More; Flow's mark is the tabs' grey with nothing waiting and
 //   jade with something, with no number, and the Tasks tab has no mark;
 // - with nothing waiting Flow opens on All done with the suggested rules, and Close and ✕ give focus back to the tab;

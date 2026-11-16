@@ -156,7 +156,7 @@
     <div id="side-update" class="side-rec finishing" role="status" hidden title="Tico is installing an update. Bots finish what they are doing; new work waits a few minutes, then starts on its own."><span class="dot" aria-hidden="true"></span><span class="side-rec-time">Updating</span><span class="side-rec-title">Tico · new bot work starts after</span></div>
     <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome"><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
     <!-- Tasks, then Flow's mark while something waits on you: a button of its own beside the link that starts Flow
-         (decide.ts needsBadgePaint, decideFlow). On a phone the bar's Flow tab says it, so the drawer leaves it out. -->
+         (tasks.ts needsBadgePaint, decide.ts decideFlow). On a phone the bar's Flow tab says it, so the drawer leaves it out. -->
     <div class="nav-row"><a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a><button class="nav-flow" type="button" data-needs-badge aria-label="Flow" aria-haspopup="dialog" title="Flow" hidden></button></div>
     <!-- Calendar: the link, then the next event with ‹ › to step through the week (ui/app/calendar-row.ts fills the text; a
          server without calendars leaves just the link). -->
@@ -266,7 +266,7 @@
   <button class="mobile-nav-item" id="mobile-org" type="button" data-nav="org" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan"><span class="mobile-nav-icon" aria-hidden="true">account_tree</span><span class="mobile-nav-label">Team</span></button>
   <!-- Flow: its mark in the tabs' grey, jade while something needs you, no number; it starts Flow (decide.ts decideFlow).
        Threads is in More, and More carries its count. A bot has no Flow: the slot keeps Threads, or Search on a server
-       without threads (decide.ts flowTabPaint); a person's Search is in More. -->
+       without threads (tasks.ts flowTabPaint); a person's Search is in More. -->
   <button class="mobile-nav-item mobile-flow" id="mobile-flow" type="button" data-nav="flow" aria-haspopup="dialog"><span class="mobile-nav-icon"><span class="flow-mark" aria-hidden="true"><svg viewBox="0 0 48 48" focusable="false"><g class="f1"><path d="M16 5.5C8 4 4.5 12 5 24 4.5 36 8 44 16 42.5 27 40 45 32 45 24 45 16 27 8 16 5.5Z" transform="translate(-3 7.2) scale(.7)" opacity=".45"/></g><g class="f2"><path d="M16 5.5C8 4 4.5 12 5 24 4.5 36 8 44 16 42.5 27 40 45 32 45 24 45 16 27 8 16 5.5Z" transform="translate(13 7.2) scale(.7)"/></g></svg></span></span><span class="mobile-nav-label">Flow</span></button>
   <a class="mobile-nav-item" id="mobile-threads" href="#/threads" data-nav="threads" hidden><span class="mobile-nav-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg></span><span class="mobile-nav-label">Threads</span><span class="nav-badge" hidden></span></a>
   <button class="mobile-nav-item" id="mobile-search" type="button" data-nav="search" aria-label="Search" aria-haspopup="dialog" hidden><span class="mobile-nav-icon" aria-hidden="true">search</span><span class="mobile-nav-label">Search</span></button>
@@ -393,9 +393,13 @@
 
 <script src="/tico/ui/app/sidebar.ts"></script>
 
+<script src="/tico/ui/app/org-chart-shape.ts"></script>
+
 <script src="/tico/ui/app/heartbeat.ts"></script>
 
 <script src="/tico/ui/app/issues.ts"></script>
+
+<script src="/tico/ui/app/bot-issues.ts"></script>
 
 <script src="/tico/ui/app/hub-v2.ts"></script>
 
@@ -404,6 +408,8 @@
 <script src="/tico/ui/app/task-row.ts"></script>
 
 <script src="/tico/ui/app/tooltip.ts"></script>
+
+<script src="/tico/ui/app/bot-history.ts"></script>
 
 <script src="/tico/ui/app/email-preview.ts"></script>
 
@@ -479,6 +485,8 @@
 
 <script src="/tico/ui/app/thread-call.ts"></script>
 
+<script src="/tico/ui/app/thread-call-live.ts"></script>
+
 <script src="/tico/ui/app/call-ring.ts"></script>
 
 <script src="/tico/ui/app/thread-connect.ts"></script>
@@ -486,6 +494,10 @@
 <script src="/tico/ui/app/tags.ts"></script>
 
 <script src="/tico/ui/app/tasks.ts"></script>
+
+<script src="/tico/ui/app/task-status-text.ts"></script>
+
+<script src="/tico/ui/app/stage-rules-mark.ts"></script>
 
 <script src="/tico/ui/app/task-pipelines.ts"></script>
 
@@ -516,6 +528,8 @@
 
 <script src="/tico/ui/app/task-live.ts"></script>
 
+<script src="/tico/ui/app/task-live-form.ts"></script>
+
 <script src="/tico/ui/app/task-modal.ts"></script>
 
 <script src="/tico/ui/app/org-rule-holds.ts"></script>
@@ -523,6 +537,8 @@
 <script src="/tico/ui/app/roadmaps.ts"></script>
 
 <script src="/tico/ui/app/task-files.ts"></script>
+
+<script src="/tico/ui/app/file-review-route.ts"></script>
 
 <script src="/tico/ui/app/file-review.ts"></script>
 
@@ -533,6 +549,8 @@
 <script src="/tico/ui/app/visual-media.ts"></script>
 
 <script src="/tico/ui/app/pages.ts"></script>
+
+<script src="/tico/ui/app/task-pages.ts"></script>
 
 <script src="/tico/ui/app/skills.ts"></script>
 
@@ -545,6 +563,8 @@
 <script src="/tico/ui/app/task-code.ts"></script>
 
 <script src="/tico/ui/app/task-runs.ts"></script>
+
+<script src="/tico/ui/app/give-to-field.ts"></script>
 
 <script src="/tico/ui/app/give-to.ts"></script>
 
@@ -599,6 +619,8 @@
 <script src="/tico/ui/app/settings-bots-bulk.ts"></script>
 
 <script src="/tico/ui/app/settings-access.ts"></script>
+
+<script src="/tico/ui/app/settings-access-edit.ts"></script>
 
 <script src="/tico/ui/app/settings-history.ts"></script>
 
@@ -721,6 +743,8 @@
 <script src="/tico/ui/app/strategy-budget.ts"></script>
 
 <script src="/tico/ui/app/finance.ts"></script>
+
+<script src="/tico/ui/app/finance-shared.ts"></script>
 
 <script src="/tico/ui/app/finance-pnl.ts"></script>
 

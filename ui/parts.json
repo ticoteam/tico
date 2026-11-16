@@ -1,5 +1,56 @@
 {
  "//": "Page parts: files a cold open does not download, fetched the first time a person goes to one of their pages (backend/ui_bundle.py, ui/app/parts.ts). Each part's entries are the names code outside it calls: pages (the router's, drawn only while the person stays on that route), calls (load the part, then call) and idle (do nothing until the part is loaded). deps load with the part. events are selectors of controls drawn outside the part whose click or change its own document listener answers: their first use loads the part. scripts/check_ui_parts.cjs checks every use from outside.",
+ "thread-settings": {
+  "files": [
+   "app/threads-page.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "threadMembersOpen",
+   "threadSettingsOpen",
+   "threadEarlierOpen"
+  ],
+  "idle": []
+ },
+ "browser-view": {
+  "files": [
+   "app/browser-view.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "key-drop": {
+  "files": [
+   "app/secret-drop.ts",
+   "app/tools-key-drop.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "kdWire",
+   "kdBeforeSend"
+  ],
+  "idle": [
+   "kdForget"
+  ]
+ },
+ "tags": {
+  "files": [
+   "app/tags.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageTags",
+   "pageTag"
+  ],
+  "calls": [
+   "settingsTags"
+  ],
+  "idle": []
+ },
  "tool-icons": {
   "files": [
    "tool-icons.ts"
@@ -81,9 +132,12 @@
    "app/settings-people.ts",
    "app/cloud-agents.ts",
    "model-login.ts",
-   "app/catalog.ts"
+   "app/catalog.ts",
+   "app/settings-access-edit.ts"
   ],
-  "deps": [],
+  "deps": [
+   "tags"
+  ],
   "pages": [
    "pageSettings",
    "pageSkillsConnect"
@@ -168,6 +222,91 @@
    "onbStop"
   ]
  },
+ "task-files": {
+  "files": [
+   "app/task-files.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "decide": {
+  "files": [
+   "app/decide.ts",
+   "app/decide-about.ts"
+  ],
+  "deps": [
+   "browser-view"
+  ],
+  "pages": [],
+  "calls": [
+   "decideStageOpen",
+   "decideWanted",
+   "decideStageWanted",
+   "decideGoThrough",
+   "decideOpen",
+   "decideFlow"
+  ],
+  "idle": [
+   "decideStop",
+   "decideRefresh",
+   "decidePaintBody"
+  ]
+ },
+ "stage-rules": {
+  "files": [
+   "app/stage-rules.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [],
+  "idle": []
+ },
+ "task": {
+  "files": [
+   "app/github-nudge.ts",
+   "app/pipeline-editor.ts",
+   "app/task-requirements.ts",
+   "app/task-meetings.ts",
+   "app/task-modal.ts",
+   "app/roadmaps.ts",
+   "app/task-code.ts",
+   "app/task-runs.ts",
+   "app/task-props.ts",
+   "app/task-live-form.ts",
+   "app/task-pages.ts",
+   "app/task-status-text.ts"
+  ],
+  "deps": [
+   "task-files",
+   "decide",
+   "tags",
+   "stage-rules"
+  ],
+  "pages": [
+   "pageRoadmap"
+  ],
+  "calls": [
+   "githubNudgeBot",
+   "githubNudgeTools",
+   "openPipelineEditor",
+   "roadmapSettingsMount",
+   "taskChatLive",
+   "taskChatRead",
+   "taskCommentsRender",
+   "taskModalOpen",
+   "taskModalShow",
+   "taskPropsMsgPaint",
+   "taskRunCatalog",
+   "taskThreadOpen"
+  ],
+  "idle": [
+   "taskAskSettled",
+   "taskChatStop",
+   "taskModalRouteClose"
+  ]
+ },
  "bot": {
   "files": [
    "bot-tools.ts",
@@ -180,13 +319,16 @@
    "app/bot-page-view.ts",
    "app/bot-details.ts",
    "app/bot-conversation.ts",
-   "app/recruit.ts"
+   "app/recruit.ts",
+   "app/bot-issues.ts",
+   "app/bot-history.ts"
   ],
   "deps": [
    "settings",
    "task",
    "bot-files",
-   "tool-icons"
+   "tool-icons",
+   "decide"
   ],
   "pages": [
    "pageBot",
@@ -290,12 +432,15 @@
    "app/company-page.ts",
    "app/redesign-org.ts",
    "app/redesign-market.ts",
-   "app/org-rules.ts"
+   "app/org-rules.ts",
+   "app/org-chart-shape.ts",
+   "app/drag-pan.ts"
   ],
   "deps": [
    "computers",
    "growth",
-   "docs-editor"
+   "docs-editor",
+   "stage-rules"
   ],
   "pages": [
    "pageBudget",
@@ -334,6 +479,42 @@
    "goalsFollowRoster"
   ]
  },
+ "finance": {
+  "files": [
+   "app/finance-pnl.ts",
+   "app/finance-budgets.ts",
+   "app/finance-books.ts",
+   "app/finance-docs.ts",
+   "app/finance-admin.ts",
+   "app/finance-tax.ts",
+   "app/finance-attribution.ts",
+   "app/finance-campaigns.ts",
+   "app/finance-receipts.ts",
+   "app/finance-subscriptions.ts",
+   "app/finance-brief.ts",
+   "app/finance-statement-upload.ts",
+   "app/finance-shared.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "finAccessPage",
+   "finAttrPage",
+   "finBalancePage",
+   "finBudgetsPage",
+   "finCardsPage",
+   "finDocPage",
+   "finLinePage",
+   "finPnlPage",
+   "finSourcesPage",
+   "finTaxPage",
+   "finTxPage"
+  ],
+  "calls": [
+   "finBriefLoad",
+   "finCampaignOwnerChange"
+  ],
+  "idle": []
+ },
  "library": {
   "files": [
    "docs-page.ts",
@@ -352,7 +533,8 @@
   "deps": [
    "finance",
    "webhooks",
-   "docs-editor"
+   "docs-editor",
+   "browser-view"
   ],
   "pages": [
    "pageCompanyDocs",
@@ -377,41 +559,6 @@
    "skillsStop",
    "toolsStop"
   ]
- },
- "finance": {
-  "files": [
-   "app/finance-pnl.ts",
-   "app/finance-budgets.ts",
-   "app/finance-books.ts",
-   "app/finance-docs.ts",
-   "app/finance-admin.ts",
-   "app/finance-tax.ts",
-   "app/finance-attribution.ts",
-   "app/finance-campaigns.ts",
-   "app/finance-receipts.ts",
-   "app/finance-subscriptions.ts",
-   "app/finance-brief.ts",
-   "app/finance-statement-upload.ts"
-  ],
-  "deps": [],
-  "pages": [
-   "finAccessPage",
-   "finAttrPage",
-   "finBalancePage",
-   "finBudgetsPage",
-   "finCardsPage",
-   "finDocPage",
-   "finLinePage",
-   "finPnlPage",
-   "finSourcesPage",
-   "finTaxPage",
-   "finTxPage"
-  ],
-  "calls": [
-   "finBriefLoad",
-   "finCampaignOwnerChange"
-  ],
-  "idle": []
  },
  "automations": {
   "files": [
@@ -519,40 +666,75 @@
    "mailForget"
   ]
  },
- "task": {
+ "assistant": {
   "files": [
-   "app/github-nudge.ts",
-   "app/pipeline-editor.ts",
-   "app/task-requirements.ts",
-   "app/task-meetings.ts",
-   "app/task-modal.ts",
-   "app/roadmaps.ts",
-   "app/task-code.ts",
-   "app/task-runs.ts",
-   "app/task-props.ts"
+   "assistant.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "assistantCards",
+   "assistantOff",
+   "assistantSettingsStrip"
+  ],
+  "idle": []
+ },
+ "changelog": {
+  "files": [
+   "changelog.ts"
   ],
   "deps": [],
   "pages": [
-   "pageRoadmap"
+   "pageChangelog"
   ],
+  "calls": [],
+  "idle": []
+ },
+ "file-review": {
+  "files": [
+   "app/file-review.ts"
+  ],
+  "deps": [],
+  "pages": [],
   "calls": [
-   "githubNudgeBot",
-   "githubNudgeTools",
-   "openPipelineEditor",
-   "roadmapSettingsMount",
-   "taskChatLive",
-   "taskChatRead",
-   "taskCommentsRender",
-   "taskModalOpen",
-   "taskModalShow",
-   "taskPropsMsgPaint",
-   "taskRunCatalog",
-   "taskThreadOpen"
+   "frvShow",
+   "frvAboveTask",
+   "frvTeardown"
   ],
-  "idle": [
-   "taskAskSettled",
-   "taskChatStop",
-   "taskModalRouteClose"
-  ]
+  "idle": []
+ },
+ "style-guide": {
+  "files": [
+   "app/style-guide.ts"
+  ],
+  "deps": [],
+  "pages": [
+   "pageStyleGuide"
+  ],
+  "calls": [],
+  "idle": []
+ },
+ "give-to": {
+  "files": [
+   "app/give-to.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "giveToOpen"
+  ],
+  "idle": []
+ },
+ "thread-call-live": {
+  "files": [
+   "app/thread-call-live.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "callJoin",
+   "callHangUp"
+  ],
+  "idle": []
  }
 }

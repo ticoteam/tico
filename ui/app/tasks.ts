@@ -31,10 +31,6 @@ const taskFinished = (t: Partial<Pick<TaskRow, 'status'>> | null | undefined) =>
 // task's own side: its parent, what it blocks, what it duplicates or follows up; `in` the other; related is `both`.
 const taskRels = (t: PartialTaskRow | null | undefined, kind: string, direction?: string) => ((t?.relations || {})[kind] || []).filter(r => !direction || r.direction === direction);
 const taskParent = (t: TaskRow | null | undefined) => taskRels(t, 'parent', 'out')[0] || null;
-function clipLine(s: string | null | undefined, n: number) {
-  s = String(s || '').replace(/\s+/g, ' ').trim();
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
-}
 const searchWords = (value: unknown) => String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
 const searchIncludes = (fields: unknown[], query: string) => {
   const haystack = searchWords(fields.filter(Boolean).join(' '));
@@ -46,9 +42,6 @@ function taskStatusLabel(t: {status?: string | null; stage?: unknown} | null | u
   if (!t) return '';
   const stage = t.status === 'open' && t.stage && typeof t.stage === 'object' ? String((t.stage as {name?: unknown}).name || '') : '';
   return stage || TASK_STATE_WORDS[String(t.status)] || String(t.status || '');
-}
-function taskStatusText(t: {status?: string | null; stage?: unknown}, label = taskStatusLabel(t)) {
-  return `<span class="task-status" data-status="${esc(t.status || 'open')}" aria-label="${esc(label)}" title="${esc(label)}">${esc(label)}</span>`;
 }
 
 // ---- the small things a row and a card carry
@@ -96,30 +89,6 @@ function occurrenceDay(t: {occurrence?: string | null; due_at?: string | null} |
   const [y, mo, d] = m[1]!.split('-').map(Number);
   return new Date(y!, mo! - 1, d!);
 }
-function taskDueInfo(t: (Partial<Pick<TaskRow, 'due_at' | 'occurrence' | 'status'>> & {owner_id?: string | null}) | null | undefined) {
-  if (!t?.due_at || taskFinished(t)) return null;
-  const at = parseServerTime(t.due_at); if (!at) return null;
-  const shown = occurrenceDay(t) || new Date(at);
-  const day = shortDay(shown);
-  if (actorSlug(t.owner_id) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
-  const late = at < Date.now();
-  // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
-  const start = (d: Date | number) => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(shown) - start(Date.now())) / 864e5);
-  const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days > 1 && days < 7
-    ? shown.toLocaleDateString(undefined, {weekday: 'short'}) : day;
-  return {at, day, kind: 'deadline', late, soon: !late && at - Date.now() < 2 * 864e5, words: late ? `Overdue ${day}` : `Due ${when}`};
-}
-// Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then. A task that depends on an
-// open task is blocked, never Snoozed, even under a snooze left open (backend/task_depends.py): no chip, no Unsnooze.
-function taskSnoozed(t: Pick<TaskV3, 'status' | 'snoozed' | 'snooze'> & PartialTaskRow | null | undefined) {
-  if (!t || taskFinished(t)) return false;
-  if (taskRels(t, 'depends_on', 'out').some(r => r.status === 'open')) return false;
-  return !!t.snoozed || !!t.snooze;
-}
-function snoozeDay(t: Pick<TaskV3, 'snooze'> | null | undefined) {
-  const until = parseServerTime(t?.snooze?.until);
-  return until ? shortDay(new Date(until)) : '';
-}
 // A face for an actor: a bot's avatar, a person's photo or initials.
 function actorFace(actor: string | null | undefined, size = 18) {
   const slug = actorSlug(actor), pid = actorPerson(actor);
@@ -145,4 +114,57 @@ async function goalOptions() {
   const r: import('../types/api').GoalList | null = await v2Get('/v2/goals?all=1');
   GOAL_OPTIONS = (r?.goals || []).map(g => ({id: g.id, title: g.title, owner_id: g.owner_id, parent_id: g.parent_id, rank: g.rank, status: g.status}));
   return GOAL_OPTIONS;
+}
+
+// ---- Needs you outside its ask screen: the screen's state, a deep link's item, the count and the lists that show it.
+// The ask screen itself (ui/app/decide.ts, decide-about.ts) is a page part, loaded when a person opens an item.
+
+let DEC: DecState | null = null;            // the open screen, null while it is shut
+let DECIDE_WANT = '';                       // a deep link's item (#/decide?item=<id>), opened once Tasks has read
+let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
+const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
+// The server sorts Home's Needs you rows by the same rule (backend/cards.py needs_act): a new kind here changes both.
+function decideKind(it: NeedsEntry): AskKind {
+  if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'question' : 'ok';
+  if (it.kind === 'paused') return 'fix';
+  if (it.kind === 'mention') return 'mention';
+  // Stuck: the ladder brought it to the person (stuck or late with them), a bot is Paused on it, or it waits on someone
+  // being let in (turn.share). Its buttons are the stuck card's, never Done, Snooze or Give to (task #392).
+  const t = it.task;
+  return t?.turn?.state === 'paused' || t?.late?.level === 'person' || t?.stuck || t?.turn?.share?.length ? 'stuck' : 'yours';
+}
+// ---- the count, and the lists that show Needs you
+/** A bot, or a bot's read-only view of the app (view-only.ts), has no Needs you and never opens Flow. */
+const decideNoFlow = (): boolean => S.me?.role === 'bot' || !!S.me?.read_only_view;
+function decideCount(): number {
+  if (decideNoFlow()) return 0;
+  return S.v2?.needsCount ?? (S.v2?.needs || []).length;
+}
+/** Flow's mark beside Tasks while something needs the person; no number (the Tasks header has the one count). */
+function needsBadgePaint() {
+  const n = decideCount();
+  for (const badge of document.querySelectorAll<HTMLElement>('[data-needs-badge]')) {
+    badge.hidden = !n;
+    if (!badge.firstElementChild) badge.innerHTML = flowMarkHTML(14);
+  }
+  flowTabPaint();
+}
+/** The phone bar's second slot: Flow, its mark grey like the other tabs and jade while something needs the person (no
+    number). A bot has no Flow: the slot keeps Threads, or Search on a server without threads (threads.ts THREADS.on). A
+    person's Threads and Search are in More (threads.ts threadsSideRender carries the count there). */
+function flowTabPaint() {
+  const off = decideNoFlow(), threads = typeof THREADS === 'undefined' || THREADS.on !== false;
+  const flow = document.querySelector<HTMLElement>('#mobile-flow');
+  if (flow) { flow.hidden = off; flow.toggleAttribute('data-waiting', decideCount() > 0); }
+  const tab = document.querySelector<HTMLElement>('#mobile-threads'), search = document.querySelector<HTMLElement>('#mobile-search');
+  if (tab) tab.hidden = !off || !threads;
+  if (search) search.hidden = !off || threads;
+}
+// Flow's taps: decideFlow is in the ask screen's page part (decide.ts), whose stand-in loads it on the first tap.
+for (const el of document.querySelectorAll<HTMLElement>('#mobile-flow, #side .nav-flow')) el.addEventListener('click', () => void decideFlow(el));
+/** Needs you changed: the badge, the Tasks page and a bot's rail draw again. */
+function needsListsRedraw() {
+  needsBadgePaint();
+  if (typeof TASKS_ST !== 'undefined' && TASKS_ST) tasksNeedsLive();
+  if (typeof BOT !== 'undefined' && BOT && $('#t-needs') && typeof botNeedsPaint === 'function') botNeedsPaint(BOT.slug);
 }

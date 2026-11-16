@@ -679,6 +679,8 @@ def test_a_page_part_is_left_out_of_the_shell_and_named_by_its_own_content(tmp_p
         ({"Bad": {"files": ["app/b.js"]}}, "Bad"),
         ({"pb": {"files": ["app/b.js"], "deps": ["px"]}}, "px"),
         ({"pb": {"files": ["app/b.js"], "events": [""]}}, "CSS selectors"),
+        # Listed before a part it needs: its script would run first, and a call in between finds that part missing.
+        ({"pb": {"files": ["app/b.js"], "deps": ["pc"]}, "pc": {"files": ["app/c.js"]}}, "pc must be listed before"),
     ],
 )
 def test_a_wrong_parts_list_is_refused(tmp_path, parts, why):

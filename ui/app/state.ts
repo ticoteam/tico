@@ -193,7 +193,7 @@ function applyConfig(config: unknown): AppConfig {
   renderNewVersion();
   renderAdministration();
   if (typeof nativeOrgSync === 'function') nativeOrgSync();
-  window.renderChangelogNotice?.();
+  renderChangelogNotice();
   noticeUpdatedServer();
   void renderAppUpdate();
   renderUsageNotice();

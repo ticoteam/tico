@@ -350,6 +350,8 @@ button.dc-jev{cursor:pointer}
   .dc-q-page{display:none}
   .dc-meta{min-height:44px}
   .dc-vbtn,.dc-task-link{min-height:44px}
+  /* the ask's meta line draws its task link 28 px tall: on a phone it is a 44 px target either way */
+  .dc-ask-meta .dc-task-link{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
   /* dense: the date and Jev's word wait in the menu; the mark stays */
   .dc-meta .dc-m-wide{display:none}
   .dc-meta .dc-m-narrow{display:inline}

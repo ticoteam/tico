@@ -128,8 +128,9 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       assert.equal(await page.locator('#tree a[href*="slack%3ACBUILD"]').count(), 0, tag + ': other chart bots keep Slack in Tools');
       for (const helper of ['botops', 'rules-owner', 'mail-sorter'])
         assert.equal(await page.locator(`#tree [data-org="b:${helper}"]`).count(), 0, tag + ': built-in and explicit helpers stay off Team');
-      // Recruiting and the company page's sources are page parts (ui/parts.json): loaded as opening those pages would.
-      await page.evaluate(() => Promise.all([uiPartLoad('bot'), uiPartLoad('company')]));
+      // Recruiting, the company page's sources and Finance's helpers are page parts (ui/parts.json): loaded as opening
+      // those pages would.
+      await page.evaluate(() => Promise.all([uiPartLoad('bot'), uiPartLoad('company'), uiPartLoad('finance')]));
       assert.deepEqual(await page.evaluate(() => ({
         recruiting: recruitPlaces().some(([id]) => id === 'counsel'),
         audience: cpSourceChoices().some(([id]) => id === 'counsel'),
