@@ -276,6 +276,27 @@ button.dc-jev{cursor:pointer}
 .dc-sr button.ghost{flex:none}
 .dc-sf{display:flex;gap:8px;padding:0 0 10px}
 .dc-sf input{flex:1;min-width:0}
+/* The owner's Strategy questions (decide-setup.ts): one column, centred; a long answer's lines and the end screen's
+   saved lines are rows like the suggested rules', the section's name small above each line. */
+.dc-side>.dc-qs{display:flex;flex-direction:column;gap:14px;width:min(600px,100%);margin:0 auto;padding-top:32px}
+.dc-q-sug{font-weight:500;white-space:pre-wrap}
+.dc-qls,.dc-qg ul{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
+.dc-ql,.dc-qg li{display:flex;align-items:center;gap:10px;min-height:44px;padding:6px 0;border-top:1px solid var(--line)}
+.dc-ql .tx{flex:1;min-width:0}
+.dc-ql .tx span{display:block;color:var(--muted);font-size:var(--t-xs)}
+.dc-ql .tx b{display:block;font-weight:500;overflow-wrap:anywhere;white-space:pre-wrap}
+.dc-ql.off .tx b{color:var(--muted);text-decoration:line-through}
+.dc-ql .dc-icon,.dc-qg .dc-icon{flex:none;width:32px;height:32px;font-size:var(--t-card);color:var(--muted)}
+.dc-ql .dc-icon:hover:not(:disabled),.dc-qg .dc-icon:hover:not(:disabled){color:var(--ink)}
+.dc-qend{align-items:stretch}
+.dc-qend>.flow-mark{align-self:center}
+.dc-q-said{margin:0;font-weight:600;text-align:center}
+.dc-qg h4{margin:0;color:var(--muted);font-size:var(--t-xs);font-weight:600}
+.dc-qg li:first-child{border-top:0}
+.dc-qg li>span{flex:1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.dc-q-pub{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.dc-q-pub .dc-sub{flex:1 1 100%}
+.dc-q-pub .primary{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
 /* "Getting ready to flow": over the first item for well under a second; the item under it is drawn and takes every
    tap and key (no pointer events here). None with reduced motion (decideStart). */
 .dc-start{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--bg);color:var(--muted);pointer-events:none;animation:dc-start .6s ease-in forwards}
@@ -291,6 +312,8 @@ button.dc-jev{cursor:pointer}
   .dc-sr .tx b{white-space:normal}
   .dc-sr .dc-icon{width:44px;height:44px}
   .dc-side>.dc-done.has{padding-top:24px}
+  .dc-side>.dc-qs{gap:12px;padding-top:4px}
+  .dc-ql .dc-icon,.dc-qg .dc-icon{width:44px;height:44px}
   /* ‹ › on a phone too, › kept 8 px clear of ✕ */
   .dc-nav [data-dc="next"]{margin-right:6px}         /* 6 px + .dc-nav's 2 px gap = 8 px */
   /* For 400 ms after an answer or Skip the next item's buttons take no taps, so a second tap on the same spot does not

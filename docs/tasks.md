@@ -179,6 +179,11 @@ never a task's title, a page or anyone's name.
 `POST /api/v2/flow/suggestions` answers at once, `ready` or `pending` (ask again); `/{id}/add`, `/undo`, `/dismiss`
 and `/feedback` act on one. Added rules do not show in the stage editor yet.
 
+For the company's owner, Flow also asks the Strategy questions still open on the draft (who we serve, what we sell, one
+active bet, what we won't do) after their asks in the All mine walk, and first when opened from the Strategy page. They
+are not in the Needs you count and do not light the Flow tab. Answers save to the Strategy draft; nothing changes for
+bots or anyone else until the owner publishes. See [Strategy: Flow](strategy.md#flow).
+
 ## Sub-tasks
 
 A task waits on the tasks it files. File one with `tico task file --parent <id> "title"` (yours unless `--owner`), or

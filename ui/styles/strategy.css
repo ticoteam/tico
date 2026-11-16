@@ -16,6 +16,8 @@
 .strat-actions:empty{display:none}
 /* Why Publish is off: a (?) after it, its words opening below and to the left (it sits at the top right). */
 :is(.strat-actions,#strat-actions) .rd-help{margin-left:0}
+/* Flow's mark beside Publish (the owner's Strategy questions in Flow): the mark alone, the bar's control size */
+#strat-actions .strat-flow{display:inline-grid;place-items:center;box-sizing:border-box;width:var(--ctl);height:var(--ctl);padding:0}
 :is(.strat-actions,#strat-actions) .rd-help-pop{left:auto;right:-4px;bottom:auto;top:calc(100% + 6px);transform:none}
 .strat-meta{margin:0 0 10px;color:var(--muted);font-size:var(--t-sm)}
 .strat-status{color:var(--ink)}

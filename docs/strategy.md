@@ -252,6 +252,38 @@ An install set up before these steps starts the Strategy page from what the Goal
 strategy gets a draft with that vision and the description as *What we sell*, for the owner to take from there. The
 Market tab's own first run (the Librarian's four questions) is unchanged ([Librarian](librarian.md#first-run-setup)).
 
+## Flow
+
+The owner's Strategy questions also come in [Flow](tasks.md#needs-you), one at a time, so the strategy can be filled in
+without leaving it. They are read from the draft with no model (`GET /api/v2/flow/questions`): who we serve, what we
+sell, one active bet and what we won't do, each only while that part of the draft is empty or still marked
+**unconfirmed** (the bet only while none is active). **Keep going** then asks the guide's other sections. Anyone but
+the owner gets none.
+
+- **Where.** After the owner's asks in the All mine walk (never in a pipeline's or a stage's walk), and first when Flow
+  is opened from the Strategy page: Flow's mark beside **Publish**, or the link `#/decide?setup=strategy`. With no
+  asks waiting, Flow opens on them instead of All done. They do not count in Needs you and do not light the Flow tab.
+- **A card.** The question, the suggested answer first (the draft's own unconfirmed text, or the top proposed bet), a
+  box and **Skip**. Skip is kept in this browser (a link from the Strategy page asks skipped ones again). The mic puts
+  the cursor in the box, so a phone keyboard's own dictation types into it; nothing is recorded.
+- **Saving.** Tapping the suggestion keeps it: the drafted text loses its marker, or the proposed bet is made active.
+  A typed answer is added after what the section holds, never over confirmed text (unconfirmed drafted text is
+  replaced). A bet is made active. Every save goes to the draft through the routes the page uses, with the draft's
+  revision; on a 409 Flow reads the draft again and sends once more. Flow never writes the summary or the vision.
+- **A long answer** (over 200 characters) goes to `POST /api/v2/flow/ramble`, which splits it into short lines, each
+  for one section or a bet, in the owner's own words (a line that is not mostly their words is dropped), cut to the
+  page's limits. The owner strikes any line with ✕ and saves the rest at once. It is one metered model call with no
+  retry, labelled `flow-ramble` in spend, at most 30 a day per person; the text is sent to the model as data and
+  nothing of it is stored or logged (the day's count is one audit row with no text). With no model, at the spend
+  cap or the day's limit, or on any failure, it says so (`why`) and Flow saves the whole answer under the question
+  asked.
+- **The end.** "Saved to your draft. Bots use it after you publish.", every line saved, by section (✕ takes one out
+  again, as a draft save), the parts Publish would change (including the owner's earlier edits), and **Publish** or
+  what still stops it (each opens its question). After Publish there is no ✕ and no Undo. Then **Keep going** or
+  **Done**.
+
+Nothing Flow saves reaches a bot, or anyone but the owner, until the owner publishes: it is the draft.
+
 ## Publishing
 
 The owner edits the draft and publishes with a note. **Publish** refuses, and the button says why, until:
@@ -335,6 +367,8 @@ Every command has an MCP tool of the same name and arguments (`tico_strategy_sho
 | `GET /strategy/summary` | any bot or human | plain text: the summary, one line per active bet with its wrong-if, "version N" |
 | `POST /strategy/draft-from`, `GET /strategy/draft-from/{job}` | the owner | setup research from `{url?, text?}`: fills the empty sections the pages support, marked unconfirmed, and proposes bets; gives up, reporting what it found, if the owner wrote the draft meanwhile. States are in [Setup](#setup); 422 for a missing or internal address |
 | `GET /strategy/guides` | any reader | deprecated: the Default guide only |
+| `GET /flow/questions` | any person; empty but for the owner | `{questions, more, revision, titles}`: the open setup questions, each `{key, title, question, suggest, bet_id}` ([Flow](#flow)) |
+| `POST /flow/ramble` | the owner only | `{text, section}` (at most 6,000 characters) to `{lines: [{section, text, why?}], split, why}`: one metered call, nothing stored; `split` false with the whole text for `section` when `why` is `no_model`, `spend_cap`, `limit` or `failed` ([Flow](#flow)) |
 | `/lenses/...` | see [Lenses](lenses.md#hub-and-the-api) | list, run, read, add a change to the draft, sharpen |
 
 A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, market_id?, text?, check_by}`. The

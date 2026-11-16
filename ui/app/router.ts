@@ -24,6 +24,8 @@ function route(hash: string = location.hash): void {
     const q = new URLSearchParams(hash.split('?')[1] || '');
     DECIDE_WANT = q.get('item') || q.get('task') || q.get('approval') || '';
     DECIDE_STAGE = DECIDE_WANT ? '' : q.get('stage') || '';
+    // #/decide?setup=strategy: the Strategy page, Flow open over it on the owner's Strategy questions (decide-setup.ts).
+    if (!DECIDE_WANT && q.get('setup') === 'strategy') { DECIDE_SETUP = true; location.replace(STRATEGY); return; }
     location.replace(NEEDS_YOU); return;
   }
   overviewStop(); graphStop(); DASH = null;

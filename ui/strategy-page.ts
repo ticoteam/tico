@@ -220,6 +220,8 @@ window.pageStrategy = async function pageStrategy(): Promise<void> {
     const bet = new URLSearchParams(S.route.split('?')[1] || '').get('bet');
     const row = bet && document.querySelector(`[data-bet="${CSS.escape(bet)}"]`);
     if (row) { row.scrollIntoView({block: 'center'}); row.classList.add('strat-flash'); }
+    // #/decide?setup=strategy: Flow over the page, on the owner's questions.
+    if (DECIDE_SETUP) { DECIDE_SETUP = false; if (strategyView(data).owner) decideQOpen(); }
   };
   if (kept) open(kept.data);
   for (const key of ['spend', 'rivals', 'news', 'growth']) void strategyMarketRead(key, load);
@@ -351,7 +353,9 @@ function strategyActionsHtml(data: StratData, view: StratView) {
   const refusal = strategyPublishRefusal(data, view), fresh = strategyDiffers(data);
   const why = refusal || (fresh ? '' : 'Nothing new to publish');
   // Why Publish is off sits in a (?) beside it, not a line of its own.
-  return `<button class="primary ph-go" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>${refusal ? helpBubble(refusal, 'data-strat-why-not') : ''}`;
+  // Flow's mark: Flow over this page, on the owner's Strategy questions (ui/app/decide-setup.ts).
+  return `<button class="ghost strat-flow" type="button" data-strat-flow aria-label="Flow" title="Flow">${flowMarkHTML(20)}</button>`
+    + `<button class="primary ph-go" type="button" data-strat-publish${why ? ` disabled title="${esc(why)}"` : ''}>Publish</button>${refusal ? helpBubble(refusal, 'data-strat-why-not') : ''}`;
 }
 
 function strategyPublishHtml() {
@@ -741,6 +745,8 @@ function strategyBindActions() {
   if (!state) return;
   const versions = $('.rd-strat-head [data-strat-versions]');
   if (versions) versions.onclick = () => void strategyVersionsOpen();
+  const flow: HTMLElement | null = $('#strat-actions [data-strat-flow]');
+  if (flow) flow.onclick = () => decideQOpen(flow);
   const publish = $('#strat-actions [data-strat-publish]');
   if (publish) publish.onclick = () => { state.publishing = true; strategyRender(); $('[data-strat-publish-form] input')?.focus(); };
 }

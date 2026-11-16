@@ -1496,6 +1496,9 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
   which brings it back. Mentions, stuck tasks, fixes and your own tasks keep Skip.
 - **The end:** "All done", and "2 snoozed" counting your own tasks snoozed on this visit and every ask you have
   snoozed; with asks it opens their list, each with ↩ to bring it back now.
+- **The owner's Strategy questions:** after their asks in All mine (not in a pipeline's or a stage's walk), and first
+  when opened from the Strategy page; with no asks waiting Flow opens on them, not All done. Not counted in Needs you.
+  See [Strategy: Flow](strategy.md#flow).
 
 Flow has no 👍 or 👎; the rules are in [Thumbs down, and rules](#thumbs-down-and-rules).
 

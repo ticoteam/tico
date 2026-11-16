@@ -1273,6 +1273,32 @@ STABLE = [
         "FlowOpinions",
     ),
     (
+        "/api/v2/flow/questions",
+        "get",
+        "Needs you",
+        "getFlowQuestions",
+        "The owner's Strategy setup questions for Flow, read from the draft with no model: `questions` (who we serve, "
+        "what we sell, one active bet, what we won't do), each only while that part of the draft is empty or still "
+        "Unconfirmed (the bet only while none is active), and `more` (the guide's other sections, for Keep going). "
+        "Each has its `key`, the section's `title`, the guide's `question`, a `suggest`ed answer (the draft's "
+        "unconfirmed text, or the top proposed bet, `bet_id`), the draft's `revision`, and `titles`, every section's "
+        "name by key (the bet's is the guide's own word). Empty for anyone but the owner. Answers are saved through the Strategy routes (PUT /api/v2/strategy/draft, POST /api/v2/strategy/bets)",
+        "FlowQuestions",
+    ),
+    (
+        "/api/v2/flow/ramble",
+        "post",
+        "Needs you",
+        "splitFlowRamble",
+        "Owner only: one long typed answer (`text`, at most 6000 characters) to the question for `section` as short "
+        "`lines`, each `{section, text}` for one section or a bet, in the owner's own words, cut to the page's limits; "
+        "never the summary or the vision. One metered model call, no retry, nothing of the text stored or logged; at "
+        "most 30 a day per person. With no model (`why`: no_model), at the spend cap (spend_cap), at the daily limit "
+        "(limit) or on a failure (failed), `split` is false and `lines` holds the whole text for `section`. Writes "
+        "nothing to the strategy",
+        "FlowRambleLines",
+    ),
+    (
         "/api/v2/flow/suggestions",
         "post",
         "Needs you",
@@ -3869,6 +3895,42 @@ SCHEMAS = {
                     }
                 )
             )
+        }
+    ),
+    "FlowQuestions": obj(
+        {
+            "questions": items(ref("FlowQuestion")),
+            "more": items(ref("FlowQuestion")),
+            "revision": {"type": ["integer", "null"]},
+            "titles": {"type": "object", "additionalProperties": {"type": "string"}},
+        }
+    ),
+    "FlowQuestion": obj(
+        {
+            "key": {"type": "string", "enum": ["serve", "sell", "bet", "not", "proof", "now", "know", "how"]},
+            "title": "s",
+            "question": "s",
+            "suggest": "s",
+            "bet_id": {"type": ["string", "null"]},
+        }
+    ),
+    "FlowRambleLines": obj(
+        {
+            "lines": items(
+                obj(
+                    {
+                        "section": {
+                            "type": "string",
+                            "enum": ["serve", "sell", "bet", "not", "proof", "now", "know", "how"],
+                        },
+                        "text": "s",
+                        "why": "s",
+                    },
+                    required=["section", "text"],
+                )
+            ),
+            "split": "b",
+            "why": {"type": ["string", "null"], "enum": ["no_model", "spend_cap", "limit", "failed", None]},
         }
     ),
     "FlowSuggestions": obj(

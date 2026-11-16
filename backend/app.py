@@ -5563,6 +5563,9 @@ def create_app(settings=None):
     from . import flow_suggestions
 
     flow_suggestions.install(app, store, auth, mutate)  # Flow's suggested rules, drawn from send-back notes
+    from . import flow_questions
+
+    flow_questions.install(app, store, auth)  # the owner's Strategy setup questions in Flow, and a ramble's lines
     from . import ask_snoozes
 
     ask_snoozes.install(app, store, auth, mutate)  # a person's snooze of one ask in their own Needs you

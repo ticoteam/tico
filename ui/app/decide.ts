@@ -11,6 +11,8 @@
    needs a new click: it is never sent again by itself.
    A pipeline's or a stage's walk (Flow's mark on a stage or the Tasks header, the menu, #/decide?stage=<id>): the same
    screen, walking only what waits on the person there (needsStageOf); the end is "All done" wherever it is.
+   The owner's Strategy questions (ui/app/decide-setup.ts) come after their asks in All mine, or first from the
+   Strategy page: a screen of their own on the right side, with no item (the hooks here are each `decideQOn`).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -270,6 +272,7 @@ function decideDialog(): HTMLDialogElement {
     // The person's own typing in Notes: Tico's note never fills it after that (decidePaintSide).
     if (ev.isTrusted && box.id === 'dc-notes' && DEC.at) DEC_OP.typed.add(DEC.at);
     if (box.id === 'dc-sug-say') DEC_SUG.draft = box.value;
+    if (box.id === 'dc-q-say') DEC_Q.typed = box.value;
     if (box instanceof HTMLInputElement && box.id === 'dc-snz-at') box.setCustomValidity('');
     decideNeedsText(root);
   });
@@ -438,6 +441,7 @@ function decideStop() {
   if (!st) return;
   DEC = null; DEC_VOICE = false;
   decideOpinionsEnd();
+  decideQEnd();
   decideSugEnd();
   DEC_ABOUT.clear(); DEC_SENT = ''; DEC_HELD.clear(); DEC_SENDING.clear();
   clearTimeout(st.barTimer);
@@ -473,6 +477,7 @@ function decideGo(st: DecState, id: string | null) {
   decideRender(st);
 }
 function decideStep(st: DecState, dir: number) {
+  if (decideQOn(st)) return;
   const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + dir];
   if (next) { decideFilesLeft(st); decideGo(st, next); }
 }
@@ -658,7 +663,7 @@ function decideSugHTML(): string {
 /** Draws the list again when All done is on screen, the ✎ box keeping its focus. */
 function decideSugPaint(st: DecState) {
   const side: HTMLElement | null = $('.decide .dc-side');
-  if (!side || decideCurrent(st)) return;
+  if (!side || decideCurrent(st) || decideQOn(st)) return;
   const typing = document.activeElement?.id === 'dc-sug-say';
   side.innerHTML = decideDoneHTML(st);
   if (typing || DEC_SUG.edit) document.querySelector<HTMLInputElement>('#dc-sug-say')?.focus({preventScroll: true});
@@ -714,7 +719,8 @@ function decideAsker(it: NeedsEntry): string {
 function decidePaintHead(st: DecState) {
   const root = $('.decide');
   if (!root) return;
-  const live = decideLive(st), at = live.indexOf(st.at || ''), it = decideCurrent(st);
+  // The Strategy questions on screen (decide-setup.ts): no item, so ‹ › and Tico's line are off.
+  const live = decideLive(st), at = live.indexOf(st.at || ''), it = decideQOn(st) ? null : decideCurrent(st);
   const where = decideWhere(st), crumb = $('.dc-crumb', root)!, key = where.join('/');
   if (crumb.dataset.where !== key) {
     crumb.dataset.where = key;
@@ -919,6 +925,8 @@ function decideRender(st: DecState) {
   const root = $('.decide');
   if (!root) return;
   decidePaintHead(st);
+  // The owner's Strategy questions, after their asks or first when Flow was opened for them (decide-setup.ts).
+  if (decideQOn(st)) { decideQPaint(st); return; }
   const it = decideCurrent(st);
   root.classList.toggle('dc-empty', !it);
   if (!it) {
@@ -941,7 +949,7 @@ function decideRender(st: DecState) {
 /** The left side: the thing asked about, as it was read. Drawn again from what is held, never read again. */
 function decidePaintBody(st: DecState) {
   const it = decideCurrent(st), host: HTMLElement | null = $('.decide .dc-thing');
-  if (!it || !host) return;
+  if (!it || !host || decideQOn(st)) return;
   const kind = decideKind(it);
   let html = '';
   if (kind === 'ok') {
@@ -1008,7 +1016,7 @@ const decideBtn = (dc: string, label: string, main = false, extra = '') =>
 /** The right side: the sentence, who asks, and the buttons for this kind. */
 function decidePaintSide(st: DecState) {
   const it = decideCurrent(st), host: HTMLElement | null = $('.decide .dc-side');
-  if (!it || !host) return;
+  if (!it || !host || decideQOn(st)) return;
   const kind = decideKind(it), asker = decideAsker(it);
   const typed = kind === 'question' ? it.ask?.typed : undefined;
   // A page's OK is about the task's page: its title heads it, with the version under it. Needs you's line opens with
@@ -1792,8 +1800,10 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   // A row of the crumb's menu: that place's walk.
   if (b.dataset.dcWalk != null) { await decideWalkTo(b.dataset.dcWalk, b.dataset.dcPipe || ''); return; }
   const what = b.dataset.dc || '';
+  if (what.startsWith('q-')) { await decideQClick(st, what, b); return; }
   if (what.startsWith('sug-')) { await decideSugAct(st, what.slice(4), b.closest<HTMLElement>('[data-sug]')?.dataset.sug || ''); return; }
   if (what === 'where') { decideMenu(!!$('.decide .dc-menu')?.hidden); return; }
+  if (what === 'voice' && decideQVoice(st)) return;
   if (what === 'voice') { DEC_VOICE = !DEC_VOICE; decidePaintHead(st); $(DEC_VOICE ? '.decide .dc-wave' : '.decide .dc-mic')?.focus(); return; }
   if (what === 'close') { decideStop(); return; }
   if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
