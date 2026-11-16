@@ -46,7 +46,6 @@ def test_hosted_own_with_the_preset_writes_the_mark_the_choices_and_only_the_lin
             "TICO_AUTH_PROXY",
             "TICO_OWNER_LINK_HASH",
             "TICO_INSTALL_PRESET",
-            "TICO_SAMPLE_COMPANY",
             "TICO_MODELS_PRESET",
             "TICO_SUPPORT",
             "TICO_GATEWAY_INVITE",
@@ -57,11 +56,10 @@ def test_hosted_own_with_the_preset_writes_the_mark_the_choices_and_only_the_lin
         "TICO_AUTH_PROXY": "owner-link",
         "TICO_OWNER_LINK_HASH": hashlib.sha256(token.encode()).hexdigest(),
         "TICO_INSTALL_PRESET": "recommended",
-        "TICO_SAMPLE_COMPANY": "on",
         "TICO_MODELS_PRESET": "subscriptions-gateway",
         "TICO_SUPPORT": "on",
         "TICO_GATEWAY_INVITE": INVITE,
-        "TICO_TEAM_NAME": "Sample Co",
+        "TICO_TEAM_NAME": "Acme",
     }
     assert not {"TICO_OIDC_ISSUER", "TICO_OIDC_CLIENT_ID", "TICO_OIDC_CLIENT_SECRET", "TICO_ACCESS_ISSUER"} & set(env)
     # The link and the invite reach no output and no command; the invite only the server's .env, on stdin.

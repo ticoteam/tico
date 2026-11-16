@@ -364,13 +364,9 @@ class Settings:
     # one bot may check in a UTC day, and how many checks run at once (past that, an output goes through unchecked, `busy`).
     rules_check_daily_drafts: int = 200
     rule_check_concurrency: int = 8
-    # TICO_SAMPLE_COMPANY=on: a new company starts as Tico's sample company (backend/sample_company.py,
-    # docs/sample-company.md), loaded once on the first start whose owner is on the roster. A set-up company is never
-    # touched. Only `on` turns it on (the recommended install's contract); unset or any other value leaves it off.
-    sample_company: bool = False
     company_file_data: str = field(default="", repr=False)
     # Whether the installer named a company file at all, apart from whether its text could be read, and why not: an
-    # empty or unreadable file is a failed import the owner sees, never a reason to start the sample company instead.
+    # empty or unreadable file is a failed import the owner sees.
     company_file_configured: bool = False
     company_file_error: str = ""
     # First-boot seed for the owner's AI provider choice (backend/providers.py). Once the
@@ -690,7 +686,6 @@ class Settings:
             ),
             rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
             rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
-            sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
             **_company_file_fields(rehearsal),
             enabled_providers=tuple(
                 part.strip().lower() for part in os.environ.get("TICO_ENABLED_PROVIDERS", "").split(",") if part.strip()

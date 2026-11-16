@@ -126,13 +126,6 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
                 invites.record(c, who.actor, row["id"])
             return onboarding.view(c, who)
 
-    @app.post("/api/v2/onboarding/sample")
-    def onboarding_sample(request: Request, body: M.Empty):
-        """Start as Tico's sample company (backend/sample_company.py): five bots with short starter tasks. The owner,
-        on a company not set up yet; it answers like `complete`."""
-        who = request.state.identity
-        return mutate(request, body, lambda c: onboarding.start_sample(c, who))
-
     @app.get(LOCAL_SIGNIN_PATH)
     def local_signin(token: str = "", next: str = "/"):
         """Turn the local owner secret into a browser session. Loopback deployments only."""

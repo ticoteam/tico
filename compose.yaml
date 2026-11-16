@@ -111,7 +111,6 @@ services:
       # The recommended setup's choices (scripts/install.sh --recommended), read on the server's first start.
       TICO_GATEWAY_INVITE:
       TICO_INSTALL_PRESET:
-      TICO_SAMPLE_COMPANY:
       TICO_COMPANY_FILE_B64:
       # A starter plan too big for the env (Tico's hosted servers): the file setup copied to ./company-file, mounted below.
       TICO_COMPANY_FILE:

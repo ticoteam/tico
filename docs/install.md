@@ -18,9 +18,8 @@ browser -> caddy (HTTPS) or cloudflared --> server :8765 (data volume)
 
 ## Recommended setup
 
-The quick start below with the recommended choices already made: a **sample company** (Sample Co: the Assistant and
-four role bots with short starter tasks), models on **your Claude and ChatGPT subscriptions, plus Tico Gateway**, **Tico
-Support on**, and a computer on this server that runs the bots (a Docker runner on the server's network, named *Server
+The quick start below with the recommended choices already made: models on **your Claude and ChatGPT subscriptions,
+plus Tico Gateway**, **Tico Support on**, and a computer on this server that runs the bots (a Docker runner on the server's network, named *Server
 computer*). There is no domain, DNS or sign-in provider to set up:
 
 ```
@@ -29,8 +28,8 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 
 Run on a terminal with no options, the installer asks which setup you want and offers this one first (press Enter); with
 any option, or piped without a terminal, it asks nothing and installs as before. It
-prints the owner sign-in link, as the quick start does. What is left is one step: open the link, then **Settings >
-Computers > Server computer > Sign in**, to Claude and to ChatGPT.
+prints the owner sign-in link, as the quick start does. Open the link and set up your team in the app, as on any new
+install, then **Settings > Computers > Server computer > Sign in**, to Claude and to ChatGPT.
 
 A local install has no public address, and it can still link to your Tico company (**Settings > General > Tico company**,
 with a server code from app.tico.dev Hosting > **Connect your own server**) for Tico models and billing. It shows there as
@@ -50,7 +49,7 @@ a local server, with no Open link.
   ([Handed over from setup](connect-an-agent.md#handed-over-from-setup)). Without the variable, nothing changes.
 - If the server computer cannot start, Tico keeps running and the installer says how to add it from **Settings >
   Computers > Add computer**.
-- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_SAMPLE_COMPANY=on`, `TICO_MODELS_PRESET=subscriptions-gateway` and
+- It writes `TICO_INSTALL_PRESET=recommended`, `TICO_MODELS_PRESET=subscriptions-gateway` and
   `TICO_SUPPORT` into `.env`; the server reads them on its first start. Every other choice below (the quick start, your own
   domain with Google, Microsoft or Cloudflare Access, your own API keys) installs as before.
 
@@ -68,8 +67,7 @@ The same flag works with the non-interactive cloud setup. The company YAML file 
 fit within 512 KiB (524,288 bytes). Setup refuses larger files or plans before provisioning. It validates the file, uses its
 company name, and carries the normalized plan privately to the server. On first startup the app creates the selected
 AI employees and reporting lines, adds its built-in roles once, and leaves employees marked **later** paused.
-It preserves the plan across retries and refuses to replace an existing company. A selected file takes precedence
-over the recommended sample company. Charts up to 300 seats fit. AWS setup creates a private, encrypted bucket in
+It preserves the plan across retries and refuses to replace an existing company. Charts up to 300 seats fit. AWS setup creates a private, encrypted bucket in
 your account, with public access blocked and a one-day expiry rule. It copies the plan to the server and deletes the
 bucket's copy once the app reads it. SSH and local setup write the plan to a private file, checking its checksum before
 starting Tico. The chart stays out of the server's environment and AWS Parameter Store size limit.
@@ -93,7 +91,7 @@ run `sudo apt-get install -y curl` first. That installs the newest release; to p
 Files go to `/opt/tico` on Linux (it uses `sudo`) and to `~/tico` on a Mac (no `sudo`); `--dir` changes it. Port 8765 is the default; use `--port 8877` if it is occupied. By hand, set `TICO_PORT=8877` in `.env`.
 The public, runner and MCP addresses follow this port. `TICO_PUBLIC_URL` and `TICO_RUNNER_URL` override their defaults.
 To prefill Finish setup, add `--owner-name "Ana" --team-name "Acme"` to the local installer command; `--company` remains an alias.
-To start with a team exported from tico.team/setup, add `--company-file ~/tico.company.yaml`: the installer packs it with the server's own code and the team loads on the first start (with `--recommended` it replaces the sample company).
+To start with a team exported from tico.team/setup, add `--company-file ~/tico.company.yaml`: the installer packs it with the server's own code and the team loads on the first start (with `--recommended` too).
 
 It prints a reusable private owner sign-in link. Keep it private: anyone with the link on this computer can sign in as you.
 Recover the token any time with `docker compose exec server cat /data/local-owner.token` in the install directory.

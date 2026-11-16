@@ -14,7 +14,7 @@ from backend import task_pages as P
 from backend import task_requirements as R
 from backend.answers import answer
 from backend.store import H
-from backend.tests.helpers.sample_company import (  # noqa: F401
+from backend.tests.helpers.fresh_install import (  # noqa: F401
     booted,
     environment,
     rows,

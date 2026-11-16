@@ -221,18 +221,6 @@ def company_page(names, answers, today=None):
     return "\n".join(lines)
 
 
-def set_sections(text, sections):
-    """`text` with the body of each `## <heading>` in `sections` replaced; a heading it lacks is added at the end."""
-    for heading, body in (sections or {}).items():
-        block = f"## {heading}\n{str(body).strip()}\n"
-        found = re.search(rf"^## {re.escape(heading)}[ \t]*\n.*?(?=^## |\Z)", text, re.M | re.S)
-        if found:
-            text = text[: found.start()] + block + ("\n" if found.end() < len(text) else "") + text[found.end() :]
-        else:
-            text = text.rstrip("\n") + "\n\n" + block
-    return text
-
-
 def materialize(
     template,
     slug,
@@ -242,7 +230,6 @@ def materialize(
     display_name=None,
     instructions=None,
     directory=None,
-    setup=None,
     folder=None,
 ):
     """Copy one catalog template into `<workspace>/bot-<slug>` and commit it. Returns the path. `folder` is the folder
@@ -251,9 +238,7 @@ def materialize(
 
     The names fill the placeholders, the onboarding answers become `knowledge/company.md`, and
     `instructions` — what the person wrote for this bot during onboarding — replaces AGENTS.md
-    when it is given. `setup` maps `## <heading>` sections to their text, added to `knowledge/company.md` for a bot
-    whose setup is already done when it is made (the sample company, backend/sample_company.py). An existing directory
-    is never touched: a bot's repository is its memory.
+    when it is given. An existing directory is never touched: a bot's repository is its memory.
     """
     if not SLUG_RE.fullmatch(slug or ""):
         raise ValueError("A bot slug is lowercase letters, digits, and single hyphens")
@@ -292,7 +277,7 @@ def materialize(
     if manifest.is_file():
         _write(target, manifest, identify(manifest.read_text(), slug, values["bot_name"]))
     (target / "knowledge").mkdir(exist_ok=True)
-    _write(target, target / COMPANY_PAGE, set_sections(company_page(names, answers), setup))
+    _write(target, target / COMPANY_PAGE, company_page(names, answers))
     if instructions:
         _write(target, target / INSTRUCTIONS, str(instructions).rstrip("\n") + "\n")
     apply_mailbox(target, instructions)

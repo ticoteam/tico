@@ -187,7 +187,6 @@ CELL_ENV_KEYS = frozenset(
         "TICO_COMPANY_FILE_S3",
         "TICO_COMPANY_FILE_S3_REGION",
         "TICO_COMPANY_FILE_DIR",
-        "TICO_SAMPLE_COMPANY",
         "TICO_UPDATES",
         "TICO_CELL",
         "TICO_HOSTED",

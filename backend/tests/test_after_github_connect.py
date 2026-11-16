@@ -16,7 +16,7 @@ import pytest
 from backend import bot_repo_maker as maker
 from backend import heartbeat
 from backend.tests.helpers.github_app import gh  # noqa: F401
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, signed_in  # noqa: F401
 
 TEAM = 21  # the default company's bots: the built-ins (Tools Owner included) and the starter team
 

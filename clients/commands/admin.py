@@ -301,7 +301,7 @@ def setup_show(api, args):
     "Finish the welcome wizard with the answers and picks it has saved (`tico_setup_show`), as the owner: the built-in "
     "bots are created and every other role becomes a Recruiting seat. Finishing twice keeps the first time. The "
     "same as the wizard's Create my team. Answers with the setup record. The wizard's choices are saved with "
-    "`tico_api` PUT /api/v2/setup, or come from the company file or sample company the install was given.",
+    "`tico_api` PUT /api/v2/setup, or come from the company file the install was given.",
     {},
     writes=True,
 )

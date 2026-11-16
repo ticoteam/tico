@@ -26,7 +26,6 @@ def test_company_file_reaches_private_env_and_secure_parameter_without_public_st
     rendered = envfile.render(s.to_env())
     packed = envfile.parse(rendered)["TICO_COMPANY_FILE_B64"]
     assert packed not in repr(s) and packed not in envfile.redact_env(rendered)
-    assert "TICO_SAMPLE_COMPANY=off" in rendered
     resumed = settings.from_saved(public, rendered)
     wizard.gather_company_file(argparse.Namespace(company_file=None, company=None), resumed)
     assert resumed.company_file_data == packed
@@ -99,7 +98,7 @@ def test_hosted_cli_carries_selected_file_through_machine_and_dns_setup(tmp_path
     assert code == 0, out
     param = ssm.called("put_parameter")[0]
     env = envfile.parse(param["Value"])
-    assert env["TICO_TEAM_NAME"] == "Acme Finance" and env["TICO_SAMPLE_COMPANY"] == "off"
+    assert env["TICO_TEAM_NAME"] == "Acme Finance"
     assert starter.unpack(env["TICO_COMPANY_FILE_B64"])["company"]["name"] == "Acme Finance"
     assert env["TICO_COMPANY_FILE_B64"] not in out + ec2.called("run_instances")[0]["UserData"]
     assert r53.called("change_resource_record_sets")

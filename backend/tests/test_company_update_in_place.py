@@ -29,7 +29,7 @@ from backend.observability import Observability
 from backend.store import H
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
-from backend.tests.helpers.sample_company import OWNER_EMAIL, settings_for, signed_in
+from backend.tests.helpers.fresh_install import OWNER_EMAIL, settings_for, signed_in
 from backend.tests.helpers.template_renames import CHARTS, employees_file
 from backend.tests.helpers.upgrade import FIXTURES
 from clients.environments import seed_registry

@@ -19,7 +19,7 @@ from backend import source_actions as SA
 from backend.item_sources import github as GS
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.sample_company import machine, rows, signed_in
+from backend.tests.helpers.fresh_install import machine, rows, signed_in
 from clients import hubcli
 
 REPO = "acme/app"

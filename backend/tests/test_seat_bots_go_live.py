@@ -14,7 +14,7 @@ from pathlib import Path
 from backend import never_stuck
 from backend.store import H
 from backend.tests.helpers.botops_parity import act
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, signed_in  # noqa: F401  (fixtures)
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, signed_in  # noqa: F401  (fixtures)
 
 
 def _post(api, path, body, token):

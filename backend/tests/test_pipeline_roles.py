@@ -1,12 +1,13 @@
 """No Product stage is left without an owner (docs/pipelines-v3.md "Default pipelines", the ladder): a role no bot fills
 goes up to the pipeline's manager, and a manager no bot fills to the General Manager, until the role's bot appears
 (pipeline_settings.preset, _fill). The stages a feature owner holds are the task's assignee's, whoever the company has.
-The sample company, which has none of the roles, is the company the first live one was, built on the same path."""
+A company whose file lists none of the roles stands for one set up without them."""
 
+from backend import company_file as C
 from backend import task_engine as E
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.helpers.sample_company import (  # noqa: F401
+from backend.tests.helpers.fresh_install import (  # noqa: F401
     OWNER_EMAIL,
     booted,
     environment,
@@ -32,17 +33,29 @@ OWNER_STAGES = (
 ROLE_STAGES = ("product-review-1", "product-review-2", "product-qa", "product-merge")
 
 
-def _sample_company(environment):
-    """A hosted install's first starts with no company file: TICO_SAMPLE_COMPANY=on (setup/settings.py), then a
-    computer."""
-    environment()
-    api = environment(seed_roster=False, sample_company=True)
+def _no_roles(environment):
+    """A new company whose company file lists only the Assistant and BotOps, then a computer."""
+    api = environment()
+    draft = C.blank()
+    draft["company"]["signals"] = ["sells_services"]
+    draft = C.Turn(draft).finish()
+    draft["company"].update(name="Kiln & Co", about="We make pottery.")
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")]
+    body = {"company_yaml": C.to_yaml(draft)}
+    preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
+    assert preview.status_code == 200, preview.text
+    done = api.post(
+        "/api/v2/onboarding/company/import",
+        json={**body, "fingerprint": preview.json()["fingerprint"]},
+        headers=signed_in(),
+    )
+    assert done.status_code == 200, done.text
     machine(api)
     return api
 
 
 def _restart(environment):
-    return environment(seed_roster=False, sample_company=True)
+    return environment(seed_roster=False)
 
 
 def _staffing(api):
@@ -63,15 +76,15 @@ def _expected(manager, **roles):
     return manager, {**dict.fromkeys(OWNER_STAGES, ASSIGNEE), **dict.fromkeys(ROLE_STAGES, manager), **roles}
 
 
-def _sample_expected():
+def _no_roles_expected():
     return _expected(TM)
 
 
-def test_a_new_sample_company_has_no_ownerless_product_stage(environment):
-    api = _sample_company(environment)
-    assert _staffing(api) == _sample_expected()
+def test_a_new_company_without_the_roles_has_no_ownerless_product_stage(environment):
+    api = _no_roles(environment)
+    assert _staffing(api) == _no_roles_expected()
     assert not rows(api, "SELECT 1 FROM pipelines WHERE id='engineering'"), "Product replaces the pair: no Engineering"
-    # Nothing is added to the sample's team.
+    # Nothing is added to the company's team.
     assert not rows(
         api,
         "SELECT id FROM bots WHERE slug IN ('product-manager','engineering-manager','reviewer-1')",
@@ -79,7 +92,7 @@ def test_a_new_sample_company_has_no_ownerless_product_stage(environment):
 
 
 def test_a_second_start_changes_nothing(environment):
-    api = _sample_company(environment)
+    api = _no_roles(environment)
     before = _staffing(api), rows(api, "SELECT id,settings_version FROM pipelines ORDER BY id")
     again = _restart(environment)
     assert (_staffing(again), rows(again, "SELECT id,settings_version FROM pipelines ORDER BY id")) == before
@@ -88,17 +101,17 @@ def test_a_second_start_changes_nothing(environment):
 def test_a_half_staffed_company_is_staffed_on_its_next_start(environment):
     """A company whose Product lost its manager and its role stages' owners: the next start (complete_company, every
     start: pipeline_settings.ensure_presets) fills them, and the assignee's stages stay the assignee's."""
-    api = _sample_company(environment)
+    api = _no_roles(environment)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE pipelines SET manager_id=NULL WHERE id='product'")
         c.execute("UPDATE stages SET owner=NULL WHERE pipeline_id='product' AND owner='bot:general-manager'")
     half = _staffing(api)
     assert half[0] is None and {half[1][s] for s in ROLE_STAGES} == {None}
-    assert _staffing(_restart(environment)) == _sample_expected()
+    assert _staffing(_restart(environment)) == _no_roles_expected()
 
 
 def test_a_role_bot_that_appears_later_takes_its_stages_from_the_stand_in(environment):
-    api = _sample_company(environment)
+    api = _no_roles(environment)
     onboarding = api.app.state.onboarding
     who = Identity("human:owner", "owner", OWNER_EMAIL)
     with api.app.state.store.transaction() as c:
@@ -129,7 +142,7 @@ def test_a_new_company_on_the_default_chart_is_staffed_while_its_release_manager
 
 def test_a_product_tasks_owner_holds_build_and_the_fixes(environment):
     """No Builder: the task's assignee, its feature owner, owns Build and both Fixes in the same task."""
-    api = _sample_company(environment)
+    api = _no_roles(environment)
     owner = "human:owner"
     with api.app.state.store.transaction() as c:
         feature_owner = "bot:" + rows(api, "SELECT id FROM bots WHERE state<>'archived' ORDER BY slug LIMIT 1")[0]["id"]

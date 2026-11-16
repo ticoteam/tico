@@ -15,7 +15,7 @@ from backend import cloud_access
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
-from backend.tests.helpers.sample_company import booted, environment, machine, rows, signed_in  # noqa: F401
+from backend.tests.helpers.fresh_install import booted, environment, machine, rows, signed_in  # noqa: F401
 
 
 def _post(api, path, body, token):

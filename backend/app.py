@@ -208,11 +208,10 @@ def create_app(settings=None):
         cloud_access.current(store)  # a lock kept from before the restart holds from the first request
         asyncio.get_running_loop().run_in_executor(None, auth.warm)  # Cloudflare's keys, before anyone signs in
         asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)  # the KMS data key
-        # TICO_SAMPLE_COMPANY=on: a new company starts as the sample company, once (backend/sample_company.py).
-        # The company file and the sample company stay before serving: on a first start the first page shows the
-        # company they make, and the owner's first answer must not race them; on any later start each is a quick check.
+        # The company file stays before serving: on a first start the first page shows the company it makes, and the
+        # owner's first answer must not race it; on any later start it is a quick check.
         if settings.company_file_configured or settings.company_file_data:
-            # A file that can't be applied is kept for the owner to see; never a sample company in its place.
+            # A file that can't be applied is kept for the owner to see.
             from . import company_import
 
             company_import.start(onboarding, store, telemetry)
@@ -221,14 +220,6 @@ def create_app(settings=None):
             from . import company_import
 
             company_import.forget(store)
-        if not (settings.company_file_configured or settings.company_file_data) and settings.sample_company:
-            try:
-                from . import sample_company
-
-                with store.transaction() as c:
-                    sample_company.load_on_start(onboarding, c)
-            except Exception as exc:
-                telemetry.capture("sample_company", exc)
         # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
         try:
             from .finance import actions as finance
@@ -581,7 +572,7 @@ def create_app(settings=None):
         openapi_url=None,
     )
     app.state.store, app.state.auth, app.state.execution = store, auth, execution
-    app.state.onboarding = onboarding  # tests build a picked team as bots, as the sample company does
+    app.state.onboarding = onboarding  # tests build a picked team as bots
     from .ui_compression import UiCompression
 
     app.add_middleware(UiCompression)
