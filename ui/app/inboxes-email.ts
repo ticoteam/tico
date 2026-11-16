@@ -219,6 +219,8 @@ interface MbMessage {
 async function mbRecent(host: HTMLElement, m: MbMailbox, run: number): Promise<void> {
   const slot = (): HTMLElement | null => host.querySelector<HTMLElement>('[data-mb-recent]');
   if (m.level === 'none') { const el = slot(); if (el) el.innerHTML = '<p class="muted">Only people who can use it see its mail.</p>'; return; }
+  // Gmail is read only for a connected mailbox; asking for an unconnected one is refused (GET /v2/mail/messages).
+  if (m.state !== 'connected') { const el = slot(); if (el) el.innerHTML = '<p class="muted">Mail is read from Gmail once it is connected.</p>'; return; }
   let d: {messages?: MbMessage[]};
   try { d = await get(`/v2/mail/messages?mailbox=${encodeURIComponent(m.address)}&limit=8`, {fresh: true}); }
   catch (e) { const el = slot(); if (run === MB.run && el) el.innerHTML = `<p class="muted">${esc(errorMessage(e, ''))}</p>`; return; }
