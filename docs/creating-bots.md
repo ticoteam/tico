@@ -572,7 +572,9 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
 
 - **Where it comes from.** The list starts with the model and harness the bot runs on (for example
   "Codex · openai/gpt-6-luna"; the icons beside the name skip it, since the harness mark says it),
-  then its GitHub repository when it has an address, and then the `tools:` entries above, one each. The runner reads `bot.yaml` from the bot's
+  then its GitHub repository when it has an address, then the `tools:` entries above, one each, and then every tool it
+  can use through a grant in Tools that no entry names (an API or MCP tool's key at its level, a key on no tool, a
+  website account), marked with a key. An entry and a grant for the same service are one row. The runner reads `bot.yaml` from the bot's
   checkout and reports the entries on its heartbeat, so an edit shows up once it is in the checkout
   on the computer. A computer running an older runner shows the model and repository only.
 - **An MCP server** shows as `mcp` with its host. The runner makes one cheap request to it (an MCP `initialize`, a few
@@ -587,7 +589,7 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
   or more GitHub repositories share one line, "GitHub · N repositories" with their access added up, which
   opens to a short line each. Opening a line gives the tool's details: the service's name, the identity it acts as
   (`identity:`), what it may do (`can:`), its scope (`database:`, `channels:`, `project:`,
-  `mailbox:`, `sites:`, `repo:` and a few like them), the `note:`, the name of the environment
+  `mailbox:`, `sites:`, `repo:`, `page:` or any other short lowercase name), the `note:`, the name of the environment
   variable, and a status: ready, or the problem, such as "Credential missing on Test Mac".
 - **What never appears.** No credential value. The runner sends the service, identity, verbs, the scope
   fields above, the note and the variable's *name*, plus whether that variable is set on its
@@ -601,8 +603,9 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
 The same list is `GET /api/v2/bots/{bot}/tools` ([custom-frontend.md](custom-frontend.md)), for a
 team's own frontend.
 
-**Registering a tool.** Someone who manages a bot (the owner, a bot administrator who owns it,
-or a human above it on the team chart) can add or remove a tool without opening its repository:
+**Registering a tool.** The bot itself (its own entries), BotOps, the Tools Owner, a credential admin, or someone who
+manages the bot (the owner, a bot administrator who owns it, or a human above it on the team chart) can add or remove a
+tool without opening its repository; the Assistant and the Tools Owner do it for a person who asks them:
 `POST /api/v2/bots/{bot}/tools`, `DELETE /api/v2/bots/{bot}/tools/{id}`, or the MCP tools
 `tico_tool_add`, `tico_tool_list`, `tico_tool_update` and `tico_tool_remove` (`tico tool add <bot> posthog --can read
 --identity "PostHog project 340585 (US)" --scope project=340585 --env POSTHOG_KEY`; a remote MCP server adds

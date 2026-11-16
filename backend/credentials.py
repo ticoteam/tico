@@ -1266,7 +1266,9 @@ def install_credentials(app, store, delegate=None, propose=None):
     @app.post('/api/v2/credentials/{cid}/grants')
     def grant(request: Request, cid: str, body: CredentialGrant):
         who = acting(request, body)
-        if who.via == 'botops' and not who.confirmed and propose:
+        from .tools_delegation import DELEGATE_VIAS
+
+        if who.via in DELEGATE_VIAS and not who.confirmed and propose:
             # BotOps giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
             # them: their own rights allow it, and a bot only ever gets what is explicitly granted to it. Anyone else is
             # refused here in plain words (`grant_authority`); a click stays for a person's access, every computer's, and
@@ -1278,6 +1280,15 @@ def install_credentials(app, store, delegate=None, propose=None):
                     body.subject.startswith('bot:') and (administrator(c, who, vault.admins) or creator(c, who, cid))
                 ):
                     name = vault.row(c, cid)['name']
+                    if who.via != 'botops':
+                        # The Tools Owner gives bots keys for the person who asked; anyone else's access is their tap.
+                        raise Problem(
+                            'forbidden',
+                            f"Giving {body.subject} the stored credential {name} is the person's own tap in Tools: "
+                            'open the key and add them under Who can use it',
+                            403,
+                            extra={'fix': 'Add them under Who can use it', 'link': '#/tools/keys?show=credentials'},
+                        )
                     return propose(
                         c,
                         who,

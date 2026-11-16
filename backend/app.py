@@ -27,6 +27,7 @@ from . import pipeline_judges
 from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
+from . import tools_delegation
 from . import task_followers
 from . import setup_failures
 from . import sources as SRC
@@ -1231,6 +1232,21 @@ def create_app(settings=None):
                     request.method, request.url.path, body, request.query_params
                 ):
                     on_behalf = "default"
+            elif (
+                not on_behalf
+                and getattr(request.state, "identity", None) is not None
+                and request.state.identity.role == "bot"
+                and not request.state.identity.via
+                and tools_delegation.route(request.method, request.url.path)
+            ):
+                # A Tools change by a bot: the Tools Owner makes it with the rights of the person who asked it
+                # (backend/tools_delegation.py); any other bot keeps its own (`act_for_requester`).
+                body = botops_act.parse_body(getattr(request, "_body", b""))
+                on_behalf = (
+                    (body.get("on_behalf_of") if isinstance(body, dict) else None)
+                    or request.query_params.get("on_behalf_of")
+                    or "default"
+                )
             if (
                 on_behalf
                 and getattr(request.state, "identity", None) is not None
@@ -1246,7 +1262,7 @@ def create_app(settings=None):
                 if acted is not None:
                     request.state.identity = replace(acted, task_actor=caller.task_actor or caller.actor)
                     if via_reset is None:
-                        via_reset = H.VIA.set("botops")
+                        via_reset = H.VIA.set(acted.via if acted.via in tools_delegation.DELEGATE_VIAS else "botops")
                     if getattr(request.state, "delegation", None):
                         delegation_reset = H.DELEGATION.set(request.state.delegation)
                     lent = (getattr(request.state, "delegation", None) or {}).get("for")
@@ -3367,7 +3383,7 @@ def create_app(settings=None):
                     "request_id",
                     "Only a task for BotOps, the "
                     + strategy_bot.name(c)
-                    + " or the Librarian carries the person's request",
+                    + ", the Librarian or the Tools Owner carries the person's request",
                     422,
                 )
             asked_botops = assistant_instruction(c, who, request_id) if assistant_direct() else None
@@ -3646,7 +3662,7 @@ def create_app(settings=None):
         if asked_botops:
             request_id = asked_botops["cited"]
             # BotOps' lending reads `botops.asked_via_assistant` (delegated_identity); the other helpers' record says
-            # which helper, and lends nothing.
+            # which helper, and lends nothing, except to the Tools Owner on a Tools change (delegated_identity).
             if owner == "bot:" + BOTOPS:
                 H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_botops)
             else:
@@ -4089,14 +4105,24 @@ def create_app(settings=None):
         `new_task`: the reference is the request a task is being filed from. `carry`: the call is one a bot's hand-off
         (carried_request) makes with the person's rights (botops_act.carried_lends); otherwise it keeps the bot's.
         """
-        if who.via == "botops" and who.role == "bot" and not who.attempt_id:
+        if who.via in tools_delegation.DELEGATE_VIAS and who.role == "bot" and not who.attempt_id:
             if ref in ("turn", "default"):
                 return who
             raise Problem("on_behalf_of", "A bot request cannot borrow a human's rights", 403)
-        if who.via == "botops" and who.attempt_id:
-            who = Identity("bot:" + BOTOPS, "bot", runner_id=who.runner_id, attempt_id=who.attempt_id, agent=who.agent)
-        if who.actor != "bot:" + BOTOPS:
-            raise Problem("forbidden", "Only BotOps applies changes on a requester's behalf", 403)
+        if who.via in tools_delegation.DELEGATE_VIAS and who.attempt_id:
+            who = Identity(
+                who.task_actor or "bot:" + BOTOPS,
+                "bot",
+                runner_id=who.runner_id,
+                attempt_id=who.attempt_id,
+                agent=who.agent,
+            )
+        # BotOps, or the Tools page's owner on a Tools change (act_for_requester admits it only there).
+        agent = who.actor
+        if agent != "bot:" + BOTOPS and not tools_delegation.is_tools_owner(c, agent):
+            raise Problem("forbidden", "Only BotOps and the Tools Owner apply changes on a requester's behalf", 403)
+        via = tools_delegation.via_of(agent)
+        named = tools_delegation.name_of(c, agent)
 
         def acting_as(principal, cited="", run="live"):
             # Keep the actual bot's credential so writes revalidate its lease under the lock,
@@ -4104,10 +4130,13 @@ def create_app(settings=None):
             # Never confirmed: only the person's own tap on a Confirm card is (auth.py, x-tico-assistant-action), so
             # every route's "always a click" rule (`risky`) asks them.
             if H.is_human(principal.actor):
-                H.DELEGATION.set({"for": principal.actor, "cited": cited, "run": run})
+                lent = {"for": principal.actor, "cited": cited, "run": run}
+                if via != "botops":
+                    lent["by"] = agent  # the Tools Owner names itself on what it does for the person
+                H.DELEGATION.set(lent)  # pyright: ignore[reportArgumentType] - typed by its None default
             return replace(
                 principal,
-                via="botops",
+                via=via,
                 confirmed=False,
                 task_actor=who.actor,
                 runner_id=who.runner_id,
@@ -4157,9 +4186,9 @@ def create_app(settings=None):
                 if not H.is_bot(handed) or handed == who.actor:
                     raise Problem(
                         "on_behalf_of",
-                        "Someone other than the person who asked for this task gave it to BotOps, "
-                        "so it lends no one's rights; they can move it to BotOps themselves or ask in their "
-                        "BotOps chat",
+                        f"Someone other than the person who asked for this task gave it to {named}, "
+                        f"so it lends no one's rights; they can move it to {named} themselves or ask in their "
+                        f"{named} chat",
                         403,
                     )
                 requester = handed
@@ -4177,7 +4206,7 @@ def create_app(settings=None):
                 ):
                     # The task's requester commenting on it, in their own words: that is them asking.
                     auth.conversation(c, who, initial["conversation_id"])
-                    H.VIA.set("botops")
+                    H.VIA.set(via)
                     return acting_as(auth.identity_for_actor(c, requester), task_id, "comment")
                 if (
                     refs.get("comment")
@@ -4187,8 +4216,8 @@ def create_app(settings=None):
                 ):
                     raise Problem(
                         "on_behalf_of",
-                        "A bot gave this task to BotOps, so your comment doesn't lend your rights; "
-                        "move it to BotOps yourself or ask in your BotOps chat",
+                        f"A bot gave this task to {named}, so your comment doesn't lend your rights; "
+                        f"move it to {named} yourself or ask in your {named} chat",
                         403,
                     )
                 if (
@@ -4224,7 +4253,7 @@ def create_app(settings=None):
                     person = None  # someone else's comment never lends the carried person's rights
                 if person:
                     # The bot handed on a person's own request (carried_request): BotOps acts as that person.
-                    H.VIA.set("botops")
+                    H.VIA.set(via)
                     return acting_as(auth.identity_for_actor(c, person["person"]), person["message_id"], "carried")
                 return acting_as(Identity(requester, "bot"))
             if not initial or requester == H.KEEPER or requester == who.actor:
@@ -4245,13 +4274,19 @@ def create_app(settings=None):
                 if origin and str(origin["actor"]).startswith("human:"):
                     auth.conversation(c, who, task["conversation_id"])
                     person = auth.identity_for_actor(c, origin["actor"])
-                    H.VIA.set("botops")
+                    H.VIA.set(via)
                     return acting_as(person, task_id)
             asked = (
                 c.execute(
                     "SELECT detail FROM events WHERE action='botops.asked_via_assistant' AND target=? "
                     "AND actor=? LIMIT 1",
                     (task_id, task["requester_id"]),
+                ).fetchone()
+                if task and via == "botops"
+                else c.execute(
+                    "SELECT detail FROM events WHERE action='assistant.asked_helper' AND target=? AND actor=? "
+                    "AND json_extract(detail,'$.helper')=? LIMIT 1",
+                    (task_id, task["requester_id"], agent),
                 ).fetchone()
                 if task
                 else None
@@ -4271,7 +4306,7 @@ def create_app(settings=None):
                         "The request the Assistant handed on no longer stands; ask the person again",
                         403,
                     )
-                H.VIA.set("botops")
+                H.VIA.set(via)
                 return acting_as(auth.identity_for_actor(c, task["requester_id"]), origin["id"], "assistant")
             if task and task.get("request_id") in ("turn", "default"):
                 # Tasks filed before the request was stored by id: the person's message the filing cited.
@@ -4303,10 +4338,10 @@ def create_app(settings=None):
         if (
             not msg
             or not str(msg["sender_id"]).startswith("human:")
-            or msg["recipient_id"] != "bot:" + BOTOPS
+            or msg["recipient_id"] != agent
             or msg["kind"] not in ("say", "answer")
         ):
-            raise Problem("on_behalf_of", "Cite a message a person sent BotOps asking for this change", 403)
+            raise Problem("on_behalf_of", f"Cite a message a person sent {named} asking for this change", 403)
         refs = msg.get("refs") or {}
         if refs.get("via") or refs.get("assistant"):
             # The Assistant wrote this for the person: its writes never carry the person's authority on.
@@ -4314,13 +4349,13 @@ def create_app(settings=None):
         conversation = H.conversation(c, msg["conversation_id"]) or {}
         if conversation.get("task_id") or conversation.get("scope") == "task" or refs.get("task"):
             raise Problem(
-                "on_behalf_of", "A person's words inside a task are not a request to BotOps; ask in chat", 403
+                "on_behalf_of", f"A person's words inside a task are not a request to {named}; ask in chat", 403
             )
         slack = refs.get("slack") if isinstance(refs.get("slack"), dict) else {}
         own_dm = (
             slack.get("kind") == "im"
             and not slack.get("recorded_only")
-            and set(conversation.get("participants") or []) == {msg["sender_id"], "bot:" + BOTOPS}
+            and set(conversation.get("participants") or []) == {msg["sender_id"], agent}
         )
         if (refs.get("slack") or refs.get("routing")) and not own_dm:
             # Anyone in a Slack channel or thread can put words in a routed message, so those never lend a person's
@@ -4329,13 +4364,13 @@ def create_app(settings=None):
             # decision, 2026-10-01). The message decides, not the room: what they type in Tico is always their own request.
             raise Problem(
                 "on_behalf_of",
-                "This request arrived through a Slack channel, so BotOps can't act on it for "
-                "the person. They can DM it to the Tico app in Slack or send it in their Tico chat with BotOps",
+                f"This request arrived through a Slack channel, so {named} can't act on it for "
+                f"the person. They can DM it to the Tico app in Slack or send it in their Tico chat with {named}",
                 403,
             )
-        if explicit and set(conversation.get("participants") or []) != {msg["sender_id"], "bot:" + BOTOPS}:
+        if explicit and set(conversation.get("participants") or []) != {msg["sender_id"], agent}:
             # A message cited by id: the person's own, in their own room with BotOps (not a room another person spoke in).
-            raise Problem("on_behalf_of", "Cite a message from the person's own chat with BotOps", 403)
+            raise Problem("on_behalf_of", f"Cite a message from the person's own chat with {named}", 403)
         if week_old(msg["created_at"]) and (
             new_task
             or not any(
@@ -4357,7 +4392,7 @@ def create_app(settings=None):
         except Problem:
             raise Problem("on_behalf_of", "Cite a request from the conversation you are working on", 403) from None
         person = auth.identity_for_actor(c, msg["sender_id"])
-        H.VIA.set("botops")  # every event and history row from here says "via BotOps"
+        H.VIA.set(via)  # every event and history row from here says "via BotOps"
         return acting_as(person, message_id)
 
     def carried_request(c, who, ref):
@@ -4678,7 +4713,29 @@ def create_app(settings=None):
         """Apply the requester's identity before the route checks its normal permissions."""
         who = request.state.identity
         if who.actor != "bot:" + BOTOPS:
-            raise Problem("forbidden", "Only BotOps acts on a person's behalf", 403)
+            # The Tools Owner on a Tools change (backend/tools_delegation.py), else nobody but BotOps.
+            tools = tools_delegation.route(request.method, request.url.path)
+            if tools:
+                with store.read() as c:
+                    tools = tools_delegation.is_tools_owner(c, who.actor)
+            if tools:
+                body = botops_act.parse_body(getattr(request, "_body", b"")) if request.method != "GET" else None
+                with store.read() as c:
+                    if tools_delegation.to_itself(c, who.actor, request.url.path, body):
+                        raise Problem(
+                            "forbidden",
+                            "The Tools Owner holds none of the keys it connects: give the level to the bot that needs it",
+                            403,
+                        )
+            if not tools:
+                if ref == "default":
+                    return None, None  # a bot's own Tools change, with its own rights
+                raise Problem(
+                    "forbidden",
+                    "Only BotOps, and the Tools Owner for a Tools change, act on a person's behalf: ask either in your "
+                    "chat with it",
+                    403,
+                )
         if botops_act.lifecycle_call(request.method, request.url.path) and ref in ("turn", "default", ""):
             # A manager bot's report: BotOps acts as that manager, which the lifecycle routes check (Auth.report_lifecycle).
             with store.read() as c:

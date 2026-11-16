@@ -253,6 +253,8 @@ NEVER = [
         (None, r"/api/v2/credential-set"),
         # An API tool's keys and levels are credentials and grants; its address and auth scheme decide where a key is sent,
         # so changing, adding or deleting a tool is the person's tap too (backend/api_tools.py). Its check only reads.
+        # The Tools changes the person asks for in their chat (a bot's key or level, a tool's settings) are admitted
+        # before this list (`admits_on_turn`, backend/tools_delegation.py).
         (None, r"/api/v2/api-tools(/[^/]+(/(keys|access)(/.*)?)?)?"),
         # HQ's cloud-machine support switch grants access just like the support_access team rule.
         ("PUT", r"/api/v2/cloud-machines/support"),
@@ -436,10 +438,16 @@ def admits_on_turn(method, path, body=None):
     path = canonical(path)
     if not path or method not in ("POST", "PUT", "PATCH", "DELETE"):
         return False
-    # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
-    if any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
-        return False
     parsed = _json(body)
+    # A Tools change the person asked for (backend/tools_delegation.py): giving a bot a key or a level, taking one back,
+    # adding or changing a tool. The route checks their rights; a value never goes through here (`secret_in_request`
+    # below), and a person's own access stays their tap.
+    from . import tools_delegation
+
+    tools = tools_delegation.route(method, path) and tools_delegation.for_bots_only(method, path, parsed)
+    # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
+    if not tools and any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
+        return False
     # The team's rules: a turn may change the ordinary ones (`{"stale_review": false}`), never the ones that grant access to
     # credentials, tokens, the SQL page or support, nor the Assistant's own (backend/team_rules.py).
     if (
@@ -1629,7 +1637,8 @@ def ensure_room(c, actor, bot):
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
 # (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
-HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.RULES_OWNER)
+# The Tools Owner works a Tools change it was handed with the person's rights (backend/tools_delegation.py).
+HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.RULES_OWNER, H.TOOLS_OWNER)
 
 
 def strategy_on(c):

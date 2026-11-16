@@ -3362,7 +3362,7 @@ SCHEMAS = {
             "scope": {
                 "type": "object",
                 "description": "Service-specific fields, a string or a list of strings each: "
-                "database, channels, project, mailbox, sites, repo, effort ...",
+                "database, channels, project, mailbox, sites, repo, page, effort ... (any short lowercase name)",
             },
             "note": "s",
             "status": {"enum": ["ready", "problem", "unknown", "pending"]},
@@ -3379,6 +3379,12 @@ SCHEMAS = {
             "one whose can, scope or note is being changed",
         },
         task_id={"type": "string", "description": "The BotOps task carrying the request"},
+        granted={
+            "type": "object",
+            "description": "The bot can use this tool through a grant in Tools: `level` (read or read_write), `kind` "
+            "(api, mcp, website, or key for a key on no tool), `href` (where it opens in Tools) and `tool_id`. A tool "
+            "both declared in bot.yaml and granted is one row with this set",
+        },
         kind={"enum": ["mcp"], "description": "`mcp` when the tool is a remote MCP server (see `mcp`)"},
         mcp={
             "type": "object",

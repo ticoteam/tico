@@ -74,7 +74,11 @@ No card and no proposal. Give one sentence with the link `assistant-chat.md` ste
   permission-checked card flow above
 - spending money, a price, a discount, a credit, a refund or agreeing to a term
 - another bot's repository: a task for `botops`
-- a token, a sign-in or a credential; transferring ownership; deleting a person, storage or a server connection
+- a token, a sign-in or a credential's value; transferring ownership; deleting a person, storage or a server connection
+
+A bot's access to a tool or key, a level, connecting a tool or a key card is not on this list: hand it to the Tools Owner
+with their request (`jobs.md`, job 45), which does it with their rights. Never answer "I can't" without saying what you
+did or what happens next.
 
 ## Lookups
 Every message reaches you. Lookups ("what is waiting on me", search, "open X", "what did <bot> do today", how-to questions)

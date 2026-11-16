@@ -331,9 +331,20 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
     def requester(c, who, ref="turn"):
         """(the person a bot's turn is for, the message whose conversation the card goes in, the task or None): the
         one whose own chat message started it, or on a task the person who fixes the bot's accounts."""
-        if (who.role != "bot" and who.via != "botops") or not who.attempt_id:
-            raise Problem("forbidden", "Only a bot in a turn asks for a credential", 403)
+        if (who.role != "bot" and who.via not in ("botops", "assistant")) or not who.attempt_id:
+            raise Problem(
+                "forbidden",
+                "A credential card is opened by a bot in a turn: ask the Tools Owner or your Assistant in chat, or add the "
+                "key yourself in Tools",
+                403,
+            )
         turn = turn_of(c, who)
+        if who.via == "assistant":
+            # The person's own Assistant, in their chat: the card is for them, in that chat, as the message that started
+            # this turn asked (backend/assistant.py checks the turn is theirs before any write).
+            if not turn or turn["sender_id"] != who.actor:
+                raise Problem("no_person", "A credential card needs the person's own chat message to answer", 409)
+            return who, turn, None
         if who.actor == "bot:" + botops or who.via == "botops":
             person = delegate(c, who, ref or "turn")
             if person.role not in ("owner", "human"):
@@ -412,16 +423,28 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
         with store.transaction() as c:
             validate_identity(c, who)
             person, msg, task = requester(c, who, body.on_behalf_of or "turn")
-            asker = botops if who.via == "botops" and who.role in ("owner", "human") else H.actor_id(who.actor)
+            asker = (
+                botops
+                if who.via == "botops" and who.role in ("owner", "human")
+                else H.actor_id(who.task_actor)
+                if who.via == "assistant"
+                else H.actor_id(who.actor)
+            )
             target = (H.resolve_bot(c, body.for_bot) or {}).get("id", body.for_bot) if body.for_bot else asker
-            tools_owner = asker != botops and tools_page_owner(c) == "bot:" + asker
-            if target != asker and asker != botops and not tools_owner:
+            # BotOps, the Tools page's owner and a person's own Assistant ask for any bot's key; a bot for its own.
+            for_anyone = asker == botops or who.via == "assistant" or tools_page_owner(c) == "bot:" + asker
+            if target != asker and not for_anyone:
                 raise Problem(
-                    "forbidden", "A bot asks for its own credential; BotOps and the Tools owner ask for any bot", 403
+                    "forbidden",
+                    "A bot asks for its own credential; BotOps, the Tools Owner and your Assistant ask for any bot's. "
+                    "Ask the Tools Owner to open the card for that bot",
+                    403,
                 )
-            if tools_owner and target == asker:
+            if for_anyone and asker != botops and target == asker:
                 raise Problem(
-                    "forbidden", "The Tools owner holds none of the keys it connects: name the bot that needs it", 403
+                    "forbidden",
+                    "Name the bot that needs the key (`--for-bot`): the Tools Owner and the Assistant hold none themselves",
+                    403,
                 )
             if not H.bot(c, target):
                 raise Problem("not_found", "Bot not found", 404)
