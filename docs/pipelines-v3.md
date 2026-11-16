@@ -1445,8 +1445,9 @@ Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and 
 - **Top bar,** one line: where you are ("All mine", "All mine / Product" or "All mine / Product / Spec"), a menu of the
   pipelines and stages where something waits on you (and Other, for items in no stage), each opening that walk; Flow's
   mark, which moves while Tico is still thinking about the item on screen; a quiet mic (voice is not built: pressing it
-  shows a wave and "Voice is coming soon"); Tico's line on the item, one line (two on a phone), whose pick is the main
-  button (a send back's note fills Notes only when it is empty and untouched); while Tico still thinks about another
+  shows a wave and "Voice is coming soon"); Tico's line on the item, one line (two on a phone), whose pick on an OK is
+  the main button (a question's choices never change for it: no choice looks chosen before a tap; a send back's note
+  fills Notes only when it is empty and untouched); while Tico still thinks about another
   ask, that ask's short title, faint (not on a phone); then ‹ (previous), › (next), ✕ (close). No count, and no score.
   While Tico still thinks about an ask, none of its answers is the main button, so the main one never changes under the
   person; with no line (none, or Tico not there) the buttons are as they always were. Tico's lines come from
@@ -1477,18 +1478,25 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
 - **An email to approve:** heading "Send this email to Dana about her replacement?". The email itself: "To: Dana", "Subject: Your replacement order", "Hi Dana, your replacement ships Monday…". A "Notes" box.
   Buttons "Approve" (main) and "Send back".
 - **A question from a bot:** heading "Which plan do new signups get?". Under it "Why it matters: …", the bot's reason.
-  A card per choice ("Free", "Pro trial", "Ask at signup"), each with its line on what happens, and "Recommended" on the
-  one the bot recommends. Then a box "Write to Builder" and Send at its right edge: the text is a comment on the task
+  A card per choice ("Free", "Pro trial", "Ask at signup"), each with its line on what happens, every card alike, and
+  only the "Recommended" tag on the one the bot recommends. Then a box "Write to Builder" and Send at its right edge: the text is a comment on the task
   written to the bot that asked, which wakes it, and the question stays open. Then one row: "I don't know, explain",
   "Give it back" and Skip. "I don't know, explain" answers the question with those words, and the bot explains in a
   new ask. "Give it back" closes it, and the bot is told "Ana gave it back: decide it yourself, or ask your manager".
   A question with no choices is the same screen without the cards.
 - **A question from a person:** heading "Which colour?". Buttons for its choices and a box "Something else", whose
-  text is the answer.
+  text is the answer. A question asked as a number has the number box and a Notes box: the words go with the number
+  as its note, or, alone, back to whoever asked.
 - **A one-tap fix:** heading "Connect Google for Scout". Line "Its Google login expired Nov 8." Button "Connect" (main).
 - **A stuck task:** heading "Export retries is stuck". Line "Checks fail: lint, unit. Builder and Eng Manager each tried 3
   times." Buttons "Try again" (main), "Reassign", "Move back", "Close".
-- **After an answer:** a bar "Approved" with an "Undo" button at the right.
+- **⋯, last on every item's row:** a question's other answers, and **Close task** when you may close the task (whoever
+  may work it: its owner, its requester, their managers, its pipeline's manager or owner, someone who moves tasks). It
+  closes the task with what is typed in the item's box as the reason, with no confirm, and moves on; ↶ reopens it. The
+  reason goes on the close in the task's history, and a bot that asked for the task (not the one that owns it) hears
+  "Closed: <title>" with it on its next run.
+- **After an answer:** ↶ alone in the top bar, named Undo, with no word beside it; it fades after 4 seconds, and stays
+  while it has the keyboard's focus.
 - **Snooze:** one menu, 1 hour, 1 day, 1 week, 1 month (each exactly that long from now) and Other (a date and time of
   your own, in the same menu). On an ask it is a quiet clock icon at the end of the answer row, in Skip's place, and
   snoozes the ask for you alone (#3769): it stays in everyone else's Needs you and its bot is not told. On your own

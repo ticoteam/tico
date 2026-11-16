@@ -168,13 +168,13 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       await page.keyboard.press('Enter');
       await dialog.locator('.dc-askw [role="menu"]').waitFor();
       assert.equal(await more.getAttribute('aria-expanded'), 'true', label);
-      assert.deepEqual(await dialog.locator('.dc-askw [role="menuitem"]').allInnerTexts(), ["I don't know, explain", 'Give it back', 'Ask back'], label);
+      assert.deepEqual(await dialog.locator('.dc-askw [role="menuitem"]').allInnerTexts(), ["I don't know, explain", 'Give it back', 'Ask back', 'Close task'], label);
       assert.equal(await focused(), "I don't know, explain", label);
       await page.keyboard.press('ArrowDown');
       assert.equal(await focused(), 'Give it back', label);
       await page.keyboard.press('ArrowUp');
       await page.keyboard.press('ArrowUp');
-      assert.equal(await focused(), 'Ask back', `${label}: ↑ wraps`);
+      assert.equal(await focused(), 'Close task', `${label}: ↑ wraps`);
       const menu = await box(dialog.locator('.dc-askw [role="menu"]'));
       assert.ok(menu.x >= 0 && menu.x + menu.width <= viewport.width && menu.y >= 0, `${label}: the menu is in view (${JSON.stringify(menu)})`);
       await page.keyboard.press('Escape');
@@ -229,12 +229,12 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       assert.deepEqual(writes[2], {p: '/api/v2/tasks/t2/asks/r2/answer', body: {value, version: 3}}, label);
       await calm();
 
-      // A person's short question: its background opens on a phone too; ⋯ holds Ask back alone; a choice answers it.
+      // A person's short question: its background opens on a phone too; ⋯ holds Ask back and Close task; a choice answers it.
       await bg.waitFor();
       assert.equal(await bg.evaluate(el => el.matches('.dc-bg-only') || (el as HTMLDetailsElement).open), true, `${label}: a short question shows its task`);
       assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Ben·.+·#3 ↗$/, label);
       await more.click();
-      assert.deepEqual(await dialog.locator('.dc-askw [role="menuitem"]').allInnerTexts(), ['Ask back'], `${label}: a person's question`);
+      assert.deepEqual(await dialog.locator('.dc-askw [role="menuitem"]').allInnerTexts(), ['Ask back', 'Close task'], `${label}: a person's question`);
       await page.keyboard.press('Escape');
       await dialog.locator('[data-dc-choice="Green"]').click();
       await page.waitForFunction(() => !document.querySelector('#need-card [data-dc-choice="Green"]'));

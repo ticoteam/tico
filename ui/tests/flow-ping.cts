@@ -6,7 +6,8 @@ import type {Route} from 'playwright';
 // - Flow narrowed to one bot (its page's Flow mark, decideBotsFlow) shows that bot's items alone, names it in the
 //   crumb, and its ping asks that bot;
 // - a ping that found no bots says so and offers the button again;
-// - a team with no bots opens on All done, not on everyone's items.
+// - a team with no bots opens on All done, not on everyone's items;
+// - ⋯'s Close task shows only to someone who may close the task (the manager of the bot that asked).
 // FLOW_SHOTS=<folder> saves All done, Asking your bots and the narrowed Flow at phone size.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -99,6 +100,17 @@ const question = (n: number, bot: string, line: string): Item => {
     assert.equal(await dialog.getByText('Move the backup to Sunday?').count(), 0, 'another bot’s item stays out');
     assert.ok((await dialog.locator('.dc-head').innerText()).includes('PM'), 'the crumb names the bot');
     await shot('narrowed');
+    // ⋯'s Close task shows only to someone who may close the task: here, once PM reports to Ana (not a task mover).
+    const more = dialog.locator('[data-dc="ask-more"]'), closeIt = dialog.locator('[role="menuitem"][data-dc="close-task"]');
+    await page.evaluate('S.me.mover = false');
+    await more.click();
+    assert.equal(await closeIt.count(), 0, 'not theirs to close');
+    await more.click();
+    await page.evaluate("S.emps.find(e => e.slug === 'pm').reports_to = 'human:ana'");
+    await more.click();
+    await closeIt.waitFor();
+    await more.click();
+    await page.evaluate('S.me.mover = true');
     await dialog.locator('[data-dc-choice="Yes"]').click();
     await dialog.getByText('All done').waitFor();
     pinged = [];

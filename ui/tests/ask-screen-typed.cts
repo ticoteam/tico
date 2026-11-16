@@ -1,6 +1,6 @@
 import type {Route} from 'playwright';
 // Offline browser check of a stage's typed answer on the ask screen (docs/pipelines-v3.md S3, kind 6): the item asks
-// its question; a number is a whole-number box with its range, and a value the server refuses stays typed under the
+// its question; a number is a whole-number box with its range and a box for words (its note), and a value the server refuses stays typed under the
 // server's own line until a good one is sent; a choice is its buttons, with no free text; text is a box and Send.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -79,16 +79,21 @@ const pipeline = {id: 'eng', name: 'Engineering', goal: '', prefix: 'E', manager
     assert.equal(await dialog.locator('[data-dc-choice]').count(), 0);
     const send = dialog.locator('[data-dc="other"]');
     assert.equal(await send.isDisabled(), true);
+    // Words have a box too: Send is on with words alone, and a number's words go as its note.
+    const words = dialog.locator('textarea#dc-other-note');
+    await words.fill('Checked on staging');
+    assert.equal(await send.isDisabled(), false, 'words alone turn Send on');
     await box.fill('120');
     await send.click();
     await dialog.locator('.err[role="alert"]').waitFor();
     assert.equal(await dialog.locator('.err[role="alert"]').innerText(), 'Confidence is a whole number from 0 to 100', "the server's line, as is");
     assert.equal(await box.inputValue(), '120', 'what was typed stays');
-    assert.deepEqual(writes[0], {p: '/api/v2/tasks/t1/asks/r1/answer', body: {value: '120', version: 4}});
+    assert.deepEqual(writes[0], {p: '/api/v2/tasks/t1/asks/r1/answer', body: {value: '120', version: 4, note: 'Checked on staging'}});
+    assert.equal(await words.inputValue(), 'Checked on staging', 'the words stay too');
     await box.fill('80');
     await box.press('Enter');
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
-    assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/asks/r1/answer', body: {value: '80', version: 4}});
+    assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/asks/r1/answer', body: {value: '80', version: 4, note: 'Checked on staging'}});
 
     // A choice: its buttons and nothing to type; with no question, its title is asked.
     await page.waitForFunction(() => document.querySelector('#need-card .dc-q')?.textContent === 'Risky');

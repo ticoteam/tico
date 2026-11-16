@@ -114,7 +114,7 @@ interface DecFile {
   error: string;
   run: Promise<void> | null;
 }
-const DEC_UNDO_MS = 10_000;
+const DEC_UNDO_MS = 4000;
 const DEC_BAR_FADE_MS = 400;     // the undo fades out over this long (decide.css .dc-bar-out)
 const DEC_CALM_MS = 400;
 let DEC_CALM_TIMER = 0;
@@ -280,8 +280,8 @@ function decideDialog(): HTMLDialogElement {
 /** A button that needs words (Send back, Something else, Add rule) is on once there are some. */
 function decideNeedsText(root: HTMLElement) {
   for (const b of root.querySelectorAll<HTMLButtonElement>('[data-dc-needs]')) {
-    const box = root.querySelector<HTMLTextAreaElement | HTMLInputElement>(b.dataset.dcNeeds!);
-    b.disabled = !box?.value.trim() || !!DEC?.busy;
+    const boxes = [...root.querySelectorAll<HTMLTextAreaElement | HTMLInputElement>(b.dataset.dcNeeds!)];
+    b.disabled = !boxes.some(box => box.value.trim()) || !!DEC?.busy;
   }
 }
 /** Opens the item `id`, or the first of the list with none. `items` is the list to walk, Needs you as the page shows
@@ -751,23 +751,21 @@ function decideLineSet(itemId: string, o: {line: string; pick: string} | null): 
   if (o) DEC_LINES.set(itemId, {line: o.line, pick: o.pick}); else DEC_LINES.delete(itemId);
   if (DEC && DEC.at === itemId) { decidePaintHead(DEC); decidePaintSide(DEC); }
 }
-/** The pick of Tico's line, as the main button (a bot's choice card, outlined as its recommendation is): the others go
-    plain. While an OK waits on Tico (decideOpWaits) no answer is the main button; with no pick, they are as drawn. A
-    question's only pick is one of its choices: until Tico names one, Send stays the main button (#3786). */
+/** The pick of Tico's line on an OK, as the main button: the others go plain. While an OK waits on Tico (decideOpWaits)
+    no answer is the main button; with no pick, they are as drawn. A question's choices never change for it: no choice
+    looks chosen before the person taps one (Tico's line says its pick; Recommended is the bot's tag), and Send stays
+    the main button (#3786). */
 function decideLinePick(it: NeedsEntry, host: HTMLElement) {
   const pick = DEC_LINES.get(it.id)?.pick;
-  const btns = [...host.querySelectorAll<HTMLButtonElement>('.dc-acts button[data-dc]:not(.linkish), button[data-dc-choice]')];
-  if (decideKind(it) === 'question' && !(it.ask?.choices || []).includes(pick || '')) return;
+  if (decideKind(it) === 'question') return;
+  const btns = [...host.querySelectorAll<HTMLButtonElement>('.dc-acts button[data-dc]:not(.linkish)')];
   if (!pick && decideOpWaits(it)) {
     for (const b of btns) if (b.classList.contains('primary')) { b.classList.remove('primary'); b.classList.add('ghost'); }
     return;
   }
   const to = pick ? btns.find(b => b.dataset.dc === pick || b.dataset.dcChoice === pick) : undefined;
   if (!to) return;
-  for (const b of btns) {
-    if (b.classList.contains('dc-choice')) b.classList.toggle('dc-rec', b === to);
-    else { b.classList.toggle('primary', b === to); b.classList.toggle('ghost', b !== to); }
-  }
+  for (const b of btns) { b.classList.toggle('primary', b === to); b.classList.toggle('ghost', b !== to); }
 }
 // ---- Tico's opinions (POST /v2/flow/opinions, backend/flow_opinions.py): its line and pick on each ask, and a score
 // the walk is ordered by and never shown. Tico only advises: nothing here answers anything.
@@ -1073,6 +1071,7 @@ function decidePaintSide(st: DecState) {
   // What was typed stays through a redraw of the same item (busy, uploads, then a refusal in the server's words).
   const same = host.querySelector<HTMLElement>('[data-key]')?.dataset.key === it.id;
   const held = same ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
+  const heldSaid = same ? host.querySelector<HTMLTextAreaElement>('#dc-other-note')?.value : undefined;
   const heldNote = same ? host.querySelector<HTMLTextAreaElement>('#dc-notes')?.value : undefined;
   const heldReply = same ? host.querySelector<HTMLTextAreaElement>('#dc-reply')?.value : undefined;
   // So does the caret: a redraw while someone types (a refusal, the end of a send) leaves them typing in the same box.
@@ -1088,11 +1087,14 @@ function decidePaintSide(st: DecState) {
     const end = ask ? decideSnoozeHTML(st) : `<button type="button" class="linkish dc-skip" data-dc="skip"${busy}>Skip</button>`;
     if (row) row.insertAdjacentHTML('beforeend', end); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${end}</div>`);
   }
-  // A question's other answers (I don't know, Give it back, Ask back) wait in ⋯, last on the row, after Snooze.
-  const more = question ? decideAskMoreHTML(st, it) : '';
+  // ⋯ is last on every item's row, after Snooze: a question's other answers (I don't know, Give it back, Ask back),
+  // and Close task.
+  const more = kind !== 'yours' ? decideAskMoreHTML(st, it) : '';
   if (more) host.querySelector<HTMLElement>('[data-key] > .dc-acts')?.insertAdjacentHTML('beforeend', more);
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
+  const saidBox = host.querySelector<HTMLTextAreaElement>('#dc-other-note');
+  if (saidBox && heldSaid) saidBox.value = heldSaid;
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
   // Tico would send it back: its note fills an empty Notes the person has not typed in, never over their words.
@@ -1217,7 +1219,8 @@ function decideQuestionHTML(st: DecState, it: NeedsEntry, typed: TaskReq['typed'
   const why = brief?.why ? `<p class="dc-why">Why it matters: ${esc(brief.why)}</p>` : '';
   const card = (c: string, i: number) => {
     const rec = brief?.recommend === c, line = details[i] || '';
-    return `<button type="button" class="dc-choice${rec ? ' dc-rec' : ''}" data-dc-choice="${esc(c)}"${busy}>`
+    // Every card looks the same: the Recommended tag alone marks the bot's pick, so none looks chosen already.
+    return `<button type="button" class="dc-choice" data-dc-choice="${esc(c)}"${busy}>`
       + `<span class="dc-choice-head"><span class="dc-choice-name">${esc(c)}</span>${rec ? '<span class="dc-rec-tag">Recommended</span>' : ''}</span>`
       + (line ? `<span class="dc-choice-line">${esc(line)}</span>` : '') + '</button>';
   };
@@ -1231,24 +1234,29 @@ function decideQuestionHTML(st: DecState, it: NeedsEntry, typed: TaskReq['typed'
     const range = min != null && max != null ? `${min}–${max}` : min != null ? `≥ ${min}` : max != null ? `≤ ${max}` : '';
     const bounds = (min != null ? ` min="${min}"` : '') + (max != null ? ` max="${max}"` : '');
     const input = `<input id="dc-other" type="number" step="1" inputmode="numeric"${bounds} aria-label="${label}" placeholder="Answer" autocomplete="off">`;
-    box = range ? `<label class="dc-notes"><span>${esc(range)}</span>${input}</label>` : input;
+    // Words always have a box: a note with the number, or, alone, a question back to whoever asked.
+    box = (range ? `<label class="dc-notes"><span>${esc(range)}</span>${input}</label>` : input)
+      + `<div class="dc-note-row"><textarea id="dc-other-note" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" aria-label="Notes" placeholder="Notes"></textarea></div>`;
   } else {
     box = `<div class="dc-note-row"><textarea id="dc-other" data-dc-grow rows="${decideNoteRows()}" maxlength="4000" aria-label="${label}" placeholder="Answer"></textarea>${typed ? '' : decideAttachHTML(st)}</div>`
       + (typed ? '' : decideFilesHTML(st, true));
   }
   const sent = DEC_SENT === it.id ? '<p class="dc-sent" role="status">Sent</p>' : '';
-  return `${why}${list}${box}${sent}${decideHeldHTML(it, '#dc-other')}<div class="dc-acts dc-ask-acts">${decideBtn('other', 'Send', true, ' data-dc-needs="#dc-other" disabled')}</div>`;
+  return `${why}${list}${box}${sent}${decideHeldHTML(it, '#dc-other')}<div class="dc-acts dc-ask-acts">${decideBtn('other', 'Send', true, ' data-dc-needs="#dc-other, #dc-other-note" disabled')}</div>`;
 }
-/** ⋯ at the end of a question's row: a bot's "I don't know, explain" and "Give it back" (answers.DONT_KNOW and
+/** ⋯ last on an item's row. A question's: a bot's "I don't know, explain" and "Give it back" (answers.DONT_KNOW and
     GIVE_BACK, which Tico adds to every bot's question), and Ask back, which sends the box's words to whoever asked as a
-    comment and leaves the question open. On your own task: Give to…, and Skip when there is a next. '' when it would
-    hold nothing (a stage's question: no one to ask back). */
+    comment and leaves the question open. On your own task: Give to…, and Skip when there is a next. On every item
+    whose task the person may close (decideMayClose): Close task. '' when it would hold nothing. */
 function decideAskMoreHTML(st: DecState, it: NeedsEntry): string {
   const busy = st.busy ? ' disabled' : '', open = st.more === 'ask', bot = decideAsker(it).startsWith('bot:');
-  const items: [string, string][] = decideKind(it) === 'yours'
+  const kind = decideKind(it), question = kind === 'question';
+  const items: [string, string][] = kind === 'yours'
     ? [['give', 'Give to…'], ...(decideLive(st).length > 1 ? [['skip', 'Skip']] as [string, string][] : [])]
-    : [...(bot ? [['dont-know', DEC_DONT_KNOW], ['give-back', DEC_GIVE_BACK]] as [string, string][] : []),
-      ...(decideReplyTo(it) ? [['askback', 'Ask back']] as [string, string][] : [])];
+    : [...(question && bot ? [['dont-know', DEC_DONT_KNOW], ['give-back', DEC_GIVE_BACK]] as [string, string][] : []),
+      ...(question && decideReplyTo(it) ? [['askback', 'Ask back']] as [string, string][] : [])];
+  // Close task, on every item with a task the person may close (a stuck one has its own Close).
+  if (kind !== 'stuck' && decideMayClose(it)) items.push(['close-task', 'Close task']);
   if (!items.length) return '';
   const btn = `<button type="button" class="dc-icon dc-snz-b dc-more-b" data-dc="ask-more" aria-label="More" title="More" aria-haspopup="menu" aria-expanded="${open}"${busy}>⋯</button>`;
   const menu = open ? `<span class="dc-snz" role="menu" aria-label="More">${items.map(([k, l]) =>
@@ -1454,16 +1462,16 @@ function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   }
   return '';
 }
-/** What was just done, in Flow's top bar left of ‹ ›, over nothing else: ↩ with its word (icon only on a phone, the
-    word for screen readers), which takes it back. It stays DEC_UNDO_MS, then fades. A failed undo says so there, in
-    words on a phone too. */
+/** Flow's top bar, left of ‹ ›, after an action: ↶ alone, named Undo, which takes it back (what was done is said to a
+    screen reader only). It stays DEC_UNDO_MS, longer while it has the focus, then fades. A failed undo says so there,
+    in words on a phone too. */
 function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
   const st = DEC, bar: HTMLElement | null = $('.decide .dc-bar');
   if (!st || !bar) return;
   clearTimeout(st.barTimer);
-  const word = `<span class="dc-bar-w">${esc(label)}</span>`;
-  bar.innerHTML = undo ? `<button type="button" data-dc="undo" aria-label="${esc(`Undo: ${label}`)}" title="${esc(`Undo: ${label}`)}">`
-    + `${DEC_UNDO_ICON}${word}</button>` : word;
+  // ↶ alone, named Undo: a word beside it read as the new item's status. What was done is said to a screen reader only.
+  const word = `<span class="dc-vh" role="status">${esc(label)}</span>`;
+  bar.innerHTML = (undo ? `<button type="button" data-dc="undo" aria-label="Undo" title="Undo">${DEC_UNDO_ICON}</button>` : '') + word;
   bar.classList.remove('dc-bar-out', 'dc-bar-err');
   const b = $('button', bar) as HTMLButtonElement | null;
   if (b && undo) b.onclick = async () => {
@@ -1479,6 +1487,11 @@ function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
   bar.hidden = false;
   const out = () => { bar.classList.add('dc-bar-out'); st.barTimer = window.setTimeout(() => { bar.hidden = true; }, DEC_BAR_FADE_MS); };
   st.barTimer = window.setTimeout(out, DEC_UNDO_MS);
+  // While ↶ has the keyboard's focus it stays; leaving it starts the wait again.
+  if (b) {
+    b.onfocus = () => { clearTimeout(st.barTimer); bar.classList.remove('dc-bar-out'); };
+    b.onblur = () => { clearTimeout(st.barTimer); st.barTimer = window.setTimeout(out, DEC_UNDO_MS); };
+  }
 }
 
 // ---- an OK: what it shows
@@ -1706,7 +1719,25 @@ async function decideShownPage(st: DecState, it: NeedsEntry): Promise<string | u
   return null;
 }
 const decideUndoAnswer = (r: unknown) => { const id = (r as TaskMoved | null)?.answer_id; return id ? () => answerUndo(id) : null; };
-const decideUndoReopen = (taskId: string) => () => () => taskMove(taskId, 'reopen', null);
+// A reopen needs a why from everyone (task_engine.move): an undo says so, or the server refuses it.
+const decideUndoReopen = (taskId: string) => () => () => taskMove(taskId, 'reopen', null, 'Undone');
+/** Whether the person may close the item's task, as the screen knows it (task_calls.can_work; the server checks
+    again): someone who moves tasks or may change its pipeline, a party to it, or the manager, at any level up, of the
+    bot that owns or asked for it. */
+function decideMayClose(it: NeedsEntry): boolean {
+  const t = it.task, me = myActor();
+  if (!t || !me || (t.status && t.status !== 'open')) return false;
+  if (canMove() || decidePipelineOf(needsStageOf(it))?.may_change) return true;
+  const parties = [t.owner_id, t.requester_id, t.assignee_id].filter((a): a is string => !!a);
+  if (parties.includes(me)) return true;
+  const up = (actor: string, seen: Set<string>): boolean => {
+    if (!actor.startsWith('bot:') || seen.has(actor)) return false;
+    seen.add(actor);
+    const id = actor.slice(4), e = (S.emps || []).find(x => x.id === id || x.slug === id), boss = String(e?.reports_to || '');
+    return boss === me || (!!boss && up(boss.startsWith('human:') || boss.startsWith('bot:') ? boss : 'bot:' + boss, seen));
+  };
+  return parties.some(a => up(a, new Set()));
+}
 /** Approve: the person's own OK of exactly what is on screen. A change since it was read is shown, never OK'd. */
 async function decideApprove(st: DecState, it: NeedsEntry) {
   const rid = decideRid(it), v = st.ok.get(decideOkKey(it)), taskId = it.task_id;
@@ -1833,11 +1864,18 @@ async function decideClick(st: DecState, ev: MouseEvent) {
       return;
     }
     case 'other': {
-      const text = decideNote('#dc-other');
+      // A number question's words: with a number, its note; alone, a question back to whoever asked (Ask back).
+      const said = decideNote('#dc-other-note');
+      if (said && !decideNote('#dc-other') && decideReplyTo(it)) {
+        await decideReplySend(st, it, '#dc-other-note', decideAsker(it).startsWith('bot:') ? rid : '');
+        return;
+      }
+      const text = decideNote('#dc-other') || said;
       if (!text) return;
       const files = await decideFilesReady(st, it.id);
       if (!files) { if (DEC === st) decidePaintSide(st); return; }
-      await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, decideWithFiles(text, files), ver), decideUndoAnswer);
+      const note = said && text !== said ? said : undefined;
+      await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, decideWithFiles(text, files), ver, note), decideUndoAnswer);
       return;
     }
     case 'reply': await decideReplySend(st, it, '#dc-reply'); return;
@@ -1865,7 +1903,14 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'done': await decideDo(st, it, 'Done', () => taskDone(taskId, ver), decideUndoReopen(taskId)); return;
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;
     case 'let-see': { const whom = it.task?.turn?.share || []; if (whom.length) await decideLetSee(st, it, whom); return; }
-    case 'close-task': await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver), decideUndoReopen(taskId)); return;
+    case 'close-task': {
+      // Close (a stuck item's) and Close task (⋯): what is typed in the item's box is the reason, kept on the close (its
+      // history, and the news a bot that asked for the task gets: task_effects._tell_requester). No confirm: ↶ reopens it.
+      st.more = '';
+      const why = [...document.querySelectorAll<HTMLTextAreaElement>('.decide .dc-side textarea')].map(b => b.value.trim()).find(Boolean);
+      await decideDo(st, it, 'Closed', () => taskMove(taskId, 'closed', ver, why), decideUndoReopen(taskId));
+      return;
+    }
     case 'snooze':
       if (decideSnoozeClose(st)) return;
       st.more = 'snooze'; st.snzOther = false; decidePaintSide(st);

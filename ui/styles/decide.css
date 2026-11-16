@@ -162,7 +162,6 @@
 .dc-choice-list{display:flex;flex-direction:column;gap:8px}
 .dc-choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
 .dc-choice:hover:not(:disabled){border-color:var(--muted)}
-.dc-choice.dc-rec{border:2px solid var(--ink);padding:9px 13px}
 .dc-choice:disabled{opacity:.6;cursor:default}
 .dc-choice-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
 .dc-choice-name{font-weight:600;overflow-wrap:anywhere}

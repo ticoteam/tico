@@ -96,7 +96,7 @@ function world(over: {title?: string} = {}) {
         // ⋯ by keyboard: Enter opens it on Give to…, ↓ moves to Skip, Esc closes it with focus back on ⋯.
         await row.locator('[data-dc="ask-more"]').focus();
         await page.keyboard.press('Enter');
-        assert.deepEqual(await row.locator('[role="menuitem"]').allInnerTexts(), ['Give to…', 'Skip']);
+        assert.deepEqual(await row.locator('[role="menuitem"]').allInnerTexts(), ['Give to…', 'Skip', 'Close task']);
         assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Give to…');
         await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Skip');
@@ -246,7 +246,7 @@ function world(over: {title?: string} = {}) {
       } finally { await page.close(); }
     }
 
-    // A question nobody named asked (a stage's): no Ask back, so no ⋯; Send stays.
+    // A question nobody named asked (a stage's): no Ask back; ⋯ holds only Close task; Send stays.
     {
       const {tasks, needs} = world();
       needs.find(n => n.id === 'r2')!.ask!.asked_by = 'stage';
@@ -254,7 +254,8 @@ function world(over: {title?: string} = {}) {
       try {
         await page.evaluate(() => { decideOpen('r2'); });
         await card(page).locator('[data-dc="other"]').waitFor({timeout: 5000});
-        assert.equal(await card(page).locator('[data-dc="askback"], [data-dc="ask-more"]').count(), 0);
+        await card(page).locator('[data-dc="ask-more"]').click();
+        assert.deepEqual(await card(page).locator('[role="menuitem"]').allInnerTexts(), ['Close task']);
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }

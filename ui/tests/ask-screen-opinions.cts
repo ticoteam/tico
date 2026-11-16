@@ -1,7 +1,8 @@
 import type {Route} from 'playwright';
 // Offline browser check of Tico's line in Flow (ui/app/decide.ts decideOpinions), against a fake of
 // POST /api/v2/flow/opinions (backend/flow_opinions.py), on a desktop:
-// - a ready opinion puts its line in the bar and makes its pick the main button; an OK's send back fills an empty Notes;
+// - a ready opinion puts its line in the bar and, on an OK, makes its pick the main button (a question's choices stay
+//   as drawn: none looks chosen before a tap); an OK's send back fills an empty Notes;
 // - while an ask is pending the next one still waiting is named before ‹ ›, and the pending ones are asked again (only
 //   they) until they are ready;
 // - in a set of more than 5, the items not yet seen go highest score first and the ones seen keep their place;
@@ -136,7 +137,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('.dc-say', {hasText: 'No. The launch moved to Friday'}).waitFor();
     assert.equal(asked[0]![0], 'r2', 'the item on screen is asked about first');
     assert.deepEqual([...asked[0]!].sort(), ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'], 'one request for the set');
-    assert.equal(await main('[data-dc-choice="No"]'), true, "the pick is the main button");
+    // A question's choices stay as drawn: none looks chosen before a tap; the line says the pick.
+    assert.equal(await main('[data-dc-choice="No"]'), false, 'no choice looks chosen');
     assert.equal(await main('[data-dc-choice="Yes"]'), false);
     assert.equal(await dialog.locator('.dc-up').textContent(), 'Pick the venue', 'the next ask still pending is named');
     assert.equal(await dialog.locator('.dc-flow .flow-mark.live').count(), 0, 'the mark rests: the item on screen is ready');
@@ -208,7 +210,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('.dc-q', {hasText: 'Friday or Monday'}).waitFor();
     late.release();
     await dialog.locator('.dc-say', {hasText: 'Friday. The venue is free.'}).waitFor({timeout: 8000});
-    assert.equal(await main('[data-dc-choice="Friday"]'), true);
+    assert.equal(await main('[data-dc-choice="Friday"]'), false, 'the new line, with no choice looking chosen');
     assert.ok(!(await page.evaluate('window.__said') as string[]).includes('Old line'), 'the answer about the old ask is dropped');
     // A ready line on an ask that then changes goes at once, and the new one is asked for.
     const n = asked.length;
