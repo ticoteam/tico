@@ -275,25 +275,28 @@ Strategy Owner's interview, several per section, and stay its.
   near that, so no word is cut. The mic puts the cursor in the box, so a phone keyboard's own dictation types into it;
   nothing is recorded.
 - **Saving.** Tapping the suggestion keeps it: the drafted text loses its marker, or the proposed bet is made active.
-  A typed answer is added after what the section holds, never over confirmed text (unconfirmed drafted text is
-  replaced). A bet is made active. Every save goes to the draft through the routes the page uses, with the draft's
+  A typed answer is added after what the section holds (not when the section already says it), never over confirmed
+  text (unconfirmed drafted text is replaced). A bet is made active. Every save goes to the draft through the routes the page uses, with the draft's
   revision; on a 409 Flow reads the draft again and sends once more. Flow never writes the summary or the vision.
 - **A long answer** (over 200 characters) goes to `POST /api/v2/flow/ramble`, which splits it into short lines, each
-  for one section or a bet, in the owner's own words (a line that is not mostly their words is dropped), cut to the
-  page's limits; what a cut leaves out comes back as `left` and shows struck through, not kept. The owner strikes any
+  for one section or a bet, in the owner's own words, cut to the page's limits. A line is kept only as the owner said
+  it: its words in the same order within one of their sentences (filler such as "um" or "you know" may go), and never
+  without a negation they said between its first and last word ("we won't do commercial property" never becomes "we do
+  commercial property"); once per answer, and not where its part already says it; what a cut leaves out comes back as `left` and shows struck through, not kept. The owner strikes any
   line with ✕ and saves the rest at once (**Skip**, then **Save** at the far right). It is one metered model call with
   no retry, labelled `flow-ramble` in spend, at most 30 a day per person (the count is read and the call's slot taken
   in one write, so two at once cannot both pass); one Send makes one call. The text is sent to the model as data and
   nothing of it is stored or logged (the day's count is one audit row with no text). An answer longer than the
   question's `max` is refused (422 `too_long`), never cut. With no model, at the spend cap or the day's limit, or on
-  any failure, it says so (`why`) and Flow saves the whole answer under the question asked.
+  any failure, or when nothing in it is usable, it says so (`why`) and the lines screen shows the whole answer as the
+  one line for the question asked, to ✕ or Save: it is never saved unseen.
 - **The end.** "Saved to your draft. Bots use it after you publish.", then every part Publish would change, with its
   text as it would publish (three lines, a tap shows it whole), the owner's edits made anywhere included; under each,
   the lines Flow saved there. ✕ takes one out again, as a draft save, only where Flow put it: if the section was
   edited since, nothing is written and the ✕ goes. **Publish** sends the revision on screen; if the draft changed
   since, nothing is published, the screen is read again and Publish waits for another tap. Or what still stops Publish
-  (each opens its question). Parts still marked unconfirmed are named above it, "Unconfirmed: Who we serve", each
-  opening its question: Publish does not stop on them, but they would go out as drafted. One row of actions: **Keep
+  (each opens its question). Parts still marked unconfirmed are named right above it (pinned with it on a phone),
+  "Unconfirmed: Who we serve", each opening its question: Publish does not stop on them, but they would go out as drafted. One row of actions: **Keep
   going**, **Done**, then **Publish** at the far right, pinned in view on a phone. **Keep going** reads the questions
   again (a part a long answer filled is not asked); Publish shows again whenever the draft differs from what is
   published. A line published has no ✕, and Publish has no Undo.

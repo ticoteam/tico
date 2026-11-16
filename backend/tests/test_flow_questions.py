@@ -83,7 +83,7 @@ def test_the_owners_basics_come_in_order_and_others_get_none(api):
 def test_every_part_has_one_short_question_of_its_own():
     assert set(FQ.ASKS) == set(FQ.KEYS)
     for key, ask in FQ.ASKS.items():
-        assert ask.endswith("?") and len(ask) <= 110, key
+        assert ask.endswith("?") and len(ask) <= 100, key
         # One sentence: no sentence ends before the last character.
         assert not any(mark in ask[:-1] for mark in (". ", "? ", "! ")), key
 
@@ -183,15 +183,80 @@ def test_one_call_gives_lines_in_the_owners_words_cut_to_the_limits(api, model):
 
 
 def test_long_lines_are_cut_and_bets_and_lines_are_capped(api, model):
-    long = "landlords " * 60
-    model({"lines": [{"section": "bet", "text": long}] * 5 + [{"section": "serve", "text": long}] * 20})
-    lines = ramble(api, text=long * 6)["lines"]
+    words = [f"unit{i}" for i in range(360)]
+    span = [" ".join(words[i : i + 60]) for i in range(0, 300, 10)]  # 30 different runs of the one long sentence
+    model(
+        {
+            "lines": [{"section": "bet", "text": t} for t in span[:5]]
+            + [{"section": "serve", "text": t} for t in span[5:]]
+        }
+    )
+    lines = ramble(api, text=" ".join(words))["lines"]
     assert len(lines) == FQ.LINES_MAX and sum(x["section"] == "bet" for x in lines) == FQ.BETS_MAX
     assert all(len(x["text"]) <= (S.STATEMENT_MAX if x["section"] == "bet" else S.SECTION_MAX) for x in lines)
     # What a cut leaves out comes back as `left`, for the page to show as not kept: no word is dropped unseen.
     bets = [x for x in lines if x["section"] == "bet"]
-    assert all((x["text"] + " " + x["left"]).split() == long.split() for x in bets)
+    assert [(x["text"] + " " + x["left"]).split() for x in bets] == [t.split() for t in span[:3]]
     assert all("left" not in x for x in lines if x["section"] == "serve")
+
+
+ANSWER = (
+    "Um, so what we sell, it's, uh, a bot that answers tenant messages, $29 a unit a month. Mostly for landlords with "
+    "a handful of flats, you know, the ones without staff. And we won't do commercial property, ever. We never raise "
+    "prices mid-year. We sell to landlords, not to agents. It's landlords, like with fifty units, no wait, one to "
+    "twenty units."
+)
+
+
+@pytest.mark.parametrize(
+    "line, kept",
+    [
+        ("A bot that answers tenant messages, $29 a unit a month.", True),  # filler left out
+        ("Landlords with a handful of flats, the ones without staff.", True),  # "you know" left out
+        ("We won't do commercial property.", True),
+        ("We won’t do commercial property, ever.", True),  # a curly apostrophe is the same word
+        ("WE SELL TO LANDLORDS", True),  # case and punctuation aside; the "not" after it is not in its span
+        ("One to twenty units.", True),
+        ("We do commercial property.", False),  # the owner's won't left out: it says the opposite
+        ("We raise prices mid-year.", False),  # never left out
+        ("We sell to agents.", False),  # not left out
+        ("Landlords with one to twenty units.", False),  # a correction's "no" is still left out between them
+        ("Landlords with a handful of flats, the ones with staff.", False),  # "with" is not where the owner said it
+        ("Flats with a handful of landlords.", False),  # another order
+        ("A bot that answers tenant messages. Mostly for landlords.", False),  # two of the owner's sentences
+        ("A bot that answers every tenant message.", False),  # a word the owner did not say
+        ("", False),
+    ],
+)
+def test_a_line_is_kept_only_as_the_owner_said_it(line, kept):
+    assert FQ.owns(line, ANSWER) is kept
+
+
+def test_a_line_is_kept_once_and_never_again_where_its_part_says_it(api, model):
+    write(api, sections={"not": "We will not take enterprise property managers, even when they ask."})
+    post(api, "strategy/bets", {"statement": "Small landlords will trust a bot with tenant messages"})
+    sell = {"section": "sell", "text": "Bots that answer tenants and chase rent, at $29 a unit a month."}
+    model(
+        {
+            "lines": [
+                sell,
+                dict(sell),  # the model gives it twice
+                {**sell, "section": "serve", "text": " bots that answer TENANTS and chase rent at $29 a unit a month"},
+                {"section": "not", "text": "We will not take enterprise property managers."},  # the section says it
+                {"section": "bet", "text": "Small landlords will trust a bot with tenant messages."},  # a bet says it
+                {"section": "serve", "text": "Landlords with one to twenty units."},
+            ]
+        }
+    )
+    back = ramble(api)
+    assert [(x["section"], x["text"]) for x in back["lines"]] == [
+        ("sell", sell["text"]),
+        ("serve", "Landlords with one to twenty units."),
+    ]
+    # Drafted text still marked Unconfirmed is replaced by a line, never added to: a line that repeats it is kept.
+    write(api, sections={"not": SS.unconfirmed("We will not take enterprise property managers.", "acme.example")})
+    model({"lines": [{"section": "not", "text": "We will not take enterprise property managers."}]})
+    assert [x["text"] for x in ramble(api)["lines"]] == ["We will not take enterprise property managers."]
 
 
 def test_an_answer_too_long_to_keep_whole_is_refused_never_cut(api, model, monkeypatch):

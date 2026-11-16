@@ -8,16 +8,19 @@
    Skip, kept per browser. The box holds what the question can keep whole (its `max`; a count shows near it), so no
    word is ever cut. The mic focuses the box, so the phone keyboard's dictation types into it. An answer over
    DEC_Q_RAMBLE characters goes to POST /v2/flow/ramble, which splits it into lines per section in the owner's words
-   (what a line's limit cut shows struck through, not kept); ✕ drops a line, then one Save. With no model, or on any
-   failure, the answer is saved whole for the section asked; one Send makes one call.
+   (what a line's limit cut shows struck through, not kept); ✕ drops a line, then one Save. With no model, nothing
+   usable in it, or on any failure, the whole answer is that screen's one line for the part asked (✕ or Save, never
+   saved unseen); one Send makes one call.
    Every save goes to the DRAFT through the Strategy routes the owner already has, with the draft's revision (a 409 is
-   read again and made again, once): a line is added after what is there, never over confirmed text; an answer takes
+   read again and made again, once): a line is added after what is there (not when it already says it), never over
+   confirmed text; an answer takes
    the place of drafted text still marked Unconfirmed (which removes the marker); a bet is made active. Flow never writes
    the summary or the vision. The end screen shows every part Publish would change with its text as it would publish
    (clamped, a tap shows it whole), the earlier edits made anywhere included, and under each the lines Flow saved there:
    ✕ takes one out again (a draft save) only where Flow put it, else it is left alone and its ✕ goes. Publish sends the
    revision on screen: if the draft changed since, nothing is published and the screen is read again for a new tap.
-   Parts still marked Unconfirmed are named above Publish (it does not stop on them; each opens its question). Each
+   Parts still marked Unconfirmed are named right above Publish, pinned with it on a phone (it does not stop on them;
+   each opens its question). Each
    screen has one row of actions, the forward one (Send, Save, Publish) at the far right.
    Publish shows whenever the draft differs from what is published, after an earlier Publish too. Keep going reads the
    questions again, so a part an answer already filled is not asked. No Undo after Publish.
@@ -131,8 +134,12 @@ async function decideQWrite(write: (data: DecQStrat, revision: number) => Promis
     catch (e) { if (attempt || errorStatus(e) !== 409) throw e; }
   }
 }
-/** A section with a line added: after what is there, or in place of drafted text still marked Unconfirmed. */
-const decideQMerge = (body: string, line: string) => !body.trim() || DEC_Q_MARK.test(body) ? line : `${body.trimEnd()}\n\n${line}`;
+/** Text as compared for a repeat: its words, in order (case and punctuation aside). */
+const decideQSame = (s: string) => ` ${s.toLowerCase().replace(/[’']/g, '').replace(/[^\p{L}\p{N}$%]+/gu, ' ').trim()} `;
+/** A section with a line added: after what is there (unless it already says it), or in place of drafted text still
+    marked Unconfirmed. */
+const decideQMerge = (body: string, line: string) => !body.trim() || DEC_Q_MARK.test(body) ? line
+  : decideQSame(body).includes(decideQSame(line)) ? body : `${body.trimEnd()}\n\n${line}`;
 /** A section with Flow's own line taken out again, only where Flow put it: the section as it was, while it reads as the
     save left it; else that insertion, where it still stands (with what came after it kept) or last. null when the text
     there changed: then nothing is written. */
@@ -166,7 +173,12 @@ async function decideQSave(lines: DecQLine[]) {
       });
       return put('/v2/strategy/draft', {revision, sections: now});
     });
-    sections.forEach((l, i) => { DEC_Q.saved.push({section: l.section, text: l.text, ...made[i]}); lines.splice(lines.indexOf(l), 1); });
+    // A line its section already said changed nothing: not a line Flow saved, so nothing for ✕ to take out.
+    sections.forEach((l, i) => {
+      const m = made[i];
+      if (m && m.before !== m.after) DEC_Q.saved.push({section: l.section, text: l.text, ...m});
+      lines.splice(lines.indexOf(l), 1);
+    });
   }
   for (const l of lines.filter(x => x.section === 'bet' && !x.off)) {
     const r = await decideQWrite((_data, revision) => post('/v2/strategy/bets',
@@ -186,8 +198,9 @@ async function decideQTake(st: DecState, q: DecQuestion, pick: DecQuestion['choi
     return [q.key];
   });
 }
-/** Send: a short answer saved as typed; a long one split into lines first (the lines screen), or saved whole when it
-    cannot be. The split is one request, never retried (a plain fetch, not post()). */
+/** Send: a short answer saved as typed; a long one split into lines first (the lines screen), or, when it cannot be
+    (no model, nothing usable in it, a failure), shown there whole as one line for the part asked, never saved unseen.
+    The split is one request, never retried (a plain fetch, not post()). */
 async function decideQSend(st: DecState, q: DecQuestion) {
   const text = DEC_Q.typed.trim();
   if (!text || DEC_Q.busy) return;
@@ -199,9 +212,8 @@ async function decideQSend(st: DecState, q: DecQuestion) {
   DEC_Q.busy = true; DEC_Q.error = ''; decideQPaint(st);
   const visit = DEC_Q.visit, lines = await decideQSplit(text, q.key);
   if (visit !== DEC_Q.visit) return;
-  DEC_Q.busy = false;
-  if (lines) { DEC_Q.lines = lines; DEC_Q.view = 'strike'; decideQPaint(st); return; }
-  await decideQRun(st, q, async () => { await decideQSave(decideQWhole(text, q.key)); return [q.key]; });
+  DEC_Q.busy = false; DEC_Q.lines = lines || decideQWhole(text, q.key); DEC_Q.view = 'strike';
+  decideQPaint(st);
 }
 /** The ramble's lines, or null when they were not split (no model, the cap, the day's limit, a failure). */
 async function decideQSplit(text: string, key: DecQKey): Promise<DecQLine[] | null> {
@@ -388,7 +400,9 @@ function decideQEndHTML(): string {
     : `<button type="button" class="dc-icon" data-dc="q-unsave" data-q-i="${i}" aria-label="Take out" title="Take out"${busy}>✕</button>`;
   const row = (r: {s: DecQSaved; i: number}) => `<li><span>${esc(r.s.text)}</span>${x(r)}</li>`;
   const list = [...groups.values()].map(g => {
-    const text = g.text === null ? '' : `<button type="button" class="dc-qt" data-dc="q-expand" aria-expanded="false">${g.text ? esc(g.text) : '—'}</button>`;
+    // Drafted text without its marker's markdown: the part is named Unconfirmed above Publish.
+    const shown = g.text === null ? '' : g.text.replace(DEC_Q_MARK, '');
+    const text = g.text === null ? '' : `<button type="button" class="dc-qt" data-dc="q-expand" aria-expanded="false">${shown ? esc(shown) : '—'}</button>`;
     const [only] = g.rows, alone = g.rows.length === 1 && only && only.s.text === g.text;
     // A part that is just Flow's one line: its ✕ on the text. Else Flow's lines under the text, one short row each.
     const body = alone ? `<ul><li>${text}${x(only)}</li></ul>`
@@ -411,9 +425,11 @@ function decideQEndHTML(): string {
       + (drafted.length ? `<div class="dc-q-pub" data-q-drafted>${drafted.map(k => fix(k, `Unconfirmed: ${decideQTitle(k)}`)).join('')}</div>` : '');
     publish = !blocked && changes.length ? decideBtn('q-publish', 'Publish', true, busy) : '';
   }
-  // One row: Keep going and Done, then the forward action, Publish, at the far right.
-  return `<div class="dc-qs dc-qend" data-q-end>${flowMarkHTML(32)}${said}<div class="dc-qgs" aria-label="What Publish changes">${list}</div>${notes}`
+  // What stops Publish and the parts still drafted sit right above the row (on a phone pinned on it, so they show with
+  // Publish without scrolling); then one row: Keep going and Done, the forward action, Publish, at the far right.
+  return `<div class="dc-qs dc-qend" data-q-end>${flowMarkHTML(32)}${said}<div class="dc-qgs" aria-label="What Publish changes">${list}</div>`
     + (DEC_Q.error ? `<p class="err" role="alert">${esc(DEC_Q.error)}</p>` : '')
+    + (notes ? `<div class="dc-q-pin">${notes}</div>` : '')
     + `<div class="dc-acts dc-q-acts">${decideBtn('q-more', 'Keep going', false, busy)}${decideBtn('q-done', 'Done', false, busy)}${publish}</div></div>`;
 }
 /** The questions' screen: the right side alone, the thing side empty (decide.css .dc-empty). */

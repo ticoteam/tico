@@ -17,14 +17,16 @@ here writes the strategy.
 
 `POST /api/v2/flow/ramble` takes one typed answer over about 200 characters and the section it answers, and returns
 it as short lines, each for one section, in the owner's own words (split and trimmed, not rewritten), cut to the
-page's limits. Owner only, checked here. One metered call to the server's writer (updates.writer_for, the daily-update
+page's limits. A line is kept only as the owner said it (`owns`: its words in order within one of their sentences,
+filler left out, never a negation), once per answer, and not where its part already says it. Owner only, checked here. One metered call to the server's writer (updates.writer_for, the daily-update
 drafts' model) under Decide's monthly cap as LABEL, no retry; its input is only the text and the section names and
 limits, the text as data. Never `summary` or `vision`: an unpublished draft's vision is already the team's before the
 first publish (strategy.vision), so Flow writes only sections and bets. Nothing of the text is stored or logged: the
 call leaves a `flow.ramble` audit row with no detail, which counts the person's calls against DAILY_MAX, and the spend
 row `judge.metered` writes (label, model, cost). With no writer (no key, demo, rehearsal), at the spend cap, at the
 daily limit, or when the call fails or returns no usable line, the answer says why (`why`) and holds the text whole as
-one line for the section asked, so a person is never stuck on a model. Nothing is cut silently: an answer longer than
+one line for the section asked, so a person is never stuck on a model (the page shows it as that one line, to ✕ or
+Save, never saved unseen). Nothing is cut silently: an answer longer than
 its question can hold whole (`answer_max`, each question's `max`) is refused with 422, and a model line cut to its
 section's limit carries what was cut as `left`, which the page shows as not kept. The day's count is checked and the
 slot taken in one write transaction, so two calls at once cannot both pass the limit.
@@ -67,10 +69,15 @@ DEADLINE = 40  # seconds for the one call
 ACTION = "flow.ramble"  # the audit row each call leaves, with no detail: what DAILY_MAX counts
 LABEL = "flow-ramble"  # the spend row's label (`judge.spend`)
 BET_CHOICES = 3  # proposed bets offered on the bet question
-OWN_WORDS = 0.8  # share of a line's words that must be the owner's own, or the line is dropped
 # strategy_setup.UNCONFIRMED at the head of a section, the line after it included.
 MARKER = re.compile(r"\A\s*_Unconfirmed: drafted from [^\n]*?\._[ \t]*(?:\n+|\Z)")
 WORD = re.compile(r"[\w'’$%.-]+", re.UNICODE)
+SENTENCE = re.compile(r"(?<=[.!?;])\s+|\n+")  # where one sentence of an answer ends
+# A word that turns what follows around: one the owner said between a line's first and last word must stay in it.
+NEGATION = frozenset(
+    "not no never without nor none nothing nobody neither cannot won't don't can't isn't aren't wasn't weren't "
+    "doesn't didn't shouldn't wouldn't couldn't mustn't hasn't haven't hadn't ain't".split()
+)
 
 SYSTEM = (
     "You split one answer a company's owner typed into short lines for their strategy page. Each line belongs to one "
@@ -175,33 +182,77 @@ def whole(text: str, section: str) -> list[Row]:
 
 
 def _words(text: str) -> list[str]:
-    return [w.strip(".-").lower() for w in WORD.findall(text) if w.strip(".-")]
+    out: list[str] = []
+    for w in WORD.findall(text.replace("’", "'")):
+        w = w.strip(".-'").lower()
+        if w:
+            out.append(w)
+    return out
 
 
-def read(answer: Any, text: str) -> list[Row]:
-    """The model's lines that hold: a known section (never summary or vision), some text, mostly the owner's own words,
-    each cut to its section's limit (what was cut is its `left`, shown as not kept); at most LINES_MAX, BETS_MAX of
-    them bets."""
+def _negates(word: str) -> bool:
+    return word in NEGATION or word.endswith("n't")
+
+
+def owns(line: str, text: str) -> bool:
+    """Whether `line` is the owner's own words from `text`: its words in the same order within one sentence of it, the
+    owner's other words there (filler: um, you know) left out, but never a negation between the line's first and last
+    word ("we won't do X" never becomes "we do X"). Case and punctuation aside; a word not in that sentence fails it."""
+    want = _words(line)
+    if not want:
+        return False
+    for sentence in SENTENCE.split(text):
+        said = _words(sentence)
+        for start, word in enumerate(said):
+            if word != want[0]:
+                continue
+            i = 1
+            for got in said[start + 1 :]:
+                if i == len(want):
+                    break
+                if got == want[i]:
+                    i += 1
+                elif _negates(got):
+                    break  # a negation would be left out of the line
+            if i == len(want):
+                return True
+    return False
+
+
+def _same(text: str) -> str:
+    """`text` as compared for a repeat: its words, in order."""
+    return " ".join(_words(text))
+
+
+def read(answer: Any, text: str, have: dict[str, list[str]] | None = None) -> list[Row]:
+    """The model's lines that hold: a known section (never summary or vision), some text, the owner's own words (`owns`),
+    each once in the answer and not already in its section (`have`: each section's confirmed text, the bets'
+    statements), cut to its section's limit (what was cut is its `left`, shown as not kept); at most LINES_MAX,
+    BETS_MAX of them bets."""
     if not isinstance(answer, dict):
         return []
     raw = cast(Row, answer).get("lines")
     if not isinstance(raw, list):
         return []
-    own, room, out, bets = set(_words(text)), limits(), cast(list[Row], []), 0
+    room, out, bets = limits(), cast(list[Row], []), 0
+    there = {k: " ".join(f" {_same(t)} " for t in v) for k, v in (have or {}).items()}
+    taken: set[str] = set()
     for item in cast(list[Any], raw):
         if not isinstance(item, dict):
             continue
         line = cast(Row, item)
         section, words = str(line.get("section") or ""), " ".join(str(line.get("text") or "").split())
-        if section not in room or not words:
+        if section not in room or not words or not owns(words, text):
             continue
-        mine = _words(words)
-        if not mine or sum(w in own for w in mine) < OWN_WORDS * len(mine):
+        same = _same(words)
+        # Once per answer, in whichever section first; never again where the section already says it.
+        if same in taken or f" {same} " in there.get(section, ""):
             continue
         if section == BET:
             if bets >= BETS_MAX:
                 continue
             bets += 1
+        taken.add(same)
         kept = _cut(words, room[section])
         left = words[len(kept) :].strip()
         out.append({"section": section, "text": kept, **({"left": left} if left else {})})
@@ -241,6 +292,17 @@ def metered(store: Any, write: Writer, user: str) -> Any:
     return judge.metered(store, [model], user, SYSTEM, LABEL, call)["answer"]
 
 
+def written(c: Any, draft: Row) -> dict[str, list[str]]:
+    """What each part already says, so a line is not added to it twice: a section's confirmed text (drafted text is
+    replaced by a line, never added to) and every bet not retired."""
+    sections = cast(Row, draft.get("sections") or {})
+    out = {
+        k: [str(sections.get(k) or "")] for k in KEYS if k != BET and unconfirmed(str(sections.get(k) or "")) is None
+    }
+    out[BET] = [str(b["statement"]) for b in cast(list[Row], S.bets(c)) if b.get("status") != "retired"]
+    return out
+
+
 def fallback(text: str, section: str, why: str) -> Row:
     return {"lines": whole(text, section), "split": False, "why": why}
 
@@ -250,6 +312,7 @@ def ramble(store: Any, who: Any, text: str, section: str) -> Row:
     with store.read() as c:
         row = cast(Row, S.draft(c) or {})
         gid = str(row.get("guide") or S.DEFAULT_GUIDE)
+        have = written(c, row)
         write = writer(c, store)
         capped = write is not None and judge.over_spend_cap(c, store.settings) is not None
     if write is None:
@@ -273,7 +336,7 @@ def ramble(store: Any, who: Any, text: str, section: str) -> Row:
     except Exception as exc:  # noqa: BLE001 - a writer error of any kind: the person still saves their answer
         LOG.warning("flow ramble call failed: %s", type(exc).__name__)
         return fallback(text, section, "failed")
-    lines = read(answer, text)
+    lines = read(answer, text, have)
     if not lines:
         return fallback(text, section, "failed")
     return {"lines": lines, "split": True, "why": None}

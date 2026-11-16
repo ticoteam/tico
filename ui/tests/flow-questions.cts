@@ -8,12 +8,13 @@ import type {Page} from 'playwright';
 //   view, every control at least 44x44, nothing wider than the screen; the bet offers up to three proposed bets;
 // - the box holds what the question keeps whole, a count showing near it; Send makes one call however often pressed;
 // - a long answer is split into lines under their sections' names, what a limit cut struck through; ✕ drops one, one
-//   Save sends the rest;
+//   Save sends the rest; one with nothing usable in it is that screen's one line, whole, never saved unseen; a line its
+//   section already says is not added again;
 // - the end screen shows each part Publish changes with its text, edits made elsewhere included; ✕ takes a line out
 //   again (a draft save) only where Flow put it, and leaves one edited since; Publish sends the revision on screen, so
 //   a draft changed since is read again for a second tap, never published unseen; after Publish, Keep going reads the
 //   questions again (a part filled by a long answer is not asked) and Publish comes back for what is new; parts still
-//   marked Unconfirmed are named above Publish, each opening its question;
+//   marked Unconfirmed are named right above Publish (pinned with it on a phone), each opening its question;
 // - opened from the Strategy page (#/decide?setup=strategy) the questions come first, an ask waiting after them; with
 //   Publish refused the end screen says what is missing instead; Skip is kept in this browser;
 // - anyone but the owner sees none of it, and nothing is read for them.
@@ -44,7 +45,8 @@ const LINES = [
   {section: 'know', text: 'Landlords hate portals.'},
 ];
 const NOW = 'Rents went up a fifth this year.';
-const HOW = 'Hire slowly.';
+const HOW = 'Hmm, how we win. Honestly I do not know yet, I would have to think about it, maybe ask me again next week when '
+  + 'I have talked to my business partner about it, sorry, it has been a really long day and I cannot think straight now.';
 const MAX = {bet: 2180, section: 4000};
 const ASK = {
   serve: 'Who has this problem worst?', sell: 'What do you make?', bet: 'What do you believe that others do not?',
@@ -75,6 +77,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     // The draft as the server holds it, and what was sent to it.
     let sections: Record<string, string> = {}, bets: Bet[] = [], revision = 1, current: Json | null = null, n = 0;
     let needs: Json[] = [], conflicts = 0, role = 'owner', hold: Promise<void> | null = null;
+    // What the split answers: the lines, or (nothing usable in the answer) the whole text and why not.
+    let split: (body: Json) => Json = () => ({lines: LINES, split: true, why: null});
     const errors: string[] = [], sent: Sent[] = [], reads: string[] = [];
     const reset = (s: Record<string, string>, b: Bet[]) => { sections = {...s}; bets = b.map(x => ({...x})); revision = 1; current = null; n = 0; sent.length = 0; reads.length = 0; };
     const open = (k: string) => !(sections[k] || '').trim() || (sections[k] || '').startsWith('_Unconfirmed:');
@@ -125,7 +129,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
         if (p.startsWith('/api/v2/strategy') || p.startsWith('/api/v2/flow/ramble') || p.includes('/asks/')) sent.push({method, path: p, body});
         const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);
         if (m) { needs = []; return json({task: brief(m[1]!), answer_id: 'a-' + m[2], requirement_id: m[2]}); }
-        if (p === '/api/v2/flow/ramble') { if (hold) await hold; return json({lines: LINES, split: true, why: null}); }
+        if (p === '/api/v2/flow/ramble') { if (hold) await hold; return json(split(body)); }
         if (p === '/api/v2/strategy/draft' && method === 'PUT') {
           if (stale(body)) return conflict();
           Object.assign(sections, body['sections'] as Record<string, string>);
@@ -286,12 +290,21 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
         g.querySelector('.dc-qt')?.textContent ?? null, [...g.querySelectorAll('li>span')].map(x => x.textContent)]));
       assert.deepEqual(await groups(), [
         [TITLE.serve, DRAFTED, []], [TITLE.sell, SELL, []], [TITLE.not, LINES[0]!.text, []], [TITLE.proof, LINES[1]!.text, []],
-        [TITLE.know, appended, [LINES[3]!.text]], [TITLE.how, (MARK + 'Referrals.').trim(), []], ['Bets', 'Small landlords will trust a bot with tenant messages\nLandlords pay per unit (proposed)\nPortals lose to texts (proposed)\nRent apps consolidate (proposed)', [PROPOSED]],
+        [TITLE.know, appended, [LINES[3]!.text]], [TITLE.how, 'Referrals.', []], ['Bets', 'Small landlords will trust a bot with tenant messages\nLandlords pay per unit (proposed)\nPortals lose to texts (proposed)\nRent apps consolidate (proposed)', [PROPOSED]],
       ], 'a part that is just Flow\'s line carries its ✕; else Flow\'s lines are listed under the text');
       assert.equal(await end.locator('.dc-qg li [data-dc="q-unsave"]').count(), 6);
       // A part still drafted is named above Publish (it would go out as drafted); Publish is not stopped by it.
       assert.deepEqual(await end.locator('[data-q-drafted] .dc-q-fix').allTextContents(), [`Unconfirmed: ${TITLE.how}`]);
       assert.equal(await layout(page, 'end'), 'q-publish');
+      // On a phone they are pinned on the row: in view with Publish, nothing to scroll, nothing over them.
+      const pinned = await page.evaluate(() => {
+        const note = document.querySelector<HTMLElement>('#need-card [data-q-drafted] .dc-q-fix')!.getBoundingClientRect();
+        const row = document.querySelector<HTMLElement>('#need-card .dc-q-acts')!.getBoundingClientRect();
+        const hit = document.elementFromPoint(note.left + note.width / 2, note.top + note.height / 2);
+        return note.top >= 0 && note.bottom <= row.top + 1 && !!hit?.closest('[data-q-drafted]');
+      });
+      assert.equal(pinned, true, 'the parts still drafted show right above Publish without scrolling');
+      assert.equal(await end.locator('.dc-qt', {hasText: '_Unconfirmed'}).count(), 0, 'no marker markdown on the end screen');
       assert.deepEqual(await end.locator('.dc-q-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('data-dc'))), ['q-more', 'q-done', 'q-publish']);
       // A long text is clamped; a tap shows it whole.
       const know = end.locator('.dc-qg', {hasText: TITLE.know}).locator('.dc-qt');
@@ -333,10 +346,23 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       await d.locator('.dc-qs[data-q="how"]').waitFor();
       assert.equal(await d.locator('.dc-qs[data-q="how"] .dc-choice').textContent(), 'Referrals.');
       assert.equal(reads.length, read + 1);
+      // A long answer with nothing usable in it: never saved unseen, but shown whole as the one line for the part
+      // asked, to ✕ or Save.
+      split = body => ({lines: [{section: body['section'], text: body['text']}], split: false, why: 'failed'});
+      const saves = writes().length;
       await d.locator('#dc-q-say').fill(HOW);
       await d.locator('[data-dc="q-send"]').tap();
+      await d.locator('[data-q-strike]').waitFor();
+      assert.equal(writes().length, saves, 'nothing saved before the owner sees it');
+      assert.deepEqual(await d.locator('.dc-ql .tx span').allTextContents(), [TITLE.how]);
+      assert.deepEqual(await d.locator('.dc-ql .tx b').allTextContents(), [HOW]);
+      await d.locator('.dc-ql [data-dc="q-drop"]').tap();
+      assert.equal(await d.locator('[data-dc="q-save"]').isDisabled(), true, 'nothing left to save');
+      await d.locator('.dc-ql [data-dc="q-drop"]').tap();
+      await d.locator('[data-dc="q-save"]').tap();
       // A new answer after Publish: Publish again, with ✕ for it alone.
       await end.locator('[data-dc="q-publish"]').waitFor();
+      assert.equal(sections['how'], HOW, 'saved whole, in place of the drafted text');
       assert.equal(await end.locator('.dc-q-said').textContent(), 'Saved to your draft. Bots use it after you publish.');
       assert.deepEqual(await end.locator('.dc-qg', {has: page.locator('[data-dc="q-unsave"]')}).locator('h4').allTextContents(), [TITLE.how]);
       await end.locator('[data-dc="q-publish"]').tap();
@@ -433,6 +459,13 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     }
 
     assert.deepEqual(writes(), []);
+    // A line its section already says is not added again (case and punctuation aside); a new one is.
+    {
+      const page = await start(false, '#/updates');
+      assert.deepEqual(await page.evaluate((know: string) => [decideQMerge(`${know}\n\nLandlords hate portals.`, 'landlords hate portals'),
+        decideQMerge(know, 'Landlords hate portals.')], KNOW), [`${KNOW}\n\nLandlords hate portals.`, `${KNOW}\n\nLandlords hate portals.`]);
+      await page.context().close();
+    }
     assert.deepEqual(errors, []);
     console.log('PASS: the owner\'s Strategy questions come after their asks and first from the Strategy page; saves carry the revision (a 409 sent again once); one Send, one split, cut words shown; ✕ takes out only Flow\'s own line; Publish sends the revision on screen and comes back for new answers; Keep going reads again; no one else sees them.');
   } finally { await browser.close(); }
@@ -441,5 +474,6 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
 declare const S: {me?: unknown};
 declare const DEC_Q: {busy: boolean};
 declare function v2Refresh(): Promise<void>;
+declare function decideQMerge(body: string, line: string): string;
 declare function decideFlow(from: HTMLElement): void;
 declare function decideStageOpen(stage: string): Promise<boolean>;

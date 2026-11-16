@@ -1131,9 +1131,9 @@ function decidePaintSide(st: DecState) {
   decideNeedsText($('.decide')!);
   decideBarRoom();
 }
-/** On a phone the answer row is pinned to the bottom (decide.css), with a page's meta line pinned on top of it: the
-    scroll keeps their height clear at the end (--dc-bar-h); the meta line sits on the
-    row (--dc-acts-h). 0 where no row is pinned. */
+/** On a phone the answer row is pinned to the bottom (decide.css), with a page's meta line (or the Strategy end
+    screen's notes, .dc-q-pin) pinned on top of it: the scroll keeps their height clear at the end (--dc-bar-h); the
+    meta line sits on the row (--dc-acts-h). 0 where no row is pinned. */
 function decideBarRoom() {
   const row = decideBarSet(), meta = row ? decideBarMeta() : null;
   // Measured again whenever its height changes without a redraw (the font arriving, a long label wrapping).
@@ -1142,7 +1142,7 @@ function decideBarRoom() {
   if (meta) DEC_BAR_WATCH?.observe(meta, {box: 'border-box'});
 }
 const decideBarRow = () => decidePhone() ? $('.decide .dc-side>div:not(.dc-done)>.dc-acts:last-child') as HTMLElement | null : null;
-const decideBarMeta = () => $('.decide .dc-side>div:not(.dc-done)>.dc-meta') as HTMLElement | null;
+const decideBarMeta = () => $('.decide .dc-side>div:not(.dc-done)>:is(.dc-meta,.dc-q-pin)') as HTMLElement | null;
 function decideBarSet(): HTMLElement | null {
   const root = $('.decide') as HTMLElement | null, row = decideBarRow(), meta = row ? decideBarMeta() : null;
   const h = row ? row.offsetHeight : 0;
