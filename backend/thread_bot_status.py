@@ -16,6 +16,7 @@ attempts, then a few reads per listed bot.
 
 import json
 
+from . import runner_online
 from .store import H, bot_readiness, readiness_document
 
 MAX_BOTS = 5
@@ -396,13 +397,7 @@ def _location(c, bot):
     ).fetchone()
     if not row:
         return {"online": False, "machine": None, "readiness": {}}
-    from .readiness import ONLINE_SECONDS
-
-    online = bool(
-        not row["revoked_at"]
-        and row["last_seen_at"]
-        and row["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    )
+    online = bool(not row["revoked_at"] and runner_online.is_online(row["last_seen_at"]))
     return {
         "online": online,
         "machine": {"runner_id": row["runner_id"], "label": row["label"]},

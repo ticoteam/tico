@@ -21,9 +21,9 @@ declare var loadSettings: () => Promise<void>;
     type Chip = {name: string; runtime: string; installed: boolean; version: string; managed: boolean; state: string; wanted: boolean; pinned: boolean; update_available: boolean; detail: string};
     const chip = (name: string, runtime: string, installed: boolean): Chip => ({name, runtime, installed, version: installed ? '1.0.0' : '', managed: true, state: 'idle',
       wanted: installed, pinned: false, update_available: false, detail: ''});
-    type Computer = {id: string; label: string; owner_id: string; bots: string[]; platform: string; last_seen_at: string; needed_runtimes: string[]; bot_runtimes?: string[]; harness_choices: Record<string, boolean>; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>; harnesses: Record<string, Chip>}};
+    type Computer = {id: string; label: string; owner_id: string; bots: string[]; platform: string; last_seen_at: string; online: boolean; needed_runtimes: string[]; bot_runtimes?: string[]; harness_choices: Record<string, boolean>; readiness: {runtimes: Record<string, {installed: boolean; authenticated: string}>; harnesses: Record<string, Chip>}};
     const computer: Computer = {id: 'computer-1', label: 'Build server', owner_id: 'ana', bots: ['helper'], platform: 'linux',
-      last_seen_at: new Date().toISOString(), needed_runtimes: ['codex'], bot_runtimes: ['codex', 'gemini'], harness_choices: {},
+      last_seen_at: new Date().toISOString(), online: true, needed_runtimes: ['codex'], bot_runtimes: ['codex', 'gemini'], harness_choices: {},
       readiness: {runtimes: {codex: {installed: true, authenticated: 'ready'}},
         harnesses: {codex: chip('Codex', 'codex', true), antigravity: chip('Antigravity', 'gemini', true), grok: chip('Grok Build', 'grok', false)}}};
     const writes: {harness: string; enabled: boolean}[] = [];

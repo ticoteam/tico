@@ -31,7 +31,7 @@ async function signOut(browser: import('playwright').Browser) {
     const now = Date.now(), at = (ms: number) => new Date(now + ms).toISOString();
     const chip = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
-    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
+    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000), online: true,
       readiness_at: at(-3000),
       needed_runtimes: ['claude', 'codex'], bot_runtimes: ['codex'], signed_out: {} as Record<string, string[]>,
       readiness: {
@@ -284,6 +284,7 @@ async function signOut(browser: import('playwright').Browser) {
     // Offline: Switch account and Sign out stay, disabled, saying why; nothing can be started.
     const online = await buttons(own('claude'));
     box.last_seen_at = at(-3 * 3600000);
+    box.online = false;
     await page.evaluate(() => loadSettings());
     await own('claude').locator('.computer-conn-signin', {hasText: 'last checked'}).waitFor();
     assert.deepEqual(await buttons(own('claude')), online);
@@ -291,6 +292,7 @@ async function signOut(browser: import('playwright').Browser) {
     assert.deepEqual(await own('claude').locator('.computer-conn-signin button').evaluateAll((all: HTMLElement[]) => all.map(b => (b as HTMLButtonElement).disabled && b.title)),
       online.map(() => 'Computer is offline'));
     box.last_seen_at = at(-3000);
+    box.online = true;
     await page.evaluate(() => loadSettings());
     await own('claude').getByRole('button', {name: 'Sign out'}).waitFor();
 
@@ -330,7 +332,7 @@ async function keys(browser: import('playwright').Browser) {
     const SECRET = 'sk-test-not-a-real-key-123456';
     const chip = (name: string, runtime: string) => ({name, runtime, installed: true, version: '1.0.0', managed: true, state: 'idle', wanted: true,
       pinned: false, update_available: false, detail: ''});
-    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000),
+    const fixture = () => ({id: 'box', label: 'Team box', owner_id: 'sam', bots: ['writer'], platform: 'linux', last_seen_at: at(-3000), online: true,
       readiness_at: at(-3000), needed_runtimes: ['codex', 'claude'], bot_runtimes: ['codex'], signed_out: {} as Record<string, string[]>,
       keys: {claude: {env: 'ANTHROPIC_API_KEY', preview: 'sk-…abc', since: at(-86400000)}},
       shared_keys: {codex: {env: 'OPENAI_API_KEY', preview: 'sk-…xyz'}},
@@ -523,6 +525,7 @@ async function keys(browser: import('playwright').Browser) {
 
     // Offline: Replace key, Clear key and Switch to subscription stay on the line, disabled, saying why.
     box.last_seen_at = at(-3 * 3600000);
+    box.online = false;
     await page.evaluate(() => loadSettings());
     await own('claude').locator('[data-model-key-replace][disabled]').waitFor();
     for (const name of ['claude', 'codex']) {
@@ -535,6 +538,7 @@ async function keys(browser: import('playwright').Browser) {
     assert.equal(await page.locator('dialog.model-key[open]').count(), 0, 'nothing opens offline');
     assert.equal(writes.length, sent, 'nothing queues offline');
     box.last_seen_at = at(-3000);
+    box.online = true;
     assert.deepEqual(errors, []);
     await page.close();
 

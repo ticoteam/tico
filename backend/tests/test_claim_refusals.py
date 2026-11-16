@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend import check_models, diagnostics, execution, health, maintenance_health
+from backend import check_models, diagnostics, execution, health, maintenance_health, runner_online
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
@@ -325,7 +325,7 @@ def ops_rows(api):
     """Health's Stuck rows for ops and the Health Monitor's findings, as the jobs stand."""
     store = api.app.state.store
     with store.read() as c:
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
         found = {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
     return rows, found

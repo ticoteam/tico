@@ -35,7 +35,8 @@ from . import (
     watchers,
 )
 from .batch_work import report, storage_error
-from .getting_started import _online_runners, _person, _wanted_runtimes, own_bots
+from .getting_started import _person, _wanted_runtimes, own_bots
+from . import runner_online
 
 
 def _harness_name(runtime):
@@ -2933,7 +2934,7 @@ def view(c, who, settings, auth, github, config):
         _person(who)
     kind = "owner" if who.role == "owner" else "admin" if auth.bot_admin(who) else who.role
     full = kind in ("owner", "admin")
-    online = _online_runners(c)
+    online = runner_online.online_rows(c)
     online_ids = {r["id"] for r in online}
     loads = _prime_claims(c, settings)
     limits = usage_limits.company(c)  # one, so the spend of every period is summed once for all the bots

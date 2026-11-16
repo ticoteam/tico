@@ -113,7 +113,7 @@ import httpx
 from clients import gateway as G
 from clients.gateway import user_agent
 
-from . import cloud_access, outbound_tls, releases
+from . import cloud_access, outbound_tls, releases, runner_online
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
 
@@ -537,13 +537,11 @@ def replacement_runner(c, key, old_id):
 
 def visible_rows(c):
     """Live runner contact proves a boot finished, but cannot undo HQ's stop or deletion."""
-    from .getting_started import ONLINE_SECONDS
-
     online = {
         r["id"]
         for r in c.execute(
             "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
-            (H.shift(H.now(), seconds=-ONLINE_SECONDS),),
+            (runner_online.cutoff(),),
         )
     }
     return {
@@ -1280,8 +1278,6 @@ def signin_wake(c, settings):
     for as long as the page keeps asking. Returns whether it is on its way: never out of credit, off a cloud company,
     after machines that never enrolled, once it is up (it is online and still cannot run the sign-in), or SIGNIN_START
     after the first ask."""
-    from .getting_started import ONLINE_SECONDS
-
     if not offered(c, settings) or cloud_access.frozen(c):
         return False
     ensure_shared(c)
@@ -1292,7 +1288,7 @@ def signin_wake(c, settings):
         current["runner_id"]
         and c.execute(
             "SELECT 1 FROM runners_with_state WHERE id=? AND revoked_at IS NULL AND last_seen_at>?",
-            (current["runner_id"], H.shift(H.now(), seconds=-ONLINE_SECONDS)),
+            (current["runner_id"], runner_online.cutoff()),
         ).fetchone()
     ):
         return False

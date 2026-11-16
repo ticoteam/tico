@@ -21,7 +21,7 @@ from starlette.requests import ClientDisconnect
 
 
 from . import built_on
-from . import agents, app_view, mcp_oauth, oidc, views
+from . import agents, app_view, mcp_oauth, oidc, runner_online, views
 from . import outcome_stats
 from . import pipeline_judges
 from . import recorder_installs
@@ -66,7 +66,6 @@ from .auth import LOCAL_SIGNIN_PATH, LOGOUT_PATH, Auth, Identity
 from .config import Settings
 from .observability import Observability, route as error_route
 from .execution import (
-    AWAKE_GAP,
     Execution,
     runner_repository,
     flag_cut,
@@ -91,7 +90,6 @@ from .providers import MODEL_BY_ID
 from .settings_admin import SettingsAdmin
 from .readiness import absolute as absolute_link
 from . import fleet_check as fleet_check_module
-from .getting_started import _online_runners
 from .screen import listing as screen_listing
 from .performance import listing as performance_listing
 from .credential_cards import install_credential_cards, scrub_attempt
@@ -2078,7 +2076,7 @@ def create_app(settings=None):
         """Online computers counted by state (backend/runner_versions.py): current, updating, needs_update, ..."""
         counts = {}
         with store.read() as c:
-            cutoff = H.shift(H.now(), seconds=-AWAKE_GAP)
+            cutoff = runner_online.cutoff()
             known = runner_versions.load(c)
             for row in c.execute(
                 "SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?", (cutoff,)
@@ -5132,7 +5130,7 @@ def create_app(settings=None):
         from . import usage_limits
         from .start_places import summaries, describe as describe_turns
 
-        online = {r["id"] for r in _online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         everyone = who.role == "owner" or auth.bot_admin(who)
         mine = H.actor_id(who.actor)
         readable = auth.bot_accesses(c, who)

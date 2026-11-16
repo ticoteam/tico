@@ -17,6 +17,7 @@ from . import (
     views,
     wake_presets,
 )
+from . import runner_online
 from .bot_rows import BotRows
 from .harnesses import resolve_harness
 from .settings_admin import compact_at as compact_at_of
@@ -151,10 +152,7 @@ def register(app, auth, settings, settings_admin, store):
         row["status"] = privacy.status(c, who, dict(status), **rows.status_inputs[slug]) if status else status
         row["assignment"] = dict(assignment) if assignment else None
         row["online"] = bool(
-            assignment
-            and not assignment["revoked_at"]
-            and assignment["last_seen_at"]
-            and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60)
+            assignment and not assignment["revoked_at"] and runner_online.is_online(assignment["last_seen_at"])
         )
         row["queued"] = rows.queued[slug]
         row["notes"] = rows.notes[slug]

@@ -6,6 +6,7 @@ server registers its digest; this grants no owner session or general API access.
 
 import re
 
+from . import runner_online
 from .store import H, Problem
 
 
@@ -47,10 +48,5 @@ def enrollment(store, auth, request_id, code_hash, label, owner, status=False):
             "SELECT last_seen_at,revoked_at FROM runners_with_state WHERE id=?", (e['runner_id'],)
         ).fetchone()
         return {
-            "online": bool(
-                runner
-                and not runner['revoked_at']
-                and runner['last_seen_at']
-                and runner['last_seen_at'] > H.shift(H.now(), minutes=-2)
-            )
+            "online": bool(runner and not runner['revoked_at'] and runner_online.is_online(runner['last_seen_at'])),
         }

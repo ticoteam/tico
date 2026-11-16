@@ -22,12 +22,11 @@ sign-in for that runtime. Another bot's missing key or another profile's sign-in
 Callers refuse only on can_run False; None never blocks.
 """
 
-from . import models_preset, read_cache
+from . import models_preset, read_cache, runner_online
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H, readiness_document
 from . import bot_settings as BS
 
-ONLINE_SECONDS = 60
 SIGNED_OUT = ("missing", "failed", "rejected")
 
 
@@ -163,7 +162,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
             "link": "#/bot/" + bot + "/more",
         }
     label = row["label"] or "its computer"
-    online = bool(row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_SECONDS))
+    online = runner_online.is_online(row["last_seen_at"])
     readiness = readiness_document(row["readiness"])
     detail = readiness.get("bots", {}).get(bot)
     detail = models_preset.as_served(c, bot, readiness, detail) if isinstance(detail, dict) else {}

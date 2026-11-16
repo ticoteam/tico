@@ -24,7 +24,8 @@ type DetailAddStep = {at?: string | undefined; runtime?: string | undefined};
 type DetailDialog = HTMLDialogElement & {restoreOpener?: () => void};
 type DetailExitUsage = import('../types/api').BrowserExitUsage;
 
-const machineOnline = (machine: DetailMachine) => !machine.revoked_at && !!machine.last_seen_at && (SETTINGS_PRESENCE.at || Date.now()) - new Date(machine.last_seen_at).getTime() < 60000;
+// The server decides online (backend/runner_online.py) and says so on each machine in /v2/operations.
+const machineOnline = (machine: DetailMachine) => !machine.revoked_at && machine.online === true;
 const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESENCE.failed
   || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
 const machinePresenceWords = (machine: DetailMachine) => machine.revoked_at ? 'revoked'

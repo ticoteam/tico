@@ -14,7 +14,8 @@ a harness never chosen is neither, and the runner keeps whatever it already has.
 
 from . import providers
 from .harnesses import runtime_of
-from .model_login import ONLINE_SECONDS, redact
+from . import runner_online
+from .model_login import redact
 from .store import H, Problem, readiness_document
 
 ACTIONS = ("update", "pin", "unpin")
@@ -87,7 +88,7 @@ def request(c, who, rid, harness, action):
     known = readiness_document(runner["readiness"]).get("harnesses") or {}
     if harness not in known:
         raise Problem("not_found", "That computer has not reported this harness", 404)
-    if not runner["last_seen_at"] or runner["last_seen_at"] < H.shift(H.now(), seconds=-ONLINE_SECONDS):
+    if not runner_online.is_online(runner["last_seen_at"]):
         raise Problem("offline", "That computer is offline, so it cannot change its tools", 409)
     report = known[harness]
     if not report.get("managed") and action != "unpin":

@@ -24,6 +24,7 @@ from backend import task_privacy as privacy
 from backend.chat_goals import readable_active
 from backend.harnesses import resolve_harness
 from backend.settings_admin import SettingsAdmin, compact_at as compact_at_of
+from backend import runner_online
 from backend.store import H, P, encode, repo_url
 from backend.tests.helpers import api as T
 from backend.tests.helpers.api_app import api_client
@@ -153,10 +154,7 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     row["status"] = privacy.status(c, who, H.status(c, bot["slug"]))
     row["assignment"] = dict(assignment) if assignment else None
     row["online"] = bool(
-        assignment
-        and not assignment["revoked_at"]
-        and assignment["last_seen_at"]
-        and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60)
+        assignment and not assignment["revoked_at"] and runner_online.is_online(assignment["last_seen_at"])
     )
     row["queued"] = privacy.job_count(c, who, bot["slug"])
     row["notes"] = len(H.notes_waiting(c, bot["slug"], limit=500))

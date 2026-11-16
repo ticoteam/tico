@@ -22,7 +22,7 @@ from fastapi import Request
 from clients import access_entry, harness_manifests, mcp_servers
 from . import model_subscriptions
 from . import models as M
-from . import google_workspace, providers, read_cache, routines
+from . import google_workspace, providers, read_cache, routines, runner_online
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
 from .store import H, Problem, encode, readiness_document, repo_url
 from . import bot_settings as BS
@@ -38,8 +38,6 @@ CREDENTIALS_NOTE = (
     "Store a needed Credential through Credentials or its chat card, and grant it to this bot. "
     "Never put a value in a task or repository. This entry names only the variable."
 )
-
-ONLINE_WITHIN_S = 60
 
 # A CLI's name is its manifest's; external agents have none.
 HARNESS_NAMES = {
@@ -497,12 +495,7 @@ def listing(c, settings, bot, reads=None):
     slug = (H.bot(c, bot) or {}).get("slug") or bot
     state = _state(c, settings, bot)
     runner, report, label = state["runner"], state["report"], state["label"]
-    online = bool(
-        runner
-        and not runner["revoked_at"]
-        and runner["last_seen_at"]
-        and runner["last_seen_at"] > H.shift(H.now(), seconds=-ONLINE_WITHIN_S)
-    )
+    online = bool(runner and not runner["revoked_at"] and runner_online.is_online(runner["last_seen_at"]))
     declared = state["declared"]
     external = resolve_harness(state["config"]) in EXTERNAL_HARNESSES
     if external:
