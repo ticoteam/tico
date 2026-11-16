@@ -43,7 +43,7 @@ const scenarios: Record<string, (browser: Browser) => Promise<void>> = {
     assert.equal(await page.locator('#inbox-head h1').textContent(), 'support@acme.example');
     assert.equal(await page.locator('[data-ib-crumb]').textContent(), 'support@acme.example');
     assert.equal(await pill(page).textContent(), 'Connected');
-    assert.equal(await page.locator('[data-mb-status]').textContent(), 'Shared inbox · Not synced yet · Tico may read and organize');
+    assert.equal(await page.locator('[data-mb-status]').textContent(), 'Shared inbox · Not checked yet · Tico may read and organize');
     assert.equal(await page.locator('#tools-root').count(), 0, 'the list is not drawn under the page');
     await page.locator('#inbox-sending [data-send-bot-row]').first().waitFor();
     // Shown in the page's order: who can use it, its limits and what waits to send, then keys, automations, recent.
@@ -157,14 +157,14 @@ const scenarios: Record<string, (browser: Browser) => Promise<void>> = {
   'the owner manages their own mailbox; an admin reads someone else\'s and may only stop it': async browser => {
     const fake = mailboxesFake();
     let {page, seen} = await open(browser, fake, googleFake(), at('mb-ana'));
-    assert.equal(await page.locator('[data-mb-status]').textContent(), 'Ana · Not synced yet · Tico may read and organize');
+    assert.equal(await page.locator('[data-mb-status]').textContent(), 'Ana · Not checked yet · Tico may read and organize');
     assert.deepEqual(await accessRows(page), [['Ana', 'Read and write', false]]);
     assert.equal(await page.locator('[data-mb-add-open]').count(), 1);
     assert.equal(await page.locator('[data-mb-stop]').count(), 1);
     assert.deepEqual(seen.errors, []);
     await page.close();
     ({page, seen} = await open(browser, fake, googleFake(), at('mb-ben')));
-    assert.equal(await page.locator('[data-mb-status]').textContent(), 'Ben · Not synced yet');
+    assert.equal(await page.locator('[data-mb-status]').textContent(), 'Ben · Not checked yet');
     assert.equal(await page.locator('[data-mb-recent]').textContent(), 'Only people who can use it see its mail.');
     assert.deepEqual(await accessRows(page), [['Ben', 'Read and write', false]]);
     assert.equal(await page.locator('[data-mb-add-open]').count(), 0);
@@ -179,7 +179,7 @@ const scenarios: Record<string, (browser: Browser) => Promise<void>> = {
     const google = googleFake();
     google.state.can_admin = false;
     const {page, seen} = await open(browser, fake, google, at('mb-support'));
-    assert.equal(await page.locator('[data-mb-status]').textContent(), 'Shared inbox · Not synced yet · Tico may read');
+    assert.equal(await page.locator('[data-mb-status]').textContent(), 'Shared inbox · Not checked yet · Tico may read');
     assert.equal(await page.locator('[data-mb-check]').count(), 1, 'anyone who can use it checks its connection');
     assert.equal(await page.locator('[data-mb-share]').count(), 0);
     assert.deepEqual(await accessRows(page), [
@@ -204,7 +204,7 @@ const scenarios: Record<string, (browser: Browser) => Promise<void>> = {
     assert.equal(await pill(page).textContent(), 'Sign-in expired');
     assert.equal(await pill(page).getAttribute('data-ib-status'), 'attention');
     assert.equal(await page.locator('[data-mb-sync-error]').textContent(), 'Google refused the sign-in (invalid_grant)');
-    assert.match((await page.locator('[data-mb-status]').textContent())!, /^Shared inbox · Last sync 3h · Tico may/);
+    assert.match((await page.locator('[data-mb-status]').textContent())!, /^Shared inbox · Checked 3h · Tico may/);
     assert.equal(await page.locator('[data-mb-signin] a').getAttribute('href'), '#/tools/settings/email');
     assert.deepEqual(seen.errors, []);
     await page.close();
@@ -217,7 +217,7 @@ const scenarios: Record<string, (browser: Browser) => Promise<void>> = {
     const {page, seen} = await open(browser, fake, google, at('mb-support'));
     fake.state.mailboxes.find(m => m.id === 'mb-support')!.synced_at = new Date(Date.now() - 60e3).toISOString();
     await page.locator('[data-mb-check]').click();
-    await page.locator('[data-mb-status]', {hasText: 'Last sync'}).waitFor();
+    await page.locator('[data-mb-status]', {hasText: 'Checked 1m'}).waitFor();
     assert.deepEqual(google.writes.filter(w => w.path === '/api/v2/google/workspace/check').map(w => w.body), [{mailbox: 'support@acme.example'}]);
     assert.deepEqual(seen.errors, []);
     await page.close();
