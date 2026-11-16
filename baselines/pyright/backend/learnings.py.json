@@ -18,22 +18,6 @@
                 }
             },
             {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 50,
-                    "endColumn": 59,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportOptionalMemberAccess",
-                "range": {
-                    "startColumn": 84,
-                    "endColumn": 93,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportCallIssue",
                 "range": {
                     "startColumn": 11,

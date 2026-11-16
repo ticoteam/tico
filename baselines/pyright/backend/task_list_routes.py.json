@@ -10,22 +10,6 @@
                 }
             },
             {
-                "code": "reportAssignmentType",
-                "range": {
-                    "startColumn": 22,
-                    "endColumn": 64,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 40,
-                    "endColumn": 43,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportPossiblyUnboundVariable",
                 "range": {
                     "startColumn": 69,

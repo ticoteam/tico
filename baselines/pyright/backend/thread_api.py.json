@@ -12,14 +12,6 @@
             {
                 "code": "reportArgumentType",
                 "range": {
-                    "startColumn": 63,
-                    "endColumn": 68,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
                     "startColumn": 70,
                     "endColumn": 75,
                     "lineCount": 1

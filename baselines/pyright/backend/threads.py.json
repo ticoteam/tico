@@ -1080,14 +1080,6 @@
                     "endColumn": 59,
                     "lineCount": 1
                 }
-            },
-            {
-                "code": "reportAttributeAccessIssue",
-                "range": {
-                    "startColumn": 6,
-                    "endColumn": 14,
-                    "lineCount": 1
-                }
             }
         ]
     }
