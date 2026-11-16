@@ -4143,28 +4143,28 @@ fn recorder_picker_and_link_queue_accept_tasks_without_a_number() {
 }
 
 #[test]
-fn recorder_picker_reads_task_types_and_searches_a_bare_number() {
+fn recorder_picker_reads_pipelines_and_filters_tasks_by_one() {
     let (tico, seen, worker) = server(vec![
-        Some(
-            json!({"types":[{"id":"general","name":"General","steps":[]},{"id":"bug","name":"Bug","numbered":true}]}),
-        ),
+        Some(json!({"pipelines":[
+            {"id":"general","name":"General","retired_at":null,"stages":[]},
+            {"id":"old","name":"Old","retired_at":"2026-11-01T09:00:00Z"},
+            {"id":"product","name":"Product","retired_at":null},
+        ]})),
         Some(json!({"tasks":[],"next_offset":null})),
         Some(json!({"tasks":[],"next_offset":null})),
     ]);
     assert_eq!(
-        tico.task_types().unwrap(),
-        json!([{"id":"general","name":"General"},{"id":"bug","name":"Bug"}])
+        tico.pipelines().unwrap(),
+        json!([{"id":"general","name":"General"},{"id":"product","name":"Product"}])
     );
-    tico.search_tasks(" 19118 ", "bug", 0).unwrap();
+    tico.search_tasks(" 19118 ", "product", 0).unwrap();
     tico.search_tasks("property manager", "", 0).unwrap();
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
-    assert!(calls[0].0.starts_with("GET /api/v2/task-types "));
-    assert!(
-        calls[1]
-            .0
-            .starts_with("GET /api/v2/tasks?q=%2319118&limit=30&brief=true&offset=0 ")
-    );
+    assert!(calls[0].0.starts_with("GET /api/v2/pipelines "));
+    assert!(calls[1].0.starts_with(
+        "GET /api/v2/tasks?q=%2319118&limit=30&brief=true&offset=0&pipeline=product "
+    ));
     assert!(
         calls[2]
             .0
