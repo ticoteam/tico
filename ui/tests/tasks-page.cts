@@ -86,6 +86,10 @@ export interface OpenOptions {
   runs?: Record<string, unknown[]>;
   bots?: unknown[];
   beforeGoto?: ((page: Page) => unknown) | null;
+  /** Answers held back this many ms, by path (a slow server). */
+  slow?: Record<string, number>;
+  /** false: return as soon as the page is asked for, before its first read lands. */
+  settle?: boolean;
 }
 
 // The app's classic-script globals, read inside page.evaluate. A script declares the ones it reads itself
@@ -231,7 +235,7 @@ const BOTS = [['pm', 'PM'], ['eng', 'Engineer'], ['ops', 'Ops'], ['writer', 'Wri
 const CONFIG = {version: '0.6.0', app_name: 'Tico', local: true};
 
 async function open(browser: Browser, {viewport = {width: 1440, height: 900}, theme = 'dark', hash = '#/tasks', mover = true, tasks: given,
-  needs: givenNeeds, comments = {}, events = {}, runs = {}, bots = BOTS, beforeGoto = null}: OpenOptions = {}) {
+  needs: givenNeeds, comments = {}, events = {}, runs = {}, bots = BOTS, beforeGoto = null, slow = {}, settle = true}: OpenOptions = {}) {
   const tasks = given ?? fixtures();
   let needs = givenNeeds ?? needsOf(tasks);
   const posts: Posted[] = [], reads: URL[] = [];
@@ -246,6 +250,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
     if (url.origin !== 'https://tico-ui.test') return route.abort();
+    if (slow[p]) await new Promise(r => setTimeout(r, slow[p]));
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]!)))
       return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
@@ -366,6 +371,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
   });
   await beforeGoto?.(page);
   await page.goto('https://tico-ui.test/' + hash);
+  if (!settle) return {page, errors, posts, reads, tasks, needs: () => needs};
   // A task waiting on Ana's own answer opens on its ask (decideTaskOpen), any other on its page.
   const ready = hash.startsWith('#/task/')
     ? page.locator('#task-modal[open] .tmodal-title, #need-card[open] .dc-q').first().waitFor()
@@ -495,6 +501,45 @@ async function youByTitle(browser: Browser) {
     await page.close();
   }
   console.log('You: rows with the same ask read by their titles; Paused and a mention by their line: ok');
+}
+
+// Chris, Nov 16: the page opened as a blank "You", with no other boards in the view button, for a few seconds. Cause: the
+// boards' list was put in only when the slower Needs you or the rows read landed too, and until then a board left in
+// view (tico.tasks.view) drew as You with "Nothing here". Each frame of a slow open is recorded: the view button never
+// says You while a board is in view, nothing says "Nothing here" before the rows land, the boards are offered as soon
+// as their read lands, and a later open names the board at once from the boards kept from the last read.
+async function slowOpen(browser: Browser) {
+  const slow: Record<string, number> = {'/api/v2/needs-you': 1500, '/api/v2/tasks': 1500};
+  const frames = (page: Page) => page.evaluate(() => (window as unknown as {seen: string[][]}).seen);
+  const {page, errors} = await open(browser, {hash: '#/tasks', slow, settle: false, beforeGoto: (pg: Page) => pg.addInitScript(() => {
+    localStorage.setItem('tico.tasks.view', JSON.stringify({pipeline: 'ops', layout: 'list'}));
+    const seen: string[][] = (window as unknown as {seen: string[][]}).seen = [];
+    const look = () => {
+      const st = typeof TASKS_ST === 'undefined' ? null : TASKS_ST;   // a classic script's `let`: no window property
+      const scope = document.querySelector('#task-scope .tl-scope-l')?.textContent ?? null;
+      if (st) seen.push([String(st.loading), scope ?? '', String((st.pipelines as unknown[]).length), document.querySelector('#task-body .empty') ? 'empty' : '']);
+      requestAnimationFrame(look);
+    };
+    requestAnimationFrame(look);
+  })});
+  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading, null, {timeout: 10000});
+  let seen = await frames(page);
+  const loading = seen.filter(f => f[0] === 'true');
+  assert.ok(loading.length > 5, 'frames were drawn while the rows were out');
+  assert.deepEqual(loading.filter(f => f[1] === 'You'), [], 'a board in view never shows as You');
+  assert.deepEqual(loading.filter(f => f[3] === 'empty'), [], 'no "Nothing here" before the rows land');
+  assert.ok(loading.some(f => f[1] === 'Operations' && f[2] === '2'), 'the boards are offered before the rows land');
+  // The next open, the boards' read slow too: the board is named from the first frame the page has.
+  slow['/api/v2/pipelines'] = 1500;
+  await page.reload();
+  await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading, null, {timeout: 10000});
+  seen = await frames(page);
+  assert.equal(seen[0]?.[0], 'true', 'the first frame is drawn before any read lands');
+  assert.deepEqual(seen[0]?.slice(1, 3), ['Operations', '2'], 'named at once from the boards kept');
+  assert.deepEqual(seen.filter(f => f[1] === 'You' || (f[0] === 'true' && f[3] === 'empty')), []);
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('a slow open: a board in view is never a blank You; the boards show before the rows: ok');
 }
 
 async function views(browser: Browser) {
@@ -658,6 +703,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
+    for (const run of [slowOpen, you, youOwnTasks, youByTitle, views, archive, pipelineArchive, pages]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

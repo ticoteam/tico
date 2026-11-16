@@ -61,7 +61,26 @@ let TASKS_ST: TasksPageState | null = null;
 const TASKS_KEPT = 'tico.tasks.view';
 const TASK_ARCHIVES: [TasksArchive, string][] = [['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
 let TASK_PIPELINES: PipelineRec[] | null = null;
-const tasksPipelinesRead = async (): Promise<PipelineRec[]> => (TASK_PIPELINES = (await pipelinesAll()).filter(p => !p.retired_at));
+// The boards as last read in this browser, kept for the same person: the next open has the view button's boards and the
+// board in view's name from its first frame, while their read is out (Chris, Nov 16: the page opened as a blank "You"
+// with no other boards for a few seconds). Another person signed in here never gets them; a list over 200 KB is not kept.
+const TASK_PIPELINES_KEPT = 'tico.tasks.pipelines', TASK_PIPELINES_KEPT_MAX = 200 * 1024;
+function tasksPipelinesKept(): PipelineRec[] {
+  try {
+    const kept = JSON.parse(localStorage.getItem(TASK_PIPELINES_KEPT) || 'null') as {who?: string; list?: PipelineRec[]} | null;
+    return S.me?.id && kept?.who === S.me.id && Array.isArray(kept.list) ? kept.list : [];
+  } catch { return []; }
+}
+async function tasksPipelinesRead(): Promise<PipelineRec[]> {
+  const list = (await pipelinesAll()).filter(p => !p.retired_at);
+  TASK_PIPELINES = list;
+  try {
+    const kept = JSON.stringify({who: S.me?.id || '', list});
+    if (S.me?.id && kept.length <= TASK_PIPELINES_KEPT_MAX) localStorage.setItem(TASK_PIPELINES_KEPT, kept);
+    else localStorage.removeItem(TASK_PIPELINES_KEPT);
+  } catch { /* the next open waits for the read */ }
+  return list;
+}
 
 // The view comes from the address (#/tasks?pipeline=<id>&layout=columns&archive=done), else as it was last left.
 // A `view` (NEEDS_YOU, Home's My tasks) names You: no pipeline unless the address names one.
@@ -92,7 +111,7 @@ function tasksURLWrite(state: TasksPageState) {
 function pageTasks(openId = '') {
   tasksLeave();
   const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
-    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, more: false, edge: null, after: '', narrow: {}, readKey: '', base: [], paging: null, stalled: false, abort: new AbortController()};
+    tasks: [], pipelines: TASK_PIPELINES || tasksPipelinesKept(), loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, more: false, edge: null, after: '', narrow: {}, readKey: '', base: [], paging: null, stalled: false, abort: new AbortController()};
   tasksKept(state);
   TASKS_ST = state;
   const main = $('#main');
@@ -336,8 +355,14 @@ async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<vo
   let held: LiveTaskEvent[] | null = [];
   try {
     const query = tasksQuery(state);
+    // The boards go in the moment their read lands, not with the rows: Needs you or a board's 500 rows can take seconds,
+    // and until the boards are known the view button offers You alone and a board in view has no name.
+    const boards = pipelinesToo ? tasksPipelinesRead().then(list => {
+      if (TASKS_ST === state && state.loading) { state.pipelines = list; tasksRender(state); }
+      return list;
+    }, () => state.pipelines) : state.pipelines;
     const [pipelines, rows, needs] = await Promise.all([
-      pipelinesToo ? tasksPipelinesRead().catch(() => state.pipelines) : state.pipelines,
+      boards,
       query ? taskBriefsPage(tasksPageQuery(state, query)) : null,
       tasksNeedsView(state) && pipelinesToo ? needsYou() : null,
     ]);
@@ -490,10 +515,12 @@ function tasksHeadPaint(state: TasksPageState) {
   const p = tasksPipeline(state), view = tasksViewOnly(), own = view ? state.tasks.length : 0;
   const you = view ? S.me?.name || 'Bot' : 'You';
   const scope = $('#task-scope');
-  const label = p ? `<span class="tl-scope-l">${esc(p.name)}</span>`
+  // A board in view before the boards are known (a first open, its read out) has no name yet: never You's.
+  const label = state.pipeline && !p ? '<span class="tl-scope-l"></span>'
+    : p ? `<span class="tl-scope-l">${esc(p.name)}</span>`
     : `<span class="tl-scope-l">${esc(you)}</span>${own ? `<span class="cnt tnum">${own}${state.more ? '+' : ''}</span>` : ''}`;
   if (scope.dataset.label !== label) { scope.dataset.label = label; scope.innerHTML = label + TL_ICON.caret; }
-  scope.setAttribute('aria-label', p ? `Showing ${p.name}` : `Showing ${you}${own ? `, ${own}` : ''}`);
+  scope.setAttribute('aria-label', p ? `Showing ${p.name}` : state.pipeline ? 'Showing a pipeline' : `Showing ${you}${own ? `, ${own}` : ''}`);
   // Flow is always on the row and keeps one width: its count is the one count of what waits on the person.
   const n = tasksReviewCount(state), play = $('#task-play');
   tasksHidden(play, view);   // a view reviews nothing: no Needs you, no answers
@@ -563,8 +590,10 @@ function tasksRender(state: TasksPageState | null) {
     return;
   }
   tasksAskOff();
+  // Loading rows until the view's own rows land: You's Needs you (already read by the app) says nothing of a board's.
+  const held = state.archive || state.pipeline || tasksViewOnly() ? state.tasks.length : state.needs.length;
   const html = state.failed ? `<p class="err" role="alert">${esc(state.failed)} <button type="button" class="linkish" data-reload>Try again</button></p>`
-    : state.loading && !state.kept && !state.needs.length && !state.tasks.length ? skelRows(6)
+    : state.loading && !state.kept && !held ? skelRows(6)
     : state.archive ? tasksArchiveHTML(state)
     : state.pipeline ? tasksPipelineHTML(state)
     : tasksViewOnly() ? tasksOwnHTML(state)
