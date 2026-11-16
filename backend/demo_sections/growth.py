@@ -728,7 +728,9 @@ def seed(b):
             )
     for k, monday in enumerate(runs):
         steps.append((moment(monday, 7), lambda k=k, monday=monday: weekly(b, s, days, runs, k, monday, people)))
-    steps.append((b.now, lambda: load_customers(b, people)))
+    # A step's clock runs on from its moment, so one at b.now writes rows dated after the build (test_demo_other_moments).
+    # The load is a few minutes before it; the export is still as of the build's day (load_customers).
+    steps.append((b.now - timedelta(minutes=5), lambda: load_customers(b, people)))
     steps.append((b.now, lambda: schedule(b, s)))
     for when, work in sorted(steps, key=lambda step: step[0]):
         b.clock.at = when
