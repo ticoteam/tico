@@ -949,6 +949,21 @@ def same_value(c, cipher, env, value):
     return None
 
 
+def held_at_read(c, proxied, row, subject):
+    """(tool row or None, way) for a held key: the tool when the run gets a proxy token for it, either because the
+    tool is proxied or because `subject` holds this Read and write key at Read only and the proxy can hold it to
+    reads (backend/api_tools.py `computer_way`). way `skip`: a read key of the same tool goes instead."""
+    tool = proxied.get(row['tool_id'])
+    if tool is not None:
+        return tool, 'proxy'
+    from . import api_tools
+
+    way = api_tools.computer_way(c, row, subject)
+    if way == 'proxy':
+        return c.execute('SELECT * FROM tools WHERE id=?', (row['tool_id'],)).fetchone(), way
+    return None, way
+
+
 def install_credentials(app, store, delegate=None, propose=None):
     from . import runner_versions
 
@@ -1324,7 +1339,9 @@ def install_credentials(app, store, delegate=None, propose=None):
             # A website account never reaches a run: its browser commands type it (backend/website_tools.py).
             for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY id"):
                 if row['ciphertext'] is not None and row['id'] in held:
-                    tool = proxied.get(row['tool_id'])
+                    tool, way = held_at_read(c, proxied, row, who.actor)
+                    if way == 'skip':
+                        continue
                     if tool is not None:
                         values.append(
                             tool_proxy.runtime_item(
@@ -1425,7 +1442,9 @@ def install_credentials(app, store, delegate=None, propose=None):
             proxied = tool_proxy.proxied_tools(c)
             for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY id"):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
-                    tool = proxied.get(row['tool_id'])
+                    tool, way = held_at_read(c, proxied, row, 'bot:' + bot)
+                    if way == 'skip':
+                        continue
                     if tool is not None:
                         values.append(
                             tool_proxy.runtime_item(

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use regex::Regex;
 use serde_json::{json, Map, Value};
 
-use crate::env::Env;
+use crate::env::{Env, ProxiedTool};
 use crate::util::{text_of, truthy};
 
 pub const REACH_TIMEOUT_S: u64 = 4;
@@ -274,9 +274,33 @@ pub fn server_name(service: &str) -> String {
     }
 }
 
+/// The address a declared MCP server is reached by when Tico holds its key: the run's variable holds a proxy token,
+/// which the vendor would refuse, so the call goes to the tool's proxy address with the rest of the server's path
+/// under the tool's API address. None when the server is not under that address.
+pub fn through_proxy(url: &str, tool: &ProxiedTool) -> Option<String> {
+    let base = tool.base.trim_end_matches('/');
+    if base.is_empty() {
+        return None;
+    }
+    let rest = url.strip_prefix(base)?;
+    if !(rest.is_empty() || rest.starts_with('/') || rest.starts_with('?')) {
+        return None;
+    }
+    Some(format!(
+        "{}/{}",
+        tool.url.trim_end_matches('/'),
+        rest.trim_start_matches('/')
+    ))
+}
+
 /// (servers, problems) for one run. A server is {name, service, url, transport, headers, env}; one whose
-/// variable is not in `env` is left out and named in `problems`.
-pub fn servers_for_run(tools: &Value, env: &Env) -> (Vec<Value>, Vec<String>) {
+/// variable is not in `env` is left out and named in `problems`. A server whose key Tico holds (`proxied`) is
+/// reached through the proxy (`through_proxy`), or left out and named when it cannot be.
+pub fn servers_for_run(
+    tools: &Value,
+    env: &Env,
+    proxied: &[ProxiedTool],
+) -> (Vec<Value>, Vec<String>) {
     let (mut servers, mut problems, mut used) = (vec![], vec![], HashSet::new());
     for (entry, mcp) in declared(tools) {
         let service = service_of(&entry);
@@ -298,13 +322,30 @@ pub fn servers_for_run(tools: &Value, env: &Env) -> (Vec<Value>, Vec<String>) {
             ));
             continue;
         }
+        let mut url = mcp["url"].clone();
+        if let Some(tool) = proxied.iter().find(|t| needs.contains(&t.env)) {
+            match through_proxy(&text_of(&url), tool) {
+                Some(via) => url = json!(via),
+                None => {
+                    problems.push(format!(
+                        "{service}: MCP server not passed. Tico holds its key, so it is reached through Tico, and its \
+                         address {} is not under {}'s API address{}. Set that address to the MCP server's in Tools > {}",
+                        text_of(&url),
+                        tool.name,
+                        if tool.base.is_empty() { String::new() } else { format!(" {}", tool.base) },
+                        tool.name
+                    ));
+                    continue;
+                }
+            }
+        }
         let (mut name, mut n) = (server_name(&service), 1);
         while used.contains(&name) {
             n += 1;
             name = format!("{}_{n}", server_name(&service));
         }
         used.insert(name.clone());
-        servers.push(json!({"name": name, "service": service, "url": mcp["url"], "transport": mcp["transport"],
+        servers.push(json!({"name": name, "service": service, "url": url, "transport": mcp["transport"],
                             "headers": mcp.get("headers").cloned().unwrap_or(json!({})), "env": entry_env(&entry)}));
     }
     (servers, problems)
@@ -672,14 +713,54 @@ mod tests {
     }
 
     #[test]
+    fn a_server_whose_key_tico_holds_goes_through_the_proxy_or_is_named() {
+        let tool = |base: &str| ProxiedTool {
+            name: "Linear".into(),
+            env: "LINEAR_API_KEY".into(),
+            url_env: "TICO_TOOL_LINEAR_URL".into(),
+            url: "http://tico.internal/api/v2/tool-proxy/linear".into(),
+            base: base.into(),
+        };
+        let held = env(&[("LINEAR_API_KEY", "tpx1.a.b")]);
+        let (servers, problems) =
+            servers_for_run(&tools(), &held, &[tool("https://mcp.linear.app")]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            text_of(&servers[0]["url"]),
+            "http://tico.internal/api/v2/tool-proxy/linear/mcp"
+        );
+        assert_eq!(
+            through_proxy("https://mcp.linear.app/", &tool("https://mcp.linear.app/")).as_deref(),
+            Some("http://tico.internal/api/v2/tool-proxy/linear/")
+        );
+        // Another host, a look-alike prefix, or no address: not passed, and the line says what to set.
+        assert_eq!(
+            through_proxy(
+                "https://mcp.linear.app.evil/mcp",
+                &tool("https://mcp.linear.app")
+            ),
+            None
+        );
+        assert_eq!(through_proxy("https://mcp.linear.app/mcp", &tool("")), None);
+        let (servers, problems) =
+            servers_for_run(&tools(), &held, &[tool("https://api.linear.app")]);
+        assert_eq!(servers.len(), 1, "only docs");
+        assert!(
+            problems[0].starts_with("linear: MCP server not passed. Tico holds its key"),
+            "{problems:?}"
+        );
+        assert!(problems[0].ends_with("in Tools > Linear"));
+    }
+
+    #[test]
     fn servers_for_a_run_need_their_granted_variable_and_each_harness_takes_its_transports() {
-        let (servers, problems) = servers_for_run(&tools(), &env(&[]));
+        let (servers, problems) = servers_for_run(&tools(), &env(&[]), &[]);
         assert_eq!(servers.len(), 1, "linear needs LINEAR_API_KEY");
         assert_eq!(
             problems,
             ["linear: MCP server not passed, LINEAR_API_KEY is not granted to this bot"]
         );
-        let (servers, problems) = servers_for_run(&tools(), &env(&[("LINEAR_API_KEY", "v")]));
+        let (servers, problems) = servers_for_run(&tools(), &env(&[("LINEAR_API_KEY", "v")]), &[]);
         assert!(problems.is_empty());
         assert_eq!(
             servers

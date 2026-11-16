@@ -169,6 +169,7 @@ class Vendor:
                         "name": MCP_TOOL,
                         "description": "Look up an Acme order",
                         "inputSchema": {"type": "object", "properties": {"order": {"type": "string"}}},
+                        "annotations": {"readOnlyHint": True},  # a lookup: the proxy lets a Read caller use it
                     }
                 ]
             }

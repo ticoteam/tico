@@ -164,12 +164,6 @@ def proxied_calls(api):
         ]
 
 
-def need(condition, why):
-    """A precondition of an expected failure: when it does not hold the test fails outright, never as the xfail."""
-    if not condition:
-        pytest.fail(why)
-
-
 # ---- static keys delivered on computers
 
 
@@ -292,24 +286,29 @@ def test_a_declared_mcp_server_gets_the_key_on_computers_and_lists_its_tools(api
 
 
 @pytest.mark.parametrize("harness", ["claude"])
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="proxied key sent to MCP vendor as tpx1 token; see Tools review finding 3",
-)
-def test_a_declared_mcp_server_whose_key_is_on_the_proxy_still_reaches_the_vendor(api, vendor, computer):
-    api_tool(api)  # on the proxy
-    level(api, "ops", "read_write")
-    declare_mcp(computer, f"{vendor.url}/mcp")
+@pytest.mark.parametrize("delivery, given", [("proxy", "read_write"), ("computer", "read")])
+def test_a_declared_mcp_server_whose_key_tico_holds_is_reached_through_the_proxy(
+    api, vendor, computer, delivery, given
+):
+    """A proxied tool, and a computer tool held at Read only with just a Read and write key: the run holds a proxy
+    token, its MCP server is reached through the proxy, and the vendor gets the real key. At Read the proxy lets the
+    session's set-up, the listing and the read-only tool through."""
+    api_tool(api, delivery=delivery)
+    level(api, "ops", given)
+    declare_mcp(computer, f"https://{HOST}/mcp")
     computer.start()
-    _, uses, _ = turn(api, computer, f"MCPCALL {MCP_SERVER}")
+    _, uses, conversation = turn(api, computer, f"MCPCALL {MCP_SERVER}")
     used = one(uses, "mcp")
-    need(used["present"], f"the MCP server was not passed to the turn: {used}")
-    need(used["environ"][ENV].startswith("tpx1."), "the run held the key itself, not a proxy token")
+    assert used["present"], used
+    token = used["environ"][ENV]
+    assert token.startswith("tpx1."), "the run held the key itself, not a proxy token"
+    assert used["tools"] == [MCP_TOOL] and used["text"] == "Order 42 shipped", json.dumps(used)
     seen = vendor.calls("/mcp", BOT_AGENT)
-    need(bool(seen), "the bot never reached the MCP server")
-    # Today: the MCP header carries the run's proxy token straight to the vendor, which refuses it (401).
-    assert seen[0]["shown"] == SECRET and seen[0]["status"] == 200, (seen[0]["status"], seen[0]["shown"][:5])
+    assert [s["rpc"] for s in seen] == ["initialize", "notifications/initialized", "tools/list", "tools/call"]
+    assert all(s["shown"] == SECRET and s["status"] < 300 for s in seen), [(s["status"], s["shown"][:5]) for s in seen]
+    calls = proxied_calls(api)
+    assert {c["result"] for c in calls} == {"sent"} and {c["path"] for c in calls} == {"/mcp"}, calls
+    nowhere(api, computer, conversation, SECRET, token)
 
 
 # ---- a website login with a password and a 2FA code
@@ -404,7 +403,7 @@ def test_a_key_granted_to_two_bots_reaches_both_and_revoking_one_leaves_the_othe
     api_tool(api, delivery="computer")
     add_bot(api, computer, "finance")
     level(api, "ops", "read_write")
-    level(api, "finance", "read")  # a computer key: a Read grant still delivers the value
+    level(api, "finance", "read_write")
     computer.start()
     until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
     line = f"CALL bearer {ENV} {vendor.url}/bearer"
