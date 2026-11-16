@@ -195,6 +195,23 @@ def test_the_demo_growth_tells_its_story(built, numbers, subtests):
             check(built)
 
 
+def loaded(people, now):
+    """The rows the demo's load step sends when the demo is built at `now`."""
+
+    class Build:
+        def __init__(self):
+            self.now, self.sent = now, []
+
+        def call(self, method, path, body):
+            self.sent.append((method, path, body))
+
+    build = Build()
+    growth_demo.load_customers(build, people)
+    ((method, path, body),) = build.sent
+    assert (method, path) == ("POST", "growth/customers")
+    return body["rows"]
+
+
 def test_a_month_whose_day_30_has_filled_sends_every_stop_on_any_build_day():
     """The demo is built on the real clock, so on every day of a year the export sends each lost customer's stop day
     once their month's day 30 has filled, and the computed share is the typed one (day 30 filling between the last
@@ -204,7 +221,7 @@ def test_a_month_whose_day_30_has_filled_sends_every_stop_on_any_build_day():
         start, runs = growth_demo.window(day)
         people = growth_demo.customers(growth_demo.model(start, runs))
         today = day.astimezone(growth_demo.ZONE).date()
-        sent = {row["customer key"]: row["churned"] for row in growth_demo.export_rows(people, today)}
+        sent = {row["customer key"]: row["churned"] for row in loaded(people, day)}
         months = {}
         for person in people:
             months.setdefault((person["channel"], f"{person['day']:%Y-%m}"), []).append(person)
