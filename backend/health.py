@@ -1044,7 +1044,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                 )
             continue
         if where and where[0] not in online_ids:
-            waiting.append({**row, "reason": "computer_offline"})
+            waiting.append({**row, "reason": "computer_offline", "runner_id": where[0]})
             if count:
                 stuck.append(
                     {**row, "reason": "computer_offline", "runner_id": where[0], "runtime": report.get("runtime") or ""}
@@ -2928,7 +2928,9 @@ def _prime_claims(c, settings=None):
     return claim_loads.read(c, settings, runners, slugs, exits=exits)
 
 
-def view(c, who, settings, auth, github, config):
+def view(c, who, settings, auth, github, config, filing=False):
+    # `filing` is Check health's read (maintenance_steps/check_health.py `_page_findings`). Its two offline checks, computers and
+    # waiting, then describe only the computers no silent-computer finding reports: computer_silent files the silent ones.
     if who.role != "bot":
         _person(who)
     kind = "owner" if who.role == "owner" else "admin" if auth.bot_admin(who) else who.role
@@ -3401,9 +3403,16 @@ def view(c, who, settings, auth, github, config):
     if kind != "bot" and (plate := _plate_check(c, who, auth, full)):
         checks.append(plate)
     fixes = [_fix("Add a computer", "#/settings", "devices")] if full else []
+    silent = silent_computers(c) if waiting or filing else []
+    reported = {x["id"] for x in silent} if filing else set()  # the silent computers' own finding names their outage
+    counted = [x for x in computers if x["id"] not in reported]
+    named_computers = []  # the computers this check says are offline (what a filed finding describes)
     if not computers:
         checks.append(_check("computers", "Computers", "bad", "No computer is set up. Bots need one to run.", fixes))
-    elif not online and not any(x["resting"] for x in computers):
+    elif not counted:
+        pass  # filing only: every computer that is offline is silent, and its own finding files the outage
+    elif not online and not any(x["resting"] for x in counted) and not reported:
+        named_computers = [x["id"] for x in counted]
         checks.append(
             _check(
                 "computers",
@@ -3413,13 +3422,14 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open Computers", "#/settings", "devices")] if full else [],
             )
         )
-    elif off := [x for x in computers if not x["online"] and not x["resting"]]:
+    elif off := [x for x in counted if not x["online"] and not x["resting"]]:
+        named_computers = [x["id"] for x in off]
         checks.append(
             _check(
                 "computers",
                 "Computers",
                 "warn",
-                f"{len(online)} of {len(computers)} online. Offline: " + ", ".join(x["label"] for x in off) + ".",
+                f"{len(online)} of {len(counted)} online. Offline: " + ", ".join(x["label"] for x in off) + ".",
                 [_fix("Open Computers", "#/settings", "devices")] if full else [],
             )
         )
@@ -3767,19 +3777,21 @@ def view(c, who, settings, auth, github, config):
     from .cloud_machines import health as cloud_health
 
     cloud = cloud_health(c, settings) if full else None
-    silent = silent_computers(c) if waiting else []
+    waiting_here = [w for w in waiting if w.get("runner_id") not in reported]
+    named_waiting = sorted({w["runner_id"] for w in waiting_here if w.get("reason") == "computer_offline"})
+    silent_here = [x for x in silent if x["id"] not in reported]
     waiting_status, waiting_reasons = "ok", []
-    if waiting:
-        names = ", ".join(w["name"] for w in waiting[:5])
+    if waiting_here:
+        names = ", ".join(w["name"] for w in waiting_here[:5])
         # Work piling up behind a computer that stopped checking in is an outage even while another computer is up.
         stopped = "".join(
             f" {x['label'] if full else 'A computer'} has not checked in for {x['minutes']} minutes "
             f"with {_silent_words(x)}."
-            for x in silent[:3]
+            for x in silent_here[:3]
         )
-        waiting_status = "bad" if silent or not online else "warn"
+        waiting_status = "bad" if silent_here or not online else "warn"
         waiting_reasons.append(
-            f"{_plural(len(waiting), 'bot')} cannot run because their computer is offline"
+            f"{_plural(len(waiting_here), 'bot')} cannot run because their computer is offline"
             + (f": {names}." if full else ".")
             + stopped
         )
@@ -4037,6 +4049,11 @@ def view(c, who, settings, auth, github, config):
         "audience": kind,
         "checks": checks,
         "attention": sum(1 for x in checks if x["status"] in ("warn", "bad")),
+        "offline": {
+            "silent": sorted(x["id"] for x in silent),
+            "computers": named_computers,
+            "waiting": named_waiting,
+        },
         "computers": computers if full else _bot_computers(computers) if kind == "bot" else [],
         "waiting": waiting if full else [],
         "slow": slow if full else [],

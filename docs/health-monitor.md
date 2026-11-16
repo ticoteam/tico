@@ -65,7 +65,7 @@ Setup checks (each problem is one BotOps task): `runner_outdated`, `runner_resta
 `limited_no_fallback`, `default_login_limited`, `check_limited`, `run_hold`, `claim_failed`, `claim_check`,
 `new_sessions`, `turn_budget`, `reviewer_holds_tasks`, `responder_has_tasks`, `doer_idle`, `stuck_setup`,
 `worktree_error`, `push_stuck`, `cannot_fetch`. While a computer is silent with work queued, its `computer_silent` task is the
-one task for that outage: the Health page's `computers` and `waiting` checks still show it but file nothing.
+one task for that outage. The Health page's `computers` and `waiting` checks file only for the computers no silent-computer finding reports: a silent computer's outage is that one task, and those two checks are held (not cleared) while it lasts.
 
 Tico-bug checks (each problem is also reported to the Tico team): `queue_idle`, `worktree_fallback`, `event_stream`,
 `readiness_403`, `runner_route_latency`, `server_cpu`.
