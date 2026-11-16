@@ -22,15 +22,7 @@ private meeting's copy keeps none, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`), and the
 (`features.memories = false` on every thread) and the Gemini CLI's `save_memory` tool; a GEMINI.md the CLI saved
 before is set aside before each turn, so no turn loads it.
 
-What a bot saved there before is not lost. Before each turn, in whichever checkout it runs (its own or a task's
-worktree), the runner copies what the checkout lacks of it into a "Working rules from Claude's memory on this
-computer" section near the top of `memory/learnings.md`: each Claude memory with its whole text, whatever
-`MEMORY.md` says beyond its links to them, and Gemini's saved memory. Each entry names its source, so a retry never
-copies twice, while a same-named memory with other text, from another computer the bot ran on, is still copied; if
-a source can't be read, nothing is copied. A flat log after it gets a `## Log` heading. A task turn's closing commit
-keeps the copy; in the bot's own checkout its next memory commit does. The move is finished once the repository's
-pushed history has it; after that an edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
-that is a link. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
+Before 0.6.0-rc.1 a bot's AI tool kept its memory on the computer: Claude's auto memory under the bot's home (`.claude/projects/<checkout>/memory/`) and the Gemini CLI's saved memory (`.gemini/GEMINI.md`). The 0.6.0-rc.1 runner copied those into `memory/learnings.md` until each bot had it in its pushed history. The runner no longer copies them; the files stay where they are, unread (Gemini's are set aside as `GEMINI.unread.md`; `runner-rs/src/bot_files.rs`).
 
 Several checkouts and turns of one bot write the same repository, so its commits often land behind what another
 pushed. The runner rebases them onto the remote and pushes again; where both sides added lines to the same spot of
