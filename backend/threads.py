@@ -548,7 +548,9 @@ def denial(c, v, row):
         # A DM reads by its membership, so whoever leaves it stops reading, its starter too. A special room (room_key: a
         # bot's personal chat) has no member rows and stays its owner's.
         owns = bool(root.get("room_key")) and v.actor == personal_owner(root)
-        return None if owns or _is_member(c, v, root["id"]) else _MISSING
+        if not owns and not _is_member(c, v, root["id"]):
+            return _MISSING
+        return None
     # participants
     return None if v.role == "owner" or v.actor in (root.get("participants") or []) else _MISSING
 
