@@ -1,10 +1,9 @@
-"""What keep-warm left behind, cleared when it was removed. A keep-warm turn sent a task's session a hidden notice (no
-seq) and its "ok" was posted to the task's room as a visible answer to it, fifteen a day burying the bot's questions.
-
-- 20261116124618_keep_warm_replies_hidden: those replies leave the thread read (their seq is cleared, as the notice's),
-  their waiting deliveries are moot, and the room's counters point at what is left. An ordinary reply stays.
-- 20261116130940_keep_warm_removed: a keep-warm job still queued is canceled, finished keep-warm runs are no longer on
-  their task (so they are not counted as its runs), and the setting's table and column are dropped.
+"""What keep-warm left behind, cleared when it was removed (migration 20261116124618_keep_warm_removed). A keep-warm
+turn sent a task's session a hidden notice (no seq) and its "ok" was posted to the task's room as a visible answer to
+it, fifteen a day burying the bot's questions. The migration takes those replies out of the thread read (their seq is
+cleared, as the notice's), moots their waiting deliveries and points the room's counters at what is left, while an
+ordinary reply stays; it cancels a keep-warm job still queued, and takes finished keep-warm runs off their task so
+they are not counted as its runs. The setting's table and column stay, unread.
 
 The rows are written as keep-warm wrote them (backend/keep_warm.py before its removal); synthetic, the fictional
 company only."""
@@ -20,8 +19,7 @@ from backend import threads
 from backend.store import H
 from backend.tests.helpers import engine as X
 
-HIDE = "backend.migrations.20261116124618_keep_warm_replies_hidden"
-REMOVE = "backend.migrations.20261116130940_keep_warm_removed"
+MIGRATION = "backend.migrations.20261116124618_keep_warm_removed"
 BOT = "bot:cpo"
 
 
@@ -99,9 +97,9 @@ def test_keep_warm_replies_already_posted_leave_the_thread_read_and_its_unread_m
     ok_seq = c.execute("SELECT seq FROM messages WHERE id=?", (ok,)).fetchone()[0]
     assert _shown(c, room) == ["Fixed the button's label.", "ok"]
     assert _counters(c, room) == (ok_seq, ok_seq)  # unread, with only an "ok" to read
-    hide = importlib.import_module(HIDE)
-    hide.up(c)
-    hide.up(c)  # again: nothing more
+    migration = importlib.import_module(MIGRATION)
+    migration.up(c)
+    migration.up(c)  # again: nothing more
     assert _shown(c, room) == ["Fixed the button's label."]
     assert _counters(c, room) == (real, real)
     states = {s for (s,) in c.execute("SELECT state FROM message_deliveries WHERE message_id=?", (ok,))}
@@ -109,17 +107,16 @@ def test_keep_warm_replies_already_posted_leave_the_thread_read_and_its_unread_m
     assert c.execute("SELECT final_text FROM attempts WHERE id=?", (run,)).fetchone()[0] == "ok"  # kept on the run
 
 
-def test_removal_cancels_a_queued_turn_takes_old_runs_off_their_task_and_drops_the_setting(c):
+def test_removal_cancels_a_queued_turn_and_takes_old_runs_off_their_task(c):
     task_id, room = _room(c)
     run, _ = _kept_warm(c, task_id, room)
     _, queued = _notice(c, task_id, room, "queued")
     other = H.say(c, X.ANA, BOT, "Is the button done?", conversation_id=room)
     job = c.execute("SELECT id FROM jobs WHERE message_id=?", (other["id"],)).fetchone()[0]
     before = task_wakes.runs_since(c, E.task(c, task_id))
-    importlib.import_module(HIDE).up(c)
-    removed = importlib.import_module(REMOVE)
-    removed.up(c)
-    removed.up(c)  # again: nothing more
+    migration = importlib.import_module(MIGRATION)
+    migration.up(c)
+    migration.up(c)  # again: nothing more
     states = dict(c.execute("SELECT id, state FROM jobs WHERE id IN (?, ?)", (queued, job)).fetchall())
     assert states == {queued: "canceled", job: "queued"}  # an ordinary queued job is left alone
     row = c.execute(
@@ -127,5 +124,3 @@ def test_removal_cancels_a_queued_turn_takes_old_runs_off_their_task_and_drops_t
     ).fetchone()
     assert tuple(row) == (None, None, None, "keep warm", "ok")  # history, on no task
     assert task_wakes.runs_since(c, E.task(c, task_id)) == before - 1
-    assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='stage_keep_warm'").fetchone()
-    assert "keep_warm_hours" not in {r[1] for r in c.execute("PRAGMA table_info(pipelines)")}
