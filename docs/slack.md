@@ -16,6 +16,10 @@ How messages are routed and stored is in [slack-gateway.md](slack-gateway.md).
 5. In Tico, Tools > Slack, paste both tokens. They are stored encrypted in Tico's database
    and never shown again. Do not put them in `.env`.
 
+**A company Tico hosts on a cloud cell** has no `.env` of its own to edit, so skip step 1: the cell's operator turns
+the gateway on for that company with `python3 -m setup cell set-slack --company <slug> on` ([cell.md](cell.md#the-slack-gateway)),
+and it stays on through updates. Until then the Slack card says the tokens are saved and the service is not running.
+
 Within a minute the Slack card on Tools and on the Health page (Settings > General > Health > Details) say **Connected**. The first connection pins the workspace
 the tokens belong to; to pin it in advance, set `SLACK_TEAM_ID` in `.env`. To change workspace, disconnect and
 paste the new tokens. Invite Tico to a channel with `/invite @Tico`.

@@ -1024,9 +1024,12 @@ def container_row(i: dict, stats: dict) -> dict:
 
 
 def ps_states(rows: list[dict]) -> dict[str, dict]:
-    """{slug: {"state", "health"}} as `cell` reads them (Cell.containers), from the one `docker ps`."""
+    """{slug: {"state", "health"}} of the servers as `cell` reads them (Cell.containers), from the one `docker ps`. A
+    company's Slack gateway carries the same label, so it is left out by its Compose service."""
     out = {}
     for row in rows:
+        if (row["_labels"].get("com.docker.compose.service") or cell.SERVER_SERVICE) != cell.SERVER_SERVICE:
+            continue
         slug = row["_labels"].get(cell.LABEL, "")
         status = str(row.get("Status", ""))
         health = (
@@ -1108,7 +1111,7 @@ def collect(box: Box, cache: dict, *, company: str | None = None, host_id: str |
             db, top = db_block(box, root, slug, cache, now, server["name"].lstrip("/") if running else None)
             errors = []
             for i in rows:
-                if (i.get("labels") or {}).get("com.docker.compose.service") in ("server", "updater"):
+                if (i.get("labels") or {}).get("com.docker.compose.service") in ("server", "updater", "slack"):
                     errors += log_lines(
                         box,
                         i.get("log"),
@@ -1247,7 +1250,7 @@ TOOLS: dict[str, dict] = {
     "containers": {"company": ("company", False)},
     "logs": {
         "company": ("company", True),
-        "role": (("server", "updater"), True),
+        "role": (("server", "updater", "slack"), True),
         "minutes": ((1, 60), True),
         "lines": ((1, 1000), True),
     },
