@@ -79,6 +79,7 @@ python3 -m setup cell stop|start --company boatyard --json
 python3 -m setup cell sleep --company boatyard [--wake-at 2026-10-30T18:00:00Z] --json
 python3 -m setup cell set-sleep --company boatyard --minutes N|default --json
 python3 -m setup cell set-page-host --company boatyard --host boatyard.tico.page|"" --json
+python3 -m setup cell set-slack --company boatyard on|off --json
 python3 -m setup cell wake --company boatyard [--timeout 300] --json
 python3 -m setup cell update --company boatyard --version vX.Y.Z --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
@@ -108,7 +109,7 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 | `full` | All 4,000 slots are in use |
 | `use_update` | `add --version` names another release than the company runs; use `update` |
 | `pull_failed` | The image could not be pulled |
-| `stop_failed` | The server could not be stopped, or Docker still says it runs. From `update`: nothing changed and the old release runs again |
+| `stop_failed` | The server (or its Slack gateway) could not be stopped, or Docker still says it runs. From `update`: nothing changed and the old release runs again |
 | `snapshot_failed` | `update` could not copy the database; nothing changed and the old release runs again |
 | `docker_failed` | A Docker or Compose call failed |
 | `router_failed` | The router refused its new config (the old config stays) |
@@ -139,6 +140,8 @@ until then. `changed` is false when nothing needed doing. The other commands ans
 - `status`: the same fields as a `list` entry, plus `healthy` (whether `/healthz` answers through the router now;
   always false for a sleeping company, which is not probed, since a probe would wake it) and `container`
   (`{"state", "health"}`).
+- `set-slack`: `{"ok": true, "company", "slack", "changed", "ready_ms"}`. A company with the gateway on also has
+  `"slack": true` in `list` and `status`, and `status` adds `slack_container` (`{"state", "health"}`).
 - `stop`: `{"ok": true, "company", "state": "stopped", "changed"}`.
 - `sleep`: `{"ok": true, "company", "state": "sleeping", "changed"}`.
 - `remove`: `{"ok": true, "company", "removed", "kept_data"}`. `removed` is false when there was nothing to remove.
@@ -244,6 +247,28 @@ moment or asleep.
   Litestream, so Litestream's last sync covers every write (at most 5 s, `shutdown-sync-timeout`) and its local state
   is current for the next start. Before, the server's own shutdown outlasted Docker's 10 s stop timeout, and the
   SIGKILL that followed also cut off Litestream's last sync.
+
+## The Slack gateway
+
+A company's [Slack gateway](slack.md) (the stock `compose.yaml`'s `slack` service) is off unless staff turn it on
+for that company: `set-slack --company <slug> on`, or `off`. The choice is kept in `company.json` (`"slack": true`),
+so every later `add` and `update` writes it again; a hand edit of `.env` does not survive. A company that was never
+turned on is exactly as before: no `COMPOSE_PROFILES` and no gateway.
+
+- **On.** `.env` gets `COMPOSE_PROFILES=slack`, and `compose.cell.yaml` gives the gateway what it gives the server:
+  a memory limit of `1g` (`SLACK_MEMORY`), the company's own `data/` folder as `/data` in place of the stock volume, the
+  `tico.cell.company` label, and `TICO_CELL`. It never mounts `control/`, so it cannot read the updater token, and it
+  has no port. It joins only the company's own default network, where nothing else lives; it needs only Slack over the
+  internet and the company's database. A running company starts it at once, and its server is not recreated (its own
+  settings do not change). A stopped or sleeping company starts it with its server.
+- **Off.** The gateway's container is stopped and removed first (a failure answers `docker_failed` and changes
+  nothing), then the files go back to what any company has.
+- **It writes the database.** So `update`, `sleep`, `stop` and a rollback stop it together with the server, and Docker
+  must say every container of the company is stopped before a database file is copied or replaced (`stop_failed`
+  otherwise). A sleeping company's gateway sleeps with it and does not see Slack until the company wakes, so give a
+  company that uses Slack `set-sleep --minutes 0`.
+- The company's `state` is still its server's. Cell stats' `logs` tool takes `role` `slack`
+  ([cell-stats.md](cell-stats.md)).
 
 ## Moving an install in
 
@@ -402,7 +427,7 @@ takes no snapshot, and it restarts the server only when a file changed, so a sec
 | `.../compose.yaml` | The stock `compose.yaml` from the checkout, unchanged |
 | `.../compose.cell.yaml` | The memory limit, `data/` mounted as `/data` and `control/` as `/control`, `TICO_CELL`, the default network and the `tico.cell.company` label |
 | `.../extra.env` | Settings carried from a moved install (`--env-file`, 0600) |
-| `.../company.json` | The slot, port, release, memory, state, aliases, the sleep policy (`sleep_minutes`), and a pending update (the release before it and its snapshot). No secrets |
+| `.../company.json` | The slot, port, release, memory, state, aliases, the sleep policy (`sleep_minutes`), whether its Slack gateway is on (`slack`), and a pending update (the release before it and its snapshot). No secrets |
 | `.../data/`, `company-file/` | The server's `/data`, and the starter plan (both owned by user 10001) |
 | `.../control/updater-token` | The company's updater token (0600, owned by 10001); its server reads it as `/control/updater-token` |
 | `.../updater-status.json` | The cell updater's last status for the company (0600) |
