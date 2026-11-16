@@ -1022,7 +1022,9 @@ def parser():
         "ask", help="ask a person on this task, in one line; it waits for their answer, which wakes you once"
     )
     s.add_argument("id")
-    s.add_argument("line", nargs="?", help="the one sentence they are asked, readable on its own")
+    s.add_argument(
+        "line", nargs="?", help="what they are asked: a first line of 140 characters at most, readable on its own"
+    )
     s.add_argument("--to", help="the person you ask: their id")
     s.add_argument(
         "--kind", choices=["answer", "ok"], help="answer (the default): a question; ok: approve or send back"

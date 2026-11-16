@@ -54,9 +54,14 @@ CONDITIONS = (
     "snooze_hours_over",
     "label",
     "requester_person",
-    "sent_back",
-    "turn",
+    "sent_back",  # read by nothing yet (`UNREAD`)
+    "turn",  # 'bot' | 'person': read by timers alone (`TIMERS_ONLY`)
 )
+# A condition nothing reads would count as true, so the rule would act on every task; one only timers read would be
+# skipped on an action When. Either is refused when a rule is saved, and a rule saved before with one is listed as not
+# acting and never holds (`unread`).
+UNREAD = {"sent_back": 'Nothing reads "sent back" yet, so the rule would act on every task: remove that condition'}
+TIMERS_ONLY = {"turn": "Whose turn it is is read by timer rules only: pick a timer When, or remove that condition"}
 QUESTION_SET = "stage-rule"
 LABEL = "stage-rule@1"
 # Jev's probability the question is true at which a rule's If holds. Below it the write goes: refusing a real wait
@@ -224,9 +229,26 @@ def view(row: Any) -> dict[str, Any]:
 
 
 def not_acting(rule: Any) -> str:
-    """Why a rule never acts ('' when it does): Tell or Move back on an action When, which only timers carry out."""
+    """Why a rule never acts ('' when it does): Tell or Move back on an action When, which only timers carry out, or a
+    condition nothing reads on its When (`unread`)."""
     events = [e for e in str(rule.get("event") or "").split(",") if e]
-    return NEEDS_TIMER if events and "timer" not in events and rule.get("then") != "block" else ""
+    if events and "timer" not in events and rule.get("then") != "block":
+        return NEEDS_TIMER
+    return unread(rule)
+
+
+def unread(rule: Any) -> str:
+    """Why a condition of the rule is read by nothing on its When ('' when every one is read): `UNREAD`, or a
+    `TIMERS_ONLY` one on an action When. `cond` is decoded, as `view` and `_check` hold it."""
+    cond: Any = rule.get("cond")
+    keys = [str(k) for k in cast(dict[str, Any], cond)] if isinstance(cond, dict) else []
+    timer = "timer" in str(rule.get("event") or "").split(",")
+    for key in keys:
+        if key in UNREAD:
+            return UNREAD[key]
+        if key in TIMERS_ONLY and not timer:
+            return TIMERS_ONLY[key]
+    return ""
 
 
 def cost(row: Any) -> str:
@@ -354,6 +376,8 @@ def matches(conn: Any, rule: Any, task_row: Any, *, owner: Any = ..., facts: Any
     question is not asked here (`judge_snooze`)."""
     cond = rule["cond"] if isinstance(rule.get("cond"), dict) else view(rule)["cond"]
     rule = {**rule, "cond": cond}
+    if unread(rule):
+        return False, ""  # listed as not acting: a condition nothing reads never holds
     facts = facts or {}
     who = task_row.get("owner_id") if owner is ... else owner
     said: list[str] = []
@@ -809,8 +833,9 @@ def sweep_snoozes(store: Any) -> list[str]:
 
 # ----------------------------------------------------------------------------- writes (the routes are part 3's)
 def _check(fields: Any, retiring: bool = False) -> dict[str, Any]:
-    """A rule's fields, refused with a plain reason when they cannot be a rule. A bot's suggestion to retire a rule
-    copies the rule as it is, so a shape saved before `NEEDS_TIMER` is not refused there."""
+    """A rule's fields, refused with a plain reason when they cannot be a rule or would never act (`not_acting`). A
+    bot's suggestion to retire a rule copies the rule as it is, so a shape saved before such a check is not refused
+    there."""
     out = dict(fields)
     events = [e for e in str(out.get("event") or "").split(",") if e]
     if not events or any(e not in EVENTS for e in events) or ("timer" in events and len(events) > 1):
@@ -825,11 +850,12 @@ def _check(fields: Any, retiring: bool = False) -> dict[str, Any]:
         raise _problem("validation", f"Then is one of {', '.join(THENS)}")
     if out["then"] == "block" and not set(events) & {"enters", "owner_changes", "bot_snoozes"}:
         raise _problem("validation", "Block needs an action to refuse: enters, owner changes or a bot snoozes")
-    if not retiring and not_acting(out):
-        raise _problem("validation", NEEDS_TIMER)
     unknown = set(out.get("cond") or {}) - set(CONDITIONS)
     if unknown:
         raise _problem("validation", f"Unknown condition: {', '.join(sorted(unknown))}")
+    idle = not_acting(out)
+    if idle and not retiring:
+        raise _problem("validation", idle)
     if not str(out.get("name") or "").strip():
         raise _problem("validation", "A rule has a name")
     return out
