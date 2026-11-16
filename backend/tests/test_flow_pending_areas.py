@@ -2,11 +2,12 @@
 written down whole (who is asked, the question, where its suggestion comes from, where the answer saves), none names
 an area Flow already asks about, and each expected question has the card's properties and passes the rubric's
 mechanical checks, so an area's build starts from questions that already fit. Words its owner proposed that break a
-rule are a strict xfail with why, as are the Strategy owner's per-part words for the questions being rewritten. Data
-only: no backend, no model."""
+rule are a strict xfail with why. Strategy's shipped per-part words (flow_questions.ASKS) are held to the same rules.
+Data only: no model."""
 
 import pytest
 
+from backend import flow_questions as FQ
 from backend.tests.helpers import flow_pending as P
 from backend.tests.helpers import flow_scenarios as F
 from evals.flow import quality as Q
@@ -49,12 +50,6 @@ def test_an_expected_question_fits_the_card_and_the_rubric(state):
     assert Q.card(state.question) + Q.failed(item(state)) == [], state.question
 
 
-def _wording():
-    for key, (question, breaks) in P.STRATEGY_WORDING.items():
-        marks = [pytest.mark.xfail(strict=True, raises=AssertionError, reason=breaks)] if breaks else []
-        yield pytest.param(question, marks=marks, id=key)
-
-
-@pytest.mark.parametrize("question", list(_wording()))
-def test_the_strategy_owners_wording_fits_the_card(question):
-    assert Q.card(question) + Q.failed({"question": question}) == [], question
+@pytest.mark.parametrize("key", list(FQ.ASKS))
+def test_strategys_shipped_wording_fits_the_card(key):
+    assert Q.card(FQ.ASKS[key]) + Q.failed({"question": FQ.ASKS[key]}) == [], FQ.ASKS[key]

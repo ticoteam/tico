@@ -48,7 +48,14 @@ def test_flow_questions_are_rubric_items_and_judgeable():
         "strategy/" + k for k in ("serve", "sell", "bet", "not", "proof", "now", "know", "how")
     }
     assert run.problems(items) == []
-    taken = Q.of_flow({"key": "serve", "title": "Who we serve", "question": "Who is it for?", "suggest": "Landlords."})
+    taken = Q.of_flow(
+        {
+            "key": "serve",
+            "title": "Who we serve",
+            "question": "Who is it for?",
+            "choices": [{"text": "Landlords.", "bet_id": None}],
+        }
+    )
     assert taken["choices"] == ["Landlords."] and Q.mechanical(taken)["recommended_first"] is True
 
 

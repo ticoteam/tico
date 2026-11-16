@@ -144,13 +144,13 @@ def failed(item):
 
 
 def of_flow(q, context=""):
-    """A Flow question (GET /api/v2/flow/questions item) as a rubric item: the suggestion, when there is one, is the
-    one choice, recommended, beside a box; it quotes the draft, so its length is the draft's."""
-    suggest = str(q.get("suggest") or "")
+    """A Flow question (GET /api/v2/flow/questions item) as a rubric item: its choices (drafted text, or up to three
+    proposed bets), the top one recommended, beside a box; they quote stored text, so their length is the draft's."""
+    choices = [str(c.get("text") or "") for c in q.get("choices") or []]
     return {
         "question": q["question"],
-        "choices": [suggest] if suggest else [],
-        "recommended": suggest or None,
+        "choices": choices,
+        "recommended": choices[0] if choices else None,
         "open": True,
         "quoted": True,
         "context": context or f"The owner is filling in the {q.get('title') or q['key']} part of their strategy.",

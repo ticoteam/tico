@@ -18,25 +18,26 @@ The owners' round 2 replies set these rules.
   a member, a bot or the owner's Assistant.
 - **Saving.** An answer saves through the routes the area's page already uses. Strategy saves to the draft, and nobody
   else's reads change before Publish.
-- **The card.** One sentence ending in "?", two lines at most at 390 px, no ids. The suggestion quotes stored data and
-  comes first. Everything shows on the first screen with the keyboard closed, every control is at least 44x44, and the
-  main button sits far right.
+- **The card.** One sentence ending in "?", two lines at most at 390 px, no ids. The choices (a part's drafted text, or
+  up to three proposed bets, by rank) quote stored data and come first, the top one marked. Everything shows on the first screen with the keyboard closed, every control is at least 44x44, and the
+  main button is the furthest right in one row of actions (on the end screen, Publish beside Keep going and Done).
 - **Quality.** A question passes the eight checks in `evals/flow/rubric.json` (one decision, plain sentence, no jargon
   or ids, real choices, recommended first, not already answered, says what it changes, right person with no detour).
   Any no fails it.
 
-The checks test properties, not words. Each part is getting its own Flow wording, so no test pins a question's text.
+The checks test properties, not words: no test pins a question's text. Strategy's shipped words
+(`flow_questions.ASKS`) are held to the card and the rubric like any other question.
 
 ## The layers
 
 | Layer | File | What it covers | Model |
 |---|---|---|---|
-| Scenarios | `backend/tests/test_flow_scenarios.py`, data in `backend/tests/helpers/flow_scenarios.py` | Each registered area's states. It checks what is asked, in what order, and where each suggestion comes from. On every state: the card's properties and the rubric's mechanical checks, a suggestion quotes stored data, a confirmed part is never asked, nobody but the owner is asked or may split an answer, answering every question through the page's routes ends publishable with nothing left, and nothing others read changes (nor the Needs you count) before Publish | none |
-| Pending states | same files | States whose trigger Flow lacks (Strategy: three drafted bets as choices, a stale bet, a bet proved wrong, a new competitor). The expected question and choices are written down as a strict xfail | none |
+| Scenarios | `backend/tests/test_flow_scenarios.py`, data in `backend/tests/helpers/flow_scenarios.py` | Each registered area's states. It checks what is asked, in what order, and where each choice comes from (all three bet choices when pinned). On every state: the card's properties and the rubric's mechanical checks, every choice quotes stored data (one for a part, at most three for the bet), a confirmed part is never asked, nobody but the owner is asked or may split an answer, answering every question through the page's routes ends publishable with nothing left, and nothing others read changes (nor the Needs you count) before Publish | none |
+| Pending states | same files | States whose trigger Flow lacks (Strategy: a stale bet, a bet proved wrong, a new competitor). The expected question and choices are written down as a strict xfail | none |
 | Pending areas | `backend/tests/test_flow_pending_areas.py`, data in `backend/tests/helpers/flow_pending.py` | Growth, Goals, Company, Rules, Finance, Contacts, Onboarding and bot conversations, each as its owner's state table: who is asked, the expected question, the suggestion's source, where the answer saves, and the gap. It checks the expected questions against the card and the rubric. Proposed words that break a rule are a strict xfail with the reason | none |
 | Ramble | `backend/tests/test_flow_ramble_cases.py`, cases in `evals/flow/ramble_cases.json` | A long answer split into lines with a fake model. A careful split meets each case. Whatever a model answers (obeying an instruction, rewriting, translating, flooding, overrunning limits, junk, failing), the route keeps only known sections, never the summary or vision, mostly the owner's own words, within limits, or the whole text | fake |
 | Quality | `backend/tests/test_flow_question_quality.py`, `evals/flow/quality.py`, `evals/flow/question_examples.json` | The rubric's mechanical checks on 32 invented good and bad questions, each with the verdict code must give. Also checks that the judge's questions validate and that the live evals' dry runs pass | none |
-| Browser | `ui/tests/flow-scenarios.cts` | Run states at 390x844 against fake routes: no asks; asks waiting (closed early too); a skipped question asked again from the Strategy page before a waiting ask, with the end screen blocked and then published; a stage walk; everything done. It runs the UI and design owners' phone checks on every card. A check waiting on an unmerged change is in `WAITS` and must still fail | none |
+| Browser | `ui/tests/flow-scenarios.cts` | Run states at 390x844 against fake routes: no asks; asks waiting (closed early too); a skipped question asked again from the Strategy page before a waiting ask, with the end screen blocked and then published; a stage walk; everything done; an answer the server could not split, shown as one whole line on the strike screen. It runs the UI and design owners' phone checks on every card: the main button far right, Publish in the action row, and the parts still drafted named above Publish | none |
 | Live evals | `evals/flow/run.py` | The ramble cases against a real writer, and the rubric's judgement checks against the judge model (Jev) | real, on demand |
 
 ## Running them
@@ -46,6 +47,9 @@ The checks test properties, not words. Each part is getting its own Flow wording
   backend/tests/test_flow_ramble_cases.py backend/tests/test_flow_question_quality.py
 node scripts/ui-tests.cts -j 1 flow-scenarios
 ```
+
+Not covered yet: the Tasks owner's sixth run state (a question skipped twice). Skip is kept per browser with no count
+(`ui/app/decide-setup.ts`), so there is no rule to test until one is built.
 
 The live evals make real model calls. Never run them in CI. Run them on demand only, with at most two calls at once.
 `--dry-run` sends nothing and checks the harness.

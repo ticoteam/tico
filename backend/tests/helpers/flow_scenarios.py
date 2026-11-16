@@ -33,13 +33,13 @@ class Drafted:
 
 @dataclass(frozen=True)
 class Ask:
-    """One question Flow should ask: its key, and where its suggested answer comes from (None: no suggestion)."""
+    """One question Flow should ask: its key, and where its suggested answers (`choices`) come from (None: none)."""
 
     key: str
     source: str | None = None  # "draft" (the draft's unconfirmed text) or "proposed_bet" (the top proposed bet)
-    suggest: str = ""  # the exact suggestion, when the scenario pins it
+    suggest: str = ""  # the first choice's exact text, when the scenario pins it
     question: str = ""  # the owner's expected wording: properties are checked on what Flow asks, never these words
-    choices: tuple[str, ...] = ()  # the choices the owner expects, in order (a pending scenario checks them)
+    choices: tuple[str, ...] = ()  # every choice's text, in order, when the scenario pins them all
 
 
 @dataclass(frozen=True)
@@ -62,12 +62,12 @@ class Area:
 
     prepare(api) -> {viewer name: token} for everyone who must get no questions (and whose reads Flow must not change
       before Publish); build(api, state) writes a scenario's state as the owner; read(api, token) is the questions read
-      ({"questions": [...], "more": [...]}, each {key, question, suggest, ...}); answer(api, question) answers one the
-      way the page does and returns the text saved; source(api, question) is (kind, stored text) the suggestion must
-      come from; stored(api) is every stored text a suggestion may quote; confirmed(api) the keys whose part needs no
+      ({"questions": [...], "more": [...]}, each {key, question, choices: [{text, ...}], ...}); answer(api, question)
+      answers one the way the page does and returns the text saved; source(api, question, i) is (kind, stored text)
+      choice i must come from; stored(api) is every stored text a choice may quote; confirmed(api) the keys whose part needs no
       question; untouched(api) what Flow must never write (Strategy: the summary and the vision); done(api) whether
       the area may be published; publish(api) publishes it; seen(api, viewers) everything those viewers read.
-    `wording` names question keys whose words break the one-sentence rule today, with why: a strict xfail each."""
+    `wording` names question keys whose words break the card's rules today, with why: a strict xfail each."""
 
     name: str
     scenarios: tuple[Scenario, ...]
@@ -96,6 +96,7 @@ HOW = "Landlord meetups and referrals, a free month for each landlord they bring
 BET_1 = "Small landlords will trust a bot with tenant messages"
 BET_2 = "Landlords will pay more for same-day repairs"
 BET_3 = "Landlords will switch for a bot that files their repair tickets"
+BET_4 = "Landlords will pay yearly for a bot that never misses a message"
 STALE = "2026-01-15"  # a bet's check date already passed
 CONFIRMED = {"serve": SERVE, "sell": SELL, "not": NOT, "proof": PROOF, "now": NOW, "know": KNOW, "how": HOW}
 # What the owner types for each part with no suggestion. What we sell is long, so it goes through the ramble route.
@@ -205,14 +206,15 @@ def _save_lines(api: Any, lines: list[dict[str, Any]]) -> None:
 
 
 def strategy_answer(api: Any, q: dict[str, Any]) -> str:
-    """One question answered as the page does: the suggestion tapped when there is one (a proposed bet made active),
+    """One question answered as the page does: the top choice tapped when there is one (a proposed bet made active),
     else the owner's typed answer, a long one sent to POST /flow/ramble first and its lines saved."""
-    if q["suggest"]:
-        if q["key"] == FQ.BET and q["bet_id"]:
-            post(api, "strategy/bets/" + q["bet_id"], {"status": "active", "revision": draft(api)["revision"]})
+    if q["choices"]:
+        top = q["choices"][0]
+        if q["key"] == FQ.BET and top.get("bet_id"):
+            post(api, "strategy/bets/" + top["bet_id"], {"status": "active", "revision": draft(api)["revision"]})
         else:
-            _save_lines(api, [{"section": q["key"], "text": q["suggest"]}])
-        return q["suggest"]
+            _save_lines(api, [{"section": q["key"], "text": top["text"]}])
+        return top["text"]
     text = TYPED[q["key"]]
     if len(text) > LONG:
         split = post(api, "flow/ramble", {"text": text, "section": q["key"]})
@@ -222,11 +224,12 @@ def strategy_answer(api: Any, q: dict[str, Any]) -> str:
     return text
 
 
-def strategy_source(api: Any, q: dict[str, Any]) -> tuple[str, str] | None:
-    """Where a question's suggestion must come from: the section's own drafted text, or the proposed bet it names."""
+def strategy_source(api: Any, q: dict[str, Any], i: int = 0) -> tuple[str, str] | None:
+    """Where a question's choice `i` must come from: the section's own drafted text, or the proposed bet it names."""
+    choice = q["choices"][i]
     with api.app.state.store.read() as c:
         if q["key"] == FQ.BET:
-            found = S.bet(c, q["bet_id"]) if q.get("bet_id") else None
+            found = S.bet(c, choice["bet_id"]) if choice.get("bet_id") else None
             return ("proposed_bet", found["statement"]) if found and found["status"] == "proposed" else None
         body = str(S.draft(c)["sections"].get(q["key"]) or "")
     return ("draft", body) if FQ.unconfirmed(body) is not None else None
@@ -300,12 +303,6 @@ STRATEGY = Area(
     done=strategy_done,
     publish=strategy_publish,
     seen=strategy_seen,
-    wording={
-        "proof": "the guide's proof ask is two sentences (How do you know people want it? Who uses it now, ...?)",
-        "now": "the guide's now ask is two sentences (Why now? What changed recently ...?)",
-        "know": "the first know ask in guide order is why-you, two sentences (Why are you the ones ...? What have ...?)",
-        "how": "the guide's how ask is two sentences and ends in a period (... come from? Name the channel, or the people.)",
-    },
     scenarios=(
         Scenario(
             "empty",
@@ -325,7 +322,7 @@ STRATEGY = Area(
             asks=(
                 Ask("serve", "draft", SERVE),
                 Ask("sell", "draft", SELL),
-                Ask("bet", "proposed_bet", BET_1),
+                Ask("bet", "proposed_bet", BET_1, choices=(BET_1, BET_2)),
                 Ask("not", "draft", NOT),
             ),
             more=(
@@ -349,9 +346,9 @@ STRATEGY = Area(
         ),
         Scenario(
             "proposed-bets-only",
-            "Nothing written, two proposed bets: the bet question offers the first, by rank.",
+            "Nothing written, two proposed bets: the bet question offers both, the first by rank on top.",
             {"bets": [(BET_1, "proposed"), (BET_2, "proposed")]},
-            asks=(Ask("serve"), Ask("sell"), Ask("bet", "proposed_bet", BET_1), Ask("not")),
+            asks=(Ask("serve"), Ask("sell"), Ask("bet", "proposed_bet", BET_1, choices=(BET_1, BET_2)), Ask("not")),
             more=(Ask("proof"), Ask("now"), Ask("know"), Ask("how")),
         ),
         Scenario(
@@ -385,11 +382,9 @@ STRATEGY = Area(
             more=(Ask("how"),),
             never=("sell", "bet", "not", "proof", "now", "know"),
         ),
-        # ---- What the Strategy owner expects once Flow has the trigger (round 2, owner states 4 to 6), and the
-        # bet question's choices it asked for. Each is a strict xfail until built.
         Scenario(
             "three-drafted-bets",
-            "Setup proposed three bets: the bet question offers all three to pick from, not only the top one.",
+            "Setup proposed three bets: the bet question offers all three to pick from, top first.",
             {"bets": [(BET_1, "proposed"), (BET_2, "proposed"), (BET_3, "proposed")]},
             asks=(
                 Ask("serve"),
@@ -397,8 +392,22 @@ STRATEGY = Area(
                 Ask("bet", "proposed_bet", BET_1, choices=(BET_1, BET_2, BET_3)),
                 Ask("not"),
             ),
-            pending="Flow offers only the top proposed bet; the owner asked for up to three as choices",
+            more=(Ask("proof"), Ask("now"), Ask("know"), Ask("how")),
         ),
+        Scenario(
+            "four-proposed-bets",
+            "Setup proposed four bets: the bet question offers the top three, by rank; the fourth waits.",
+            {"bets": [(BET_1, "proposed"), (BET_2, "proposed"), (BET_3, "proposed"), (BET_4, "proposed")]},
+            asks=(
+                Ask("serve"),
+                Ask("sell"),
+                Ask("bet", "proposed_bet", BET_1, choices=(BET_1, BET_2, BET_3)),
+                Ask("not"),
+            ),
+            more=(Ask("proof"), Ask("now"), Ask("know"), Ask("how")),
+        ),
+        # ---- What the Strategy owner expects once Flow has the trigger (round 2, owner states 4 to 6). Each is a
+        # strict xfail until built.
         Scenario(
             "published-stale-bet",
             "Published, and the active bet's check date has passed: Flow asks whether it still holds.",

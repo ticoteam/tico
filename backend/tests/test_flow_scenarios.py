@@ -38,9 +38,11 @@ def check(area, api, found):
         assert q["key"] not in confirmed, f"{q['key']} is asked though it is confirmed"
         if q["key"] not in area.wording:
             assert Q.card(q["question"]) + Q.failed(Q.of_flow(q)) == [], f"{q['key']}: {q['question']!r}"
-        if q["suggest"]:
-            assert any(q["suggest"] in text for text in stored), f"{q['key']} suggests {q['suggest']!r}: not stored"
-            assert "_Unconfirmed" not in q["suggest"]
+        assert len(q["choices"]) <= (FQ.BET_CHOICES if q["key"] == FQ.BET else 1), q["key"]
+        for choice in q["choices"]:
+            text = choice["text"]
+            assert text and any(text in body for body in stored), f"{q['key']} offers {text!r}: not stored"
+            assert "_Unconfirmed" not in text
 
 
 @pytest.mark.parametrize("case", F.cases(), ids=F.case_id)
@@ -55,12 +57,16 @@ def test_flow_asks_what_the_scenario_says(api, case):
     expected = {a.key: a for a in scenario.asks + scenario.more}
     for q in every(found):
         want = expected[q["key"]]
-        source = area.source(api, q) if q["suggest"] else None
-        assert (source or (None,))[0] == want.source, f"{q['key']}: suggestion from {source}, not {want.source}"
+        texts = [c["text"] for c in q["choices"]]
+        sources = [area.source(api, q, i) for i in range(len(texts))]
+        assert [(s or (None,))[0] for s in sources] == [want.source] * len(texts), f"{q['key']}: choices from {sources}"
+        assert bool(texts) == bool(want.source), f"{q['key']}: choices {texts}, expected from {want.source}"
         if want.suggest:
-            assert q["suggest"] == want.suggest
-        if source:
-            assert q["suggest"] in source[1]
+            assert texts[0] == want.suggest
+        if want.choices:
+            assert texts == list(want.choices)
+        for text, source in zip(texts, sources, strict=True):
+            assert source and text in source[1]
     check(area, api, found)
 
 
@@ -139,7 +145,7 @@ def test_a_pending_scenario_asks_what_its_owner_expects(api, area, scenario):
     area.build(api, scenario.state)
     found = every(area.read(api, F.OWNER))
     for want in scenario.asks + scenario.more:
-        got = [q for q in found if q["key"] == want.key and tuple(q.get("choices") or ()) == want.choices]
+        got = [q for q in found if q["key"] == want.key and tuple(c["text"] for c in q["choices"]) == want.choices]
         assert got, f"no {want.key} question with the choices {want.choices}"
         assert Q.card(got[0]["question"]) == []
         check(area, api, {"questions": got, "more": []})

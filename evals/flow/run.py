@@ -142,10 +142,10 @@ def load_questions(path=EXAMPLES):
 
 
 def flow_questions():
-    """Flow's own Strategy questions as rubric items: the guide's ask for each part, as an empty draft gets them."""
+    """Flow's own Strategy questions as rubric items: each part's question, as an empty draft gets it."""
     names = FQ.titles(S.DEFAULT_GUIDE)
     out = []
-    for key, ask in FQ._asks(S.DEFAULT_GUIDE).items():
+    for key, ask in FQ.ASKS.items():
         context = f"The owner's strategy draft has nothing in {names[key]} yet; the answer is saved there, as a draft."
         out.append({"id": f"strategy/{key}", **Q.of_flow({"key": key, "title": names[key], "question": ask}, context)})
     return out

@@ -452,21 +452,3 @@ BOT_CONVERSATIONS = PendingArea(
 )
 
 PENDING = (GROWTH, GOALS, COMPANY, RULES, FINANCE, CONTACTS, ONBOARDING, BOT_CONVERSATIONS)
-# The Strategy owner's per-part wording (round 2), for the builder replacing the guide's questions: checked for the
-# same properties, so a proposal that breaks them is known before it ships.
-STRATEGY_WORDING = {
-    "serve": ("Which customers do you serve first, the ones who need this most?", ""),
-    "sell": ("What do you sell, and what does a customer pay for it?", ""),
-    "bet": ("What is the one bet you're making now that could turn out wrong?", ""),
-    "not": ("What won't you do, even when a good customer asks for it?", ""),
-    "proof": (
-        "How do you know customers want it? Name who uses it and how often.",
-        "two sentences, the second not a question",
-    ),
-    "now": ("What changed recently that makes this possible, or needed, now?", ""),
-    "know": ("What do you know about this market that your competitors don't?", ""),
-    "how": (
-        "Where do your next 100 customers come from? Name the channel, or the people.",
-        "kept as is by the owner: two sentences, ending in a period",
-    ),
-}

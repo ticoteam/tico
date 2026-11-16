@@ -4,9 +4,11 @@ import type {Locator, Page} from 'playwright';
 // an ask has someone waiting and counts, a question has nobody waiting and never counts; asks always come first; Flow
 // opened from an area's page puts that area's questions first; a stage's walk never shows a question.
 // - No asks, setup open: Flow opens on the first question, not All done, and the Flow tab stays grey. The four basics
-//   are answered (one long answer split: the strike screen's rules), then Publish.
+//   are answered (one long answer split: the strike screen's rules), then Publish. An answer the server could not
+//   split comes back to the strike screen as one whole line under the part asked.
 // - Asks waiting: every ask first, no question read while one is on screen; closed early, the questions wait quietly
-//   and the tab stays lit for the asks alone; then the questions, each suggestion tapped, then Publish.
+//   and the tab stays lit for the asks alone; then the questions, each suggestion tapped (the bet offers the top three
+//   proposed, by rank), then Publish, with the part still drafted named above it.
 // - A question skipped in this browser is left out of All mine; from the Strategy page it is asked again, Strategy
 //   first though an ask waits; the end screen blocked (no Publish, each blocker opens its question); then Publish;
 //   then the ask.
@@ -14,9 +16,9 @@ import type {Locator, Page} from 'playwright';
 // - Everything done: All done, nothing about setup.
 // On every card, the UI and design owners' phone checks: nothing scrolls sideways, the question, the suggestion, the
 // box and the buttons show on the first screen, the question takes at most two lines, every control is at least 44x44
-// and none overlaps another, and the forward button (Send, Save, Publish) shows without scrolling. A check that waits
-// on a change not on this branch yet is in WAITS with why: it is run and must still fail, and once it passes the
-// script fails so its entry is taken out (a strict xfail, as the backend tests mark one).
+// and none overlaps another, and the forward button (Send, Save, Publish) shows without scrolling and is the furthest
+// right in its one row of actions (Publish beside Keep going and Done). Not here: a question skipped more than once is
+// asked again like any other (decide-setup.ts keeps no count of skips, so the Tasks owner's sixth state has no rule).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const {html, isUiPath, serveUi} = require('./support/page.cts') as import('./support/page.cts').Api;
@@ -33,7 +35,7 @@ const ASK = {
   sell: 'What do you sell, and what does a customer pay for it?',
   bet: "What is the one bet you're making now that could turn out wrong?",
   not: "What won't you do, even when a good customer asks for it?",
-  proof: 'How do you know customers want it?', now: 'What changed recently that makes this possible now?',
+  proof: 'How do you know customers want it: who uses it, and how often?', now: 'What changed recently that makes this possible, or needed, now?',
   know: "What do you know about this market that your competitors don't?", how: 'Where do your next 100 customers come from?',
 } as const;
 const TITLE = {serve: 'Who we serve', sell: 'What we sell', bet: 'Bet', not: "What we won't do", proof: 'Proof', now: 'Why now',
@@ -55,6 +57,12 @@ const SPLIT = [
 const DRAFTED = {serve: 'Landlords with one to twenty units.', sell: 'Bots that answer tenants, $29 a unit.', not: 'No enterprise deals.'};
 const CONFIRMED: Record<string, string> = {...DRAFTED, proof: 'Forty landlords pay.', now: 'Tenants text now.', know: 'Landlords hate apps.', how: 'Meetups.'};
 const PROPOSED = 'Small landlords will trust a bot with tenant messages';
+// Four proposed bets, by rank: the bet question offers the top three.
+const PROPOSALS = [PROPOSED, 'Landlords will pay per unit, not per seat', 'Landlords switch for a bot that files repair tickets',
+  'Landlords will pay yearly for a bot that never misses a message'];
+const LONG = 'Honestly I am not sure who we serve yet, I keep changing my mind about it every week, and my cofounder and I '
+  + 'argue about it at every lunch, so I would rather think about it some more and come back to this question later on.';
+const MAX = {bet: 480, section: 4000};
 const QUESTION = (i: number) => `Ship the Acme pricing page ${['on Monday', 'with annual plans', 'in Spanish too'][i - 1]}?`;
 const brief = (id: string) => ({id, title: `Task ${id}`, number: Number(id.slice(1)), pipeline_id: 'product', stage_id: 'spec', status: 'open',
   owner_id: 'bot:pm', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
@@ -68,31 +76,26 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
   stages: [{id: 'spec', name: 'Spec', purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
     expected_bots_only: false, on_enter: {}, requirements: []}],
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
-// Phone checks that wait on a change this branch's base does not have yet: each must still fail here.
-const WAITS: Record<string, string> = {
-  'forward far right': 'the main button sits left of Skip and Keep going; the UI owner\'s pitch 518 moves it to the far right (on the rebase)',
-  'publish in the actions row': 'Publish sits above Keep going and Done, not in their row (pitch 518, on the rebase)',
-  'unconfirmed named at publish': 'the end screen does not name parts still Unconfirmed, which would go out as drafted (Strategy owner, round 2)',
-};
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
-  const waited = new Set<string>();
   try {
     // The draft as the fake server holds it.
     let sections: Record<string, string> = {}, bets: Bet[] = [], revision = 1, current: Json | null = null, n = 0, needs: Json[] = [];
+    let splits = true;  // false: the ramble route cannot split (no model), and gives the whole answer back
     const errors: string[] = [], reads: string[] = [];
     const reset = (s: Record<string, string>, b: Bet[], asks: Json[] = []) => {
-      sections = {...s}; bets = b.map(x => ({...x})); revision = 1; current = null; n = 0; reads.length = 0; needs = asks;
+      sections = {...s}; bets = b.map(x => ({...x})); revision = 1; current = null; n = 0; reads.length = 0; needs = asks; splits = true;
     };
     const open = (k: string) => !(sections[k] || '').trim() || (sections[k] || '').startsWith('_Unconfirmed:');
     const item = (key: Key): Json[] => {
       if (key === 'bet') {
         if (bets.some(b => b.status === 'active')) return [];
-        const top = bets.find(b => b.status === 'proposed');
-        return [{key, title: TITLE[key], question: ASK[key], suggest: top?.statement || '', bet_id: top?.id || null}];
+        const top = bets.filter(b => b.status === 'proposed').sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99)).slice(0, 3);
+        return [{key, title: TITLE[key], question: ASK[key], choices: top.map(b => ({text: b.statement, bet_id: b.id})), max: MAX.bet}];
       }
-      return open(key) ? [{key, title: TITLE[key], question: ASK[key], suggest: (sections[key] || '').replace(MARK, ''), bet_id: null}] : [];
+      const drafted = (sections[key] || '').replace(MARK, '');
+      return open(key) ? [{key, title: TITLE[key], question: ASK[key], choices: drafted ? [{text: drafted, bet_id: null}] : [], max: MAX.section}] : [];
     };
     const questions = () => ({questions: BASICS.flatMap(item), more: MORE.flatMap(item), revision, titles: TITLE});
     const draft = () => ({revision, guide: 'default', summary: '', vision: '', sections: {...sections}, bets: bets.map(b => ({...b}))});
@@ -125,7 +128,8 @@ const WAITS: Record<string, string> = {
         const body = (r.postDataJSON() || {}) as Json;
         const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);
         if (m) { needs = needs.filter(x => x['id'] !== m[2]); return json({task: brief(m[1]!), answer_id: 'a-' + m[2], requirement_id: m[2]}); }
-        if (p === '/api/v2/flow/ramble') return json({lines: SPLIT.map(l => ({...l})), split: true, why: null});
+        if (p === '/api/v2/flow/ramble') return json(splits ? {lines: SPLIT.map(l => ({...l})), split: true, why: null}
+          : {lines: [{section: body['section'], text: String(body['text']).trim()}], split: false, why: 'no_model'});
         if (p.startsWith('/api/v2/strategy') && body['revision'] !== revision)
           return json({error: {code: 'conflict', message: 'The draft changed.'}, revision}, 409);
         if (p === '/api/v2/strategy/draft' && method === 'PUT') {
@@ -140,7 +144,8 @@ const WAITS: Record<string, string> = {
         const one = p.match(/^\/api\/v2\/strategy\/bets\/(b\d+)$/);
         if (one) { const bet = bets.find(b => b.id === one[1])!; bet.status = String(body['status']); revision++; return json({bet, revision}); }
         if (p === '/api/v2/strategy/publish') {
-          n++; current = {...draft(), n, bets: bets.filter(b => b.status === 'active')}; revision++;
+          // Every bet not retired, as backend/strategy.py publish snapshots them.
+          n++; current = {...draft(), n, bets: bets.filter(b => b.status !== 'retired').map(b => ({...b}))}; revision++;
           return json({...current});
         }
         return json(unrouted(p));
@@ -150,12 +155,6 @@ const WAITS: Record<string, string> = {
       return page;
     };
 
-    /** A check that waits on a change not here yet: it must still fail; once it passes, take it out of WAITS. */
-    const waits = async (name: keyof typeof WAITS, check: () => Promise<void>) => {
-      assert.ok(WAITS[name], `no WAITS entry ${name}`);
-      try { await check(); } catch { waited.add(name); return; }
-      assert.fail(`"${name}" passes now: take it out of WAITS (${WAITS[name]})`);
-    };
     type Box = {x: number; y: number; width: number; height: number};
     const box = async (l: Locator): Promise<Box> => { const b = await l.boundingBox(); assert.ok(b, 'on screen'); return b!; };
     /** The phone checks on the screen showing now. `forward` is its main button, `row` the other buttons beside it. */
@@ -205,7 +204,7 @@ const WAITS: Record<string, string> = {
       await card(d, key).waitFor();
       assert.equal(await card(d, key).locator('.dc-q').textContent(), ASK[key]);
       await phone(page, `${key} card`, send(d));
-      await waits('forward far right', () => farRight(send(d), card(d, key).locator('.dc-acts .dc-skip')));
+      await farRight(send(d), card(d, key).locator('.dc-acts .dc-skip'));
     };
     const type = async (page: Page, d: Locator, key: Key, text: string, split = false) => {
       await ask1(page, d, key);
@@ -222,7 +221,7 @@ const WAITS: Record<string, string> = {
     const publishes = async (page: Page, d: Locator, hash: string, version = 1) => {
       const e = end(d), pub = e.locator('[data-dc="q-publish"]');
       await phone(page, 'end screen', pub);
-      await waits('publish in the actions row', () => farRight(pub, e.locator('[data-dc="q-more"], [data-dc="q-done"]')));
+      await farRight(pub, e.locator('[data-dc="q-more"], [data-dc="q-done"]'));
       await pub.tap();
       await e.locator('.dc-q-said', {hasText: `Published v${version}`}).waitFor();
       assert.equal(n, version, 'published');
@@ -250,7 +249,7 @@ const WAITS: Record<string, string> = {
       assert.deepEqual(await rows.locator('.tx b').allTextContents(), SPLIT.map(l => l.text));
       assert.deepEqual(await rows.locator('.tx span').allTextContents(), SPLIT.map(l => TITLE[l.section as Key]));
       await phone(page, 'the lines', save);
-      await waits('forward far right', () => farRight(save, strike.locator('.dc-acts .dc-skip')));
+      await farRight(save, strike.locator('.dc-acts .dc-skip'));
       for (let i = 0; i < SPLIT.length; i++) {
         await rows.nth(i).locator('[data-dc="q-drop"]').tap();
         await rows.nth(i).locator('[data-dc="q-drop"][aria-label="Keep"]').waitFor();
@@ -279,7 +278,9 @@ const WAITS: Record<string, string> = {
     // ---- Three asks waiting: every ask first; closed early, the questions wait; then the questions; Publish.
     {
       const drafted = Object.fromEntries(Object.entries({...DRAFTED, proof: 'Forty landlords pay.'}).map(([k, v]) => [k, MARK + v]));
-      reset(drafted, [{id: 'b1', statement: PROPOSED, status: 'proposed', rank: 1}], [ask(1), ask(2), ask(3)]);
+      // Ranked out of order as stored: the choices follow the rank.
+      const ranks = [2, 1, 4, 3], proposed = PROPOSALS.map((statement, i) => ({id: `b${i + 1}`, statement, status: 'proposed', rank: i + 1}));
+      reset(drafted, ranks.map(r => proposed[r - 1]!), [ask(1), ask(2), ask(3)]);
       const page = await start('#/updates'), d = page.locator('#need-card');
       await page.locator('#mobile-flow[data-waiting]').waitFor({state: 'attached'});
       await page.locator('#mobile-flow').tap();
@@ -302,17 +303,40 @@ const WAITS: Record<string, string> = {
         const [qb, tb, bb] = [await box(c.locator('.dc-q')), await box(take), await box(d.locator('#dc-q-say'))];
         assert.ok(qb.y + qb.height <= tb.y + 1 && tb.y + tb.height <= bb.y + 1, `${key}: question, then suggestion, then box`);
         assert.equal(await take.textContent(), key === 'bet' ? PROPOSED : DRAFTED[key as keyof typeof DRAFTED]);
+        // Drafted text is one choice; the bet offers the top three proposed, by rank, the first marked.
+        assert.deepEqual(await c.locator('.dc-choice').allTextContents(), key === 'bet' ? PROPOSALS.slice(0, 3) : [DRAFTED[key as keyof typeof DRAFTED]]);
+        assert.equal(await c.locator('.dc-choice.dc-rec').count(), 1, 'one choice marked');
         await take.tap();
         await c.waitFor({state: 'detached'});
       }
       assert.deepEqual(Object.keys(DRAFTED).map(k => sections[k]), Object.values(DRAFTED), 'each drafted part kept, its marker gone');
-      assert.equal(bets[0]!.status, 'active');
+      assert.deepEqual(bets.filter(b => b.status === 'active').map(b => b.statement), [PROPOSED], 'the top bet made active, the rest left');
       assert.equal(await lit(page), false, 'grey once the asks are answered, though the questions were open');
       // Proof is still Unconfirmed: Publish would send it out as drafted.
       await end(d).waitFor();
-      await waits('unconfirmed named at publish', async () =>
-        assert.match((await end(d).textContent()) || '', /(unconfirmed|as drafted)[^]*Proof|Proof[^]*(unconfirmed|as drafted)/i));
+      const named = end(d).locator('[data-q-drafted] [data-dc="q-fix"], [data-q-drafted] .dc-q-fix');
+      assert.deepEqual(await named.allTextContents(), ['Unconfirmed: Proof'], 'the part still drafted is named above Publish');
+      assert.match((await end(d).textContent()) || '', /Unconfirmed[^]*Proof/);
       await publishes(page, d, '#/updates');
+      await page.context().close();
+    }
+
+    // ---- An answer the server could not split (no model): the strike screen, one whole line under the part asked.
+    {
+      reset({}, []);
+      const page = await start('#/decide?setup=strategy'), d = page.locator('#need-card');
+      splits = false;
+      await type(page, d, 'serve', LONG, true);
+      const strike = d.locator('[data-q-strike]'), save = d.locator('[data-dc="q-save"]'), rows = strike.locator('.dc-ql');
+      await strike.waitFor();
+      assert.deepEqual(await rows.locator('.tx b').allTextContents(), [LONG], 'the whole answer, one line, uncut');
+      assert.deepEqual(await rows.locator('.tx span').allTextContents(), [TITLE.serve]);
+      assert.equal(await rows.locator('.dc-q-left').count(), 0, 'nothing struck as cut');
+      await phone(page, 'the whole line', save);
+      await farRight(save, strike.locator('.dc-acts .dc-skip'));
+      await save.tap();
+      await card(d, 'sell').waitFor();
+      assert.equal(sections['serve'], LONG);
       await page.context().close();
     }
 
@@ -379,9 +403,7 @@ const WAITS: Record<string, string> = {
     }
 
     assert.deepEqual(errors, []);
-    const left = Object.keys(WAITS).filter(k => !waited.has(k));
-    assert.deepEqual(left, [], 'every WAITS check ran');
-    console.log(`PASS: Flow's run states at phone width: asks first, questions never counted, the area first from its page, none in a stage walk, All done when nothing is open; the cards fit the phone. Waiting on: ${[...waited].join('; ')}.`);
+    console.log("PASS: Flow's run states at phone width: asks first, questions never counted, the area first from its page, none in a stage walk, All done when nothing is open, an unsplit answer one whole line; the cards fit the phone, the main button far right, Publish in the row, drafted parts named.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
