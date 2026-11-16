@@ -205,7 +205,7 @@ def test_claim_excludes_workspace_filing_before_its_limit_and_keeps_other_action
 
 def test_personal_connection_still_queues_for_its_computer(api, live):
     machine = organizer(api)
-    personal(api, "ana", BOX, holder=machine["runner_id"])
+    personal(api, "ana", BOX)
     aid, run = run_mail(api, ARCHIVE, LABEL, LEAVE)
     assert run["status"] == "waiting" and live["calls"] == []
     assert all(r["state"] == "queued" and r["attempts"] == 0 for r in rows(api, aid))

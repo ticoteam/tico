@@ -5,10 +5,11 @@ import json
 import jwt
 import pytest
 
-from backend import google_workspace, mailbox_access
+from backend import google_connect, google_workspace, mailbox_access
 from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
+from backend.tests.helpers.google_connect import CLIENT, FakeGoogle
 from backend.tests.helpers.google_workspace import personal
 from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail
@@ -24,6 +25,8 @@ def read(api, path, token="ana-test", **params):
 def test_owner_and_assistant_read_personal_and_shared_workspace_mail_without_a_copy(
     api, live, workspace_key, assistant_token
 ):
+    with api.app.state.store.transaction() as c:  # a key authorized for the read-only scopes reads with them
+        c.execute("UPDATE google_workspaces SET authorized_scopes=?", (json.dumps(google_workspace.scope_urls()),))
     for token, mailbox in (("ana-test", BOX), (assistant_token, BOX), (assistant_token, SHARED)):
         page = read(
             api,
@@ -104,14 +107,30 @@ def test_workspace_lists_require_a_mailbox_and_gmail_failures_are_not_empty(api,
         assert c.execute("SELECT COUNT(*) FROM events WHERE action='mail.read'").fetchone()[0] == 0
 
 
-def test_live_personal_grants_still_use_the_stored_path_even_with_workspace_connected(api, live):
-    personal(api, "ana", BOX)
+@pytest.fixture
+def ana_connected(api, monkeypatch):
+    """Ana's own Connect Google grant, read only, kept on the server; Google refreshes it to `ya29.ana`."""
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, "google_oauth_client_id", CLIENT)
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "tico-secret")
+    personal(api, "ana", BOX, client=CLIENT)
+    google = FakeGoogle({"access_token": "ya29.ana", "expires_in": 3599})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    return google
+
+
+def test_a_personal_grant_is_read_live_through_its_own_grant_even_with_workspace_connected(
+    api, live, workspace_key, ana_connected
+):
     put_mail(api, BOX, msg_id="stored", thread_id="stored-thread", subject="Stored invoice", body="Stored body")
-    page = read(api, "messages", mailbox=BOX, q="invoice")
-    assert page["messages"][0]["msg_id"] == "stored" and page["q"] == '"invoice"'
-    assert read(api, "messages/stored", mailbox=BOX)["body"] == "Stored body"
-    assert read(api, "threads/stored-thread", mailbox=BOX)["messages"][0]["body"] == "Stored body"
-    assert live["calls"] == []
+    minted = len(workspace_key)
+    page = read(api, "messages", mailbox=BOX, q="from:sender")
+    assert page["messages"][0]["msg_id"] == "m2" and page["messages"][0]["mailbox"] == BOX
+    assert read(api, "messages/m1", mailbox=BOX)["body"] == "Live contract body."
+    assert [item["msg_id"] for item in read(api, "threads/t1", mailbox=BOX)["messages"]] == ["m1", "m2"]
+    assert live["calls"] and all(token == "ya29.ana" for _, _, token in live["calls"])
+    assert len(workspace_key) == minted  # the key never mints for a mailbox a person's grant covers
+    assert ana_connected.calls[-1]["refresh_token"] == "1//g1"
 
 
 def test_legacy_reads_keep_fts_and_the_stored_cursor(api, gmail_http):
@@ -236,10 +255,10 @@ def test_a_bot_organizes_only_with_its_own_current_grant(api, live):
     assert len(live["writes"]) == 1
 
 
-def test_a_personal_grant_cannot_be_organized_live(api, live):
-    personal(api, "ana", BOX)
-    result = organize(api, expected=422, mailbox=BOX, action="archive", ids=["m1"])
-    assert result["error"]["detail"] == "Live organizing needs Whole Workspace" and not live["calls"]
+def test_a_read_only_personal_grant_is_not_organized_and_google_is_not_asked(api, live, ana_connected):
+    result = organize(api, expected=403, mailbox=BOX, action="archive", ids=["m1"])
+    assert result["error"]["code"] == "read_only" and not live["writes"]
+    assert google_connect.REVOKE_URI not in ana_connected.uris and not ana_connected.calls
 
 
 def test_label_unlabel_and_empty_queries_do_not_create_unwanted_labels(api, live):

@@ -33,7 +33,7 @@ they stay greppable.
 | [`doc_sources.status`](#doc_sourcesstatus) | check | refused | `link_only`, `queued`, `preparing`, `updating`, `ready`, `empty`, `failed`, `access_needed` |  |
 | [`model_subscriptions.status`](#model_subscriptionsstatus) | check | refused | `new`, `working`, `needs_reconnect` |  |
 | [`strategy_actions.state`](#strategy_actionsstate) | check | refused | `proposed`, `done`, `undone` |  |
-| [`google_connects.status`](#google_connectsstatus) | check | refused | `signing_in`, `ready`, `finishing`, `revoking`, `disconnecting`, `connected`, `disconnected`, `failed` |  |
+| [`google_connects.status`](#google_connectsstatus) | check | refused | `signing_in`, `finishing`, `connected`, `disconnected`, `failed` |  |
 | [`google_workspaces.status`](#google_workspacesstatus) | check | refused | `pending`, `connected`, `failing` |  |
 | [`fin_cards.status`](#fin_cardsstatus) | check | refused | `active`, `frozen`, `canceled` | `cancelled` (`canceled`) |
 | [`fin_payments.status`](#fin_paymentsstatus) | check | refused | `queued`, `sending`, `awaiting_bank_approval`, `submitted`, `settled`, `returned`, `failed`, `canceled`, `unknown` | `cancelled` (`canceled`) |
@@ -125,7 +125,7 @@ fix adds; its race test is the example to follow.
 |---|---|---|---|---|---|
 | SM-01 | statement upload preview and agent pairing (UI) | `ui/app` | none: the latest reply wins | a phase and a request revision; only the current revision may submit | `ui/tests/finance-statement-race-unit.cts`, `ui/tests/agent-pair-race-unit.cts` |
 | SM-02 | merge-queue act and undo | `source_actions.py` | the item's state | the undo checks the current visit's intent before it dequeues | `test_merge_queue_undo_intent.py::test_back_and_forward_while_the_queue_call_is_out_leaves_the_pr_queued` |
-| SM-03 | `google_connects.status` | `google_connect.py` | the person's row | an operation id per connect or disconnect, required at exchange and result | `test_google_connect.py::test_a_late_result_from_an_earlier_connect_does_not_finish_the_next_one` |
+| SM-03 | `google_connects.status` | `google_connect.py` | the person's row | an operation id per connect or disconnect; the exchange keeps its grant only while its operation is current | `test_google_connect.py::test_an_exchange_answered_after_its_connect_was_replaced_keeps_nothing_and_revokes_nothing` |
 | SM-04 | `automation_runs.status`, `webhook_sends.state` | `automations.py`, `webhook_delivery.py` | the state (`running`, `sending`) | a claim token; a reclaimed worker cannot settle | `test_automation_reclaimed_worker.py::test_an_old_automation_worker_cannot_save_while_the_new_claim_holds_the_run`, `test_webhook_reclaimed_worker.py` |
 | SM-05 | direct meeting-turn claims (`live_meeting_turns.status`) | `live_meetings.py` | the claim | a recoverable claim: returned on reconnect, or abandoned | `test_live_meeting_claims.py::test_a_lost_claim_answer_is_shown_to_its_bot_again_and_the_same_claim_is_returned` |
 | SM-07 | AI Gateway spending cap | `finance/gateway_sync.py` | the cap record | the key and destination the cap was set for | `test_finance_gateway_cap_target.py::test_a_reply_for_a_key_replaced_meanwhile_does_not_satisfy_the_new_key` |
@@ -440,21 +440,17 @@ Transitions (`backend/strategy_acts.py`): insert `proposed`; `proposed` to `done
 CHECK. NOT NULL, no default.
 
 - `signing_in`: the sign-in started and waits for its callback. `oauth_state` holds the one-time nonce.
-- `ready`: the callback arrived, the code is stored, and the connection waits to be finished.
-- `finishing`: tokens are being exchanged and saved (a claim with a time limit).
-- `connected`: working.
-- `revoking`: the grant is being revoked at the provider (a claim).
-- `disconnecting`: a local disconnect was asked for, waiting to be claimed.
-- `disconnected`: removed.
+- `finishing`: the callback arrived and the server is trading the code for the grant (a request with a time limit).
+- `connected`: working. The grant is sealed on the server (`grant_sealed`).
+- `disconnected`: removed, or ended by the move of grants to the server (`kind` `reconnect`).
 - `failed`: the step failed.
 
-Transitions (`backend/google_connect.py`): (none) to `signing_in` on start; `signing_in` to `ready` on callback (clears
-`oauth_state`); `ready` to `finishing`; `finishing` to `connected` or `failed`; `connected` or `ready` to `disconnecting`;
-`disconnecting` to `revoking`; `revoking` to `disconnected` or `failed`. A row stuck in `signing_in`, `ready`, `finishing`
-or `revoking` past its time limit is reset by a sweep. Each start (connect or disconnect) sets a new `operation_id` and
-clears the pending grant; the claim, `/exchange` and `/result` name that operation, and every write after the claim is
-conditional on it, so an answer for an earlier operation changes nothing. `answered` records the computer's result for
-the current operation, and a repeat of it is answered the same way.
+Transitions (`backend/google_connect.py`): (none) to `signing_in` on start; `signing_in` to `finishing` on callback
+(clears `oauth_state` and `verifier`); `finishing` to `connected` or `failed`; any to `disconnected` on disconnect. A row
+stuck in `signing_in` or `finishing` past its time limit is reset by a sweep. Each start (connect or disconnect) sets a
+new `operation_id`, and the exchange's write is conditional on it, so a connect replaced meanwhile keeps nothing. A
+grant connected before stays (`grant_sealed`, `grant_operation_id`) until a new connect replaces it or a disconnect
+clears it.
 
 The column `google_connects.state` was renamed to `oauth_state`. `ensure_schema` renames it on an existing database and
 recreates its index as `google_connects_oauth_state`.

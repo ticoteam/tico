@@ -1,13 +1,12 @@
-"""Who may act for a mailbox on the connector and Connect Google routes: one owner per mailbox (plan v3 A/B, v4 O, v5 T/V).
+"""Who may act for a mailbox on the connector routes: one owner per mailbox (plan v3 A/B, v4 O, v5 T).
 
 `publisher()` (backend/connectors.py) is unchanged. It still decides every mailbox that no Google Workspace and no
-personal grant covers, exactly as before. A mailbox one of them covers has a single owner:
-- `workspace`: its message bot's host, else its one online sync computer (`google_workspace.owned_mailboxes`);
-- `personal`: the computer that takes the person's live Connect Google grant (`takes`): the live computer hosting their
-  message bot, or the holder while no computer hosts it.
-Any other computer is refused with 403 `workspace_owned` or `personal_grant`, a publisher included. Work already leased
-stays with the computer that leased it (`connectors.py`, `automations.py`), so a move never turns finished work into a
-retry. Health is kept per computer and per account (`connector_reports`), and `service_health` is derived from it.
+personal grant covers, exactly as before. A mailbox one of them covers has a single owner, whichever covers it: its
+message bot's host, else its one online sync computer (`google_workspace.owned_mailboxes`). Both credentials stay on
+the server, which hands that computer a short-lived token (backend/google_tokens.py). Any other computer is refused
+with 403 `workspace_owned` or `personal_grant`, a publisher included. Work already leased stays with the computer that
+leased it (`connectors.py`, `automations.py`), so a move never turns finished work into a retry. Health is kept per
+computer and per account (`connector_reports`), and `service_health` is derived from it.
 """
 
 import json
@@ -15,7 +14,7 @@ import json
 from . import google_workspace as workspace
 from .store import H, Problem, encode
 
-# A computer that answered this recently is online; the bot's computer then takes a first connect (plan v5 V).
+# A computer that answered this recently is online.
 ONLINE_SECONDS = 60
 # A computer's report older than this is stale: its failing accounts stop counting for the service (plan v5 T).
 FRESH_SECONDS = 1800
@@ -23,7 +22,7 @@ FRESH_SECONDS = 1800
 FORBIDDEN = "This machine is not assigned the private app-connector capability"
 MESSAGES = {
     "workspace_owned": "{box} is read by its assigned sync computer, not by this one",
-    "personal_grant": "{box} is connected through its person's Google grant, which the computer holding that grant reads",
+    "personal_grant": "{box} is connected through its person's Google grant, read by its assigned sync computer",
 }
 
 
@@ -90,31 +89,6 @@ def reportable(c, runner_id, named, owned=None):
     return {box["address"] for box in visible(c, runner_id, named, owned=owned)}
 
 
-def inbox_hosts(c):
-    """Each person whose message bot is placed on a computer: {person_id: {bot, runner, online}}. `runner` is None when
-    the bot has no live computer; `online` says that computer answered within ONLINE_SECONDS."""
-    placed = {
-        row["bot"]: row
-        for row in c.execute(
-            "SELECT a.bot, a.runner_id, r.last_seen_at, r.revoked_at FROM assignments a "
-            "JOIN runners_with_state r ON r.id=a.runner_id"
-        )
-    }
-    since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    out = {}
-    for box in boxes(c):
-        if not box["bot"] or not box["person_id"]:
-            continue
-        row = placed.get(box["bot"])
-        live = row is not None and not row["revoked_at"]
-        out[box["person_id"]] = {
-            "bot": box["bot"],
-            "runner": row["runner_id"] if live else None,
-            "online": bool(live and row["last_seen_at"] and row["last_seen_at"] > since),
-        }
-    return out
-
-
 def turn_principals(c, runner_id, auth=None):
     """Who this computer's turns act as: each bot placed on it, and for a live Assistant turn here (`auth` given), the
     person it acts for (backend/auth.py assistant_principal)."""
@@ -152,28 +126,6 @@ def turn_level(c, runner_id, mailbox, auth=None):
 def live_runners(c):
     """The ids of the computers that are not revoked. A revoked computer is never a host or a holder."""
     return {row[0] for row in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")}
-
-
-def takes(runner_id, named, row, hosts, live):
-    """Whether this computer is the one that acts on one person's Connect Google row (plan v4 O, v5 V). The first connect,
-    reconnect, exchange, refresh, result and the mailbox's ownership all ask this one rule.
-
-    - A row being disconnected or revoked goes to its holder while the holder is live. With the holder gone, a publisher
-      `named` finishes it.
-    - Otherwise, when the person's message bot has a live computer (`hosts`), only that computer takes it, online or not:
-      a publisher waits for the host rather than taking the connect.
-    - With no host, a live holder keeps its grant. With no live holder, a publisher `named` takes it (a first connect).
-    The claim passes `named` narrowed to the orphan case (`google_connect.claimable`)."""
-    holder = row["holder"] or ""
-    holder_live = bool(holder) and holder in live
-    if row["status"] in ("disconnecting", "revoking"):
-        return holder == runner_id if holder_live else bool(named)
-    host = (hosts.get(row["person_id"]) or {}).get("runner")
-    if host:
-        return host == runner_id
-    if holder_live:
-        return holder == runner_id
-    return bool(named)
 
 
 def report(c, service, runner_id, now, *, failing=None, ok=(), reportable_set=None):

@@ -1177,9 +1177,9 @@ def operation_issues(c, who, auth):
                 needs_person=bool(detail.get("needs_person")),
                 action=detail.get("action"),
             )
-        # Google connections: the Workspace key that stopped working, and a person's grant held on a computer other
-        # than their message bot's (backend/google_connect.py, google_workspace.py).
-        from . import google_rights, google_workspace
+        # Google connections: the Workspace key that stopped working, and a covered mailbox no computer syncs
+        # (backend/google_workspace.py).
+        from . import google_workspace
 
         key = google_workspace.active(c)
         if key and key["status"] == "failing":
@@ -1190,8 +1190,8 @@ def operation_issues(c, who, auth):
                 needs_person=True,
                 action="Check the key in Tools > Settings > Email.",
             )
-        sync_owners = google_workspace.workspace_sync_owners(c)
-        for box in google_workspace.workspace_mailboxes(c):
+        sync_owners = google_workspace.sync_owners(c)
+        for box in google_workspace.workspace_mailboxes(c) + google_workspace.personal_mailboxes(c):
             if box["address"] not in sync_owners:
                 add(
                     "google_workspace",
@@ -1204,28 +1204,6 @@ def operation_issues(c, who, auth):
                     action="Bring an isolated company server online."
                     if box["kind"] == "shared"
                     else "Bring the person's computer, their Assistant's host or an isolated company server online.",
-                )
-        labels = {row["id"]: row["label"] for row in c.execute("SELECT id,label FROM runners_with_state")}
-        hosts = google_rights.inbox_hosts(c)
-        for grant in c.execute(
-            "SELECT person_id,mailbox,holder FROM google_connects WHERE status='connected' "
-            "AND holder IS NOT NULL AND grant_hash IS NOT NULL"
-        ).fetchall():
-            host = (hosts.get(grant["person_id"]) or {}).get("runner")
-            if host and host != grant["holder"]:
-                holder = labels.get(grant["holder"]) or "another computer"
-                bot_computer = labels.get(host) or "the computer that runs their message bot"
-                add(
-                    "google_grant",
-                    grant["mailbox"] + "'s Google grant is on " + holder,
-                    grant["mailbox"]
-                    + "'s Google grant is on "
-                    + holder
-                    + ". Reconnect in Tools > Settings > Email to move it "
-                    "to " + bot_computer + ", where their message bot runs.",
-                    machine=grant["holder"],
-                    needs_person=True,
-                    action="Open Tools > Settings > Email",
                 )
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail

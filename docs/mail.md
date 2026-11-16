@@ -16,8 +16,8 @@ The old `#/mail` route remains available for existing deep links.
 same mailbox access. Output is Markdown by default; add `--json` for the API response. Lists accept `--limit` (up to
 50) and `--cursor` with the previous `next_cursor`. Inbox accepts `--q` to search within INBOX. `tico mail` is postal mail.
 
-The mail API requires a mailbox for live lists; it does not combine Workspace inboxes. Personal Connect Google grants
-and legacy connections keep their existing stored reads; live reading needs Whole Workspace. Existing mail sync and
+The mail API requires a mailbox for live lists; it does not combine inboxes. A mailbox Whole Workspace or a person's own
+Connect Google grant covers is read live; legacy connections keep their existing stored reads. Existing mail sync and
 stored copies are unchanged by live reads. Opening a message or thread checks access and records `mail.read`.
 
 ## Organizing live
@@ -551,8 +551,8 @@ without a message-bot host use only a company server. Among equally eligible com
 An isolated server is a Linux Docker runner that supervises its own `connectors` job. Another member's personal
 computer is never chosen just because it is online. A fallback owner is replaced when it has not contacted Tico for
 60 seconds or is revoked. If no eligible computer is online, nothing syncs and Health says the mailbox has no sync computer.
-Stopped mailboxes and mailboxes awaiting a person are excluded from this fallback. A personal Connect Google grant
-keeps its existing ownership rule. Syncing grants no bot access: the person and their Assistant can read their copies;
+Stopped mailboxes and mailboxes awaiting a person are excluded from this fallback. A mailbox a person's own Connect
+Google grant covers follows the same rule: the server holds the grant and hands that computer a token. Syncing grants no bot access: the person and their Assistant can read their copies;
 other bots still need an explicit mailbox grant, even on the syncing computer.
 
 For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
@@ -586,12 +586,13 @@ the account that signed in and cannot reach anyone else in the Workspace.
    the one their message bot manages.
 2. Google asks them to sign in as that mailbox and to allow Tico to read their mail and calendar. With Tico's shared app,
    nothing that writes or sends is asked for. With the company's own Google app, see below.
-3. Google returns them to Tico. The computer that runs the mail sync finishes the sign-in and keeps the grant. Settings
-   shows what the grant allows, and the sync starts on its next cycle. The server sees a one-time code for a few
-   minutes and never the grant itself.
+3. Google returns them to Tico. The Tico server trades the one-time code for the grant at once and keeps it sealed with
+   its credential key. Settings shows what the grant allows, and Tico reads the mailbox live from Google. No computer
+   holds the grant or a token from it beyond the hour-long token the server gives the computer that syncs the mailbox.
 
-Tico refuses any other account: if Google says someone else signed in, nothing is stored and that grant is revoked at
-once. Only the person can connect their own mailbox; an owner cannot connect it for them.
+Tico refuses any other account: if the ID token Google returns with the grant names someone else, nothing is stored
+and that grant is revoked at once. A grant with no Gmail access, or more access than the app asks for, is revoked the
+same way. Only the person can connect their own mailbox; an owner cannot connect it for them.
 
 What it allows with Tico's shared app: Gmail `gmail.readonly`, and Calendar `calendar.events.readonly`, `calendar.freebusy` and
 `calendar.calendarlist.readonly`. A bot's `read` verb in Tico also covers labelling, archiving and triage, but a
@@ -618,18 +619,18 @@ Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
   later, the next sync fails and Settings > General > Health > Details says to reconnect (or names the admin policy). Tico never falls back
   to a service account for that mailbox. **Connect Google** again replaces the grant.
-- **Disconnect** in Tools > Settings > Email revokes the grant at Google and deletes it from the computer that holds it.
-  A reconnect or a disconnect goes only to that computer, and a person's first connect goes to the computer that
-  already holds mail access, so one computer keeps the team's mail. If another computer answers anyway it says it
-  holds nothing, and Settings shows that instead of "disconnected". If that computer stays offline for 15 minutes,
-  Settings says so and points to myaccount.google.com/permissions to remove Tico now; the disconnect stays queued, and
-  the computer still revokes and deletes the grant when it is back.
+- **Disconnect** in Tools > Settings > Email deletes the grant from the server at once and revokes it at Google. If
+  Google cannot be reached, Settings says so and points to myaccount.google.com/permissions to remove Tico there.
+- Grants used to be kept on a computer. Since they moved to the server, each such connection shows **Connect Google
+  again** once; the copy left on the computer is no longer used.
 
-Where the grant is kept: `google-oauth.json` beside `google-sa.json` (the runner's state directory on Linux, mode 0600,
-closed to bots). It moves out of `workspace/secrets` without dropping other grants, and follows a re-enrollment the
-same way the key does. No token reaches a bot's environment, a log or a report: a message bot's run still gets an
-hour-long token for one mailbox the server named for it, and nothing else. A computer can hold both a key and grants:
-mailboxes without a connected account still use the service account, if there is one.
+Where the grant is kept: in the server's database, sealed with its credential key (`google_connects.grant_sealed`) under
+a context that names the person, the connect and the mailbox, so a sealed grant copied to another row, or kept
+after the person's mailbox changed, opens nowhere. Connecting another mailbox ends the old grant and revokes it. No token or
+refresh token reaches a response, a log, an event or `tico sql` (the table is closed to it). Every Gmail and Calendar
+call on the server takes its token from one place (`backend/google_tokens.py`), which picks the person's grant over
+the Workspace key; a message bot's run still gets an hour-long token for one mailbox the server named for it, and
+nothing else.
 
 Tico's Google app, testing and verification. Each Tico server names its own OAuth client, so there are two honest
 ways to supply it:
@@ -647,26 +648,18 @@ ways to supply it:
   try Connect Google, not for lasting sync.
 
 The app's client secret never leaves the Tico server, for either kind of app: one public app's secret is shared by
-every team, so no computer holds it. Google refreshes a grant only with the client that issued it, so the server does
-it on the computers' behalf. The computer that holds the grant sends its refresh token to the server
-(`POST /api/v2/connectors/mail/google/token`, with its runner registration). The server adds the secret, asks Google
-for one service's scopes, never more than the grant holds, and returns only an hour-long access token and its expiry. It keeps no token
-and logs none: only each grant's SHA-256 fingerprint, which can refresh nothing, so it refreshes only the grant it
-issued for that mailbox and that computer. The sign-in's one-time code is exchanged the same way (`/exchange`, once, by the computer that
-claimed it), so the grant on the computer has a client id and no secret. Each connect or disconnect has its own id,
-which the claim hands to the computer (`id`, never the person): `/exchange` and `/result` are addressed by it, so an
-answer for a connect the person has since replaced is refused (`stale`, 409) and changes nothing. A grant Google gives
-such a replaced exchange is not passed on or recorded, so the server never refreshes it; the grant connected before
-stays until a new connect finishes. The same result sent again gets the same answer. Only a computer that holds a Connect Google
-grant from this server may ask, one service at a time. A grant from Tico's shared app, or one made before scopes were
-recorded, holds only the read scopes (`gmail.readonly` and the calendar read scopes). A grant the company's own app made
-also holds `gmail.modify` and `calendar.events` if Google gave them. The
-computer's runner gives the mail CLI the server's address and its registration for this; a mail CLI run by hand, or
-a bot's turn on a Mac without the runner's credential socket, cannot refresh such a grant and says to use the runner.
-A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and refreshes on
-the computer as before.
+every team, so no computer holds it. Google refreshes a grant only with the client that issued it, so the server
+refreshes it, for one service's scopes, never more than the grant holds. A grant from Tico's shared app, or one made
+before scopes were recorded, holds only the read scopes (`gmail.readonly` and the calendar read scopes). A grant the
+company's own app made also holds `gmail.modify` and `calendar.events` if Google gave them; a read-only grant refuses a
+write before Google is asked. Each connect has its own id: a grant Google gives a sign-in the person has since replaced
+or disconnected is not kept, and the grant connected before stays until a new connect finishes. Mail sent from such a
+mailbox goes out from the server's own send queue, as Whole Workspace mail does.
+A grant made with `google connect --client-file` (a team's own Desktop client) keeps its own secret and is used only by
+a mail CLI run by hand: under the runner, every mailbox's token comes from the server, never from a key file or grant
+on the computer.
 
-On the computer that holds the grants, `scripts/mail.sh google status` lists the connected accounts and what each may
+On a computer holding grants made there with `--client-file`, `scripts/mail.sh google status` lists the connected accounts and what each may
 do (never a token). `scripts/mail.sh google revoke --mailbox <address>` removes that account's grant from this computer
 and asks Google to revoke it. The local copy goes first, so this computer stops using the grant even when Google cannot
 be reached. If Google does not confirm the revocation, the command says so; the grant may still be active at Google, so

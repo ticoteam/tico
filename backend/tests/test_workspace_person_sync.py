@@ -184,13 +184,14 @@ def test_stopped_awaiting_foreign_and_other_provider_mailboxes_are_not_fallback_
     token(api, machine["token"], PERSONAL, expected=403)
 
 
-def test_a_personal_google_grant_keeps_its_holder_even_when_offline(api, known_person):
-    first, holder = computers(api)
-    personal(api, "cara", PERSONAL, holder=holder["runner_id"])
-    place(api, first, "assistant")
-    offline(api, holder)
-    assert owners(api, [first, holder]) == [holder["runner_id"]]
-    assert token(api, first["token"], PERSONAL, expected=403)["error"]["kind"] == "personal_grant"
+def test_a_personal_google_grant_follows_the_same_sync_rule_as_the_workspace(api, known_person):
+    first, second = computers(api)
+    personal(api, "cara", PERSONAL)
+    place(api, second, "assistant")  # her Assistant's online host takes it, as it would a Workspace mailbox
+    assert owners(api, [first, second]) == [second["runner_id"]]
+    assert token(api, first["token"], PERSONAL, expected=403)["error"]["kind"] == "workspace_owned"
+    offline(api, second)
+    assert owners(api, [first, second]) == [first["runner_id"]]
 
 
 def test_targets_connector_principal_and_token_belong_to_the_chosen_computer_only(api, known_person):

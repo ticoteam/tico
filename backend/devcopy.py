@@ -196,7 +196,6 @@ EMPTY = (
     "mailboxes",
     "mailbox_accesses",
     "google_connects",
-    "google_mail_holders",
     "slack_credentials",
     "slack_posts",
     "slack_events",

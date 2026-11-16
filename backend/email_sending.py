@@ -1013,10 +1013,11 @@ def _finish(c, row, status, message="", detail=""):
 
 
 def server_sends(c, mailbox):
-    """Whether the server sends this inbox's mail itself: the Workspace key covers it and no person's own grant does."""
+    """Whether the server sends this inbox's mail itself: the Workspace key or the person's own Connect Google grant
+    covers it (both stay on the server, backend/google_tokens.py)."""
     from . import google_workspace
 
-    return google_workspace.authority(c, mailbox) == "workspace"
+    return google_workspace.authority(c, mailbox) in ("workspace", "personal")
 
 
 # inbox -> when the drain last reached it (monotonic): the inbox waiting longest goes first. One small entry per
@@ -1025,13 +1026,15 @@ _SERVED = {}
 
 
 def drain(store, auth, limit=20, budget=None):
-    """The server's own dispatch, on its drain worker (backend/drains.py): each Workspace inbox with queued mail is
-    reconciled, and its due sends go to Gmail one at a time (pacing usually allows one a pass). A token is minted before
-    any permit, so a credential that fails leaves the email pending, never unknown. Gmail is called under no write lock.
-    With a `budget`, nothing new is leased once it is spent; the inboxes not reached go first in the next pass."""
+    """The server's own dispatch, on its drain worker (backend/drains.py): each inbox the server holds a credential for
+    (the Workspace key, or a person's own grant) with queued mail is reconciled, and its due sends go to Gmail one at a
+    time (pacing usually allows one a pass). A token is taken before any permit, so a credential that fails leaves the
+    email pending, never unknown; a grant that can only read fails its due emails, which it can never send. Gmail is
+    called under no write lock. With a `budget`, nothing new is leased once it is spent; the inboxes not reached go
+    first in the next pass."""
     import time
 
-    from . import drains, gmail_live, google_workspace
+    from . import drains, gmail_live, google_tokens
 
     if store.settings.rehearsal or store.settings.demo:
         return 0
@@ -1049,18 +1052,25 @@ def drain(store, auth, limit=20, budget=None):
         if not drains.left(budget):
             break
         _SERVED[mailbox] = time.monotonic()
-        token = None
+        token = refused = None
         with store.read() as c:
             if c.execute(
                 "SELECT 1 FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? LIMIT 1",
                 (mailbox, H.now()),
             ).fetchone():
                 try:
-                    token = google_workspace.mint(
-                        c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"]
-                    )["access_token"]
-                except Problem:
-                    token = None  # the key is failing: the email waits; Tools > Settings > Email says why
+                    token = google_tokens.token(c, mailbox, "gmail", write=True)
+                except Problem as problem:
+                    # A failing key or a grant Google refused: the email waits; Tools > Settings > Email says why.
+                    refused = problem if problem.code == "read_only" else None
+        if refused is not None:
+            with store.transaction(durable=True) as c:
+                for row in c.execute(
+                    "SELECT * FROM email_sends WHERE mailbox=? AND state='pending' AND send_after<=? LIMIT ?",
+                    (mailbox, H.now(), limit),
+                ).fetchall():
+                    _finish(c, row, "failed", "", refused.detail)
+            continue
         for _ in range(limit):
             if not drains.left(budget):
                 break  # the rest waits for the next pass

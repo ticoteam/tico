@@ -464,9 +464,9 @@ def server_token(found, service, scopes, mailbox):
 
 
 def server_workspace_token(mailbox, service):
-    """(access token, expiry ISO, granted scopes or None) from the Tico server's Google Workspace connection, for a computer
-    with no key of its own: the server mints only for a mailbox it covers and names this computer for. None means the
-    server named no scopes, which reads the same as the key path (no narrowing)."""
+    """(access token, expiry ISO, granted scopes or None) from the Tico server, which holds every Google credential: the
+    person's own Connect Google grant, else the Workspace key. It answers only for a mailbox it covers and names this
+    computer for. None means the server named no scopes, which reads the same as the key path (no narrowing)."""
     answer = _broker_call("connectors/mail/workspace/token", {"mailbox": mailbox, "service": service}, mailbox)
     if not isinstance(answer, dict) or not answer.get("access_token"):
         raise Failure(f"Tico's server returned no access for {mailbox}", "Try again in a few minutes.")

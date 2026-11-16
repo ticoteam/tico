@@ -515,6 +515,59 @@ def test_a_mailbox_the_server_cannot_mint_for_is_still_dispatched_by_its_compute
     assert receipt["send"]["provider_message_id"] == "provider-9" and calls == []
 
 
+def own_grant(inbox, monkeypatch, scopes):
+    """BOX is connected with its person's own Connect Google grant, held on the server, with `scopes`; Google refreshes
+    it to `ya29.own`. Returns the fake Google and the fake Gmail's send calls."""
+    from backend import gmail_live, google_connect
+    from backend.tests.helpers.google_connect import CLIENT, FakeGoogle
+    from backend.tests.helpers.google_workspace import personal
+
+    settings = inbox.app.state.store.settings
+    monkeypatch.setattr(settings, "google_oauth_client_id", CLIENT)
+    monkeypatch.setattr(settings, "google_oauth_client_secret", "tico-secret")
+    personal(inbox, "ana", BOX, client=CLIENT, scopes=json.dumps(scopes))
+    google = FakeGoogle({"access_token": "ya29.own", "expires_in": 3599})
+    monkeypatch.setattr(google_connect, "post_token", google)
+    calls = []
+
+    def send_call(url, *, token, body, content_type):
+        calls.append({"url": url, "token": token})
+        return 200, {"id": "gmail-7"}
+
+    monkeypatch.setattr(gmail_live, "send_call", send_call)
+    return google, calls
+
+
+def test_the_server_sends_a_personal_grant_s_mail_from_its_own_grant(inbox, monkeypatch):
+    from backend import google_connect as GC
+
+    autonomous(inbox)
+    google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES + [GC.G + "gmail.modify"])
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    machine = runner(inbox)
+    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=403)
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+    assert S.drain(store, auth) == 1
+    assert [call["token"] for call in calls] == ["ya29.own"]
+    assert google.calls[-1]["grant_type"] == "refresh_token" and google.calls[-1]["scope"] == GC.G + "gmail.modify"
+    with store.read() as c:
+        row = c.execute("SELECT state,runner_id FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+    assert tuple(row) == ("sent", S.SERVER)
+
+
+def test_a_read_only_personal_grant_fails_its_due_email_without_asking_google(inbox, monkeypatch):
+    from backend import google_connect as GC
+
+    autonomous(inbox)
+    google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES)
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+    assert S.drain(store, auth) == 0 and calls == [] and google.calls == []
+    with store.read() as c:
+        row = c.execute("SELECT state,detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+    assert row["state"] == "failed" and "read only" in row["detail"]
+
+
 def one_send_policy():
     path = next((Path(__file__).parents[1] / "migrations").glob("*_one_send_policy.py"))
     spec = importlib.util.spec_from_file_location("one_send_policy_migration", path)

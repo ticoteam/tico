@@ -233,34 +233,18 @@ def test_retirement_keeps_nested_reported_logins(api, field, report):  # noqa: F
     assert computers.sweep(store, H.now()) == []
 
 
-@pytest.mark.parametrize("hold", ["google_grant", "google_holder", "google_mail", "meetings"])
-def test_retirement_keeps_a_computer_holding_a_google_grant_or_meeting_importer(api, hold):  # noqa: F811
-    from backend import google_connect
-
+def test_retirement_keeps_a_computer_holding_a_meeting_importer(api):  # noqa: F811
     old, _ = replaced_computer(api)
     store, rid = api.app.state.store, old["runner_id"]
     with store.transaction() as c:
-        google_connect.ensure_schema(c)
-        if hold.startswith("google_") and hold != "google_mail":
-            column = "runner_id" if hold == "google_grant" else "holder"
-            c.execute(
-                f"INSERT INTO google_connects(person_id,mailbox,status,{column},created_at,updated_at) "
-                "VALUES('ana','ana@example.com','connected',?,?,?)",
-                (rid, H.now(), H.now()),
-            )
-        elif hold == "google_mail":
-            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,1,0)", (rid,))
-        else:
-            c.execute(
-                "INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) "
-                "VALUES('zoom',1,?,'ana',?)",
-                (rid, H.now()),
-            )
+        c.execute(
+            "INSERT INTO meeting_importers(source,enabled,runner_id,updated_by,updated_at) VALUES('zoom',1,?,'ana',?)",
+            (rid, H.now()),
+        )
     assert computers.sweep(store, H.now()) == []
-    if hold == "meetings":
-        with store.transaction() as c:
-            c.execute("UPDATE meeting_importers SET enabled=0 WHERE source='zoom'")
-        assert computers.sweep(store, H.now()) == [rid]
+    with store.transaction() as c:
+        c.execute("UPDATE meeting_importers SET enabled=0 WHERE source='zoom'")
+    assert computers.sweep(store, H.now()) == [rid]
 
 
 def test_retirement_keeps_a_sharing_browser_exit_until_sharing_is_off(api):  # noqa: F811
