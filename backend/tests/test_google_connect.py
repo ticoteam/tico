@@ -500,7 +500,7 @@ def test_the_migration_also_upgrades_a_file_from_before_the_module_added_its_own
         None,
     )
     columns = {r[1] for r in conn.execute("PRAGMA table_info(google_connects)")}
-    assert set(migration.ADDED) <= columns and not columns & set(migration.GONE)
+    assert columns == {name for name, _ in migration.SHAPE}
 
 
 def test_a_connection_the_migration_ended_asks_once_to_connect_again(app):

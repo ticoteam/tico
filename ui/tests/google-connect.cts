@@ -12,7 +12,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 interface GoogleState {
   configured?: boolean; mailbox: string; syncing?: boolean; status: string; kind?: string | null; message?: string | null;
-  hint?: string | null; can?: string[]; app?: string; acts?: {mail: boolean; calendar: boolean}; stalled?: boolean;
+  hint?: string | null; can?: string[]; app?: string; acts?: {mail: boolean; calendar: boolean};
 }
 interface PageWin { mountGoogleConnect: (el: Element) => void }
 (async () => {
@@ -53,7 +53,7 @@ interface PageWin { mountGoogleConnect: (el: Element) => void }
         me: {mailbox: google.mailbox, covered_by_workspace: false}, setup: {base: 'https://tico-ui.test', reachable: true}});
       if (p === '/api/v2/mail/google') return json(google);
       if (p === '/api/v2/mail/google/connect') { writes.push(p); return json({auth_url: authUrl, mailbox: google.mailbox}); }
-      if (p === '/api/v2/mail/google/disconnect') { writes.push(p); google = {...google, status: 'disconnecting'}; return json(google); }
+      if (p === '/api/v2/mail/google/disconnect') { writes.push(p); google = {...google, status: 'disconnected', kind: null, message: null, hint: null}; return json(google); }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
@@ -108,17 +108,18 @@ interface PageWin { mountGoogleConnect: (el: Element) => void }
     assert.equal((await page.locator('#set-google').innerText()).includes(upgrade), false);
     assert.equal((await page.locator('#set-google').innerText()).includes(calendarUpgrade), false);
     await page.locator('#set-google [data-google-disconnect]').click();
-    await page.waitForFunction(() => /Disconnecting/.test(document.querySelector('#set-google')?.textContent || ''));
+    await page.locator('#set-google [data-google-connect]').waitFor();  // the server forgets and revokes it at once
+    assert.equal(await page.locator('#set-google [data-google-disconnect]').count(), 0);
     assert.deepEqual(writes, ['/api/v2/mail/google/connect', '/api/v2/mail/google/connect', '/api/v2/mail/google/disconnect']);
 
-    // A disconnect the holding computer never takes says so, and points to Google's own page to revoke now.
-    google = {...google, status: 'disconnecting', stalled: true,
-      message: "The computer that holds your Google access hasn't come online, so Tico hasn't revoked it yet."};
+    // A disconnect Google could not confirm says so, and points to Google's own page to revoke it there.
+    google = {...google, status: 'disconnected', kind: 'not_revoked',
+      message: 'Tico forgot your Google access, but could not reach Google to revoke it.',
+      hint: 'Remove Tico at myaccount.google.com/permissions to end it at Google too.'};
     await page.evaluate(() => (window as unknown as PageWin).mountGoogleConnect(document.querySelector('#set-google')!));
     await page.locator('#set-google [role=alert]').waitFor();
-    assert.match(await page.locator('#set-google').innerText(), /hasn't come online/);
-    assert.doesNotMatch(await page.locator('#set-google').innerText(), /within two minutes/);
-    assert.equal(await page.locator('#set-google a[href="https://myaccount.google.com/permissions"]').count(), 1);
+    assert.match(await page.locator('#set-google').innerText(), /could not reach Google to revoke it/);
+    assert.match(await page.locator('#set-google').innerText(), /myaccount\.google\.com\/permissions/);
 
     // A server without Tico's Google app says so, with no button.
     google = {configured: false, mailbox: 'cara@acme.example', status: 'none'};
