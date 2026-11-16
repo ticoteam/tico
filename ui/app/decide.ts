@@ -23,6 +23,8 @@ type AskKind = 'ok' | 'question' | 'yours' | 'stuck' | 'fix' | 'mention';
     was read from. Held per ask (decideOkKey): a stage's requirement is the same on every task in the stage. */
 interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
+  /** What it OKs, as its grant's subject names it (finance, email_send, spec…); '' for a stage's OK with no grant. */
+  kind?: string;
   hash: string | null;
   html: string;
   pages: import('../types/api').Page[];
@@ -809,7 +811,9 @@ function decidePaintBody(st: DecState) {
       : !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       // Changes since vK on (the version menu): the same page with its changed blocks marked.
-      : changed + `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}">${v.since?.on && v.since.marked ? v.since.html : v.html}`
+      // `dc-act`: an action's summary (a payment, an email: what will happen), which a phone keeps in view above the
+      // chat; a spec and a page fold behind Read the spec.
+      : changed + `<div class="dc-doc${!v.html && !v.pages.length ? ' dc-bare' : ''}${v.kind && v.kind !== 'spec' && v.html ? ' dc-act' : ''}">${v.since?.on && v.since.marked ? v.since.html : v.html}`
         + `${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
   } else if (kind === 'question' && decideTaskId(it)) {
     // A question's background: its task, one line that opens (open as it was left on this item, through a redraw).
@@ -1393,6 +1397,7 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
     // No grant (404): a stage's OK, which shows what its requirement names.
     const shown = await okShown(rid).catch((e: unknown) => { if (errorStatus(e) === 404) return null; throw e; });
     const [kind, ...rest] = (shown?.subject ?? '').split(':'), ref = rest.join(':');
+    v.kind = kind ?? '';
     if (!shown) {
       const before = it.ask?.page ? await decideRoundsRead(v, it) : null;
       await decideShowsRead(v, decideShowRefs(it), before);

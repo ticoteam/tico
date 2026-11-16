@@ -2,7 +2,8 @@ import type {Page, Route} from 'playwright';
 // Offline browser check that every OK opens on what will happen, in words, before Approve (spec #427, "Approvals say
 // what will happen"; ui/app/decide-content.ts):
 // - a Finance payment: Finance's own sentence first, the amount in dollars (not cents), the bank it is paid from and the
-//   line it posts to by name, and no id, key or brace above Approve, at 390 px;
+//   line it posts to by name, and no id, key or brace above Approve, at 390 px, where it stays in view above the
+//   task's chat (a spec folds; this does not);
 // - a Finance rule: its examples with amounts in dollars and the line they post to;
 // - an email: To, From, subject, body, attachments with sizes, and no hash anywhere;
 // - a Company page edition: title, who it goes to, period, link, text; its content_sha256 only under Details;
@@ -136,6 +137,8 @@ async function firstScreenClean(page: Page, label: string) {
     const ready = () => dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
     const open = async (rid: string) => {
       const line = OKS[rid]!.line;
+      // The item on screen first: a count taken before it is drawn would step past the one asked for.
+      await dialog.locator('.dc-q').first().waitFor();
       if (!(await dialog.locator('.dc-q', {hasText: line}).count())) await dialog.locator('[data-dc="next"]').click();
       await dialog.locator('.dc-q', {hasText: line}).waitFor();
       await ready();
@@ -151,6 +154,10 @@ async function firstScreenClean(page: Page, label: string) {
 
     // r1, at 390 px: Finance's sentence first, dollars, names; the content under Details.
     await open('r1');
+    // On a phone the task folds above its chat, but what will happen stays in view, above the chat, before Approve.
+    assert.ok(await dialog.locator('.dc-thing .dc-doc').first().isVisible(), 'payment: the summary shows on a phone');
+    const sum = (await dialog.locator('.dc-thing .dc-doc').first().boundingBox())!, chatTop = (await dialog.locator('.dc-chat').boundingBox())!;
+    assert.ok(sum.y < chatTop.y, `payment: the summary is above the chat (${sum.y} vs ${chatTop.y})`);
     let text = await firstScreenClean(page, 'payment');
     assert.equal(await dialog.locator('.dc-doc .dc-title').first().innerText(), 'Pay Keelson Freight Forwarding $1,920.00 for bill B-1042');
     assert.match(text, /\$1,920\.00/);
