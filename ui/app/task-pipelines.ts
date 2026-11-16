@@ -13,7 +13,8 @@
    tasks is as tall as its header. A stage draws its first 50 tasks, then "Show 250 more" for the rest of it (PV_CAP); a
    draw changes only the columns that changed (pvPaint), so a flood of live changes does not draw the whole board. The
    page (tasks-page.ts) owns the header, loading the pipeline and its tasks, search, filter, the archive and opening a
-   task (any [data-task] element); it calls the hooks set at the end of this file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
+   task (any [data-task] element); it calls the hooks set at the end of this file. Moving a task between columns is
+   task-board.ts; a refused move shows the engine's reason above the stages.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
