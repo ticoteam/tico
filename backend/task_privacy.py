@@ -898,6 +898,33 @@ def attempt_readable(c, actor, aid, memo=None):
         return False
 
 
+def prime_attempt_messages(c, aids):
+    """Read the job message and inputs of many runs in one query per 250, for the attempt_pages_readable checks that
+    follow in this snapshot: the same rows and key prime_attempts keeps, without the rest of the runs' provenance, for
+    a page that checks many bot replies but reads no run's tasks (the Threads rail)."""
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    wanted = sorted(
+        {aid for aid in aids if isinstance(aid, str) and aid} - {k[1] for k in values if k[:1] == ("attempt_messages",)}
+    )
+    for start in range(0, len(wanted), 250):
+        chunk = wanted[start : start + 250]
+        marks = ",".join("?" * len(chunk))
+        found = {aid: [] for aid in chunk}
+        for row in c.execute(
+            "SELECT a.id AS primed_attempt,m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+            f"JOIN messages m ON m.id=j.message_id WHERE a.id IN ({marks}) UNION "
+            "SELECT i.attempt_id AS primed_attempt,m.* FROM attempt_inputs i "
+            f"JOIN messages m ON m.id=i.message_id WHERE i.attempt_id IN ({marks})",
+            chunk * 2,
+        ):
+            row = dict(row)
+            found[row.pop("primed_attempt")].append(row)
+        for aid in chunk:
+            values[("attempt_messages", aid)] = found[aid]
+
+
 def attempt_pages_readable(c, actor, aid):
     """A run's job message and inputs keep their own file refusal and that of the messages they reply to (the same
     rule as ReadIndex.attempt_pages). The reply chains are read one query per level for all of them together, so a
