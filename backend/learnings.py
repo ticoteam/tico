@@ -143,6 +143,51 @@ def _bots_in(participants, team):
     return {p[4:] for p in participants if str(p).startswith("bot:") and p[4:] in team}
 
 
+SENT_PER_PERSON = 50  # the sent emails one night reads from each person's Gmail
+
+
+def _sent_mail(c, people, since, now):
+    """What each person sent from their own mailbox in the window, read from Gmail (Tico keeps no copy): the newest
+    SENT_PER_PERSON a night. A mailbox Gmail cannot answer for is passed over tonight."""
+    from . import gmail_live
+
+    low, high = (int((H.parse_ts(at) or datetime.now(timezone.utc)).timestamp()) for at in (since, now))
+    boxes = {
+        r["address"]
+        for r in c.execute("SELECT address FROM mailboxes WHERE status='active' AND kind='personal'")
+        if r["address"] in people
+    }
+    out = []
+    for address in sorted(boxes):
+        person = people[address]
+        try:
+            ids = gmail_live.message_ids(c, address, f"in:sent after:{low} before:{high + 1}", SENT_PER_PERSON)
+            sent = [gmail_live.message(c, address, mid) for mid in ids]
+        except Problem as failed:
+            LOG.info("learnings passed over a mailbox Gmail did not answer for: %s", failed.code)
+            continue
+        for m in sent:
+            if str(m["from"] or "").lower() != address or not low < m["epoch"] <= high:
+                continue
+            body = unquoted(m["body"])
+            text = clip(f"{m['subject']}\n\n{body}" if m["subject"] else body)
+            if not text:
+                continue
+            out.append(
+                {
+                    "key": f"mail:{address}:{m['id']}",
+                    "source": "mail",
+                    "author": "human:" + person["id"],
+                    "created_at": utc(datetime.fromtimestamp(m["epoch"], timezone.utc)),
+                    "ref": {"mailbox": address, "msg_id": m["id"], "thread": m["thread_id"]},
+                    "label": f"{m['subject'] or 'Email'} · {person['name'] or person['id']}",
+                    "text": text,
+                    "audience": None,
+                }
+            )
+    return out
+
+
 def collect(c, settings, now, team):
     """Every item newer than its source's cursor, up to `now`, oldest first. One read snapshot."""
     since, who, items = cursors(c, now), names(c), []
@@ -263,31 +308,7 @@ def collect(c, settings, now, team):
     for r in c.execute("SELECT id,name,email FROM humans WHERE coalesce(email,'')<>''"):
         people.setdefault(r["email"].strip().lower(), r)
     if people:
-        low, high = int(H.parse_ts(since["mail"]).timestamp()), int(H.parse_ts(now).timestamp())
-        marks = ",".join("?" * len(people))
-        for m in c.execute(
-            "SELECT mailbox,msg_id,thread_id,epoch,from_addr,subject,body,to_addresses FROM mail_messages "
-            f"WHERE deleted_at IS NULL AND lower(from_addr) IN ({marks}) AND lower(mailbox)=lower(from_addr) "
-            "AND labels LIKE '%\"SENT\"%' AND epoch>? AND epoch<=? ORDER BY epoch",
-            (*people, low, high),
-        ).fetchall():
-            person = people[m["from_addr"].strip().lower()]
-            body = unquoted(m["body"])
-            text = clip(f"{m['subject']}\n\n{body}" if m["subject"] else body)
-            if not text:
-                continue
-            items.append(
-                {
-                    "key": f"mail:{m['mailbox']}:{m['msg_id']}",
-                    "source": "mail",
-                    "author": "human:" + person["id"],
-                    "created_at": utc(datetime.fromtimestamp(m["epoch"], timezone.utc)),
-                    "ref": {"mailbox": m["mailbox"].lower(), "msg_id": m["msg_id"], "thread": m["thread_id"]},
-                    "label": f"{m['subject'] or 'Email'} · {person['name'] or person['id']}",
-                    "text": text,
-                    "audience": None,
-                }
-            )
+        items += _sent_mail(c, people, since["mail"], now)
     for r in c.execute(
         "SELECT m.id,m.title,m.notes,m.metadata,m.created_at FROM meetings m "
         "LEFT JOIN media_control mc ON mc.meeting_id=m.id WHERE m.review_state='live' "

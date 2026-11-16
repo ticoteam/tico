@@ -1,4 +1,4 @@
-"""Workspace reads work with no synced messages; stored personal and legacy reads stay intact."""
+"""Mail reads ask Gmail every time: Workspace reads work with no copy, and an old copy is never read."""
 
 import json
 
@@ -6,13 +6,13 @@ import jwt
 import pytest
 
 from backend import google_connect, google_workspace, mailbox_access
+from backend.store import H
 from backend.tests.helpers.api import get, headers, setup_attempt  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn
 from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
 from backend.tests.helpers.google_connect import CLIENT, FakeGoogle
 from backend.tests.helpers.google_workspace import personal
 from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401
-from backend.tests.helpers.mail_api import put_mail
 from backend.tests.helpers.mail_live import SHARED, assistant_token, live, no_cached_tokens
 
 
@@ -122,7 +122,7 @@ def ana_connected(api, monkeypatch):
 def test_a_personal_grant_is_read_live_through_its_own_grant_even_with_workspace_connected(
     api, live, workspace_key, ana_connected
 ):
-    put_mail(api, BOX, msg_id="stored", thread_id="stored-thread", subject="Stored invoice", body="Stored body")
+    put_old_copy(api, BOX, "stored")
     minted = len(workspace_key)
     page = read(api, "messages", mailbox=BOX, q="from:sender")
     assert page["messages"][0]["msg_id"] == "m2" and page["messages"][0]["mailbox"] == BOX
@@ -133,16 +133,26 @@ def test_a_personal_grant_is_read_live_through_its_own_grant_even_with_workspace
     assert ana_connected.calls[-1]["refresh_token"] == "1//g1"
 
 
-def test_legacy_reads_keep_fts_and_the_stored_cursor(api, gmail_http):
-    put_mail(api, BOX, msg_id="old1", thread_id="old-thread", epoch=100, subject="Old invoice")
-    put_mail(api, BOX, msg_id="old2", thread_id="old-thread", epoch=200, subject="Old invoice")
-    first = read(api, "messages", q="invoice", limit=1)
-    assert first["next_cursor"] == "200|" + BOX + "|old2"
-    second = read(api, "messages", q="invoice", limit=1, cursor=first["next_cursor"])
-    assert second["messages"][0]["msg_id"] == "old1" and second["next_cursor"] is None
-    assert read(api, "messages/old1", mailbox=BOX)["subject"] == "Old invoice"
-    assert len(read(api, "threads/old-thread", mailbox=BOX)["messages"]) == 2
-    assert gmail_http["calls"] == []
+def test_every_mailbox_reads_gmail_and_never_an_old_copy(api, gmail_http, monkeypatch):
+    from backend import google_tokens
+
+    monkeypatch.setattr(google_tokens, "token", lambda c, mailbox, service, write=False: "door-token")
+    put_old_copy(api, BOX, "stored")
+    page = read(api, "messages", mailbox=BOX, q="invoice")
+    assert [item["msg_id"] for item in page["messages"]] == ["m2"] and page["next_cursor"] == NEXT
+    assert [item["msg_id"] for item in read(api, "threads/t1", mailbox=BOX)["messages"]] == ["m1", "m2"]
+    assert all(token == "door-token" for _, _, token in gmail_http["calls"])
+
+
+def put_old_copy(api, mailbox, msg_id):
+    """A row a computer's sync left behind before the server read Gmail itself: nothing reads it."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,to_addresses,cc,subject,"
+            "snippet,labels,body,attachments,updated_at) VALUES(?,?,'t1',300,'','old@acme.example','[]','[]',"
+            "'Old invoice','','[]','Old body','[]',?)",
+            (mailbox, msg_id, H.now()),
+        )
 
 
 def organize(api, token="ana-test", expected=200, **body):

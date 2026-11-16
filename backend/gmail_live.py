@@ -1,4 +1,4 @@
-"""Read, organize and send Workspace mail in Gmail, without retaining messages on the server.
+"""Read, organize and send mail in Gmail, without retaining messages on the server.
 
 Callers check mailbox access before asking for a token. Every token comes from the one door, backend/google_tokens.py:
 the Workspace key or the person's own Connect Google grant. `send` delivers one frozen email the send queue has already
@@ -27,6 +27,8 @@ INLINE_RAW_MAX = 4 * 1024 * 1024  # a bigger email goes up as a multipart upload
 SECONDS = 10
 LIMIT_MAX = 50
 WORKERS = 10
+HISTORY_MAX = 100  # message ids one history call returns; the rest wait for the next
+HISTORY_PAGES = 20
 HTTP_MAX_BYTES = 8 * 1024 * 1024
 PAGE_MAX_BYTES = 256 * 1024
 OPEN_MAX_BYTES = 2 * 1024 * 1024
@@ -122,11 +124,16 @@ def list(c, mailbox, q="", page_token="", limit=50):
     ):
         raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
 
-    def metadata(item):
+    messages = _metadata(mailbox, token, [item["id"] for item in ids])
+    return _bounded({"messages": messages, "next_cursor": nxt, "q": q}, PAGE_MAX_BYTES)
+
+
+def _metadata(mailbox, token, ids):
+    def one(mid):
         return _message(
             _get(
                 mailbox,
-                "messages/" + urllib.parse.quote(item["id"], safe=""),
+                "messages/" + urllib.parse.quote(mid, safe=""),
                 token,
                 format="metadata",
                 metadataHeaders=METADATA_HEADERS,
@@ -134,8 +141,23 @@ def list(c, mailbox, q="", page_token="", limit=50):
         )
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        messages = [item for item in pool.map(metadata, ids)]
-    return _bounded({"messages": messages, "next_cursor": nxt, "q": q}, PAGE_MAX_BYTES)
+        return builtins.list(pool.map(one, ids))
+
+
+def metadata(c, mailbox, ids):
+    """These messages' headers and snippets (no bodies), in the order given; at most LIMIT_MAX."""
+    if len(ids) > LIMIT_MAX:
+        raise Problem("gmail_size", "Read at most 50 messages at once", 422)
+    return _bounded(_metadata(mailbox, _token(c, mailbox), builtins.list(ids)), PAGE_MAX_BYTES)
+
+
+def first(c, mailbox, q):
+    """The newest message the query finds, as {id, threadId}, or None: one list call, no message read."""
+    page = _get(mailbox, "messages", _token(c, mailbox), q=q, maxResults=1, fields="messages(id,threadId)")
+    rows = page.get("messages") or []
+    if not isinstance(rows, builtins.list) or any(not isinstance(row, dict) or not row.get("id") for row in rows):
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
+    return {"id": str(rows[0]["id"]), "threadId": str(rows[0].get("threadId") or "")} if rows else None
 
 
 def thread(c, mailbox, thread_id):
@@ -185,6 +207,54 @@ def message_ids(c, mailbox, query, limit=100):
         if len(seen_pages) >= 500:
             raise Problem("gmail_unavailable", "Gmail paging did not finish; narrow the query", 502)
     return ids
+
+
+def profile(c, mailbox):
+    """The mailbox's current Gmail history id: where a first watch starts following it."""
+    found = _get(mailbox, "profile", _token(c, mailbox), fields="historyId").get("historyId")
+    if not isinstance(found, (str, int)) or not str(found).isdigit():
+        raise Problem("gmail_unavailable", "Gmail returned an incomplete profile; try again", 502, retryable=True)
+    return str(found)
+
+
+def history(c, mailbox, start, limit=HISTORY_MAX):
+    """The ids of messages added since history id `start`, oldest first, and the history id they reach: at most `limit`
+    ids (the rest wait for the next call from the returned id). An expired `start` is Problem `not_found` (404)."""
+    token, ids, cursor, reached, pages = _token(c, mailbox), [], "", str(start), 0
+    while True:
+        query = {"startHistoryId": start, "historyTypes": "messageAdded", "maxResults": 500}
+        if cursor:
+            query["pageToken"] = cursor
+        page = _get(mailbox, "history", token, **query)
+        rows, cursor, newest = page.get("history") or [], page.get("nextPageToken") or "", page.get("historyId")
+        if not isinstance(rows, builtins.list) or not isinstance(cursor, str):
+            raise Problem("gmail_unavailable", "Gmail returned an incomplete history; try again", 502, retryable=True)
+        for row in rows:
+            added = row.get("messagesAdded") if isinstance(row, dict) else None
+            for item in added if isinstance(added, builtins.list) else ():
+                mid = ((item or {}).get("message") or {}).get("id") if isinstance(item, dict) else None
+                if isinstance(mid, str) and mid and mid not in ids:
+                    if len(ids) >= limit:
+                        return ids, reached
+                    ids.append(mid)
+            if isinstance(row, dict) and str(row.get("id") or "").isdigit():
+                reached = str(row["id"])
+        pages += 1
+        if not cursor:
+            newest = str(newest or "")
+            if newest.isdigit() and int(newest) > int(reached):
+                reached = newest
+            return ids, reached
+        if pages >= HISTORY_PAGES:
+            return ids, reached
+
+
+def label_total(c, mailbox, label_id):
+    """How many messages carry this label now (Gmail's own count; nothing is listed)."""
+    found = _get(
+        mailbox, "labels/" + urllib.parse.quote(label_id, safe=""), _token(c, mailbox), fields="messagesTotal"
+    ).get("messagesTotal", 0)
+    return found if isinstance(found, int) and found >= 0 else 0
 
 
 def labels(c, mailbox):

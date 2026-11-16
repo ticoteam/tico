@@ -1,11 +1,11 @@
-/* ui/app/mail.ts — Message bots page (synced mail)
+/* ui/app/mail.ts — Message bots page (mail read live from Gmail)
    The one page header: the title, Messages and Instructions as tabs when a mailbox has instructions (one view is no
    tabs), search and the shared filter icon (labels and attachments, chips under the header as on Tasks). The mailboxes
    list sits beside the messages only when there are two or more to choose from. Every empty state is said once.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// The synced-mail API's answers as this page reads them: /v2/mail/mailboxes, /v2/mail/messages, /v2/mail/threads/:id, /v2/mail/agent.
+// The mail API's answers as this page reads them: /v2/mail/mailboxes, /v2/mail/messages, /v2/mail/threads/:id, /v2/mail/agent.
 interface MailPageBox {
   address: string;
   name?: string | null;
@@ -133,13 +133,11 @@ function mailLabelName(label: string): string | undefined {
 function mailTags(labels: string[] | null | undefined): string {
   return (labels || []).filter(l => l !== 'INBOX').map(l => { const n = mailLabelName(l); return n ? `<span class="pill">${esc(n)}</span>` : ''; }).join('');
 }
-// A mailbox's last sync, for its tooltip: the page shows no caption for it, only an error when the sync failed.
+// When the server last read a mailbox's Gmail, for its tooltip, or why that read failed.
 function mailFresh(box: MailPageBox | null | undefined): string {
   if (!box) return '';
-  if (box.error) return `Last sync failed${box.synced_at ? ' · ' + ago(box.synced_at) : ''}`;
-  if (!box.synced_at) return 'Not synced yet';
-  const n = box.message_count || 0;
-  return `Last synced ${ago(box.synced_at)} · ${n} message${n === 1 ? '' : 's'}`;
+  if (box.error) return box.error;
+  return box.synced_at ? `Checked ${ago(box.synced_at)}` : 'Not checked yet';
 }
 function mailQuery(st: MailPageState, cursor: string | null | undefined): string {
   const qs = new URLSearchParams();
@@ -163,7 +161,7 @@ function mailDrawList(st: MailPageState, listed: MailPageMessage[], boxes: MailP
   if (!listed.length) {
     mailNeed('#mail-list').innerHTML = `<div class="empty-state">${st.q || st.label || st.attach
       ? 'No matches'
-      : (boxes.some(b => b.synced_at) ? 'No messages' : 'No synced messages yet')}</div>`;
+      : 'No messages'}</div>`;
     return;
   }
   const filterBox = mailBoxParam(st.mailbox);
@@ -299,7 +297,8 @@ async function pageMail(): Promise<void> {
   catch (e) { if (load === MAIL_LOAD) mailNeed('#mail-list').innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (load !== MAIL_LOAD) return;
   const mine = (S.me?.email || '').toLowerCase();
-  if (!st.mailbox && boxes.length) {
+  // Mail is read from one mailbox's Gmail at a time: no mailbox (or the old "all") opens the reader's own.
+  if ((!st.mailbox || st.mailbox === 'all') && boxes.length) {
     const prefer = boxes.find(b => b.address === mine) || boxes[0]!;
     mailGo({mailbox: prefer.address});
     return;
@@ -308,10 +307,8 @@ async function pageMail(): Promise<void> {
   const box = boxes.find(b => b.address === filterBox);
   // The mailboxes list only when there is a choice; with one, the heading over the messages names it.
   const several = boxes.length > 1;
-  $('#mail-box-list')!.innerHTML = (several
-    ? `<button class="mail-box-link${st.mailbox === 'all' ? ' on' : ''}" type="button" data-mailbox="all"${st.mailbox === 'all' ? ' aria-current="true"' : ''}><span class="name">All message bots</span></button>` : '') +
-    boxes.map(b => `<button class="mail-box-link${st.mailbox === b.address ? ' on' : ''}" type="button" data-mailbox="${esc(b.address)}" title="${esc([b.address, mailFresh(b)].join(' · '))}"${st.mailbox === b.address ? ' aria-current="true"' : ''}>
-      <span class="name">${esc(b.name || b.address)}</span>${b.agent_bot ? '<span class="agent-mark" aria-hidden="true">mail</span>' : ''}<span class="count">${esc(b.message_count || 0)}</span></button>`).join('');
+  $('#mail-box-list')!.innerHTML = boxes.map(b => `<button class="mail-box-link${st.mailbox === b.address ? ' on' : ''}" type="button" data-mailbox="${esc(b.address)}" title="${esc([b.address, mailFresh(b)].join(' · '))}"${st.mailbox === b.address ? ' aria-current="true"' : ''}>
+      <span class="name">${esc(b.name || b.address)}</span>${b.agent_bot ? '<span class="agent-mark" aria-hidden="true">mail</span>' : ''}</button>`).join('');
   ($('.mail-boxes') as HTMLElement).hidden = !several;
   $('#mail-shell')!.classList.toggle('one', !several);
   const current = $('#mail-current') as HTMLElement;
@@ -377,7 +374,7 @@ async function pageMail(): Promise<void> {
           <span class="muted tnum" title="${esc(fmt(m.date))}">${esc(fmt(m.date) || mailWhen(m.date, m.epoch))}</span></div>
         <div class="tags" style="margin-bottom:8px">${mailTags(m.labels)}${(m.rule_hits || []).map(h => `<span class="pill">${esc(h.id || 'rule')}</span>`).join('')}</div>
         <pre class="mail-body">${esc(m.body || '')}</pre>
-        ${m.body_truncated ? '<p class="muted" style="margin:6px 0 0">Body was truncated when synced.</p>' : ''}
+        ${m.body_truncated ? '<p class="muted" style="margin:6px 0 0">Body was truncated; open it in Gmail for the rest.</p>' : ''}
         ${(m.attachments || []).length ? `<p class="muted" style="margin:8px 0 0">${m.attachments!.map(a => esc(a.name || a.filename || 'attachment')).join(' · ')}</p>` : ''}
       </article>`).join('')}`;
   } catch (e) {

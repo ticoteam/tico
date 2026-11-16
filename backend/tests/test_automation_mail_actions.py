@@ -19,6 +19,7 @@ from clients.tico import APIError
 from connectors.mail import access, gmail as gm, policy as pl
 from connectors.mail import actions as mail_actions, unsubscribe as unsub
 from connectors.mail.tests import fake
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.automation_mail_actions import BOX, automate, claim, computer, last_run, later, owned_by_ana
 
 DRAFT = {"id": "draft", "type": "action", "do": "draft_reply", "args": {"body": "Draft: checking with finance."}}

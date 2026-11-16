@@ -63,7 +63,7 @@ def offline(api, machine):
 
 
 def addresses(api, machine):
-    return {b["address"] for b in get(api, "connectors/mail/targets", machine["token"])["mailboxes"]}
+    return {b["address"] for b in get(api, "connectors/mail/targets", machine["token"])["acts_for"]}
 
 
 def retire(api, *machines):
@@ -316,19 +316,10 @@ def test_the_owners_assistant_and_mail_page_read_live_mail_without_a_message_bot
     with api.app.state.store.read() as c:
         assert routines.message_bot_mailboxes(c) == []
     assert addresses(api, machine) == {BOX}
-    post(
-        api,
-        "connectors/mail/messages",
-        {"mailbox": BOX, "messages": [mail_message()], "synced_at": H.now()},
-        machine["token"],
-    )
-    with api.app.state.store.read() as c:
-        synced = c.execute("SELECT msg_id,body FROM mail_messages WHERE mailbox=?", (BOX,)).fetchone()
-        assert synced["msg_id"] == "m-plain" and synced["body"] == "How does pricing work?"
     for credential in ("ana-test", attempt["token"]):
         boxes = get(api, "mail/mailboxes", credential)["mailboxes"]
         box = next(b for b in boxes if b["address"] == BOX)
-        assert box["message_count"] == 1 and box["agent_bot"] is None
+        assert box["agent_bot"] is None
         assert get(api, "mail/messages?mailbox=" + BOX, credential)["messages"][0]["msg_id"] == "m2"
         assert get(api, "mail/messages/m1?mailbox=" + BOX, credential)["body"] == "Live contract body."
     answer = get(api, "mail/access?mailbox=" + BOX, attempt["token"])

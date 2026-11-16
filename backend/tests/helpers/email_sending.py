@@ -1,7 +1,6 @@
 """Helpers that other tests share, moved out of test_email_sending.py so they import no test file."""
 
 import base64
-import json
 from email.message import EmailMessage
 import pytest
 from backend import email_sending as S, mailbox_access as MA
@@ -41,7 +40,7 @@ def mime(body="Thanks for the update.", to=None, files=False, subject="Update", 
 
 
 @pytest.fixture
-def inbox(api):
+def inbox(api, fake_gmail):
     with api.app.state.store.transaction() as c:
         row = MA.ensure_mailbox(c, BOX, person_id="ana", created_by="human:ana")
         MA.grant(c, "human:ana", row["id"], "bot", "ops", "read_write")
@@ -50,25 +49,19 @@ def inbox(api):
 
 
 def incoming(c, *, facts=None, sender=CONTACT, mid="inbound"):
-    c.execute(
-        "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,to_addresses,cc,subject,"
-        "snippet,labels,body,attachments,updated_at,send_facts) VALUES(?,?,?,0,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            BOX,
-            mid,
-            "thread",
-            H.now(),
-            sender,
-            json.dumps([BOX]),
-            "[]",
-            "Update",
-            "Hello",
-            "[]",
-            "Hello",
-            "[]",
-            H.now(),
-            json.dumps({"message-id": "<" + mid + "@vendor.example>", **(facts or {})}),
-        ),
+    """A message from `sender` in the inbox's Gmail (the fake_gmail fixture's), with these header facts."""
+    from backend.tests.helpers.fake_gmail import CURRENT
+
+    CURRENT["fake"].add(
+        BOX,
+        mid,
+        thread="thread",
+        sender=sender,
+        to=[BOX],
+        subject="Update",
+        body="Hello",
+        message_id="<" + mid + "@vendor.example>",
+        headers={key.title(): value for key, value in (facts or {}).items()},
     )
 
 

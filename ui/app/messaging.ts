@@ -118,7 +118,7 @@ function messagingEvidence(data: MessagingDetail): string {
       </button>`})),
   ];
   events.sort((a, b) => b.at - a.at);
-  return events.length ? events.slice(0, 70).map(e => e.html).join('') : '<div class="empty">No synced messages for these sources yet.</div>';
+  return events.length ? events.slice(0, 70).map(e => e.html).join('') : '<div class="empty">No messages for these sources yet.</div>';
 }
 // The Slack checks this bot ran; its schedules and other triggers are automations (#/automations, searched by its name).
 function messagingRuns(data: MessagingDetail): string {
@@ -149,7 +149,7 @@ function messagingDetail(data: MessagingDetail): void {
         <div class="msg-panel-title"><h2 id="msg-instructions-title"${updated ? ` title="${esc(updated)}"` : ''}>Instructions</h2></div>
         <div class="msg-panel-body">
           <div class="msg-facts"><span><strong>${b.sources.length}</strong> source${b.sources.length === 1 ? '' : 's'}</span><span>Last run <strong>${b.last_run ? esc(ago(b.last_run)) : 'not recorded'}</strong></span><span>Next <strong>${b.next_run ? esc(fmt(b.next_run)) : b.slack_interval_minutes ? `Slack every ${b.slack_interval_minutes} minutes when new` : 'not scheduled'}</strong></span></div>
-          ${shownSources.length ? `<div class="msg-facts msg-facts-sources">${shownSources.map(s => `<span>${esc(s.name)}${s.kind === 'email' ? ` · ${s.error ? 'sync error' : s.synced_at ? 'synced ' + ago(s.synced_at) : 'not synced'}` : ` · ${s.post ? 'can post' : 'reads only'}`}</span>`).join('')}</div>` : ''}
+          ${shownSources.length ? `<div class="msg-facts msg-facts-sources">${shownSources.map(s => `<span>${esc(s.name)}${s.kind === 'email' ? ` · ${s.error ? esc(s.error) : s.synced_at ? 'checked ' + ago(s.synced_at) : 'not checked yet'}` : ` · ${s.post ? 'can post' : 'reads only'}`}</span>`).join('')}</div>` : ''}
           <div class="msg-instructions">${esc(data.instructions.content || 'No instructions have been published.')}</div>
         </div>
       </section>

@@ -1,4 +1,4 @@
-"""Which mailboxes the mail and calendar sync targets, and which one a message bot's token is for.
+"""Which mailboxes a computer acts for, and which one a message bot's token is for.
 
 A message bot's mailbox is the address its `gmail` tool declares in bot.yaml (BotOps fills it from the
 `Mailbox:` line). Only when it declares none does its person's own email stand in.
@@ -23,7 +23,11 @@ def assigned(api):
 
 
 def mail_targets(api, token=None):
-    return get(api, "connectors/mail/targets", token or runner(api)["token"])["mailboxes"]
+    """The mailboxes a computer acts for (automation mail actions, queued sends). It syncs none: `mailboxes` is empty,
+    since the server reads every mailbox's Gmail itself."""
+    answer = get(api, "connectors/mail/targets", token or runner(api)["token"])
+    assert answer["mailboxes"] == []
+    return answer["acts_for"]
 
 
 def test_targets_are_the_message_bots_declared_mailboxes_not_every_person(api):

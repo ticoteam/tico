@@ -1748,12 +1748,11 @@ def _calendar_invite(attachments):
 
 def mail_watch(c, mailbox, synced_at):
     """Where a mailbox's watch starts, as an ISO time: its message automations act on the mail received from there on,
-    once each. The first batch a mailbox sends sets it, a day before that sync (MAIL_LOOKBACK_HOURS), so the last day's
-    mail is news when a mailbox is connected. It never moves after that: a gap (an outage, a quiet weekend) leaves the
-    mail that arrived in it news, and the per-automation cap (MAX_IN_FLIGHT) paces the backlog. A mailbox from before
-    the watch was kept has none, so its first sync after the upgrade sets it the same way. The caller stores the result
-    on the mailbox's row (connectors `_refresh_mailbox`), which keeps the first one stored."""
-    row = c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
+    once each. The server's first check of a mailbox sets it, a day before that check (MAIL_LOOKBACK_HOURS), so the last
+    day's mail is news when a mailbox is connected. It never moves after that: a gap (an outage, a quiet weekend) leaves
+    the mail that arrived in it news, and the per-automation cap (MAX_IN_FLIGHT) paces the backlog. The caller stores
+    the result on the mailbox's row (backend/gmail_watch.py), which keeps the first one stored."""
+    row = c.execute("SELECT watching_since_at FROM mailboxes WHERE address=?", (str(mailbox).lower(),)).fetchone()
     if row and row["watching_since_at"]:
         return row["watching_since_at"]
     # In UTC: an offset in the sync's stamp is an instant, and H.shift would keep its local clock.
@@ -1763,9 +1762,9 @@ def mail_watch(c, mailbox, synced_at):
 
 
 def on_mail(c, mailbox, message, watch=None):
-    """A new message in a person's mailbox (the mail connector's copy), for the automations of that mailbox's
-    person: whose it is is checked again now, since a person may have lost it since the save. `watch` (`mail_watch`):
-    a message received before the mailbox's watch began is old mail the sync brought back, and no automation hears it.
+    """A new message in a mailbox (backend/gmail_watch.py read it from Gmail), for the automations of that mailbox's
+    person: whose it is is checked again now, since a person may have lost it since. `watch` (`mail_watch`): a message
+    received before the mailbox's watch began is old mail a check listed again, and no automation hears it.
     A message with no received time (0) is heard as it always was."""
     epoch = int(getattr(message, "epoch", 0) or 0)
     if watch and 0 < epoch < H.parse_ts(watch).timestamp():
@@ -4281,7 +4280,8 @@ def install(app, store, auth, mutate):
     def mail_computer(c, who, mailbox):
         """Only the computer that may act for this mailbox claims and reports its actions (google_rights.refusal: the
         computer hosting a Google Workspace mailbox's message bot, the one holding a person's grant, else a publisher),
-        and, once the mailbox has been published, only the runner that did."""
+        and, once the mailbox has been published, only the runner that did. Which runner that is stays on
+        `mail_mailboxes.runner_id` (its last sync's) until these computer routes go."""
         from . import google_rights
         from .connectors import human_of
 

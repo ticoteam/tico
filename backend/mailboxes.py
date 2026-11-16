@@ -84,22 +84,20 @@ def _table(c, name):
 
 
 def _failing(c):
-    """{address: {reason, error}} for each mailbox a computer reports it cannot read (google_rights.counted)."""
-    from . import google_rights
-
-    out = {}
-    if not _table(c, "connector_reports"):
-        return out
-    for row in google_rights.counted(c, "mail", H.now()):
-        try:
-            reason = json.loads(row["failing"] or "{}").get("reason") or ""
-        except ValueError:
-            reason = ""
-        address = row["account"].lower()
-        # One computer refusing the sign-in outranks another's passing network error: only a person fixes it.
-        if address not in out or reason == "signin":
-            out[address] = {"reason": "signin" if reason == "signin" else "failed", "error": row["error"][:300]}
-    return out
+    """{address: {reason, error}} for each mailbox whose last Gmail check failed (backend/gmail_watch.py): `signin`
+    while Google refuses its sign-in (reconnects keeps that refusal), else `failed`."""
+    refused = (
+        {r[0] for r in c.execute("SELECT lower(account) FROM google_signin_refusals WHERE service='mail'")}
+        if _table(c, "google_signin_refusals")
+        else set()
+    )
+    return {
+        row["address"]: {
+            "reason": "signin" if row["address"] in refused else "failed",
+            "error": row["check_error"][:300],
+        }
+        for row in c.execute("SELECT address, check_error FROM mailboxes WHERE coalesce(check_error,'')<>''")
+    }
 
 
 def _state(c, box, live):
@@ -124,11 +122,6 @@ class _Reader:
         self.c, self.who, self.roster = c, who, roster(c)
         self.live, self.routines = _live_mailboxes(c), _routines(c)
         self.facts, self.principal = MA._Facts(c), MA.principal(c, who)
-        self.synced = (
-            {r["address"]: r for r in c.execute("SELECT address, synced_at, newest_epoch FROM mail_mailboxes")}
-            if _table(c, "mail_mailboxes")
-            else {}
-        )
         self.failing = _failing(c)
         self.grants = {}
         for row in c.execute("SELECT mailbox_id, grantee_type, grantee_id FROM mailbox_accesses ORDER BY created_at"):
@@ -152,13 +145,12 @@ class _Reader:
         return {"people": len(people), "bots": len(bots), "names": (people + bots)[:USED_BY_NAMES]}
 
     def sync(self, box):
-        """The last successful read of `box` and, while a computer reports it failing, why: `signin` when Google
-        refused the sign-in (only a person signing in again fixes it), else `failed`."""
-        seen = self.synced.get(box["address"])
+        """The server's last good read of `box` from Gmail (backend/gmail_watch.py) and, while it fails, why: `signin`
+        when Google refused the sign-in (only a person signing in again fixes it), else `failed`."""
         failing = self.failing.get(box["address"])
         return {
-            "synced_at": seen["synced_at"] if seen else None,
-            "newest_epoch": seen["newest_epoch"] if seen else None,
+            "synced_at": box.get("checked_at"),
+            "newest_epoch": None,
             "sync": (failing or {}).get("reason") or "",
             "sync_error": (failing or {}).get("error") or "",
         }

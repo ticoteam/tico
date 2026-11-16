@@ -12,12 +12,13 @@ from backend import task_asks as K
 from backend.auth import Auth, Identity
 from backend.store import H
 from backend.tests.helpers.email_sending import BOX, incoming, mime
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 
 ANA, BEN = "human:ana", "human:ben"
 
 
 @pytest.fixture
-def store(company):
+def store(company, fake_gmail):
     with company.transaction() as c:
         row = MA.ensure_mailbox(c, BOX, person_id="ana", created_by=ANA)
         MA.grant(c, ANA, row["id"], "bot", "ops", "read_write")

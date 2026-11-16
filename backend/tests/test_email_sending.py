@@ -11,6 +11,7 @@ from backend import email_sending as S
 from backend import task_asks
 from backend.store import H
 from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.email_sending import (
     BOX,
     CONTACT,
@@ -91,6 +92,29 @@ def test_known_correspondent_and_verified_reply_can_send(inbox):
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     assert queued["state"] == "pending"
     assert queued["decision"]["outcome"] == "allow"
+
+
+def test_reply_and_address_checks_ask_gmail_and_wait_while_it_does_not_answer(inbox, fake_gmail):
+    from backend import mail_facts
+    from backend.store import Problem
+
+    autonomous(inbox, ask_new_address=True)
+    known = queue(inbox, raw=mime(body="To a known sender"))
+    assert "new_address" not in known["decision"]["reasons"]  # the contact wrote to the inbox (Gmail from:)
+    stranger = queue(inbox, raw=mime(body="To a stranger", to=["new@vendor.example"]))
+    assert "new_address" in stranger["decision"]["reasons"]
+    searches = [q.get("q", [""])[0] for path, q, _ in fake_gmail.calls if path.endswith("/messages")]
+    assert "from:" + CONTACT in searches and any(s.startswith("in:sent") for s in searches)
+    mail_facts.forget()
+    fake_gmail.down.add(BOX)
+    with inbox.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM email_sends").fetchone()[0]
+    with pytest.raises(Problem) as waited:
+        queue(inbox, raw=mime(body="A reply", In_Reply_To="<inbound@vendor.example>"), reply_to_id="inbound")
+    assert waited.value.retryable
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_cli_sending_controls_share_the_email_command_and_api(inbox, monkeypatch, capsys):

@@ -924,27 +924,16 @@ def install_connectors(app, store, execution, mutate):
         with store.read() as c:
             runner, named, owned = reader(c, request.state.identity)
             targets = google_rights.visible(c, runner["id"], named, owned=owned)
-            freshness = {row["address"]: row for row in c.execute("SELECT * FROM mail_mailboxes")}
             company = workspace.permissions(c)
-        mailboxes = []
-        for target in targets:
-            address, person_id = target["address"], target["person_id"]
-            row = freshness.get(address)
-            mailboxes.append(
-                {
-                    "address": address,
-                    "person_id": person_id,
-                    "newest_epoch": row["newest_epoch"] if row else None,
-                    "oldest_epoch": row["oldest_epoch"] if row else None,
-                    "message_count": row["message_count"] if row else 0,
-                    "synced_at": row["synced_at"] if row else None,
-                    "error": row["error"] if row else None,
-                }
-            )
+        # The server watches every mailbox's mail itself (backend/gmail_watch.py), so no computer syncs one: `mailboxes`
+        # is empty. `acts_for` are the mailboxes whose automation mail actions and queued sends this computer still
+        # carries out (runner_support/connectors.py) until the server does those too.
+        acts_for = [{"address": target["address"], "person_id": target["person_id"]} for target in targets]
         # What Tico may do (Tools), which the mail CLI the runner runs checks every write against
         # (connectors/mail/policy.py runner_company): it reads it here, over the runner's own registration.
         return {
-            "mailboxes": mailboxes,
+            "mailboxes": [],
+            "acts_for": acts_for,
             "batch": MAIL_BATCH,
             "retention_days": store.settings.mail_retention_days,
             "company": company,
@@ -966,8 +955,10 @@ def install_connectors(app, store, execution, mutate):
             now = H.now()
             from . import automations
 
-            # The mailbox's first batch sets its watch and later batches keep it (automations.mail_watch).
-            watch = automations.mail_watch(c, body.mailbox, body.synced_at)
+            # The mailbox's first batch sets its watch and later batches keep it (automations.mail_watch); a mailbox
+            # with no `mailboxes` row keeps it on its sync row until this computer route goes.
+            kept = c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (body.mailbox,)).fetchone()
+            watch = (kept and kept["watching_since_at"]) or automations.mail_watch(c, body.mailbox, body.synced_at)
             from . import mailbox_access
             from .entities import ingest
 
@@ -1106,6 +1097,10 @@ def install_connectors(app, store, execution, mutate):
                     )
                 c.execute("DELETE FROM mail_fts WHERE mailbox=? AND msg_id=?", (body.mailbox, msg_id))
             _refresh_mailbox(c, body.mailbox, person["id"], runner["id"], body.synced_at, watch)
+            c.execute(
+                "UPDATE mailboxes SET watching_since_at=coalesce(watching_since_at,?) WHERE address=?",
+                (watch, body.mailbox),
+            )
             accepted = len(body.messages) + len(body.deleted)
             google_rights.report(c, "mail", runner["id"], now, ok=[body.mailbox])  # that account is working
             reconnects.google_good(c, "mail", [body.mailbox])  # a synced mailbox is that account working

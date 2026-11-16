@@ -1,15 +1,18 @@
 """Bot-first view of scheduled email and Slack work.
 
-The source of truth stays with the mail connector, Slack gateway, and automations. This read
-model joins their records for people reviewing what a bot covers and what it saw.
+The source of truth stays with Gmail, the Slack gateway, and automations. This read model joins their records for
+people reviewing what a bot covers and what it saw. Mail is read from Gmail when the page asks (Tico keeps no copy):
+a mailbox's review count is Gmail's own count of its review labels, kept REVIEW_SECONDS.
 """
 
 import json
+import threading
+import time
 
 from fastapi import Request
 
 from . import routines, runs
-from .mail import message_public, visible_addresses
+from .mail import live_message_public, visible_addresses
 from . import slack_channels as SC
 from .slack_gateway import permalink
 from .store import H, P, Problem
@@ -22,6 +25,53 @@ def _json(value, fallback):
         return json.loads(value) if value else fallback
     except (TypeError, ValueError):
         return fallback
+
+
+REVIEW_SECONDS = 60
+MAIL_SHOWN = 40  # the newest messages a bot's page shows, across its mailboxes
+REVIEW_LABELS = ("hub/needs-", "hub/drafted")  # a prefix, and the drafted label itself
+_REVIEW = {}  # mailbox -> (count, monotonic expiry)
+_REVIEW_LOCK = threading.Lock()
+
+
+def needs_review(c, address):
+    """How many messages in the mailbox carry a review label now (Gmail's count per label, added up). A mailbox Gmail
+    cannot answer for counts 0; its check error says why."""
+    from . import gmail_live
+
+    now = time.monotonic()
+    with _REVIEW_LOCK:
+        hit = _REVIEW.get(address)
+    if hit and hit[1] > now:
+        return hit[0]
+    try:
+        count = sum(
+            gmail_live.label_total(c, address, row["id"])
+            for row in gmail_live.labels(c, address)
+            if row["type"] == "user" and (row["name"].startswith(REVIEW_LABELS[0]) or row["name"] == REVIEW_LABELS[1])
+        )
+    except Problem:
+        count = 0
+    with _REVIEW_LOCK:
+        _REVIEW[address] = (count, now + REVIEW_SECONDS)
+    return count
+
+
+def rule_hits(c, mailbox, ids):
+    """{message id: [automation names]}: the automations each message started a run of."""
+    from .automations import _stored_ref
+
+    refs = {_stored_ref(f"mail:{mailbox}:{mid}"): mid for mid in ids}
+    out = {}
+    if refs:
+        marks = ",".join("?" * len(refs))
+        for row in c.execute(
+            "SELECT r.trigger_ref, a.name FROM automation_runs r JOIN automations a ON a.id=r.automation_id "
+            f"WHERE r.trigger_ref IN ({marks}) ORDER BY r.started_at",
+            tuple(refs),
+        ):
+            out.setdefault(refs[row["trigger_ref"]], []).append(row["name"])
+    return out
 
 
 def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, reads):
@@ -37,8 +87,8 @@ def _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes
                 "name": address,
                 "synced_at": row.get("synced_at"),
                 "error": row.get("error"),
-                "message_count": row.get("message_count") or 0,
-                "needs_review": row.get("needs_review") or 0,
+                "message_count": 0,
+                "needs_review": needs_review(c, address),
             }
         )
     if who.role == "owner":
@@ -65,17 +115,10 @@ def _catalog(c, who, auth, settings):
     people = roster(c)
     channels = SC.channel_map(c, settings) if who.role == "owner" else {}
     mailboxes = {
-        row["address"]: dict(row) for row in c.execute("SELECT * FROM mail_mailboxes") if row["address"] in allowed
+        row["address"]: {"synced_at": row["checked_at"], "error": row["check_error"]}
+        for row in c.execute("SELECT address,checked_at,check_error FROM mailboxes")
+        if row["address"] in allowed
     }
-    if mailboxes:
-        marks = ",".join("?" * len(mailboxes))
-        for row in c.execute(
-            "SELECT m.mailbox,count(*) AS n FROM mail_messages m WHERE m.deleted_at IS NULL "
-            f"AND m.mailbox IN ({marks}) AND EXISTS (SELECT 1 FROM json_each(m.labels) "
-            "WHERE value LIKE 'hub/needs-%' OR value='hub/drafted') GROUP BY m.mailbox",
-            tuple(mailboxes),
-        ):
-            mailboxes[row["mailbox"]]["needs_review"] = row["n"]
     reads = {(row["channel"], row["reader"]): dict(row) for row in c.execute("SELECT * FROM slack_reads")}
     # Each bot's own automations (a mail bot's checks and schedules): when one last ran and when the next is due.
     schedules = {}
@@ -228,15 +271,20 @@ def install_messaging(app, store, auth):
             ]
             mail = []
             if mailboxes:
-                marks = ",".join("?" * len(mailboxes))
-                for row in c.execute(
-                    f"SELECT * FROM mail_messages WHERE deleted_at IS NULL AND mailbox IN ({marks}) "
-                    "ORDER BY epoch DESC LIMIT 40",
-                    tuple(mailboxes),
-                ):
-                    item = message_public(row)
-                    item["rule_hits"] = _json(row["rule_hits"], [])
-                    mail.append(item)
+                from . import gmail_live, mailbox_access
+
+                domains = mailbox_access.company_domains(c)
+                for address in mailboxes:
+                    try:
+                        page = gmail_live.list(c, address, limit=MAIL_SHOWN)["messages"]
+                    except Problem:
+                        continue  # the source's check error says why
+                    hits = rule_hits(c, address, [item["id"] for item in page])
+                    for item in page:
+                        shown = live_message_public(address, item, domains)
+                        shown["rule_hits"] = hits.get(item["id"], [])
+                        mail.append(shown)
+                mail = sorted(mail, key=lambda item: (item["epoch"], item["msg_id"]), reverse=True)[:MAIL_SHOWN]
             slack = []
             digests = []
             posts = []

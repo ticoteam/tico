@@ -17,6 +17,7 @@ from backend.store import H
 from backend.tests.helpers.api import claim, headers, post
 from backend import bot_settings as BS
 from backend.tests.helpers.bot_contact import bot
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail
 from backend.tests.helpers.maintenance_learn_step import complete, queue, start
 
@@ -342,7 +343,39 @@ def test_private_or_deleted_sources_stay_out_of_company_update(api, monkeypatch)
         assert updates.request_slots(c, "ops")["learnings"] == []
 
 
-def test_only_what_the_company_may_read_reaches_the_company_update(api):
+def test_a_nights_sent_mail_is_read_from_gmail_and_a_silent_mailbox_is_passed_over(api, fake_gmail):
+    from backend import mailbox_access as MA
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        for person in ("ana", "ben"):
+            MA.ensure_mailbox(c, person + "@acme.example", person_id=person, created_by="human:ana")
+    window = (1_783_000_000, 1_783_100_000)
+    put_mail(api, "ana@acme.example", msg_id="sent", from_addr="ana@acme.example", labels=["SENT"], epoch=1_783_050_000)
+    put_mail(
+        api, "ana@acme.example", msg_id="older", from_addr="ana@acme.example", labels=["SENT"], epoch=1_782_000_000
+    )
+    put_mail(api, "ana@acme.example", msg_id="received", labels=["INBOX"], epoch=1_783_050_000)
+    put_mail(
+        api, "ben@acme.example", msg_id="ben-sent", from_addr="ben@acme.example", labels=["SENT"], epoch=1_783_050_000
+    )
+    fake_gmail.down.add("ben@acme.example")
+    people = {"ana@acme.example": {"id": "ana", "name": "Ana"}, "ben@acme.example": {"id": "ben", "name": "Ben"}}
+    since, now = (learnings.utc(datetime_of(t)) for t in window)
+    with store.read() as c:
+        items = learnings._sent_mail(c, people, since, now)
+        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
+    assert [(i["key"], i["author"]) for i in items] == [("mail:ana@acme.example:sent", "human:ana")]
+    assert "How does pricing work?" in items[0]["text"]
+
+
+def datetime_of(epoch):
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(epoch, timezone.utc)
+
+
+def test_only_what_the_company_may_read_reaches_the_company_update(api, fake_gmail):
     """One install, each source in turn (public and private Slack channels, personal sent mail, task comments, a direct
     chat that references a public task, the bot's home with restricted history), the learning rows cleared between."""
     store = api.app.state.store

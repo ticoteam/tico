@@ -78,8 +78,8 @@ def test_a_workspace_mailbox_is_read_by_the_computer_running_its_bot(api, worksp
     place(api, bot_mac)
     publish(api, bot_mac["token"])
     assert publish(api, office["token"], expected=403)["error"]["kind"] == "workspace_owned"
-    assert [b["address"] for b in get(api, "connectors/mail/targets", bot_mac["token"])["mailboxes"]] == [BOX]
-    assert get(api, "connectors/mail/targets", office["token"])["mailboxes"] == []
+    assert [b["address"] for b in get(api, "connectors/mail/targets", bot_mac["token"])["acts_for"]] == [BOX]
+    assert get(api, "connectors/mail/targets", office["token"])["acts_for"] == []
 
 
 def test_the_token_route_answers_only_the_bot_s_computer(api, workspace_key):

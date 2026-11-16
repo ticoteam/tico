@@ -1,0 +1,224 @@
+"""The server hears new mail from Gmail itself (backend/gmail_watch.py): each message once, nothing of it kept."""
+
+import json
+import time
+from datetime import datetime, timedelta, timezone
+
+import pytest
+import time_machine
+
+from backend import drains, gmail_watch, google_workspace
+from backend import mailbox_access as MA
+from backend.entities import store as ES
+from backend.store import H
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
+
+BOX = "ana@acme.example"
+T0 = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
+NOOP = {
+    "id": "sort",
+    "type": "filter",
+    "rules": [
+        {"when": [{"field": "message.subject", "op": "contains", "value": "zz-never"}], "then": [{"do": "archive"}]}
+    ],
+}
+
+
+def epoch(at):
+    return int(at.timestamp())
+
+
+@pytest.fixture
+def watched(api, fake_gmail, monkeypatch):
+    """Ana's mailbox, covered by the company's key, and one message automation on it."""
+    monkeypatch.setattr(google_workspace, "authority", lambda c, mailbox: "workspace")
+    with api.app.state.store.transaction() as c:
+        MA.ensure_mailbox(c, BOX, person_id="ana", created_by="human:ana")
+    aid = post(
+        api,
+        "automations",
+        {"name": "Mail", "owner": "person:ana", "trigger": {"type": "message", "inbox": BOX}, "steps": [NOOP]},
+    )["id"]
+    return api, fake_gmail, aid
+
+
+def check(api, at):
+    """One pass of the watch at `at` (each test steps on past INTERVAL, so the mailbox is due)."""
+    gmail_watch._TRIED.clear()
+    with time_machine.travel(at, tick=False):
+        return gmail_watch.drain(api.app.state.store)
+
+
+def heard(api, aid):
+    rows = get(api, f"automations/{aid}/runs")["runs"]
+    refs = [r["trigger_ref"] for r in rows]
+    assert len(refs) == len(set(refs))  # never twice
+    return sorted(ref.rsplit(":", 1)[-1] for ref in refs)
+
+
+def box_row(api):
+    with api.app.state.store.read() as c:
+        return dict(c.execute("SELECT * FROM mailboxes WHERE address=?", (BOX,)).fetchone())
+
+
+def test_new_mail_is_heard_once_and_old_mail_before_the_watch_never(watched):
+    api, gmail, aid = watched
+    gmail.add(BOX, "recent", epoch=epoch(T0 - timedelta(hours=2)))
+    gmail.add(BOX, "ancient", epoch=epoch(T0 - timedelta(days=3)))
+    gmail.add(BOX, "draft", epoch=epoch(T0 - timedelta(hours=1)), labels=("DRAFT",))
+    assert check(api, T0) == 1  # the first check: the last day's mail, drafts not heard
+    assert heard(api, aid) == ["recent"]
+    first = box_row(api)
+    assert first["watching_since_at"] == "2026-11-15T12:00:00.000000Z" and first["check_error"] is None
+    assert first["history_id"] == str(gmail.history_id(BOX))
+    assert check(api, T0 + timedelta(minutes=2)) == 0  # a repeat pass hears nothing new
+    gmail.add(BOX, "new", epoch=epoch(T0 + timedelta(minutes=3)))
+    assert check(api, T0 + timedelta(minutes=4)) == 1
+    assert heard(api, aid) == ["new", "recent"]
+    assert box_row(api)["watching_since_at"] == first["watching_since_at"]  # the watch never moves
+
+
+def test_an_expired_history_id_lists_again_without_hearing_anything_twice(watched):
+    api, gmail, aid = watched
+    gmail.add(BOX, "one", epoch=epoch(T0 - timedelta(minutes=30)))
+    check(api, T0)
+    gmail.add(BOX, "two", epoch=epoch(T0 + timedelta(minutes=1)))
+    gmail.expired.add(BOX)  # Gmail no longer has the saved history id: the last hour is listed again
+    assert check(api, T0 + timedelta(minutes=3)) == 2
+    assert heard(api, aid) == ["one", "two"]
+
+
+def test_gmail_down_leaves_the_history_id_and_says_why_then_catches_up(watched):
+    api, gmail, aid = watched
+    check(api, T0)
+    before = box_row(api)
+    gmail.add(BOX, "during", epoch=epoch(T0 + timedelta(minutes=1)))
+    gmail.down.add(BOX)
+    assert check(api, T0 + timedelta(minutes=3)) == 0
+    after = box_row(api)
+    assert (after["history_id"], after["checked_at"]) == (before["history_id"], before["checked_at"])
+    assert "Gmail did not answer" in after["check_error"]
+    listed = {m["address"]: m for m in get(api, "mailboxes")["mailboxes"]}
+    assert (listed[BOX]["sync"], listed[BOX]["sync_error"]) == ("failed", after["check_error"])
+    gmail.down.clear()
+    assert check(api, T0 + timedelta(minutes=6)) == 1
+    assert heard(api, aid) == ["during"] and box_row(api)["check_error"] is None
+
+
+def test_a_refused_mailbox_goes_to_reconnects_as_a_sign_in_to_fix(watched):
+    api, gmail, _ = watched
+    gmail.refused.add(BOX)
+    check(api, T0)
+    listed = {m["address"]: m for m in get(api, "mailboxes")["mailboxes"]}
+    assert listed[BOX]["sync"] == "signin"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT service FROM google_signin_refusals WHERE account=?", (BOX,)).fetchone()[0] == "mail"
+    gmail.refused.clear()
+    check(api, T0 + timedelta(minutes=3))
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM google_signin_refusals WHERE account=?", (BOX,)).fetchone()
+
+
+def test_bounces_known_sender_and_the_directory_are_fed_and_no_row_keeps_a_body(watched):
+    api, gmail, aid = watched
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO email_sends(id,mailbox,actor,bot,via,content_sha256,idempotency_key,recipients,attachments,"
+            "subject,body_sha256,raw,draft_id,thread_id,reply_to_id,approval_id,classification,decision,state,"
+            "created_at,send_after) VALUES('s1',?,'human:ana','','','h','k1','[\"gone@vendor.example\"]','[]','Hi',"
+            "'b','','','','','','{}','{}','sent',?,?)",
+            (BOX, H.now(), H.now()),
+        )
+    gmail.add(BOX, "wrote-before", sender=BOX, to=["jane@client.example"], labels=("SENT",), epoch=epoch(T0) - 7200)
+    gmail.add(
+        BOX,
+        "jane",
+        sender="jane@client.example",
+        sender_header="Jane Ortiz <jane@client.example>",
+        body="SECRET CONTRACT TERMS",
+        snippet="A short preview",
+        epoch=epoch(T0) - 60,
+    )
+    gmail.add(
+        BOX,
+        "bounce",
+        sender="mailer-daemon@vendor.example",
+        body="Final-Recipient: rfc822; gone@vendor.example",
+        epoch=epoch(T0) - 30,
+    )
+    check(api, T0)
+    with store.read() as c:
+        assert c.execute("SELECT address FROM email_suppressed_recipients").fetchone()[0] == "gone@vendor.example"
+        assert ES.matching(c, "person", {"email": "jane@client.example"})
+        jane = c.execute(
+            "SELECT saved_state FROM automation_runs WHERE trigger_ref=?", ("mail:" + BOX + ":jane",)
+        ).fetchone()
+        message = json.loads(jane["saved_state"])["payload"]["message"]
+        assert message["known_sender"] is True and message["body"] == "SECRET CONTRACT TERMS"  # while it runs
+    store.automations.drain()
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM automation_runs WHERE finished_at IS NULL").fetchone()[0] == 0
+        for row in c.execute("SELECT saved_state FROM automation_runs"):
+            assert "SECRET CONTRACT TERMS" not in (row[0] or "")
+        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
+    assert sorted(heard(api, aid)) == ["bounce", "jane", "wrote-before"]
+
+
+def test_a_finished_run_of_any_kind_drops_the_body_it_read(api):
+    """The database's own rule: any write that finishes a run (or touches a finished one) takes the body out."""
+    store = api.app.state.store
+    state = {"payload": {"message": {"subject": "Hi", "body": "Private words"}}, "steps": []}
+    with store.transaction() as c:
+        for rid, status in (("run_a", "running"), ("run_b", "queued")):
+            c.execute(
+                "INSERT INTO automation_runs(id,automation_id,version,started_at,status,saved_state) "
+                "VALUES(?,'auto',1,?,?,?)",
+                (rid, H.now(), status, json.dumps(state)),
+            )
+        c.execute("UPDATE automation_runs SET status='ok',finished_at=? WHERE id='run_a'", (H.now(),))
+        c.execute("UPDATE automation_runs SET saved_state=saved_state WHERE id='run_b'")
+        kept = {r[0]: json.loads(r[1]) for r in c.execute("SELECT id,saved_state FROM automation_runs")}
+    assert "body" not in kept["run_a"]["payload"]["message"] and kept["run_a"]["payload"]["message"]["subject"] == "Hi"
+    assert kept["run_b"]["payload"]["message"]["body"] == "Private words"  # unfinished: the run still reads it
+
+
+def test_fifty_mailboxes_take_one_pass_within_the_drain_budget(api, fake_gmail, monkeypatch):
+    monkeypatch.setattr(google_workspace, "authority", lambda c, mailbox: "workspace")
+    with api.app.state.store.transaction() as c:
+        for n in range(50):
+            MA.ensure_mailbox(c, f"inbox{n}@acme.example", kind="shared", created_by="human:ana")
+    for n in range(50):
+        fake_gmail.add(f"inbox{n}@acme.example", f"m{n}", epoch=int(time.time()) - 60)
+    started = time.monotonic()
+    heard_now = gmail_watch.drain(api.app.state.store, budget=drains.Budget(drains.BUDGET))
+    assert heard_now == 50 and time.monotonic() - started < drains.BUDGET
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM mailboxes WHERE checked_at IS NULL").fetchone()[0] == 0
+
+
+def test_no_google_token_reaches_a_response_log_event_or_sql(watched, caplog, monkeypatch):
+    from backend import google_tokens
+
+    api, gmail, _ = watched
+    secret = "ya29.SECRET-ACCESS-TOKEN"
+    monkeypatch.setattr(google_tokens, "token", lambda c, mailbox, service, write=False: secret)
+    gmail.add(BOX, "m1", epoch=int(time.time()) - 60)
+    gmail_watch.drain(api.app.state.store)
+    gmail.down.add(BOX)
+    gmail_watch._TRIED.clear()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE mailboxes SET checked_at=NULL")
+    gmail_watch.drain(api.app.state.store)
+    answers = [
+        api.get(path, headers=headers()).text
+        for path in ("/api/v2/mailboxes", "/api/v2/mail/mailboxes", "/api/v2/messaging/bots")
+    ]
+    with api.app.state.store.read() as c:
+        rows = [
+            json.dumps([tuple(r) for r in c.execute(f"SELECT * FROM {table}")])
+            for table in ("mailboxes", "events", "service_health", "automation_runs")
+        ]
+    for text in (*answers, *rows, caplog.text):
+        assert secret not in text
