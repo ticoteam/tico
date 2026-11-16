@@ -185,8 +185,9 @@ def _every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future
         enabled = {row["name"]: row["enabled"] for row in rows}
         assert enabled["Weekday inbox sweep"] is False
         schedules = [row for row in rows if row["enabled"] and row["trigger"]["type"] == "schedule"]
-        # 16 on main, and the Assistant's daily sweep is the one new enabled schedule (backend/onboarding.py).
-        assert len(schedules) == 17
+        # 16 on main, the Assistant's daily sweep (backend/onboarding.py) and the Tools Owner's weekly review, which the
+        # start's complete_company makes with the Tools Owner (onboarding.ensure_tools_owner).
+        assert len(schedules) == 18
         sweep = sweep_automation_id(settings)
         week_start = NOW - timedelta(days=7)
         for row in schedules:

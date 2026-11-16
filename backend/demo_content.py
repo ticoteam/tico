@@ -112,6 +112,11 @@ PEOPLE = [
     },
 ]
 
+# The built-ins the demo's computers report ready beside the chart's bots: the ones whose routines the demo week runs
+# (backend/demo_sections/schedules.py). The Tools Owner is made by the start's complete_company and reviews the tools
+# each Monday.
+READY_BUILT_INS = ("librarian", "strategy-owner", "tools-owner")
+
 # slug, catalog template, reports to. Each department has a lead bot under the person who runs it (a `human:` parent),
 # and the Assistant (assistant) hangs under Ana.
 BOTS = [

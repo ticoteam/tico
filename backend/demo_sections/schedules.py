@@ -32,7 +32,7 @@ CLAIM_TRIES = 60  # polls a computer makes for a bot's job before it gives up
 # still its first one after now.
 SETTLE = timedelta(hours=1)
 
-# Routines whose summaries are not in D.ROUTINES: the Strategy, Librarian and BotOps bots.
+# Routines whose summaries are not in D.ROUTINES: the Strategy, Librarian, Tools Owner and BotOps bots.
 EXTRA_SUMMARIES = {
     "strategy-owner:kpi-pass": (
         "Checked forty goals; the Q4 bookings goal moved to amber.",
@@ -48,6 +48,11 @@ EXTRA_SUMMARIES = {
         "Refreshed the docs map: 214 pages, three moved.",
         "Docs map unchanged; no pages moved.",
         "Refreshed the docs map; two broken links fixed.",
+    ),
+    "tools-owner:review-the-tools": (
+        "Checked twelve tools; all working. Nothing filed.",
+        "Checked twelve tools; the Stripe key expires in nine days, so a card is open for Ben.",
+        "Checked twelve tools; two keys for one PostHog project, proposed as one.",
     ),
     "botops:task-sweep": (
         "Swept every bot: two stuck tasks handed to their owners.",
