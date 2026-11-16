@@ -281,18 +281,9 @@ def kind_for(e, body):
     return e.kind
 
 
-def _bot_target(c, e, target):
-    """Resolve id-addressed bot settings to their owning bot before checking manager rights."""
-    target = target or {}
-    if target.get("bot"):
-        return target["bot"]
-    object_id = target.get("id")
-    if not object_id:
-        return ""
-    if not e.route.startswith("routines/{id}"):
-        return ""
-    found = c.execute("SELECT bot FROM schedules WHERE id=?", (object_id,)).fetchone()
-    return found["bot"] if found else ""
+def _bot_target(target):
+    """The bot a bot setting names: every bot entry is addressed by its bot, none by another object's id."""
+    return (target or {}).get("bot") or ""
 
 
 def _whose(c, e, target):
@@ -330,7 +321,7 @@ def may(c, auth, who, e, target=None):
 
         return who.role == "human" and H.can_move(c, who.actor)
     if e.who == "bot":
-        return auth.bot_manager(c, who, _bot_target(c, e, target))
+        return auth.bot_manager(c, who, _bot_target(target))
     if e.who == "self":
         return who.role == "human" and (
             e.target != "person" or who.actor == "human:" + str((target or {}).get("person"))

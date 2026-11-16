@@ -1424,9 +1424,8 @@ class SettingsAdmin:
 
     def _apply(self, c, who, transition):
         self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
+        # begin checked the revision in this same write, just before it made the transition.
         config = self._config(c, transition["bot"])
-        if config["revision"] != transition["expected_revision"]:
-            raise Problem("version_conflict", "Bot settings changed while the change was being prepared", 409)
         self.execution.expire(c)
         target, bot, field = _json(transition["target"], {}), transition["bot"], transition["kind"]
         field = "model" if field == "model" else "placement"
