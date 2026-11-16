@@ -578,8 +578,8 @@ class Auth:
         reference). Any other turn of the assistant bot (a Slack route, a meeting delivery, a routine) stays the bot's
         own.
 
-        Everyone's chat is the Assistant, the owner's too (backend/assistant.py): a Strategy Owner turn, even one queued
-        in the owner's earlier Strategy Owner chat (`rooms.STRATEGY_ROOM`), is the bot's own and never the owner's."""
+        Everyone's chat is the Assistant, the owner's too (backend/assistant.py): a Strategy Owner turn is the bot's own
+        and never the owner's."""
         # Only a live lease: a token kept from a finished turn means nothing (validate_identity says the
         # same for the plain bot identity; this repeats it where the token turns into a person).
         room_key = rooms.ASSISTANT_ROOM if attempt["bot_id"] == self.settings.assistant_bot else None

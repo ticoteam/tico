@@ -13,32 +13,8 @@ SHARED = "shared"
 # The one private room each person has with the Assistant (backend/assistant.py); distinct from the
 # room the person's tasks for the assistant bot land in, so its history is only what they said to it.
 ASSISTANT_ROOM = "assistant"
-# The owner's earlier chat with the Strategy Owner (backend/strategy_bot.py), from when the owner had it in place of an
-# Assistant room: one per company, belonging to the owner seat, history now (read-only under "Earlier chats",
-# backend/assistant.py). No new message goes to it; a transfer of ownership still moves it to the new owner. Its stored
-# value stays "ceo": the rows stored so far carry it.
-STRATEGY_ROOM = "ceo"
 # The one private room each person has with the Librarian (backend/librarian.py): their Ask the Librarian questions.
 DOCS_ROOM = "docs"
-
-
-def session_config(conversation, bot, config):
-    """The config a turn is handed. In the owner's earlier Strategy Owner chat (a turn queued there before it became
-    history) it keys its session on that conversation
-    (clients/sessions.py, `session: task`), so the owner's chat is one session and the Strategy Owner's goals session (its
-    regular checks and goal work) another, and neither shares the other's context. The bot's own `session` setting
-    never applies here: `session: bot` would put the owner's chat on the thread its goals session and other bots'
-    messages use. Every runner reads `session` from the turn it is handed, so none needs to know this room."""
-    from .strategy_bot import SLUG
-
-    if (
-        bot == SLUG
-        and conversation
-        and conversation.get("scope") == PERSONAL
-        and conversation.get("room_key") == STRATEGY_ROOM
-    ):
-        return {**(config or {}), "session": "task"}
-    return config
 
 
 def roster(c, shared=False):
@@ -164,13 +140,6 @@ def room_bot(conversation):
 
 
 def personal_room(c, human_actor, bot="assistant", subject="Private control room"):
-    # Once a bot's chats have moved, a person's chat with it is the bot's Home (backend/bot_home_merge.py). The Assistant's
-    # rooms stay as they are: home_for_chat names no Home for them.
-    from . import bot_home_merge
-
-    home = bot_home_merge.home_for_chat(c, human_actor, bot)
-    if home:
-        return H.conversation(c, home)
     row = c.execute(
         "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
         "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",
@@ -316,7 +285,7 @@ def task_conversation_id(c, auth, owner, requester):
         room = work_room(c, auth, H.actor_id(owner), requester)
     except H.Refused:
         return None
-    # A Home is never a task's conversation (backend/bot_home_merge.py): the task opens its own thread there.
+    # A Home is never a task's conversation: the task opens its own thread there.
     if not room or room.get("audience") == "home":
         return None
     return room["id"]

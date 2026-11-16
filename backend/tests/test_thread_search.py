@@ -12,7 +12,10 @@ SCHEMA = importlib.import_module("backend.migrations.0047_native_threads_schema"
 
 # The visibility a viewer gets in these tests: company threads only, and never a message from one actor.
 THREADS = "cv.audience='company'"
-MESSAGES = "m.sender_id<>'human:eve'"
+
+
+def not_eve(message):
+    return message["sender_id"] != "human:eve"
 
 
 def database():
@@ -38,9 +41,7 @@ def post(c, mid, thread, body, actor="human:ana", refs=None):
 
 
 def find(c, query, **kw):
-    return search.search(
-        c, query, thread_sql=THREADS, message_sql=MESSAGES, readable=kw.pop("readable", lambda m: True), **kw
-    )
+    return search.search(c, query, thread_sql=THREADS, readable=kw.pop("readable", not_eve), **kw)
 
 
 def ids(result):

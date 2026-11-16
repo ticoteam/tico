@@ -4309,14 +4309,6 @@ SCHEMAS = {
                 "(a message whose refs.action names one is a Confirm / Cancel card)",
             },
             "pending": "a",
-            "earlier": {
-                "oneOf": [
-                    obj({"room_id": "s", "bot": "s", "name": "s"}, required=["room_id", "bot", "name"]),
-                    {"type": "null"},
-                ],
-                "description": "The owner's earlier chat with the Strategy Owner, read-only (GET "
-                "/api/v2/conversations/{room_id}/messages); null for everyone else, or none",
-            },
         },
         required=[
             "available",
@@ -4331,7 +4323,6 @@ SCHEMAS = {
             "execution",
             "actions",
             "pending",
-            "earlier",
         ],
         actors=ACTORS,
     ),
@@ -10080,7 +10071,6 @@ SCHEMAS.update(
         "ThreadReactions": items(
             obj({"emoji": "s", "count": "i", "actors": "a"}, required=["emoji", "count", "actors"])
         ),
-        "ThreadEarlier": obj({"home": "s", "messages": "i"}, required=["home", "messages"]),
         "ThreadUploaded": obj(
             {"thread": ref("ThreadView"), "message": ref("ThreadMessage")}, required=["thread", "message"]
         ),
@@ -10603,15 +10593,6 @@ STABLE.extend(
             "unreactToMessage",
             "Remove my reaction from a message (a no-op without one); answers the message's reactions",
             "ThreadReactions",
-        ),
-        (
-            "/api/v2/threads/{thread_id}/open-earlier",
-            "post",
-            "Threads",
-            "openEarlierMessages",
-            "A manager of a bot opens its Home's earlier shared-room messages to the Home's readers; a bot's Home only (422 "
-            "otherwise), managers only (403)",
-            "ThreadEarlier",
         ),
         (
             "/api/v2/uploads/threads/{thread_id}/messages",

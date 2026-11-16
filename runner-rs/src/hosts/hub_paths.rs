@@ -868,7 +868,6 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "thread members add",
     "thread members list",
     "thread members remove",
-    "thread open-earlier",
     "thread pin",
     "thread post",
     "thread react",

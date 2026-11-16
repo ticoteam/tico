@@ -32,9 +32,6 @@ A thread's audience is one of these:
   Making a thread public changes its audience, so it needs no Write on the group.
 - Adding a person, bot or group needs **Write** on them. Removing someone needs the thread's owner or an admin.
 - A group added to a thread is resolved live: whoever leaves the group loses the thread.
-- A bot's earlier messages reach its Home readers only once a manager of the bot opens them: **Open earlier messages to
-  Read** in the Home's **Thread settings** or on the notice each manager gets in their DM with the bot, or
-  `tico thread open-earlier <thread>`. Until then readers see one **Earlier messages** row.
 - Sub-threads follow the audience of the thread they branch from.
 - Mentions and follows never give access. Naming someone outside the thread leaves a warning for the author, and
   nothing else happens until that person is added.
@@ -64,7 +61,6 @@ you change it, so there is no Save button. A row you may not use is left out. On
   that is not a task's or a meeting's. Another limit shows as its number of days. See [Keeping messages](#keeping-messages).
 - **Summarize**: posts a summary of what is new in the thread and its sub-threads to your DM with **Assistant**.
 - **Mark all read**: marks the thread and every sub-thread under it read.
-- **Open earlier messages to Read**: on a Home with earlier messages. See [Who can read a thread](#who-can-read-a-thread).
 - **Archive** or **Unarchive**: a manager sees it, except on a Home. Archive takes the thread off the Threads list.
   Unarchive puts it back.
 
@@ -212,7 +208,7 @@ person or bot did; that actor is not shown as a name.
 | A bot's message | The bot's name, as usual. |
 | The Assistant, for a person | A normal message from **<first name>'s Assistant**. |
 | A task update (Tico's line about a task) | A small gray line. Two or more in a row fold into "N task updates", collapsed by default. |
-| A built-in: Follow-up timer, Earlier messages, Task roundup, Stuck check, Rule check, Health check, Maintenance | A small gray line led by its name. |
+| A built-in: Follow-up timer, Task roundup, Stuck check, Rule check, Health check, Maintenance | A small gray line led by its name. |
 | One of your automations | A small gray line; the name opens the automation. |
 | System (an update, a backup, a migration), or any other line from Tico | A small gray line with no sender. |
 
@@ -258,7 +254,6 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `tico thread sub <message>` | `tico_thread_sub` | open a message's sub-thread without posting |
 | `tico thread react <message-id> <emoji>` | `tico_thread_react` | your reaction to a message, such as `:+1:` |
 | `tico thread unreact <message-id> <emoji>` | `tico_thread_unreact` | remove your reaction |
-| `tico thread open-earlier <thread>` | `tico_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
 | `tico thread task <message-id> --title T --owner O` | `tico_thread_task` | a task from a message, private unless the thread is company-wide |
 | `tico thread delete <message-id>` | `tico_thread_delete` | delete your message: a marker stays and the asks it answered reopen |
 | `tico thread upload <thread> <file> [--text ..] [--kind say\|ask] [--to ACTOR] [--under MESSAGE]` | `tico_thread_upload` | a message with a local file streamed to the thread (or to a message's sub-thread) |
@@ -282,7 +277,6 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
   makes nothing and answers 404 `no_dm`. `POST /api/v2/threads/dm` with `members` and an optional `body` makes a group DM.
 - `GET /api/v2/threads?with=<actor>&cursor=&limit=`: the threads shared with that actor that you can read.
 - `PUT` and `DELETE /api/v2/messages/{id}/reactions/{emoji}`: add or remove your reaction.
-- `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.
 - `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
   `file`), under the chat upload size caps: `tico thread upload`.
 - `DELETE /api/v2/messages/{id}`: delete your message (`tico thread delete`).

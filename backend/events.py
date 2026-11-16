@@ -2359,11 +2359,7 @@ def _messages(view, rows, shared=None):
                 )
             else:
                 out.append((row, _SameForAll(cid, place, whole, refs)))
-        elif (
-            message.get("deleted_at")
-            and not threads.legacy_hidden(c, view.reader, message)
-            and _readable_before_deletion(view, dict(message))
-        ):
+        elif message.get("deleted_at") and _readable_before_deletion(view, dict(message)):
             out.append((row, {"id": subject, "conversation_id": cid, **place, "deleted": True}))
     return out
 
@@ -2433,7 +2429,7 @@ def _threads(view, rows, threads_scope=()):
         elif kind == "activity":
             # The newest message the viewer reads names the event; `unread_count` is how many of them are unread for
             # the viewer (one check each), so a list adds that many without a re-read.
-            shown = [ref for ref in (activity.get(tid) or {row["ref"]: None}) if _activity_shown(view, found, ref)]
+            shown = [ref for ref in (activity.get(tid) or {row["ref"]: None}) if _activity_shown(view, ref)]
             if not shown:
                 continue
             entry["counters"] = {
@@ -2462,13 +2458,9 @@ def _threads(view, rows, threads_scope=()):
         elif kind == "attention":
             pass  # the reader's needs-you set moved: the client re-reads it, nothing else is sent
         elif kind == "ranked":
-            # Its Important level moved (backend/thread_rank.py): the list is read again. Not to someone who reads only
-            # a migrated Home's old history, whose row nothing new may move.
-            if threads.legacy_reader_only(view.c, view.reader, found):
-                continue
+            pass  # its Important level moved (backend/thread_rank.py): the list is read again
         elif kind == "bot_status":
-            # The root's status rows as this reader reads them (backend/thread_bot_status.py), read for this one root;
-            # nothing to one who reads only a migrated Home's old history.
+            # The root's status rows as this reader reads them (backend/thread_bot_status.py), read for this one root.
             from . import thread_bot_status
 
             root = (
@@ -2476,7 +2468,7 @@ def _threads(view, rows, threads_scope=()):
                 if not found.get("root_id") or found["root_id"] == tid
                 else threads.thread_row(view.c, found["root_id"])
             )
-            if root is None or threads.legacy_reader_only(view.c, view.reader, root):
+            if root is None:
                 continue
             entry["thread_id"] = entry["root_id"]
             if viewed is None:
@@ -2519,18 +2511,16 @@ def _activity_unread(view, thread_id, message_id):
     )
 
 
-def _activity_shown(view, thread, message_id):
+def _activity_shown(view, message_id):
     """Whether a message's change may move this viewer's row of its thread: they read the message, or read it before it
-    was deleted. Someone who opens a migrated Home only for its old history sees nothing new (threads.sidebar)."""
+    was deleted."""
     from . import threads
 
     message = H.message(view.c, message_id, include_deleted=True) if message_id else None
-    if not message or threads.legacy_reader_only(view.c, view.reader, thread):
+    if not message:
         return False
     if message.get("deleted_at"):
-        return not threads.legacy_hidden(view.c, view.reader, message) and _readable_before_deletion(
-            view, dict(message)
-        )
+        return _readable_before_deletion(view, dict(message))
     return threads.message_readable(view.c, view.reader, message, thread_checked=True)
 
 
@@ -2891,7 +2881,6 @@ def _neutral(key):
     return (
         key[0] == "one"
         and key[1] == H.CONVERSATION_SQL
-        or key[0] in ("threads_legacy_homes", "threads_legacy_slugs")
         or key == ("SELECT value FROM registry_metadata WHERE key=?", ("people",))
     )
 

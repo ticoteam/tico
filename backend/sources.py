@@ -23,7 +23,6 @@ ASSISTANT_DEFAULT = "Assistant"
 # The built-in automations a keeper line can name: key -> display name. A write names its key in refs.source.
 BUILTINS = {
     "follow-up-timer": "Follow-up timer",
-    "earlier-messages": "Earlier messages",
     "task-roundup": "Task roundup",
     "stuck-check": "Stuck check",
     "rule-check": "Rule check",

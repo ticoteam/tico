@@ -34,7 +34,6 @@ SYSTEM_REFS = (
     "card",
     "follow_up",
     "carries",
-    "earlier_messages",
     "import",
     "replay",
 )  # system notices and history: never summarized

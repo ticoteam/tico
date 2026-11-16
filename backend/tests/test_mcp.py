@@ -70,7 +70,6 @@ THREAD_WRITES = {
     "tico_thread_dm_group",
     "tico_thread_react",
     "tico_thread_unreact",
-    "tico_thread_open_earlier",
     "tico_thread_task",
     "tico_thread_delete",
     "tico_thread_upload",
@@ -125,7 +124,6 @@ def test_thread_tools_reach_the_routes_of_the_contract():
     run("tico_thread_dm_group", {"members": ["human:cara"]})
     run("tico_thread_react", {"message_id": "m7", "emoji": ":+1:"})
     run("tico_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
-    run("tico_thread_open_earlier", {"thread_id": "th1"})
     run("tico_thread_task", {"message_id": "m7", "title": "Ship it", "owner": "bot:ops", "operation_id": "op1"})
     run("tico_thread_pin", {"thread": "th1"})
     run("tico_thread_unpin", {"thread": "th1"})
@@ -141,7 +139,6 @@ def test_thread_tools_reach_the_routes_of_the_contract():
         ("POST", "threads/dm", {"members": ["human:cara"], "body": None}),
         ("PUT", "messages/m7/reactions/:+1:", None),
         ("DELETE", "messages/m7/reactions/:+1:", None),
-        ("POST", "threads/th1/open-earlier", {}),
         ("POST", "threads/messages/m7/task", {"title": "Ship it", "owner": "bot:ops"}),
         ("PUT", "threads/th1/pin", None),
         ("DELETE", "threads/th1/pin", None),

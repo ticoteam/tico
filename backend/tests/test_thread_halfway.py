@@ -270,23 +270,6 @@ def test_at_most_five_bots_oldest_wait_first(api):
     assert rows[0]["actor"] == "bot:ops"
 
 
-def test_a_reader_of_only_a_migrated_homes_old_history_gets_no_bot_status(api, monkeypatch):
-    machine_for(api)
-    thread = new_thread(api)
-    with api.app.state.store.read() as c:
-        after = E.latest(c)
-    say(api, thread["id"], "@ops can you check this?")
-    assert bot_status(api, thread["id"], "ben-test")
-    monkeypatch.setattr(threads, "legacy_reader_only", lambda c, v, row: getattr(v, "actor", "") == "human:ben")
-    assert bot_status(api, thread["id"], "ben-test") == []
-    assert timeline(api, thread["id"], "ben-test")["bot_status"] == []
-    assert bot_status(api, thread["id"])  # the Home's own readers still see it
-    sent = [
-        d for _, topic, d in read_as(api, who(api, "ben-test"), after, ("threads",)) if d.get("kind") == "bot_status"
-    ]
-    assert sent == []
-
-
 def test_a_message_to_one_bot_that_names_another_is_only_the_first_bots_input(api):
     machine = machine_for(api, ("ops", "cpo"))
     thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo"))

@@ -6,11 +6,10 @@ so search never returns text the thread no longer shows. Only the start of a lon
 bounds what a write pays for.
 
 Search never decides who may read. The caller passes the visibility of the thread as SQL over a `conversations` row
-(alias `cv`), of the message as SQL over a `messages` row (alias `m`), and the full decision on each candidate as
-`readable` (threads.readable_sql, threads.message_sql and threads.message_readable, through threads.search). All three
-are required, so nothing is searched unfiltered. A hit the viewer may not read is not counted, paged or sent, and a
-hidden thread's existence does not show: a page that comes back empty has no `next_cursor`, whatever the hidden rows
-hold. Candidates are read in batches until the page fills or SCAN_MAX of them have been decided.
+(alias `cv`) and the full decision on each candidate as `readable` (threads.readable_sql and threads.message_readable,
+through threads.search). Both are required, so nothing is searched unfiltered. A hit the viewer may not read is not
+counted, paged or sent, and a hidden thread's existence does not show: a page that comes back empty has no
+`next_cursor`, whatever the hidden rows hold. Candidates are read in batches until the page fills or SCAN_MAX of them have been decided.
 
 Rows are keyed by `message_search_keys.id`, which is the FTS rowid. An update or delete finds its index row through
 that key, so no write scans the index.
@@ -39,9 +38,9 @@ def match_expression(query):
     return " AND ".join(f'"{word}"*' for word in words)
 
 
-def search(c, query, *, thread_sql, message_sql, readable, args=(), limit=20, before=None):
-    """The newest visible hits for `query`: {"hits": [...], "next_cursor"}. `thread_sql` and `message_sql` are SQL
-    booleans over `cv` and `m` (see the module docstring), `args` their parameters, in order; `readable(message)` decides
+def search(c, query, *, thread_sql, readable, args=(), limit=20, before=None):
+    """The newest visible hits for `query`: {"hits": [...], "next_cursor"}. `thread_sql` is a SQL boolean over `cv`
+    (see the module docstring), `args` its parameters, in order; `readable(message)` decides
     each candidate from its row. `before` is the `next_cursor` of the page before. Each hit: message_id, thread_id,
     title, from_actor, created, excerpt."""
     match = match_expression(query)
@@ -53,7 +52,7 @@ def search(c, query, *, thread_sql, message_sql, readable, args=(), limit=20, be
         f"snippet(message_search, 0, '', '', '…', {EXCERPT_WORDS}) AS excerpt "
         "FROM message_search JOIN message_search_keys k ON k.id=message_search.rowid "
         "JOIN messages m ON m.id=k.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE message_search MATCH ? AND ({thread_sql}) AND ({message_sql}) AND k.id<? "
+        f"WHERE message_search MATCH ? AND ({thread_sql}) AND k.id<? "
         "ORDER BY k.id DESC LIMIT ?"
     )
     below = int(before) if before else 1 << 62

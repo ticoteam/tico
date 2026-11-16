@@ -476,8 +476,6 @@ def test_only_what_the_company_may_read_reaches_the_company_update(api, fake_gma
     with store.transaction() as c:
         home = threads.home(c, "bot:ops")
         public = H.say(c, "human:ana", "bot:ops", "Use the Friday cutoff.", conversation_id=home["id"])
-        legacy = H.say(c, "human:ana", "bot:ops", "Old restricted history.", conversation_id=home["id"])
-        c.execute("UPDATE messages SET legacy_audience='shared:ops' WHERE id=?", (legacy["id"],))
         task = H.task_create(
             c, "human:ana", "Private billing rules", "Personal billing.", "bot:ops", lint=False, private=True
         )
@@ -489,10 +487,10 @@ def test_only_what_the_company_may_read_reaches_the_company_update(api, fake_gma
             conversation_id=home["id"],
             refs={"task": task["id"]},
         )
-        ids = {m["id"] for m in (public, legacy, private)}
+        ids = {m["id"] for m in (public, private)}
         items, _ = learnings.collect(c, store.settings, H.now(), {"ops": {"name": "Ops"}})
         corrections = [i for i in items if i["ref"].get("message") in ids]
-        assert len(corrections) == 3
+        assert len(corrections) == 2
         keep_items(c, corrections)
         assert [i["ref"]["message"] for i in learnings.pending(c, "ops")] == [public["id"]]
         c.execute(

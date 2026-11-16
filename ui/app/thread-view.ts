@@ -11,7 +11,6 @@ interface ThvThread extends ThreadRow {
   deletable?: boolean;
   root_id?: string;
   audience_group_id?: string;
-  earlier?: unknown;
 }
 // What a message quotes: the server's `reply_to`, or one made here from the message it names.
 interface ThvQuote {
@@ -50,7 +49,6 @@ interface ThvRefs {
   credential_request?: string;
   action?: string;
   read_back?: unknown;
-  earlier_messages?: { thread_id?: string };
   files?: ThvFileRef[];
   attachments?: ChatFile[];
   /** The runner's notices (backend/execution.py split_runner_notices): plain lines. */
@@ -76,7 +74,6 @@ interface ThvMessage {
   revision?: number | undefined;
   hidden?: boolean;
   deleted?: boolean;
-  earlier?: boolean;
   collapsed?: boolean;
   unread?: boolean;
   count?: number | string;
@@ -268,7 +265,7 @@ interface ThvLater {
   stick: boolean;   // any change in the frame asked to stay at the bottom
   read: boolean;    // send read marks once the messages are drawn
 }
-// One row of the drawn list: a message, a fold of hidden or earlier ones, or a collapsed sub-thread's link.
+// One row of the drawn list: a message, a fold of hidden ones, or a collapsed sub-thread's link.
 interface ThvRow {
   m?: ThvMessage;
   fold?: string;
@@ -677,15 +674,15 @@ async function thvDelete(view: ThvView, button: HTMLButtonElement) {
     location.hash = THREADS_ROUTE;
   } catch (e) { toast(errorMessage(e, ''), true); button.disabled = false; }
 }
-// A message the viewer may not read is one quiet row, never its words. Earlier shared history folds into one "Earlier
-// messages" row; two such rows meet where one page of it ends and the next begins.
+// A message the viewer may not read is one quiet row, never its words; two such rows meet where one page ends and the
+// next begins.
 function thvRows(view: ThvView) {
   const rows: ThvRow[] = [];
   for (const m of view.messages) {
     if (m.hidden) {
-      const fold = m.earlier ? 'earlier' : 'hidden', last = rows[rows.length - 1];
-      if (last?.fold === fold) { last.ids!.push(m.id); continue; }
-      rows.push({fold, id: m.id, ids: [m.id]});
+      const last = rows[rows.length - 1];
+      if (last?.fold === 'hidden') { last.ids!.push(m.id); continue; }
+      rows.push({fold: 'hidden', id: m.id, ids: [m.id]});
       continue;
     }
     // An older server's tree folds a long sub-thread's start: a quiet link to that sub-thread stands for it.
@@ -840,9 +837,7 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   // The Assistant's read-back of what it will approve is shown exactly as written, never formatted.
   else if (m.refs?.read_back) body = `<div class="th-body read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`;
   // A file the bot names is a link to it (file-mentions.ts).
-  else body = `${messageMd('th-body md', m.body || '', bot ? m.sender_id : '', {shortLinks: true})}${
-    // The notice a bot's manager got about its Home's closed history (no longer sent; old ones keep their button).
-    m.refs?.earlier_messages?.thread_id ? `<button type="button" class="ghost small th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''}`;
+  else body = messageMd('th-body md', m.body || '', bot ? m.sender_id : '', {shortLinks: true});
   // A bot's reply reads as Claude's does: one folded line of what its run did first (ui/app/chat.ts), then the words,
   // the runner's warnings and the message's cards.
   const run = !m.deleted && bot ? v2RunHTML(m, view.run) : '';
@@ -858,11 +853,7 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
     ${m.deleted ? '' : thvMsgActsHTML(view, m)}
   </div>`;
 }
-function thvFoldHTML(view: ThvView, row: ThvRow) {
-  if (row.fold === 'hidden') return `<div class="th-fold th-notshown" data-mid="${esc(row.id)}"><span>Not shown</span></div>`;
-  return `<div class="th-fold th-earlier" data-mid="${esc(row.id)}"><span>Earlier messages</span>${
-    view.thread?.earlier ? `<button type="button" class="linkish" data-th-earlier="${esc(view.id)}">Open earlier messages to Read</button>` : ''}</div>`;
-}
+const thvFoldHTML = (row: ThvRow) => `<div class="th-fold th-notshown" data-mid="${esc(row.id)}"><span>Not shown</span></div>`;
 const thvMoreHTML = (m: ThvMessage) => `<a class="th-fold th-more" href="${threadHref(m.thread_id)}" data-mid="${esc(m.id)}"><span>${esc(m.count)} earlier ${Number(m.count) === 1 ? 'reply' : 'replies'}</span></a>`;
 function thvPendingHTML(view: ThvView, p: ThvPending) {
   const text = `<div class="th-body">${esc(p.text)}${p.files?.length ? ` <span class="muted">· ${p.files.length} file${p.files.length === 1 ? '' : 's'}</span>` : ''}</div>`;
@@ -973,16 +964,14 @@ function thvLineGroups(view: ThvView) {
   }
   return of;
 }
-// The old notice about a Home's closed history keeps its Open button on the line.
 const thvLineHTML = (view: ThvView, m: ThvMessage) => sourceLineHTML(m, {cls: 'th-line' + (view.flash === m.id ? ' th-flash' : ''),
-  attrs: ` data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}"`,
-  tail: m.refs?.earlier_messages?.thread_id ? `<button type="button" class="linkish th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''});
+  attrs: ` data-mid="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}"`});
 // The line stands for its group: a button that opens or shuts it. Its panel is always in the markup (empty while shut),
 // so aria-controls names an element either way.
 const thvUpdateLineHTML = (req: string, panel: string, open: boolean) => `<div class="th-upd"><button type="button" class="th-upd-btn" data-th-update="${esc(req)}" aria-expanded="${open}" aria-controls="${panel}">› Update generated</button></div>`;
 
 // What the message rows read from the thread itself (thvMsgActsHTML, thvMoreHTML).
-const thvRowsKey = (view: ThvView) => `${thvCanPost(view)}|${!!view.thread?.earlier}`;
+const thvRowsKey = (view: ThvView) => `${thvCanPost(view)}`;
 // The list is its rows (thvRowsHTML), then the bots' status rows (thvTailHTML), so a status change redraws only those.
 function thvTailHTML(view: ThvView, rows: string) {
   if (['loading', 'gone', 'error'].includes(view.state)) return '';
@@ -1007,7 +996,7 @@ function thvRowsHTML(view: ThvView) {
     if (!divided && row.m && thvIsNew(view, row.m)) { out.push('<div class="th-newline" role="separator" aria-label="New"><span>New</span></div>'); divided = true; prev = null; }
     if (row.m && !row.m.deleted && isSourceLine(row.m)) { out.push(thvLineHTML(view, row.m)); prev = null; return; }
     if (row.m) { out.push(thvMsgHTML(view, row.m, thvJoins(view, prev, row.m))); prev = row.m; return; }
-    out.push(row.fold ? thvFoldHTML(view, row) : thvMoreHTML(row.more!));
+    out.push(row.fold ? thvFoldHTML(row) : thvMoreHTML(row.more!));
     prev = null;
   };
   for (let i = 0; i < rows.length; i++) {
@@ -1199,7 +1188,7 @@ function threadViewsLive(topic: string, d: ThvMessageEvent & ThvLiveEvent) {
         continue;
       }
       if (d.thread_id === view.id && d.thread) {
-        // A rename redraws the header and the composer's line; the rows only when what they show changed (Reply, Earlier).
+        // A rename redraws the header and the composer's line; the rows only when what they show changed (Reply).
         const was = thvRowsKey(view);
         view.thread = {...view.thread, ...d.thread};
         thvLater(view, thvRowsKey(view) === was ? ['head', 'composer'] : THV_ALL);
@@ -1794,13 +1783,6 @@ async function thvClick(view: ThvView, ev: Event) {
   const call = t.closest<HTMLElement>('[data-call]');
   if (call) { void callAction(view, call.dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadSettingsOpen(view); return; }
-  const earlier = t.closest<HTMLButtonElement>('[data-th-earlier]');
-  if (earlier) {
-    earlier.disabled = true;
-    try { await threadEarlierOpen(view, earlier.dataset.thEarlier); }
-    catch (e) { toast(errorMessage(e, ''), true); earlier.disabled = false; }
-    return;
-  }
   const quote = t.closest<HTMLElement>('[data-th-quote]');
   if (quote) { void thvGoTo(view, quote.dataset.thQuote!); return; }
   const stop = t.closest<HTMLButtonElement>('[data-th-stop]');

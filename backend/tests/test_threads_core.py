@@ -2,8 +2,6 @@
 held post writes nothing, a write that fails mid-way leaves nothing behind, sub-thread starts race to one row,
 revisions apply highest-first, the loop guard defers and resumes, inbox readers read deliveries, reactions keep to
 readers, a run's reply lands in its sub-thread, and session keys keep private and public apart.
-
-The migration's reader sets are checked by test_threads_migration_e2e.py (today's pre-threads predicates, read live).
 """
 
 import contextlib
@@ -102,7 +100,6 @@ def test_the_threads_contracts_on_the_demo_world(tmp_path, demo_template, subtes
         _the_inbox_reads_deliveries_not_to_actor,
         _reactions_need_read_access_and_are_one_per_emoji,
         _a_runs_reply_goes_to_the_sub_thread_of_its_parent_and_never_across_trees,
-        _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new,
         _outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot,
         _a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read,
         _a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read,
@@ -755,186 +752,18 @@ def test_session_keys_never_share_a_thread_across_audience_classes():
     assert sessions.lane(cfg, "ops", None, "c", "r1", "private") == "main"
 
 
-# ----------------------------------------------------------------------------- migration: crafted per-message cases
-from backend.tests.helpers.api import post as api_post  # noqa: F401
-from backend.tests.helpers.live_meetings import live  # noqa: F401
-
-UNSTAMPED = (
-    "UPDATE messages SET seq=NULL, origin_id=NULL, revision=0, restricted=1, legacy_audience=NULL",
-    "UPDATE conversations SET root_id=id, path='/'||id||'/', last_seq=0, last_unread_seq=0",
-    "DELETE FROM message_deliveries",
-    "DELETE FROM registry_metadata WHERE key='threads-migration'",
-)
+# ----------------------------------------------------------------------------- the restricted flag
+from backend.tests.helpers.live_meetings import live  # noqa: F401,E402
 
 
-def message_readers(c, auth, ids):
-    viewers = {a: threads.viewer(auth, w) for a, w in identities(c, auth).items()}
-    out = {}
-    for mid in ids:
-        row = dict(c.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone())
-        out[mid] = {a for a, v in viewers.items() if threads.readable(c, v, row)}
-    return out
-
-
-def test_migration_keeps_each_crafted_messages_readers_and_a_roster_change_only_narrows(live):
-    """A private task's reference, a meeting's provenance and a shared room's history: per message, the same readers
-    before the migration (columns unset, restricted: the full pre-threads check) and after it, and a removal only narrows."""
-    store, auth = live.app.state.store, live.app.state.auth
-    meeting = api_post(live, "live-meetings", {"title": "Synthetic restricted planning", "visibility": "private"})["id"]
-    with store.transaction() as c:
+def test_a_write_that_names_a_task_anywhere_in_its_refs_is_restricted(live):
+    with live.app.state.store.transaction() as c:
         secret = H.task_create(c, "human:ana", "Acme acquisition", "", "bot:finance", private=True, lint=False)
-        direct = H.open_conversation(
-            c, "human:ana", ["human:ana", "human:ben", "bot:ops"], kind="chat", subject="Plans"
-        )
-        plain = H.say(c, "human:ana", "bot:ops", "Lunch at noon", conversation_id=direct["id"])
-        task_ref = H.say(
-            c, "human:ana", "bot:ops", "See the acquisition", conversation_id=direct["id"], refs={"task": secret["id"]}
-        )
-        from backend.store import encode
-
-        provenance = H.say(c, "human:ana", "bot:ops", "From the meeting", conversation_id=direct["id"])
-        c.execute(
-            "UPDATE messages SET refs=? WHERE id=?",
-            (encode({"live_meeting": {"meeting_id": meeting}}), provenance["id"]),
-        )
-        shared = H.open_conversation(
-            c,
-            "human:ben",
-            ["human:ben", "bot:cpo"],
-            kind="chat",
-            subject="CPO room",
-            scope="shared",
-            room_key="cpo",
-            allow_held=True,
-        )
-        in_room = H.say(c, "human:ben", "bot:cpo", "Roadmap draft", conversation_id=shared["id"])
-        nested = H.say(c, "human:ana", "bot:ops", "Nested reference", conversation_id=direct["id"])
-        c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"origin": {"task": secret["id"]}}), nested["id"]))
-        ids = [plain["id"], task_ref["id"], provenance["id"], in_room["id"], nested["id"]]
-        for statement in UNSTAMPED:
-            c.execute(statement)
-    with store.read_transaction() as c:
-        before = message_readers(c, auth, ids)
-    assert "human:cara" not in before[task_ref["id"]] and "human:ben" in before[plain["id"]]
-    with store.transaction() as c:
-        threads.migrate(c)
-        stamped = {
-            r["id"]: dict(r)
-            for r in c.execute(
-                "SELECT id, seq, origin_id, restricted, legacy_audience FROM messages WHERE id IN (?,?,?,?,?)", ids
-            )
-        }
-    assert all(r["seq"] and r["origin_id"] for r in stamped.values())
-    assert stamped[task_ref["id"]]["restricted"] == 1 and stamped[in_room["id"]]["legacy_audience"] == "shared:cpo"
-    assert stamped[nested["id"]]["restricted"] == 1, "a task named under a safe key is still a task reference"
-    assert stamped[plain["id"]]["restricted"] == 0
-    with store.read_transaction() as c:
-        # New writes walk the same way.
+    with live.app.state.store.read_transaction() as c:
         assert threads.restricted_for(None, {"origin": {"task": secret["id"]}}, None, c=c) == 1
         assert threads.restricted_for(None, {"via": secret["id"]}, None, c=c) == 1
         assert threads.restricted_for(None, {"reason": "see #/task/abc"}, None) == 1
         assert threads.restricted_for(None, {"via": "assistant", "origin": {"install": "slack:acme"}}, None, c=c) == 0
-    with store.read_transaction() as c:
-        home = threads.home(c, "bot:cpo", create=False)
-        assert home["audience"] == "home" and home["owner_id"] == "bot:cpo"
-    with store.read_transaction() as c:
-        after = message_readers(c, auth, ids)
-    assert after == before
-    api_post(live, "people/cara", {"left": True})
-    with store.read_transaction() as c:
-        removed = message_readers(c, auth, ids)
-    assert all(removed[m] <= after[m] for m in ids)
-    assert all("human:cara" not in removed[m] for m in ids)
-
-
-def _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new(world, monkeypatch):
-    """Spec section 4: the shared room is its bot's Home. Its history keeps exactly its old readers until a manager
-    opens it; everything new follows Home Read. Pinned in Python, in SQL and in the legacy per-message check."""
-    from backend import task_privacy
-
-    store, auth, who = world
-    with store.transaction() as c:
-        homeless = [a for a in sorted(who) if a.startswith("bot:") and threads.home(c, a, create=False) is None]
-        bot = homeless[0]
-        slug = H.actor_id(bot)
-        old_reader, home_reader = people(who)[:2]
-        room = H.open_conversation(
-            c,
-            old_reader,
-            [old_reader, bot],
-            kind="chat",
-            subject="Shared room",
-            scope="shared",
-            room_key=slug,
-            allow_held=True,
-        )
-        old = H.say(c, old_reader, bot, "Old roadmap", conversation_id=room["id"])
-        # What the migration does to a shared room: its history keeps its readers, the room becomes the Home.
-        c.execute("UPDATE messages SET legacy_audience=?, restricted=1 WHERE id=?", ("shared:" + slug, old["id"]))
-        threads._store_shared_homes(c, slug)
-        assert threads.home(c, bot, create=False)["id"] == room["id"]
-        new = threads.post(c, bot, room["id"], "New plan")
-    real_home = threads.Viewer.can_read_home
-    monkeypatch.setattr(
-        threads.Viewer,
-        "shared_slugs",
-        lambda self, c, slugs: {x for x in slugs if x == slug and self.actor == old_reader},
-    )
-    monkeypatch.setattr(
-        threads.Viewer,
-        "can_read_home",
-        lambda self, c, owner: self.actor == home_reader if owner == bot else real_home(self, c, owner),
-    )
-
-    def sees(c, actor):
-        v = threads.viewer(auth, who[actor])
-        python = {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)}
-        sql = {
-            r[0]
-            for r in c.execute(
-                "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages") + " AND "
-                "conversation_id IN (SELECT id FROM conversations WHERE "
-                + threads.readable_sql(c, v, "conversations")
-                + ")",
-                (room["id"],),
-            )
-        }
-        legacy = {m for m in (old["id"], new["id"]) if task_privacy.message_readable(c, actor, H.message(c, m))}
-        return python, sql, legacy, threads.readable(c, v, room["id"])
-
-    with store.read_transaction() as c:
-        assert sees(c, old_reader) == ({old["id"]}, {old["id"]}, {old["id"]}, True)
-        listed = threads.timeline(c, threads.viewer(auth, who[old_reader]), room["id"])
-        assert [m["id"] for m in listed["messages"]] == [old["id"]], "an old reader never sees what is new"
-        assert listed["thread"]["last_seq"] == old["seq"] and listed["thread"]["me"]["unread"] == 0
-        python, sql, legacy, opens = sees(c, home_reader)
-        assert (python, sql, opens) == ({new["id"]}, {new["id"]}, True)
-        assert old["id"] not in legacy
-        # An internal bot that reads the Home, in a turn not granted the old room, sees only what is new too.
-        from backend.auth import Identity
-
-        peer = next(a for a in sorted(who) if a.startswith("bot:") and a != bot)
-        v = threads.viewer(auth, Identity(peer, "bot", attempt_id="att-none"))
-        monkeypatch.setattr(
-            threads.Viewer,
-            "can_read_home",
-            lambda self, c, owner: self.actor in (home_reader, peer) if owner == bot else real_home(self, c, owner),
-        )
-        v._hidden = None
-        sql = {
-            r[0]
-            for r in c.execute(
-                "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages"),
-                (room["id"],),
-            )
-        }
-        assert {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)} == {new["id"]} == sql
-    with store.transaction() as c:
-        threads.open_earlier_messages(c, H.KEEPER, slug)
-    with store.read_transaction() as c:
-        python, sql, _legacy, opens = sees(c, home_reader)
-        assert python == sql == {old["id"], new["id"]} and opens
-        assert sees(c, old_reader)[3] is False, "once opened, the Home is read by its Read audience alone"
 
 
 def _outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot(world):
@@ -996,8 +825,6 @@ def _a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read(
         open_task = H.task_create(c, owner.actor, "Acme launch", "", owner.actor, private=False, lint=False)
         tied = threads.post(c, owner, tid, "On it", refs={"task": secret["id"]})
         tied_open = threads.post(c, owner, tid, "Also on it", refs={"task": open_task["id"]})
-        kept = threads.post(c, owner, tid, "Old readers only")
-        c.execute("UPDATE messages SET legacy_audience='shared:finance' WHERE id=?", (kept["id"],))
-        page = [{"id": m["id"]} for m in (plain, reply, tied, tied_open, kept)]
+        page = [{"id": m["id"]} for m in (plain, reply, tied, tied_open)]
         threads.mark_narrower(c, page)
-    assert [bool(m.get("audience_limited")) for m in page] == [False, False, True, False, True]
+    assert [bool(m.get("audience_limited")) for m in page] == [False, False, True, False]

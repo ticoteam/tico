@@ -286,7 +286,6 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     ) == [
         "access",
         "access_bot_limit",
-        "bot-chats-to-home",
         "bot_access",
         "ceo-bot",
         "company-turn-incident",
@@ -314,8 +313,6 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "stage_rules_snooze_sweep",
         "strategy-bot",
         "task_session_default",
-        "threads-migration",
-        "threads-neutral-titles",
         "tool_settings.moved",
         "usage-count",
         "validate-proof-sweep",

@@ -405,8 +405,7 @@ def test_the_thread_answers_match_the_live_ones(api):
     call("openThreadDm", "get", "/api/v2/threads/dm", params={"with": "human:ben"})
     call("createThreadDm", "post", "/api/v2/threads/dm", json={"members": ["human:ben"], "body": "Quick question"})
     call("listThreads", "get", "/api/v2/threads", params={"with": "human:ben"})
-    ops_home = call("getThreadHome", "get", "/api/v2/threads/home/bot:ops")
-    call("openEarlierMessages", "post", f"/api/v2/threads/{ops_home['id']}/open-earlier")
+    call("getThreadHome", "get", "/api/v2/threads/home/bot:ops")
     uploaded = call(
         "uploadThreadMessage",
         "post",

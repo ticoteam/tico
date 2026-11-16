@@ -1019,7 +1019,7 @@ def digest(value):
 def message_page(c, cid, *, before=None, since=None, limit=200):
     """Newest page, in display order; rowid breaks ties for messages in the same millisecond. A
     deleted task comment is left out: this page is also what a bot's run is handed. `cid` may be
-    a list of conversations (a task's history across a merged room and its Home)."""
+    a list of conversations."""
     cids = list(cid) if isinstance(cid, (list, tuple)) else [cid]
     where = "conversation_id IN (%s)" % ",".join("?" * len(cids))
     clauses, args = [where, "deleted_at IS NULL"], list(cids)
@@ -1043,13 +1043,8 @@ def message_page(c, cid, *, before=None, since=None, limit=200):
 def task_message_page(c, task, **kwargs):
     """Messages about this task. A dedicated task thread returns the whole conversation;
     a shared chat room returns only rows tagged with this task id."""
-    from . import bot_home_merge
-
-    # A person's old chat with the bot moved into its Home (backend/bot_home_merge.py): the task's messages are in the
-    # room, its recorded Home and the Home it is in now. The last one is the room the task's messages belong to.
-    cids = bot_home_merge.history_ids(c, task["conversation_id"])
-    page = message_page(c, cids, **kwargs)
-    conv = H.conversation(c, cids[-1])
+    page = message_page(c, task["conversation_id"], **kwargs)
+    conv = H.conversation(c, task["conversation_id"])
     if conv and conv.get("task_id") == task["id"]:
         return page
     page["messages"] = [m for m in page["messages"] if H.message_task_id(m) == task["id"]]
@@ -2356,11 +2351,6 @@ class Store:
                 from . import strategy_bot as StrategyBot
 
                 StrategyBot.migrate(c)
-                # Cards waiting in the owner's earlier Strategy Owner chat move to their Assistant room
-                # (backend/assistant.py: one Assistant for everyone). Idempotent.
-                from . import assistant as Assistant
-
-                Assistant.migrate(c, self.settings)
                 # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
                 from . import profiles as Profiles
 

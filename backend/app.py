@@ -35,7 +35,6 @@ from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link, setup_handoff
 from . import org_rule_check
 from . import task_rule_gate
-from . import bot_home_merge
 from .roadmaps import exact_approval
 from . import cloud_access
 from . import counsel
@@ -1950,9 +1949,6 @@ def create_app(settings=None):
             elif kind != "turn_id":
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
-    def named_destination(c, who, body, create=True):
-        return recipient_gate.named_destination(c, who, body, auth, create=create)
-
     def send(c, who, body):
         body = routed_message(c, who, body)
         check_refs(c, who, body.refs)
@@ -2492,21 +2488,11 @@ def create_app(settings=None):
 
     def chat_place(who, bot):
         """A person's chat with a bot is the direct chat it lands in: its conversation id is the thread `where:` names.
-        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread). Once the
-        bot's chats have moved, that chat is its Home (backend/bot_home_merge.py home_for_chat)."""
+        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread)."""
 
         def place(c, author, recipients):
-            home = bot_home_merge.home_for_chat(c, who.actor, bot, create=False)
             chat = (views.direct_chat(c, who.actor, bot) or {}).get("id") or ""
-            return org_rule_check.place_for(c, author, recipients, home or chat)
-
-        return place
-
-    def home_place(home):
-        """A place that is one Home: a write there is in `where: thread:<home>`, and its kind is a thread."""
-
-        def place(c, author, recipients):
-            return org_rule_check.place_for(c, author, recipients, home)
+            return org_rule_check.place_for(c, author, recipients, chat)
 
         return place
 
@@ -2695,7 +2681,7 @@ def create_app(settings=None):
         check read, so the audience is read again here, inside the write: a caller who lost access gets 404, and an
         audience that moved since the check is checked again (409)."""
         body = routed_message(c, who, body)
-        body.conversation_id = named_destination(c, who, body)
+        body.conversation_id = body.conversation_id or None
         audience = rule_message_audience(c, who, body) if rc is not None else None
         replay = {"body": body.model_dump(mode="json", by_alias=True), **({"files": files} if files else {})}
         rule = org_rule_check.apply(c, rc, body.text, replay, audience_now=audience)
@@ -2719,51 +2705,6 @@ def create_app(settings=None):
             return None, None
         with store.read() as c:
             body = routed_message(c, who, body)
-        if body.conversation_id:
-            # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
-            # attempt, a private run's, still decides what the Home allows. A room whose Home is archived gets the bot's
-            # Home made here, before the checks, as the implicit path does, so the checks see where the words would land.
-            with store.read() as c:
-                make = bot_home_merge.home_missing(c, body.conversation_id)
-                if not make:
-                    body.conversation_id = named_destination(c, who, body, create=False)
-            if make:
-                with store.transaction() as c:
-                    body.conversation_id = named_destination(c, who, body)
-        elif not H.is_human(who.actor):
-            # A bot's message to a person that names no room goes to the person's chat Home (hubdb.chat_home). The checks
-            # must see that Home: it is made here if the bot has none open (an archived one), so a private run's words
-            # cannot reach a Home the checks never named.
-            with store.transaction() as c:
-                body.conversation_id = named_destination(c, who, body)
-        elif str(body.to).lower() != "assistant":
-            # A person's message to a bot that names no room is written to the bot's personal room (rooms.chat_room), which
-            # is the chat's Home once the bot's chats have moved (rooms.personal_room). The recipient is resolved as the
-            # write resolves it (auth.target: `bot:<slug>`, a bare slug or an id), so every spelling of one bot gets the same
-            # Home. The checks name that Home too, so `where: thread:<home>` sees it, and it is made first when archived, as
-            # the write would make it. A shared bot's shared room is not a Home: a member's message there is checked where it
-            # is written. The Assistant's own room is not a Home either (send routes it apart).
-            from .shared_bots import route as shared_route
-
-            with store.read() as c:
-                to = auth.target(c, who, body.to)
-                target = H.actor_id(shared_route(c, who.actor, to)) if to.startswith("bot:") else ""
-                personal = (
-                    bool(target)
-                    and target != settings.assistant_bot
-                    and not (
-                        rooms.thread_mode(c, target) == rooms.SHARED and rooms.shared_member(c, auth, who.actor, target)
-                    )
-                )
-                make = personal and bot_home_merge.chat_home_missing(c, who.actor, target)
-                home = (
-                    None if make or not personal else bot_home_merge.home_for_chat(c, who.actor, target, create=False)
-                )
-            if make:
-                with store.transaction() as c:
-                    home = bot_home_merge.home_for_chat(c, who.actor, target)
-            if home and place is None:
-                place = home_place(home)
         reach.precheck(
             store,
             who,
@@ -2802,7 +2743,7 @@ def create_app(settings=None):
             ):
                 return None
             cid = receipt["conversation_id"]
-            if body.conversation_id and named_destination(c, who, body, create=False) != cid:
+            if body.conversation_id and body.conversation_id != cid:
                 return None
             return {**body.model_dump(), "conversation_id": cid}
 

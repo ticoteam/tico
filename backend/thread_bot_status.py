@@ -406,15 +406,11 @@ def _location(c, bot):
 
 
 def status(c, v, root):
-    """The bot status rows of this root for viewer `v`, who reads it (the caller checked). Nothing for one who reads
-    only a migrated Home's old history: what its bots do now is not theirs to see."""
-    from . import queue_refusals, threads
+    """The bot status rows of this root for viewer `v`, who reads it (the caller checked)."""
+    from . import queue_refusals
 
     root_id = _root(c, root)
     if not root_id:
-        return []
-    row = root if isinstance(root, dict) and root.get("id") == root_id else H.conversation(c, root_id)
-    if row and threads.legacy_reader_only(c, threads.viewer(None, v), row):
         return []
     found = candidates(c, root_id)
     if not found:

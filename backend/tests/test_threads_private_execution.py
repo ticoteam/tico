@@ -99,8 +99,8 @@ def test_the_reader_of_a_hidden_parent_still_sees_the_sub_thread_title(api):
 
 
 def test_a_title_stored_before_the_fix_is_hidden_from_a_reader_of_a_hidden_parent(api):
-    """A sub-thread made before the title rule holds its parent's first line. Reads hide it from the reader who cannot
-    read the parent, and the stored copy is cleared by the start-up cleanup."""
+    """A sub-thread titled by hand with its parent's first line: reads hide it from the reader who cannot read the
+    parent."""
     _, _, sub_id = hidden_sub_thread(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Secret launch plan for the board", sub_id))
@@ -111,22 +111,6 @@ def test_a_title_stored_before_the_fix_is_hidden_from_a_reader_of_a_hidden_paren
         api.get(f"/api/v2/threads/{sub_id}", headers=headers("cara-test")).json()["title"]
         == "Secret launch plan for the board"
     )
-    with api.app.state.store.transaction() as c:
-        threads._neutral_titles(c)
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
-
-
-def test_the_cleanup_keeps_a_title_a_person_gave_and_a_visible_parent_keeps_its_derived_title(api):
-    thread, _, sub_id = hidden_sub_thread(api)
-    with api.app.state.store.transaction() as c:
-        plain = threads.post(c, "human:cara", thread["id"], "Plain topic line")
-        c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Budget notes", sub_id))
-        keeper = threads.sub_thread(c, "human:cara", plain["id"])["id"]
-        c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Plain topic line", keeper))
-        threads._neutral_titles(c)
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == "Budget notes"
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (keeper,)).fetchone()[0] == ""
-    assert api.get(f"/api/v2/threads/{keeper}", headers=headers("ben-test")).json()["title"] == "Plain topic line"
 
 
 def runner_reply(c, thread_id, question, text, refs):
@@ -144,8 +128,6 @@ def test_a_sub_thread_on_an_ordinary_bot_reply_keeps_its_title(api):
         assert H.message(c, reply["id"])["restricted"] == 1
         sub_id = threads.sub_thread(c, "human:ana", reply["id"])["id"]
         # Nothing derived is stored: the title is the parent's first line, shown on read to readers of the parent.
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
-        threads._neutral_titles(c)
         assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
     for reader in ("ana-test", "ben-test"):
         seen = api.get(f"/api/v2/threads/{sub_id}", headers=headers(reader)).json()

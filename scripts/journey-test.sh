@@ -237,14 +237,7 @@ ask() {  # name, then what to ask (env=NAME, worktree=TASK): one turn with BotOp
   retry 120 reply_to "$cid" "$nonce" || { say "no reply from the fake harness to $nonce"; return 1; }
 }
 fact() { tr ' ' '\n' < "$WORK/reply" | sed -n "s/^$1=//p" | head -n 1; }   # one fact of the last reply
-current_room() {  # conversation id: the room its messages are in now. When the bot's chats moved into its Home (migration
-  # 0067, backend/bot_home_merge.py) the old room is closed and its messages carry the Home's id; home_merges records which.
-  # Looked up on every check, so the room is found where it is after the update, a rollback or a restore.
-  local home
-  home="$(sql "SELECT home_id FROM home_merges WHERE conversation_id='$1' LIMIT 1" 2>/dev/null)"
-  printf '%s\n' "${home:-$1}"
-}
-replied() { get "conversations/$(current_room "$(cat "$WORK/conversation")")/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
+replied() { get "conversations/$(cat "$WORK/conversation")/messages" | json 'sys.exit(0 if any(m["body"].startswith("journey-reply:") for m in d["messages"]) else 1)'; }
 conversation_intact() { replied && [ "$(environment_id)" = "$STATE_ID" ]; }
 fixture_intact() {  # the rows scripts/make_upgrade_fixture.py added, as many as it added
   [ "$(sql "SELECT (SELECT count(*) FROM bots WHERE slug IN ('coo','cmo','seo')) || ' ' || (SELECT count(*) FROM tasks WHERE id IN ('t1','t2','t3')) || ' ' || (SELECT count(*) FROM messages WHERE id IN ('m1','m2'))")" = "3 3 2" ]
@@ -547,15 +540,7 @@ step_old_runner() {
   [ "$(docker inspect --format '{{.Config.Image}}' "$RUNNER" | sed 's/.*://')" = "$PREV" ] || { say "the runner is not on $PREV"; return 1; }
   task="$(new_task "Acme pricing page")" || return 1
   ask old worktree="$task" || return 1
-  if [ "$(current_room "$SEED_CONVERSATION")" != "$SEED_CONVERSATION" ]; then
-    # The seeded chat moved into the bot's Home on the update (backend/bot_home_merge.py): this turn starts a new thread
-    # there, so the Home's thread is the baseline for the checks after this one.
-    [ "$(fact thread)" != "$SEED_THREAD" ] || { say "the chat moved to the Home but the $PREV runner kept the seeded thread: $(cat "$WORK/reply")"; return 1; }
-    [ "$(cat "$WORK/conversation")" = "$(current_room "$SEED_CONVERSATION")" ] || { say "the $PREV runner's turn did not land in the Home"; return 1; }
-    SEED_THREAD="$(fact thread)"
-  else
-    [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the $PREV runner did not continue the seeded session: $(cat "$WORK/reply")"; return 1; }
-  fi
+  [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the $PREV runner did not continue the seeded session: $(cat "$WORK/reply")"; return 1; }
   [ "$(fact worktree)" = ok ] || { say "the $PREV runner could not add a worktree: $(cat "$WORK/reply")"; return 1; }
   [ "$(worktree_state "$task" | tr '\n' ' ')" = "present on-disk " ] || { say "the $PREV runner's new worktree is $(worktree_state "$task" | tr '\n' ' ')"; return 1; }
 }

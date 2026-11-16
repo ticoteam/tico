@@ -17,6 +17,7 @@ import time
 
 import pytest
 
+from backend.store import H
 from backend.tests.live import live  # noqa: F401  (the live fixture the Computer listens through)
 from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
 from backend.tests.threads_e2e import call, create_thread, home_id, ok, require_threads_api, say, timeline
@@ -241,7 +242,7 @@ def test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages(api, compu
 
 
 def public_turn(api, computer):
-    """A DM with a secret, then a public thread whose legacy-audience message is kept out of replays. Returns the
+    """A DM with a secret, then a public thread whose message tied to a private task is kept out of replays. Returns the
     public turn's (kind, prompt) and the provider calls it made from its start (`seen`)."""
     require_threads_api(api)
     computer.start()
@@ -251,10 +252,14 @@ def public_turn(api, computer):
     seen = len(computer.calls())
     company = create_thread(api, title="Launch notes", audience="company", members=["bot:ops"])
     say(api, "ana-test", company["id"], "PUBLIC-ROOM note: launch is Tuesday")
-    legacy = say(api, "ana-test", company["id"], "LEGACY-SECRET: the price is internal")
-    # A message its old readers alone may read: kept in the thread, never replayed to a public session.
+    narrower = say(api, "ana-test", company["id"], "TASK-SECRET: the price is internal")
+    # A message tied to a private task, which some readers of the thread may not read: kept in the thread, never
+    # replayed to a public session.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET legacy_audience='shared:nobody', restricted=1 WHERE id=?", (legacy["id"],))
+        secret = H.task_create(c, "human:ana", "Pricing", "", "human:ana", private=True, lint=False)
+        c.execute(
+            "UPDATE messages SET refs=?, restricted=1 WHERE id=?", (json.dumps({"task": secret["id"]}), narrower["id"])
+        )
     say(api, "ana-test", company["id"], "@ops summarise the launch notes")
     until(lambda: finished(computer) == 2, "the reply in the public thread")
     kind, _thread = provider_turns(computer)[-1]
@@ -262,11 +267,11 @@ def public_turn(api, computer):
 
 
 @pytest.mark.parametrize("harness", ["claude"])
-def test_a_public_turn_never_carries_a_direct_message_or_legacy_text(api, computer):
+def test_a_public_turn_never_carries_a_direct_message_or_narrower_text(api, computer):
     kind, prompt, seen = public_turn(api, computer)
     assert kind == "new", "a public thread's first turn starts its own session"
     assert "DM-SECRET" not in prompt, "a direct message never reaches a public turn"
-    assert "LEGACY-SECRET" not in prompt, "a legacy-audience message never reaches a public turn"
+    assert "TASK-SECRET" not in prompt, "a message tied to a private task never reaches a public turn"
     # Nothing the provider saw during the public turn, not only its prompt, carries the direct message's text.
     leaked = [call_ for call_ in computer.calls()[seen:] if "DM-SECRET" in json.dumps(call_)]
     assert not leaked, f"the direct message reached the provider in a public turn: {leaked}"

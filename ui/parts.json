@@ -8,8 +8,7 @@
   "pages": [],
   "calls": [
    "threadMembersOpen",
-   "threadSettingsOpen",
-   "threadEarlierOpen"
+   "threadSettingsOpen"
   ],
   "idle": []
  },

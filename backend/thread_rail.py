@@ -514,18 +514,17 @@ def _member_counts(c, ids):
 
 
 # ----------------------------------------------------------------------------- catch up
-# A message the per-message check passes as it stands, without reading it whole: not restricted, no old Home history.
-# Any other, and every message of a migrated Home's thread (`threads._legacy_homes`), is read whole for the check.
-PLAIN = "(m.restricted=0 AND m.legacy_audience IS NULL)"
+# A message the per-message check passes as it stands, without reading it whole: not restricted. Any other is read
+# whole for the check.
+PLAIN = "(m.restricted=0)"
 
 
 def _readable_ids(c, v, light):
     """The ids of these message rows ({"id", "conversation_id", "plain"}, their threads already checked) the reader may
     read: a plain one passes as it is; any other is read whole for the per-message check."""
-    legacy = T._legacy_homes(c)
     out, whole = set(), []
     for m in light:
-        (out.add if m["plain"] and m["conversation_id"] not in legacy else whole.append)(m["id"])
+        (out.add if m["plain"] else whole.append)(m["id"])
     rows = [
         dict(r)
         for part in H.chunks(whole)
@@ -671,7 +670,7 @@ def _readable_new(c, v, roots):
     """{root id: how many new messages of its open subtree the reader may read}: subtree_summaries' unread, through the
     thread check for each sub-thread (at most CATCH_UP_THREADS a root) and the per-message check for each message that
     can hide (at most CATCH_UP_HIDDEN read whole a call; past that they are not counted)."""
-    mark, subtree, legacy = T._subtree_mark(c, v), T._SUBTREE.format(me="?"), T._legacy_homes(c)
+    mark, subtree = T._subtree_mark(c, v), T._SUBTREE.format(me="?")
     groups = []
     for part in H.chunks(list(roots)):
         unread_sql, args = T._subtree_unread_sql(c, v, part)
@@ -690,7 +689,7 @@ def _readable_new(c, v, roots):
     for g in groups:
         if g["thread"] != g["root"] and not (found.get(g["thread"]) and T.thread_readable(c, v, found[g["thread"]])):
             continue
-        sure = 0 if g["thread"] in legacy else int(g["plain"] or 0)
+        sure = int(g["plain"] or 0)
         out[g["root"]] = out.get(g["root"], 0) + sure
         if int(g["n"]) > sure:
             hidden.append(g)
@@ -698,10 +697,9 @@ def _readable_new(c, v, roots):
     for g in hidden:
         if budget <= 0:
             break
-        maybe = "" if g["thread"] in legacy else f" AND NOT {PLAIN}"
         for r in c.execute(
             f"SELECT m.* FROM {subtree}JOIN messages m ON m.conversation_id=s.id AND m.seq>{mark} "
-            f"WHERE s.id=? AND {T.unread_message_sql()}{maybe} ORDER BY m.seq LIMIT ?",
+            f"WHERE s.id=? AND {T.unread_message_sql()} AND NOT {PLAIN} ORDER BY m.seq LIMIT ?",
             (v.actor, g["thread"], v.actor, v.actor, budget),
         ).fetchall():
             budget -= 1
@@ -719,14 +717,12 @@ def _walk(c, v, flags, after=None):
     before it, so a later page goes on from there and pages, `count` and `catch_up_ids` agree. Each item is {"row",
     "rank", "activity", "mention", "new_count", "unread", "attention", "scanned"}."""
     mentions, held, homes = flags
-    history = T._history_only_roots(c, v)
     extra, marks = _names(v, c)
     flagged = sorted(set(mentions) | held | set(homes))
     args = {
         "me": v.actor,
         "flagged": json.dumps(flagged),
         "mentions": json.dumps(sorted(mentions)),
-        "history": json.dumps(history),
         **extra,
     }
     by_person, to_viewer = T.unread_terms(c, v)
@@ -738,7 +734,7 @@ def _walk(c, v, flags, after=None):
         T.readable_sql(c, v, "r"),
         f"(({audience} IN ('company','team','members','personal','participants','task') AND "
         f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_flagged})",
-        f"({is_flagged} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))",
+        f"({is_flagged} OR {by_person} OR {to_viewer})",
         # A muted root shows only for a mention.
         f"({is_mention} OR NOT EXISTS (SELECT 1 FROM thread_followers mf WHERE mf.thread_id=r.id "
         "AND mf.actor=:me AND mf.notify='muted'))",
@@ -767,7 +763,7 @@ def _walk(c, v, flags, after=None):
             # A bot's Home counts only `_home_replies`, already checked: counting its messages again would spend the
             # per-message checks (and CATCH_UP_HIDDEN) on a number that is never used.
             bot_homes = {r["id"] for r in found if r and _is_bot_home(r, v)}
-            counts = _readable_new(c, v, [i for i in readable if i not in history and i not in bot_homes])
+            counts = _readable_new(c, v, [i for i in readable if i not in bot_homes])
             for r in found:
                 scanned += 1
                 position = [int(r["activity"] or 0), r["id"]]
