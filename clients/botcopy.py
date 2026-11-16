@@ -6,7 +6,7 @@ grants credentials; this module makes the repository and the commits.
 
 A copy is a fresh repository with one commit: the original's files at the commit it was at, not its history.
 Nothing is linked afterwards except `copied_from: {bot, sha}` on the server, which "update from the original" and
-"suggest to the original" read. Both work on the instructions only (`AGENTS.md`, `skills/`, `playbooks/`), file by file,
+"suggest to the original" read. Both work on the instructions only (`AGENTS.md`, `skills/`, `.claude/skills/`, `playbooks/`), file by file,
 with `git merge-file` for the three-way merge.
 
 Secrets never travel: dotenv files, `secrets/`, key files and credentials are left out whatever else is asked.
@@ -29,7 +29,7 @@ from clients.manifest import folder_dir, manifest_path, repo_dir, tools_of
 # What "the original's instructions" means. AGENT.md is the instruction file of a repository the runner has not moved
 # to AGENTS.md yet: kept in scope so the move reads as one deletion and one addition.
 INSTRUCTION_FILES = ("AGENTS.md", "AGENT.md")
-SCOPE = (*INSTRUCTION_FILES, "skills/", "playbooks/")
+SCOPE = (*INSTRUCTION_FILES, "skills/", ".claude/skills/", "playbooks/")
 # Left out unless the person asked for the original's memory: what the bot learned and did, not how it works.
 # state.md is the status note an older repository may still hold.
 MEMORY_DIRS = ("memory", "notes", "state", "reports", "artifacts")

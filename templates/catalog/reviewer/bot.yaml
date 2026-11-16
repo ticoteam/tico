@@ -28,5 +28,5 @@ tools:
     can: [read]
     note: "reads open pull requests, their diffs and checks; every review comment is a draft on the task for a human to post"
 # Writing to GitHub is the owner's decision, not the template's: the team's GitHub App token can write, so the only
-# thing between this bot and a public comment is its declared access and .claude/settings.json, which allows reviews and
-# comments and denies merging, closing and editing. It stays read only; a posted review needs granted write access.
+# thing between this bot and a public comment is its declared access and .claude/settings.json, which denies merging,
+# closing and editing. It stays read only; a posted review needs granted write access.

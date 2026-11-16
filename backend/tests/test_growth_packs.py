@@ -2,9 +2,9 @@
 Experiments and Growth Monitoring with the same stage playbooks, runs exactly two routines (Watch and Find ideas) on its
 channel's cadence, and tags its tasks with the channel key the setup chart uses.
 
-The stage playbooks are one text shipped in every pack, so a fix to one is a fix to all: a copy that drifts would teach
-one Owner a different way out of a stage. A routine or requirement renamed in one place and not the other would leave a
-bot running a playbook that names a stage line nobody checks."""
+The stage playbooks are one file every pack takes (templates/catalog/_shared), so a fix to one is a fix to all. A routine
+or requirement renamed in one place and not the other would leave a bot running a playbook that names a stage line nobody
+checks."""
 
 import re
 from pathlib import Path
@@ -32,14 +32,6 @@ PACKS = {
     "search-ads-owner": ("search-ads", {"watch": DAILY, "find-ideas": FIND}),
     "social-ads-owner": ("social-ads", {"watch": DAILY, "find-ideas": FIND}),
 }
-# One text in every pack: the stage playbooks and AGENTS.md's "Your pipelines" section.
-SHARED = (
-    "playbooks/watch.md",
-    "playbooks/find-ideas.md",
-    "playbooks/build-a-bet.md",
-    "playbooks/run-and-measure.md",
-    "playbooks/fix-a-slip.md",
-)
 
 
 def manifest(template):
