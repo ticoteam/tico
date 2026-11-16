@@ -199,7 +199,7 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     const told = create.locator('#task-create-readers');
     await told.waitFor({state: 'visible'});
     assert.match(await told.innerText(), /can read it as it moves through Product: Reviewer/);
-    assert.equal(posted.findLast(x => x.p.endsWith('/private-readers'))!.body['parent'], 't-11');
+    assert.equal(posted.filter(x => x.p.endsWith('/private-readers')).at(-1)!.body['parent'], 't-11');
     // Another pipeline that names nobody: the line goes; back to Product: it comes back.
     await create.locator('[name=pipeline]').selectOption('ops');
     await told.waitFor({state: 'hidden'});
