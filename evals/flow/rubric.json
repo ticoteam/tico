@@ -1,0 +1,70 @@
+{
+  "version": 2,
+  "summary": "What makes a question a person can answer in Flow (docs/flow-scenarios.md): eight yes/no checks, each true for a good question, and any no fails the question. `layer` says who applies it: `mechanical` plain code alone (evals/flow/quality.py), `judge` the judge model alone, `both` plain code first and the judge where code cannot tell. `judge` is the judge model's instruction, asked of a state {question, choices, context}. Wording from the Assistant's owner, round 2.",
+  "checks": [
+    {
+      "id": "one_decision",
+      "name": "One decision",
+      "rule": "It settles exactly one thing: no \"and\", no \"all of them\", no list kept somewhere else.",
+      "layer": "both",
+      "judge": "Does the `question` settle exactly one thing, with no second question joined by \"and\", no \"all of them\", and no list of questions kept somewhere else?",
+      "not_for": "One decision that covers several named things the same way (turn these three back on) is still one decision."
+    },
+    {
+      "id": "plain_sentence",
+      "name": "Plain sentence",
+      "rule": "The first line is a question you can answer without opening anything.",
+      "layer": "both",
+      "judge": "Is the first sentence of the `question` a plain question the person can answer from what it says, without opening a page, a comment or a file?",
+      "not_for": "A short line after the question saying what the asker will do next is fine."
+    },
+    {
+      "id": "no_ids_jargon",
+      "name": "No jargon or ids",
+      "rule": "No version numbers, stage or field names, internal names or links.",
+      "layer": "both",
+      "judge": "Is the `question` free of version numbers, stage or field names, internal names, ids, code and links, using only words a business owner would use?",
+      "not_for": "Words from the person's own business, and the names of the person's own bots and teammates, are not jargon."
+    },
+    {
+      "id": "real_choices",
+      "name": "Real choices",
+      "rule": "2 to 4 options a person would actually pick between, each saying what happens.",
+      "layer": "both",
+      "judge": "Does the person get 2 to 4 real options to pick between (a yes/no question counts as two), each saying what happens, never placeholders, made-up examples or near-duplicates?",
+      "not_for": "A question with a box to type in, and one suggested answer drawn from the person's own records beside it, passes."
+    },
+    {
+      "id": "recommended_first",
+      "name": "Recommended first",
+      "rule": "The asker's pick comes first and is marked.",
+      "layer": "both",
+      "judge": "When there are choices, is the one the asker recommends listed first and marked as the recommendation?",
+      "not_for": "An open question with no choices passes."
+    },
+    {
+      "id": "not_answered",
+      "name": "Not already answered",
+      "rule": "Nothing in the code, docs, data or your earlier decisions answers it.",
+      "layer": "judge",
+      "judge": "Does answering need the person, because nothing the `context` says the company already holds (its code, docs, data or the person's earlier decisions) answers it?",
+      "not_for": "Asking the person to confirm text that was drafted for them is fine: the draft is a guess until they say so."
+    },
+    {
+      "id": "says_what_it_changes",
+      "name": "Says what it changes",
+      "rule": "One line on what the answer decides, and the answer changes something that is saved.",
+      "layer": "judge",
+      "judge": "Can the person tell from the `question` and its `context` what their answer decides, and does the answer change something that is saved?",
+      "not_for": ""
+    },
+    {
+      "id": "right_person",
+      "name": "Right person, no detour",
+      "rule": "You can save the answer yourself, with no other page, connect step or Settings.",
+      "layer": "both",
+      "judge": "Going by the `context`, can the person asked save this answer themselves, right here, with no other page, connect step or Settings?",
+      "not_for": ""
+    }
+  ]
+}

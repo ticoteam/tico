@@ -1,0 +1,935 @@
+{
+  "summary": "Invented questions for the rubric (rubric.json), ten good and twelve bad, about fictional companies. `mechanical` is what plain code must say (evals/flow/quality.py `mechanical`, exactly, null where only a judge can tell); `expect` is the right verdict on every check, which the live judge run (python -m evals.flow.run judge) scores its verdicts against. A file of a bot's asks has the same shape without `mechanical` and `expect`.",
+  "questions": [
+    {
+      "id": "good-price",
+      "question": "Should Acme raise the starter plan from $29 to $39 a unit next month?",
+      "choices": [
+        "Keep $29",
+        "Raise to $39"
+      ],
+      "recommended": "Keep $29",
+      "context": "The pricing page shows $29 a unit. Three landlords who left this month said the price was not why.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-call-first",
+      "question": "Which landlord should the sales bot call first this week?",
+      "choices": [
+        "The 4-unit landlord who asked for a demo",
+        "The 12-unit landlord on Pine Road"
+      ],
+      "recommended": "The 4-unit landlord who asked for a demo",
+      "context": "Two leads came in on Monday. The 4-unit landlord asked for a demo; the 12-unit one downloaded the price sheet.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-serve-first",
+      "question": "Who should Acme serve first: landlords with one to twenty units, or property managers?",
+      "choices": [
+        "Landlords with one to twenty units",
+        "Property managers"
+      ],
+      "recommended": "Landlords with one to twenty units",
+      "context": "Forty small landlords pay today. No property manager has signed up.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-refund",
+      "question": "Can the support bot send the refund to the tenant who was charged twice?",
+      "choices": [
+        "Send the refund",
+        "Not yet"
+      ],
+      "recommended": "Send the refund",
+      "context": "The tenant at 14 Elm Court paid March rent twice on the same day. The bank shows both payments.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-wont-do",
+      "question": "What will Acme never do, even when a big customer would pay for it?",
+      "choices": [],
+      "open": true,
+      "context": "The strategy draft's What we won't do is empty, and Publish needs it.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-confirm-draft",
+      "question": "Is this who you serve?",
+      "choices": [
+        "Landlords with one to twenty units who run everything from a spreadsheet."
+      ],
+      "recommended": "Landlords with one to twenty units who run everything from a spreadsheet.",
+      "open": true,
+      "context": "Setup drafted this line from the company's website; the owner has not confirmed it.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-reminder-time",
+      "question": "When should the rent reminder go out, three days before rent is due or on the day?",
+      "choices": [
+        "Three days before",
+        "On the day"
+      ],
+      "recommended": "Three days before",
+      "context": "Late payments fell by a third for the landlords who got the reminder three days early.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-bakery-hours",
+      "question": "Should Kettle Lane Bakery open at 6 a.m. on Saturdays from next month?",
+      "choices": [
+        "Keep 8 a.m.",
+        "Open at 6 a.m."
+      ],
+      "recommended": "Keep 8 a.m.",
+      "context": "Saturday sales before 9 a.m. are a tenth of the day's. Two regulars asked for earlier hours.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-pick-bet",
+      "question": "Which bet should be active this quarter?",
+      "choices": [
+        "Small landlords will trust a bot with tenant messages",
+        "Landlords will pay more for same-day repairs"
+      ],
+      "recommended": "Small landlords will trust a bot with tenant messages",
+      "context": "Both are proposed bets on the strategy draft; Publish needs one active bet.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-pause-ads",
+      "question": "Should Growth pause the social ads that cost $40 a sign-up this week?",
+      "choices": [
+        "Pause them",
+        "Keep them running"
+      ],
+      "recommended": "Pause them",
+      "context": "The ads brought 6 sign-ups for $240. Search ads brought 14 for $150 over the same week.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-two-questions",
+      "question": "Should we raise prices? And which plan should change first?",
+      "choices": [
+        "Yes",
+        "No"
+      ],
+      "context": "",
+      "mechanical": {
+        "one_decision": false,
+        "plain_sentence": false,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": false,
+        "plain_sentence": false,
+        "no_ids_jargon": true,
+        "real_choices": false,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-ids",
+      "question": "Approve requirement_id 7f3a9c21 on task t_42 before the stage closes?",
+      "choices": [
+        "Approve",
+        "Send back"
+      ],
+      "context": "A pre-release page is waiting.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": false,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": false,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-placeholder-choices",
+      "question": "Which plan should we offer new landlords?",
+      "choices": [
+        "Option A",
+        "Option B"
+      ],
+      "context": "",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": false,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": false,
+        "recommended_first": false,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-not-a-question",
+      "question": "Tell me about your customers.",
+      "choices": [],
+      "open": true,
+      "context": "",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": false,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": false,
+        "plain_sentence": false,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-too-long",
+      "question": "Given everything we discussed last week about the move to annual billing and the feedback from the landlords in the pilot, should we go ahead now?",
+      "choices": [
+        "Go ahead",
+        "Wait"
+      ],
+      "context": "",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": false,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": false,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-recommended-last",
+      "question": "What should the support bot do about the tenant charged twice?",
+      "choices": [
+        "Nothing for now",
+        "Refund the second payment"
+      ],
+      "recommended": "Refund the second payment",
+      "context": "The bank shows both payments on the same day.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": false,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": false,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-in-the-records",
+      "question": "What does Acme charge for the starter plan?",
+      "choices": [],
+      "open": true,
+      "context": "The published pricing page says the starter plan is $29 a unit a month, and the strategy's What we sell says the same.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": false,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-vague",
+      "question": "Any thoughts on the thing from yesterday?",
+      "choices": [],
+      "open": true,
+      "context": "",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": false,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-duplicate-choices",
+      "question": "Send the March invoice to the landlord on Pine Road now?",
+      "choices": [
+        "Yes",
+        "yes",
+        "No"
+      ],
+      "context": "",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": false,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": false,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-code",
+      "question": "Should `strategy.publish` run with **force** on the draft?",
+      "choices": [
+        "Run it",
+        "Do not run it"
+      ],
+      "context": "",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": false,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": false,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-one-choice-no-box",
+      "question": "Approve the spring rent increase?",
+      "choices": [
+        "Approve"
+      ],
+      "open": false,
+      "context": "",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": false,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": false,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-tech-words",
+      "question": "Can I change the JSON payload the webhook endpoint sends to the bank?",
+      "choices": [
+        "Change it",
+        "Leave it"
+      ],
+      "context": "",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": false,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": false,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-resume-three",
+      "question": "Turn the three paused writing bots back on? I'll check their next runs.",
+      "choices": [
+        "Resume all three",
+        "Keep them paused"
+      ],
+      "recommended": "Resume all three",
+      "context": "Three of Acme's writing bots were paused overnight after a failed run; the cause is fixed. Ana owns them and can resume them here.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-card-look",
+      "question": "Should setup questions in Flow look different from approvals?",
+      "choices": [
+        "Look different",
+        "Look the same"
+      ],
+      "recommended": "Look different",
+      "context": "Ana is designing Acme's Flow cards; nothing decides yet whether a setup question looks like an approval. The answer is saved as the card design.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-logo-colours",
+      "question": "Should the logo and brand colours be part of brand setup in Flow?",
+      "choices": [
+        "Yes, ask for them",
+        "No, keep them on the Brand page"
+      ],
+      "recommended": "Yes, ask for them",
+      "context": "Ana owns Acme's brand setup. The answer decides which questions brand setup asks in Flow.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-who-reads",
+      "question": "Which bots should read what you tell Flow about how you like to be asked?",
+      "choices": [
+        "Every bot that asks you",
+        "Only your Assistant"
+      ],
+      "recommended": "Every bot that asks you",
+      "context": "Ana is telling Flow how she likes to be asked. The answer is saved as who may read that note.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "good-sign-in",
+      "question": "How should the two new bots' computers sign in to their AI plan? I recommend sharing your subscription.",
+      "choices": [
+        "Share my subscription",
+        "Use a separate key"
+      ],
+      "recommended": "Share my subscription",
+      "context": "Acme just added two bots, each on its own cloud computer; Ana owns the company subscription and can share it from here.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": true,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-unsnooze-idea",
+      "question": "A bot's idea: unsnooze to send it on.",
+      "choices": [],
+      "open": false,
+      "context": "A bot filed an idea that was snoozed. The note does not say what the idea is.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": false,
+        "no_ids_jargon": null,
+        "real_choices": false,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": false,
+        "no_ids_jargon": false,
+        "real_choices": false,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-ok-version",
+      "question": "OK Ana (version 1)",
+      "choices": [
+        "OK"
+      ],
+      "open": false,
+      "context": "A stage waits on Ana's OK of a page; the ask does not say which page or what the OK lets happen.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": false,
+        "no_ids_jargon": false,
+        "real_choices": false,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": false,
+        "no_ids_jargon": false,
+        "real_choices": false,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": false,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-seven-in-a-comment",
+      "question": "Can you answer my seven setup questions in the comment above?",
+      "choices": [],
+      "open": true,
+      "context": "The bot wrote seven questions in a comment on its task.",
+      "mechanical": {
+        "one_decision": false,
+        "plain_sentence": false,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": false
+      },
+      "expect": {
+        "one_decision": false,
+        "plain_sentence": false,
+        "no_ids_jargon": true,
+        "real_choices": true,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": false
+      }
+    },
+    {
+      "id": "bad-four-in-one",
+      "question": "Is 'Contacts set up enough' one inbox, company kinds confirmed, one place, 3 key companies linked?",
+      "choices": [
+        "Yes",
+        "No"
+      ],
+      "context": "The contacts bot wants a bar for when contacts setup is done.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": false,
+        "plain_sentence": true,
+        "no_ids_jargon": false,
+        "real_choices": false,
+        "recommended_first": true,
+        "not_answered": true,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    },
+    {
+      "id": "bad-release-date",
+      "question": "When will the style-guide work behind the chat go live?",
+      "choices": [],
+      "open": true,
+      "context": "Acme's release records already list the release that ships the style-guide work, with its date.",
+      "mechanical": {
+        "one_decision": null,
+        "plain_sentence": null,
+        "no_ids_jargon": null,
+        "real_choices": null,
+        "recommended_first": null,
+        "not_answered": null,
+        "says_what_it_changes": null,
+        "right_person": null
+      },
+      "expect": {
+        "one_decision": true,
+        "plain_sentence": true,
+        "no_ids_jargon": true,
+        "real_choices": false,
+        "recommended_first": true,
+        "not_answered": false,
+        "says_what_it_changes": true,
+        "right_person": true
+      }
+    }
+  ]
+}
