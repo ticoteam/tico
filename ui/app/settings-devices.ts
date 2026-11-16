@@ -711,7 +711,11 @@ function renderSettingsMachines() {
       <td>${esc(settingsPersonName(botRow(agent.bot)?.owner_id))}</td>
       <td>${agent.model ? `${esc(agent.model)}${agent.provider ? `<span class="settings-cell-note">${esc(agent.provider)}</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen_at ? `<span class="muted"> · ${esc(agoSaid(agent.last_seen_at))}</span>` : ''}</span></td></tr>`).join('');
-  const empty = !SETTINGS_PRESENCE.at && SETTINGS_PRESENCE.failed ? 'Computer presence unavailable · checking…' : revoked ? 'No active computers.' : 'No computers yet.';
+  // Before the first answer the list says what it is doing, never "No computers yet" (that is an answer).
+  const empty = SETTINGS_PRESENCE.at ? (revoked ? 'No active computers.' : 'No computers yet.')
+    : SETTINGS_PRESENCE.failed ? 'Couldn\'t reach the server · trying again…'
+    : SETTINGS_PRESENCE.slow ? 'Still reading computers · the server is slow…'
+    : 'Reading computers…';
   const rows = coming + cards;
   const list = `${rows ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th class="num">Bots</th>${pickers.map(toolHead).join('')}${others.map(toolHead).join('')}<th>Now</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">${empty}</div>`}
     ${revoked ? `<label class="settings-cell-note machine-show-revoked"><input type="checkbox" data-show-revoked-computers${showRevoked ? ' checked' : ''}> Show revoked (${revoked})</label>` : ''}

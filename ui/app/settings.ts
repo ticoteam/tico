@@ -34,7 +34,7 @@ type SettingsOperations = {machines: SettingsMachine[]; cloud_coming?: SettingsC
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
 type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabled_providers?: string[]; default?: {model?: string}};
 type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; cloudComing?: SettingsCloudComing[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
-type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
+type SettingsPresence = {interval: number; retry: number; timeout: number; at: number; checking: boolean; failed: boolean; slow: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
 // GET /v2/bots/<bot>/execution-review: the stopped runs a person decides on.
 type StoppedKind = 'read' | 'restarted' | 'timeout' | 'changed' | 'twice' | 'unknown';
@@ -61,28 +61,39 @@ function settingsMachinesSnapshot(machines: SettingsMachine[], request = ++SETTI
   SETTINGS_DATA.machines = machines;
   SETTINGS_DATA.cloudComing = coming;
 }
+// A slow answer is kept, never thrown away: past `timeout` the list says it is still reading, and the answer is drawn
+// when it lands (Chris, Nov 16: a read over 10 s was dropped at 10 s and asked again 25 s later, so Computers never
+// filled in). The rest of Settings waits for it no longer than `timeout` (loadSettings, settingsMachinesWait).
 async function settingsMachinesRead() {
   const request = ++SETTINGS_PRESENCE.request;
-  let timer: number | undefined;
+  const timer = setTimeout(() => {
+    if (SETTINGS_PRESENCE.applied >= request) return;
+    SETTINGS_PRESENCE.slow = true;
+    if (settingsMachinesVisible()) renderSettingsMachines();
+  }, SETTINGS_PRESENCE.timeout);
   try {
-    const operations = await Promise.race([
-      get('/v2/operations', {fresh: true}),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Presence check timed out')), SETTINGS_PRESENCE.timeout); })
-    ]);
+    const operations = await get('/v2/operations', {fresh: true});
     if (!Array.isArray(operations.machines)) throw new Error('Presence unavailable');
     settingsMachinesSnapshot(operations.machines, request, Array.isArray(operations.cloud_coming) ? operations.cloud_coming : []);
     return operations;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); if (SETTINGS_PRESENCE.request === request) SETTINGS_PRESENCE.slow = false; }
+}
+/** The read for loadSettings: the rest of Settings is drawn after `timeout` at most; a later answer still goes in. */
+function settingsMachinesWait(read: Promise<SettingsOperations>): Promise<SettingsOperations | null> {
+  let timer: number | undefined;
+  return Promise.race([read, new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), SETTINGS_PRESENCE.timeout); })])
+    .finally(() => clearTimeout(timer));
 }
 const settingsMachinesVisible = () => S.route === SETTINGS && SETTINGS_TAB === 'devices' && !!$('#set-machines');
 function settingsMachinesWatch() {
   clearTimeout(SETTINGS_PRESENCE.timer ?? undefined);
   SETTINGS_PRESENCE.timer = null;
   if (!settingsMachinesVisible() || !S.me) return;
+  // A failed read is tried again in a few seconds (a release restarting the server, a dropped connection), not 25.
   SETTINGS_PRESENCE.timer = setTimeout(() => {
     if (!settingsMachinesVisible()) return;
     void settingsMachinesRefresh().finally(settingsMachinesWatch);
-  }, SETTINGS_PRESENCE.interval);
+  }, SETTINGS_PRESENCE.failed ? SETTINGS_PRESENCE.retry : SETTINGS_PRESENCE.interval);
 }
 function settingsMachinesRefresh() {
   if (!S.me) return Promise.resolve();
@@ -629,12 +640,16 @@ async function renderSettingsTurnLevels() {
 }
 async function loadSettings() {
   try {
+    const kept = (): SettingsOperations => ({machines: SETTINGS_DATA.machines, services: SETTINGS_DATA.services, issues: SETTINGS_DATA.issues,
+      ...(SETTINGS_DATA.runnable ? {runnable: SETTINGS_DATA.runnable} : {}), ...(SETTINGS_DATA.agents ? {agents: SETTINGS_DATA.agents} : {}),
+      ...(SETTINGS_DATA.schedulerEnabled !== undefined ? {scheduler_enabled: SETTINGS_DATA.schedulerEnabled} : {})});
+    const read = S.me ? settingsMachinesRead() : null;
+    // Past `timeout` the rest of Settings is drawn with what was kept; the answer, when it lands, fills in Computers,
+    // Services and the checks (settingsOperationsLate).
+    if (read) void read.then(ops => settingsOperationsLate(ops), () => { SETTINGS_PRESENCE.failed = true; if (settingsMachinesVisible()) { renderSettingsMachines(); settingsMachinesWatch(); } });
     const [people, operations, catalog, employees, history, limits] = await Promise.all([
       get('/humans'),
-      S.me ? settingsMachinesRead().catch(() => {
-        SETTINGS_PRESENCE.failed = true;
-        return {...SETTINGS_DATA, scheduler_enabled: SETTINGS_DATA.schedulerEnabled};
-      }) : Promise.resolve({machines: [], services: []}),
+      read ? settingsMachinesWait(read).then(ops => ops || kept(), () => kept()) : Promise.resolve<SettingsOperations>({machines: [], services: []}),
       S.me ? get('/v2/models') : Promise.resolve({models: []}),
       get('/employees'),
       S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: []}),
@@ -653,7 +668,7 @@ async function loadSettings() {
       harnesses: catalog.harnesses || [], gateway: catalog.gateway || null,
       enabledProviders: catalog.enabled_providers || [], defaultModel: catalog.default?.model || '',
       issues: operations.issues || [], history, limits,
-      schedulerEnabled: operations.scheduler_enabled, loaded: true};
+      ...(operations.scheduler_enabled !== undefined ? {schedulerEnabled: operations.scheduler_enabled} : {}), loaded: true};
     document.dispatchEvent(new Event('tico:settings-loaded'));
     renderTree();
     if (S.route !== SETTINGS) return;
@@ -679,6 +694,17 @@ function settingsIssueLine(issue: SettingsIssue): string {
   const credit = issue.kind === 'cloud_credit' && S.me?.role === 'owner' ? cloudCreditLinkHTML() : '';
   if (issue.more) return `<details class="settings-issue-more"><summary title="${esc(issue.more)}">${esc(issue.detail)}</summary><p>${esc(issue.more)}</p></details>${credit ? `<p>${credit}</p>` : ''}`;
   return `<p>${esc(issue.detail)}${credit}</p>${issue.action && issue.action !== 'review' ? `<p>${esc(issue.action)}</p>` : ''}`;
+}
+/** The operations answer once it lands, when it came after loadSettings had drawn without it. */
+function settingsOperationsLate(operations: SettingsOperations) {
+  if (!SETTINGS_DATA.loaded) return;   // loadSettings has not drawn yet: it takes this answer itself
+  const next: SettingsData = {...SETTINGS_DATA, services: operations.services || SETTINGS_DATA.services, issues: operations.issues || SETTINGS_DATA.issues};
+  if (operations.runnable) next.runnable = operations.runnable;
+  if (operations.agents) next.agents = operations.agents;
+  if (operations.scheduler_enabled !== undefined) next.schedulerEnabled = operations.scheduler_enabled;
+  SETTINGS_DATA = next;
+  if (S.route !== SETTINGS) return;
+  renderSettingsIssues(); renderSettingsMachines(); renderSettingsServices();
 }
 function renderSettingsIssues() {
   const el = $('#settings-issues'); if (!el) return;

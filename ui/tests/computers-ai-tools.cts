@@ -35,7 +35,7 @@ interface Machine {
 // App globals the page defines; the browser flow reads and drives them through page.evaluate.
 declare const S: {me: {id: string; role: string; bot_admin?: boolean}};
 declare const SETTINGS_DATA: {loaded: boolean; people: unknown[]; machines: {id: string; label?: string; update?: {outdated: boolean; server_release: string} | undefined}[]};
-declare const SETTINGS_PRESENCE: {at: number; checking: boolean; pending: unknown; timer: number | undefined};
+declare const SETTINGS_PRESENCE: {at: number; checking: boolean; failed: boolean; slow: boolean; pending: unknown; timer: number | undefined};
 declare function loadSettings(tab?: string): Promise<void>;
 declare function settingsMachinesWatch(): void;
 declare function settingsMachinesRefresh(): Promise<void>;
@@ -466,10 +466,13 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     assert.match(await dialog.locator('[data-computer-status]').innerText(), /checking/);
     presenceOffset = 200000;
     await page.clock.fastForward(70000);
-    await page.evaluate(() => SETTINGS_PRESENCE.pending);
+    // Past the deadline the read is kept (not dropped): the list says it is still reading.
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.slow && !!SETTINGS_PRESENCE.pending), true, 'a slow read is kept past its deadline');
     await online();
     assert.match(await row('box').locator('[data-machine-status]').innerText(), /checking/);
     assert.equal(await signIn.evaluate(node => node === document.activeElement), true, 'focus survives deadline repaint');
+    for (const held of heldPresence.splice(0)) await held.fulfill({status: 503, contentType: 'application/json', body: '{"error":"Unavailable"}'});
+    await page.evaluate(() => SETTINGS_PRESENCE.pending);
     presenceMode = 'failure';
     await page.evaluate(() => settingsMachinesRefresh());
     await online();
@@ -508,12 +511,21 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     await page.evaluate(() => (window as unknown as PageWin).initialSettingsLoad);
     assert.equal(await page.evaluate(() => SETTINGS_DATA.loaded && SETTINGS_DATA.people.length > 0), true);
     assert.equal(await page.locator('#machine-operator').count(), 1);
-    assert.match(await page.locator('[data-machines-list]').innerText(), /presence unavailable.*checking/);
+    assert.match(await page.locator('[data-machines-list]').innerText(), /Still reading computers/);
     assert.equal(await page.locator('#set-bots > .err, #set-machines > .err').count(), 0);
-    presenceMode = 'live';
-    await page.evaluate(() => settingsMachinesRefresh());
+    // The answer that comes after the deadline is drawn, not thrown away (Chris, Nov 16: Computers never filled in).
     for (const held of heldPresence.splice(0)) await held.fulfill({status: 200, contentType: 'application/json',
-      body: JSON.stringify({machines: [], services: []})});
+      body: JSON.stringify({machines: [box], services: []})});
+    await row('box').waitFor();
+    assert.equal(await page.evaluate(() => SETTINGS_PRESENCE.slow || SETTINGS_PRESENCE.failed), false);
+    // A failed first read (a release restarting the server) says so and tries again in 3 s, not 25.
+    presenceMode = 'failure';
+    await page.evaluate(() => { SETTINGS_DATA.machines = []; SETTINGS_PRESENCE.at = 0; return settingsMachinesRefresh(); });
+    assert.match(await page.locator('[data-machines-list]').innerText(), /Couldn.t reach the server/);
+    presenceMode = 'fixed';
+    await page.evaluate(() => settingsMachinesWatch());
+    await page.clock.fastForward(3001);
+    await row('box').waitFor();
     // Leaving the tab stops its timer; returning starts it and requests fresh presence.
     await page.locator('[data-settings-tab=bots]').click();
     const afterLeaving = presenceReads;
