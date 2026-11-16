@@ -242,7 +242,7 @@ def _band(p: float, bar: tuple[float, float]) -> str:
     return "unsure"
 
 
-# Rules a person added to a check from Flow's suggested rules (backend/flow_suggestions.py): each is one more yes/no
+# Rules a person added to a check from Flow's suggested rules (removed; task_pages.added_rules): each is one more yes/no
 # part, asked beside the check's own (`part_rule<n>`, n from 1 in the order given), and read against the default bar,
 # since BARS were set for the check's own parts. A shipped check stays itself: its rubric is not touched, so `check_of`
 # still names it, its parts are asked and read as before, and the rules only add parts.
@@ -260,7 +260,7 @@ def rules_of(requirement: dict[str, Any]) -> list[str]:
 def asked_rules(check: str | None, rules: list[str]) -> list[str]:
     """The added rules one call asks: as many as fit beside the check's own questions within the client's
     MAX_QUESTIONS (a call over it is refused before any model sees it). Any after them are not asked, so they read as
-    can't tell (`_rule_lines`), never met. flow_suggestions.RULES_MAX keeps a check well under it."""
+    can't tell (`_rule_lines`), never met. A check held at most 20 added rules, well under it."""
     own = len(CHECKS[check]) if check in CHECKS else 1
     return rules[: max(0, int(J.MAX_QUESTIONS) - own)]
 

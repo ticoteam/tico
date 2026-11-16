@@ -78,7 +78,6 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
             shown_hash: String(n).repeat(64), standing: 'waiting', task_id: `t${n}`});
         }
         if (p === '/api/v2/flow/opinions') return json({opinions: []});
-        if (p === '/api/v2/flow/suggestions') return json({suggestions: []});   // the end screen's suggested rules: none
         if (r.method() !== 'GET' && p.startsWith('/api/')) {
           const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
           writes.push({p, body});

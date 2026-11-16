@@ -67,7 +67,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
           writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
           const m = /^\/api\/v2\/tasks\/(t-7[23])\/asks\/([^/]+)\/answer$/.exec(p);
           if (m) return json({task: brief(m[1]!, 'x', 72), answer_id: 'a-' + m[1], requirement_id: m[2]});
-          if (p === '/api/v2/flow/opinions' || p === '/api/v2/flow/suggestions') return json({opinions: [], suggestions: []});
+          if (p === '/api/v2/flow/opinions') return json({opinions: []});
         }
         if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
         return json(unrouted(p));

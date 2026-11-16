@@ -164,20 +164,10 @@ on, for 24 hours or until the ask's words, choices or shown page change. Tico on
 button. With no model, the ask shows plain buttons. `POST /api/v2/flow/opinions` takes up to 30 Needs-you ids and
 answers at once: `ready`, `pending` (ask again) or `none`.
 
-When Flow shows All done to someone who may change a pipeline (its owner, its manager, the company's owner and
-Admins), it lists **Suggested rules** under it: short sentences saying what work at a stage's page check must contain
-or do, drawn from the notes people wrote when they sent a bot's page back there. Each shows its pipeline and stage and
-how many of the send backs it rests on. **Add** makes Jev ask it of the next page judged at that check, as one more
-yes/no part beside the check's own (a shipped check keeps its parts and bars); Undo takes it out again, and a page
-already judged keeps its verdict. Jev is shown an added rule as text to check the page against, never as an
-instruction, and a check holds at most 20 of them. ✎ tells Tico what to change and it rewrites the sentence; ✕
-dismisses it for everyone. A rule is one plain sentence on one line: anything else the model writes is dropped. A check
-is worked out again once it has five new send backs, with one call to the daily update drafts' model, metered with
-Jev's spend. It reads only people's notes on tasks every member may read (not private, not owned or asked for by a bot
-whose access is restricted) in pipelines that are not private, and the model sees the notes and the check's own text,
-never a task's title, a page or anyone's name.
-`POST /api/v2/flow/suggestions` answers at once, `ready` or `pending` (ask again); `/{id}/add`, `/undo`, `/dismiss`
-and `/feedback` act on one. Added rules do not show in the stage editor yet.
+Flow no longer suggests rules at All done. Rules people added there before keep binding their page check: Jev still
+asks each of the next page judged at that check, as one more yes/no part beside the check's own. To add a rule now,
+edit the stage. A bot that has been corrected on the same thing several times asks you whether to make it a standing
+rule (`skills/add-to-flow/SKILL.md`).
 
 **Want more? Ping your bots.** All done offers this button: each bot you manage gets one message from you pointing
 at Tico's `skills/add-to-flow/SKILL.md`, and the screen says "Asking your bots" while their questions come in. A bot

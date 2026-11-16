@@ -27,6 +27,9 @@ someone: an open ask of yours on the same thing stays as it is.
 - At most three, the most valuable first.
 - Each question is one decision, in one plain sentence that reads on its own, plus one line on what you will do with
   the answer. Leave it free-form: `--choices` only when it is a real pick between named options.
+- If a person has corrected you on the same thing several times, a good question is whether to make it a standing
+  rule; on yes, write it at the top of `memory/learnings.md`, and if it should bind the whole stage, say so to whoever
+  edits that stage.
 
 Each question is its own new task, yours, with one ask on it:
 

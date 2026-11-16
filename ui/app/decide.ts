@@ -229,7 +229,6 @@ function decideDialog(): HTMLDialogElement {
     if (box instanceof HTMLTextAreaElement && box.matches('[data-dc-grow]')) decideGrow(box);
     // The person's own typing in Notes: Tico's note never fills it after that (decidePaintSide).
     if (ev.isTrusted && box.id === 'dc-notes' && DEC.at) DEC_OP.typed.add(DEC.at);
-    if (box.id === 'dc-sug-say') DEC_SUG.draft = box.value;
     if (box instanceof HTMLInputElement && box.id === 'dc-snz-at') box.setCustomValidity('');
     decideNeedsText(root);
   });
@@ -246,10 +245,6 @@ function decideDialog(): HTMLDialogElement {
     // Enter in an answer's one-line box sends it.
     if (DEC && ev.key === 'Enter' && eventElement(ev)?.matches('input#dc-other')) {
       ev.preventDefault(); (d.querySelector<HTMLButtonElement>('[data-dc="other"]'))?.click(); return;
-    }
-    // Enter in a suggested rule's ✎ box sends it.
-    if (DEC && ev.key === 'Enter' && eventElement(ev)?.matches('input#dc-sug-say')) {
-      ev.preventDefault(); (d.querySelector<HTMLButtonElement>('[data-dc="sug-send"]'))?.click(); return;
     }
     // Snooze's menu: Enter in Other's time box snoozes until it; ↑ ↓ move between its choices.
     const snz = DEC?.more === 'snooze' ? eventElement(ev)?.closest('.dc-snzw') : null;
@@ -324,15 +319,15 @@ function decideStart(d: HTMLDialogElement) {
 // Async so code outside this page part (Tasks' ▶ Review) may use its answer: the shell's stand-in loads the part first.
 async function decideGoThrough(): Promise<boolean> { const at = DEC_RESUME; DEC_RESUME = ''; return (!!at && decideOpen(at)) || decideOpen(''); }
 /** The phone's Flow tab and Flow's mark beside Tasks: ▶ over all of Needs you, as the Tasks header's Flow on You; with
-    nothing waiting, the same screen on All done (and its suggested rules), never a tap that does nothing. Closing it
+    nothing waiting, the same screen on All done, never a tap that does nothing. Closing it
     gives focus back to `from` (a tapped button is not focused on every browser). The shell wires the taps (tasks.ts). */
 async function decideFlow(from: HTMLElement): Promise<void> {
   if (!(await decideGoThrough())) decideOpen('', [], '', '', true);
   const st = DEC;
   if (!st) return;
   st.opener = from;
-  // Away from Tasks the pipelines may not be read yet: All done's suggested rules (and the crumb's menu) need them.
-  if (!decidePipelines().length) void tasksPipelinesRead().then(() => { if (DEC === st && !decideCurrent(st)) decideSugStart(st); }, () => {});
+  // Away from Tasks the pipelines may not be read yet: the crumb's menu needs them.
+  if (!decidePipelines().length) void tasksPipelinesRead().catch(() => {});
 }
 /** A task page's Answer: the Needs you item that is this task's ask for requirement `rid`. Items are keyed by their own
     id (`<ask id>:<requirement id>`) and a stage's requirement is the same on every task in the stage, so both the task
@@ -401,7 +396,6 @@ function decideStop() {
   if (!st) return;
   DEC = null; DEC_VOICE = false;
   decideOpinionsEnd();
-  decideSugEnd();
   DEC_ABOUT.clear(); DEC_SENT = ''; DEC_HELD.clear(); DEC_SENDING.clear();
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
@@ -512,10 +506,10 @@ async function decideWalkTo(stage: string, pipeline: string) {
   if (!decideOpen('', decideSource(), stage, pipeline)) decideOpen('', decideSource());
 }
 /** Nothing left: All done, how many are snoozed (your own tasks snoozed on this visit, and every ask you snoozed for
-    yourself that is still snoozed), and the suggested rules for the person's stages. With asks snoozed, "N snoozed"
+    yourself that is still snoozed), and Ping your bots. With asks snoozed, "N snoozed"
     opens their list: each by its task's title, with ↩ to bring it back now. */
 function decideDoneHTML(st: DecState): string {
-  const sug = decideSugHTML(), asks = st.snoozedAsks, n = st.snoozed + (asks?.length || 0);
+  const asks = st.snoozedAsks, n = st.snoozed + (asks?.length || 0);
   const list = st.snoozedOpen && asks?.length ? `<ul class="dc-snzl" aria-label="Snoozed">${asks.map(a => {
     const title = a.task?.title || a.line, back = `Unsnooze${a.snoozed_until ? ` · snoozed until ${timeSaid(a.snoozed_until)}` : ''}`;
     return `<li><span class="dc-snzl-t" title="${esc(a.line)}">${esc(title)}</span><button type="button" class="dc-icon" data-dc="unsnooze" data-dc-ask="${esc(a.id)}" aria-label="${esc(`Unsnooze: ${title}`)}" title="${esc(back)}">${DEC_UNDO_ICON}</button></li>`;
@@ -525,8 +519,8 @@ function decideDoneHTML(st: DecState): string {
     : `<p class="dc-sub">${n} snoozed</p>`;
   const ping = st.asking ? '<p class="dc-sub dc-asking" role="status">Asking your bots</p>'
     : '<button type="button" class="primary" data-dc="ping">Want more? Ping your bots</button>';
-  return `<div class="dc-done${sug ? ' has' : ''}">${flowMarkHTML(48, st.asking)}<h2>All done</h2>`
-    + said + list + ping + '<button type="button" class="ghost" data-dc="close">Close</button>' + sug + '</div>';
+  return `<div class="dc-done">${flowMarkHTML(48, st.asking)}<h2>All done</h2>`
+    + said + list + ping + '<button type="button" class="ghost" data-dc="close">Close</button></div>';
 }
 /** "Want more? Ping your bots": each bot in the ping's scope is asked for its questions (backend/flow_ping.py); they
     come in as Needs you items, and decideRefresh brings the first on screen. One a moment ago is asked once. */
@@ -559,135 +553,6 @@ async function decideSnoozedRead(st: DecState) {
   if (!st.at) decideRender(st);
 }
 
-// ---- suggested rules (backend/flow_suggestions.py)
-interface FlowSuggestion {id: string; text: string; state: 'open' | 'added' | 'dismissed'; pending: boolean; notes_used: number;
-  notes_of: number; pipeline: string; stage: string}
-const DEC_SUG_POLL_MS = 2000;     // the next read while one is being worked out or rewritten
-const DEC_SUG_FOR_MS = 60_000;    // given up on this long after the last ask
-/** This visit's suggested rules: the rows as last read, whether they were asked for, the next read's timer, when the
-    last ask was sent, the row whose ✎ box is open and what is typed in it, why a row's last action was refused, and the
-    visit, which closing moves on so a read from an earlier visit lands nowhere. `version` moves on with every action,
-    so a read sent before one never puts back what the action changed; one read is out at a time (`reading`), and
-    `again` asks for one more once it is back. */
-const DEC_SUG = {rows: [] as FlowSuggestion[], asked: false, timer: 0, since: 0, edit: '', draft: '', visit: 0,
-  version: 0, reading: false, again: false, said: {} as Record<string, string>};
-function decideSugEnd() {
-  DEC_SUG.visit++;
-  clearTimeout(DEC_SUG.timer);
-  Object.assign(DEC_SUG, {rows: [], asked: false, timer: 0, since: 0, edit: '', draft: '', reading: false, again: false, said: {}});
-}
-/** All done, the first time this visit: the suggestions for the stages the person may change, if any. */
-function decideSugStart(st: DecState) {
-  if (DEC_SUG.asked || S.me?.read_only_view || !decidePipelines().some(p => p.may_change)) return;
-  DEC_SUG.asked = true;
-  decideSugPoll(st);
-}
-/** Read again every DEC_SUG_POLL_MS while something is pending, for DEC_SUG_FOR_MS at most; any failure ends it. */
-function decideSugPoll(st: DecState) {
-  DEC_SUG.since = Date.now();
-  if (DEC_SUG.reading) DEC_SUG.again = true;
-  else if (!DEC_SUG.timer) void decideSugRound(st);
-}
-async function decideSugRound(st: DecState) {
-  DEC_SUG.timer = 0;
-  DEC_SUG.reading = true;
-  const visit = DEC_SUG.visit, version = DEC_SUG.version;
-  const abort = new AbortController(), late = window.setTimeout(() => abort.abort(), 15_000);
-  let got: {state: string; suggestions: FlowSuggestion[]} | null = null;
-  try {
-    // A read that changes nothing: no retries and no pressed-button state (not post()).
-    const r = await fetch(`${API}/v2/flow/suggestions`, {method: 'POST', redirect: 'error', signal: abort.signal,
-      headers: {'Content-Type': 'application/json', 'Idempotency-Key': newRequestId()}, body: '{}'});
-    if (r.ok) got = decideSugRead(await r.json());
-  } catch { got = null; } finally { clearTimeout(late); }
-  if (visit !== DEC_SUG.visit || DEC !== st) return;
-  DEC_SUG.reading = false;
-  if (DEC_SUG.again) {   // an action since, or one more asked for: read again now, this answer is older than it
-    DEC_SUG.again = false;
-    clearTimeout(DEC_SUG.timer);
-    void decideSugRound(st);
-    return;
-  }
-  if (!got || version !== DEC_SUG.version) return;
-  DEC_SUG.rows = got.suggestions;
-  decideSugPaint(st);
-  if (got.state === 'pending' && Date.now() - DEC_SUG.since < DEC_SUG_FOR_MS) {
-    DEC_SUG.timer = window.setTimeout(() => void decideSugRound(st), DEC_SUG_POLL_MS);
-  }
-}
-/** The list in an answer; anything else (an empty answer) is none, ready. */
-function decideSugRead(body: unknown): {state: string; suggestions: FlowSuggestion[]} {
-  const o = body && typeof body === 'object' ? body as {state?: unknown; suggestions?: unknown} : {};
-  const list = Array.isArray(o.suggestions) ? o.suggestions as unknown[] : [];
-  return {state: o.state === 'pending' ? 'pending' : 'ready',
-    suggestions: list.filter((x): x is FlowSuggestion => {
-      const row = x && typeof x === 'object' ? x as Partial<FlowSuggestion> : null;
-      return !!row && typeof row.id === 'string' && typeof row.text === 'string' && row.state !== 'dismissed';
-    })};
-}
-/** The list under All done: none at all with nothing to show. */
-function decideSugHTML(): string {
-  if (!DEC_SUG.rows.length) return '';
-  const icon = (dc: string, label: string, mark: string, off = false) =>
-    `<button type="button" class="dc-icon" data-dc="${dc}" title="${label}" aria-label="${label}"${off ? ' disabled' : ''}>${mark}</button>`;
-  return '<section class="dc-sug" aria-label="Suggested rules"><h3>Suggested rules</h3>' + DEC_SUG.rows.map(r => {
-    const on = r.state === 'added', id = esc(r.id);
-    const said = DEC_SUG.said[r.id];
-    const why = said ? esc(said) : on ? 'Added' : r.pending ? 'Tico is rewriting it'
-      : `${esc(r.pipeline)} / ${esc(r.stage)} · ${r.notes_used} of ${r.notes_of} send backs`;
-    const acts = on ? icon('sug-undo', 'Undo', '↩')
-      : `<button type="button" class="ghost" data-dc="sug-add"${r.pending ? ' disabled' : ''}>Add</button>`
-        + icon('sug-edit', 'Tell Tico what to change', '✎', r.pending) + icon('sug-dismiss', 'Dismiss', '✕');
-    const box = DEC_SUG.edit === r.id && !on && !r.pending ? `<div class="dc-sf" data-sug="${id}">
-      <input id="dc-sug-say" maxlength="500" autocomplete="off" aria-label="Tell Tico what to change" value="${esc(DEC_SUG.draft)}">
-      <button type="button" class="ghost" data-dc="sug-send" data-dc-needs="#dc-sug-say"${DEC_SUG.draft.trim() ? '' : ' disabled'}>Send</button></div>` : '';
-    return `<div class="dc-sr${on ? ' on' : ''}${r.pending ? ' busy' : ''}" data-sug="${id}"><div class="tx"><b title="${esc(r.text)}">${esc(r.text)}</b>`
-      + `<span>${why}</span></div>${acts}</div>${box}`;
-  }).join('') + '</section>';
-}
-/** Draws the list again when All done is on screen, the ✎ box keeping its focus. */
-function decideSugPaint(st: DecState) {
-  const side: HTMLElement | null = $('.decide .dc-side');
-  if (!side || decideCurrent(st)) return;
-  const typing = document.activeElement?.id === 'dc-sug-say';
-  side.innerHTML = decideDoneHTML(st);
-  if (typing || DEC_SUG.edit) document.querySelector<HTMLInputElement>('#dc-sug-say')?.focus({preventScroll: true});
-}
-/** Add, Undo, ✕, ✎ and Send on one row: each a write for everyone who may change the stage; the row as it came back. */
-async function decideSugAct(st: DecState, what: string, id: string) {
-  const at = DEC_SUG.rows.findIndex(r => r.id === id), row = DEC_SUG.rows[at];
-  if (!row) return;
-  if (what === 'edit') {
-    DEC_SUG.edit = DEC_SUG.edit === id ? '' : id; DEC_SUG.draft = '';
-    decideSugPaint(st);
-    return;
-  }
-  const text = DEC_SUG.draft.trim();
-  if (what === 'send' && !text) return;
-  // Any read out now was sent before this: it is dropped, and the list read once more after it is saved.
-  DEC_SUG.version++;
-  delete DEC_SUG.said[id];
-  if (what === 'send') { DEC_SUG.edit = ''; DEC_SUG.draft = ''; row.pending = true; }
-  decideSugPaint(st);
-  const visit = DEC_SUG.visit, path = `/v2/flow/suggestions/${encodeURIComponent(id)}/${what === 'send' ? 'feedback' : what}`;
-  try {
-    const got = await post(path, what === 'send' ? {text} : {});
-    if (visit !== DEC_SUG.visit) return;
-    const back = decideSugRead({suggestions: [got.suggestion]}).suggestions[0];
-    const now = DEC_SUG.rows.findIndex(r => r.id === id);
-    if (now >= 0) {
-      if (what === 'dismiss') DEC_SUG.rows.splice(now, 1);
-      else if (back) DEC_SUG.rows[now] = back;
-    }
-    DEC_SUG.version++;
-    decideSugPoll(st);   // read once more after it is saved; on, every DEC_SUG_POLL_MS, while it is pending
-  } catch (e) {
-    if (visit !== DEC_SUG.visit) return;
-    row.pending = false;
-    DEC_SUG.said[id] = errorMessage(e, 'Not saved.');   // why, on the row itself: a check that is full says so
-  }
-  decideSugPaint(st);
-}
 const decideStageName = (id: string | null | undefined): string => {
   for (const p of (typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []) {
     const s = p.stages.find(x => x.id === id);
@@ -913,7 +778,6 @@ function decideRender(st: DecState) {
     $('.dc-thing', root)!.innerHTML = '';
     $('.dc-side', root)!.innerHTML = decideDoneHTML(st);
     decideBarRoom();
-    decideSugStart(st);
     if (st.snoozedAsks === null && !DEC_SNZ_READ) { DEC_SNZ_READ = true; void decideSnoozedRead(st).finally(() => { DEC_SNZ_READ = false; }); }
     return;
   }
@@ -1817,7 +1681,6 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   // A row of the crumb's menu: that place's walk.
   if (b.dataset.dcWalk != null) { await decideWalkTo(b.dataset.dcWalk, b.dataset.dcPipe || ''); return; }
   const what = b.dataset.dc || '';
-  if (what.startsWith('sug-')) { await decideSugAct(st, what.slice(4), b.closest<HTMLElement>('[data-sug]')?.dataset.sug || ''); return; }
   if (what === 'where') { decideMenu(!!$('.decide .dc-menu')?.hidden); return; }
   if (what === 'voice') { DEC_VOICE = !DEC_VOICE; decidePaintHead(st); $(DEC_VOICE ? '.decide .dc-wave' : '.decide .dc-mic')?.focus(); return; }
   if (what === 'close') { decideStop(); return; }

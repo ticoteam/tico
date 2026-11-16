@@ -20,7 +20,7 @@ from . import views as views_
 from .store import Problem
 
 Row = dict[str, Any]
-# Untyped helpers, as Any so this strict module checks its own code (as backend/flow_suggestions.py does).
+# Untyped helpers, as Any so this strict module checks its own code (as backend/flow_opinions.py does).
 H: Any = H_
 R: Any = R_
 views: Any = views_
