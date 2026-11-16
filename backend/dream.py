@@ -65,11 +65,8 @@ with `tico_task_show` first, and pass the version the last call on it printed wi
 4. Ask. Ask only about the business: what you should do, for whom, by which rule or priority, where two
    instructions about the work disagree, or one broad question that would align you better. Never ask for
    permission, about which files to edit, how to organize your memory, or anything else about the dream itself:
-   decide those yourself. If something only {requester} can settle, ask it with `tico_task_ask` to {requester} on
-   this task: one question per ask (an ask that asks two things is refused), and one ask at a time (asking again
-   replaces the open one), so wait for each answer before the next. At most 3 asks. Each one makes sense on its own
-   and ends with your suggested answer ("Suggested: ..."). Ask big alignment questions before small either/or ones.
-   Zero questions is fine. {wait}
+   decide those yourself. {ask} At most 3 questions. Each one makes sense on its own and ends with your suggested
+   answer ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is fine. {wait}
 
 5. Apply. Fold the answers in. A broad answer may rewrite whole sections. Fix each fact where it lives, delete what
    has been replaced, turn relative dates into absolute ones, and merge duplicates.
@@ -90,16 +87,21 @@ MODES = {
         "waiting": "{requester} started this and is waiting for it.",
         "settle": "Do not edit memory/ or knowledge/ yet: anything there is committed when your turn ends, before the "
         "answers come. Keep the draft in this conversation.",
+        "ask": "If something only {requester} can settle, ask it with `tico_task_ask` to {requester} on this task: "
+        "one question per ask (an ask that asks two things is refused), and one ask at a time (asking again replaces "
+        "the open one), so wait for each answer before the next.",
         "wait": "Then stop and wait for the answer.",
     },
     True: {
         "waiting": "Nobody is waiting: this dream started on its own, on a copy of your latest session, so what you "
         "remember from it counts as read.",
-        "settle": "Apply it as you go, and commit what you have settled before any question (step 7, but do not "
-        "finish the task yet).",
-        "wait": "If you asked, stop and wait for the answer, apply it, and make the second commit of step 7 before you "
-        "finish the task. With zero questions, finish after the first commit. {requester} did not start this "
-        "dream.",
+        "settle": "Apply it as you go.",
+        # Nobody watches an auto dream: its questions go to the person's Flow the usual way, each its own task with a
+        # plain title, never on this task, whose body is these instructions.
+        "ask": "If something only {requester} can settle, follow Tico's skills/add-to-flow/SKILL.md (under HUB_DIR) "
+        "and ask {requester}: each question its own new task with one ask, never on this task (if Tico will not let "
+        "you reach them, ask your supervisor, as the skill says). The answer reaches you on that task.",
+        "wait": "Do not wait for answers: finish this dream after your commit. {requester} did not start this dream.",
     },
 }
 
