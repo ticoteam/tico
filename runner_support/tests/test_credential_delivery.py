@@ -12,12 +12,13 @@ import hashlib
 import json
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
 
-from backend import egress
-from backend.tests.helpers.api import assign, headers, post, put, runner
+from backend import egress, mcp_connect
+from backend.tests.helpers.api import assign, get, headers, post, put, runner
 from backend.tests.helpers.credentials import setup as vault_setup
 from backend.tests.live import live  # noqa: F401
 from backend import bot_settings as BS
@@ -275,6 +276,77 @@ def test_a_declared_mcp_server_whose_key_tico_holds_is_reached_through_the_proxy
     calls = proxied_calls(api)
     assert {c["result"] for c in calls} == {"sent"} and {c["path"] for c in calls} == {"/mcp"}, calls
     nowhere(api, computer, conversation, SECRET, token)
+
+
+# ---- a remote MCP server added in Tools, granted with no bot.yaml entry
+
+
+MCP_ENV = "ACME_VENDOR_MCP_TOKEN"  # the variable Tools gives the Acme Vendor MCP tool's key
+
+
+def mcp_tool(api, vendor, monkeypatch, auth="token"):
+    """Tools > Add > MCP server: Acme Vendor's server, probed and checked from the server through the stub."""
+    monkeypatch.setattr(mcp_connect, "TRANSPORT", vendor.proxy_transport())
+    url = f"https://{HOST}/mcp"
+    found = post(api, "mcp-tools/probe", {"url": url})
+    assert found["token"] and found["oauth"] == (auth == "oauth"), found
+    body = {"name": "Acme Vendor", "url": url, "auth": auth} | ({"token": SECRET} if auth == "token" else {})
+    tool = post(api, "mcp-tools", body)
+    assert tool["id"] == TOOL and tool["delivery"] == "proxy", tool
+    return tool
+
+
+def mcp_reached(api, vendor, computer, accepted):
+    """One turn's MCPCALL to the granted server: the run held a proxy token and no bot.yaml entry, and every call the
+    bot made reached the vendor through the proxy with `accepted` in its place."""
+    _, uses, conversation = turn(api, computer, f"MCPCALL {MCP_SERVER}")
+    used = one(uses, "mcp")
+    assert used["present"], used
+    assert used["tools"] == [MCP_TOOL] and used["text"] == "Order 42 shipped", used
+    assert used["environ"][MCP_ENV].startswith("tpx1."), "the run held the key itself, not a proxy token"
+    seen = vendor.calls("/mcp", BOT_AGENT)
+    assert [s["rpc"] for s in seen] == ["initialize", "notifications/initialized", "tools/list", "tools/call"]
+    assert all(s["shown"] == accepted and s["host"] == HOST for s in seen), [s["status"] for s in seen]
+    assert "tools:" not in (computer.config.parent.parent / "projects" / "bot-ops" / "bot.yaml").read_text()
+    argv = computer.prompts()[-1]["argv"]
+    server = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"][MCP_SERVER]
+    assert server["headers"] == {"Authorization": f"Bearer ${{{MCP_ENV}}}"}
+    assert server["url"].endswith(f"/api/v2/tool-proxy/{TOOL}/mcp")
+    calls = proxied_calls(api)
+    assert len(calls) == 4 and all(c["path"] == "/mcp" and c["result"] == "sent" for c in calls), calls
+    return conversation
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_a_granted_mcp_tool_with_a_token_reaches_the_run_with_no_bot_yaml_entry(api, vendor, computer, monkeypatch):
+    mcp_tool(api, vendor, monkeypatch)
+    detail = get(api, f"api-tools/{TOOL}")
+    assert detail["status"]["text"] == "Working" and detail["mcp"]["tools"] == 1, detail["status"]
+    level(api, "ops", "read_write")
+    computer.start()
+    conversation = mcp_reached(api, vendor, computer, SECRET)
+    nowhere(api, computer, conversation, SECRET)
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_a_granted_mcp_tool_signed_in_over_oauth_reaches_the_run_and_its_tokens_stay_on_the_server(
+    api, vendor, computer, monkeypatch
+):
+    vendor.oauth = True
+    mcp_tool(api, vendor, monkeypatch, auth="oauth")
+    authorize = post(api, f"api-tools/{TOOL}/sign-in", {})["authorize_url"]
+    # The person's browser: the sign-in page approves and sends it back to Tico with a code.
+    page = urlsplit(authorize)
+    approved = httpx.get(f"{vendor.url}{page.path}?{page.query}", follow_redirects=False, timeout=10)
+    back = urlsplit(approved.headers["location"])
+    done = api.get(back.path + "?" + back.query, follow_redirects=False)
+    assert done.status_code == 302 and done.headers["location"] == f"/#/tools/api/{TOOL}", done.text
+    until(lambda: (get(api, f"api-tools/{TOOL}")["mcp"] or {}).get("tools") == 1, "the first check after sign-in")
+    level(api, "ops", "read_write")
+    computer.start()
+    access = sorted(vendor.access)[-1]
+    conversation = mcp_reached(api, vendor, computer, access)
+    nowhere(api, computer, conversation, access, "acme-synthetic-oauth-refresh-1")
 
 
 # ---- a website login with a password and a 2FA code

@@ -45,7 +45,7 @@ interface ToolApiAudience {everyone: boolean; people: string[]; teams: string[];
 interface ToolApiData {
   tool: ToolApiTool; status?: ToolsStatus; private?: boolean; can_manage?: boolean; can_set_audience?: boolean;
   access?: ToolApiAccess[]; seen_by?: ToolApiSeen[]; audience?: ToolApiAudienceIn | null; keys?: ToolApiKey[];
-  recent?: ToolApiCall[]; checks?: ToolApiCheck[];
+  recent?: ToolApiCall[]; checks?: ToolApiCheck[]; mcp?: ToolMcp | null;
 }
 interface ToolApiPerson {id: string; name?: string; email?: string | null; hidden?: boolean; archived?: boolean}
 type ToolApiFinance = import('../types/api').FinanceAdAccounts & {campaigns?: FcCampaign[]};
@@ -96,10 +96,10 @@ function taDrawHead(): void {
   if (!state?.data) return;
   const root = $('#tool-api'), {tool, status, can_manage: manage} = state.data, base = '#/tools/api/' + encodeURIComponent(state.id);
   root.querySelector('[data-ta-crumb]').textContent = tool.name;
-  const sub = ['API key', taHost(tool.base_url)].filter(Boolean).join(' · ');
+  const sub = [state.data.mcp ? 'MCP server' : 'API key', taHost(state.data.mcp?.url || tool.base_url)].filter(Boolean).join(' · ');
   root.querySelector('[data-ta-head]').innerHTML = `<header class="tt-title"><span class="tt-tile lg" aria-hidden="true"><span class="nav-icon">api</span></span>
       <div class="tt-title-text"><h1>${esc(tool.name)}${state.data.private ? TOOLS_PRIVATE : ''}</h1><p class="muted">${esc(sub)}</p></div>
-      <div class="tt-title-act">${toolsPill(status)}${tool.base_url && tool.check_path ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}${
+      <div class="tt-title-act">${toolsPill(status)}${tool.base_url && (tool.check_path || state.data.mcp) ? '<button type="button" class="ghost small" data-ta-check>Check now</button>' : ''}${
         manage ? '<button type="button" class="ghost small" data-ta-settings>Settings</button>' : ''}</div></header>
     <nav class="tt-tabs" aria-label="${esc(tool.name)}">${[['overview', base, 'Overview'], ['activity', base + '/activity', 'Activity']].map(([k, href, label]) =>
       `<a href="${href}" data-ta-tab="${k}"${(state.tab || 'overview') === k ? ' class="ph-tab cur" aria-current="page"' : ' class="ph-tab"'}>${label}</a>`).join('')}</nav>`;
@@ -111,7 +111,7 @@ function taDrawOverview(): void {
   if (!d) return;
   if (formBusy(body)) return;   // a half-typed Add stays put
   body.innerHTML = `<div class="tt-cols"><div class="tt-col">${taWhoCard(d)}${taRecentCard(d)}</div>
-    <div class="tt-col">${d.can_set_audience ? taSeeCard(d) : ''}${taFinanceSlot(d)}${taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
+    <div class="tt-col">${d.can_set_audience ? taSeeCard(d) : ''}${taFinanceSlot(d)}${tmCard(d)}${d.mcp?.auth === 'oauth' ? '' : taKeysCard(d)}${taCheckCard(d)}${taLimitsCard()}</div></div>`;
   const finSlot: HTMLElement | null = body.querySelector('[data-ta-finance]');
   taFinanceBind(finSlot);
 }
@@ -201,7 +201,8 @@ function taCheckCard(d: ToolApiData): string {
   const squares = [...Array<ToolApiCheck | null>(TA_CHECKS - checks.length).fill(null), ...checks.slice().reverse()].map(c => c
     ? `<span class="tt-sq ${c.ok ? 'ok' : 'fail'}" title="${esc(`${fmt(c.checked_at)} · ${c.status_code || ''} ${c.detail || ''}`.trim())}"></span>`
     : '<span class="tt-sq"></span>').join('');
-  const line = tool.check_path ? `GET ${tool.check_path}${last ? ` → ${last.status_code || last.detail || ''}` : ''}` : 'No check path';
+  const line = d.mcp ? `initialize · tools/list${last ? ` → ${last.status_code || last.detail || ''}` : ''}`
+    : tool.check_path ? `GET ${tool.check_path}${last ? ` → ${last.status_code || last.detail || ''}` : ''}` : 'No check path';
   return `<section class="card" id="tool-check"><header><h2>Check</h2></header>
     <p class="muted">${tool.delivery === 'proxy' ? 'Every 30 min' : 'On Check now'}</p><p class="mono tt-check-line">${esc(line)}</p>
     <div class="tt-squares" role="img" aria-label="${checks.filter(c => c.ok).length} of ${checks.length} checks worked">${squares}</div>
@@ -247,6 +248,7 @@ async function taClick(ev: Event): Promise<void> {
   const state = TA;
   if (!b || !state?.data) return;
   const id = state.id;
+  if (tmClick(b, id)) return;
   // A write, then the page read again and drawn; a refusal is a toast and leaves the page as it was.
   const write = async (run: () => Promise<unknown>) => {
     b.disabled = true;

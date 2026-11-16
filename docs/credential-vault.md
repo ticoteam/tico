@@ -55,6 +55,35 @@ through the proxy too: the runner sends it to `$TICO_TOOL_<ID>_URL` plus the ser
 with the run's proxy token in its header, and the proxy puts the key in its place. A server whose address is not under
 the tool's API address is not passed, and the turn's diagnostics say which address to set.
 
+### MCP servers
+
+**Tools → Add → MCP server** connects a remote MCP server (streamable HTTP) by its address. Tico asks the server first,
+from the server and under the proxy's address rules: an `initialize` with no sign-in. A 401 or 403 means it needs one:
+a pasted token always works, and when the server names an OAuth authorization server (`WWW-Authenticate: Bearer
+resource_metadata=…`, RFC 9728, or `/.well-known/oauth-protected-resource`) **Sign in** is offered too.
+
+- **Paste a token**: a personal access token or API key, stored as the tool's key. It goes as
+  `Authorization: Bearer <token>`, or as the whole value of another header you name (an `X-Api-Key`, say). Raygun's
+  server (`https://api.raygun.com/v3/mcp`) takes a Raygun personal access token as the Bearer.
+- **Sign in**: OAuth's authorization code with PKCE. Tico registers itself with the server's authorization server
+  (dynamic client registration, RFC 7591) when it offers that; otherwise the person adding the tool gives a client id
+  (and secret) made there for Tico, with the redirect address `<your Tico address>/api/v2/tool-oauth/callback`. The
+  sign-in belongs to the company, and the tool shows who signed in. Its access and refresh tokens are sealed like any
+  credential, refreshed by the server alone, never revealed, and never sent to a computer: a signed-in tool is always
+  on the proxy. When the server refuses a refresh the tool says **Sign in again** under Needs you, and a bot's calls
+  are refused with the same words.
+
+The tool's check is `initialize` and `tools/list` instead of a GET: Working or Key rejected as any tool's, and the
+number of tools the server lists, with how many it marks read-only (`readOnlyHint`).
+
+An MCP tool is granted by level like any tool, and a bot needs **no bot.yaml entry** for it: each run's
+`credential-runtime` lists the server of every MCP tool it holds (`mcp_servers`: name, address, transport and a header
+with the key's variable as `${VAR}`), and the runner passes it to the harness beside bot.yaml's own servers (bot.yaml's
+wins when both use a name). On the proxy the address is the tool's proxy address and the variable holds the run's
+proxy token; the proxy puts the stored token, or the sign-in's current access token, in its place. On computers (a
+pasted token only) the address is the server's own and the variable holds the token. Older SSE servers are not added
+this way: they stay a bot.yaml `tools:` entry.
+
 Model credentials named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY` infer
 that variable when the optional variable field is blank. An explicit variable always wins. For a stored API key or token,
 **Manage access > Every computer** lets computers sign their models in. It gives no bot access: grant a bot separately.
@@ -314,7 +343,8 @@ breaks the `op://` form; reference it by its item id.
 - A missing credential is not yours to work around: open the card (`tico credential request`); on a task it goes in the
   task's thread and the task is Paused until it is saved, so stop there. The bot's Tools list shows every declared
   Credential as present or missing.
-- Saving a credential is not permission to use it. Only a `tools:` entry and a grant connects a bot to a credential. Changing `tools:` is a task for the owner.
+- Saving a credential is not permission to use it. Only a `tools:` entry and a grant connects a bot to a credential (an MCP
+  server added in Tools needs the grant alone). Changing `tools:` is a task for the owner.
 - A granted value exists only for that run; do not copy it anywhere that outlives the run.
 - Each bot can have only one active granted Credential for a variable. Revoke its previous grant before replacing it.
 - `can:` describes intended operations; restrict the vendor key or endpoint to enforce read-only access. Tico does not filter a vendor's MCP tools by `can`.

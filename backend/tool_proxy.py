@@ -470,11 +470,13 @@ def install(app, store):
             problem = address_problem(tool['base_url'] or '', name)
             if problem:
                 return (403, 'tool_address', problem, log), None
+            # A sign-in (backend/mcp_connect.py) is a Read and write key too: a Read caller is held to MCP reads.
             reads_only = level == 'read' and credential['access_level'] != 'read'
             who = api_tools._label(c, subject) if reads_only else ''
             if reads_only and method not in SAFE and method != 'POST':
                 return (403, 'forbidden', read_only_detail(who, name), log), None
-            key = vault.cipher.decrypt(c, credential)
+            # An MCP tool's sign-in has no stored key: its access token is fetched below.
+            key = None if credential['kind'] == 'oauth' else vault.cipher.decrypt(c, credential)
             return None, {
                 'tool': dict(tool),
                 'credential': dict(credential),
@@ -507,6 +509,35 @@ def install(app, store):
             return refused(status, code, detail)
         assert ready is not None  # plan answers a refusal or a plan
         tool, credential, key = ready['tool'], ready['credential'], ready['key']
+        got = ready or {}  # the plan, typed as never None past the refusal above
+        if key is None:
+            from . import mcp_connect
+
+            try:
+                key = await loop().run_in_executor(None, mcp_connect.access_token, store, vault, credential['id'])
+            except mcp_connect.Failed as exc:
+                name = tool['name'] or tool_id
+                again = isinstance(exc, mcp_connect.SignInNeeded)
+                detail = (
+                    f'{name} needs a new sign-in: Tools > {name} > Sign in.'
+                    if again
+                    else f'{name}\'s sign-in server did not answer ({exc.reason}).'
+                )
+                await loop().run_in_executor(
+                    None,
+                    record,
+                    tool_id,
+                    credential['id'],
+                    got['subject'],
+                    got['level'],
+                    method,
+                    shown,
+                    401 if again else 502,
+                    'refused' if again else 'failed',
+                    detail,
+                    began,
+                )
+                return refused(401 if again else 502, 'tool_sign_in', detail)
         secrets = secrets_of(key, credential.get('username') or '')
         log = lambda status, result, detail: loop().run_in_executor(
             None,
@@ -560,17 +591,36 @@ def install(app, store):
             trust_env=False,
             verify=outbound_tls.context(trust_env=False),
         )
+        forward = lambda key: client.send(
+            client.build_request(
+                method,
+                target,
+                headers=[('Host', host), *outgoing_headers(request, tool, credential, key, got['where'])],
+                content=b''.join(chunks),
+                extensions={'sni_hostname': sni},
+            ),
+            stream=True,
+        )
         try:
-            upstream = await client.send(
-                client.build_request(
-                    method,
-                    target,
-                    headers=[('Host', host), *outgoing_headers(request, tool, credential, key, ready['where'])],
-                    content=b''.join(chunks),
-                    extensions={'sni_hostname': sni},
-                ),
-                stream=True,
-            )
+            upstream = await forward(key)
+            if upstream.status_code == 401 and credential['kind'] == 'oauth':
+                # The server ended the access token before its time: refreshed once, and the call sent again.
+                from . import mcp_connect
+
+                await upstream.aclose()
+                try:
+                    key = await loop().run_in_executor(
+                        None, lambda: mcp_connect.access_token(store, vault, credential['id'], force=True)
+                    )
+                except mcp_connect.Failed:
+                    key = None
+                if key is None:
+                    name = tool['name'] or tool_id
+                    await client.aclose()
+                    await log(401, 'refused', f'{name} needs a new sign-in')
+                    return refused(401, 'tool_sign_in', f'{name} needs a new sign-in: Tools > {name} > Sign in.')
+                secrets = secrets_of(key, '')
+                upstream = await forward(key)
         except httpx.HTTPError as exc:
             await client.aclose()
             detail = scrub_text(f'{type(exc).__name__}: {exc}', secrets)[:200]

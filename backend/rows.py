@@ -941,6 +941,12 @@ class ToolRow(TypedDict):
     kind: str
     sites: str | None
     central_only: int
+    # A remote MCP server (backend/mcp_connect.py): its address, transport, last listing, OAuth setup and client secret.
+    mcp_url: str
+    mcp_transport: str
+    mcp_tools: str | None
+    mcp_oauth: str | None
+    mcp_client_secret: str | None
 
 
 class ToolCheckRow(TypedDict):

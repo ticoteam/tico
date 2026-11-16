@@ -8270,6 +8270,28 @@ SCHEMAS['ApiTool'] = obj(
             )
         )
         | {'description': 'Only to whoever may change it: who can see an Only listed tool, and why'},
+        'mcp': {
+            'anyOf': [
+                obj(
+                    {
+                        'url': 's',
+                        'transport': {'enum': ['http', 'sse']},
+                        'auth': {'enum': ['token', 'oauth']},
+                        'header': 's',
+                        'tools': {'type': ['integer', 'null']},
+                        'read_only': 'i',
+                        'names': items('s'),
+                        'listed_at': 'n',
+                        'signed_in_by': 'n',
+                        'signed_in_at': 'n',
+                        'client': {'enum': ['registered', 'given', None]},
+                    }
+                ),
+                {'type': 'null'},
+            ],
+            'description': 'A remote MCP server (Tools > Add > MCP server): its address, how it signs in, who signed '
+            'in, and the tools its last check listed; null for an API tool',
+        },
     },
     required=['tool', 'keys', 'access', 'checks', 'recent', 'status', 'can_manage', 'private', 'can_set_audience'],
 )

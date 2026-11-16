@@ -20,6 +20,7 @@ from html import unescape
 import httpx
 from fastapi import Request
 
+from . import mcp_client
 from .auth import Identity, validate_identity
 from .imports import MeetingImport, segments_of
 from .store import H, Problem, encode
@@ -108,12 +109,7 @@ class GranolaMCP:
             if meeting_meta is not None:
                 meeting_meta["next_meetings_call"] = self.clock() + GET_MEETINGS_INTERVAL
 
-    @staticmethod
-    def seconds(value, default):
-        try:
-            return max(1, int(value))
-        except (ValueError, TypeError, OverflowError):
-            return default
+    seconds = staticmethod(mcp_client.seconds)
 
     @staticmethod
     def verification(url):
@@ -220,23 +216,20 @@ class GranolaMCP:
             row = await asyncio.to_thread(read_client)
             if row and not rejected:
                 return json.loads(row[0])["client_id"]
-            response = await self.http(
-                "POST",
-                AUTH + "/oauth2/register",
-                json={
-                    "client_name": "Tico",
-                    "token_endpoint_auth_method": "none",
-                    "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
-                    # Granola rejects a registration without redirect_uris, even for a device-code client that never
-                    # redirects ("redirect_uris must be an array"); a loopback address is never used.
-                    "redirect_uris": ["http://127.0.0.1/callback"],
-                },
+            body = mcp_client.registration(
+                # Granola rejects a registration without redirect_uris, even for a device-code client that never
+                # redirects ("redirect_uris must be an array"); a loopback address is never used.
+                ["http://127.0.0.1/callback"],
+                ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
             )
+            body.pop("response_types")  # a device-code client asks for no authorization code
+            response = await self.http("POST", AUTH + "/oauth2/register", json=body)
             if response.status_code >= 400:
                 raise GranolaError()
-            client_id = self.payload(response).get("client_id")
-            if not isinstance(client_id, str) or not client_id:
-                raise GranolaError("bad_response")
+            try:
+                client_id, _secret = mcp_client.registered(self.payload(response))
+            except mcp_client.AnswerError:
+                raise GranolaError("bad_response") from None
 
             def save_client():
                 with self.store.transaction() as c:
@@ -582,9 +575,7 @@ class GranolaMCP:
             }
             if session.get("id"):
                 headers["Mcp-Session-Id"] = session["id"]
-            body = {"jsonrpc": "2.0", "method": method, "params": params or {}}
-            if not notification:
-                body["id"] = uuid.uuid4().hex
+            body = mcp_client.rpc(method, params, notification)
             meetings = method == "tools/call" and (params or {}).get("name") == "get_meetings"
             response = await self.http("POST", MCP, headers=headers, json=body, meeting_meta=meta if meetings else None)
             session["last_call"] = self.clock()
@@ -614,22 +605,13 @@ class GranolaMCP:
                 session["id"] = response.headers["Mcp-Session-Id"]
             if notification:
                 return {}
-            if "text/event-stream" in response.headers.get("content-type", ""):
-                value = None
-                for event in response.text.replace("\r\n", "\n").split("\n\n"):
-                    data = "\n".join(line[5:].lstrip() for line in event.splitlines() if line.startswith("data:"))
-                    if data:
-                        try:
-                            candidate = json.loads(data)
-                            if candidate.get("id") == body["id"]:
-                                value = candidate
-                                break
-                        except (ValueError, AttributeError):
-                            pass
-                if not isinstance(value, dict):
-                    raise GranolaError("bad_response", http_status=status)
-            else:
-                value = self.payload(response)
+            try:
+                value = mcp_client.message(response.text, response.headers.get("content-type", ""), body["id"])
+            except mcp_client.AnswerError:
+                raise GranolaError(
+                    "bad_response",
+                    http_status=status if "text/event-stream" in response.headers.get("content-type", "") else None,
+                ) from None
             if value.get("error"):
                 error = value["error"]
                 code = error.get("code") if isinstance(error, dict) else None

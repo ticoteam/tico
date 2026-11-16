@@ -1665,25 +1665,25 @@ impl Runner {
         .await;
     }
 
-    /// The bot's own bot.yaml MCP servers this harness can reach (crate::perbot::mcp_for_run); each problem is a
-    /// diagnostic on the turn.
+    /// The bot's own bot.yaml MCP servers and its granted MCP tools' (`vault.mcp`) this harness can reach
+    /// (crate::perbot::mcp_for_run); each problem is a diagnostic on the turn.
     fn mcp_servers(
         &self,
         aid: &str,
         path: &Path,
         env: &Env,
-        granted: &std::collections::BTreeSet<String>,
+        vault: &crate::env::Vault,
         runtime: &str,
         config: &Value,
-        proxied: &[crate::env::ProxiedTool],
     ) -> Vec<Value> {
         let (servers, problems) = crate::perbot::mcp_for_run(
             path,
             env,
-            granted,
+            &vault.names,
             runtime,
             &text_of(&config["harness"]),
-            proxied,
+            &vault.tools,
+            &vault.mcp,
         );
         for line in problems {
             self.diagnose(aid, &line);
@@ -2510,7 +2510,7 @@ impl Runner {
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                 add_dirs: crate::company_skills::with_dir(p.add_dirs.clone(), company_skills.as_deref()),
                 company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config, &vault.tools),
+                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault, &runtime, &config),
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
@@ -3073,7 +3073,7 @@ impl Runner {
                     gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                     add_dirs: crate::company_skills::with_dir(place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(), company_skills.as_deref()),
                     company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                    mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config, &vault.tools),
+                    mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault, &hop.runtime, &hop_config),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
                     memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),
