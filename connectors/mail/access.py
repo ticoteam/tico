@@ -213,7 +213,10 @@ def _connector_answer():
         raise Refused("Tico gave this connector run no list of mailboxes.")
     level = "read_write" if LEASED else "read"
     boxes = []
-    for target in targets.get("mailboxes") or []:
+    # `acts_for`: the mailboxes whose actions and sends this computer carries out (the server watches every mailbox's
+    # mail itself, so `mailboxes`, the ones it syncs, is empty); a server from before it sent only `mailboxes`.
+    rows = targets.get("acts_for")
+    for target in (targets.get("mailboxes") if rows is None else rows) or []:
         addr = str((target or {}).get("address") or "").strip().lower()
         if "@" in addr:
             boxes.append({"address": addr, "level": level, "person_id": target.get("person_id")})

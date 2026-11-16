@@ -309,7 +309,7 @@ async function auAllAutomations(): Promise<AuRow[] & {error?: undefined}> {
 }
 async function auLoadList(state: AutomationsState) {
   // Maintenance, the Heartbeat and the incoming webhooks are read alongside: their rows lead the list
-  // (automations-maintenance.js, automations-heartbeat.js, settings-webhooks.ts); an older hub has none.
+  // (automations-maintenance.js, automations-heartbeat.js, settings-webhooks.ts).
   const gen = state.mtGen, hbGen = state.hbGen;
   const [found, groups, maint, hooks, heart] = await Promise.all([
     auAllAutomations().catch(e => ({error: e as Error})),
@@ -340,8 +340,8 @@ async function auLoadList(state: AutomationsState) {
   state.list = list;
 }
 const auRowName = (a: AuRow) => { const src = auSource(a.trigger); return {name: a.name || 'Untitled', src: src && !String(a.name || '').toLowerCase().includes(src.toLowerCase()) ? src : ''}; };
-// The on/off switch: `can_pause` (a read-only built-in shows it to the top of the org only); older hubs send can_edit.
-const auMayPause = (a: AuRow) => a.can_pause ?? !!a.can_edit;
+// The on/off switch: `can_pause` (a read-only built-in shows it to the top of the org only).
+const auMayPause = (a: AuRow) => !!a.can_pause;
 function auSwitch(on: boolean, label: string, attrs = '') {
   return `<input type="checkbox" role="switch" class="people-switch au-sw" aria-label="${esc(label)}"${on ? ' checked' : ''} ${attrs}>`;
 }

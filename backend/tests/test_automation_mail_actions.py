@@ -19,6 +19,7 @@ from clients.tico import APIError
 from connectors.mail import access, gmail as gm, policy as pl
 from connectors.mail import actions as mail_actions, unsubscribe as unsub
 from connectors.mail.tests import fake
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.automation_mail_actions import BOX, automate, claim, computer, last_run, later, owned_by_ana
 
 DRAFT = {"id": "draft", "type": "action", "do": "draft_reply", "args": {"body": "Draft: checking with finance."}}
@@ -560,6 +561,26 @@ def test_a_lease_another_computer_let_run_out_is_not_run_again_unless_the_action
     assert computer.gmail.sent == []  # the send was never carried out on either computer
 
 
+def test_a_mailbox_the_server_watches_is_acted_for_by_its_computer_with_no_sync_row(api, computer, monkeypatch):
+    """A mailbox added after the server took over the watch is never published by a computer: the computer it is
+    `acts_for` claims and reports its actions; another person's computer still may not."""
+    from backend import gmail_watch
+
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: True)
+    with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_1")
+        c.execute(
+            "INSERT INTO automation_mail_actions(id,automation_id,mailbox,msg_id,action,args,state,created_at) "
+            "VALUES('ma_1','auto_1',?,'m1','send','{}','queued',?)",
+            (BOX, "2026-10-28T09:00:00Z"),
+        )
+        assert not c.execute("SELECT 1 FROM mail_mailboxes WHERE address=?", (BOX,)).fetchone()
+    stranger = runner(api, operator="ben", label="Ben's Mac")
+    claim(api, stranger["token"], expected=403)
+    (action,) = claim(api, computer.token)["actions"]
+    post(api, f"automations/mail-actions/{action['id']}/result", {"ok": True, "detail": "sent"}, computer.token)
+
+
 def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, computer):
     claim(api, computer.token, expected=403)
     with api.app.state.store.transaction() as c:
@@ -933,104 +954,10 @@ def test_reply_mode_with_the_send_switch_off_saves_a_draft(api, computer):
     assert last_run(api, aid)["steps"][0]["outputs"]["actions"][0]["detail"] == "send_off"
 
 
-def test_change_calendar_off_refuses_a_booking_and_fails_what_was_queued_at_claim(api, computer):
-    """What Tico may do holds the calendar on the server too: no booking is queued while Change calendar is off, and one
-    queued before it went off fails at the claim instead of landing on the calendar later."""
-    booking = {
-        "calendar": BOX,
-        "title": "Planning",
-        "start": "2099-01-01T09:00:00+00:00",
-        "end": "2099-01-01T09:30:00+00:00",
-        "attendees": [],
-    }
-    queued = post(api, "calendar/appointments", booking)["action"]
-    r = api.put(
-        "/api/v2/google/permissions",
-        json={"organize_mail": True, "send_mail": True, "change_calendar": False},
-        headers=headers(),
-    )
-    assert r.status_code == 200, r.text
-    refused = api.post("/api/v2/calendar/appointments", json=booking, headers=headers())
-    assert refused.status_code == 403 and refused.json()["error"]["code"] == "company_off", refused.text
-    assert post(api, "connectors/calendar/actions/claim", {}, computer.token) == {"action": None}
-    with api.app.state.store.read() as c:
-        row = c.execute("SELECT status,error FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()
-        assert row["status"] == "failed" and "What Tico may do" in row["error"]
-        assert c.execute("SELECT count(*) FROM calendar_actions").fetchone()[0] == 1
-
-
 def test_the_runner_s_own_commands_need_no_owner_proof_wherever_its_registration_lives(api, computer):
-    """Sync, a mail action's lease and a calendar booking's claim run as the owner with the registration at
-    TICO_RUNNER_CONFIG (the fixture): each reads What Tico may do from the hub and nothing else about who runs it."""
+    """Sync and a mail action's lease run as the owner with the registration at TICO_RUNNER_CONFIG (the fixture): each
+    reads What Tico may do from the hub and nothing else about who runs it. (Calendar bookings are made on the server.)"""
     automate(api, ARCHIVE)
     computer.sync()
     assert computer.worker.mail_action_tick() >= 1
     assert "INBOX" not in computer.gmail.store["m1"]["labelIds"]
-    booking = {
-        "calendar": BOX,
-        "title": "Planning",
-        "start": "2099-01-01T09:00:00+00:00",
-        "end": "2099-01-01T09:30:00+00:00",
-        "attendees": [],
-    }
-    queued = post(api, "calendar/appointments", booking)["action"]
-    assert computer.worker.calendar_action_tick() == 1
-    assert len(computer.calendar.created_events) == 1
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT status FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()[0] == "succeeded"
-
-
-def test_completed_silent_calendar_hold_does_not_revoke_its_approved_invitation(api, computer):
-    booking = {
-        "calendar": BOX,
-        "title": "Planning",
-        "start": "2099-01-01T09:00:00+00:00",
-        "end": "2099-01-01T09:30:00+00:00",
-        "attendees": ["ben@acme.example"],
-    }
-    queued = post(api, "calendar/appointments", booking)["action"]
-    assert computer.worker.calendar_action_tick() == 1
-    assert computer.gmail.sent == []
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT status FROM calendar_actions WHERE id=?", (queued["id"],)).fetchone()[0] == "succeeded"
-        send = c.execute("SELECT * FROM email_sends WHERE calendar_action_id=?", (queued["id"],)).fetchone()
-        assert send is not None and send["state"] == "waiting_approval"
-    approve_and_dispatch(api, computer, send["id"])
-    assert len(computer.gmail.sent) == 1
-    assert "text/calendar" in str(computer.sent()[0])
-
-
-def test_hub_conference_preparation_failure_returns_a_retryable_non_send(api, computer):
-    from connectors.mail import calendar
-
-    booking = {
-        "calendar": BOX,
-        "title": "Planning",
-        "start": "2099-01-01T09:00:00+00:00",
-        "end": "2099-01-01T09:30:00+00:00",
-        "attendees": ["ben@acme.example"],
-    }
-    queued = post(api, "calendar/appointments", booking)["action"]
-    with (
-        mock.patch.object(
-            calendar.Calendar,
-            "ready_conference",
-            side_effect=calendar.ConferencePending("Meeting link pending", status=503),
-        ),
-        mock.patch.object(pl, "queue_send") as send,
-    ):
-        assert computer.worker.calendar_action_tick() == 1
-    send.assert_not_called()
-    result = get(api, "calendar/actions/" + queued["id"])["action"]
-    assert result["status"] == "failed" and "Retry scheduling" in result["error"]
-    assert result["result"]["event_id"] and all(
-        event["sendUpdates"] == "none" for event in computer.calendar.created_events.values()
-    )
-    retried = post(api, "calendar/appointments", booking)["action"]
-    assert retried["id"] != queued["id"]
-    assert computer.worker.calendar_action_tick() == 1
-    with api.app.state.store.read() as c:
-        assert (
-            c.execute("SELECT state FROM email_sends WHERE calendar_action_id=?", (retried["id"],)).fetchone()[0]
-            == "waiting_approval"
-        )

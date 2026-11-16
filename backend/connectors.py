@@ -1,15 +1,21 @@
-"""Bounded reads and queued writes through explicitly authorized local connectors.
+"""Bounded reads and queued writes through explicitly authorized local connectors, and the calendar appointment routes.
 
 No computer holds a Google credential. A computer that owns a mailbox asks for a short-lived access token for it
 (`/connectors/mail/workspace/token`), which the server takes from the Workspace key or the person's own Connect Google
-grant (backend/google_tokens.py, the one door). Calendar reads use the provider-normalized snapshot published by
-the runner; writes are durable actions that the same runner claims once. Who may act for which mailbox is decided in
-backend/google_rights.py.
+grant (backend/google_tokens.py, the one door). Who may act for which mailbox is decided in backend/google_rights.py.
+
+The appointment routes (`/calendar/appointments`, `/calendar/upcoming`) read a calendar live on the server
+(backend/gcal_live.py, a 60 s cache), and a booking is made on Google in the request, its `calendar_actions` row the
+receipt. No computer reads or books a calendar any more.
 """
 
-from datetime import datetime, timezone
+from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import re
+import threading
+import time
 
 from fastapi import Request
 from typing import Literal
@@ -17,7 +23,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from . import models as M
-from . import google_connect, google_rights, reconnects, routines
+from . import gcal_live, google_connect, google_rights, reconnects, routines
 from . import google_workspace as workspace
 from .store import H, P, Problem, encode
 
@@ -67,8 +73,84 @@ class CalendarEvent(M.Contract):
         return self
 
 
-SNAPSHOT_DAYS = 14  # a personal connection's calendar on the Calendar page (the company key reads Google live)
+SNAPSHOT_DAYS = 14  # the appointment routes' window: from the start of today (UTC)
 SNAPSHOT_EVENTS = 500
+LIVE_SECONDS = 60  # one calendar's live read is reused this long
+LIVE_CACHED = 256  # calendars held in the cache
+MEET_TRIES = 5  # reads of a new event while Google makes its Meet link, one a second
+_LIVE: OrderedDict = OrderedDict()  # address -> (expires, read at, events)
+_LIVE_LOCK = threading.Lock()
+
+
+def _recordable(occurrence, address):
+    """One Google occurrence in the appointments' shape (CalendarEvent), or None for one that is no meeting of this
+    person's: all day, time away, busy only, declined, or a hold with nobody else and no meeting link."""
+    if occurrence.get("all_day") or occurrence.get("kind") != "event" or occurrence.get("busy_only"):
+        return None
+    if occurrence.get("response") == "declined":
+        return None
+    emails = []
+    for attendee in occurrence.get("attendees") or []:
+        email = str(attendee.get("email") or "").strip().lower()
+        if email and email not in emails:
+            emails.append(email)
+    url = occurrence.get("meeting_url") or ""
+    if len(set(emails) | {address}) < 2 and not url:
+        return None
+    stable = occurrence.get("ical_uid") or occurrence.get("event_id") or occurrence["occurrence_id"]
+    return {
+        "occurrence_id": hashlib.sha256(f"{stable}\n{occurrence['start']}".encode()).hexdigest()[:24],
+        "event_id": str(occurrence["occurrence_id"]).removeprefix("google:" + address + ":"),
+        "title": str(occurrence.get("title") or "Meeting")[:240],
+        "start": occurrence["start"],
+        "end": occurrence["end"],
+        "attendees": emails[:100],
+        "meeting_url": url,
+    }
+
+
+def live_appointments(c, address):
+    """(read at, events) of `address`'s own Google calendar from the start of today for SNAPSHOT_DAYS, read as that
+    mailbox and reused for LIVE_SECONDS. Raises gcal_live's Problem when Google cannot answer."""
+    now = time.monotonic()
+    with _LIVE_LOCK:
+        hit = _LIVE.get(address)
+        if hit and hit[0] > now:
+            _LIVE.move_to_end(address)
+            return hit[1], list(hit[2])
+    start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    found = gcal_live.events(c, address, address, start, start + timedelta(days=SNAPSHOT_DAYS), limit=SNAPSHOT_EVENTS)
+    rows = [row for row in (_recordable(o, address) for o in found) if row][:SNAPSHOT_EVENTS]
+    at = H.now()
+    with _LIVE_LOCK:
+        _LIVE[address] = (now + LIVE_SECONDS, at, rows)
+        _LIVE.move_to_end(address)
+        while len(_LIVE) > LIVE_CACHED:
+            _LIVE.popitem(last=False)
+    return at, list(rows)
+
+
+def forget_live(address=None):
+    """Drop the cached read of one calendar (a booking just changed it), or of every calendar."""
+    with _LIVE_LOCK:
+        if address is None:
+            _LIVE.clear()
+        else:
+            _LIVE.pop(address, None)
+
+
+def appointments_view(c, address):
+    """The appointments answer for one calendar, read live from Google with the server's credential for it (the
+    person's own Connect Google grant or the Workspace key). A calendar the server holds none for, or a Google
+    failure, answers stale with its kind, never an error page, so the Recorder and the native view keep their last
+    list."""
+    if not gcal_live.connected(c, address):
+        return {"calendar": address, "events": [], "updated_at": None, "stale": True, "error": "not_connected"}
+    try:
+        at, events = live_appointments(c, address)
+    except Problem as failed:
+        return {"calendar": address, "events": [], "updated_at": None, "stale": True, "error": failed.code}
+    return {"calendar": address, "events": events, "updated_at": at, "version": 1, "stale": False}
 
 
 class CalendarSnapshot(M.Contract):
@@ -411,14 +493,9 @@ def install_connectors(app, store, execution, mutate):
     def targets(request: Request):
         with store.read() as c:
             runner, named, owned = reader(c, request.state.identity)
-            # Calendar sync follows the same ownership as mail, including known Workspace mailboxes without a bot.
-            people = [
-                {"id": box["person_id"], "email": box["address"]}
-                for box in google_rights.visible(c, runner["id"], named, owned=owned)
-                if box["person_id"]
-            ]
-        # `hours` is what a computer from before `days` reads; a newer one reads from the start of today for `days`.
-        return {"people": people, "hours": 24, "days": SNAPSHOT_DAYS, "refresh_seconds": 45}
+        # Every calendar is read live on the server now: a computer is given none to read. `hours` is what a computer
+        # from before `days` reads.
+        return {"people": [], "hours": 24, "days": SNAPSHOT_DAYS, "refresh_seconds": 45}
 
     @app.post("/api/v2/connectors/calendar/snapshots")
     def publish(request: Request, body: CalendarPublish):
@@ -616,28 +693,22 @@ def install_connectors(app, store, execution, mutate):
         with store.read() as c:
             person, address = calendar_person(c, calendar)
             calendar_allowed(c, who, address, person)
-            row = c.execute(
-                "SELECT * FROM connector_snapshots WHERE kind='calendar' AND owner=?", (person["id"],)
-            ).fetchone()
+            view = appointments_view(c, address)
         with store.transaction() as c:
             H.event(c, who.actor, "calendar.read", address, {})
-        if not row:
-            return {"calendar": address, "events": [], "updated_at": None, "stale": True}
-        payload = json.loads(row["payload"])
-        stale = row["updated_at"] < H.shift(H.now(), seconds=-180)
-        return {
-            "calendar": address,
-            "events": payload["events"],
-            "updated_at": row["updated_at"],
-            "version": row["version"],
-            "stale": stale,
-        }
+        return view
 
     @app.post("/api/v2/calendar/appointments")
     def schedule_appointment(request: Request, body: CalendarAppointmentCreate):
+        """Book one appointment, made on Google in this request with the server's credential for the calendar, without
+        Google's own invitations: an invitation is Tico's email, frozen with its Meet link and queued through the
+        send rules and approvals (calendar_action_id). The calendar_actions row is the receipt, settled here; an
+        answer Google did not give is `unknown`, never retried. A calendar the server holds no credential for is
+        refused; no computer books one."""
         who = request.state.identity
         if who.role not in ("bot", "human", "owner"):
             raise Problem("identity", "Only a bot or person may schedule an appointment", 403)
+        made = {}
 
         def work(c):
             person, address = calendar_person(c, body.calendar)
@@ -645,10 +716,15 @@ def install_connectors(app, store, execution, mutate):
             if not workspace.permissions(c)["change_calendar"]:
                 raise Problem("company_off", CALENDAR_OFF, 403)
             if body.attendees:
+                from . import mailbox_access
                 from .email_sending import effective
 
                 if effective(c, address, H.actor_id(who.actor) if who.role == "bot" else "")["mode"] == "never":
                     raise Problem("policy", "Never blocks this inbox's invitations", 403)
+                if not mailbox_access.may(c, who.actor, address)["send"]:
+                    # The invitation is an email from this inbox: one that could not be queued is refused now, before
+                    # anything is made on Google.
+                    raise Problem("forbidden", "Inviting people from that calendar needs Send on its inbox", 403)
             start = instant(body.start)
             if start.astimezone(timezone.utc) < datetime.now(timezone.utc):
                 raise Problem("start", "Calendar appointments must start in the future", 422)
@@ -671,11 +747,18 @@ def install_connectors(app, store, execution, mutate):
                         + " is not. Put the time in a draft for a person to send",
                         403,
                     )
+            if not gcal_live.connected(c, address):
+                raise Problem(
+                    "not_connected",
+                    "Tico can't reach that calendar: connect Google for it in Tools > Settings > Email",
+                    403,
+                    extra={"kind": "not_connected"},
+                )
             action_id, now = H.new_id(), H.now()
             c.execute(
                 "INSERT INTO calendar_actions(id,requested_by,calendar_email,summary,start,end,"
-                "attendees,description,add_meet,status,result,error,created_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,'pending','{}','',?,?)",
+                "attendees,description,add_meet,status,result,error,created_at,updated_at,started_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,'{}','',?,?,?)",
                 (
                     action_id,
                     who.actor,
@@ -686,10 +769,13 @@ def install_connectors(app, store, execution, mutate):
                     encode(body.attendees),
                     body.description,
                     1 if body.add_meet else 0,
+                    "running",
+                    now,
                     now,
                     now,
                 ),
             )
+            made["id"] = action_id
             H.event(
                 c,
                 who.actor,
@@ -703,7 +789,125 @@ def install_connectors(app, store, execution, mutate):
                 )
             }
 
-        return mutate(request, body, work)
+        answer = mutate(request, body, work)
+        if made:
+            return book(made["id"])
+        if answer["action"]["status"] == "running":
+            # A retried request: the receipt as it stands now, never a second booking.
+            with store.read() as c:
+                row = c.execute("SELECT * FROM calendar_actions WHERE id=?", (answer["action"]["id"],)).fetchone()
+            return {"action": calendar_action(row)} if row else answer
+        return answer
+
+    def book(action_id):
+        """Make the booked event on Google, then settle its receipt: succeeded (with the invitation queued),
+        failed when Google refused it, or unknown when Google's answer never came."""
+        with store.read() as c:
+            row = dict(c.execute("SELECT * FROM calendar_actions WHERE id=?", (action_id,)).fetchone())
+        address, actor = row["calendar_email"], row["requested_by"]
+        attendees = json.loads(row["attendees"] or "[]")
+        fields = {
+            "title": row["summary"],
+            "start": row["start"],
+            "end": row["end"],
+            "notes": row["description"] or None,
+            "attendees": attendees,
+            "add_meet": bool(row["add_meet"]),
+            "actor": actor,
+            **({"bot": H.actor_id(actor)} if str(actor).startswith("bot:") else {}),
+        }
+        # A fixed id: whatever happens to this request, Google can hold at most one event for this receipt.
+        event_id = hashlib.sha256(action_id.encode()).hexdigest()[:32]
+        status, result, error, raw = "unknown", {}, "", None
+        try:
+            with store.read() as c:
+                raw = gcal_live.insert_raw(c, address, address, fields, send_updates="none", event_id=event_id)
+                for _ in range(MEET_TRIES if row["add_meet"] else 0):
+                    if gcal_live.meeting_url(raw):
+                        break
+                    time.sleep(1)
+                    raw = gcal_live.get_raw(c, address, address, str(raw.get("id") or event_id))
+            result = {"event_id": str(raw.get("id") or event_id), "meeting_url": gcal_live.meeting_url(raw)}
+            if row["add_meet"] and not result["meeting_url"]:
+                status, error = "failed", "Google made the event but not its Meet link, so no invitation went out"
+            else:
+                status = "succeeded"
+        except Problem as refused:
+            if refused.status in (401, 403, 404, 409, 422) and not refused.retryable:
+                status, error = "failed", "Google Calendar refused the event (" + refused.code + ")"
+            else:
+                error = "Tico did not hear back from Google; check the calendar before booking again"
+        except Exception:  # noqa: BLE001 - the receipt says unknown; nothing is retried
+            error = "Tico did not hear back from Google; check the calendar before booking again"
+        classification = raw_mail = None
+        if status == "succeeded" and attendees:
+            from connectors.mail import compose
+            from . import email_sending
+
+            start, end = instant(row["start"]), instant(row["end"])
+            text = row["description"] or row["summary"]
+            raw_mail = compose.build(attendees, row["summary"], text, from_addr=address)
+            raw_mail = compose.with_invitation(raw_mail, raw, address, attendees, start, end, row["summary"])
+            classification = {
+                **email_sending.classify(app, store, email_sending.snapshot(raw_mail, address)),
+                "lint": [],
+            }
+        forget_live(address)
+        with store.transaction() as c:
+            current = c.execute("SELECT status FROM calendar_actions WHERE id=?", (action_id,)).fetchone()
+            if current and current["status"] == "running":
+                if raw_mail is not None:
+                    from . import email_sending
+
+                    try:
+                        send = email_sending.enqueue(
+                            c,
+                            execution.auth,
+                            actor,
+                            email_sending.Enqueue(mailbox=address, raw=raw_mail, calendar_action_id=action_id),
+                            classification,
+                            wait_for_gmail=True,  # the event is made: Gmail not answering lets the invitation wait
+                        )
+                        result["invitation_send_id"] = send["id"]
+                    except Problem as refused:
+                        status, error = (
+                            "failed",
+                            "The event was made, but its invitation was refused: " + refused.detail,
+                        )
+                now = H.now()
+                c.execute(
+                    "UPDATE calendar_actions SET status=?,result=?,error=?,updated_at=?,finished_at=? "
+                    "WHERE id=? AND status='running'",
+                    (status, encode(result), error, now, now, action_id),
+                )
+                H.event(
+                    c,
+                    actor,
+                    "calendar.schedule." + status,
+                    action_id,
+                    {"calendar": address, "event_id": result.get("event_id", "")},
+                )
+                if result.get("event_id"):
+                    from . import calendar_events, gcal_watch
+
+                    written = raw or {}
+                    gcal_watch.own_write(
+                        c,
+                        address,
+                        result["event_id"],
+                        sequence=written.get("sequence") if isinstance(written.get("sequence"), int) else None,
+                        end=(written.get("end") or {}).get("dateTime") or row["end"],
+                    )
+                    calendar_events.emit(
+                        c,
+                        actor,
+                        "created",
+                        result["event_id"],
+                        calendar_events.google_detail(address, "google:" + address + ":" + result["event_id"]),
+                        mailbox=address,
+                    )
+            settled = c.execute("SELECT * FROM calendar_actions WHERE id=?", (action_id,)).fetchone()
+        return {"action": calendar_action(settled)}
 
     @app.get("/api/v2/calendar/actions/{action_id}")
     def calendar_action_status(action_id: str, request: Request):
@@ -721,27 +925,16 @@ def install_connectors(app, store, execution, mutate):
         with store.read() as c:
             runner, named, owned = reader(c, request.state.identity)
             targets = google_rights.visible(c, runner["id"], named, owned=owned)
-            freshness = {row["address"]: row for row in c.execute("SELECT * FROM mail_mailboxes")}
             company = workspace.permissions(c)
-        mailboxes = []
-        for target in targets:
-            address, person_id = target["address"], target["person_id"]
-            row = freshness.get(address)
-            mailboxes.append(
-                {
-                    "address": address,
-                    "person_id": person_id,
-                    "newest_epoch": row["newest_epoch"] if row else None,
-                    "oldest_epoch": row["oldest_epoch"] if row else None,
-                    "message_count": row["message_count"] if row else 0,
-                    "synced_at": row["synced_at"] if row else None,
-                    "error": row["error"] if row else None,
-                }
-            )
+        # The server watches every mailbox's mail itself (backend/gmail_watch.py), so no computer syncs one: `mailboxes`
+        # is empty. `acts_for` are the mailboxes whose automation mail actions and queued sends this computer still
+        # carries out (runner_support/connectors.py) until the server does those too.
+        acts_for = [{"address": target["address"], "person_id": target["person_id"]} for target in targets]
         # What Tico may do (Tools), which the mail CLI the runner runs checks every write against
         # (connectors/mail/policy.py runner_company): it reads it here, over the runner's own registration.
         return {
-            "mailboxes": mailboxes,
+            "mailboxes": [],
+            "acts_for": acts_for,
             "batch": MAIL_BATCH,
             "retention_days": store.settings.mail_retention_days,
             "company": company,
@@ -763,8 +956,10 @@ def install_connectors(app, store, execution, mutate):
             now = H.now()
             from . import automations
 
-            # The mailbox's first batch sets its watch and later batches keep it (automations.mail_watch).
-            watch = automations.mail_watch(c, body.mailbox, body.synced_at)
+            # The mailbox's first batch sets its watch and later batches keep it (automations.mail_watch); a mailbox
+            # with no `mailboxes` row keeps it on its sync row until this computer route goes.
+            kept = c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (body.mailbox,)).fetchone()
+            watch = (kept and kept["watching_since_at"]) or automations.mail_watch(c, body.mailbox, body.synced_at)
             from . import mailbox_access
             from .entities import ingest
 
@@ -903,6 +1098,10 @@ def install_connectors(app, store, execution, mutate):
                     )
                 c.execute("DELETE FROM mail_fts WHERE mailbox=? AND msg_id=?", (body.mailbox, msg_id))
             _refresh_mailbox(c, body.mailbox, person["id"], runner["id"], body.synced_at, watch)
+            c.execute(
+                "UPDATE mailboxes SET watching_since_at=coalesce(watching_since_at,?) WHERE address=?",
+                (watch, body.mailbox),
+            )
             accepted = len(body.messages) + len(body.deleted)
             google_rights.report(c, "mail", runner["id"], now, ok=[body.mailbox])  # that account is working
             reconnects.google_good(c, "mail", [body.mailbox])  # a synced mailbox is that account working
@@ -976,20 +1175,16 @@ def install_connectors(app, store, execution, mutate):
         if who.role not in ("human", "owner"):
             raise Problem("identity", "Calendar snapshots are available only to signed-in people", 403)
         with store.read() as c:
-            person = c.execute("SELECT id FROM humans WHERE id=?", (H.actor_id(who.actor),)).fetchone()
-            row = c.execute(
-                "SELECT * FROM connector_snapshots WHERE kind='calendar' AND owner=?", (person["id"],)
-            ).fetchone()
-            if not row:
+            person = c.execute("SELECT id,email FROM humans WHERE id=?", (H.actor_id(who.actor),)).fetchone()
+            if not person or not person["email"]:
                 return {"events": [], "updated_at": None, "stale": True}
-            payload = json.loads(row["payload"])
-            stale = row["updated_at"] < H.shift(H.now(), seconds=-180)
-            return {
-                "events": payload["events"],
-                "updated_at": row["updated_at"],
-                "version": row["version"],
-                "stale": stale,
-            }
+            try:
+                _person, address = calendar_person(c, person["email"])
+            except Problem:
+                return {"events": [], "updated_at": None, "stale": True}
+            view = appointments_view(c, address)
+            view.pop("calendar", None)
+            return view
 
     app.get("/api/v2/calendar/upcoming")(upcoming)
     # The existing native WebView calls this compatibility path. It has identical auth and data.

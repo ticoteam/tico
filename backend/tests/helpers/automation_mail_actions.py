@@ -113,9 +113,21 @@ class Computer:
 
 
 @pytest.fixture
-def computer(api, tmp_path, monkeypatch):
+def computer(api, tmp_path, monkeypatch, fake_gmail):
     machine = runner(api)
     box = Computer(api, tmp_path, machine["token"])
+    # The same message in the mailbox's Gmail as the server reads it (a reply's original, its sender).
+    fake_gmail.add(
+        BOX,
+        "m1",
+        thread="t1",
+        sender="billing@vendor.example",
+        sender_header=INVOICE["From"],
+        subject=INVOICE["Subject"],
+        body="Please pay invoice 4471.",
+        message_id=INVOICE["Message-ID"],
+        epoch=int(time.time()) - 3600,
+    )
     monkeypatch.setattr(cli, "open_gmail", lambda mailbox: gm.Gmail(box.gmail, mailbox, sleep=lambda s: None))
     monkeypatch.setattr(cli, "open_db", lambda: db.connect(tmp_path / "mail.db"))
     monkeypatch.setattr(audit_log, "AUDIT_PATH", tmp_path / "audit.jsonl")
@@ -131,7 +143,7 @@ def computer(api, tmp_path, monkeypatch):
         "RUNNER_ACCESS",
         lambda: {
             **box.worker.client.get("connectors/mail/targets"),
-            "mailboxes": [{"address": a} for a in box.worker.mail_boxes],
+            "acts_for": [{"address": a} for a in box.worker.mail_boxes],
         },
     )
     monkeypatch.setattr(cli, "open_calendar", lambda mailbox: box.calendar)

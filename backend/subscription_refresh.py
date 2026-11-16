@@ -8,6 +8,7 @@ from fastapi import Request
 from clients.harness_manifests import caps
 
 from . import hubdb as H, models as M
+from . import runner_online
 from .repositories import metadata, save_metadata
 from .store import Problem
 
@@ -104,7 +105,7 @@ def request_refresh(c, auth, who, body):
         value['state'] = 'unavailable'
     elif state.get('signed_in') is False:
         raise Problem('signed_out', 'Sign in before refreshing this subscription', 409)
-    elif not runner['last_seen_at'] or runner['last_seen_at'] < H.shift(now, seconds=-60):
+    elif not runner_online.is_online(runner['last_seen_at']):
         raise Problem('offline', 'This computer is offline; its last weekly reading is unchanged', 409)
     elif len(pending(c, body.runner_id)) >= 5:
         raise Problem('busy', 'This computer already has weekly refreshes queued; try again shortly', 409)

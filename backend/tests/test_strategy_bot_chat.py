@@ -1,7 +1,7 @@
 """One Assistant for everyone (backend/assistant.py, docs/assistant.md): the owner's chat is their Assistant like
 everyone else's, and the Strategy Owner, the Librarian and BotOps are helpers it hands cited work to. The owner's earlier
-chat with the Strategy Owner (room_key "ceo") is read-only history under "Earlier chats", and the cards waiting in it
-move to the owner's Assistant room once."""
+chat with the Strategy Owner (room_key "ceo") is read-only history under "Earlier chats", and it stays with the owner
+seat."""
 
 import uuid
 
@@ -144,52 +144,6 @@ def test_the_owners_earlier_strategy_bot_chat_is_read_only_history_under_earlier
         )
     attempt = post(api, "jobs/claim", {"bot": "strategy-owner"}, token=r["token"])["attempt"]
     assert get(api, "me", attempt["token"])["actor"] == "bot:strategy-owner"
-
-
-def test_cards_waiting_in_the_earlier_chat_move_to_the_assistant_room_once(api):
-    strategy_bot(api)
-    old = earlier_chat(api)
-    settings = api.app.state.store.settings
-    with api.app.state.store.transaction() as c:
-        owner = Identity("human:ana", "owner", "ana@acme.example")
-        waiting = assistant.create_proposal(
-            c,
-            settings,
-            owner,
-            H.conversation(c, old),
-            "assistant",
-            "Archive the Ops bot",
-            "POST",
-            "/api/v2/bots/ops/archive",
-            {"expected_revision": 1},
-            None,
-        )["action"]
-        done = assistant.create_proposal(
-            c,
-            settings,
-            owner,
-            H.conversation(c, old),
-            "assistant",
-            "Archive the Docs bot",
-            "POST",
-            "/api/v2/bots/docs/archive",
-            {"expected_revision": 1},
-            None,
-        )["action"]
-        c.execute("UPDATE assistant_actions SET status='done' WHERE id=?", (done["id"],))
-        assert assistant.migrate(c, settings) == 1
-        assert assistant.migrate(c, settings) == 0  # every start: once moved, nothing is left to move
-    mine = get(api, "assistant")
-    with api.app.state.store.read() as c:
-        rows = {r["id"]: r["conversation_id"] for r in c.execute("SELECT id, conversation_id FROM assistant_actions")}
-        cards = c.execute(
-            "SELECT sender_id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.action')=?",
-            (mine["room_id"], waiting["id"]),
-        ).fetchall()
-    assert rows == {waiting["id"]: mine["room_id"], done["id"]: old}
-    assert [r["sender_id"] for r in cards] == ["bot:assistant"]
-    assert [a["id"] for a in mine["pending"]] == [waiting["id"]]
-    assert mine["actions"][waiting["id"]]["status"] == "pending"
 
 
 def _assistant_asks(api, r, helper_slug, token="ana-test", said="What should we focus on?", cite="turn", expected=200):

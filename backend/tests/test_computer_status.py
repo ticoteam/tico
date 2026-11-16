@@ -8,7 +8,7 @@ import pytest
 
 from backend import cloud_machines as CM, computers, runner_states
 from backend import bot_settings as BS
-from backend.getting_started import ONLINE_SECONDS
+from backend.runner_online import ONLINE_SECONDS
 from backend.scheduler import Scheduler
 from backend.store import H
 from backend.tests.helpers.api import assign, get, post, ready, runner  # noqa: F401

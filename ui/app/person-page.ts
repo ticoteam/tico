@@ -104,7 +104,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   const about = goalParts(p.about || '');
   // The shared page header (page-head.ts): their face and name, the tabs, Message for someone else, ⋯ last. Their live
   // goals are one quiet list under it; the standing goal text is the Goals card's.
-  const dm = S.me?.id !== p.id && THREADS.on !== false && p.my_access?.write !== false;
+  const dm = S.me?.id !== p.id && p.my_access?.write !== false;
   $('#main').innerHTML = `${pageHead({title: p.name || p.id, hook: 'person-ph',
       tabs: tabs.map(t => ({label: t === 'assistant' ? myChatName() : PERSON_TAB_LABELS[t] || t, cur: t === tab, attrs: `data-pt="${t}"`})),
       tabsAttrs: `id="ptabs" aria-label="${esc(p.name || p.id)}"`,

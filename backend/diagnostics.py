@@ -543,7 +543,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
     page runs in ({version, lines, mac}: support.AppShell), whose version and log go in labelled `app`. `report` is what
     the person reports (support.Report), redacted with the rest."""
     from . import beta, health, onboarding, replication, runner_versions, setup_failures
-    from .getting_started import _online_runners
+    from . import runner_online
     from .views import roster
 
     updater = _updater_report(settings)
@@ -560,7 +560,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         redactor = Redactor(_domains(settings, people), bot_rows, humans)
         config = config or onboarding.config_view(c, settings, who)
         checks = health.view(c, who, settings, auth, github, config)["checks"]
-        online_ids = {r["id"] for r in _online_runners(c)}
+        online_ids = {r["id"] for r in runner_online.online_rows(c)}
         runners = _runner_rows(c, runner_versions.load(c), online_ids)
         bots_total = sum(1 for b in H.bots(c) if b.get("state") != "archived")
         routines = c.execute("SELECT count(*) FROM schedules").fetchone()[0]

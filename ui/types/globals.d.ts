@@ -69,7 +69,6 @@ declare var ticoAppUpdate: any;
 declare var ticoAssistantName: any;
 declare var ticoBootSnap: any;
 declare var ticoBootTiming: BootTimingReport | undefined;
-declare var ticoIsCloud: any;
 declare var ticoPageHidden: (() => { inCall: boolean }) | undefined;
 declare var ticoSearch: any;
 declare var ticoTheme: any;

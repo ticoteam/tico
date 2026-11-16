@@ -59,6 +59,9 @@ EMPTY = (
     "update_queue",
     "task_reminders",
     "calendar_actions",
+    # The Google calendar watcher's sync tokens and what it saw: a copy's watcher learns its calendars again quietly.
+    "calendar_watches",
+    "calendar_watch_events",
     "suggestions",  # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries",
     "worktree_waits",
@@ -192,8 +195,9 @@ EMPTY = (
     "email_send_operations",
     "email_send_previews",
     "email_legacy_automations",
-    # mail, Slack, GitHub, Granola, meeting bots, support
+    # mail, Slack, GitHub, Granola, meeting bots, support; the old copies of mail (read live from Gmail now) stay behind
     "mail_mailboxes",
+    "mail_messages",
     "mailboxes",
     "mailbox_accesses",
     "google_connects",
@@ -478,7 +482,6 @@ KEEP = (
             "live_meeting_windows",
             "live_meetings",
             "mail_agent_instructions",
-            "mail_messages",
             "main_pushes",
             "market_citations",
             "entity_links",

@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from fastapi import Request
 from pydantic import Field
 
-from . import diagnostics, login_holds, models_preset, providers, runner_versions, team_rules
+from . import diagnostics, login_holds, models_preset, providers, runner_online, runner_versions, team_rules
 from . import models as M
 from .models import Contract
 from .store import H, Problem
@@ -196,7 +196,7 @@ def _runner_checks(c, settings):
     from .store import readiness_document
 
     out = []
-    online = health._online_runners(c)
+    online = runner_online.online_rows(c)
     computers = health._computers(c, online, settings)
     # Work a computer holds while it waits to update or restart is said here, never as a queue_idle Tico bug.
     held, restarting = {}, {}
@@ -622,7 +622,7 @@ def _bot_checks(c, settings=None):
                 f"BotOps: finish {name}'s setup with the person it serves, or pause it so its work is not held.",
             )
         )
-    online_ids = {r["id"] for r in health._online_runners(c)}
+    online_ids = {r["id"] for r in runner_online.online_rows(c)}
     for row in health.refused_queues(c, settings):
         out.append(
             _finding(

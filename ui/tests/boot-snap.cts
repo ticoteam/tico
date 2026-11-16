@@ -12,7 +12,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RoutesSupport.Api;
 const {t} = require('./support/load.cts') as import('./support/load.cts').Api;
 
-interface PageWin { EventSource: unknown; ticoBootSnap: boolean; __dbGo: () => void }
+interface PageWin { ticoBootSnap: boolean; __dbGo: () => void }
 interface KeptScreen { route: string; who: string; html: string }
 interface BootSnapState { who: string; banned: boolean; epoch: number | null; db: Promise<unknown> | null; timer: ReturnType<typeof setTimeout> | undefined }
 // Page-defined globals (app/boot-snap.ts) used inside page.evaluate callbacks.
@@ -31,7 +31,7 @@ declare function bootSnapDrop(): unknown;
     const errors: string[] = [];
     page.on('pageerror', e => errors.push(e.message));
     // Under automation the kept screen is off unless the page asks for it, as this script does.
-    await context.addInitScript(() => { (window as unknown as PageWin).EventSource = undefined; (window as unknown as PageWin).ticoBootSnap = true; });
+    await context.addInitScript(() => { (window as unknown as PageWin).ticoBootSnap = true; });
     let person = 'ana', held: Array<() => unknown> | null = null;
     await context.route('**/*', async route => {
       const p = new URL(route.request().url()).pathname;

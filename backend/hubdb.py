@@ -1691,14 +1691,7 @@ def migrate(conn, adopt_legacy=False):
     )
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
     from . import message_links
-    from . import threads
 
-    threads.ensure(conn)
-    threads.migrate(conn)
-    # Once: everyone's old personal chat with a bot moves into that bot's Home (backend/bot_home_merge.py).
-    from . import bot_home_merge
-
-    bot_home_merge.run_once(conn)
     message_links.ensure(conn)
     # The pipelines every company has (General), made when missing on every start, and given their manager once that
     # bot exists (backend/pipeline_settings.py). Here, so a hub opened without the cloud store has them too.
@@ -1738,6 +1731,8 @@ def _one(conn, sql, args=()):
 VIA = contextvars.ContextVar("hub_via", default="")
 # When BotOps acts with a person's rights: whose, which request lent them (a message or task id), and whether the person
 # asked in this run (`live`) or BotOps cites their open task in a later one (`follow_through`). Every event then says so.
+# The Tools Owner sets it the same way for a Tools change (via "tools-owner", backend/tools_delegation.py), naming itself
+# (`by`).
 # The Assistant sets it too, for a task action the person asked for in their own Assistant chat (`asked`, the message cited).
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
 # A person's own identity used through a personal token for this request (backend/app.py request_guard): a message it
@@ -1830,7 +1825,7 @@ def event(conn, actor, action, target="", detail=None):
         detail = {**(detail or {}), "attempt_id": RUN.get()}
     if VIA.get() and (detail is None or isinstance(detail, dict)):
         detail = {**(detail or {}), "via": VIA.get()}
-        if VIA.get() in ("botops", "assistant") and DELEGATION.get():
+        if VIA.get() in ("botops", "assistant", "tools-owner") and DELEGATION.get():
             detail["delegation"] = DELEGATION.get()
     detail = SRC.stamp_data(detail, actor)  # what a keeper event was for (backend/sources.py), when a scope names it
     row = {

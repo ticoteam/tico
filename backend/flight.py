@@ -92,7 +92,6 @@ BIG = {
     "idempotency": "created_at",
     "changes": "created_at",
     "tasks": "created_at",
-    "mail_messages": None,
     "flight_requests": None,
 }
 # Histogram bucket edges in milliseconds: 25% apart from 0.05 ms to about a minute. A percentile is its bucket's upper

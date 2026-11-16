@@ -4,12 +4,14 @@ the owner's mailboxes only; a manual run's input only what the owner may read; i
 `via: automation:<id>`; an Assistant turn only on the owner's own Assistant."""
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
 from backend import automation_actions, automations, mailbox_access
 from backend.store import H
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.automation_access import WAKE, flow
 
@@ -83,20 +85,40 @@ def test_slack_dm_is_the_owners_own_and_a_channel_must_be_one_the_owner_reads(ap
     assert runs(api, dm)["daily"][0]["dropped"] == 1
 
 
-def test_find_mail_reads_only_the_owners_mailboxes(api):
-    with api.app.state.store.transaction() as c:
-        for box, mid in (("ana@acme.example", "a1"), ("ben@acme.example", "b1")):
-            c.execute(
-                "INSERT INTO mail_messages(mailbox,msg_id,epoch,date,from_addr,to_addresses,cc,subject,snippet,"
-                "labels,body,attachments,updated_at) VALUES(?,?,0,'',?,'[]','[]','Invoice','',"
-                "'[]','','[]',?)",
-                (box, mid, "billing@acme.example", H.shift(H.now(), minutes=5)),
-            )
+def test_find_mail_reads_only_the_owners_mailboxes_from_gmail_and_moves_past_what_it_found(api, fake_gmail):
+    now = int(datetime.now(timezone.utc).timestamp())  # mail that arrives after the automation is made
+    for box, mid in (("ana@acme.example", "a1"), ("ben@acme.example", "b1")):
+        fake_gmail.add(box, mid, sender="billing@acme.example", subject="Invoice", epoch=now + 120)
+    fake_gmail.add("ana@acme.example", "a0", sender="news@acme.example", subject="Newsletter", epoch=now + 60)
     find = {"id": "look", "type": "find", "source": "mail", "query": "Invoice", "limit": 10}
     aid = post(api, "automations", flow(steps=[find]))["id"]
-    run = post(api, f"automations/{aid}/run", {})["run"]
-    out = run["steps"][0]["outputs"]
-    assert out["count"] == 1 and [i["mailbox"] for i in out["items"]] == ["ana@acme.example"]
+    out = post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]
+    assert out["count"] == 1 and [(i["mailbox"], i["id"]) for i in out["items"]] == [("ana@acme.example", "a1")]
+    searched = [query.get("q", [""])[0] for path, query, _ in fake_gmail.calls if path.endswith("/messages")]
+    assert [q.split(" after:")[0] for q in searched] == ["Invoice"] and not any(
+        "ben@" in path for path, _, _ in fake_gmail.calls
+    )
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
+    out = post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["outputs"]
+    assert out["count"] == 0  # the watermark moved past it: the next search starts after its time
+
+
+def test_mail_find_walks_many_messages_of_one_second_one_at_a_time(api, fake_gmail):
+    """59 messages received in the same second, found one a run: the cursor (time, then id) moves past each in turn,
+    never stalls among them, and finds none twice."""
+    second = int(datetime.now(timezone.utc).timestamp()) + 60
+    for n in range(59):
+        fake_gmail.add("ana@acme.example", f"s{n:02d}", subject="Invoice", epoch=second)
+    with api.app.state.store.read() as c:
+        cursor, found = ("", ""), []
+        for _ in range(60):
+            page = automation_actions.find(c, {}, "mail", "Invoice", 1, cursor, mailboxes=["ana@acme.example"])
+            if not page:
+                break
+            found += [item["id"] for item in page]
+            cursor = (page[-1]["at"], page[-1]["id"])
+    assert found == [f"s{n:02d}" for n in range(59)]
 
 
 def test_a_manual_runs_input_names_only_what_the_owner_may_read(api):

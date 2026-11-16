@@ -244,6 +244,34 @@ def _build():
             "title": "A computer has not reported for an hour",
         },
     )
+    # A calendar event added, changed or cancelled, in Tico's own calendar or in Google (backend/calendar_events.py),
+    # ids only: whoever acts reads the event through its own access. Automations hear them; no endpoint does.
+    calendar = {
+        "calendar_id": "google:ana@acme.example",
+        "home": "google",
+        "occurrence_id": "google:ana@acme.example:e1",
+    }
+    add(
+        "calendar.event.created",
+        "A calendar event was added.",
+        "Calendar event added",
+        calendar,
+        outbound=False,
+    )
+    add(
+        "calendar.event.changed",
+        "A calendar event was moved or changed.",
+        "Calendar event changed",
+        calendar,
+        outbound=False,
+    )
+    add(
+        "calendar.event.cancelled",
+        "A calendar event was cancelled.",
+        "Calendar event cancelled",
+        calendar,
+        outbound=False,
+    )
     # Rules take these two as they happen (backend/triggers.py, backend/tico_notices.py); no endpoint hears them.
     add(
         "webhook.received",

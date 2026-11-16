@@ -206,8 +206,10 @@ const needsYou = (() => {
     assert.equal(reply, 'Yes', `${where}: the hub has the answer to the question`);
     assertClean(page, `${where}: answered`);
 
-    // The OK: the card goes on to it (or its row opens it), and she approves it there.
+    // The OK: the card goes on to it (or its row opens it), and she approves it there. A phone opens an OK on its task
+    // (the Task tab, where Approve is), and the OK's ask sits in the Chat tab, so that tab is opened to read it first.
     if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await okRow.click();
+    if (phone) await card.locator('[data-dc="tab"][data-dc-tab="chat"]').click({timeout: t(20000)});
     await card.locator('.dc-q', {hasText: OK}).first().waitFor({timeout: t(20000)});
     await card.locator('[data-dc="approve"]:not([disabled])').first().click();
     await until(async () => (await ok())?.met, `${where}: the OK given on the hub`);

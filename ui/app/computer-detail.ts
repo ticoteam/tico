@@ -24,7 +24,8 @@ type DetailAddStep = {at?: string | undefined; runtime?: string | undefined};
 type DetailDialog = HTMLDialogElement & {restoreOpener?: () => void};
 type DetailExitUsage = import('../types/api').BrowserExitUsage;
 
-const machineOnline = (machine: DetailMachine) => !machine.revoked_at && !!machine.last_seen_at && (SETTINGS_PRESENCE.at || Date.now()) - new Date(machine.last_seen_at).getTime() < 60000;
+// The server decides online (backend/runner_online.py) and says so on each machine in /v2/operations.
+const machineOnline = (machine: DetailMachine) => !machine.revoked_at && machine.online === true;
 const machinePresenceStale = () => SETTINGS_PRESENCE.checking || SETTINGS_PRESENCE.failed
   || !!SETTINGS_PRESENCE.at && Date.now() - SETTINGS_PRESENCE.at > SETTINGS_PRESENCE.interval;
 const machinePresenceWords = (machine: DetailMachine) => machine.revoked_at ? 'revoked'
@@ -344,9 +345,8 @@ function machineVersionsHTML(machine: DetailMachine, online: boolean) {
   const names = [...new Set([...Object.keys(runtimes), ...tools.filter(tool => tool.installed).map(tool => tool.runtime)])]
     .filter(name => !needed || needed.has(name) || runtimes[name]?.installed || toolFor(name).installed);
   const choices = machine.harness_choices || {};
-  // What its bots run on, fallbacks included, stays on (the server refuses an off for it); an older server sends
-  // no bot_runtimes, only its bots' own runtimes.
-  const botRuntimes = new Set(machine.bot_runtimes || ((machine.bots || []).length ? machine.needed_runtimes || [] : []));
+  // What its bots run on, fallbacks included, stays on (the server refuses an off for it).
+  const botRuntimes = new Set(machine.bot_runtimes || []);
   const rows = names.map(name => {
     const tool = toolFor(name), value: DetailRuntime = runtimes[name] || {};
     const installed = value.installed || tool.installed, version = installed ? (tool.version || value.version || '') : '';

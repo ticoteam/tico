@@ -4,6 +4,7 @@ from pathlib import Path
 
 from backend.store import H, encode
 from backend.tests.helpers.api import as_member, assign, get, post, runner  # noqa: F401
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.mail_api import put_mail, seed_org
 from backend import bot_settings as BS
 
@@ -87,7 +88,7 @@ def setup_sources(api, tmp_path):
         )
 
 
-def test_source_and_message_access_does_not_follow_bot_visibility(api, tmp_path):
+def test_source_and_message_access_does_not_follow_bot_visibility(api, tmp_path, fake_gmail):
     as_member(api, "ben@acme.example")
     setup_sources(api, tmp_path)
     ben = get(api, "messaging/bots", "ben-test")
@@ -102,6 +103,34 @@ def test_source_and_message_access_does_not_follow_bot_visibility(api, tmp_path)
         expected=403,
     )
     get(api, "messaging/bots/doc-updater/slack-digests/digest-1", "ben-test", expected=403)
+
+
+def test_a_bots_mail_and_review_count_are_read_from_gmail_with_rule_hits_from_runs(api, tmp_path, fake_gmail):
+    from backend import mailbox_access as MA
+
+    setup_sources(api, tmp_path)
+    with api.app.state.store.transaction() as c:
+        box = MA.ensure_mailbox(c, "ana@acme.example", person_id="ana", created_by="human:ana")
+        MA.grant(c, "human:ana", box["id"], "bot", "cpo", "read")
+        c.execute(
+            "INSERT INTO automations(id,name,owner_id,trigger_type,enabled,flow,version,created_at,created_by_id,"
+            "updated_at) VALUES('triage','Triage','person:ana','message',1,'{}',1,?,'person:ana',?)",
+            (H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started_at,status) "
+            "VALUES('run_1','triage',1,'mail:ana@acme.example:mail1',?,'ok')",
+            (H.now(),),
+        )
+    catalog = get(api, "messaging/bots", "ana-test")
+    [source] = [s for bot in catalog["bots"] for s in bot["sources"] if s["id"] == "email:ana@acme.example"]
+    assert source["needs_review"] == 1  # Gmail's own count of hub/needs-owner
+    page = get(api, "messaging/bots/cpo?source=email:ana@acme.example", "ana-test")
+    assert [(m["msg_id"], m["subject"], m["rule_hits"]) for m in page["mail"]] == [
+        ("mail1", "Customer asks for help", ["Triage"])
+    ]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_a_hidden_backlog_never_says_more_is_waiting():

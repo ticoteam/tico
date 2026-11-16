@@ -689,10 +689,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "archives": "1" if owner else "0" if bot else f"owner={me}",
         "connector_snapshots": "1" if owner else "0" if bot else f"owner={q(person)}",
         "service_jobs": "1" if owner else "0" if bot else f"requested_by={me}",
-        # Mail copies are read through /api/v2/mail. SQL stays owner-only.
-        "mail_mailboxes": "1" if owner else "0",
-        "mail_messages": "1" if owner else "0",
-        "mail_fts": "1" if owner else "0",
         # The Company page's own rules, drafts, stats and approvals: the owner's, as the page's API shows them. The
         # readers' tables (who they are, their sessions and invites, what they wrote, what they read) are not listed, so
         # they are denied to everyone, the owner included.
@@ -1298,7 +1294,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             if (table in tables or table in sources or table == "pages") and context == prefix + table:
                 return sqlite3.SQLITE_OK
             # FTS5 reads the virtual table and its shadow tables with no view
-            # context. Allow that only for the owner: mail_fts is owner-only.
+            # context. Allow that only for the owner.
             parent = fts_parent(table or "")
             if who.role == "owner" and table in tables and str(table).endswith("_fts"):
                 return sqlite3.SQLITE_OK

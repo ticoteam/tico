@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend import execution, health, maintenance_health
+from backend import execution, health, maintenance_health, runner_online
 from backend.store import H
 from backend.tests.helpers.api import post
 
@@ -17,7 +17,7 @@ def held(api, machine, asks=True, **busy):
         c.execute(
             "UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),)
         )
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
         found = {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
     return rows, found

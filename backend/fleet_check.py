@@ -7,7 +7,7 @@ report the rest.
 """
 
 from . import bot_tools, usage_limits
-from .getting_started import _online_runners
+from . import runner_online
 from .health import missing_repositories, repository_fix
 from .statuses import is_parked
 from .store import H
@@ -43,7 +43,7 @@ def prime_pause_reasons(c, bots):
 
 
 def check(c, who, auth, settings):
-    online = {r["id"] for r in _online_runners(c)}
+    online = {r["id"] for r in runner_online.online_rows(c)}
     from .cloud_machines import resting as resting_machines
 
     resting = resting_machines(c)  # a cloud machine stopped when idle starts for work: not offline

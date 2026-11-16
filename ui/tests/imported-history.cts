@@ -24,7 +24,7 @@ declare function renderTree(): void;
   const placements: Record<string, Record<string, unknown>> = {};
   const errors: string[] = [], writes: unknown[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(() => { (window as unknown as {EventSource: unknown}).EventSource = undefined; });
+  await page.addInitScript(() => { (window as unknown as {EventSource: unknown}).EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource; });
   const bots = () => [
     {name:'history-copy',display_name:'Imported Designer',status:'active',host:'keeper',can_chat:true,owner_id:'ana',
       online:fresh,agent:{harness:'grokbot',credential:true,synced:true,last_seen_at:last}},

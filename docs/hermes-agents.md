@@ -188,7 +188,7 @@ only active bots and humans, and is checked and capped like any bot when it writ
 | Where it runs | a computer, chosen in Settings | wherever the profile lives; not tracked |
 | Credential | a 90 s lease per run | one standing credential per bot, made in Settings and revocable there |
 | A message to it | queues a job the computer claims | waits until the agent reads it |
-| Liveness | computer heartbeat every 15 s; offline after 60 s | heartbeat every minute; offline after 180 s |
+| Liveness | computer heartbeat every 15 s; offline after 120 s | heartbeat every minute; offline after 180 s |
 | Runs, tokens, usage limits, fallback | yes | no: nothing is dispatched |
 | Repository | `bot-<slug>`, pushed after each run | `bot-<slug>` for backup, pushed from the computer |
 

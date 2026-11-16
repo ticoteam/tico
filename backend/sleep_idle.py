@@ -35,7 +35,7 @@ from datetime import date, datetime, timezone
 from fastapi import Request
 from pydantic import Field, StrictBool
 
-from . import cloud_access, releases
+from . import cloud_access, releases, runner_online
 from . import hubdb as H
 from .hook_relay import Failed, Link, Stop, link_of
 from .models import Contract
@@ -247,10 +247,8 @@ def later_sends(c, at):
 
 
 def online_computer(c):
-    """Whether a bot computer was heard from in the last two minutes (getting_started's own test of "online")."""
-    from .getting_started import _online_runners
-
-    return bool(_online_runners(c))
+    """Whether a bot computer is online (backend/runner_online.py)."""
+    return bool(runner_online.online_rows(c))
 
 
 def busy(c, at):

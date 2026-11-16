@@ -32,9 +32,11 @@ from pydantic import Field
 
 from . import audit_log as _audit_log
 from . import calendar_derived as _derived
+from . import calendar_events as _calendar_events
 from . import calendar_store as _store
 from . import connectors as _connectors
 from . import gcal_live as _gcal
+from . import gcal_watch as _gcal_watch
 from . import google_workspace as _workspace
 from . import groups as _groups
 from . import people as _people
@@ -52,6 +54,8 @@ groups: Any = _groups
 people_mod: Any = _people
 reach: Any = _reach
 gcal: Any = _gcal
+gcal_watch: Any = _gcal_watch
+calendar_events: Any = _calendar_events
 derived: Any = _derived
 cal_store: Any = _store
 
@@ -803,6 +807,7 @@ def _decorate(c: Any, auth: Any, who: Any, caller: Row, occurrences: list[Row]) 
         occ["can"] = {"join": bool(occ.get("meeting_url")) and not occ.get("busy_only"), "edit": bool(edit)}
         occ["links"] = {**NO_LINKS, **_map(occ.get("links"))}
         occ.pop("calendar_id", None)
+        occ.pop("google_sequence", None)
         out.append(occ)
     return out
 
@@ -1516,12 +1521,28 @@ def _record_google(c: Any, who: Any, caller: Row, action: str, occ: Row, calenda
         )
     target = "calendar_google:" + str(occ.get("occurrence_id") or calendar_id)
     audit_log.write(c, caller["actor"], target, None, {"calendar": "google:" + calendar_id, "action": action})
-    H.event(
+    occurrence = str(occ.get("occurrence_id") or "")
+    # The id Google wrote: an instance keeps its own id (`<series>_<start>`), as the watcher keys instances; the
+    # normalized `event_id` is its series. The watcher then takes exactly this version as Tico's own.
+    written = str(occ.get("google_id") or "") or occurrence.removeprefix("google:" + calendar_id + ":")
+    series = str(occ.get("event_id") or "")
+    gcal_watch.own_write(
+        c,
+        calendar_id,
+        written,
+        sequence=occ.get("google_sequence"),
+        cancelled=action == "cancelled",
+        end=occ.get("end"),
+        series_id=series if series and series != written else None,
+        repeats=bool(occ.get("recurring")) and series == written,
+    )
+    calendar_events.emit(
         c,
         who.actor,
-        "calendar.event." + action,
+        action,
         str(occ.get("event_id") or occ.get("occurrence_id") or ""),
-        {"calendar_id": "google:" + calendar_id, "home": "google", **({"bot": bot} if bot else {})},
+        calendar_events.google_detail(calendar_id, occurrence or None, **({"bot": bot} if bot else {})),
+        mailbox=calendar_id,
     )
     c.execute(
         "INSERT INTO changes(topic, kind, subject_id, ref, actor, created_at) VALUES('calendar','google',?,?,?,?)",
@@ -1858,16 +1879,17 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
         with store.read() as c:
             caller = _caller(c, who)
             replay = store.saved(c, who, request.url.path, key_of(request))
+            deleted = ""
             if not replay:
                 current = _google_target(c, who, caller, parsed)
-                gcal.delete(
-                    c, parsed["calendar_id"], parsed["calendar_id"], google_scope(chosen, current, parsed["event_id"])
-                )
+                deleted = google_scope(chosen, current, parsed["event_id"])
+                gcal.delete(c, parsed["calendar_id"], parsed["calendar_id"], deleted)
 
         def record(c: Any) -> Row:
             if replay:
                 raise Problem("receipt_expired", "This write's receipt expired; send it again", 409)
-            _record_google(c, who, caller, "cancelled", {"occurrence_id": occurrence_id}, parsed["calendar_id"], None)
+            gone = {"occurrence_id": occurrence_id, "google_id": deleted}
+            _record_google(c, who, caller, "cancelled", gone, parsed["calendar_id"], None)
             return {"occurrence_id": occurrence_id, "cancelled": True, "scope": chosen}
 
         return mutate(request, body, record)
@@ -1885,6 +1907,7 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
                 return {"occurrence_id": occurrence_id, "response": body.response}
 
             return mutate(request, body, work)
+        written: Row = {}
         with store.read() as c:
             caller = _caller(c, who)
             viewer = _viewer_google(c, caller)
@@ -1905,12 +1928,22 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
                 ]
                 if not any(a["email"] == viewer for a in answers):
                     raise Problem("not_attendee", "Only an attendee can reply", 403)
-                gcal.patch(c, viewer, viewer, event_id, {"attendees": answers, "actor": caller["actor"]})
+                replied = _map(
+                    gcal.patch(c, viewer, viewer, event_id, {"attendees": answers, "actor": caller["actor"]})
+                )
+                written = {
+                    "google_id": str(replied.get("occurrence_id") or "").removeprefix("google:" + viewer + ":")
+                    or event_id,
+                    "google_sequence": replied.get("google_sequence"),
+                    "event_id": replied.get("event_id"),
+                    "end": replied.get("end"),
+                    "recurring": replied.get("recurring"),
+                }
 
         def record(c: Any) -> Row:
             if replay:
                 raise Problem("receipt_expired", "This write's receipt expired; send it again", 409)
-            _record_google(c, who, caller, "changed", {"occurrence_id": occurrence_id}, viewer or "", None)
+            _record_google(c, who, caller, "changed", {**written, "occurrence_id": occurrence_id}, viewer or "", None)
             return {"occurrence_id": occurrence_id, "response": body.response}
 
         return mutate(request, body, record)

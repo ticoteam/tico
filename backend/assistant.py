@@ -253,6 +253,8 @@ NEVER = [
         (None, r"/api/v2/credential-set"),
         # An API tool's keys and levels are credentials and grants; its address and auth scheme decide where a key is sent,
         # so changing, adding or deleting a tool is the person's tap too (backend/api_tools.py). Its check only reads.
+        # The Tools changes the person asks for in their chat (a bot's key or level, a tool's settings) are admitted
+        # before this list (`admits_on_turn`, backend/tools_delegation.py).
         (None, r"/api/v2/api-tools(/[^/]+(/(keys|access)(/.*)?)?)?"),
         # HQ's cloud-machine support switch grants access just like the support_access team rule.
         ("PUT", r"/api/v2/cloud-machines/support"),
@@ -436,10 +438,16 @@ def admits_on_turn(method, path, body=None):
     path = canonical(path)
     if not path or method not in ("POST", "PUT", "PATCH", "DELETE"):
         return False
-    # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
-    if any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
-        return False
     parsed = _json(body)
+    # A Tools change the person asked for (backend/tools_delegation.py): giving a bot a key or a level, taking one back,
+    # adding or changing a tool. The route checks their rights; a value never goes through here (`secret_in_request`
+    # below), and a person's own access stays their tap.
+    from . import tools_delegation
+
+    tools = tools_delegation.route(method, path) and tools_delegation.for_bots_only(method, path, parsed)
+    # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
+    if not tools and any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
+        return False
     # The team's rules: a turn may change the ordinary ones (`{"stale_review": false}`), never the ones that grant access to
     # credentials, tokens, the SQL page or support, nor the Assistant's own (backend/team_rules.py).
     if (
@@ -1628,8 +1636,10 @@ def ensure_room(c, actor, bot):
 # helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Owner
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
-# (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
-HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.RULES_OWNER)
+# (`move_strategy_room`). Up to v0.6.0-rc.1 each start moved the cards still waiting in it to the owner's Assistant room,
+# so none is left there.
+# The Tools Owner works a Tools change it was handed with the person's rights (backend/tools_delegation.py).
+HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.RULES_OWNER, H.TOOLS_OWNER)
 
 
 def strategy_on(c):
@@ -1676,39 +1686,6 @@ def move_strategy_room(c, actor, to):
     )
     H.event(c, actor, "strategy_bot.chat_moved", room["id"], {"from": before, "to": to})
     return H.conversation(c, room["id"])
-
-
-def migrate(c, settings):
-    """Every start (backend/store.py), idempotent: a card still waiting in the owner's earlier Strategy Owner chat moves
-    to its owner's Assistant room, with its card posted there, so it stays where they look and its result lands there.
-    Moving is safe: a card runs only on its owner's own click, as them, whichever room it sits in, and a card of an
-    earlier owner was already withdrawn when the seat moved on (`move_strategy_room`). Each card moves once: after the
-    move none is left in that room."""
-    moved = 0
-    for row in c.execute(
-        "SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
-        "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
-        "AND a.owner=v.owner_id ORDER BY a.created_at",
-        (rooms.STRATEGY_ROOM,),
-    ).fetchall():
-        room = ensure_room(c, row["owner"], settings.assistant_bot)
-        c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
-        H._write_message(
-            c,
-            "bot:" + settings.assistant_bot,
-            row["owner"],
-            "Needs your OK: " + row["summary"],
-            room,
-            "say",
-            {"assistant": True, "action": row["id"]},
-            None,
-            None,
-            delivered_at=H.now(),
-        )
-        moved += 1
-    if moved:
-        H.event(c, H.KEEPER, "assistant.strategy_cards_moved", "", {"cards": moved})
-    return moved
 
 
 def earlier_chat(c, settings, who):

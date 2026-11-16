@@ -1142,8 +1142,6 @@
   "backend/tests/test_threads_e2e_runner.py": 1.09,
   "backend/tests/test_threads_e2e_slack.py": 5.28,
   "backend/tests/test_threads_list_queries.py": 3.21,
-  "backend/tests/test_threads_migration_e2e.py": 179.11,
-  "backend/tests/test_threads_migration_resume.py": 3.73,
   "backend/tests/test_threads_note_boundaries.py": 41.42,
   "backend/tests/test_threads_perf.py": 113.77,
   "backend/tests/test_threads_private_execution.py": 22.43,

@@ -91,11 +91,71 @@ fn scalar(value: &Value, limit: usize) -> String {
     }
 }
 
-/// The scope fields of an entry as {key: text | [text]}, capped.
+/// An entry's own fields, never scope (access_entry.ENTRY_FIELDS).
+const ENTRY_FIELDS: &[&str] = &[
+    "service", "identity", "can", "env", "note", "mcp", "scope", "vault",
+];
+
+/// Whether `key` is a scope field beyond SCOPE_KEYS: a short lowercase name (access_entry.SCOPE_KEY_RE), such as
+/// `page` or `ad_account`, that is not one of the entry's own fields.
+fn other_scope_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    key.len() <= 40
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !SCOPE_KEYS.contains(&key)
+        && !ENTRY_FIELDS.contains(&key)
+        && !secret_name(key)
+}
+
+/// A key named like a credential (access_entry.SECRET_NAME): never reported as a scope.
+fn secret_name(key: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "secret",
+        "password",
+        "passwd",
+        "passphrase",
+        "token",
+        "apikey",
+        "authorization",
+        "bearer",
+        "credential",
+    ];
+    let parts: Vec<&str> = key
+        .split('_')
+        .map(|p| p.strip_suffix('s').unwrap_or(p))
+        .collect();
+    parts.iter().any(|p| WORDS.contains(p))
+        || parts
+            .windows(2)
+            .any(|w| matches!(w, ["api", "key"] | ["private", "key"]))
+}
+
+/// The scope fields of an entry as {key: text | [text]}, capped: the known keys in order, then any other simple name
+/// in the entry's order. Another key's value that looks like a credential is left out (access_entry.scope_of).
 pub fn scope_of(entry: &Value) -> Map<String, Value> {
     let mut result = Map::new();
-    for key in SCOPE_KEYS {
-        match entry.get(*key) {
+    let others: Vec<&str> = entry
+        .as_object()
+        .map(|o| {
+            o.keys()
+                .map(String::as_str)
+                .filter(|k| other_scope_key(k))
+                .collect()
+        })
+        .unwrap_or_default();
+    for key in SCOPE_KEYS.iter().copied().chain(others.iter().copied()) {
+        if !SCOPE_KEYS.contains(&key) {
+            let shown = match entry.get(key) {
+                Some(Value::Array(items)) => items.iter().map(py_str).collect::<Vec<_>>().join(" "),
+                Some(v) => py_str(v),
+                None => String::new(),
+            };
+            if !crate::mcp::secret_in(&shown).is_empty() {
+                continue;
+            }
+        }
+        match entry.get(key) {
             Some(Value::Array(items)) => {
                 let kept: Vec<Value> = items
                     .iter()
@@ -270,7 +330,7 @@ mod tests {
     fn rows_name_variables_never_values_and_say_where_the_credential_is() {
         let access = json!([
             {"service": "PostHog", "identity": "analytics@acme.example", "can": "read", "env": "POSTHOG_KEY", "note": "  dashboards\n only "},
-            {"service": "postgres", "database": "ware-house", "can": ["read", ""], "read_only": true, "channels": ["#a", {"x": 1}, 7]},
+            {"service": "postgres", "database": "ware-house", "can": ["read", ""], "read_only": true, "channels": ["#a", {"x": 1}, 7], "page": "Acme Page", "Bad": "x", "ad_token": "plain", "notes_ref": "sk-abcdefghijklmnop"},
             {"service": "gmail", "env": "GOOGLE_SA_KEY", "can": ["read"], "identity": "{{bot_email}}"},
             {"service": "board", "vault": "hub", "can": ["act"]},
             {"service": "linear", "env": "K", "mcp": {"url": "http://example.com"}},
@@ -291,7 +351,7 @@ mod tests {
         assert_eq!(rows[1]["credential"], "missing");
         assert_eq!(
             rows[1]["scope"],
-            json!({"database": "ware-house", "channels": ["#a", "7"], "read_only": "yes"})
+            json!({"database": "ware-house", "channels": ["#a", "7"], "read_only": "yes", "page": "Acme Page"})
         );
         assert_eq!(
             (rows[2]["credential"].as_str(), rows[2]["held"].as_bool()),

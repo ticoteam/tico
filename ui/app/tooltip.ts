@@ -31,11 +31,11 @@ function tipHTML(slug: string): string {
     rows.push(['State', botStatePill(slug)]);
     rows.push(['Open', esc(`${openCount(slug)} task${openCount(slug) === 1 ? '' : 's'}`)]);
   }
-  if (S.me?.cloud && e && e.agent) {
+  if (S.me && e && e.agent) {
     rows.push(['Run by', esc(`${agentKind(e.agent)}${e.agent.profile ? ` · ${e.agent.profile}` : ''}`)]);
     rows.push(['Status', agentPresenceLabel(e.agent, e.online)]);
     if (e.agent.last_seen_at) rows.push([e.agent.synced ? 'Last sync' : 'Last seen', esc(ago(e.agent.last_seen_at))]);
-  } else if (S.me?.cloud && e) {
+  } else if (S.me && e) {
     rows.push(['Computer', esc(e.machine?.label || 'Not registered')]);
     rows.push(['Status', e.online ? (e.ready ? 'Online · ready' : 'Online · setup needed') : 'Offline']);
     // Its turns run on the Tico AI Gateway until its subscription is signed in (backend/models_preset.py as_served).

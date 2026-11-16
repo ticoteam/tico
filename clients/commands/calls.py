@@ -205,7 +205,7 @@ def meetings_import_file(api, args):
     "Read upcoming appointments on a team calendar. Every bot may "
     "use this tool. The default is the team owner's calendar; pass `calendar` for your "
     "operator's. "
-    "Results are Tico's provider-normalized snapshot and include its freshness.",
+    "Results are read live from the calendar and include when they were read.",
     {"calendar": _s("Roster email whose calendar to read; default the team owner's", default="")},
 )
 def calendar_upcoming(api, args):
@@ -215,9 +215,9 @@ def calendar_upcoming(api, args):
 @tool(
     "tico_calendar_schedule",
     "Schedule an appointment on a team calendar. Every bot may use "
-    "this tool without a separate permission grant. Tico queues one idempotent provider "
-    "action; attendees receive the invitation when the calendar tool completes it. Use "
-    "tico_calendar_status before claiming success.",
+    "this tool without a separate permission grant. Tico makes the event and queues its "
+    "invitation as an email under the send rules. Only status `succeeded` means it exists; "
+    "tico_calendar_status reads it again.",
     {
         "calendar": _s("Roster email whose calendar owns the event; default the team owner's", default=""),
         "title": _s("Calendar event title"),

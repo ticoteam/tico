@@ -21,7 +21,7 @@ from typing import Any, NoReturn, cast
 
 from connectors.mail import calendar as mail_calendar
 
-from . import google_tokens, google_workspace
+from . import google_connect, google_tokens, google_workspace
 from .store import Problem
 
 Json = dict[str, Any]
@@ -166,9 +166,19 @@ def _write_token(c: Conn, mailbox: str) -> str:
 
 
 def connected(c: Conn, address: str) -> bool:
-    """Whether this address's calendar home is Google: the company key covers it, is active, and was delegated a
-    calendar scope, and the person has no Connect Google grant of their own (that keeps the computer path)."""
-    if _authority(c, address) != "workspace":
+    """Whether this address's calendar home is Google, read on the server: the person's own Connect Google grant holds
+    the calendar read scope (a personal grant wins), or the company key covers the address, is active, and was
+    delegated a calendar scope."""
+    kind = _authority(c, address)
+    if kind == "personal":
+        row = cast("Callable[[Conn, str], Json | None]", google_tokens.grant_row)(c, address)
+        if row is None:
+            return False
+        scopes = cast("Callable[[str, str | None], set[str]]", google_connect.refresh_scopes)(
+            "calendar", row.get("grant_scopes")
+        )
+        return google_connect.G + "calendar.events.readonly" in scopes
+    if kind != "workspace":
         return False
     held = set(_authorized(_active(c)))
     return any(set(table["calendar"]) <= held for table in (WORKSPACE_SCOPES, READ_ONLY_SCOPES))
@@ -454,6 +464,71 @@ def calendar_list(c: Conn, as_mailbox: str) -> list[Json]:
     return out[:LIST_MAX]
 
 
+class SyncExpired(Exception):
+    """Google no longer knows this sync token (410): list the calendar in full again."""
+
+
+class PageExpired(Exception):
+    """Google refused the page token a listing was continuing from: start that listing again."""
+
+
+def _change(item: Json) -> Json | None:
+    """One changed event as the watcher keeps it: no title, notes, place or people, only what tells a change."""
+    if not item.get("id"):
+        return None
+    end = _dict(item.get("end"))
+    first = _dict(item.get("originalStartTime"))
+    try:
+        sequence = int(item.get("sequence") or 0)
+    except (TypeError, ValueError):
+        sequence = 0
+    return {
+        "id": str(item["id"])[:1024],
+        "status": "cancelled" if item.get("status") == "cancelled" else "confirmed",
+        "sequence": sequence,
+        "series_id": str(item.get("recurringEventId") or "")[:1024] or None,
+        "repeats": bool(item.get("recurrence")),
+        "end": str(end.get("dateTime") or end.get("date") or "")[:40] or None,
+        "original_start": str(first.get("dateTime") or first.get("date") or "")[:40] or None,
+    }
+
+
+def changes_page(
+    c: Conn, as_mailbox: str, calendar_id: str, sync_token: str | None, page_token: str | None = None
+) -> tuple[list[Json], str | None, str | None]:
+    """One page of what changed on a calendar, read as `as_mailbox`: (events, next page token, next sync token). With
+    a sync token: what changed since it, cancelled ones included; without: every event now on the calendar (a series
+    once, its moved and cancelled instances apart). The sync token comes with the last page only. Raises SyncExpired
+    when Google answers 410 for the sync token, PageExpired when it refuses the page token."""
+    token = _read_token(c, as_mailbox)
+    query: dict[str, Any] = (
+        {"syncToken": sync_token, "maxResults": LIMIT_MAX}
+        if sync_token
+        else {"showDeleted": "false", "maxResults": LIMIT_MAX}
+    )
+    if page_token:
+        query["pageToken"] = page_token
+    url = BASE + "calendars/" + _quote(calendar_id) + "/events?" + urllib.parse.urlencode(query)
+    status, page = gcal_call(url, token=token)
+    page = _dict(page)
+    if status == 410 and sync_token:
+        raise SyncExpired()
+    if page_token and status in (400, 410):
+        raise PageExpired()
+    if status not in (200, 201) or "error" in page:
+        _raise(status, page, False)
+    if not isinstance(page.get("items", []), list):
+        raise Problem("gcal_unavailable", "Google Calendar returned an incomplete page; try again", 502, True)
+    items = [row for row in map(_change, map(_dict, _list(page.get("items")))) if row]
+    following = page.get("nextPageToken")
+    if isinstance(following, str) and following:
+        return items, following, None
+    synced = page.get("nextSyncToken")
+    if not isinstance(synced, str) or not synced:
+        raise Problem("gcal_unavailable", "Google Calendar gave no sync token; try again", 502, True)
+    return items, None, synced
+
+
 def time_zone(c: Conn, as_mailbox: str) -> str | None:
     """The mailbox's Google Calendar time zone (IANA), or None."""
     value = _call("users/me/settings/timezone", _read_token(c, as_mailbox)).get("value")
@@ -579,19 +654,30 @@ def _send(send_updates: str) -> str:
 
 
 def _written(raw: Json, as_mailbox: str, calendar_id: str) -> Json:
+    """A write's answer as an occurrence, plus `google_sequence`: the version Google gave this write, so the watcher
+    takes exactly that version as Tico's own (the routes drop the key before answering)."""
     row = normalize(raw, as_mailbox, calendar_id, access_role="owner")
     if row is None:
         raise Problem("gcal_unavailable", "Google Calendar returned an incomplete event; try again", 502, True)
+    if isinstance(raw.get("sequence"), int):
+        row["google_sequence"] = raw["sequence"]
     return row
 
 
-def insert(c: Conn, as_mailbox: str, calendar_id: str, body: Json, *, send_updates: str = "all") -> Json:
-    """Create the event on `calendar_id` as `as_mailbox` and answer it as an occurrence. `body` is the contract's
-    POST fields (see `google_body`); a Meet link is asked for with conferenceDataVersion=1."""
+def insert_raw(
+    c: Conn, as_mailbox: str, calendar_id: str, body: Json, *, send_updates: str = "all", event_id: str | None = None
+) -> Json:
+    """`insert`, answering Google's event itself (an invitation is built from its conference details). `event_id`
+    names the event (base32hex, 5-1024 characters) so the same request can never make a second one; it also asks
+    for the Meet link with that id."""
     google = google_body(body)
     if not body.get("actor"):
         raise Problem("actor", "A Tico write names who made it", 422)
-    raw = _call(
+    if event_id:
+        google["id"] = event_id
+        if "conferenceData" in google:
+            google["conferenceData"]["createRequest"]["requestId"] = event_id
+    return _call(
         "calendars/" + _quote(calendar_id) + "/events",
         _write_token(c, as_mailbox),
         method="POST",
@@ -600,7 +686,27 @@ def insert(c: Conn, as_mailbox: str, calendar_id: str, body: Json, *, send_updat
         sendUpdates=_send(send_updates),
         conferenceDataVersion=1 if "conferenceData" in google else None,
     )
+
+
+def insert(
+    c: Conn, as_mailbox: str, calendar_id: str, body: Json, *, send_updates: str = "all", event_id: str | None = None
+) -> Json:
+    """Create the event on `calendar_id` as `as_mailbox` and answer it as an occurrence. `body` is the contract's
+    POST fields (see `google_body`); a Meet link is asked for with conferenceDataVersion=1."""
+    raw = insert_raw(c, as_mailbox, calendar_id, body, send_updates=send_updates, event_id=event_id)
     return _written(raw, as_mailbox, calendar_id)
+
+
+def get_raw(c: Conn, as_mailbox: str, calendar_id: str, event_id: str) -> Json:
+    """Google's own event (cancelled ones too), read with the write scope: for the writer checking what it wrote."""
+    return _call(
+        "calendars/" + _quote(calendar_id) + "/events/" + _quote(event_id), _write_token(c, as_mailbox), write=True
+    )
+
+
+def meeting_url(raw: Json) -> str:
+    """The join link in a Google event, or ''."""
+    return _meeting_url(raw) or ""
 
 
 def patch(c: Conn, as_mailbox: str, calendar_id: str, event_id: str, body: Json, *, send_updates: str = "all") -> Json:

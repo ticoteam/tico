@@ -52,11 +52,11 @@ function mbStatus(m: MbMailbox): [string, string] {
   if (m.state === 'awaiting_person') return ['pending', 'Awaiting person'];
   if (m.state === 'not_connected') return ['attention', 'Not connected'];
   if (m.sync === 'signin') return ['attention', 'Sign-in expired'];
-  if (m.sync === 'failed') return ['attention', 'Sync failed'];
+  if (m.sync === 'failed') return ['attention', 'Check failed'];
   return ['ok', 'Connected'];
 }
 const mbWho = (m: MbMailbox): string => (m.kind === 'shared' ? 'Shared inbox' : m.person_id ? (m.person_name || m.person_id) : 'Awaiting person');
-const mbSynced = (m: MbMailbox): string => (m.synced_at ? `Last sync ${ago(m.synced_at)}` : m.state === 'connected' ? 'Not synced yet' : '');
+const mbSynced = (m: MbMailbox): string => (m.synced_at ? `Checked ${ago(m.synced_at)}` : m.state === 'connected' ? 'Not checked yet' : '');
 
 inboxesKind('mailbox', {label: 'Email', order: 10,
   detail: (host, id, ctx) => renderMailbox(host, id, ctx),
@@ -113,7 +113,7 @@ function mbKeysHTML(d: MbDetail): string {
   const m = d.mailbox, row = (dt: string, dd: string) => dd ? `<dt>${esc(dt)}</dt><dd>${dd}</dd>` : '';
   const key = m.connection === 'workspace' ? `Google Workspace${d.domain ? ' · ' + esc(d.domain) : ''}` : m.person_id ? `${esc(m.person_name || m.person_id)}'s Google sign-in` : 'Google sign-in';
   const allows = d.may ? esc(mbMayLine(d.may).replace(/^./, c => c.toUpperCase())) : '';
-  return `<dl class="tt-kv">${row('Key', key)}${row('Allows', allows)}${row('Last sync', m.synced_at ? `<span title="${esc(fmt(m.synced_at))}">${esc(ago(m.synced_at))}</span>` : '')}</dl>`;
+  return `<dl class="tt-kv">${row('Key', key)}${row('Allows', allows)}${row('Checked', m.synced_at ? `<span title="${esc(fmt(m.synced_at))}">${esc(ago(m.synced_at))}</span>` : '')}</dl>`;
 }
 
 function mbOneDraw(host: HTMLElement, d: MbDetail): void {
@@ -208,7 +208,7 @@ async function mbActivity(host: HTMLElement, id: string, ctx: InboxCtx): Promise
   return {kind: 'mailbox', id: m.id, name: m.address, address: m.address, ...d};
 }
 
-// The newest mail Tico holds for it, for whoever may read it (GET /v2/mail/messages refuses everyone else).
+// Its newest mail, read from Gmail, for whoever may read it (GET /v2/mail/messages refuses everyone else).
 interface MbMessage {
   thread_id?: string | null;
   subject?: string | null;

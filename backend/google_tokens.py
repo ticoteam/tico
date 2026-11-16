@@ -11,9 +11,9 @@
 - anything else is refused: no credential covers the mailbox.
 
 A write (`write=True`) needs the service's act scope. A read-only grant, or one whose act scope What Tico may do turned
-off, is refused here before Google is called. Tokens are cached in memory until five minutes before they expire, keyed by
-the grant, so a new grant or a disconnect never reuses an old token. No token or refresh token is logged, stored or put
-in an event.
+off, is refused here before Google is called. Tokens are cached in memory until five minutes before they expire, keyed
+by the grant and its mailbox, so a new grant or a disconnect never reuses an old token. No token or refresh token is
+logged, stored or put in an event.
 """
 
 import sqlite3
@@ -43,8 +43,8 @@ PERMISSIONS = cast("tuple[str, ...]", google_workspace.PERMISSIONS)
 
 _LOCK = threading.Lock()
 _STORE: list[Any] = []  # the server's store (`use_store`), for the one write the door makes: ending a bad grant
-# (person, grant operation, client, service, scopes) -> (answer, expiry in epoch seconds)
-_CACHE: OrderedDict[tuple[str, str, str, str, tuple[str, ...]], tuple[Json, float]] = OrderedDict()
+# (person, grant operation, mailbox, client, service, scopes) -> (answer, expiry in epoch seconds)
+_CACHE: OrderedDict[tuple[str, str, str, str, str, tuple[str, ...]], tuple[Json, float]] = OrderedDict()
 
 
 # The untyped modules this one leans on, with the shapes it uses. Looked up on each call, so tests can replace them.
@@ -205,7 +205,14 @@ def _personal(c: Conn, row: Json, service: str, scopes: str) -> Json:
             403,
             extra={"kind": "reconnect"},
         )
-    key = (str(row["person_id"]), str(row["grant_operation_id"]), client[0], service, tuple(sorted(wanted)))
+    key = (
+        str(row["person_id"]),
+        str(row["grant_operation_id"]),
+        mailbox.strip().lower(),
+        client[0],
+        service,
+        tuple(sorted(wanted)),
+    )
     now = time.time()
     with _LOCK:
         hit = _CACHE.get(key)

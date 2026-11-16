@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from backend import health, models_preset, releases, replication
+from backend import health, models_preset, releases, replication, runner_online
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
@@ -1293,7 +1293,7 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
             "VALUES('helper-running',?,'helper',?,1,'x','running',?,?,?)",
             (running_job, runner, H.shift(H.now(), hours=1), H.now(), H.now()),
         )
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         monkeypatch.setattr(execution, "bot_claimable", lambda *args, **kwargs: ("lane_held", None, False))
 
         [row] = health._waiting(c, online)[1]
@@ -1348,7 +1348,7 @@ def test_work_held_on_purpose_behind_an_interrupted_run_is_not_stuck(environment
         )
         claimable(c, runner, "helper")
         jobs = fenced_task_jobs(c, "helper", H.shift(H.now(), minutes=-30))
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         # Unheld, the fenced work is stuck behind the interrupted run until someone reviews it.
         [row] = health._waiting(c, online)[2]
         assert (row["bot"], row["reason"], row["queued"], row["dead"]) == ("helper", "uncertain", 0, len(jobs))
@@ -1385,7 +1385,7 @@ def test_a_persons_message_waiting_two_minutes_on_a_computer_with_room_is_stuck(
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         chat = H.open_conversation(c, owner, [owner, "bot:ops"], kind="chat")
         H._write_message(c, owner, "bot:ops", "hello?", chat, "say", {}, None, None)
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         assert health._waiting(c, online)[1] == []  # just sent
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-3),))
         [row] = health._waiting(c, online)[1]
@@ -1423,7 +1423,7 @@ def test_work_a_computer_holds_while_it_waits_to_update_is_the_update_not_a_tico
             (job, runner, H.shift(H.now(), hours=1), H.now()),
         )
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops'", (H.shift(H.now(), minutes=-30),))
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         [row] = health._waiting(c, online)[2]
         assert row["bot"] == "ops" and row["reason"] == "slow"  # nothing says it is updating: a bug
         c.execute(
@@ -1525,7 +1525,7 @@ def test_the_update_hold_names_each_turn_by_bot_task_and_start_but_never_a_priva
             "VALUES(?,'0.3.46','mac','waiting','0.3.48',?)",
             (runner, H.now()),
         )
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         [row] = health._waiting(c, online)[2]
         assert row["reason"] == "updating" and row["running"] == 2
         botops, qa = row["turns"]  # oldest first
@@ -1833,7 +1833,7 @@ def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environmen
             "UPDATE jobs SET state='queued', created_at=? WHERE message_id=?",
             (H.shift(H.now(), minutes=-30), notice["id"]),
         )
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         _, slow, stuck = health._waiting(c, online)
         assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
             ("ops", "task_wait", True)

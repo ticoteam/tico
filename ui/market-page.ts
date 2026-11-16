@@ -411,7 +411,7 @@ function marketBlankHtml(row: MarketResearchRow | null, setup: MarketSetupState 
       <span class="market-spin" aria-hidden="true"></span>
       <div><strong>Researching your market.</strong>
         <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
-  if (!(S.me?.cloud && S.me.role === 'owner') || !setup) return '<p class="market-none">Nothing here yet.</p>';
+  if (S.me?.role !== 'owner' || !setup) return '<p class="market-none">Nothing here yet.</p>';
   if (!setup.skipped) return marketQuestionHtml(setup);
   const answered = MARKET_QUESTIONS.filter(([key]) => setup.answers[key]).length;
   return `<div class="market-start" data-market-resume>
@@ -433,7 +433,7 @@ async function mountBlank(shell: HTMLElement): Promise<MarketMounted> {
   // An empty market has no map to open: the header's ⋯ keeps only its Copy link (Market's own header only).
   const head = marketPageHead(shell);
   if (head) pageHeadSet(head, 'more', PAGE_HEAD_COPY);
-  if (S.me?.cloud && S.me.role === 'owner') {
+  if (S.me?.role === 'owner') {
     try { setup = (await get<{market: MarketSetupState | null}>('/v2/librarian/setup')).market; } catch { setup = null; }
     if (setup) setup = {...setup, answers: {...setup.answers}};
     // Filed from another browser and still being worked on: the notice, not the questions. Its thirty minutes

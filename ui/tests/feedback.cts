@@ -1,6 +1,6 @@
 // 👍 / 👎 on a bot's or another person's work (ui/app/feedback.ts), against a fake of the feedback routes
 // (backend/feedback.py). Fixtures only.
-//  - an older server (404 on the batched read) shows no control at all, and nothing asks for reasons;
+//  - a failed batched read (404) shows no control at all, and nothing asks for reasons;
 //  - one batched read per subject type for what is drawn, never one per message, and never a person's own message;
 //  - 👍 saves in one tap and a second tap removes it; 👎 saves, then its sheet offers recent reasons as chips, says
 //    "You've said this before." for a reason used twice (Make a rule becomes the main button), tells the bot, or drafts a
@@ -112,16 +112,16 @@ async function chatPage(browser: Browser, {phone = false, theme = 'dark', off = 
 }
 const posts = (writes: Write[], type?: string) => writes.filter(w => w.method === 'POST' && w.p === '/api/v2/feedback' && (!type || w.body!.subject_type === type)).map(w => w.body);
 
-async function olderServer(browser: Browser) {
+async function failedRead(browser: Browser) {
   const {page, errors, reads} = await chatPage(browser, {off: true});
-  await page.waitForFunction(() => FB.on === false);
+  for (let i = 0; i < 40 && !reads.length; i++) await page.waitForTimeout(50);
   await page.locator('.bubble.bot').first().hover();
-  assert.equal(await page.locator('.fb-ctl:visible, .fb-mark:visible, .fb-row:visible').count(), 0, 'no thumbs on a server without feedback');
+  assert.equal(await page.locator('.fb-ctl:visible, .fb-mark:visible, .fb-row:visible').count(), 0, 'no thumbs while the read fails');
   assert.equal(await page.getByRole('button', {name: 'Copy message'}).first().isVisible(), true, 'Copy is as it was');
   assert.ok(!reads.includes('reasons'), 'nothing asks for reasons');
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('feedback older server: ok');
+  console.log('feedback failed read: ok');
 }
 
 async function chatDesktop(browser: Browser, theme = 'dark') {
@@ -426,7 +426,7 @@ async function askPanel(browser: Browser) {
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    await olderServer(browser);
+    await failedRead(browser);
     await chatDesktop(browser);
     await chatDesktop(browser, 'light');
     await chatPhone(browser);

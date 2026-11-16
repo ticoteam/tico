@@ -65,7 +65,7 @@ function railEdgeHTML(side: RailSide, label?: string, controls?: string): string
 
 let railsTimer: number | undefined;
 function railsSave(): void {
-  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  if (typeof S === 'undefined' || !S.me) return;
   clearTimeout(railsTimer);
   railsTimer = setTimeout(() => { void post('/v2/preferences/' + RAILS_PREF, {value: railsSaved()}).catch(() => {}); }, 800);
 }
@@ -78,7 +78,7 @@ function railsKeep(side: RailSide, w: number | null): void {
   railsSave();
 }
 async function railsSync(): Promise<void> {
-  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  if (typeof S === 'undefined' || !S.me) return;
   const v: Record<string, unknown> | null | undefined = (await v2Get('/v2/preferences/' + RAILS_PREF))?.value;
   const at = Number(v?.at) || 0, localAt = Number(railsSaved().at) || 0;
   if (v && at > localAt) {

@@ -78,14 +78,14 @@ const settingsMachinesVisible = () => S.route === SETTINGS && SETTINGS_TAB === '
 function settingsMachinesWatch() {
   clearTimeout(SETTINGS_PRESENCE.timer ?? undefined);
   SETTINGS_PRESENCE.timer = null;
-  if (!settingsMachinesVisible() || !S.me?.cloud) return;
+  if (!settingsMachinesVisible() || !S.me) return;
   SETTINGS_PRESENCE.timer = setTimeout(() => {
     if (!settingsMachinesVisible()) return;
     void settingsMachinesRefresh().finally(settingsMachinesWatch);
   }, SETTINGS_PRESENCE.interval);
 }
 function settingsMachinesRefresh() {
-  if (!S.me?.cloud) return Promise.resolve();
+  if (!S.me) return Promise.resolve();
   if (SETTINGS_PRESENCE.pending) return SETTINGS_PRESENCE.pending;
   SETTINGS_PRESENCE.checking = true;
   if (settingsMachinesVisible()) renderSettingsMachines();
@@ -212,7 +212,7 @@ function pageSettings() {
       <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
       <section class="card settings-health" id="settings-health-line" aria-label="Health"></section>
       ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
-        ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
+        ${S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
           <div><strong>Team icon</strong>
             <input id="settings-team-icon-file" type="file" accept="image/png,image/jpeg,image/webp" aria-label="Choose team icon" hidden>
@@ -592,7 +592,7 @@ async function renderSettingsPrivacy() {
 // Models draws its cards when shown; Computers reads the subscriptions and the Gateway toggle for its pickers.
 function settingsModelsRender() {
   if (SETTINGS_TAB === 'models') { void renderSettingsSubs(); void renderSettingsProviders(); void renderSettingsTurnLevels(); }
-  else if (SETTINGS_TAB === 'devices' && S.me?.cloud) {
+  else if (SETTINGS_TAB === 'devices' && S.me) {
     void Promise.all([subsLoad(), providersViewLoad().catch(() => null)]).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
   }
 }
@@ -631,22 +631,22 @@ async function loadSettings() {
   try {
     const [people, operations, catalog, employees, history, limits] = await Promise.all([
       get('/humans'),
-      S.me?.cloud ? settingsMachinesRead().catch(() => {
+      S.me ? settingsMachinesRead().catch(() => {
         SETTINGS_PRESENCE.failed = true;
         return {...SETTINGS_DATA, scheduler_enabled: SETTINGS_DATA.schedulerEnabled};
       }) : Promise.resolve({machines: [], services: []}),
-      S.me?.cloud ? get('/v2/models') : Promise.resolve({models: []}),
+      S.me ? get('/v2/models') : Promise.resolve({models: []}),
       get('/employees'),
-      S.me?.cloud && S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: []}),
-      S.me?.cloud ? get('/v2/usage/limits').catch(() => null) : Promise.resolve(null),
+      S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: []}),
+      S.me ? get('/v2/usage/limits').catch(() => null) : Promise.resolve(null),
       loadHarnessRows(),
       // The Computers table's pickers: the company's subscriptions, and whether the Gateway runs a tool without one.
-      S.me?.cloud ? Promise.all([subsLoad(), providersViewLoad().catch(() => null)]) : null
+      S.me ? Promise.all([subsLoad(), providersViewLoad().catch(() => null)]) : null
     ]);
     S.emps = namedRoster(employees);
     setPeople(people);
-    SETTINGS_DATA = {people: (people.people || []).filter((p: SettingsPerson) => !p.hidden), machines: S.me?.cloud ? SETTINGS_DATA.machines : [],
-      cloudComing: S.me?.cloud ? SETTINGS_DATA.cloudComing || [] : [],
+    SETTINGS_DATA = {people: (people.people || []).filter((p: SettingsPerson) => !p.hidden), machines: S.me ? SETTINGS_DATA.machines : [],
+      cloudComing: S.me ? SETTINGS_DATA.cloudComing || [] : [],
       runnable: operations.runnable || {},
       agents: operations.agents || [],
       services: operations.services || [], models: catalog.models || [],

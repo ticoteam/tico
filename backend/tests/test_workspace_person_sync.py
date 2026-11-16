@@ -63,7 +63,7 @@ def offline(api, machine):
 
 
 def addresses(api, machine):
-    return {b["address"] for b in get(api, "connectors/mail/targets", machine["token"])["mailboxes"]}
+    return {b["address"] for b in get(api, "connectors/mail/targets", machine["token"])["acts_for"]}
 
 
 def retire(api, *machines):
@@ -220,7 +220,10 @@ def test_a_non_publisher_computer_can_sync_a_botless_workspace_mailbox(api, know
     publish(api, machine["token"], PERSONAL)
 
 
-def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api, known_person):
+def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api, known_person, monkeypatch):
+    from backend import gcal_live
+
+    monkeypatch.setattr(gcal_live, "events", lambda c, *a, **k: [])
     chosen, other = computers(api)
     publish(api, chosen["token"], PERSONAL)
     publish(api, other["token"], PERSONAL, expected=403)
@@ -228,13 +231,14 @@ def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api
     post(api, "automations/mail-actions/claim", {"mailbox": PERSONAL}, other["token"], expected=403)
     health(api, chosen["token"], ok=[PERSONAL])
     health(api, other["token"], ok=[PERSONAL], expected=403)
+    # The Workspace key reaches this calendar, so the server reads it live and no computer is asked for it.
     targets = get(api, "connectors/calendar/targets", chosen["token"])
-    assert targets["people"] == [{"id": "cara", "email": PERSONAL}]
+    assert targets["people"] == []
     assert (targets["hours"], targets["days"]) == (24, 14)  # hours for a computer from before days
     snapshot = {"snapshots": [{"email": PERSONAL, "events": []}]}
-    post(api, "connectors/calendar/snapshots", snapshot, chosen["token"])
     post(api, "connectors/calendar/snapshots", snapshot, other["token"], expected=403)
-    assert get(api, "calendar/appointments?calendar=" + PERSONAL, "cara-test")["updated_at"]
+    read = get(api, "calendar/appointments?calendar=" + PERSONAL, "cara-test")
+    assert read["updated_at"] and read["stale"] is False
     offline(api, chosen)
     publish(api, other["token"], PERSONAL)
     assert post(api, "automations/mail-actions/claim", {"mailbox": PERSONAL}, other["token"])["actions"] == []
@@ -312,19 +316,10 @@ def test_the_owners_assistant_and_mail_page_read_live_mail_without_a_message_bot
     with api.app.state.store.read() as c:
         assert routines.message_bot_mailboxes(c) == []
     assert addresses(api, machine) == {BOX}
-    post(
-        api,
-        "connectors/mail/messages",
-        {"mailbox": BOX, "messages": [mail_message()], "synced_at": H.now()},
-        machine["token"],
-    )
-    with api.app.state.store.read() as c:
-        synced = c.execute("SELECT msg_id,body FROM mail_messages WHERE mailbox=?", (BOX,)).fetchone()
-        assert synced["msg_id"] == "m-plain" and synced["body"] == "How does pricing work?"
     for credential in ("ana-test", attempt["token"]):
         boxes = get(api, "mail/mailboxes", credential)["mailboxes"]
         box = next(b for b in boxes if b["address"] == BOX)
-        assert box["message_count"] == 1 and box["agent_bot"] is None
+        assert box["agent_bot"] is None
         assert get(api, "mail/messages?mailbox=" + BOX, credential)["messages"][0]["msg_id"] == "m2"
         assert get(api, "mail/messages/m1?mailbox=" + BOX, credential)["body"] == "Live contract body."
     answer = get(api, "mail/access?mailbox=" + BOX, attempt["token"])

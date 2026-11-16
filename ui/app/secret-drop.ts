@@ -199,9 +199,11 @@ function sdPreview(item: Pick<SdItem, 'type' | 'value'>): string {
     ? item.value.slice(0, 3) + '…' + item.value.slice(-3) : '••••••';
 }
 
-/** The digest the server's backstop lets through for a suspect the person un-marked (secret_drop.digest). */
+/** The digest the server's backstop lets through for a suspect the person un-marked (secret_drop.digest). sha256Bytes
+    (ui/app/sha256.ts) answers on a plain-http page, which has no crypto.subtle. */
 async function sdDigest(rules: SdRules, value: string): Promise<string> {
-  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sdNormalize(rules, value)));
+  const text = new TextEncoder().encode(sdNormalize(rules, value)).slice();
+  const bytes = await sha256Bytes(text.buffer);
   return Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
 }
 

@@ -22,7 +22,7 @@ import yaml
 from clients.manifest import group_of, manifest_path, routines_of
 from . import goals as G
 from . import models as M
-from . import providers
+from . import providers, runner_online
 from . import beta, census, changelog, hosted_updates, releases, replication, runner_versions, support_asks, ui_bundle
 from .config import ASSISTANT_NAME
 from . import strategy_bot, lifecycle, rooms, routines, statuses
@@ -686,12 +686,11 @@ class Onboarding:
     def _machine(c, settings=None):
         from . import cloud_machines
 
-        recent = H.shift(H.now(), seconds=-60)
         runners = [
             {
                 "id": row["id"],
                 "label": row["label"],
-                "online": bool(row["last_seen_at"] and row["last_seen_at"] > recent),
+                "online": runner_online.is_online(row["last_seen_at"]),
             }
             for row in c.execute(
                 "SELECT id,label,last_seen_at FROM runners_with_state WHERE revoked_at IS NULL ORDER BY created_at"
@@ -1626,7 +1625,7 @@ class Onboarding:
                 # the one this company's bots belong on.
                 online = c.execute(
                     "SELECT id,label FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
-                    (H.shift(H.now(), seconds=-60),),
+                    (runner_online.cutoff(),),
                 ).fetchall()
                 row = online[0] if len(online) == 1 else None
                 if row:

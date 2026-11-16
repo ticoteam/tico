@@ -190,7 +190,10 @@ def mailbox_rows(v):
     if not boxes:
         return []
     mine = set() if v.admin else set(mail.visible_addresses(v.c, v.who)) if v.person else set()
-    synced = {r["address"]: r for r in v.c.execute("SELECT address, synced_at, error FROM mail_mailboxes")}
+    synced = {
+        r["address"]: {"synced_at": r["checked_at"], "error": r["check_error"]}
+        for r in v.c.execute("SELECT address, checked_at, check_error FROM mailboxes")
+    }
     out = []
     for box in boxes:
         address = box["address"]

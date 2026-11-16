@@ -328,6 +328,103 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environ
         assert c.execute("SELECT count(*) FROM ok_grants WHERE subject LIKE 'support:%'").fetchone()[0] == 0
 
 
+def queued_for_helper(api, runner, last_seen_minutes_ago, bot="helper"):
+    """A computer last heard from that many minutes ago, with one request queued for its bot `bot`."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        H.sync_registry(c, {bot: {"name": bot, "status": "active"}}, None)
+        c.execute(
+            "INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'t')",
+            (bot, runner["runner_id"], H.now()),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO messages(id,sender_id,recipient_id,kind,body,created_at) "
+            "VALUES(?,'human:ana',?,'chat','hi',?)",
+            (f"m-{bot}", f"bot:{bot}", H.now()),
+        )
+        enqueue_stored(c, f"m-{bot}")
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=-last_seen_minutes_ago), runner["runner_id"]),
+        )
+
+
+def set_last_seen(api, runner, minutes_ago):
+    """Moves a computer's last check-in to that many minutes ago."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=-minutes_ago), runner["runner_id"]),
+        )
+
+
+def test_a_silent_computer_with_queued_work_is_one_botops_task(environment):
+    # Health's "Bots waiting" and "Computers" checks say the same outage as computer_silent. Each filed its own task.
+    api, runner = built(environment)
+    queued_for_helper(api, runner, 15)
+    run(api)
+    run(api)  # a noisy check files on its second run
+    titles = [t["title"] for t in botops_tasks(api)]
+    assert [t for t in titles if "not checked in" in t] == [f"Health: {CANARY} has not checked in for 15 minutes"]
+    assert "Health: Bots waiting" not in titles and "Health: Computers" not in titles
+
+
+def test_an_offline_computer_that_is_not_silent_yet_still_files_bots_waiting(environment):
+    # Only a silent computer hands its outage to its own task; one offline for less than the silence limit does not.
+    api, runner = built(environment)
+    queued_for_helper(api, runner, 5)
+    run(api)
+    run(api)
+    titles = [t["title"] for t in botops_tasks(api)]
+    assert "Health: Bots waiting" in titles
+    assert not [t for t in titles if "not checked in" in t]
+
+
+def test_an_offline_computer_still_files_when_another_computer_is_silent(environment):
+    # A has been silent for 15 minutes with work queued: its outage is computer_silent's task. B is offline for 5 minutes, not
+    # silent yet, so its "Bots waiting" and "Computers" still file, naming B and not A. Neither is cleared for A's silence.
+    api, runner = built(environment)
+    other = machine(api, label="Second Mac")
+    queued_for_helper(api, runner, 15)
+    queued_for_helper(api, other, 5, bot="scout")
+    run(api)
+    run(api)
+    assert "scout" in finding(api, "page:waiting")["detail"] and "helper" not in finding(api, "page:waiting")["detail"]
+    assert "Second Mac" in finding(api, "page:computers")["detail"]
+    assert CANARY not in finding(api, "page:computers")["detail"]
+    tasks = botops_tasks(api)
+    titles = [t["title"] for t in tasks]
+    assert "Health: Bots waiting" in titles and "Health: Computers" in titles
+    assert [t for t in titles if "not checked in" in t] == [f"Health: {CANARY} has not checked in for 15 minutes"]
+    for task in tasks:
+        if task["title"] in ("Health: Bots waiting", "Health: Computers"):
+            assert said(api, task["id"], "Cleared at") == []
+
+
+def test_an_offline_computer_that_goes_silent_holds_its_checks_then_they_clear_when_it_returns(environment):
+    # Bots waiting and Computers filed for an offline computer. It then goes silent: computer_silent takes the outage, and the
+    # two checks are held, not cleared. When it checks in again they clear, with their cleared comments.
+    api, runner = built(environment)
+    queued_for_helper(api, runner, 5)
+    run(api)
+    run(api)
+    tasks = {
+        t["title"]: t["id"] for t in botops_tasks(api) if t["title"] in ("Health: Bots waiting", "Health: Computers")
+    }
+    assert set(tasks) == {"Health: Bots waiting", "Health: Computers"}
+    set_last_seen(api, runner, 15)
+    run(api)
+    run(api)
+    assert finding(api, "page:waiting")["present"] == 1 and finding(api, "page:computers")["present"] == 1
+    assert f"Health: {CANARY} has not checked in for 15 minutes" in [t["title"] for t in botops_tasks(api)]
+    for task_id in tasks.values():
+        assert said(api, task_id, "Cleared at") == []
+    set_last_seen(api, runner, 0)
+    run(api)
+    for task_id in tasks.values():
+        assert len(said(api, task_id, "Cleared at")) == 1
+
+
 def test_the_idle_load_is_taken_from_a_computer_only(environment):
     api, _ = built(environment)
     r = api.post("/api/v2/runners/idle-load", json={"sampled_at": H.now(), "busy": []}, headers=signed_in())
@@ -1375,7 +1472,8 @@ def _part_readers_write_nothing(api, runner, monkeypatch, hq=None, comments=None
             _, found, notes = check_health.gather(r, ctx)
         finally:
             r.execute("PRAGMA query_only=0")
-    assert notes == {}, notes
+    # No reader failed. The page's offline record is a success, not a failure note.
+    assert {key: value for key, value in notes.items() if key != "offline"} == {}, notes
     assert any(row["key"].startswith("event_stream:") for row in found)
 
 
@@ -1385,7 +1483,7 @@ def _part_app_settings(api, runner, monkeypatch, hq=None, comments=None, clock=N
     store, auth = api.app.state.store, api.app.state.auth
     seen = {}
 
-    def view(c, who, settings, auth_, github, config):
+    def view(c, who, settings, auth_, github, config, **_):
         seen["settings"] = settings
         return {"checks": []}
 
@@ -1619,7 +1717,7 @@ def _part_github(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     health.note_github_token(store, "The App's key was refused", "Check the GitHub App's private key")
     seen = {}
 
-    def view(c, who, settings, auth_, github, config):
+    def view(c, who, settings, auth_, github, config, **_):
         seen["github"] = github
         return {"checks": [health._github(c, github, settings)]}
 

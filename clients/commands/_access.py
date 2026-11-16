@@ -178,15 +178,12 @@ AUDIENCE = {
     "tico_skill_submit": PEOPLE + BOTS,  # any person or bot proposes; an admin approves (backend/skills.py)
     "tico_repo_review": ("bot", "botops"),
     "tico_repo_product_create": ("owner", "bot", "botops"),  # a bot needs Create product repositories (server)
-    **{
-        name: REQUESTER
-        for name in (
-            "tico_credential_grant",
-            "tico_credential_revoke",
-            "tico_credential_import",
-            "tico_credential_delete",
-        )
-    },
+    # The Tools Owner gives and takes back a bot's key with the rights of the person who asked it (the server lends them
+    # on Tools changes only, backend/tools_delegation.py); any other bot is refused with who can.
+    **{name: REQUESTER + ("bot",) for name in ("tico_credential_grant", "tico_credential_revoke", "tico_tool_level")},
+    **{name: REQUESTER for name in ("tico_credential_import", "tico_credential_delete")},
+    # A bot registers, changes or removes its own bot.yaml tool entries; the Tools Owner any bot's (backend/bot_tools.py).
+    **{name: REQUESTER + ("bot",) for name in ("tico_tool_add", "tico_tool_update", "tico_tool_remove")},
     **{
         name: REQUESTER
         for name in (
@@ -211,9 +208,6 @@ AUDIENCE = {
             "tico_group_access",
             "tico_bot_owners",
             "tico_human_add",
-            "tico_tool_add",
-            "tico_tool_update",
-            "tico_tool_remove",
             "tico_bot_copy",
             "tico_bot_update_from_original",
             "tico_bot_suggest_to_original",
@@ -365,6 +359,7 @@ ASSISTANT_HIDDEN = frozenset(
         "tico_tool_call",
         "tico_task_readers_list",  # tico_task_show has the readers; the Assistant's listing is near its size cliff
         "tico_tool_check",  # tico_tool_index has each tool's status; Check now is on the tool's page. Same cliff.
+        "tico_tool_level",  # a Tools change the Assistant hands the Tools Owner (playbooks/acting-for-them.md)
     }
 )
 

@@ -36,7 +36,7 @@ function auHeartRow(h: HeartbeatView): ListRow {
     description: h.steps.map(s => s.name).join(' '), can_edit: false, can_pause: false,
     ...(h.last_beat_at ? {last_run: {id: 'hb', started_at: h.last_beat_at, status: auHeartLastFailed(h) ? 'failed' : 'ok'}} : {})};
 }
-// The Heartbeat's row goes right after Maintenance (first when there is none); an older hub leaves the list as it is.
+// The Heartbeat's row goes right after Maintenance (first when there is none).
 // Generic: a list comes back as the type it went in (automations.js passes one it has not typed).
 function auHeartList<T extends AutomationRow[] | null | undefined>(list: T, h: HeartbeatView | null | undefined): T {
   if (!auHeartOk(h) || !Array.isArray(list)) return list;
@@ -70,9 +70,9 @@ async function auHeartLoad(state: AutomationsState): Promise<void> {
   try {
     const h = await get<HeartbeatView>('/v2/heartbeat');
     if (AU !== state || state.hbGen !== gen) return;
-    state.heartError = auHeartOk(h) ? '' : 'The Heartbeat needs a newer hub';
+    state.heartError = '';
     if (auHeartOk(h)) auHeartAdopt(state, h);
-  } catch (e) { if (AU === state && state.hbGen === gen) { const status = errorStatus(e); state.heartError = status !== undefined && [403, 404].includes(status) ? 'The Heartbeat needs a newer hub' : errorMessage(e, ''); } }
+  } catch (e) { if (AU === state && state.hbGen === gen) { state.heartError = errorMessage(e, ''); } }
   if (AU === state && state.id === AU_HEART && !state.heart) auDrawPane();
 }
 // The safety poll: once a minute while the screen is open and the page visible; leaving it (or the page) ends it.

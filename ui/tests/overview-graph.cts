@@ -7,7 +7,7 @@ import type {Route} from 'playwright';
 //    Add rule opens the Rules dialog with Who set to the teammate, and the graph reads its rules again after;
 //  - Goals: chips coloured by status, the panel with KPI and target, a link where a goal supports another owner's;
 //    Update opens the Goals page's sheet, and closing it reads the goals again;
-//  - Reports to / Reports move the selection; a person's panel; an older server without the rules route;
+//  - Reports to / Reports move the selection; a person's panel; a failed rules read (404) says so, goals still work;
 //  - pan and zoom (buttons, keys, wheel, drag, Fit) with 60+ bots; keyboard open and close;
 //  - a phone: the same chart in its frame, the panel a bottom sheet, no sideways page scroll.
 // GRAPH_SHOTS=<dir> saves desktop and phone screenshots, dark and light, in both modes.
@@ -281,10 +281,10 @@ async function goalsMode(browser: import('playwright').Browser) {
   console.log('goals mode: ok');
 }
 
-async function olderServer(browser: import('playwright').Browser) {
+async function failedRulesRead(browser: import('playwright').Browser) {
   const {page, errors} = await open(browser, {old: true});
   await ready(page, 'rules');
-  assert.equal(await page.locator('#og-status').innerText(), 'Rules need a newer Tico.');
+  assert.equal(await page.locator('#og-status').innerText(), 'Could not load rules.');
   assert.equal(await page.locator('#og-cv .og-count').count(), 0);
   await node(page, 'b:writer').click();
   assert.equal(await page.locator('#og-panel [data-og-add-rule]').count(), 0);
@@ -294,7 +294,7 @@ async function olderServer(browser: import('playwright').Browser) {
   assert.ok(await page.locator('#og-cv .og-chip').count() >= 4, 'goals still work');
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('older server: ok');
+  console.log('failed rules read: ok');
 }
 
 async function keyboardAndZoom(browser: import('playwright').Browser) {
@@ -437,7 +437,7 @@ async function screens(browser: import('playwright').Browser) {
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
-    await tabAndToggle(browser); await rulesMode(browser); await goalsMode(browser); await olderServer(browser);
+    await tabAndToggle(browser); await rulesMode(browser); await goalsMode(browser); await failedRulesRead(browser);
     await keyboardAndZoom(browser); await opensOnMine(browser); await phone(browser); await screens(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

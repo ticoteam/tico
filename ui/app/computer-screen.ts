@@ -169,7 +169,7 @@ async function pageComputerScreen(id: string, from?: string) {
   addEventListener('resize', state.onResize);
   // The first session and the View | Control switch follow the computer's mode; Settings' listing has it, else one
   // read of it. At Control the person drives at once, and View stays one tap away.
-  if (!screenMachine(id)?.screen && S.me?.cloud) {
+  if (!screenMachine(id)?.screen && S.me) {
     try { await settingsMachinesRead(); } catch {}
     if (SCREEN !== state) return;
   }

@@ -37,8 +37,8 @@ const ENTRY_ROUTE = entryRoute();
 if (ENTRY_ROUTE) history.replaceState(null, '', location.pathname + ENTRY_ROUTE);
 else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // My dashboard is home
 // Every team-facing name comes from the server (GET /api/me -> config, also GET /api/v2/config),
-// so a second environment shows its own application, team and assistant names. The defaults keep
-// an older server working, and strings built before /api/me answers read the names lazily.
+// so a second environment shows its own application, team and assistant names. The defaults show until /api/me
+// answers, and strings built before then read the names lazily.
 const CONFIG_DEFAULTS: AppConfig = {environment_id: '', company_name: '', app_name: 'Tico', assistant_name: 'Assistant',
                          assistant_bot: 'assistant', public_url: '', runner_url: location.origin, visual_origin: '',
                          github_owner: '', local: false, release: '', onboarding_needed: false, version: '', update: null, s3_view_urls: {}};
@@ -102,7 +102,7 @@ const NATIVE_VISUAL_WAIT_MS = 5000, NATIVE_VISUAL_TIMEOUT = Symbol('native visua
 let NATIVE_VISUAL_VERSION = 0, NATIVE_VISUAL_PENDING: Promise<unknown> = Promise.resolve(), NATIVE_VISUAL_ORIGIN = '', NATIVE_VISUAL_FILES = '';
 const nativeVisualVersion = (): number => NATIVE_VISUAL_VERSION;
 const authenticatedConfigPerson = (me: SelfPerson | null | undefined): boolean => !!(me && typeof me.id === 'string' && me.id.trim()
-  && me.cloud === true && ['owner', 'viewer'].includes(me.role));
+  && ['owner', 'viewer'].includes(me.role));
 function nativeVisualOrigin(config: Partial<AppConfig> | null | undefined, field: 'visual_origin' | 'visual_files' = 'visual_origin'): string {
   const raw = config?.[field];
   if (typeof raw !== 'string' || !raw || /[^\x21-\x7e]|[@\\%?#]/.test(raw)) return '';

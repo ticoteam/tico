@@ -358,7 +358,7 @@ async function botReposMount(host: Element | null, slug: string) {
   let view: BotReposView, team: ReposView;
   try {
     [view, team] = await Promise.all([get<BotReposView>(`/v2/bots/${encodeURIComponent(slug)}/repositories`), get<ReposView>('/v2/repositories')]);
-  } catch { return; }      // an older server, or no rights to read it: the section just stays away
+  } catch { return; }      // no rights to read it: the section just stays away
   if (!host.isConnected || !team.github_connected) return;
   const admin = settingsIsAdmin(), owner = S.me?.role === 'owner';
   const state: BrepoState = {mode: view.mode || 'own', all_access: view.all_access || 'write', create_repositories: !!view.create_repositories,

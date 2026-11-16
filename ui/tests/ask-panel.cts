@@ -334,7 +334,7 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     const working = page.locator('#ask-panel [data-ask-working]');
     await working.waitFor();
     assert.equal(await working.innerText(), 'Working · 4m · Closing tasks');
-    // The poll's next draw of the same chat, 5 s on, keeps the thread (and replies typed into it): only the line's time moves.
+    // The next draw of the same chat, 5 s on, keeps the thread (and replies typed into it): only the line's time moves.
     state.execution = {...state.execution!, started_at: ago(0.25)};
     await page.evaluate(() => ASK.refresh());
     await page.evaluate(() => { (document.querySelector<HTMLElement>('#ask-panel [data-ask-thread]')!.firstElementChild as HTMLElement).dataset.kept = '1';

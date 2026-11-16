@@ -27,6 +27,7 @@ from backend import (
     turn_budgets,
     wake_presets,
 )
+from backend import runner_online
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt
 from backend.tests.helpers.held_runs import task_held
@@ -796,6 +797,6 @@ def test_health_lists_waiting_bots_while_a_claim_check_raises(api, monkeypatch, 
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-30),))
-        online = {r["id"] for r in health._online_runners(c)}
+        online = {r["id"] for r in runner_online.online_rows(c)}
         waiting, slow, stuck = health._waiting(c, online, store.settings)
     assert "ops" not in {r["bot"] for r in stuck}
