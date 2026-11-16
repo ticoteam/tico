@@ -3961,7 +3961,9 @@ def revived_roots(c, v, roots=None):
     if roots is None:
         from . import task_privacy
 
-        key = ("revived_roots", repr(task_privacy.actor(v.who)))
+        # Everything readable_sql and the per-message checks read from the viewer, so a snapshot that ever serves two
+        # viewers never hands one the other's answer.
+        key = ("revived_roots", repr(task_privacy.actor(v.who)), v.role, v.runner_turn)
         return read_cache.value(c, key, lambda: _revived_roots(c, v, None), shared=True)
     return _revived_roots(c, v, roots)
 

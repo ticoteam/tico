@@ -11,6 +11,8 @@ from backend.tests.helpers.files import turn
 from backend.tests.helpers.pages import page
 from backend.tests.helpers.task_privacy_reads import traced_get
 from backend.tests.helpers.thread_rail_batches import (  # noqa: F401  (the runner fixture)
+    EARLIER,
+    bot_reply,
     home as _home,
     runner,
     seed_finished_task_replies,
@@ -199,3 +201,27 @@ def test_finished_task_revivals_are_the_same_with_and_without_priming(api, monke
     every = {_thread_of(api, t) for t in shown}
     assert batched["human:ben"] == every, batched["human:ben"]
     assert batched["human:ana"] == every | {_thread_of(api, hidden)}, batched["human:ana"]
+
+
+def test_a_post_in_a_sub_thread_the_reader_may_not_read_does_not_bring_its_task_back(api, monkeypatch):
+    """A sub-thread can be narrower than its root (its own task), and the batched revival check reads each post's own
+    thread: Ben may read the finished task's root but not the sub-thread that names Ana's private task, so a bot's post
+    there after the finish brings the root back for Ana and not for him, with priming and without."""
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Private", "Secret", "human:ana", private=True, lint=False)
+        task = H.task_create(c, "human:ana", "Finished sub", "Done work", "human:ben", lint=False)
+        [root] = c.execute(
+            "SELECT id FROM conversations WHERE task_id=? AND parent_id IS NULL", (task["id"],)
+        ).fetchone()
+        asked = threads.post(c, "human:ben", root, "Status?")
+        H.task_done(c, "human:ana", task["id"], "Done.", seen_version=H.task(c, task["id"])["version"])
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (EARLIER, asked["id"]))
+        c.execute("UPDATE history_events SET created_at=? WHERE subject_id=?", (EARLIER, task["id"]))
+        side = threads.sub_thread(c, "human:ana", asked["id"])["id"]
+        c.execute("UPDATE conversations SET task_id=? WHERE id=?", (secret["id"], side))
+        bot_reply(c, "ops", side, "sub", asked, task_id=task["id"])
+        c.execute("UPDATE messages SET restricted=1")
+    batched = {a: _revived(api, a) for a in ("human:ben", "human:ana")}
+    monkeypatch.setattr(read_cache, "cache", lambda c: None)
+    assert {a: _revived(api, a) for a in batched} == batched
+    assert root not in batched["human:ben"] and root in batched["human:ana"], batched
