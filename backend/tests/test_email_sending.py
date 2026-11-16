@@ -135,6 +135,36 @@ def test_a_gmail_refusal_is_not_remembered_as_a_fact_and_the_send_waits(inbox, f
     assert "new_address" not in queue(inbox, raw=mime(body="To a known sender"))["decision"]["reasons"]
 
 
+def test_mail_tico_composes_is_queued_while_gmail_is_down_and_decided_when_it_answers(inbox, fake_gmail, monkeypatch):
+    """A calendar invitation (or any email Tico composes inside another write) never fails because Gmail cannot say
+    who is known: it is queued pending, unchecked, and the drain decides it with Gmail's answer before it can go."""
+    from backend import email_sending as S
+
+    monkeypatch.setattr(S, "server_sends", lambda c, mailbox: True)  # the server sends from it (its key is faked)
+    autonomous(inbox, ask_new_address=True)
+    fake_gmail.down.add(BOX)
+    with inbox.app.state.store.transaction() as c:
+        queued = S.enqueue(
+            c,
+            inbox.app.state.auth,
+            "human:ana",
+            S.Enqueue(mailbox=BOX, raw=mime(body="An invitation", to=["new@vendor.example"]), calendar_action_id=""),
+            {"legal_or_money": False, "status": "classified"},
+            wait_for_gmail=True,
+        )
+    assert queued["state"] == "pending" and queued["decision"]["outcome"] == "wait"
+    assert "gmail_unchecked" in queued["decision"]["reasons"]
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+    assert S.drain(store, auth) == 0  # Gmail still down: it waits, nothing is sent or asked
+    with store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
+    fake_gmail.down.clear()
+    S.drain(store, auth)
+    with store.read() as c:
+        row = c.execute("SELECT state,decision FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+    assert row["state"] == "waiting_approval" and "new_address" in json.loads(row["decision"])["reasons"]
+
+
 def test_cli_sending_controls_share_the_email_command_and_api(inbox, monkeypatch, capsys):
     from backend.tests.helpers.automation_cli import Client
     from clients import hubcli, remotecli

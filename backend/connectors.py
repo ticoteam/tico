@@ -866,6 +866,7 @@ def install_connectors(app, store, execution, mutate):
                             actor,
                             email_sending.Enqueue(mailbox=address, raw=raw_mail, calendar_action_id=action_id),
                             classification,
+                            wait_for_gmail=True,  # the event is made: Gmail not answering lets the invitation wait
                         )
                         result["invitation_send_id"] = send["id"]
                     except Problem as refused:

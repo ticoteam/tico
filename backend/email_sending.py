@@ -425,9 +425,26 @@ def why(found):
     )
 
 
-def decision(c, auth, row, *, dispatch=False):
+def decision(c, auth, row, *, dispatch=False, wait_for_gmail=False):
+    """The send rules' outcome for this frozen email: allow, ask or blocked. A Gmail fact it needs (the message it
+    answers, whether a recipient is known) that Gmail cannot give now raises its retryable Problem; with
+    `wait_for_gmail` it is `wait` instead (reason `gmail_unchecked`) unless a rule blocks it anyway: the email is queued
+    and the drain decides it again, with Gmail's answer, before it can go."""
     policy = effective(c, row["mailbox"], row["bot"])
-    reasons, blocked = [], []
+    reasons, blocked, unchecked = [], [], []
+
+    def fact(read, default):
+        try:
+            return read()
+        except Problem as unread:
+            if not (wait_for_gmail and unread.retryable):
+                raise
+            unchecked.append(unread.code)
+            return default
+
+    def known_to(address):
+        return fact(lambda: known(c, row["mailbox"], address), True)
+
     if policy["mode"] == "never":
         blocked.append("never")
     if not access.may(c, row["actor"], row["mailbox"])["send"]:
@@ -451,7 +468,7 @@ def decision(c, auth, row, *, dispatch=False):
         blocked.append("blocked_recipient")
     if row["bot"] and any(listed(policy["owner_handles"], a) for a in recipients):
         blocked.append("owner_handles_personally")
-    original = _original(c, row)
+    original = fact(lambda: _original(c, row), None)
     is_reply = bool(
         original
         and row["thread_id"] == original["thread_id"]
@@ -463,9 +480,9 @@ def decision(c, auth, row, *, dispatch=False):
         reasons.append("legal_or_money_or_unclassified")
     if policy["mode"] == "ask_first":
         reasons.append("ask_first")
-    if policy["what"] == "replies_only" and not is_reply:
+    if policy["what"] == "replies_only" and not is_reply and not (row["reply_to_id"] and unchecked):
         reasons.append("new_message")
-    if policy["ask_new_address"] and any(not known(c, row["mailbox"], a) for a in recipients):
+    if policy["ask_new_address"] and any(not known_to(a) for a in recipients):
         reasons.append("new_address")
     if policy["ask_attachments"] and json.loads(row["attachments"]):
         reasons.append("attachments")
@@ -482,7 +499,7 @@ def decision(c, auth, row, *, dispatch=False):
     if own_writing(row) and policy["second_review"] and checks.get("review") is not True:
         reasons.append("second_review")
     if any(rule["value"] == "known_addresses" for rule in policy["recipient_rules"]) and any(
-        not known(c, row["mailbox"], a) for a in recipients
+        not known_to(a) for a in recipients
     ):
         blocked.append("known_addresses_only")
     if any(rule["value"] == "internal" for rule in policy["recipient_rules"]) and outside:
@@ -533,6 +550,14 @@ def decision(c, auth, row, *, dispatch=False):
         ).fetchone():
             blocked.append("already_replied")
     lifted = approved(c, auth, row, policy)
+    if unchecked and not blocked:
+        return {
+            "outcome": "wait",
+            "reasons": ["gmail_unchecked", *reasons],
+            "policy": policy,
+            "approval_id": row["approval_id"],
+            "approved": False,
+        }
     if reasons and not lifted:
         return {
             "outcome": "blocked" if blocked else "ask",
@@ -663,9 +688,11 @@ def ok_given(c, grant, ctx):
         raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
 
 
-def enqueue(c, auth, actor, body, classification, via="", operation_key="", rules=None):
+def enqueue(c, auth, actor, body, classification, via="", operation_key="", rules=None, wait_for_gmail=False):
     """Freeze, decide and queue one send. `rules` is the org rule check's in-write half (`rule_gate`): a held email is
-    queued blocked with the hold's text, and a warned one carries the warning line in its frozen copy."""
+    queued blocked with the hold's text, and a warned one carries the warning line in its frozen copy. With
+    `wait_for_gmail` (an email Tico composes inside another write, a calendar invitation), Gmail not answering the
+    decision's questions queues it pending and unchecked (`decision`) instead of refusing it."""
     mailbox = body.mailbox.strip().lower()
     bot = H.actor_id(actor) if actor.startswith("bot:") else ""
     if not access.may(c, actor, mailbox)["send"]:
@@ -752,11 +779,13 @@ def enqueue(c, auth, actor, body, classification, via="", operation_key="", rule
         "created_at": now,
         "send_after": H.shift(now, seconds=effective(c, mailbox, bot)["undo_seconds"]),
     }
-    found = decision(c, auth, row)
+    found = decision(c, auth, row, wait_for_gmail=wait_for_gmail)
     if gate and gate["outcome"] == "held":
         found = {**found, "outcome": "blocked", "reasons": ["org_rule", *found["reasons"]], "held": gate.get("held")}
     row["decision"] = dump(found)
-    row["state"] = {"allow": "pending", "ask": "waiting_approval", "blocked": "blocked"}[found["outcome"]]
+    row["state"] = {"allow": "pending", "wait": "pending", "ask": "waiting_approval", "blocked": "blocked"}[
+        found["outcome"]
+    ]
     if row["state"] == "blocked":
         text = (gate or {}).get("held", {}).get("text") if found.get("held") else ""
         row.update(raw="", finished_at=now, detail=text or why(found))
