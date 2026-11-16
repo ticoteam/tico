@@ -582,10 +582,11 @@ def _bot_home(cv):
 
 def _flags(c, v):
     """({root id: [message ids]}, {root ids}, {root id: count}): the roots that mention the reader, with their open
-    mentions' and asks' messages (thread_attention._addressed's rule, ids only, the newest ATTENTION_SCAN); the roots of
-    writes held for their review; and the bots' Homes with a reply or mention for them past their mark (`_home_replies`).
-    Every message passes the thread and the per-message check; only one that can hide is read whole. A bot's reply in its
-    own Home is not an open item: it counts while unread (`_home_replies`), so reading it clears it."""
+    mentions' and asks' messages (Catch up's own rule, wider than Needs attention's open_mentions; ids only, the newest
+    ATTENTION_SCAN); the roots of writes held for their review; and the bots' Homes with a reply or mention for them
+    past their mark (`_home_replies`). Every message passes the thread and the per-message check; only one that can
+    hide is read whole. A bot's reply in its own Home is not an open item: it counts while unread (`_home_replies`), so
+    reading it clears it."""
     from . import thread_attention
 
     me = v.actor
