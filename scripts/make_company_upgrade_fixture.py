@@ -96,7 +96,7 @@ def build(out):
     # ---- day one: the first start applies HQ's chart, the person finishes setup, the shared cloud computer enrolls
     with TestClient(create_app(settings)) as api:
         assert call(api, "GET", "setup")["company_import_failed"] is None
-        call(api, "POST", "onboarding/complete", {})
+        call(api, "POST", "setup/complete", {})
         cloud(api)
         api.app.state.cloud_machines.tick()
         created = [c for c in hq.calls if c[0] == "create"]

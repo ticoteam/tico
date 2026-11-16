@@ -62,7 +62,7 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'bo', name: 'Bo'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'bo', name: 'Bo'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         const ends = [...snoozed.values()].sort();
         const items = open.filter(n => !snoozed.has(n.id));

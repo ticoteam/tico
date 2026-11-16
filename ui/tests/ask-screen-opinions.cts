@@ -66,7 +66,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(version), next: null});
       if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found'}, 404);   // a stage's OK: no grant

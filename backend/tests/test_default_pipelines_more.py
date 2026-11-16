@@ -41,7 +41,7 @@ FACTORIES = [
 
 def _new_company(environment):
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     return api
 

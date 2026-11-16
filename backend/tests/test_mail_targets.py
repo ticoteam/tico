@@ -146,7 +146,7 @@ def test_one_success_resets_the_domain_and_clears_the_health_issue(tmp_path, cap
 
 
 def named(api, person, body, token="ana-test", expected=200):
-    return post(api, f"access/people/{person}", body, token=token, expected=expected)
+    return post(api, f"access/humans/{person}", body, token=token, expected=expected)
 
 
 def test_only_an_owner_or_admin_names_a_message_bot_and_one_bot_serves_one_person(api):

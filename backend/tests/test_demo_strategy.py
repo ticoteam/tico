@@ -88,8 +88,8 @@ def _the_strategy_bot_proposal_is_accepted_into_the_draft(built):
     proposed bet, unpublished, and nothing waits on Goals."""
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
-        pending = api.get("/api/v2/goal-proposals?status=pending").json()["proposals"]
-        decided = api.get("/api/v2/goal-proposals?status=confirmed").json()["proposals"]
+        pending = api.get("/api/v2/proposals?status=pending").json()["proposals"]
+        decided = api.get("/api/v2/proposals?status=confirmed").json()["proposals"]
         needs = api.get("/api/v2/goals/needs-you").json()
     assert pending == []
     [proposal] = [p for p in decided if p["kind"] == "strategy_draft"]

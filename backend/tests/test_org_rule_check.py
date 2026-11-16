@@ -616,7 +616,7 @@ def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):
     assert "nonce" not in get(api, f"rule-holds/{held['id']}", token="ops-test")
     # The held text is in no conversation, comment or inbox, and makes no work.
     assert bodies(api, "gold") == [] and sql(api, "SELECT id FROM jobs WHERE bot_id='ana'") == []
-    assert "gold" not in api.get("/api/v2/inbox", headers=headers()).text
+    assert "gold" not in api.get("/api/v2/messages?unread=1", headers=headers()).text
     kept = post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
     assert kept["state"] == "kept"
     post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test", expected=409)

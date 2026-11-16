@@ -59,7 +59,7 @@ declare function settingsHistoryShow(view?: string): void;
           config: {version: '0.3.52', app_name: 'Tico'}});
       }
       if (p === '/api/employees') return json(bots);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], schedules: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/usage/limits') return json({bots: {}});

@@ -54,7 +54,7 @@ interface PageWin {
       if (path === '/api/me' || path === '/api/v2/me') return json({id: 'ana', actor: 'human:ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (path === '/api/v2/config') return json(config);
       if (path === '/api/employees' || path === '/api/issues') return json([]);
-      if (path === '/api/humans' || path === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (path === '/api/humans' || path === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (path === '/api/status') return json({active: [], queued: [], recent_runs: [], health_issues: []});
       if (path === '/api/v2/status') return json({bots: []});
       if (path === '/api/v2/needs-you') return json({items: []});

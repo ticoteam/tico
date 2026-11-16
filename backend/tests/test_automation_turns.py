@@ -50,7 +50,7 @@ def test_a_turns_cost_counts_toward_the_spend_cap(api):
 
 
 def test_an_assistant_step_makes_the_persons_assistant_room_on_first_use(api):
-    assert get(api, "people/ben/assistant") == {"bot": None}
+    assert get(api, "humans/ben/assistant") == {"bot": None}
     flow = {
         "name": "Brief",
         "owner": "person:ben",
@@ -59,9 +59,9 @@ def test_an_assistant_step_makes_the_persons_assistant_room_on_first_use(api):
     }
     aid = post(api, "automations", flow)["id"]
     run = post(api, f"automations/{aid}/run", {})["run"]
-    bot = get(api, "people/ben/assistant")["bot"]
+    bot = get(api, "humans/ben/assistant")["bot"]
     assert bot and run["steps"][0]["outputs"]["turn"]["bot"] == bot
-    get(api, "people/nobody/assistant", expected=404)
+    get(api, "humans/nobody/assistant", expected=404)
 
 
 def test_a_market_change_made_in_an_automations_turn_names_the_turn(api):

@@ -59,7 +59,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
         if (p === '/api/me') return json({...me, config});
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'chris', name: 'Chris'}, {id: 'ana', name: 'Ana'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'chris', name: 'Chris'}, {id: 'ana', name: 'Ana'}], teams: {}});
         if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
         if (p === '/api/v2/needs-you') return json({actor: 'human:chris', count: needs.length, items: needs, version: '1', next: null});
         if (p === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);     // a stage's OK: no grant

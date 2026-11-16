@@ -208,7 +208,7 @@ def install(app, store, auth, mutate, settings):
                 CA.gate(c, who.actor, "target", gated)
             raise Problem(
                 "forbidden",
-                f"The {strategy_bot.name(c)} proposes {what}; the owner confirms it (POST /api/v2/goal-proposals)",
+                f"The {strategy_bot.name(c)} proposes {what}; the owner confirms it (POST /api/v2/proposals)",
                 403,
             )
 
@@ -388,7 +388,7 @@ def install(app, store, auth, mutate, settings):
             raise Problem(
                 "forbidden",
                 "A person sets a goal's Why on their own click; a bot proposes one "
-                "(POST /api/v2/goal-proposals, kind goal_why)",
+                "(POST /api/v2/proposals, kind goal_why)",
                 403,
             )
 
@@ -1040,7 +1040,7 @@ def install(app, store, auth, mutate, settings):
             row = G.goal(c, p["goal_id"]) if p["goal_id"] else None
             if row:
                 watch.append(row["id"])
-            step(f"/api/v2/goal-proposals/{p['id']}/decide", {"decision": raw["decision"]})
+            step(f"/api/v2/proposals/{p['id']}/decide", {"decision": raw["decision"]})
             about = bold(row["title"]) if row else q((K.kpi(c, p["kpi_id"]) or {}).get("name") or "")
             text = (
                 ("Accept" if raw["decision"] == "confirm" else "Turn down")
@@ -1752,7 +1752,7 @@ def install(app, store, auth, mutate, settings):
             return {"bot": bot, "kpis": botkpis.for_bot(c, bot)}
 
     # ------------------------------------------------------------------ proposals
-    @app.get("/api/v2/goal-proposals")
+    @app.get("/api/v2/proposals")
     def proposal_list(request: Request, status: str = "pending", goal_id: str | None = None, kpi_id: str | None = None):
         who = request.state.identity
         auth.domain(who)
@@ -1777,7 +1777,7 @@ def install(app, store, auth, mutate, settings):
                 )
             return {"proposals": rows}
 
-    @app.post("/api/v2/goal-proposals")
+    @app.post("/api/v2/proposals")
     def proposal_create(request: Request, body: M.GoalProposal):
         """Propose a change the caller may not make: clearer wording, a KPI for a goal, a new definition,
         a target, or a flag (vague or duplicate). The owner confirms or rejects."""
@@ -1796,7 +1796,8 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goal-proposals/{pid}/decide")
+    @app.post("/api/v2/proposals/{pid}/decide")
+    @app.post("/api/v2/goal-proposals/{pid}/decide", deprecated=True)  # rc.1 CLI (on_behalf_of)
     def proposal_decide(request: Request, pid: str, body: M.GoalProposalDecision):
         """A person's own decision: confirm makes the change as them, reject drops it."""
         who = request.state.identity
@@ -1854,7 +1855,8 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goal-proposals/turned-down")
+    @app.post("/api/v2/proposals/turned-down")
+    @app.post("/api/v2/goal-proposals/turned-down", deprecated=True)  # rc.1 CLI and playbooks
     def proposal_turned_down(request: Request, body: M.GoalProposal):
         """The owner's "no" in their Assistant chat to a suggestion the Strategy Owner would make (a number or a date, a
         measure, new words, a flag): stored in this one call as a turned-down suggestion on the goal, with the owner's
@@ -1904,7 +1906,7 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/goal-proposals/{pid}/note")
+    @app.post("/api/v2/proposals/{pid}/note")
     def proposal_reason(request: Request, pid: str, body: M.GoalProposalReason):
         """After "No, leave it": the person who turned the suggestion down tells the Strategy Owner why, in one line, once."""
         who = request.state.identity

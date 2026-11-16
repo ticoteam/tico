@@ -632,7 +632,7 @@ def slack_diag(org, gateway):
 
 
 def assistant_slug(org, person, who=DANA):
-    reply = org.api("get", f"/api/v2/people/{person}/assistant", who=who, wave=W3)
+    reply = org.api("get", f"/api/v2/humans/{person}/assistant", who=who, wave=W3)
     if reply.status != 200:
         raise Unmet(W3, f"assistant of {person}: {reply.status} {reply.excerpt()}")
     slug = reply.body.get("bot") if isinstance(reply.body, dict) else None

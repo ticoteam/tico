@@ -645,13 +645,13 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
   the Keychain and a logout could not be undone (sign out, then **Add key**). It needs a runner that knows it
   (`Update <computer> to switch to an API key from here` otherwise).
 
-None of this restarts the runner. `POST /api/v2/runners/{runner_id}/logouts` with `{"runtime":"codex"}` (and
-`"profile"` for a named subscription left from an earlier release) signs out; `GET /api/v2/runners/{runner_id}/logouts/bots?runtime=codex` lists the
-bots it stops; `POST /api/v2/runners/{runner_id}/logins` with `"switch": true` switches (with `"to": "subscription"`,
-switches the Computer's own login off its API key); `POST /api/v2/runners/{runner_id}/keys` with `"switch": true`
+None of this restarts the runner. `POST /api/v2/computers/{runner_id}/logouts` with `{"runtime":"codex"}` (and
+`"profile"` for a named subscription left from an earlier release) signs out; `GET /api/v2/computers/{runner_id}/logouts/bots?runtime=codex` lists the
+bots it stops; `POST /api/v2/computers/{runner_id}/logins` with `"switch": true` switches (with `"to": "subscription"`,
+switches the Computer's own login off its API key); `POST /api/v2/computers/{runner_id}/keys` with `"switch": true`
 switches it from its subscription to the key in `secret`; `POST
-/api/v2/runners/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
-sign-in, with `GET /api/v2/runners/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
+/api/v2/computers/{runner_id}/shared-key` with `{"runtime":"codex"}` lets the shared key back. Each is followed like a
+sign-in, with `GET /api/v2/computers/{runner_id}/logins/{id}` (`kind` says which; a sign-out ends `signed_out`). BotOps
 cannot sign a login out, because it stops bots. A turn already running when the account changes is not stopped and
 may finish on the old account. On a Mac, Claude Code keeps its login in the Keychain rather than in files, so there is
 no side to sign in on: Switch account isn't offered for it there (the server and the runner refuse it too); sign out,
@@ -718,10 +718,10 @@ Computer: its next key fetch deletes its copies and logs out the login the key m
 Add key**. A key a Computer is still checking cannot be deleted there; cancel **Replace key** or let the check
 end first.
 
-`GET /api/v2/runners/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the
-shared key, the Computers it serves. `POST /api/v2/runners/{runner_id}/keys` with `{"runtime":"codex","secret":"…",
+`GET /api/v2/computers/{runner_id}/keys?runtime=codex` says which key signs it in (`source`, `preview`) and, for the
+shared key, the Computers it serves. `POST /api/v2/computers/{runner_id}/keys` with `{"runtime":"codex","secret":"…",
 "scope":"this"}` adds or replaces a key and returns a `use_key` row to follow with `GET …/logins/{id}` (it ends `done`
-or `failed`); `"scope":"all"` replaces the shared key. `POST /api/v2/runners/{runner_id}/keys/clear` with
+or `failed`); `"scope":"all"` replaces the shared key. `POST /api/v2/computers/{runner_id}/keys/clear` with
 `{"runtime":"codex","scope":"this"}` (or `"all"`) clears it and returns each Computer's `clear_key` row, or `waiting`
 for one that is offline.
 
@@ -731,9 +731,9 @@ Earlier releases let a computer sign in named subscriptions besides its own logi
 computer now has one login per AI tool for all its bots. Upgrading deletes the bots' choices (the bot then runs on its
 computer's login), and nothing signs a named subscription in or runs on one. A computer that still has some keeps
 reporting them, unread and unshown, for one release; their folders stay on the computer. The computer's operator or an
-admin can take one off with `POST /api/v2/runners/{runner_id}/removals` (`{"runtime":"codex","profile":"team-chatgpt"}`,
+admin can take one off with `POST /api/v2/computers/{runner_id}/removals` (`{"runtime":"codex","profile":"team-chatgpt"}`,
 online computers on a runner that knows it, `model_remove_v1`) or sign it out with `POST
-/api/v2/runners/{runner_id}/logouts` (`{"runtime":"codex","profile":"team-chatgpt"}`).
+/api/v2/computers/{runner_id}/logouts` (`{"runtime":"codex","profile":"team-chatgpt"}`).
 
 The server and runner negotiate this change with `computer_logins_v1` in config, assignments and attempts, and an
 acknowledgement in the runner's capabilities and readiness. An updated runner keeps an older server's
@@ -792,7 +792,7 @@ state. Unknown sign-in state is `null`.
 ### Sign-in and profiles on the computer
 
 The Computer operator can manage sign-in on their own Computer; owners and admins can manage it on any Computer. A
-sign-in, switch or switch to a subscription is for the Computer's login: `POST /api/v2/runners/{runner_id}/logins`
+sign-in, switch or switch to a subscription is for the Computer's login: `POST /api/v2/computers/{runner_id}/logins`
 with `{"runtime":"codex"}` (or `claude`). One with a named `"profile"` is refused (422 `one_login`), and so is
 `tico-runner profile login <name>` for any profile but the computer's own. The browser relays the provider's link and
 code; the provider writes its credentials locally. A Computer's login can itself be a profile folder: the one named

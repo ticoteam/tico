@@ -92,7 +92,7 @@ const {t} = (() => { try { return require('./support/load.cts') as import('./sup
       if (p === '/api/v2/health/findings') return json({findings: [], botops: true, reports_without_asking: false});
       if (p === '/api/v2/system/metrics') return json({});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [holding, later]});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});

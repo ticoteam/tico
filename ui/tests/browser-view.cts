@@ -80,7 +80,7 @@ async function start(browser: import('playwright').Browser, hash: string, width:
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, credential_access: true, mover: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([{id: 'support-bot', name: 'support-bot', display_name: 'Support Bot', status: 'active', owner_id: 'ana'}]);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/v2/pipelines') return json({pipelines: [PIPELINE]});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: 1, items: [NEED], version: '1', next: null});
     if (p === '/api/v2/website-tools/w1') return json(TOOL);

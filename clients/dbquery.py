@@ -790,7 +790,7 @@ def audit(client, db, statement, result, query=None, param_names=(), error=None,
 
 def named_query(client, name, query_id):
     try:
-        return client.get(f"integrations/{name}/queries", id=query_id)
+        return client.get(f"tools/{name}/queries", id=query_id)
     except APIError as exc:
         if exc.status == 404:
             raise Refusal(

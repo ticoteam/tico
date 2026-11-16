@@ -15,7 +15,7 @@ from backend.tests.helpers.api import (
 
 def test_revocation_invalidates_running_bot_credential(api):
     r, _, attempt = setup_attempt(api)
-    post(api, f"runners/{r['runner_id']}/revoke", {})
+    post(api, f"computers/{r['runner_id']}/revoke", {})
     get(api, "me", r["token"], expected=401)
     get(api, "me", attempt["token"], expected=401)
 
@@ -53,7 +53,7 @@ def test_tico_fleet_snapshot_is_bound_to_the_initiating_human(api):
     assign(api, machine, "assistant")
     ready(api, machine, ["assistant"])
     attempt = claim(api, machine)
-    fleet = get(api, "tico/fleet", attempt["token"])
+    fleet = get(api, "health/issues", attempt["token"])
     assert fleet["actor"] == "human:ben"
     # The assistant is in the fleet (it still takes work) though nobody chats with it.
     assert {bot["slug"] for bot in fleet["bots"]} == {"assistant", "ops", "cpo", "product-design", "doc-updater"}
@@ -69,7 +69,7 @@ def test_tico_task_execution_cannot_assume_a_private_fleet_identity(api):
     ready(api, machine, ["assistant"])
     attempt = claim(api, machine)
     assert attempt["conversation"]["scope"] == "task"
-    get(api, "tico/fleet", attempt["token"], expected=403)
+    get(api, "health/issues", attempt["token"], expected=403)
 
 
 def test_message_pagination_preserves_all_history_with_timestamp_ties(api):

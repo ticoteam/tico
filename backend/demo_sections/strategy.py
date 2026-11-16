@@ -561,7 +561,7 @@ def _proposal(b):
 
     pid = b.write(work)
     b.at(days=CONTENT["days"]["accepted"])
-    b.call("POST", f"goal-proposals/{pid}/decide", {"decision": "confirm"})
+    b.call("POST", f"proposals/{pid}/decide", {"decision": "confirm"})
 
 
 def _brand(b):

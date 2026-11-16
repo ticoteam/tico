@@ -1,4 +1,4 @@
-"""Measures a bot's unread list (GET /api/v2/messages?unread=1, the handler GET /api/v2/inbox shares) with one unread
+"""Measures a bot's unread list (GET /api/v2/messages?unread=1) with one unread
 message in each of 10, 100, 200 and 500 task rooms, each room's task open and owned by the bot (P04).
 
     python3 -m pytest bench/perf-inbox-rooms.py -n 0 -s -q

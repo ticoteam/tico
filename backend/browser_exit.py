@@ -264,7 +264,7 @@ def install(app, store, auth, mutate, execution, sessions):
             "may_turn_off": manage,
         }
 
-    @app.get("/api/v2/runners/{rid}/browser-exit")
+    @app.get("/api/v2/computers/{rid}/browser-exit")
     def exit_policy(request: Request, rid: str):
         """Whether this computer shares its internet with bots, which bots, and its daily cap in bytes."""
         who = request.state.identity
@@ -275,7 +275,7 @@ def install(app, store, auth, mutate, execution, sessions):
                 raise Problem("not_found", "Computer not found", 404)
             return view(c, who, runner)
 
-    @app.post("/api/v2/runners/{rid}/browser-exit")
+    @app.post("/api/v2/computers/{rid}/browser-exit")
     def set_exit_policy(request: Request, rid: str, body: M.BrowserExitPolicy):
         """Share this computer's internet with bots, or stop. Only the person whose computer it is turns it on or
         changes the bots and cap; an admin may turn it off. Turning it off, or taking a bot off, closes their
@@ -325,7 +325,7 @@ def install(app, store, auth, mutate, execution, sessions):
         sessions.push_exit_policy(rid)  # what is stored now, never this request's (a replay must not reopen)
         return result
 
-    @app.get("/api/v2/runners/{rid}/browser-exit/usage")
+    @app.get("/api/v2/computers/{rid}/browser-exit/usage")
     def exit_usage(request: Request, rid: str, days: int = 7, limit: int = USAGE_PAGE, offset: int = 0):
         """What went through this computer for bots: per day, bot and hostname, the bytes and connections, newest day
         first, kept 30 days. The person whose computer it is, or an admin."""

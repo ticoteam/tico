@@ -333,7 +333,7 @@ def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_c
     # It proposes; the owner of the goal confirms, as themselves, and only then does the target move.
     proposal = post(
         api,
-        "goal-proposals",
+        "proposals",
         {
             "kind": "kpi_target",
             "goal_id": goal["id"],
@@ -344,22 +344,22 @@ def test_the_goal_manager_reads_and_writes_facts_but_a_target_needs_the_owners_c
         token=token,
     )["proposal"]
     assert get(api, f"goals/{goal['id']}", "ben-test")["goal"]["kpis"][0]["link"]["target"] == 70
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=token, expected=403)
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token=token, expected=403)
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "confirm"}, token="cara-test", expected=403)
     done = post(
-        api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "note": "Agreed"}, token="ben-test"
+        api, f"proposals/{proposal['id']}/decide", {"decision": "confirm", "note": "Agreed"}, token="ben-test"
     )["proposal"]
     assert (done["status"], done["decided_by"]) == ("confirmed", "human:ben")
     assert get(api, f"goals/{goal['id']}", "ben-test")["goal"]["kpis"][0]["link"]["target"] == 60
-    post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "reject"}, token="ben-test", expected=422)  # once
+    post(api, f"proposals/{proposal['id']}/decide", {"decision": "reject"}, token="ben-test", expected=422)  # once
     # A definition change is one too, and confirming it starts a new definition version.
     change = post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "kpi_definition", "kpi_id": kpi["id"], "payload": {"definition": "Finish setup within 7 days"}},
         token=token,
     )["proposal"]
-    post(api, f"goal-proposals/{change['id']}/decide", {"decision": "confirm"}, token="ben-test")
+    post(api, f"proposals/{change['id']}/decide", {"decision": "confirm"}, token="ben-test")
     shown = get(api, f"kpis/{kpi['id']}", "ben-test")
     assert shown["kpi"]["definition_version"] == 2 and [d["version"] for d in shown["definitions"]] == [2, 1]
     # A reading made under the old definition keeps saying so; a correction is a new reading, the old one stays.

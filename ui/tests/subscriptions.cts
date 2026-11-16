@@ -855,7 +855,7 @@ async function plansRunOut(browser: Browser) {
   assert.equal(await box.isChecked(), false);
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-computer-row=r2] [data-subs-set-line]')?.textContent?.endsWith('on the Gateway'));
-  assert.deepEqual(writes.at(-1), {p: '/api/v2/runners/r2/gateway-fallback', method: 'POST', body: {on: true}});
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/r2/gateway-fallback', method: 'POST', body: {on: true}});
   assert.equal(await detail.locator('[data-gateway-fallback=r2]').isChecked(), true);
   assert.deepEqual(errors, []);
   await page.close();

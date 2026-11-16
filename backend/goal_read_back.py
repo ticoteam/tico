@@ -46,7 +46,7 @@ _SAVING = [
         r"/api/v2/goals/[^/]+/kpis",
         r"/api/v2/goals/[^/]+/kpis/[^/]+",
         r"/api/v2/goals/[^/]+/kpis/[^/]+/unlink",
-        r"/api/v2/goal-proposals/[^/]+/decide",
+        r"/api/v2/(?:goal-)?proposals/[^/]+/decide",  # rc.1 bots' saved steps say goal-proposals
     )
 ]
 
@@ -111,7 +111,10 @@ def saving(method, path):
 def turns_down(method, path):
     """Whether this write is the owner's "no" to a suggestion (goal_routes.py `turned-down`). It is admitted on the owner's
     cited turn whatever the team's autonomous-action setting says: a rejection they asked for in words, nothing else."""
-    return method == "POST" and str(path or "") == "/api/v2/goal-proposals/turned-down"
+    return method == "POST" and str(path or "") in (
+        "/api/v2/proposals/turned-down",
+        "/api/v2/goal-proposals/turned-down",
+    )
 
 
 def strategy_turn(who):
@@ -271,7 +274,7 @@ def answered(c, who, cited):
     return back, yes, words[:120]
 
 
-# The owner's "no" to a suggestion in their chat (`POST /api/v2/goal-proposals/turned-down`): no read-back and no second
+# The owner's "no" to a suggestion in their chat (`POST /api/v2/proposals/turned-down`): no read-back and no second
 # yes. The cited message must open with a no; its words are the reason, unless they said only no.
 # A Why is left out: proposing one replaces the Strategy Owner's Why still waiting, which a "no" must not reject.
 TURN_DOWN_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag")
@@ -391,7 +394,7 @@ def changed_since(c, back, change, done):
     said = []
     # A suggestion settled by someone else since: its decide route would only say it was decided already.
     for step in change["steps"]:
-        m = re.fullmatch(r"/api/v2/goal-proposals/([^/]+)/decide", step["path"])
+        m = re.fullmatch(r"/api/v2/(?:goal-)?proposals/([^/]+)/decide", step["path"])
         p = m and G.proposal(c, m.group(1))
         if p and p["status"] != "pending":
             did = {"confirmed": "accepted", "rejected": "turned down"}.get(p["status"])

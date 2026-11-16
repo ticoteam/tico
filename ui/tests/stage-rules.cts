@@ -88,7 +88,7 @@ async function serve(page: Page, errors: string[], mayChange: boolean): Promise<
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', role: mayChange ? 'owner' : 'member', mover: true, cloud: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([]);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/v2/pipelines') return json({pipelines: [pipelineOf(mayChange), product]});
     if (p === '/api/v2/pipelines/eng' && r.method() === 'POST') {
       const body = (r.postDataJSON() || {}) as Record<string, unknown>;

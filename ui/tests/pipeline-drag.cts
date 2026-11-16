@@ -171,7 +171,7 @@ async function scrollKept(browser: import('playwright').Browser): Promise<void> 
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       // As backend/task_pipelines_routes.py answers: the record inside {pipeline: …}, on a read and on a save.
       if (p === '/api/v2/pipelines/product' && r.method() === 'POST') {

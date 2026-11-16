@@ -391,7 +391,7 @@ class BrowserHost:
             {"version": "test", "platform": "test", "capabilities": ["browser_v1"]},
             token=self.token,
         )
-        post(api, f"runners/{self.registration['runner_id']}/browser-host", {"on": True})
+        post(api, f"computers/{self.registration['runner_id']}/browser-host", {"on": True})
         self.boxes, self.verbs, self.errors, self.polls = {}, [], [], 0
         self.stopping = threading.Event()
         self.thread = threading.Thread(target=self.serve, daemon=True)

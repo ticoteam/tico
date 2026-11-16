@@ -793,7 +793,7 @@ def test_a_person_who_leaves_on_the_people_route_leaves_their_team_grant_at_once
         assert grant.status == "committed", grant
         gid = str(grant.result["grant_id"])
         assert "human:eve" in SA.grant(c, gid).members
-    r = api.post("/api/v2/people/eve", json={"left": True}, headers=headers("ana-test"))
+    r = api.post("/api/v2/humans/eve", json={"left": True}, headers=headers("ana-test"))
     assert r.status_code == 200, r.text
     with store.read() as c:
         assert "human:eve" not in SA.grant(c, gid).members
@@ -829,7 +829,7 @@ def test_a_fault_in_the_org_revalidation_leaves_the_person_update_and_no_partial
         raise RuntimeError("forced: the revalidation fails after a partial change")
 
     monkeypatch.setattr(handlers, "suspend_unstanding", half_done)
-    r = api.post("/api/v2/people/eve", json={"left": True}, headers=headers("ana-test"))
+    r = api.post("/api/v2/humans/eve", json={"left": True}, headers=headers("ana-test"))
     assert r.status_code == 200, r.text
     assert calls == [gid]
     with store.read() as c:

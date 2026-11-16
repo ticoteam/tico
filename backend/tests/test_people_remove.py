@@ -11,7 +11,7 @@ from backend.tests.helpers.people_access import call, person_headers, view
 
 def added_and_left(api, email="e2e-tester@acme.example"):
     pid = call(api, "POST", "/people", {"name": "E2E Tester", "email": email})["person"]
-    assert api.post(f"/api/v2/people/{pid}", json={"left": True}, headers=signed_in()).status_code == 200
+    assert api.post(f"/api/v2/humans/{pid}", json={"left": True}, headers=signed_in()).status_code == 200
     return pid
 
 
@@ -85,7 +85,7 @@ def test_only_the_owner_removes_and_only_a_left_person(environment):
     pid = call(api, "POST", "/people", {"email": "typo@acme.example"})["person"]
     assert not next(p for p in view(api)["people"] if p["id"] == pid)["removable"]
     assert remove(api, pid, expected=409)["error"]["detail"] == "Mark them as left first"
-    assert api.post(f"/api/v2/people/{pid}", json={"left": True}, headers=signed_in()).status_code == 200
+    assert api.post(f"/api/v2/humans/{pid}", json={"left": True}, headers=signed_in()).status_code == 200
     remove(api, pid, person_headers(api, "riley"), expected=403)  # an admin
     remove(api, pid, person_headers(api, "quinn"), expected=403)  # a member
     remove(api, pid)

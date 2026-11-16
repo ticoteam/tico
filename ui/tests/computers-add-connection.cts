@@ -60,7 +60,7 @@ const shot = async (locator: Locator, name: string) => { if (SHOTS) await locato
       if (p === '/api/employees') return json([{name: 'writer', display_name: 'Writer', status: 'active', owner_id: 'ana', can_manage: true,
         users: [], bot_owners: [], machine: {runner_id: 'box', label: 'Team box', owner_id: 'ana'}}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});

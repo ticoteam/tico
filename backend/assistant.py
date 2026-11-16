@@ -173,12 +173,12 @@ def _fields(body):
 
 
 def canonical(path):
-    """The canonical spelling of a request path (`route_renames`): an old spelling (`/runners/{id}/...`) is checked as the
-    route it answers, so no gate check is skipped by using the old name. None when the path is not one."""
-    from .route_renames import new_path
+    """The canonical spelling of a request path (`legacy_spellings`): a kept old spelling (`/api/v2/runners/{id}/inbox-only`)
+    is checked as the route it answers, so no gate check is skipped by using the old name. None when the path is not one."""
+    from .legacy_spellings import canonical as canonical_of
 
     p = normalize_path(path)
-    return (new_path(p) or p) if p else None
+    return (canonical_of(p) or p) if p else None
 
 
 def catalogue_setting(method, path, body=None):

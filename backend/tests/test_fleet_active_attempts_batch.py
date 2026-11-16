@@ -13,7 +13,7 @@ def test_fleet_snapshot_reports_active_attempt_from_batched_live_map(api):
     ready(api, machine, ["assistant"])
     attempt = claim(api, machine)
     assert attempt
-    fleet, statements = traced(api, lambda: get(api, "tico/fleet", attempt["token"]))
+    fleet, statements = traced(api, lambda: get(api, "health/issues", attempt["token"]))
     coo = next(bot for bot in fleet["bots"] if bot["slug"] == "assistant")
     assert coo["active_runs"] >= 1
     assert coo["active_run"]["id"] == attempt["id"]

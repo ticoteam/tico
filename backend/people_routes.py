@@ -19,7 +19,7 @@ from . import views
 
 
 def register(app, auth, mutate, settings, store, visual_view):
-    @app.delete("/api/v2/people/{pid}")
+    @app.delete("/api/v2/humans/{pid}")
     def person_remove(request: Request, pid: str):
         """The owner removes a left person who has no history, such as one added by mistake, for good
         (backend/people_remove.py). Anyone with history stays as left."""
@@ -49,7 +49,7 @@ def register(app, auth, mutate, settings, store, visual_view):
             auth.sync_access(c)
         return result
 
-    @app.get("/api/v2/people/{pid}/slack")
+    @app.get("/api/v2/humans/{pid}/slack")
     def person_slack(request: Request, pid: str):
         """Slack DMs between this person and Tico bots (one Tico app; each bot has its own hub thread)."""
         who = request.state.identity

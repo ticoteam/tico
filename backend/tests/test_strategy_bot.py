@@ -277,7 +277,7 @@ def test_the_name_sticks_and_only_the_owner_renames_it(environment):
 
     with api.app.state.store.read() as c:
         assert names.lookup(c, {"bot:strategy-owner"}) == {"bot:strategy-owner": "Strategy Owner"}
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     from backend.app import create_app
     from fastapi.testclient import TestClient
 
@@ -304,7 +304,7 @@ def test_the_name_sticks_and_only_the_owner_renames_it(environment):
     with api.app.state.store.read() as c:
         assert names.lookup(c, {"bot:strategy-owner"}) == {"bot:strategy-owner": "Atlas"}
         assert strategy_bot.name(c) == "Atlas"
-    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
     from backend.app import create_app
     from fastapi.testclient import TestClient
 

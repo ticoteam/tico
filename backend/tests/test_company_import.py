@@ -107,13 +107,13 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
     text = twelve_role_text()
     draft = C.from_yaml(text)
     titles = {b["id"]: b["title"] for b in draft["bots"]}
-    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
     summary = preview.json()
     assert {e["id"] for e in summary["employees"]} == {"assistant", "botops"}
     assert sorted(s["id"] for s in summary["seats"]) == sorted(TWELVE)
     done = api.post(
-        "/api/v2/onboarding/company/import",
+        "/api/v2/setup/company/import",
         json={"company_yaml": text, "fingerprint": summary["fingerprint"]},
         headers=signed_in(),
     )
@@ -190,12 +190,12 @@ def test_a_file_that_names_no_manager_for_botops_leaves_it_under_the_general_man
     if named:
         next(b for b in draft["bots"] if b["template"] == "botops")["reports_to"] = named
     text = C.to_yaml(draft)
-    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
     summary = preview.json()
     assert {e["id"]: e["reports_to"] for e in summary["employees"]}["botops"] == line
     done = api.post(
-        "/api/v2/onboarding/company/import",
+        "/api/v2/setup/company/import",
         json={"company_yaml": text, "fingerprint": summary["fingerprint"]},
         headers=signed_in(),
     )
@@ -225,7 +225,7 @@ def test_a_seat_with_no_template_yet_is_a_recruiting_seat_like_any_other_role(en
     api = environment()
     text = company_text(keep=("assistant", "botops", "controller", "accounts-payable-specialist"))
     assert "no_bot_yet: true" in text
-    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
     summary = preview.json()
     assert {s["id"]: s["reports_to"] for s in summary["seats"]} == {
@@ -258,7 +258,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     text = C.to_yaml(draft)
     assert "held_by: ana" in text and "held_by: ben" in text
     body = {"company_yaml": text}
-    preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in())
     assert preview.status_code == 200, preview.text
     summary = preview.json()
     # Ana and Ben hold their roles: no seat and no bot for those. The Payroll Specialist is a seat under Ana, who is no one in
@@ -277,7 +277,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
         "Clean ledgers": "company",
     }
     body["fingerprint"] = summary["fingerprint"]
-    done = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
+    done = api.post("/api/v2/setup/company/import", json=body, headers=signed_in())
     assert done.status_code == 200, done.text
     assert not rows(
         api, "SELECT slug FROM bots WHERE slug IN ('accounts-payable-specialist','controller','payroll-specialist')"
@@ -302,13 +302,13 @@ def invited_from_setup(api, finance):
     """The owner gives Ana's email and clicks Invite: she is on the roster and the seat that waited with the owner
     reports to her. This install signs in another way, so no invite email can go: the owner is told so, plainly."""
     invite = lambda key, email: api.post(
-        "/api/v2/onboarding/company/people/%s/invite" % key, json={"email": email}, headers=signed_in()
+        "/api/v2/setup/company/people/%s/invite" % key, json={"email": email}, headers=signed_in()
     )
     refused = invite("ana", "ana@acme.example")
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_unavailable"
     assert "Tell Ana to sign in at" in refused.json()["error"]["detail"]
     (ana,) = [
-        p for p in api.get("/api/people", headers=signed_in()).json()["people"] if p["email"] == "ana@acme.example"
+        p for p in api.get("/api/humans", headers=signed_in()).json()["people"] if p["email"] == "ana@acme.example"
     ]
     assert rows(api, "SELECT reports_to FROM seats WHERE id=?", (finance,))[0]["reports_to"] == "human:" + ana["id"]
     record = api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]
@@ -322,7 +322,7 @@ def invited_from_setup(api, finance):
     from backend import company_import, invites
 
     keyed = lambda key, email="someone-else@acme.example": api.post(
-        "/api/v2/onboarding/company/people/ana/invite",
+        "/api/v2/setup/company/people/ana/invite",
         json={"email": email},
         headers={**signed_in(), "Idempotency-Key": key},
     )
@@ -370,20 +370,20 @@ def invited_from_setup(api, finance):
         assert invite("nobody", "x@acme.example").status_code == 404
         # Removed since: the seats her invite moved under her are not her history, so Remove is offered, and they go
         # back to the owner removing her.
-        assert api.post("/api/v2/people/%s" % ana["id"], json={"left": True}, headers=signed_in()).status_code == 200
+        assert api.post("/api/v2/humans/%s" % ana["id"], json={"left": True}, headers=signed_in()).status_code == 200
         with api.app.state.store.read() as c:
             gone = next(p for p in views.roster(c)["people"] if p["id"] == ana["id"])
             assert people_remove.removable(c, gone) and people_remove.history(c, ana["id"]) == ""
             under = [r[0] for r in c.execute("SELECT id FROM seats WHERE reports_to=?", ("human:" + ana["id"],))]
         assert under
-        assert api.delete("/api/v2/people/%s" % ana["id"], headers=signed_in()).status_code == 200
+        assert api.delete("/api/v2/humans/%s" % ana["id"], headers=signed_in()).status_code == 200
         with api.app.state.store.read() as c:
             assert not c.execute("SELECT 1 FROM seats WHERE reports_to=?", ("human:" + ana["id"],)).fetchone()
             assert all(
                 c.execute("SELECT reports_to FROM seats WHERE id=?", (s,)).fetchone()[0].startswith("human:")
                 for s in under
             )
-        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
+        assert ana["id"] not in [p["id"] for p in api.get("/api/humans", headers=signed_in()).json()["people"]]
         # Removed, a repeat of a bound key still answers from its binding and never invites her again. The binding keeps
         # neither the address (its hash) nor the refusal text that named it.
         bound = rows(
@@ -397,14 +397,14 @@ def invited_from_setup(api, finance):
         (refused_key,) = [row["key"] for row in bound if row["state"] == "refused"]
         with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
             replayed = api.post(
-                "/api/v2/onboarding/company/people/ana/invite",
+                "/api/v2/setup/company/people/ana/invite",
                 json={"email": "ana@acme.example"},
                 headers={**signed_in(), "Idempotency-Key": refused_key},
             )
             assert replayed.status_code == 422 and replayed.json()["error"]["code"] == "invite_failed"
             assert replayed.json()["error"]["detail"] == invites.REMOVED
             assert keyed("k-1").status_code == 200 and Issuer.calls == sends
-        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
+        assert ana["id"] not in [p["id"] for p in api.get("/api/humans", headers=signed_in()).json()["people"]]
     finally:
         api.app.state.auth.proxy = None
 
@@ -412,11 +412,11 @@ def invited_from_setup(api, finance):
 def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(environment):
     api = environment()
     body = {"company_yaml": company_text()}
-    preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in())
     assert preview.status_code == 200, preview.text
     assert not rows(api, "SELECT id FROM seats")
     body["fingerprint"] = preview.json()["fingerprint"]
-    done = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
+    done = api.post("/api/v2/setup/company/import", json=body, headers=signed_in())
     assert done.status_code == 200, done.text
     assert done.json()["names"]["company_name"] == "Acme Finance"
     assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} == BUILTINS
@@ -432,7 +432,7 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     saved = rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]
     assert '"finance":"mid"' in saved["value"]
     before = (rows(api, "SELECT id FROM tasks ORDER BY id"), rows(api, "SELECT id FROM seats ORDER BY id"))
-    again = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
+    again = api.post("/api/v2/setup/company/import", json=body, headers=signed_in())
     assert again.status_code == 200
     assert (rows(api, "SELECT id FROM tasks ORDER BY id"), rows(api, "SELECT id FROM seats ORDER BY id")) == before
     machine(api)
@@ -442,16 +442,16 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
 def test_import_requires_owner_and_matching_preview_and_refuses_replacing_a_configured_company(environment):
     api = environment()
     body = {"company_yaml": company_text(), "fingerprint": "0" * 64}
-    refused = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
+    refused = api.post("/api/v2/setup/company/import", json=body, headers=signed_in())
     assert refused.status_code == 409
     assert not rows(api, "SELECT slug FROM bots WHERE slug='accounts-payable-specialist'")
-    assert api.post("/api/v2/onboarding/company/import", json=body).status_code in (401, 403)
+    assert api.post("/api/v2/setup/company/import", json=body).status_code in (401, 403)
     api.app.state.store.settings.test_identities["helper-test"] = Identity(
         "human:helper", "human", email="helper@sample.example"
     )
     assert (
         api.post(
-            "/api/v2/onboarding/company/preview",
+            "/api/v2/setup/company/preview",
             json={"company_yaml": body["company_yaml"]},
             headers=signed_in() | {"Authorization": "Bearer helper-test"},
         ).status_code
@@ -459,23 +459,23 @@ def test_import_requires_owner_and_matching_preview_and_refuses_replacing_a_conf
     )
     assert (
         api.post(
-            "/api/v2/onboarding/company/import",
+            "/api/v2/setup/company/import",
             json=body,
             headers=signed_in() | {"Authorization": "Bearer helper-test"},
         ).status_code
         == 403
     )
     preview = api.post(
-        "/api/v2/onboarding/company/preview", json={"company_yaml": body["company_yaml"]}, headers=signed_in()
+        "/api/v2/setup/company/preview", json={"company_yaml": body["company_yaml"]}, headers=signed_in()
     ).json()
     body["fingerprint"] = preview["fingerprint"]
-    assert api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/setup/company/import", json=body, headers=signed_in()).status_code == 200
     changed = copy.copy(body)
     changed["company_yaml"] = changed["company_yaml"].replace("Acme Finance", "Another Company")
     changed["fingerprint"] = api.post(
-        "/api/v2/onboarding/company/preview", json={"company_yaml": changed["company_yaml"]}, headers=signed_in()
+        "/api/v2/setup/company/preview", json={"company_yaml": changed["company_yaml"]}, headers=signed_in()
     ).json()["fingerprint"]
-    assert api.post("/api/v2/onboarding/company/import", json=changed, headers=signed_in()).status_code == 409
+    assert api.post("/api/v2/setup/company/import", json=changed, headers=signed_in()).status_code == 409
     assert api.get("/api/v2/config", headers=signed_in()).json()["company_name"] == "Acme Finance"
 
 
@@ -927,12 +927,12 @@ def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(en
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
     text = C.to_yaml(draft)
     assert len(starter.canonical(starter.load(text)).encode()) > 131072  # past the old 128 KB plan limit
-    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
     builtins = sum(b["template"] in BUILTINS for b in draft["bots"])
     assert len(preview.json()["employees"]) == builtins and len(preview.json()["seats"]) == 300 - builtins
     done = api.post(
-        "/api/v2/onboarding/company/import",
+        "/api/v2/setup/company/import",
         json={"company_yaml": text, "fingerprint": preview.json()["fingerprint"]},
         headers=signed_in(),
     )
@@ -942,7 +942,7 @@ def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(en
     assert len(rows(api, "SELECT id FROM seats WHERE closed_at IS NULL")) == 300 - builtins
     extra = "  - id: one-too-many\n    template: accounts-payable-specialist\n    title: One Too Many\n"
     over = text.replace("employees:\n", "employees:\n" + extra, 1)
-    refused = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": over}, headers=signed_in())
+    refused = api.post("/api/v2/setup/company/preview", json={"company_yaml": over}, headers=signed_in())
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "company_file"
 
 
@@ -1035,9 +1035,7 @@ def test_imported_goals_show_on_goals_with_their_owner_and_measure(tmp_path, env
             imported_goals_on_goals_page(api, text)
     else:
         api = environment()
-        preview = api.post(
-            "/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()
-        ).json()
+        preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
         assert "goals" not in preview["deferred"]
         assert [(g["title"], g["owner"]) for g in preview["goals"]] == [
             ("Reach 40 paying firms", "company"),
@@ -1047,7 +1045,7 @@ def test_imported_goals_show_on_goals_with_their_owner_and_measure(tmp_path, env
             ("Questions answered", "company"),
         ]
         done = api.post(
-            "/api/v2/onboarding/company/import",
+            "/api/v2/setup/company/import",
             json={"company_yaml": text, "fingerprint": preview["fingerprint"]},
             headers=signed_in(),
         )
@@ -1085,7 +1083,7 @@ def imported_goals_on_goals_page(api, text):
     record = api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]
     assert "goals" not in record["deferred"]
     again = api.post(
-        "/api/v2/onboarding/company/import",
+        "/api/v2/setup/company/import",
         json={"company_yaml": text, "fingerprint": record["fingerprint"]},
         headers=signed_in(),
     )
@@ -1154,12 +1152,10 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
             for slug, config in seed.items():
                 c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
                 BS.write(c, slug, config)
-        preview = api.post(
-            "/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()
-        ).json()
+        preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
         assert [(g["title"], g["owner"]) for g in preview["goals"]] == owners
         done = api.post(
-            "/api/v2/onboarding/company/import",
+            "/api/v2/setup/company/import",
             json={"company_yaml": text, "fingerprint": preview["fingerprint"]},
             headers=signed_in(),
         )
@@ -1269,10 +1265,10 @@ def every_goal(draft):
 
 
 def preview_and_import(api, text):
-    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
     done = api.post(
-        "/api/v2/onboarding/company/import",
+        "/api/v2/setup/company/import",
         json={"company_yaml": text, "fingerprint": preview.json()["fingerprint"]},
         headers=signed_in(),
     )
@@ -1317,9 +1313,7 @@ def test_a_329_goal_company_file_imports_and_a_330_goal_file_is_refused_plainly(
     over = text.replace("\nrules:\n", "\n" + extra + "rules:\n", 1)
     assert over != text
     for path, body in (("preview", {}), ("import", {"fingerprint": "0" * 64})):
-        refused = api.post(
-            "/api/v2/onboarding/company/" + path, json={"company_yaml": over, **body}, headers=signed_in()
-        )
+        refused = api.post("/api/v2/setup/company/" + path, json={"company_yaml": over, **body}, headers=signed_in())
         assert refused.status_code == 422 and refused.json()["error"]["code"] == "company_file", refused.text
         assert "goals has more than 329 entries" in refused.text
     assert not rows(api, "SELECT id FROM goals")
@@ -1563,7 +1557,7 @@ def test_an_import_that_names_no_places_keeps_the_places_already_saved(environme
 
     api = environment()
     saved = api.put(
-        "/api/v2/onboarding",
+        "/api/v2/setup",
         json={
             "names": {"company_name": "Acme", "app_name": "Atlas", "assistant_name": "Morgan"},
             "answers": {"what_we_do": "Kits.", "regions": ["Worldwide", "Texas"]},
@@ -1685,7 +1679,7 @@ def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environ
     monkeypatch.setattr(
         O, "read_cards", lambda settings: [card for card in real(settings) if card["template"] != "builder"]
     )
-    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": live_text()}, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json={"company_yaml": live_text()}, headers=signed_in())
     assert preview.status_code == 422 and "live seat needs a template" in preview.text
 
 
@@ -1737,11 +1731,11 @@ def default_chart_text():
 
 
 def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(environment):
-    """Review finding 4: a company that finishes setup without a chart (POST /api/v2/onboarding/complete with nothing
+    """Review finding 4: a company that finishes setup without a chart (POST /api/v2/setup/complete with nothing
     picked) gets the default chart, as the site's file would give it: its live seats as bots, the rest Recruiting.
     Completing again changes nothing."""
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     ids = bot_ids(api)
     assert set(LIVE_DEFAULT) <= set(ids)
@@ -1765,7 +1759,7 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     }
     assert {stored_line(api, slug) for slug in LIVE_DEFAULT if slug.endswith("-manager")} == {"human:owner"}
     before = (len(rows(api, "SELECT id FROM seats")), len(ids))
-    again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    again = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text
     assert (len(rows(api, "SELECT id FROM seats")), len(bot_ids(api))) == before
 
@@ -1799,7 +1793,7 @@ def test_setup_lists_the_default_chart_by_team_and_leaves_out_the_teams_switched
     assert {row["team"]: row["on"] for row in saved.json()["default_chart"]}[off["team"]] is False
     # A client that does not send it keeps it.
     api.put("/api/v2/setup", json={"answers": {"building": "Rentals"}}, headers=signed_in())
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     assert done.json()["default_chart"] == []
     titles = {r["title"] for r in rows(api, "SELECT title FROM seats")}
@@ -1826,7 +1820,7 @@ def test_a_default_team_of_built_ins_only_is_locked():
 def _reviewer_models(api, enabled):
     done = api.put("/api/v2/providers", json={"enabled": enabled}, headers=signed_in())
     assert done.status_code == 200, done.text
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     return {slug: stored_config(api, slug).get("model") for slug in ("reviewer-1", "reviewer-2")}
 
@@ -1903,7 +1897,7 @@ def test_setup_leaves_a_company_whose_work_is_already_set_up_alone(environment):
     with api.app.state.store.transaction() as c:
         stage = {"name": "Take the order", "owner": "assignee", "requirements": [{"kind": "owner_done"}]}
         pipeline_settings.save(c, "human:owner", {"name": "Orders", "prefix": "OR", "stages": [stage]})
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     assert not set(LIVE_DEFAULT) & set(bot_ids(api))
     assert not rows(api, "SELECT id FROM seats")

@@ -276,7 +276,7 @@ def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_
     )
     run = start(api, token=strategy_token)
     assert run["status"] == "done" and run["proposal_id"]
-    pending = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]
+    pending = [p for p in get(api, "proposals")["proposals"] if p["kind"] == "strategy_draft"]
     assert [p["id"] for p in pending] == [run["proposal_id"]] and pending[0]["proposed_by"] == "bot:strategy-owner"
     payload = pending[0]["payload"]
     assert payload["source"] == "lens" and payload["lens"] == "blue-ocean" and pending[0]["lens_name"] == "Blue Ocean"
@@ -294,7 +294,7 @@ def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_
         first["id"], changes=[{"label": "Sharper summary", "payload": {"summary": "Owner's run."}}]
     )
     assert start(api)["proposal_id"] is None
-    assert len([p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]) == 1
+    assert len([p for p in get(api, "proposals")["proposals"] if p["kind"] == "strategy_draft"]) == 1
 
 
 def test_a_run_sent_as_a_proposal_cannot_also_be_added_to_the_draft(api, model):

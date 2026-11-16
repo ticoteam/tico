@@ -132,7 +132,7 @@ class Hub:
                 "selected": {},
             },
         )
-        return self.call("post", "onboarding/complete", {})
+        return self.call("post", "setup/complete", {})
 
 
 def build(hub, state):

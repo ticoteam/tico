@@ -31,33 +31,33 @@ def cleared(api, rid):
 def test_only_the_operator_or_an_admin_signs_out(api):
     r = online(api)
     rid = r["runner_id"]
-    post(api, f"runners/{rid}/logouts", {"runtime": "codex"}, token="cara-test", expected=403)
-    post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True}, token="cara-test", expected=403)
-    get(api, f"runners/{rid}/logouts/bots?runtime=codex", token="cara-test", expected=403)
-    post(api, f"runners/{rid}/logouts", {"runtime": "codex"}, token=r["token"], expected=403)
+    post(api, f"computers/{rid}/logouts", {"runtime": "codex"}, token="cara-test", expected=403)
+    post(api, f"computers/{rid}/logins", {"runtime": "codex", "switch": True}, token="cara-test", expected=403)
+    get(api, f"computers/{rid}/logouts/bots?runtime=codex", token="cara-test", expected=403)
+    post(api, f"computers/{rid}/logouts", {"runtime": "codex"}, token=r["token"], expected=403)
     assert cleared(api, rid) == []
 
 
 def test_a_sign_out_marks_the_login_signed_out_until_a_person_signs_in_again(api):
     r = online(api)
     rid = r["runner_id"]
-    out = post(api, f"runners/{rid}/logouts", {"runtime": "codex"})
+    out = post(api, f"computers/{rid}/logouts", {"runtime": "codex"})
     assert out["kind"] == "sign_out" and out["state"] == "requested"
     assert pending(api, r) == [
         {"id": out["id"], "runtime": "codex", "profile": "", "kind": "sign_out", "expires_at": out["expires_at"]}
     ]
     assert cleared(api, rid) == [("codex", "")]
     # Asking again returns the same request; a sign-in meanwhile would race it on the same files.
-    assert post(api, f"runners/{rid}/logouts", {"runtime": "codex"})["id"] == out["id"]
-    post(api, f"runners/{rid}/logins", {"runtime": "codex"}, expected=409)
+    assert post(api, f"computers/{rid}/logouts", {"runtime": "codex"})["id"] == out["id"]
+    post(api, f"computers/{rid}/logins", {"runtime": "codex"}, expected=409)
     # A sign-out ends signed out, never signed in.
     post(api, f"runner-logins/{out['id']}/report", {"state": "signed_in"}, token=r["token"], expected=422)
     assert report(api, r, out["id"], state="signed_out", message="Signed out") == {"state": "signed_out"}
-    assert get(api, f"runners/{rid}/logins/{out['id']}")["state"] == "signed_out"
+    assert get(api, f"computers/{rid}/logins/{out['id']}")["state"] == "signed_out"
     assert get(api, "operations")["computers"][0]["signed_out"] == {"codex": [""]}
     assert get(api, "operations")["computers"][0]["key_cleared"] == [], "a sign-out is not a cleared key"
     # A switch is a sign-in on the side; when it finishes, the login is no longer signed out.
-    switch = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
+    switch = post(api, f"computers/{rid}/logins", {"runtime": "codex", "switch": True})
     assert switch["kind"] == "switch" and pending(api, r)[0]["kind"] == "switch"
     assert cleared(api, rid) == [("codex", "")]
     report(api, r, switch["id"], state="signed_in")
@@ -67,7 +67,7 @@ def test_a_sign_out_marks_the_login_signed_out_until_a_person_signs_in_again(api
 def test_a_sign_out_that_did_not_take_leaves_the_login_as_it_was(api):
     r = online(api)
     rid = r["runner_id"]
-    out = post(api, f"runners/{rid}/logouts", {"runtime": "claude", "profile": "work"})
+    out = post(api, f"computers/{rid}/logouts", {"runtime": "claude", "profile": "work"})
     assert cleared(api, rid) == [("claude", "work")]
     report(api, r, out["id"], state="failed", message="Claude is still signed in")
     assert cleared(api, rid) == []
@@ -76,9 +76,9 @@ def test_a_sign_out_that_did_not_take_leaves_the_login_as_it_was(api):
 def test_a_canceled_switch_keeps_the_mark_and_the_old_login(api):
     r = online(api)
     rid = r["runner_id"]
-    report(api, r, post(api, f"runners/{rid}/logouts", {"runtime": "codex"})["id"], state="signed_out")
-    switch = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
-    post(api, f"runners/{rid}/logins/{switch['id']}/cancel", {})
+    report(api, r, post(api, f"computers/{rid}/logouts", {"runtime": "codex"})["id"], state="signed_out")
+    switch = post(api, f"computers/{rid}/logins", {"runtime": "codex", "switch": True})
+    post(api, f"computers/{rid}/logins/{switch['id']}/cancel", {})
     assert pending(api, r) == [] and cleared(api, rid) == [("codex", "")]
 
 
@@ -99,7 +99,7 @@ def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_s
     rid, token = machine["runner_id"], machine["token"]
     beat(api, token, auth={"Authorization": "Bearer " + token})
     assert computer_asks(api, token).json()["credentials"]
-    r = api.post(f"/api/v2/runners/{rid}/logouts", json={"runtime": "codex"}, headers=signed_in())
+    r = api.post(f"/api/v2/computers/{rid}/logouts", json={"runtime": "codex"}, headers=signed_in())
     assert r.status_code == 200, r.text
     assert computer_asks(api, token).json() == {"credentials": [], "signed_out": True}
     # Only the computer's own login is affected, and only for that runtime.
@@ -107,13 +107,13 @@ def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_s
     as_computer(api, token, f"runner-logins/{r.json()['id']}/report", {"state": "signed_out"})
     assert computer_asks(api, token).json()["credentials"] == []
     # "Use the shared key" is the person saying so.
-    used = api.post(f"/api/v2/runners/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
+    used = api.post(f"/api/v2/computers/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
     assert used.status_code == 200, used.text
     assert used.json()["kind"] == "use_shared_key"
     assert computer_asks(api, token).json()["credentials"][0]["value"] == "sk-team-key-0123456789"
     # Nothing to restore once it is no longer signed out.
     as_computer(api, token, f"runner-logins/{used.json()['id']}/report", {"state": "done"})
-    again = api.post(f"/api/v2/runners/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
+    again = api.post(f"/api/v2/computers/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
     assert again.status_code == 409
 
 
@@ -121,15 +121,15 @@ def test_a_switch_past_its_commit_point_cannot_be_canceled_and_one_canceled_firs
     r = online(api)
     rid = r["runner_id"]
     # Only a switch has a commit point.
-    sign_in = post(api, f"runners/{rid}/logins", {"runtime": "claude"})
+    sign_in = post(api, f"computers/{rid}/logins", {"runtime": "claude"})
     post(api, f"runner-logins/{sign_in['id']}/report", {"state": "finishing"}, token=r["token"], expected=422)
-    out = post(api, f"runners/{rid}/logouts", {"runtime": "claude", "profile": "work"})
+    out = post(api, f"computers/{rid}/logouts", {"runtime": "claude", "profile": "work"})
     post(api, f"runner-logins/{out['id']}/report", {"state": "finishing"}, token=r["token"], expected=422)
     # Canceled before the commit point: the runner's finishing gets canceled back, so it keeps the old login.
-    late = post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})
-    post(api, f"runners/{rid}/logins/{late['id']}/cancel", {})
+    late = post(api, f"computers/{rid}/logins", {"runtime": "codex", "switch": True})
+    post(api, f"computers/{rid}/logins/{late['id']}/cancel", {})
     assert report(api, r, late["id"], state="finishing") == {"state": "cancelled"}  # the runner wire keeps its spelling
-    assert get(api, f"runners/{rid}/logins/{late['id']}")["state"] == "canceled"
+    assert get(api, f"computers/{rid}/logins/{late['id']}")["state"] == "canceled"
 
 
 def test_a_mac_is_never_asked_to_switch_claude_code_which_keeps_its_login_in_the_keychain(api):
@@ -137,16 +137,16 @@ def test_a_mac_is_never_asked_to_switch_claude_code_which_keeps_its_login_in_the
     rid = r["runner_id"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
-    refused = post(api, f"runners/{rid}/logins", {"runtime": "claude", "switch": True}, expected=422)
+    refused = post(api, f"computers/{rid}/logins", {"runtime": "claude", "switch": True}, expected=422)
     assert "keychain" in refused["error"]["detail"] and "Sign out, then sign in" in refused["error"]["detail"]
     assert pending(api, r) == []
     # Codex keeps its login in a file there too, and Claude Code still signs out and in.
-    assert post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True})["kind"] == "switch"
-    assert post(api, f"runners/{rid}/logouts", {"runtime": "claude"})["kind"] == "sign_out"
+    assert post(api, f"computers/{rid}/logins", {"runtime": "codex", "switch": True})["kind"] == "switch"
+    assert post(api, f"computers/{rid}/logouts", {"runtime": "claude"})["kind"] == "sign_out"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='linux' WHERE id=?", (rid,))
     post(
-        api, f"runners/{rid}/logins", {"runtime": "claude", "switch": True}, expected=409
+        api, f"computers/{rid}/logins", {"runtime": "claude", "switch": True}, expected=409
     )  # the sign-out is still running
 
 
@@ -190,7 +190,7 @@ def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_
     rid, token = machine["runner_id"], machine["token"]
     auth = {"Authorization": "Bearer " + token}
     beat(api, token, SWITCHES_TYPE, auth=auth)
-    start = lambda body, who=None: api.post(f"/api/v2/runners/{rid}/logins", json=body, headers=who or signed_in())
+    start = lambda body, who=None: api.post(f"/api/v2/computers/{rid}/logins", json=body, headers=who or signed_in())
     has_key = lambda: computer_asks(api, token).json()["credentials"][0]["value"] == "sk-team-key-0123456789"
     assert has_key()
 
@@ -206,7 +206,7 @@ def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_
         {"state": "waiting", "url": "https://auth.openai.com/codex/device"},
     )
     assert has_key(), "until the subscription works the key stays in use"
-    api.post(f"/api/v2/runners/{rid}/logins/{first.json()['id']}/cancel", json={}, headers=signed_in())
+    api.post(f"/api/v2/computers/{rid}/logins/{first.json()['id']}/cancel", json={}, headers=signed_in())
     assert has_key() and key_off(api, rid) == []
 
     # Failed after the commit point (the new login did not work in place): the key stays too.
@@ -233,7 +233,7 @@ def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_
     as_computer(api, token, f"runner-logins/{later['id']}/report", {"state": "signed_in"})
     assert computer_asks(api, token).json()["credentials"] == []
     # Use the shared key is the person saying so.
-    used = api.post(f"/api/v2/runners/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
+    used = api.post(f"/api/v2/computers/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
     assert used.status_code == 200, used.text
     assert key_off(api, rid) == [] and has_key()
 
@@ -241,17 +241,17 @@ def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_
 def test_switch_to_subscription_is_for_the_operator_or_an_admin(api):
     r = online(api, SWITCHES_TYPE)
     rid = r["runner_id"]
-    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token="cara-test", expected=403)
-    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token=r["token"], expected=403)
+    post(api, f"computers/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token="cara-test", expected=403)
+    post(api, f"computers/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token=r["token"], expected=403)
     # The computer's own login only, and not both a switch of account and of type at once.
-    post(api, f"runners/{rid}/logins", {"runtime": "codex", "profile": "work", "to": "subscription"}, expected=422)
-    post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True, "to": "subscription"}, expected=422)
-    post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "api_key"}, expected=422)
+    post(api, f"computers/{rid}/logins", {"runtime": "codex", "profile": "work", "to": "subscription"}, expected=422)
+    post(api, f"computers/{rid}/logins", {"runtime": "codex", "switch": True, "to": "subscription"}, expected=422)
+    post(api, f"computers/{rid}/logins", {"runtime": "codex", "to": "api_key"}, expected=422)
     assert pending(api, r) == []
     # Claude Code on a Mac keeps its login in the keychain: no side to sign in on, as for Switch account.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
-    refused = post(api, f"runners/{rid}/logins", {"runtime": "claude", "to": "subscription"}, expected=422)
+    refused = post(api, f"computers/{rid}/logins", {"runtime": "claude", "to": "subscription"}, expected=422)
     assert "keychain" in refused["error"]["detail"]
 
 
@@ -313,11 +313,11 @@ def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_
     r = online(api, REMOVES)
     rid = r["runner_id"]
     with_profile(api, r)
-    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, token="cara-test", expected=403)
-    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "work"}, token=r["token"], expected=403)
-    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": ""}, expected=422)
-    post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "other"}, expected=404)
-    post(api, f"runners/{rid}/removals", {"runtime": "claude", "profile": "work"}, expected=404)
+    post(api, f"computers/{rid}/removals", {"runtime": "codex", "profile": "work"}, token="cara-test", expected=403)
+    post(api, f"computers/{rid}/removals", {"runtime": "codex", "profile": "work"}, token=r["token"], expected=403)
+    post(api, f"computers/{rid}/removals", {"runtime": "codex", "profile": ""}, expected=422)
+    post(api, f"computers/{rid}/removals", {"runtime": "codex", "profile": "other"}, expected=404)
+    post(api, f"computers/{rid}/removals", {"runtime": "claude", "profile": "work"}, expected=404)
     assert pending(api, r) == []
 
 

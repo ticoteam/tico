@@ -15,7 +15,7 @@ def test_the_api_refuses_a_bot_its_own_sign_in(api):
     assert 'assignments' not in get(api, 'subscriptions')
     # Nor a second, named login on the computer for a bot to run on: a different account means another computer.
     refused = post(
-        api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'engineering'}, expected=422
+        api, f"computers/{r['runner_id']}/logins", {'runtime': 'codex', 'profile': 'engineering'}, expected=422
     )
     assert refused['error']['code'] == 'one_login'
 
@@ -27,7 +27,7 @@ def test_sign_in_permissions(api):
     rid = r['runner_id']
     seen = next(m for m in get(api, 'operations', 'cara-test')['computers'] if m['id'] == rid)
     assert seen['may_manage'] is False
-    post(api, f"runners/{rid}/logins", {'runtime': 'codex'}, token='cara-test', expected=403)
+    post(api, f"computers/{rid}/logins", {'runtime': 'codex'}, token='cara-test', expected=403)
     put(
         api,
         'subscriptions/name',
@@ -58,11 +58,11 @@ def test_sign_in_permissions(api):
         ('revoke', {}),
     ]:
         post(api, f"runners/{rid}/{path}", body, token='cara-test', expected=403)
-    login = post(api, f"runners/{r['runner_id']}/logins", {'runtime': 'codex'})
+    login = post(api, f"computers/{r['runner_id']}/logins", {'runtime': 'codex'})
     assert login['profile'] == ''
     pending = get(api, 'runner-logins', r['token'])['logins']
     assert pending[0]['profile'] == ''
-    post(api, f"runners/{rid}/revoke", {})
+    post(api, f"computers/{rid}/revoke", {})
     assert all(m['id'] != rid for m in get(api, 'operations', 'cara-test')['computers'])
     assert any(m['id'] == rid for m in get(api, 'operations')['computers'])
 
@@ -71,8 +71,8 @@ def test_botops_signin_uses_requester_rights_by_default():
     from backend.botops_act import default_delegable
 
     assert not default_delegable('PUT', 'subscriptions')
-    assert default_delegable('POST', 'runners/computer-a/logins', {'runtime': 'codex'})
-    assert default_delegable('GET', 'runners/computer-a/logins/login-a')
+    assert default_delegable('POST', 'computers/computer-a/logins', {'runtime': 'codex'})
+    assert default_delegable('GET', 'computers/computer-a/logins/login-a')
     assert not default_delegable('GET', 'runner-logins')
 
 

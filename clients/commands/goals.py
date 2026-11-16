@@ -55,7 +55,7 @@ def goal_read_back(api, args):
     "tico_goal_save",
     "Save one exact method/path/body step returned by tico_goal_read_back after the owner agrees. "
     "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry. "
-    "Also records the owner's \"no\" to a suggestion you made in chat: path /api/v2/goal-proposals/turned-down, with the "
+    "Also records the owner's \"no\" to a suggestion you made in chat: path /api/v2/proposals/turned-down, with the "
     "suggestion's kind, goal_id, kpi_id, payload and reason as the body; the owner's words become its reason.",
     {
         "method": {"type": "string", "enum": ["POST"]},
@@ -76,7 +76,7 @@ def goal_save(api, args):
         path = path.replace("{new}", created)
     # This helper only replays goal read-back writes; the server checks the cited yes and exact body.
     if args["method"] != "POST" or not re.fullmatch(
-        r"/api/v2/(?:goals(?:/[^/]+(?:/why|/kpis(?:/[^/]+(?:/unlink)?)?)?)?|goal-proposals/(?:[^/]+/decide|turned-down))",
+        r"/api/v2/(?:goals(?:/[^/]+(?:/why|/kpis(?:/[^/]+(?:/unlink)?)?)?)?|(?:goal-)?proposals/(?:[^/]+/decide|turned-down))",
         path,
     ):
         raise ValueError("path must be a goal read-back save step")
@@ -729,7 +729,7 @@ def proposal_decide(api, args):
     body = {"decision": args["decision"], "note": args.get("note") or ""}
     if args.get("option") is not None:
         body["option"] = int(args["option"])
-    path = "goal-proposals" if args.get("on_behalf_of") else "proposals"
+    path = "proposals"
     return _asked(api, args).post(f"{path}/{args['id']}/decide", body, key=_key(args))["proposal"]
 
 

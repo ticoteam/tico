@@ -7318,7 +7318,7 @@ STABLE.extend(
             "InboxSwitch",
         ),
         (
-            "/api/v2/people/{person}/assistant",
+            "/api/v2/humans/{person}/assistant",
             "get",
             "Automations",
             "getPersonAssistant",

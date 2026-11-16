@@ -10,12 +10,9 @@ import re
 from . import brand_icons
 from . import ui_build
 from . import ui_bundle
-from .route_renames import install as install_route_renames
 
 
 def register(app, auth, settings):
-    install_route_renames(app)  # after every route: the new spellings canonical, the old ones deprecated
-
     # The two icons browsers ask for at the root (backend/brand_icons.py). Before the static mounts below, which would
     # otherwise answer first.
     @app.api_route("/favicon.ico", methods=["GET", "HEAD"], include_in_schema=False)

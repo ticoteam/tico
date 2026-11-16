@@ -179,7 +179,7 @@ def test_the_judge_config_reports_the_gateways_40_questions_and_a_41_question_as
     """The Gateway answers a call of 41 or more questions with an error (production, 2026-11-13): Tico says so, and
     refuses such an ask itself instead of sending it."""
     wire(api, monkeypatch, own_key="ts-synthetic")
-    shown = get(api, "judge")
+    shown = get(api, "decisions")
     assert shown["max_questions"] == 40 and shown["max_call_chars"] == J.MAX_CALL_CHARS
     many = {f"q{n}": {"type": "noul", "instructions": f"Is it about item {n}?"} for n in range(41)}
     r = api.post("/api/v2/decisions", headers=headers(), json={"state": {"subject": "Invoice 4471"}, "questions": many})
@@ -190,7 +190,7 @@ def test_the_judge_config_reports_the_gateways_40_questions_and_a_41_question_as
 # ----------------------------------------------------------------------------- 1. the Gateway answers
 def test_with_a_gateway_key_a_decision_goes_to_the_gateway_as_tico_decide_and_the_audit_names_it(api, monkeypatch, net):
     wire(api, monkeypatch, own_key="ts-synthetic")
-    shown = get(api, "judge")
+    shown = get(api, "decisions")
     assert shown["configured"] and shown["provider"] == "Tico AI Gateway" and shown["model"] == "tico-decide-low"
     r = ask(api)
     assert r.status_code == 200, r.text
@@ -676,7 +676,7 @@ def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes
 def test_with_no_gateway_key_and_no_other_provider_decide_is_off_and_callers_carry_on(api, monkeypatch, net):
     wire(api, monkeypatch, gateway_key="")
     assert api.app.state.judge is None
-    assert get(api, "judge")["configured"] is False
+    assert get(api, "decisions")["configured"] is False
     r = ask(api)
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unconfigured"
     with api.app.state.store.read() as c:

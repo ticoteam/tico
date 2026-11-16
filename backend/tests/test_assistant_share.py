@@ -154,7 +154,7 @@ def test_a_person_whose_sign_in_is_off_shares_nothing_more(api):
     finance = bot_token(api, "finance")
     post(api, "assistant/viewers", {"bot": "finance"}, token="cara-test")
     get(api, "assistant/shared/human:cara", finance)
-    post(api, "access/people/cara", {"sign_in": False})
+    post(api, "access/humans/cara", {"sign_in": False})
     get(api, "assistant/shared/human:cara", finance, expected=403)
     assert get(api, "assistant/shared", finance)["people"] == []
 

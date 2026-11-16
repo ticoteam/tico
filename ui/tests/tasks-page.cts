@@ -255,7 +255,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p === '/api/me') return json({...me, config: CONFIG});
     if (p === '/api/v2/config') return json(CONFIG);
     if (p === '/api/employees') return json(bots);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}], teams: {}});
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

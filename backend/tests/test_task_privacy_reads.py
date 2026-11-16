@@ -265,7 +265,7 @@ def test_private_execution_cannot_publish_public_task_or_wider_reply(api):
     )
     post(api, "messages", {"to": "ana", "text": "Private derived output"}, attempt["token"], expected=403)
     post(api, "updates", {"body": "Private derived output"}, attempt["token"], expected=403)
-    post(api, "integrations/github/learnings", {"text": "Private derived output"}, attempt["token"], expected=403)
+    post(api, "tools/github/learnings", {"text": "Private derived output"}, attempt["token"], expected=403)
     assert not sql(api, "SELECT id FROM tasks WHERE id='" + row["id"] + "'")
 
 

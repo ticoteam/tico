@@ -357,7 +357,7 @@ def test_onboarding_names_a_managers_slug_for_a_bot_whose_id_is_not_its_slug_and
     assert r.status_code == 200, r.text
 
     def line():
-        return next(b for b in get(api, "onboarding")["bots"] if b["id"] == sales)
+        return next(b for b in get(api, "setup")["bots"] if b["id"] == sales)
 
     assert (line()["reports_to"], line()["reports_to_slug"]) == (manager, "growth-manager")
     rename(api, manager, "sales-director")

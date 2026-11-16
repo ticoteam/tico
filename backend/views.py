@@ -310,7 +310,7 @@ def entries(c, github_owner="", shared=False):
 
 
 def seat_parents(c, settings, auth, who):
-    """{open seat id: where it hangs on the team chart for this caller}, as GET /api/people draws it
+    """{open seat id: where it hangs on the team chart for this caller}, as GET /api/humans draws it
     (backend/lifecycle.py `chart_seats`): GET /api/v2/seats carries the same, so a client that refreshes the seats from
     there still hangs a seat under a closed seat where that seat answered to."""
     from . import strategy_bot
@@ -2682,7 +2682,8 @@ def install_views(app, store, auth, mutate, task_view):
                 c, request.state.identity, employee_rows(c, request.state.identity), auth
             )
 
-    @app.get("/api/people")
+    @app.get("/api/humans")
+    @app.get("/api/people", deprecated=True)  # rc.1 Letters list (ui/app/inboxes-letters.ts)
     def people(request: Request):
         who = request.state.identity
         person_or_view(who)
@@ -2757,7 +2758,7 @@ def install_views(app, store, auth, mutate, task_view):
                 out["developers"] = [pid for pid in out.get("developers") or [] if pid not in people_hidden]
             return out
 
-    @app.get("/api/people/{pid}/photo")
+    @app.get("/api/humans/{pid}/photo")
     def person_photo(request: Request, pid: str):
         who = request.state.identity
         human_only(who)
@@ -3450,11 +3451,6 @@ def install_views(app, store, auth, mutate, task_view):
     def summary_answer(who, limit):
         with store.read_transaction() as c:
             return needs_summary(c, auth, who, task_view, limit)
-
-    @app.get("/api/v2/tico/fleet")
-    def tico_fleet(request: Request):
-        with store.read() as c:
-            return fleet_snapshot(c, auth, request.state.identity, task_view)
 
     @app.post("/api/employees/{bot}/session/clear")
     def clear_session(request: Request, bot: str, body: M.Empty):
