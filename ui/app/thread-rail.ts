@@ -121,7 +121,7 @@ async function pageThreads() {
 // No thread to open but chats wait for you: say how many, and offer Catch up (never the empty picture).
 const trUnreadWords = (n: number): string => `${threadsCountText(n)} chat${n === 1 ? '' : 's'} with new messages`;
 function trUnreadPane(pane: Element): boolean {
-  const n = THREADS.rail === true ? threadsCatchUp() : 0;
+  const n = threadsCatchUp();
   if (!n) return false;
   pane.innerHTML = `<div class="tr-empty" data-tr-unread-pane><div class="empty-state">${EMPTY_ART.unread}<p><b data-tr-unread-n>${esc(trUnreadWords(n))}</b></p>
     <button type="button" class="primary" data-tr-catchup>Catch up</button></div></div>`;
@@ -231,13 +231,13 @@ function railRender() {
   more.hidden = all; more.textContent = all ? '' : `${unread.length - RAIL_UNREAD_CAP} more`;
   rail.querySelector('.tr-none').hidden = !(words && !lists.pinned.length && !lists.threads.length && !unread.length);
   rail.querySelector('[data-tr-more]').hidden = !THREADS.next || !!words;
-  const can = THREADS.rail === true, n = threadsCatchUp();
+  const n = threadsCatchUp();
   const catchUp = rail.querySelector('[data-tr-catch]'), badge = catchUp.querySelector('.tr-badge');
-  catchUp.hidden = !can;
+  catchUp.hidden = false;
   catchUp.classList.toggle('cur', !!CU.open);
   badge.hidden = !n; badge.textContent = threadsCountText(n);
   catchUp.setAttribute('aria-label', n ? `Catch up, ${n}` : 'Catch up');
-  rail.querySelector('[data-tr-browse]').hidden = !can;
+  rail.querySelector('[data-tr-browse]').hidden = false;
   // The pane's "N chats with new messages" follows the count; at 0 (and Catch up closed: nothing moves behind it) the
   // pane is emptied first, so this cannot run again, and pageThreads() picks what shows instead.
   const un = document.querySelector('[data-tr-unread-n]'), unPane = un?.closest('.tr-pane');

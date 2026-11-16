@@ -20,7 +20,7 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
   try {
     const page = await browser.newPage({viewport:{width:1280,height:800}, serviceWorkers:'block'});
     const errors: string[] = [], writes: {key: string | undefined; body: Buffer | null}[] = [];
-    let role = 'owner', cloud = true, failures = 0, refusal = false;
+    let role = 'owner', failures = 0, refusal = false;
     const rules: Record<string, boolean> = {stale_review:false, topic_fresh:false};
     const ruleWrites: Record<string, boolean>[] = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -44,11 +44,11 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
       if (p === '/api/v2/access/rules' && request.method() === 'PUT') {
         const body: Record<string, boolean> = request.postDataJSON(); ruleWrites.push(body); Object.assign(rules, body); return json(rules);
       }
-      if (p === '/api/me') return json({id:'ana',role,name:'Ana',email:'ana@example.com',cloud,registered:true,config:{version:'dev',company_name:'Acme'}});
+      if (p === '/api/me') return json({id:'ana',role,name:'Ana',email:'ana@example.com',cloud:true,registered:true,config:{version:'dev',company_name:'Acme'}});
       if (p === '/api/v2/config') return json({version:'dev',company_name:'Acme'});
       if (p === '/api/employees') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people:[],teams:{}});
-      if (p === '/api/status') return json({cloud,keeper_alive:true,active:[],queued:[],recent_runs:[],health_issues:[]});
+      if (p === '/api/status') return json({cloud:true,keeper_alive:true,active:[],queued:[],recent_runs:[],health_issues:[]});
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/operations') return json({machines:[],services:[]});
       if (p.endsWith('/watch')) return route.fulfill({contentType:'text/event-stream',body:': fixture\n\n'});
@@ -104,12 +104,13 @@ const logo = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQV
     await page.reload();
     await page.locator('#settings-tabs').waitFor();
     assert.equal(await page.locator('#settings-team').count(),0);
-    // A local hub's owner gets the Team card without the team icon; the Stale ticket review and Topic changed switches
-    // live in Settings > System (ui/app/settings-recurring.ts): no switch here, and no note saying they moved.
-    role = 'owner'; cloud = false;
+    // The owner's icon control is always drawn (the hub always reports cloud, so there is no local-hub case). The Stale
+    // ticket review and Topic changed switches live in Settings > System (ui/app/settings-recurring.ts): no switch here,
+    // and no note saying they moved.
+    role = 'owner';
     await page.reload();
     await page.locator('[data-settings-tab=general]').click();
-    assert.equal(await page.locator('#settings-team-icon-change').count(),0);
+    assert.equal(await page.locator('#settings-team-icon-change').count(),1);
     assert.equal(await page.locator('#settings-stale-review, #settings-topic-fresh').count(),0);
     assert.equal(await page.locator('#settings-team [data-settings-moved], #settings-team-moved').count(),0);
     assert.deepEqual(ruleWrites,[]);

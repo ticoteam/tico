@@ -106,7 +106,7 @@ const CAL_ROW_DAYS = 7;
 const calRowEl = () => document.getElementById('nav-calendar');
 
 async function calRowLoad(): Promise<void> {
-  if (CAL_ROW.off || CAL_ROW.loading || !S.me || SESSION.out) return;
+  if (CAL_ROW.loading || !S.me || SESSION.out) return;
   CAL_ROW.loading = true;
   const from = calMidnight(new Date()), to = calAddDays(from, CAL_ROW_DAYS + 1);
   try {
@@ -118,16 +118,15 @@ async function calRowLoad(): Promise<void> {
     // A calendar that would not answer is not an empty week: say nothing rather than "n/a".
     CAL_ROW.failed = !!a.errors?.length;
     CAL_ROW.at = Date.now();
-    // Calendar writes arrive live once the server has shown it serves calendars (an older one refuses the topic).
+    // Calendar writes arrive live: the topic joins once a read has answered.
     if (!CAL_ROW.live) {
       const soon = () => liveSoon('cal-row', () => void calRowLoad(), 500);
       const offs = [liveOn('calendar', soon), liveOn('reset', soon)];
       CAL_ROW.live = () => { for (const off of offs) off(); };
       liveTopicAdd('calendar');
     }
-  } catch (e) {
-    // A server without calendars (404): the row is just "Calendar", and nothing asks again.
-    if ((e as {status?: number}).status === 404) { CAL_ROW.off = true; CAL_ROW.list = []; }
+  } catch {
+    // A failed read keeps the row as it was.
   } finally {
     CAL_ROW.loading = false;
   }
@@ -163,7 +162,7 @@ function calRowDraw(dir = 0): void {
   const row = calRowEl(); if (!row) return;
   const next = row.querySelector<HTMLElement>('[data-cal-next]');
   if (!next) return;
-  if (CAL_ROW.off || !CAL_ROW.at) { next.innerHTML = ''; row.classList.remove('cal-on'); return; }
+  if (!CAL_ROW.at) { next.innerHTML = ''; row.classList.remove('cal-on'); return; }
   row.classList.add('cal-on');
   const now = new Date(), up = calRowUpcoming(now);
   if (!up.length) { CAL_ROW.pick = null; next.innerHTML = CAL_ROW.failed ? '' : '<span class="cal-nx cal-none" title="Nothing scheduled"><span aria-hidden="true">n/a</span><span class="sr-only">Nothing scheduled</span></span>'; return; }

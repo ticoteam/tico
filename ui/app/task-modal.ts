@@ -720,7 +720,7 @@ async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then:
 // Its dialog and the box's host, the task it reads and how (the poll, or the live events' off switch), what was last read
 // and drawn, the run being stopped, the composer's reach and Set as goal, and which task-update groups are open.
 interface TaskChatState {
-  dialog: ModalDialog; host: HTMLElement; path: string; id: string | number; poll: number; sending: boolean; reading: boolean;
+  dialog: ModalDialog; host: HTMLElement; path: string; id: string | number; sending: boolean; reading: boolean;
   liveOff?: (() => void) | null; cid?: string; stopped?: boolean; data?: ModalDetail; rendered?: string; stopping?: string | undefined;
   reach?: ComposeReach; goalOnce?: boolean; openLines?: Set<string>; count?: number;
   /** How many of the newest lines are drawn (taskChatEarlier adds a page), and whether a page is being added. */
@@ -728,7 +728,7 @@ interface TaskChatState {
 }
 let TASK_JUMP = ENTRY_JUMP?.task ? {task: ENTRY_JUMP.task, id: ENTRY_JUMP.id} : null;   // {task, id}: a link's message, once that task's conversation shows
 function taskChatStop() {
-  if (TASK_CHAT) { clearInterval(TASK_CHAT.poll); TASK_CHAT.liveOff?.(); }
+  if (TASK_CHAT) TASK_CHAT.liveOff?.();
   TASK_CHAT = null;
   liveTasksSync();                     // the router calls this on every page change too (ui/app/live.ts)
 }
@@ -1322,14 +1322,14 @@ async function taskChatRead(state: TaskChatState) {
   } catch (e) {
     if (!taskChatCurrent(state)) return;
     if ([403, 404].includes(errorStatus(e) ?? 0)) {
-      state.stopped = true; clearInterval(state.poll); state.liveOff?.();
+      state.stopped = true; state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
       if (state.dialog.taskLive) taskLiveGone(state.dialog, state.dialog.taskLive);
       else if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       state.dialog.close(); state.dialog.innerHTML = '';
       return;
     }
-    if (errorStatus(e) === 400) {state.stopped = true; clearInterval(state.poll); state.liveOff?.();}
+    if (errorStatus(e) === 400) {state.stopped = true; state.liveOff?.();}
     const status = $('[data-task-chat-status]', state.host);
     if (status) status.textContent = `Unable to refresh: ${errorMessage(e, '')}`;
     else state.host.innerHTML = `<p class="err" role="status">Conversation unavailable: ${esc(errorMessage(e, ''))}</p>`;
@@ -1337,19 +1337,12 @@ async function taskChatRead(state: TaskChatState) {
 }
 async function taskChatLoad(id: string | number, dialog: ModalDialog, data: ModalDetail | null = null) {
   const state: TaskChatState = TASK_CHAT = {dialog, host: $('.task-chat', dialog),
-    path: `/v2/tasks/${encodeURIComponent(id)}`, id, poll: 0, sending: false, reading: false};
+    path: `/v2/tasks/${encodeURIComponent(id)}`, id, sending: false, reading: false};
   liveTasksSync();
   if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
   if (data) { await taskStagesFor(data); taskCommentsRender(state, data); } else await taskChatRead(state);
   if (!taskChatCurrent(state) || state.stopped) return;
   taskJumpPending(state);
-  // Without live events, the poll they replaced.
-  state.poll = liveFallback(() => {
-    if (document.hidden || !taskChatCurrent(state)) return;
-    void taskChatRead(state);
-    tfLoad(state.dialog, state.id).catch(() => {});     // a new file or version, or an answer on one, without reopening
-  }, 180000);
-  if (state.poll) return;
   // A change to the task itself reaches taskChatLive from the page's task events (ui/app/refresh.ts); its comments
   // are messages in its conversation.
   const cid = state.cid;

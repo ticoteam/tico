@@ -5,8 +5,7 @@
 // Tasks, bot status lines and Needs you arrive here as they change, for every page; the messages and runs of the
 // conversations on screen too (each view says which with liveFollow). One EventSource carries them all. It resumes
 // from the last change number it was given, so a reconnect misses nothing; `reset` means it was away longer than
-// the server keeps (a day) and each view reads in full. A browser with no EventSource keeps the old polls
-// (liveFallback); everywhere else nothing polls for what this stream carries.
+// the server keeps (a day) and each view reads in full. Nothing else polls for what this stream carries.
 type LiveEventData = {seq?: number | string; needs_version?: unknown; [key: string]: unknown};
 // Each view's handler takes the data its own event carries (a list, a row, an event), so the parameter is bivariant.
 type LiveHandler = Function;
@@ -46,7 +45,6 @@ function liveProbe(read: Promise<unknown>): void {
   LIVE_PROBES.add(read);
   void read.catch(() => {}).finally(() => LIVE_PROBES.delete(read));
 }
-const liveAvailable = () => typeof EventSource !== 'undefined';
 const liveConnected = () => LIVE.connected;
 // `fn(data)` for each event of `topic` (one of LIVE_TOPICS, or `reset`, `status` and `needs-list`); returns the unsubscribe.
 function liveOn(topic: string, fn: LiveHandler): () => void {
@@ -98,8 +96,7 @@ function liveFollowThread(id: string | number | null | undefined): () => void {
     else { LIVE.threads.delete(id); liveRestart(); }
   };
 }
-// A topic only some servers send (`threads`, once the server answers GET /v2/threads): asking an older server for it
-// would fail the whole stream (422), so it joins only when the server has shown it has it.
+// A topic joins once a read has shown the server sends it (`threads`, from GET /v2/threads/rail).
 // `seq`: the change number the read that showed it is as of (GET /v2/threads/rail `seq`). Before the first stream opens,
 // that stream resumes from it, so it carries the topic over from that read (`carried` on its `needs` connect) and replays
 // whatever changed since, in every topic, rather than starting from now and leaving a gap after the read.
@@ -110,10 +107,6 @@ function liveTopicAdd(topic: string, seq?: number | null): void {
   // Threads keep the sidebar live on every install, cloud or not.
   if (LIVE.started) liveRestart(); else liveStart();
 }
-// Only where the stream cannot run: the poll it replaced. Returns the timer (0 when the stream carries it).
-// A hidden tab does not poll: goals / task modal / Updates fell back every few seconds across background tabs
-// whenever live was down.
-const liveFallback = (fn: () => void, ms: number) => liveAvailable() ? 0 : setInterval(() => { if (!document.hidden) fn(); }, ms);
 // Run `fn` once after a burst: every call within `ms` of the first folds into it.
 const LIVE_SOON = new Map<string, number>();
 function liveSoon(key: string, fn: () => void, ms = 250): void {
@@ -141,7 +134,7 @@ document.addEventListener('visibilitychange', () => {
   for (const [key, t] of LIVE_THROTTLE) if (t.hidden && t.fn) { t.hidden = false; liveThrottle(key, t.fn, t.ms); }   // the caller's own pace
 });
 function liveStart(): void {
-  if (LIVE.started || !liveAvailable()) return;
+  if (LIVE.started) return;
   LIVE.started = true;
   if (!LIVE_PROBES.size) { liveEventsConnect(); return; }
   LIVE.waiting = true;
@@ -282,4 +275,4 @@ function liveResume(): void {
 }
 // A tab coming back from sleep or a dropped network reconnects now rather than at the end of its backoff.
 window.addEventListener('online', () => { if (LIVE.started && !LIVE.connected && !SESSION.out) liveEventsConnect(); });
-window.liveEvents = {on: liveOn, follow: liveFollow, available: liveAvailable, connected: liveConnected};
+window.liveEvents = {on: liveOn, follow: liveFollow, connected: liveConnected};

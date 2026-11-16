@@ -6,7 +6,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// GET /v2/model-subscriptions: an older server answers without the lists (`listed` false), and a failed read is {error}.
+// GET /v2/model-subscriptions: a reply without the lists (`listed` false), and a failed read is {error}.
 type SubsListAnswer = Partial<import('../types/api').ModelSubscriptionList> & {connect?: string[]; error?: unknown};
 // A kind: the server's rows, or SUBS_KINDS when it sends none.
 interface SubsKindRow {kind: string; label: string; runtime: string; secret_label?: string; owned?: boolean; connect?: boolean; help?: string}

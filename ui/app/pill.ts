@@ -221,7 +221,7 @@ function sendWayPick(mode: string) {
   const changed = mode !== SEND_WAY;
   SEND_WAY = mode; SEND_WAY_PICKS++;
   if (changed) for (const paint of SEND_WAY_PAINT) paint();
-  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  if (typeof S === 'undefined' || !S.me) return;
   clearTimeout(SEND_WAY_TIMER ?? undefined);
   SEND_WAY_TIMER = setTimeout(() => {
     SEND_WAY_TIMER = null;
@@ -230,7 +230,7 @@ function sendWayPick(mode: string) {
 }
 // The kept way, read once the page knows who is signed in. A pick made while the read was out wins, written or not.
 async function sendWaySync() {
-  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  if (typeof S === 'undefined' || !S.me) return;
   const picks = SEND_WAY_PICKS;
   const v = (await v2Get('/v2/preferences/' + SEND_WAY_PREF))?.value;
   if (!sendWayOk(v) || SEND_WAY_PICKS !== picks || v === SEND_WAY) return;

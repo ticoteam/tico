@@ -127,7 +127,7 @@ async function callLoad(view: ThvView): Promise<void> {
                                ...(r.providers ? {providers: r.providers} : {})});
     if (live?.provider) callViewKeep(live);
   } catch (e) {
-    // 404 from a server without calls; a call the viewer cannot read is the same answer.
+    // 404: a call the viewer cannot read.
     CALL_THREADS.set(view.id, errorStatus(e) === 503 ? {off: true} : {none: true});
   }
   callViewsDraw(view.id);

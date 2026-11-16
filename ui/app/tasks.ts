@@ -150,15 +150,14 @@ function needsBadgePaint() {
   flowTabPaint();
 }
 /** The phone bar's second slot: Flow, its mark grey like the other tabs and jade while something needs the person (no
-    number). A bot has no Flow: the slot keeps Threads, or Search on a server without threads (threads.ts THREADS.on). A
-    person's Threads and Search are in More (threads.ts threadsSideRender carries the count there). */
+    number). A bot has no Flow: the slot keeps Threads. A person's Threads and Search are in More (threads.ts
+    threadsSideRender carries the count there). */
 function flowTabPaint() {
-  const off = decideNoFlow(), threads = typeof THREADS === 'undefined' || THREADS.on !== false;
+  const off = decideNoFlow();
   const flow = document.querySelector<HTMLElement>('#mobile-flow');
   if (flow) { flow.hidden = off; flow.toggleAttribute('data-waiting', decideCount() > 0); }
-  const tab = document.querySelector<HTMLElement>('#mobile-threads'), search = document.querySelector<HTMLElement>('#mobile-search');
-  if (tab) tab.hidden = !off || !threads;
-  if (search) search.hidden = !off || threads;
+  const tab = document.querySelector<HTMLElement>('#mobile-threads');
+  if (tab) tab.hidden = !off;
 }
 // Flow's taps: decideFlow is in the ask screen's page part (decide.ts), whose stand-in loads it on the first tap.
 for (const el of document.querySelectorAll<HTMLElement>('#mobile-flow, #side .nav-flow')) el.addEventListener('click', () => void decideFlow(el));

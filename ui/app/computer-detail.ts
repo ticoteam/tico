@@ -345,9 +345,8 @@ function machineVersionsHTML(machine: DetailMachine, online: boolean) {
   const names = [...new Set([...Object.keys(runtimes), ...tools.filter(tool => tool.installed).map(tool => tool.runtime)])]
     .filter(name => !needed || needed.has(name) || runtimes[name]?.installed || toolFor(name).installed);
   const choices = machine.harness_choices || {};
-  // What its bots run on, fallbacks included, stays on (the server refuses an off for it); an older server sends
-  // no bot_runtimes, only its bots' own runtimes.
-  const botRuntimes = new Set(machine.bot_runtimes || ((machine.bots || []).length ? machine.needed_runtimes || [] : []));
+  // What its bots run on, fallbacks included, stays on (the server refuses an off for it).
+  const botRuntimes = new Set(machine.bot_runtimes || []);
   const rows = names.map(name => {
     const tool = toolFor(name), value: DetailRuntime = runtimes[name] || {};
     const installed = value.installed || tool.installed, version = installed ? (tool.version || value.version || '') : '';

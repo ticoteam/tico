@@ -87,12 +87,12 @@ interface OGRuleIndex {
 type OGGoal = GkGoal;
 type OGKpi = GkKpi & {target?: number | null; link?: {kind?: string; target?: number | null} | undefined};
 type OGStatus = 'done' | 'green' | 'yellow' | 'red' | 'none' | 'gray';
-// {view, abort, tree, rules: null|'missing'|'error'|{...}, goals: null|'error'|[...], sel, rule, edit: {ruleId: bool}, tf: {x, y, s}, seq}
+// {view, abort, tree, rules: null|'error'|{...}, goals: null|'error'|[...], sel, rule, edit: {ruleId: bool}, tf: {x, y, s}, seq}
 interface OGState {
   view: 'rules' | 'goals';
   abort: AbortController;
   tree: OGTree;
-  rules: OGRules | 'missing' | 'error' | null;
+  rules: OGRules | 'error' | null;
   goals: OGGoal[] | 'error' | null;
   sel: string | null;
   rule: string | null;
@@ -286,7 +286,6 @@ function ogNodeHtml(node: OGNode): string {
 function ogStatusHtml(): string {
   const og = ogNow();
   if (og.view === 'rules') {
-    if (og.rules === 'missing') return '<p class="og-line muted">Rules need a newer Tico.</p>';
     if (og.rules === 'error') return '<p class="og-line err">Could not load rules.</p>';
     if (og.rules && !(og.rules.rules || []).length) return `<p class="og-line muted">No rules yet · <a href="${RULES_ROUTE}">Rules</a></p>`;
   } else {
@@ -556,7 +555,6 @@ function ogRulesSection(node: OGNode): string {
   const rules = ogNow().rules;
   const may = S.me?.role !== 'bot' && rules && typeof rules === 'object';
   const head = `<div class="og-sh"><h3>Rules</h3><span class="spacer"></span>${may ? '<button type="button" class="ghost small" data-og-add-rule>Add rule</button>' : ''}</div>`;
-  if (rules === 'missing') return head + '<p class="muted og-pl">Rules need a newer Tico.</p>';
   if (rules === 'error') return head + '<p class="err og-pl">Could not load rules.</p>';
   if (!rules) return head + skelRows(2);
   const {who, with: withs} = ogRulesOf(node.key);
@@ -655,7 +653,7 @@ async function ogLoad(): Promise<void> {
   const state = ogNow(), seq = ++state.seq;
   const [rules, goals] = await Promise.all([
     get<import('../types/api').RulesByTeammate>('/v2/rules/by-teammate', {fresh: true}).then(r => ({rules: r.rules || [], bots: r.bots || [], people: r.people || []}),
-      (e: Partial<ApiFailure> | undefined): 'missing' | 'error' => e?.status === 404 ? 'missing' : 'error'),
+      (): 'error' => 'error'),
     get<GoalsTreeData>('/v2/goals/tree', {fresh: true}).then(r => (r.goals || []).filter(g => !goalBuiltInOwner(g.owner_id)), (): 'error' => 'error'),
   ]);
   if (OG !== state || seq !== state.seq) return;

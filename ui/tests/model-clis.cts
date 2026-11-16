@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
 // Settings > Computers, a computer's pop-up > Versions and updates > Installation and updates: the owner's On box per model CLI. What the computer's bots run on, their fallback
 // included (`bot_runtimes`), is checked and locked; any other one turns on and off with a POST and the page reloads; a
-// refused change puts the box back. An older server sends no bot_runtimes: its bots' own runtimes stay locked.
+// refused change puts the box back.
 // Every request is intercepted.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -83,13 +83,7 @@ declare var loadSettings: () => Promise<void>;
     await page.waitForFunction(() => { const el = document.querySelector('#set-machines [data-harness-choice="grok"]') as HTMLInputElement; return !el.checked && !el.disabled; });
     assert.equal(writes.length, 3);
     assert.deepEqual(writes[2], {harness: 'grok', enabled: true});
-    // An older server: no bot_runtimes, so only what its bots run on (needed_runtimes) is locked.
-    delete computer.bot_runtimes;
-    await page.evaluate(() => loadSettings());
-    await page.locator('#set-machines details[data-machine-details]').evaluate((el: HTMLDetailsElement) => { el.open = true; });
-    assert.deepEqual(await state('codex'), [true, true]);
-    assert.deepEqual(await state('antigravity'), [true, false]);
     assert.deepEqual(errors, []);
-    console.log('PASS: Model CLIs toggle, bot and fallback locked, on/off, refused, older server');
+    console.log('PASS: Model CLIs toggle, bot and fallback locked, on/off, refused');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

@@ -108,6 +108,4 @@ function searchOpen(): void {
   const open: HTMLElement = $('#search-open');
   open.onclick = () => { if (document.body.classList.contains('drawer')) setDrawer(false); searchOpen(); };
   window.ticoSearch = searchOpen;
-  const mobile: HTMLElement = $('#mobile-search');
-  mobile.onclick = searchOpen;
 })();

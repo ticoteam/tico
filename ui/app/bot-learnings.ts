@@ -58,7 +58,7 @@ async function botLearningsLoad(slug: string) {
   const button = $('#bot-learn');
   if (!button) return;
   let data: LearnPage;
-  try { data = await get<LearnPage>(`${learnApi(slug)}?include_documents=false`); } catch { return; }          // an older server has no history: no button
+  try { data = await get<LearnPage>(`${learnApi(slug)}?include_documents=false`); } catch { return; }          // a failed read: no button
   if (BOT?.slug !== slug || !button.isConnected) return;
   const docs: Record<string, string> = data.documents || {};
   if (!(data.updates || []).length && !Object.values(docs).some(t => String(t).trim()) &&
@@ -75,7 +75,7 @@ async function botLearningsLoad(slug: string) {
   };
 }
 
-// The bot's dream, or null: an older server has none, and a failed read shows the panel as it was.
+// The bot's dream, or null when there is none or the read failed (the panel shows as it was).
 async function dreamFetch(slug: string, fresh = false): Promise<BotDream | null> {
   try { return (await get<{dream?: BotDream | null}>(dreamApi(slug), {fresh}))?.dream || null; } catch { return null; }
 }
