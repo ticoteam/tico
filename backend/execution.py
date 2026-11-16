@@ -6451,9 +6451,8 @@ class Execution:
             "SELECT active_message.conversation_id FROM attempts active_attempt "
             "JOIN jobs active_job ON active_job.id=active_attempt.job_id "
             "JOIN messages active_message ON active_message.id=active_job.message_id "
-            "WHERE active_attempt.id=?) OR m.conversation_id=? OR ((m.kind='ask' "
-            "OR json_extract(m.refs,'$.needs_action')=1) AND m.wait_s>0 "
-            "AND m.sender_id LIKE 'bot:%')) ORDER BY m.rowid",
+            "WHERE active_attempt.id=?) OR m.conversation_id=? OR (json_extract(m.refs,'$.needs_action')=1 "
+            "AND m.wait_s>0 AND m.sender_id LIKE 'bot:%')) ORDER BY m.rowid",
             (attempt["bot_id"], claim_holds.REASON, H.now(), aid, task_room),
         ).fetchall()
         read_at = c.total_changes
@@ -6512,7 +6511,7 @@ class Execution:
                     or row["in_reply_to"] == origin["message_id"]
                     or refs.get("turn_id") == aid
                     or (task and task.get("request_id") and row["in_reply_to"] == task["request_id"])
-                    or row["kind"] in ("answer", "steer")
+                    or row["kind"] == "steer"
                     or refs.get("credential_saved")
                 )
                 if (
@@ -6778,7 +6777,7 @@ class Execution:
         if not carried and privacy.make_page_actor(c, actor, msg) == target:
             # The Assistant's answer belongs in the initiating person's private room, as its request does.
             return H._write_message(c, actor, target, text, conv, "say", refs, msg["id"], None, delivered_at=H.now())
-        to = target if not carried or H.is_human(target) or msg["kind"] == "ask" else None
+        to = target if not carried or H.is_human(target) else None
         v = threads.viewer(None, Identity(actor, "bot", attempt_id=aid))
         thread, under = conv, None
         if parent_id and text and str(text).strip() and str(target).startswith(("human:", "bot:")):
@@ -6977,9 +6976,9 @@ class Execution:
             # A reply the turn already sent (a tool message) is not posted again; the rule check's verdict on the final
             # text still applies (held, the run keeps only the note), so `posting` decides only the post.
             posting = not already and not same
-            if source["kind"] in ("say", "ask", "steer") or task:
+            if source["kind"] in ("say", "steer") or task:
                 target = source["sender_id"]
-                # A bot is answered only when it asked (a message flagged needs_action; an ask before step 6c), except
+                # A bot is answered only when it asked (a message flagged needs_action), except
                 # where the thread's wake rule chose to start this run for its message (a carrier): the loop guard,
                 # not this rule, bounds bots answering bots there. The reply itself asks nothing back. A bot's
                 # needs-action comment on a task only wakes the owner: the work on the task answers it, and posting
@@ -6989,7 +6988,6 @@ class Execution:
                 source_refs = source_refs if isinstance(source_refs, dict) else {}
                 replyable = (
                     not str(target).startswith("bot:")
-                    or source["kind"] == "ask"
                     or carried
                     or (bool(source_refs.get("needs_action")) and not source_refs.get("comment"))
                 )
@@ -7029,7 +7027,7 @@ class Execution:
                     refs = {
                         "turn_id": aid,
                         **({"task": task["id"]} if task else {}),
-                        **({"warnings": notices} if notices and msg["kind"] != "ask" else {}),
+                        **({"warnings": notices} if notices else {}),
                     }
                     refused = False
                     try:

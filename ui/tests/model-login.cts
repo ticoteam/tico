@@ -52,7 +52,7 @@ async function loginHosted(browser: import('playwright').Browser) {
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p === '/api/v2/operations') return json({machines: [box], services: []});
         if (p === '/api/v2/models') return json({models: [], harnesses});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [{runner_id: 'box', label: 'Server', profiles: []}], assignments: []});
         if (p === '/api/v2/computers/box/logins' && method === 'POST') {
           const body = req.postDataJSON(), id = `in${++seq}`; writes.push({p, body});
@@ -270,7 +270,7 @@ async function toKey(browser: import('playwright').Browser) {
         if (p === '/api/v2/needs-you') return json({items: []});
         if (p === '/api/v2/operations') return json({machines: [box], services: []});
         if (p === '/api/v2/models') return json({models: [], harnesses});
-        if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+        if (p === '/api/v2/settings/history') return json({changes: []});
         if (p === '/api/v2/subscriptions') return json({profiles_by_computer: [], assignments: []});
         const keys = p.match(/^\/api\/v2\/computers\/(\w+)\/keys$/);
         if (keys && method === 'GET') {

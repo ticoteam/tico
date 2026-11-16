@@ -2362,8 +2362,6 @@ def create_app(settings=None):
                     row = {**row, "goals": body.goals}
                 if body.notes is not None:
                     row = {**row, "notes": body.notes}
-                if body.notify_slack_task_done is not None:
-                    row = {**row, "notify_slack_task_done": body.notify_slack_task_done}
                 if login is not None:
                     row = {**row, "github": login}
                 if body.notify_slack_bot_messages is not None:
@@ -2402,7 +2400,6 @@ def create_app(settings=None):
                         "about": body.about is not None,
                         "goals": body.goals is not None,
                         "notes": body.notes is not None,
-                        "notify_slack_task_done": body.notify_slack_task_done,
                         "github": body.github is not None,
                         "notify_slack_bot_messages": body.notify_slack_bot_messages,
                         "update_draft": body.update_draft,
@@ -4304,7 +4301,7 @@ def create_app(settings=None):
             not msg
             or not str(msg["sender_id"]).startswith("human:")
             or msg["recipient_id"] != "bot:" + BOTOPS
-            or msg["kind"] not in ("say", "answer")
+            or msg["kind"] != "say"
         ):
             raise Problem("on_behalf_of", "Cite a message a person sent BotOps asking for this change", 403)
         refs = msg.get("refs") or {}
@@ -4413,7 +4410,7 @@ def create_app(settings=None):
         task = H.task(c, H.message_task_id(msg, conversation) or "")
         slack = refs.get("slack") if isinstance(refs.get("slack"), dict) else {}
         own_dm = slack.get("kind") == "im" and not slack.get("recorded_only")
-        if msg["recipient_id"] != who.actor or msg["kind"] not in ("say", "answer"):
+        if msg["recipient_id"] != who.actor or msg["kind"] != "say":
             why = "That message was not sent to you"
         elif refs.get("via") or refs.get("assistant"):
             why = "The Assistant wrote that message"
@@ -4668,7 +4665,7 @@ def create_app(settings=None):
             not msg
             or msg.get("deleted_at")
             or msg["recipient_id"] != "bot:" + BOTOPS
-            or msg["kind"] not in ("say", "answer")
+            or msg["kind"] != "say"
             or not H.is_bot(msg["sender_id"])
         ):
             return None
@@ -5230,7 +5227,7 @@ def create_app(settings=None):
         conv = H.conversation(c, msg["conversation_id"])
         tid = work_task_id(msg, conv)
         task = H.task(c, tid) if tid else None
-        target = msg["sender_id"] if msg["kind"] == "ask" else reply_target(msg, conv, task)
+        target = reply_target(msg, conv, task)
         refs = {"turn_id": replay["attempt"], **({"task": tid} if task else {})}
         # The completion's own destination check, as the run it came from: a private task or meeting the reply drew
         # on that its reader lost since the hold keeps it from going there.
@@ -5325,7 +5322,7 @@ def create_app(settings=None):
             conv = H.conversation(c, msg["conversation_id"])
             tid = work_task_id(msg, conv)
             task = H.task(c, tid) if tid else None
-            if not (msg["kind"] in ("say", "ask", "steer") or task):
+            if not (msg["kind"] in ("say", "steer") or task):
                 return None
             target = reply_target(msg, conv, task)
         bot = Identity("bot:" + row["bot_id"], "bot", attempt_id=aid)

@@ -184,15 +184,15 @@ def task_news_sql(m="m"):
 # A bot's posts in a task's own thread reach a person only for these reasons: an @mention, a reply to them, or
 # following the task (`counts_for_person`). Rows written for any other reason before followers did not count, and
 # still do not.
-BOT_TASK_KINDS = ("say", "notice", "ask")
+BOT_TASK_KINDS = ("say", "notice")
 BOT_TASK_REASONS = ("mention", "reply", "follower")
 
 
 def task_post_sql(m="m"):
-    """SQL: the messages row `m` is a bot's say, notice or ask in some task's own thread (the thread is a task's
+    """SQL: the messages row `m` is a bot's say or notice in some task's own thread (the thread is a task's
     conversation_id, which tasks_conversation indexes)."""
     return (
-        f"({m}.sender_id LIKE 'bot:%' AND {m}.kind IN ('say','notice','ask') "
+        f"({m}.sender_id LIKE 'bot:%' AND {m}.kind IN ('say','notice') "
         f"AND EXISTS (SELECT 1 FROM tasks t WHERE t.conversation_id={m}.conversation_id))"
     )
 
@@ -5241,12 +5241,9 @@ def task_comments(conn, task_id, *, actor=None):
     if actor is not None:
         privacy.prime_messages(conn, rows)
     for m in rows:
-        if message_task_id(m, conv) == task_id and m.get("kind") in ("say", "ask", "answer"):
+        if message_task_id(m, conv) == task_id and m.get("kind") == "say":
             if actor is not None and not privacy.message_readable(conn, actor, m, current=True):
                 continue
-            if m["kind"] == "ask" and m["refs"].get("questions"):
-                m["ask"] = {**{k: m["refs"].get(k) for k in ("questions", "who")}, "by": m["sender_id"]}
-                m["answers"] = review_answers(conn, m["id"], actor=actor)
             if m["refs"].get("answer"):
                 m["answer"] = m["refs"]["answer"]
             out.append(m)
@@ -7795,9 +7792,6 @@ def message_view(conn, row):
     if row:
         row = dict(row)
         row["refs"] = _json(row.get("refs"), {}) or {}
-        if row["kind"] == "ask" and row["refs"].get("questions"):
-            row["ask"] = {k: row["refs"].get(k) for k in ("questions", "who")}
-            row["answers"] = review_answers(conn, row["id"])
         if row["refs"].get("answer"):
             row["answer"] = row["refs"]["answer"]
     return row

@@ -288,92 +288,17 @@ def _a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_pa
     assert [row["id"] for row in past["changes"]] == [ids[2]] and past["changes"][0]["truncated"] is False
 
 
-def prepared_transitions(api, count):
-    """`count` prepared transitions of ops, newest first."""
-    stamp = H.now()
-    with api.app.state.store.transaction() as c:
-        for i in range(count):
-            c.execute(
-                "INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,"
-                "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (
-                    H.new_id(),
-                    "ops",
-                    "model",
-                    encode({"model": "fake-model"}),
-                    "human:ana",
-                    1,
-                    "prepared",
-                    H.shift(stamp, seconds=-i),
-                    stamp,
-                ),
-            )
-
-
-def _a_settings_history_first_page_with_transitions_stays_within_its_bytes(api):
-    # Three prepared changes, and a page of changes that fills what they leave.
-    # The 120 people who made the changes have long names: the page sends each name beside its id.
-    prepared_transitions(api, 3)
-    text = {"display_name": "Ops", "description": "A long description. " * 80}
-    with api.app.state.store.transaction() as c:
-        c.executemany(
-            "INSERT INTO humans(id,name,email,slack_id,teams) VALUES(?,?,?,?,?)",
-            [(f"person-{i:03d}", f"Person {i:03d} " + "with a long name " * 6, None, None, None) for i in range(120)],
-        )
-        c.executemany(
-            "INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
-            "via) VALUES(?,?,?,?,?,?,?,?,?)",
-            [
-                (
-                    H.new_id(),
-                    "ops",
-                    "definition",
-                    encode(text),
-                    encode(text),
-                    f"human:person-{i:03d}",
-                    None,
-                    H.shift(H.now(), seconds=-i),
-                    None,
-                )
-                for i in range(120)
-            ],
-        )
-    opened = api.get("/api/v2/settings/history?limit=100", headers=headers())
-    page = opened.json()
-    assert len(opened.content) <= 256 * KB
-    assert len(page["transitions"]) == 3 and page["transitions_truncated"] is False
-    assert len(page["changes"]) >= 40 and page["next_before"]
-
-
-def _a_settings_history_first_page_flags_the_transitions_past_its_limit(api):
-    # Four prepared changes on a page of three: the bytes hold them all, but the oldest is left out and flagged.
-    prepared_transitions(api, 4)
-    page = api.get("/api/v2/settings/history?limit=3", headers=headers()).json()
-    with api.app.state.store.read() as c:
-        newest = [row[0] for row in c.execute("SELECT id FROM bot_transitions ORDER BY created_at DESC")]
-    assert [row["id"] for row in page["transitions"]] == newest[:3] and page["transitions_truncated"] is True
-    page = api.get("/api/v2/settings/history?limit=4", headers=headers()).json()
-    assert len(page["transitions"]) == 4 and page["transitions_truncated"] is False
-
-
 def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave_out(api):
     setup_attempt(api)
 
     def clear():
         with api.app.state.store.transaction() as c:
-            for table in ("bot_transitions", "settings_changes"):
-                c.execute(f"DELETE FROM {table}")
+            c.execute("DELETE FROM settings_changes")
 
     for story in (
         _a_settings_history_page_is_byte_capped,
         _a_settings_history_page_counts_utf8_bytes_not_characters,
         _a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_passes_it,
-    ):
-        clear()
-        story(api)
-    for story in (
-        _a_settings_history_first_page_with_transitions_stays_within_its_bytes,
-        _a_settings_history_first_page_flags_the_transitions_past_its_limit,
     ):
         clear()
         story(api)

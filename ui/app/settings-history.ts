@@ -39,14 +39,6 @@ function settingsValue(field: string, value: SettingsValue) {
   return JSON.stringify(value);
 }
 
-interface SettingsTransition {
-  id: string;
-  bot: string;
-  kind: string;
-  state: string;
-  error?: string | null;
-}
-
 // A bot's setup changing, in words: only what changed ("Setting up → active", "Now reports to Ana").
 const historyStatus = (v: string | null | undefined) => { const w = statusWord(v); return w.charAt(0).toUpperCase() + w.slice(1); };
 function settingsDefinitionChange(before: SettingsValue, after: SettingsValue) {
@@ -277,8 +269,6 @@ interface SettingsChange {
 }
 interface SettingsHistoryData {
   changes: SettingsChange[];
-  transitions: SettingsTransition[];
-  transitions_truncated?: boolean | undefined;
   next_before?: string | null | undefined;
 }
 interface SettingsHistoryPage {
@@ -299,7 +289,7 @@ function settingsHistoryOlder(before: string, bot = ''): Promise<SettingsHistory
 // on its way is dropped when a later draw replaces this one, as a fresh first page after an undo does.
 function renderSettingsHistory(el = $('#set-history'), history: SettingsHistoryData = SETTINGS_DATA.history, older: (before: string) => Promise<SettingsHistoryPage> = settingsHistoryOlder) {
   if (!el) return;
-  const changes = history?.changes || [], transitions = history?.transitions || [];
+  const changes = history?.changes || [];
   const rows = changes.map(change => {
     const e = botRow(change.bot);
     const field = SETTINGS_FIELD_LABEL[change.field] || change.field;
@@ -324,7 +314,7 @@ function renderSettingsHistory(el = $('#set-history'), history: SettingsHistoryD
       try {
         const next = await older(history.next_before ?? '');
         if (el._settingsDrawn === drawn) renderSettingsHistory(el, {changes: [...changes, ...(next.changes || [])],
-          transitions, transitions_truncated: history.transitions_truncated, next_before: next.next_before}, older);
+          next_before: next.next_before}, older);
       } catch (error) { showOlder.disabled = false; toast(errorMessage(error, ''), true); }
       return;
     }

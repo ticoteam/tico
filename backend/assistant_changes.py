@@ -143,7 +143,7 @@ def describe(c, auth, who, kind, row, settings):
         undo, why = undoable(c, auth, who, kind, row, {}, settings)
     else:
         obj = f"message:{cid}"
-        what = "Answered a question" if row["kind"] == "answer" else "Sent a message"
+        what = "Sent a message"
         words = (row["body"] or "")[:WORDS]
         undo, why = False, "a message sent stays sent"
     out = {

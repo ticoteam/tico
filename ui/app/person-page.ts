@@ -140,9 +140,6 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
         ${personEditHTML('id="person-access-edit"', 'Edit access')}</header>
       <div class="muted" id="person-access-text"></div></section>
     ${edit ? `<section class="card" id="person-notify"><header><h2>Notifications</h2></header>
-      <label class="person-notify" title="A Slack DM when a task they asked for is finished or declined">
-        <input type="checkbox" role="switch" class="people-switch" id="person-notify-slack" ${p.notify_slack_task_done !== false ? 'checked' : ''}>
-        <span>Task results in Slack</span></label>
       <label class="person-notify" title="Bot messages to them are copied to their Tico DM in Slack. Conversations they start in Slack always answer there">
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-bots" ${p.notify_slack_bot_messages !== false ? 'checked' : ''}>
         <span>Bot messages in Slack</span></label>
@@ -178,7 +175,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
     const rest = $('#goal-rest'), open = rest.hidden;
     rest.hidden = !open; more.textContent = open ? 'less' : 'more'; more.setAttribute('aria-expanded', String(open));
   };
-  const notifySwitch = (id: string, key: 'notify_slack_task_done' | 'notify_slack_bot_messages' | 'update_draft' | 'email_digest') => {
+  const notifySwitch = (id: string, key: 'notify_slack_bot_messages' | 'update_draft' | 'email_digest') => {
     const box = $(id);
     if (box) box.onchange = async () => {
       const value = box.checked, status = $('#person-notify-status');
@@ -193,7 +190,6 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
       } finally { box.disabled = false; }
     };
   };
-  notifySwitch('#person-notify-slack', 'notify_slack_task_done');
   notifySwitch('#person-notify-bots', 'notify_slack_bot_messages');
   notifySwitch('#person-update-draft', 'update_draft');
   notifySwitch('#person-email-digest', 'email_digest');
