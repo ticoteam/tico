@@ -247,6 +247,73 @@ def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(
     assert get(api, 'runner-credential-migration', machine['token'])['bots'] == []
 
 
+def test_migration_shares_one_credential_per_value_by_grant(api):
+    setup(api)
+    from backend.credentials import FILE_MIGRATION
+
+    machine = runner(api)
+    for bot in ('ops', 'finance', 'cpo'):
+        assign(api, machine, bot)
+    ready(api, machine, ['ops', 'finance', 'cpo'])
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            'UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops', 'finance', 'cpo']), FILE_MIGRATION)
+        )
+
+    def migrate(bot, value):
+        item = {'env': 'QA_SHARED_KEY', 'value': value}
+        post(api, 'runner-credential-migration', {'bot': bot, 'credentials': [item]}, machine['token'])
+
+    def rows():
+        with api.app.state.store.read() as c:
+            return [
+                dict(r)
+                for r in c.execute("SELECT id,name,tool_id FROM credentials WHERE env='QA_SHARED_KEY' ORDER BY name")
+            ]
+
+    # Two bots with the same value: one credential named after its variable, two grants, one tool.
+    migrate('ops', 'fixture-shared-value-1')
+    migrate('finance', 'fixture-shared-value-1')
+    shared = rows()
+    assert [r['name'] for r in shared] == ['QA_SHARED_KEY'] and shared[0]['tool_id']
+    assert get(api, 'runner-credential-grants', machine['token'])['bots'] == {
+        'ops': ['QA_SHARED_KEY'],
+        'finance': ['QA_SHARED_KEY'],
+        'cpo': [],
+    }
+    with api.app.state.store.read() as c:
+        assert (
+            c.execute('SELECT count(*) FROM credential_grants WHERE credential_id=?', (shared[0]['id'],)).fetchone()[0]
+            == 2
+        )
+        assert c.execute('SELECT count(*) FROM tools').fetchone()[0] == 1
+        events = [
+            r[0] for r in c.execute("SELECT detail FROM events WHERE action='credential.migrated' ORDER BY rowid")
+        ]
+    assert json.loads(events[1])['shared'] is True and all('fixture-shared' not in e for e in events)
+    # A different value is its own credential; the bot's name tells it apart from the first.
+    migrate('cpo', 'fixture-other-value-2')
+    assert [r['name'] for r in rows()] == ['QA_SHARED_KEY', 'QA_SHARED_KEY (cpo)']
+
+    # A revoked grant still wins: the same value migrated again never gives the bot the shared credential back.
+    row = next(r for r in get(api, 'credentials')['credentials'] if r['id'] == shared[0]['id'])
+    grant = next(g for g in row['grants'] if g['subject'] == 'bot:finance')
+    post(api, f"credentials/{row['id']}/grants/{grant['id']}/revoke", {})
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['finance']), FILE_MIGRATION))
+    migrate('finance', 'fixture-shared-value-1')
+    assert get(api, 'runner-credential-grants', machine['token'])['bots']['finance'] == []
+    assert len(rows()) == 2
+
+    # A key of an Only listed tool is never shared this way: the value gets a credential of its own.
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE tools SET audience=? WHERE id=?', (json.dumps(['human:ana']), shared[0]['tool_id']))
+        c.execute("DELETE FROM credential_grants WHERE subject='bot:cpo'")
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['cpo']), FILE_MIGRATION))
+    migrate('cpo', 'fixture-shared-value-1')
+    assert len(rows()) == 3
+
+
 def test_a_reserved_variable_name_is_refused_and_an_old_one_is_named_in_health(api):
     setup(api)
     refused = post(
