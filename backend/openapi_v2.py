@@ -1280,8 +1280,8 @@ STABLE = [
         "The owner's Strategy setup questions for Flow, read from the draft with no model: `questions` (who we serve, "
         "what we sell, one active bet, what we won't do), each only while that part of the draft is empty or still "
         "Unconfirmed (the bet only while none is active), and `more` (the guide's other sections, for Keep going). "
-        "Each has its `key`, the section's `title`, the guide's `question`, a `suggest`ed answer (the draft's "
-        "unconfirmed text, or the top proposed bet, `bet_id`), its `max` (the longest answer it holds whole), the draft's "
+        "Each has its `key`, the section's `title`, Flow's `question` for that part, its `choices` (the draft's "
+        "unconfirmed text, or up to three proposed bets, top first, each with its `bet_id`), its `max` (the longest answer it holds whole), the draft's "
         "`revision`, and `titles`, every section's "
         "name by key (the bet's is the guide's own word). Empty for anyone but the owner. Answers are saved through the Strategy routes (PUT /api/v2/strategy/draft, POST /api/v2/strategy/bets)",
         "FlowQuestions",
@@ -3912,8 +3912,7 @@ SCHEMAS = {
             "key": {"type": "string", "enum": ["serve", "sell", "bet", "not", "proof", "now", "know", "how"]},
             "title": "s",
             "question": "s",
-            "suggest": "s",
-            "bet_id": {"type": ["string", "null"]},
+            "choices": items(obj({"text": "s", "bet_id": {"type": ["string", "null"]}})),
             "max": "i",
         }
     ),

@@ -4,7 +4,7 @@
    Needs you's count, the Flow tab and its mark are not changed by them.
    The questions are read from the draft (GET /v2/flow/questions): who we serve, what we sell, one active bet, what we
    won't do, each while it is empty or still Unconfirmed; Keep going asks the guide's other sections. A card is the
-   question, the suggested answer as its first choice (the draft's own unconfirmed text, or a proposed bet), a box, and
+   question, the suggested answers first (the draft's own unconfirmed text, or up to three proposed bets), a box, and
    Skip, kept per browser. The box holds what the question can keep whole (its `max`; a count shows near it), so no
    word is ever cut. The mic focuses the box, so the phone keyboard's dictation types into it. An answer over
    DEC_Q_RAMBLE characters goes to POST /v2/flow/ramble, which splits it into lines per section in the owner's words
@@ -17,6 +17,8 @@
    (clamped, a tap shows it whole), the earlier edits made anywhere included, and under each the lines Flow saved there:
    ✕ takes one out again (a draft save) only where Flow put it, else it is left alone and its ✕ goes. Publish sends the
    revision on screen: if the draft changed since, nothing is published and the screen is read again for a new tap.
+   Parts still marked Unconfirmed are named above Publish (it does not stop on them; each opens its question). Each
+   screen has one row of actions, the forward one (Send, Save, Publish) at the far right.
    Publish shows whenever the draft differs from what is published, after an earlier Publish too. Keep going reads the
    questions again, so a part an answer already filled is not asked. No Undo after Publish.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -173,13 +175,14 @@ async function decideQSave(lines: DecQLine[]) {
     lines.splice(lines.indexOf(l), 1);
   }
 }
-/** The suggested answer, tapped: the drafted text kept as the owner's (its marker gone), or the proposed bet made active. */
-async function decideQTake(st: DecState, q: DecQuestion) {
+/** A suggested answer, tapped: the drafted text kept as the owner's (its marker gone), or that proposed bet made active. */
+async function decideQTake(st: DecState, q: DecQuestion, pick: DecQuestion['choices'][number]) {
   await decideQRun(st, q, async () => {
-    if (q.key === 'bet' && q.bet_id) {
-      await decideQWrite((_data, revision) => post(`/v2/strategy/bets/${encodeURIComponent(q.bet_id || '')}`, {status: 'active', revision}));
-      DEC_Q.saved.push({section: 'bet', text: q.suggest, bet: q.bet_id, made: false});
-    } else await decideQSave([{section: q.key, text: q.suggest}]);
+    const bet = pick.bet_id;
+    if (q.key === 'bet' && bet) {
+      await decideQWrite((_data, revision) => post(`/v2/strategy/bets/${encodeURIComponent(bet)}`, {status: 'active', revision}));
+      DEC_Q.saved.push({section: 'bet', text: pick.text, bet, made: false});
+    } else await decideQSave([{section: q.key, text: pick.text}]);
     return [q.key];
   });
 }
@@ -348,12 +351,14 @@ function decideQCount(box: HTMLTextAreaElement) {
 }
 function decideQAskHTML(q: DecQuestion): string {
   const busy = DEC_Q.busy ? ' disabled' : '';
-  const take = q.suggest ? `<div class="dc-choice-list"><button type="button" class="dc-choice dc-rec" data-dc="q-take"${busy}><span class="dc-choice-name dc-q-sug">${esc(q.suggest)}</span></button></div>` : '';
+  // The suggested answers, the top one first and marked: drafted text, or up to three proposed bets.
+  const take = q.choices.length ? `<div class="dc-choice-list">${q.choices.map((c, i) => `<button type="button" class="dc-choice${i ? '' : ' dc-rec'}" data-dc="q-take" data-q-c="${i}"${busy}>`
+    + `<span class="dc-choice-name dc-q-sug">${esc(c.text)}</span></button>`).join('')}</div>` : '';
   return `<div class="dc-qs" data-q="${esc(q.key)}"><h3 class="dc-q">${esc(q.question)}</h3>${take}`
     + `<div class="dc-note-row"><textarea id="dc-q-say" data-dc-grow rows="${decideNoteRows()}" maxlength="${q.max}" aria-label="Answer" placeholder="Answer"${busy}></textarea>`
     + '<span class="dc-q-count" aria-live="polite" hidden></span></div>'
     + (DEC_Q.error ? `<p class="err" role="alert">${esc(DEC_Q.error)}</p>` : '')
-    + `<div class="dc-acts">${decideBtn('q-send', 'Send', true, ` data-dc-needs="#dc-q-say" disabled`)}<button type="button" class="linkish dc-skip" data-dc="q-skip"${busy}>Skip</button></div></div>`;
+    + `<div class="dc-acts dc-q-acts"><button type="button" class="linkish dc-skip" data-dc="q-skip"${busy}>Skip</button>${decideBtn('q-send', 'Send', true, ` data-dc-needs="#dc-q-say" disabled`)}</div></div>`;
 }
 /** A long answer's lines, each under its section's name (what its limit cut, struck through: not kept); ✕ drops one
     (↩ keeps it after all), then Save. */
@@ -364,7 +369,7 @@ function decideQStrikeHTML(): string {
     + `<button type="button" class="dc-icon" data-dc="q-drop" data-q-i="${i}" aria-label="${l.off ? 'Keep' : 'Drop'}" title="${l.off ? 'Keep' : 'Drop'}"${busy}>${l.off ? DEC_UNDO_ICON : '✕'}</button></li>`).join('');
   return `<div class="dc-qs" data-q-strike><ul class="dc-qls">${rows}</ul>`
     + (DEC_Q.error ? `<p class="err" role="alert">${esc(DEC_Q.error)}</p>` : '')
-    + `<div class="dc-acts">${decideBtn('q-save', 'Save', true, on && !DEC_Q.busy ? '' : ' disabled')}<button type="button" class="linkish dc-skip" data-dc="q-skip"${busy}>Skip</button></div></div>`;
+    + `<div class="dc-acts dc-q-acts"><button type="button" class="linkish dc-skip" data-dc="q-skip"${busy}>Skip</button>${decideBtn('q-save', 'Save', true, on && !DEC_Q.busy ? '' : ' disabled')}</div></div>`;
 }
 /** The end of a part: each part Publish would change with its text (clamped; a tap shows it whole), and under it the
     lines Flow saved there that ✕ can still take out; once nothing differs from what is published, what was saved. Then
@@ -392,18 +397,24 @@ function decideQEndHTML(): string {
   }).join('');
   const said = data && !changes.length && DEC_Q.published ? `<p class="dc-q-said">Published v${DEC_Q.published}</p>`
     : DEC_Q.saved.length ? '<p class="dc-q-said">Saved to your draft. Bots use it after you publish.</p>' : '';
-  let publish = '';
-  if (!data) publish = skelRows(1);
+  // What stops Publish, and the parts still drafted (they would go out as drafted): each opens its question.
+  let notes = '', publish = '';
+  if (!data) notes = skelRows(1);
   else {
     const noBet = !(data.bets || []).some(b => b.status === 'active'), noNot = !decideQText(data.draft?.sections?.['not']);
-    const fix = (key: string, words: string) => `<button type="button" class="ghost dc-q-fix" data-dc="q-fix" data-q-key="${key}"${busy}>${esc(words)}</button>`;
-    publish = noBet || noNot
-      ? `<div class="dc-q-pub">${noBet ? fix('bet', `Needs an active ${(data.label_one || 'Bet').toLowerCase()}`) : ''}${noNot ? fix('not', "Needs What we won't do") : ''}</div>`
-      : changes.length ? `<div class="dc-q-pub">${decideBtn('q-publish', 'Publish', true, busy)}</div>` : '';
+    const asked = new Set([...DEC_Q.basics, ...DEC_Q.more].map(x => x.key));
+    const fix = (key: string, words: string) => asked.has(key as DecQKey)
+      ? `<button type="button" class="ghost dc-q-fix" data-dc="q-fix" data-q-key="${key}"${busy}>${esc(words)}</button>` : `<span class="dc-q-fix">${esc(words)}</span>`;
+    const drafted = Object.keys(DEC_Q.titles).filter(k => k !== 'bet' && DEC_Q_MARK.test(decideQBody(data, k)));
+    const blocked = noBet || noNot;
+    notes = (blocked ? `<div class="dc-q-pub" data-q-needs>${noBet ? fix('bet', `Needs an active ${(data.label_one || 'Bet').toLowerCase()}`) : ''}${noNot ? fix('not', "Needs What we won't do") : ''}</div>` : '')
+      + (drafted.length ? `<div class="dc-q-pub" data-q-drafted>${drafted.map(k => fix(k, `Unconfirmed: ${decideQTitle(k)}`)).join('')}</div>` : '');
+    publish = !blocked && changes.length ? decideBtn('q-publish', 'Publish', true, busy) : '';
   }
-  return `<div class="dc-qs dc-qend" data-q-end>${flowMarkHTML(32)}${said}<div class="dc-qgs" aria-label="What Publish changes">${list}</div>${publish}`
+  // One row: Keep going and Done, then the forward action, Publish, at the far right.
+  return `<div class="dc-qs dc-qend" data-q-end>${flowMarkHTML(32)}${said}<div class="dc-qgs" aria-label="What Publish changes">${list}</div>${notes}`
     + (DEC_Q.error ? `<p class="err" role="alert">${esc(DEC_Q.error)}</p>` : '')
-    + `<div class="dc-acts">${decideBtn('q-more', 'Keep going', false, busy)}${decideBtn('q-done', 'Done', false, busy)}</div></div>`;
+    + `<div class="dc-acts dc-q-acts">${decideBtn('q-more', 'Keep going', false, busy)}${decideBtn('q-done', 'Done', false, busy)}${publish}</div></div>`;
 }
 /** The questions' screen: the right side alone, the thing side empty (decide.css .dc-empty). */
 function decideQPaint(st: DecState) {
@@ -428,7 +439,7 @@ async function decideQClick(st: DecState, what: string, b: HTMLElement) {
   // One press, one call: nothing else while a save, a split or a read runs.
   if (DEC_Q.busy) return;
   switch (what) {
-    case 'q-take': if (q && DEC_Q.view === 'ask') await decideQTake(st, q); return;
+    case 'q-take': { const pick = q?.choices[Number(b.dataset.qC)]; if (q && pick && DEC_Q.view === 'ask') await decideQTake(st, q, pick); return; }
     case 'q-send': if (q && DEC_Q.view === 'ask') await decideQSend(st, q); return;
     case 'q-skip':
       if (q && DEC_Q.view === 'ask') decideQSkip(q.key);
@@ -440,8 +451,8 @@ async function decideQClick(st: DecState, what: string, b: HTMLElement) {
     case 'q-unsave': await decideQUnsave(st, i); return;
     case 'q-publish': await decideQPublish(st); return;
     case 'q-fix': {
-      // What stops Publish: its question again, here.
-      const key = b.dataset.qKey || '', again = DEC_Q.basics.find(x => x.key === key);
+      // What stops Publish, or a part still drafted: its question again, here.
+      const key = b.dataset.qKey || '', again = [...DEC_Q.basics, ...DEC_Q.more].find(x => x.key === key);
       if (again) { DEC_Q.queue = [again]; decideQNext(st); }
       return;
     }

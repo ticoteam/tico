@@ -6,9 +6,11 @@ the Strategy draft, read by plain code, and the one model call that splits a lon
 what we won't do (BASICS, what "set up enough" means, and what Publish needs besides who and what), each asked only
 while that part of the DRAFT is empty or still starts with strategy_setup's Unconfirmed marker; the bet only while no
 bet is active. `more` is the guide's other sections (proof, why now, what we know, how we sell), asked when the owner
-taps Keep going. A question's words are the guide's `ask` for that section (backend/strategy_guides/default.yaml, the
-first in guide order); its suggested answer is the draft's own unconfirmed text, or, for the bet, the top proposed bet
-(tapping it makes that bet active). The guide's `claim` has blanks a model would fill, so it is never offered as is.
+taps Keep going. A question's words are Flow's own for that part (ASKS: one short sentence each, asking what the part
+holds; the guide's questions are the Strategy Owner's interview, several per section, and the first of them is not
+always the part's question); its `choices` are the draft's own unconfirmed text, or, for the bet, up to BET_CHOICES
+proposed bets, top first (tapping one makes that bet active). The guide's `claim` has blanks a model would fill, so it
+is never offered as is.
 Anyone but the owner (goal_routes.company_editor) gets no questions. The page saves every answer itself, through the
 Strategy routes the owner already has (PUT /strategy/draft, POST /strategy/bets), with the draft's revision; nothing
 here writes the strategy.
@@ -64,6 +66,7 @@ DAILY_MAX = 30  # ramble calls per person per day (UTC)
 DEADLINE = 40  # seconds for the one call
 ACTION = "flow.ramble"  # the audit row each call leaves, with no detail: what DAILY_MAX counts
 LABEL = "flow-ramble"  # the spend row's label (`judge.spend`)
+BET_CHOICES = 3  # proposed bets offered on the bet question
 OWN_WORDS = 0.8  # share of a line's words that must be the owner's own, or the line is dropped
 # strategy_setup.UNCONFIRMED at the head of a section, the line after it included.
 MARKER = re.compile(r"\A\s*_Unconfirmed: drafted from [^\n]*?\._[ \t]*(?:\n+|\Z)")
@@ -80,6 +83,19 @@ SYSTEM = (
 
 
 # ---- the questions ----------------------------------------------------------------------------------------------
+# Flow's question for each part: one sentence, ending in "?", short enough for two lines on a phone.
+ASKS: dict[str, str] = {
+    "serve": "Which customers do you serve first, the ones who need this most?",
+    "sell": "What do you sell, and what does a customer pay for it?",
+    BET: "What is the one bet you're making now that could turn out wrong?",
+    "not": "What won't you do, even when a good customer asks for it?",
+    "proof": "How do you know customers want it: who uses it, and how often?",
+    "now": "What changed recently that makes this possible, or needed, now?",
+    "know": "What do you know about this market that your competitors don't?",
+    "how": "Where do your next 100 customers come from?",
+}
+
+
 def unconfirmed(text: str) -> str | None:
     """The drafted text under the Unconfirmed marker, or None when the section does not start with it."""
     found = MARKER.match(text or "")
@@ -96,16 +112,6 @@ def titles(gid: str) -> dict[str, str]:
     return {**cast(dict[str, str], S.TITLES), BET: str(S.guide(gid)["bet_label"])}
 
 
-def _asks(gid: str) -> dict[str, str]:
-    """The guide's open question for each key, the first in guide order (its `bets` section is the bet)."""
-    out: dict[str, str] = {}
-    for q in cast(list[Row], S.guide(gid)["questions"]):
-        key = BET if q.get("section") == "bets" else str(q.get("section") or "")
-        if key in KEYS and key not in out and q.get("ask"):
-            out[key] = str(q["ask"])
-    return out
-
-
 def questions(c: Any, who: Any) -> Row:
     """GET /flow/questions: the owner's open basics and the rest, from the draft as it is, and each section's name (the
     end screen's headings). Empty for anyone else."""
@@ -114,30 +120,22 @@ def questions(c: Any, who: Any) -> Row:
     row = cast(Row, S.draft(c))
     sections = cast(Row, row["sections"])
     gid = str(row.get("guide") or S.DEFAULT_GUIDE)
-    asks, names = _asks(gid), titles(gid)
+    names = titles(gid)
     out: dict[str, list[Row]] = {"questions": [], "more": []}
     for key in KEYS:
-        if key not in asks:
-            continue
-        item: Row = {
-            "key": key,
-            "title": names[key],
-            "question": asks[key],
-            "suggest": "",
-            "bet_id": None,
-            "max": answer_max(key),
-        }
+        choices: list[Row] = []
         if key == BET:
             if S.bets(c, "active"):
                 continue
-            proposed = cast(list[Row], S.bets(c, "proposed"))
-            if proposed:
-                item.update(suggest=str(proposed[0]["statement"]), bet_id=proposed[0]["id"])
+            proposed = cast(list[Row], S.bets(c, "proposed"))[:BET_CHOICES]
+            choices = [{"text": str(b["statement"]), "bet_id": str(b["id"])} for b in proposed]
         else:
             body = str(sections.get(key) or "")
             if not open_section(body):
                 continue
-            item["suggest"] = unconfirmed(body) or ""
+            drafted = unconfirmed(body)
+            choices = [{"text": drafted, "bet_id": None}] if drafted else []
+        item: Row = {"key": key, "title": names[key], "question": ASKS[key], "choices": choices, "max": answer_max(key)}
         out["questions" if key in BASICS else "more"].append(item)
     return {**out, "revision": row["revision"], "titles": {k: names[k] for k in KEYS}}
 

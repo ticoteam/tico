@@ -4,13 +4,16 @@ import type {Page} from 'playwright';
 // - after the owner's asks the questions come, as a card of their own: the suggested answer first, a box, Skip;
 // - tapping the suggestion saves it to the draft with the draft's revision (a drafted section loses its marker; a
 //   proposed bet is made active); a 409 is read again and sent again, once;
+// - at phone width each screen has one row of actions, the forward one (Send, Save, Publish) at the far right and in
+//   view, every control at least 44x44, nothing wider than the screen; the bet offers up to three proposed bets;
 // - the box holds what the question keeps whole, a count showing near it; Send makes one call however often pressed;
 // - a long answer is split into lines under their sections' names, what a limit cut struck through; ✕ drops one, one
 //   Save sends the rest;
 // - the end screen shows each part Publish changes with its text, edits made elsewhere included; ✕ takes a line out
 //   again (a draft save) only where Flow put it, and leaves one edited since; Publish sends the revision on screen, so
 //   a draft changed since is read again for a second tap, never published unseen; after Publish, Keep going reads the
-//   questions again (a part filled by a long answer is not asked) and Publish comes back for what is new;
+//   questions again (a part filled by a long answer is not asked) and Publish comes back for what is new; parts still
+//   marked Unconfirmed are named above Publish, each opening its question;
 // - opened from the Strategy page (#/decide?setup=strategy) the questions come first, an ask waiting after them; with
 //   Publish refused the end screen says what is missing instead; Skip is kept in this browser;
 // - anyone but the owner sees none of it, and nothing is read for them.
@@ -80,11 +83,12 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       const q = (key: Key): Json[] => {
         if (key === 'bet') {
           if (bets.some(b => b.status === 'active')) return [];
-          const top = bets.find(b => b.status === 'proposed');
-          return [{key, title: TITLE[key], question: ASK[key], suggest: top?.statement || '', bet_id: top?.id || null, max: MAX.bet}];
+          const top = bets.filter(b => b.status === 'proposed').slice(0, 3).map(b => ({text: b.statement, bet_id: b.id}));
+          return [{key, title: TITLE[key], question: ASK[key], choices: top, max: MAX.bet}];
         }
         if (!open(key)) return [];
-        return [{key, title: TITLE[key], question: ASK[key], suggest: (sections[key] || '').replace(MARK, ''), bet_id: null, max: MAX.section}];
+        const drafted = (sections[key] || '').startsWith(MARK) ? (sections[key] || '').replace(MARK, '') : '';
+        return [{key, title: TITLE[key], question: ASK[key], choices: drafted ? [{text: drafted, bet_id: null}] : [], max: MAX.section}];
       };
       return {questions: (['serve', 'sell', 'bet', 'not'] as Key[]).flatMap(q), more: (['proof', 'now', 'know', 'how'] as Key[]).flatMap(q), revision, titles: TITLE};
     };
@@ -144,7 +148,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
         }
         if (p === '/api/v2/strategy/publish') {
           if (stale(body)) return conflict();
-          n++; current = {...draft(), n, bets: bets.filter(b => b.status === 'active')}; revision++;
+          // A version keeps every bet not retired (strategy.publish).
+          n++; current = {...draft(), n, bets: bets.filter(b => b.status !== 'retired').map(b => ({...b}))}; revision++;
           return json({...current});
         }
         return json(unrouted(p));
@@ -159,10 +164,37 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       await page.screenshot({path: path.join(shots, `${name}.png`)});
     };
     const writes = () => sent.filter(s => s.path.startsWith('/api/v2/strategy'));
+    // At phone width: one row of actions, the forward one (if any) furthest right and fully in view, uncovered; every
+    // control on the screen at least 44x44; nothing wider than the screen.
+    const layout = async (page: Page, what: string) => {
+      const got = await page.evaluate(() => {
+        const row = document.querySelector<HTMLElement>('#need-card .dc-qs .dc-q-acts')!;
+        const shown = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>('button')].filter(b => b.offsetParent);
+        const rects = shown(row).map(b => ({dc: b.dataset['dc'] || '', r: b.getBoundingClientRect()}));
+        const right = rects.reduce((a, b) => b.r.right > a.r.right ? b : a);
+        const main = row.querySelector<HTMLElement>('.primary'), m = main?.getBoundingClientRect();
+        const hit = m ? document.elementFromPoint(m.left + m.width / 2, m.top + m.height / 2) : null;
+        return {
+          rows: new Set(rects.map(x => Math.round(x.r.top))).size, right: right.dc, main: main?.dataset['dc'] || '',
+          seen: !m || (m.top >= 0 && m.bottom <= innerHeight && m.left >= 0 && m.right <= innerWidth && !!hit && row.contains(hit)),
+          small: shown(document.querySelector('#need-card .dc-qs')!).filter(b => { const r = b.getBoundingClientRect(); return r.width < 44 || r.height < 44; })
+            .map(b => b.dataset['dc'] || b.textContent),
+          wide: document.documentElement.scrollWidth,
+        };
+      });
+      assert.equal(got.rows, 1, `${what}: one row of actions`);
+      if (got.main) assert.equal(got.right, got.main, `${what}: the forward action at the far right`);
+      assert.equal(got.seen, true, `${what}: the forward action in view, nothing over it`);
+      assert.deepEqual(got.small, [], `${what}: every control at least 44x44`);
+      assert.ok(got.wide <= 390, `${what}: nothing wider than the screen (${got.wide})`);
+      return got.main;
+    };
 
     // ---- A phone: an ask first, then the questions; each kind of save; the end screen and Publish.
     {
-      reset({serve: MARK + DRAFTED, know: KNOW}, [{id: 'b1', statement: PROPOSED, status: 'proposed', rank: 1}]);
+      reset({serve: MARK + DRAFTED, know: KNOW, how: MARK + 'Referrals.'}, [{id: 'b1', statement: PROPOSED, status: 'proposed', rank: 1},
+        {id: 'b2', statement: 'Landlords pay per unit', status: 'proposed', rank: 2}, {id: 'b3', statement: 'Portals lose to texts', status: 'proposed', rank: 3},
+        {id: 'b4', statement: 'Rent apps consolidate', status: 'proposed', rank: 4}]);
       needs = [ask()];
       const page = await start(true, '#/updates');
       const d = page.locator('#need-card');
@@ -185,6 +217,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       await d.locator('.dc-mic').tap();
       assert.equal(await page.evaluate(() => document.activeElement?.id), 'dc-q-say');
       assert.equal(await d.locator('.dc-wave').isVisible(), false, 'no voice mode');
+      assert.equal(await layout(page, 'question'), 'q-send');
       await shot(page, 'question-card');
 
       // The suggestion tapped: the drafted section is the owner's now, sent with the revision.
@@ -203,9 +236,10 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       assert.deepEqual(sells.map(s => s.body['sections']), [{sell: SELL}, {sell: SELL}]);
       assert.equal(sections['sell'], SELL);
 
-      // The bet: the proposed one offered, tapped, made active.
-      assert.equal(await d.locator('.dc-qs[data-q="bet"] .dc-choice').textContent(), PROPOSED);
-      await d.locator('.dc-qs[data-q="bet"] .dc-choice').tap();
+      // The bet: the top three proposed offered, the top one first and marked; tapped, made active.
+      assert.deepEqual(await d.locator('.dc-qs[data-q="bet"] .dc-choice').allTextContents(), [PROPOSED, 'Landlords pay per unit', 'Portals lose to texts']);
+      assert.equal(await d.locator('.dc-qs[data-q="bet"] .dc-choice.dc-rec').textContent(), PROPOSED);
+      await d.locator('.dc-qs[data-q="bet"] .dc-choice').first().tap();
       await d.locator('.dc-qs[data-q="not"]').waitFor();
       assert.deepEqual(writes().at(-1), {method: 'POST', path: '/api/v2/strategy/bets/b1', body: {status: 'active', revision: 4}});
 
@@ -235,6 +269,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       assert.deepEqual(await d.locator('.dc-ql .tx del[aria-label="Not kept"]').allTextContents(), [LINES[1]!.left]);
       await d.locator('.dc-ql').nth(2).locator('[data-dc="q-drop"]').tap();
       assert.equal(await d.locator('.dc-ql.off').count(), 1);
+      assert.equal(await layout(page, 'strike'), 'q-save');
       await shot(page, 'strike-screen');
       const before = writes().length;
       await d.locator('[data-dc="q-save"]').tap();
@@ -245,15 +280,19 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       const appended = `${KNOW}\n\n${LINES[3]!.text}`;
       assert.deepEqual(writes().slice(before).map(s => s.body),
         [{revision: 5, sections: {not: LINES[0]!.text, proof: LINES[1]!.text, know: appended}}], 'one save');
-      assert.equal(sections['how'], undefined, 'the dropped line is not saved');
+      assert.equal(sections['how'], MARK + 'Referrals.', 'the dropped line is not saved');
       assert.equal(await end.locator('.dc-q-said').textContent(), 'Saved to your draft. Bots use it after you publish.');
       const groups = async () => end.locator('.dc-qg').evaluateAll(gs => gs.map(g => [g.querySelector('h4')?.textContent,
         g.querySelector('.dc-qt')?.textContent ?? null, [...g.querySelectorAll('li>span')].map(x => x.textContent)]));
       assert.deepEqual(await groups(), [
         [TITLE.serve, DRAFTED, []], [TITLE.sell, SELL, []], [TITLE.not, LINES[0]!.text, []], [TITLE.proof, LINES[1]!.text, []],
-        [TITLE.know, appended, [LINES[3]!.text]], ['Bets', PROPOSED, []],
+        [TITLE.know, appended, [LINES[3]!.text]], [TITLE.how, (MARK + 'Referrals.').trim(), []], ['Bets', 'Small landlords will trust a bot with tenant messages\nLandlords pay per unit (proposed)\nPortals lose to texts (proposed)\nRent apps consolidate (proposed)', [PROPOSED]],
       ], 'a part that is just Flow\'s line carries its ✕; else Flow\'s lines are listed under the text');
       assert.equal(await end.locator('.dc-qg li [data-dc="q-unsave"]').count(), 6);
+      // A part still drafted is named above Publish (it would go out as drafted); Publish is not stopped by it.
+      assert.deepEqual(await end.locator('[data-q-drafted] .dc-q-fix').allTextContents(), [`Unconfirmed: ${TITLE.how}`]);
+      assert.equal(await layout(page, 'end'), 'q-publish');
+      assert.deepEqual(await end.locator('.dc-q-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('data-dc'))), ['q-more', 'q-done', 'q-publish']);
       // A long text is clamped; a tap shows it whole.
       const know = end.locator('.dc-qg', {hasText: TITLE.know}).locator('.dc-qt');
       await know.click();
@@ -288,10 +327,11 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       assert.equal(await end.locator('[data-dc="q-publish"]').count(), 0, 'nothing left to publish');
       assert.equal(await d.locator('[data-dc="undo"][aria-label*="ublish"]').count(), 0, 'no Undo for Publish');
 
-      // Keep going reads the questions again: proof, know and now are filled now, so only how is asked.
+      // Keep going reads the questions again: proof, know and now are filled now, so only how (still drafted) is asked.
       const read = reads.length;
       await end.locator('[data-dc="q-more"]').tap();
       await d.locator('.dc-qs[data-q="how"]').waitFor();
+      assert.equal(await d.locator('.dc-qs[data-q="how"] .dc-choice').textContent(), 'Referrals.');
       assert.equal(reads.length, read + 1);
       await d.locator('#dc-q-say').fill(HOW);
       await d.locator('[data-dc="q-send"]').tap();
@@ -301,6 +341,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       assert.deepEqual(await end.locator('.dc-qg', {has: page.locator('[data-dc="q-unsave"]')}).locator('h4').allTextContents(), [TITLE.how]);
       await end.locator('[data-dc="q-publish"]').tap();
       await end.locator('.dc-q-said', {hasText: 'Published v2'}).waitFor();
+      assert.equal(await end.locator('[data-q-drafted]').count(), 0, 'nothing still drafted');
       assert.deepEqual(writes().at(-1), {method: 'POST', path: '/api/v2/strategy/publish', body: {note: '', revision: 11}});
       await end.locator('[data-dc="q-done"]').tap();
       await d.waitFor({state: 'hidden'});
@@ -309,7 +350,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
 
     // ---- From the Strategy page: the questions first, an ask after them; Publish refused says what is missing; Skip kept.
     {
-      reset({}, []);
+      reset({know: MARK + KNOW}, []);
       needs = [ask()];
       const page = await start(false, '#/decide?setup=strategy');
       const d = page.locator('#need-card');
@@ -322,7 +363,12 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       }
       const end = d.locator('[data-q-end]');
       await end.locator('.dc-q-fix').first().waitFor();
-      assert.deepEqual(await end.locator('.dc-q-fix').allTextContents(), ['Needs an active bet', "Needs What we won't do"]);
+      assert.deepEqual(await end.locator('[data-q-needs] .dc-q-fix').allTextContents(), ['Needs an active bet', "Needs What we won't do"]);
+      // A part still drafted is named too, and opens its question, its drafted text offered.
+      await end.locator('[data-q-drafted] .dc-q-fix', {hasText: TITLE.know}).click();
+      await d.locator('.dc-qs[data-q="know"] .dc-choice', {hasText: KNOW}).waitFor();
+      await d.locator('[data-dc="q-skip"]').click();
+      await end.locator('[data-q-drafted]').waitFor();
       assert.equal(await end.locator('[data-dc="q-publish"]').count(), 0, 'no Publish while it would be refused');
       assert.equal(await end.locator('.dc-q-said').count(), 0, 'nothing saved, nothing said');
       // What is missing is its question again.

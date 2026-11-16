@@ -63,17 +63,16 @@ def events(api, action):
         return [dict(r) for r in c.execute("SELECT actor, target, detail FROM events WHERE action=?", (action,))]
 
 
-def test_the_owners_basics_come_from_the_guide_in_order_and_others_get_none(api):
+def test_the_owners_basics_come_in_order_and_others_get_none(api):
     found = get(api, "flow/questions")
     assert [q["key"] for q in found["questions"]] == ["serve", "sell", "bet", "not"]
     assert [q["key"] for q in found["more"]] == ["proof", "now", "know", "how"]
     asks = {q["key"]: q for q in found["questions"] + found["more"]}
-    guide = {q["key"]: q["ask"] for q in S.guide("default")["questions"]}
-    # The first question in guide order for each section: "make" for what we sell, "acute" for who we serve.
-    assert asks["sell"]["question"] == guide["make"] and asks["serve"]["question"] == guide["acute"]
-    assert asks["bet"]["question"] == guide["contrarian"] and asks["not"]["question"] == guide["wont"]
+    # Flow's own words for each part: who we serve asks who, what we sell asks the price.
+    assert {k: q["question"] for k, q in asks.items()} == FQ.ASKS
+    assert "pay" in asks["sell"]["question"] and "customers" in asks["serve"]["question"]
     assert asks["serve"]["title"] == "Who we serve" and asks["bet"]["title"] == "Bet"
-    assert all(q["suggest"] == "" for q in found["questions"]) and found["revision"] == draft(api)["revision"]
+    assert all(q["choices"] == [] for q in found["questions"]) and found["revision"] == draft(api)["revision"]
     assert found["titles"] == {**{k: S.TITLES[k] for k in FQ.KEYS if k != "bet"}, "bet": "Bet"}
     # Each question says the longest answer it keeps whole, so the page caps its box there.
     assert asks["serve"]["max"] == S.SECTION_MAX and asks["bet"]["max"] == FQ.answer_max("bet")
@@ -81,17 +80,36 @@ def test_the_owners_basics_come_from_the_guide_in_order_and_others_get_none(api)
     assert get(api, "flow/questions", token=MEMBER) == {"questions": [], "more": [], "revision": None, "titles": {}}
 
 
-def test_a_part_is_asked_while_empty_or_unconfirmed_and_the_bet_offers_a_proposed_one(api):
+def test_every_part_has_one_short_question_of_its_own():
+    assert set(FQ.ASKS) == set(FQ.KEYS)
+    for key, ask in FQ.ASKS.items():
+        assert ask.endswith("?") and len(ask) <= 110, key
+        # One sentence: no sentence ends before the last character.
+        assert not any(mark in ask[:-1] for mark in (". ", "? ", "! ")), key
+
+
+def test_a_part_is_asked_while_empty_or_unconfirmed_and_the_bet_offers_up_to_three_proposed(api):
     drafted = SS.unconfirmed("Landlords with 1-20 units.", "acme.example")
     write(api, sections={"serve": drafted, "sell": "Bots at $29 a unit a month.", "proof": "40 landlords."})
-    proposed = post(api, "strategy/bets", {"statement": "Landlords trust bots with tenant messages"})["bet"]
+    statements = [
+        "Landlords trust bots with tenant messages",
+        "Landlords pay per unit, not per seat",
+        "Small landlords switch within a month",
+        "Portals lose to text messages",
+    ]
+    made = [post(api, "strategy/bets", {"statement": x})["bet"] for x in statements]
     found = get(api, "flow/questions")
     asks = {q["key"]: q for q in found["questions"]}
     # Confirmed text is never asked again; drafted text is offered as the answer, its marker left out.
     assert list(asks) == ["serve", "bet", "not"] and "proof" not in [q["key"] for q in found["more"]]
-    assert asks["serve"]["suggest"] == "Landlords with 1-20 units."
-    assert asks["bet"]["suggest"] == proposed["statement"] and asks["bet"]["bet_id"] == proposed["id"]
-    # Tapping the proposed bet makes it active (the bet route the page uses): the bet question goes.
+    assert asks["serve"]["choices"] == [{"text": "Landlords with 1-20 units.", "bet_id": None}]
+    # The bet: the top three proposed, in rank order, each with its id.
+    with api.app.state.store.read() as c:
+        ranked = S.bets(c, "proposed")
+    assert len(ranked) == 4 and len(asks["bet"]["choices"]) == FQ.BET_CHOICES == 3
+    assert asks["bet"]["choices"] == [{"text": b["statement"], "bet_id": b["id"]} for b in ranked[:3]]
+    proposed = made[0]
+    # Tapping a proposed bet makes it active (the bet route the page uses): the bet question goes.
     post(api, "strategy/bets/" + proposed["id"], {"status": "active", "revision": draft(api)["revision"]})
     assert [q["key"] for q in get(api, "flow/questions")["questions"]] == ["serve", "not"]
 
