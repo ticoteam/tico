@@ -1490,6 +1490,9 @@ class PipelineRow(TypedDict):
     created_at: str
     updated_at: str
     retired_at: str | None
+    # Keep-warm's old setting (removed): nothing reads it. It stays until every install has run the migration that
+    # added it (20261113235427_keep_warm_hours), since a drop before then is undone by that migration.
+    keep_warm_hours: int
 
 
 class StageRow(TypedDict):
