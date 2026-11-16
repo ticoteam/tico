@@ -151,8 +151,8 @@ def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tu
     same page on another task is another verdict), `heads` (the newest commit of each PR the task links, so a page that
     says the checks pass at the newest commit can be checked; at_head keeps every linked PR, one not read yet as None,
     and `attach` waits for it; any other page gets only the commits Tico has read, so a PR not read yet never holds a
-    page up), `release` (with_release); and the rules people added to the check from Flow's suggested rules, which
-    were removed (`added_rules`), each asked as one more part beside the rubric's own."""
+    page up), `release` (with_release); and no added rules: Flow's suggested rules were removed, and a rule added
+    there no longer binds its check (nothing showed it or could remove it)."""
     from .item_sources import github as F
     from . import task_requirements as R
 
@@ -166,19 +166,8 @@ def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tu
         context["heads"] = heads
     if settings.get("with_release"):
         context["release"] = release_tags(conn, row["id"])
-    rules = added_rules(conn, str(requirement["id"]))
+    rules: list[str] = []
     return rubric, context, rules
-
-
-def added_rules(conn: "sqlite3.Connection", requirement_id: str) -> list[str]:
-    """The rules people added to this check from Flow's suggested rules, in the order they were added: Jev asks each of
-    the next page attached. The suggestions themselves are gone from Flow; the rules already added stay in
-    `flow_suggestions` (state `added`) and keep binding their check, read-only now."""
-    rows = conn.execute(
-        "SELECT text FROM flow_suggestions WHERE requirement_id=? AND state='added' ORDER BY acted_at, rowid",
-        (requirement_id,),
-    ).fetchall()
-    return [str(row[0]) for row in rows]
 
 
 def attach(

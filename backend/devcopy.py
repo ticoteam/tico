@@ -598,7 +598,7 @@ KEEP = (
             "ask_opinions",
             # A person's snooze of one ask in their own Needs you (backend/ask_snoozes.py): kept with its tasks.
             "ask_snoozes",
-            # Rules people added to a page check from Flow's suggested rules (task_pages.added_rules): kept with their pipelines.
+            # Flow's suggested rules (removed): the old rows, read by nothing, kept with their pipelines.
             "flow_suggestions",
             "flow_suggestion_runs",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.

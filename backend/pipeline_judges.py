@@ -242,7 +242,7 @@ def _band(p: float, bar: tuple[float, float]) -> str:
     return "unsure"
 
 
-# Rules a person added to a check from Flow's suggested rules (removed; task_pages.added_rules): each is one more yes/no
+# Rules a person added to a check from Flow's suggested rules (removed: nothing passes rules now): each is one more yes/no
 # part, asked beside the check's own (`part_rule<n>`, n from 1 in the order given), and read against the default bar,
 # since BARS were set for the check's own parts. A shipped check stays itself: its rubric is not touched, so `check_of`
 # still names it, its parts are asked and read as before, and the rules only add parts.
