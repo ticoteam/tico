@@ -34,9 +34,6 @@ declare function settingsHistoryShow(view?: string): void;
       id, bot: id.startsWith('h') ? 'helper' : 'ops', field: 'identity',
       before: {display_name: `Name ${i + 1}`, description: ''}, after: {display_name: `Name ${i + 2}`, description: ''},
       actor: 'ana', via: '', transition_id: null, created_at: at(i * 10), undone_at: null, can_undo: true}));
-    // A change still in progress: the owner's first page carries it, and no later page does.
-    const PENDING = {id: 'tr1', bot: 'ops', kind: 'model', state: 'prepared', progress: {prepared: 0, total: 1},
-      checkpoints: []};
     // Two rows a page, so the stub pages the way the server's byte cap does: a next_before on every page but the last.
     const pageOf = <T extends {id: string}>(rows: T[], before?: string) => {
       const start = before ? rows.findIndex(row => row.id === before) + 1 : 0;
@@ -70,9 +67,7 @@ declare function settingsHistoryShow(view?: string): void;
         const bot = url.searchParams.get('bot') || '', before = url.searchParams.get('before') || '';
         calls.push({bot, before});
         const rows = CHANGES.filter(row => !bot || row.bot === bot);
-        // The first page left out older in-progress changes that would not fit (`transitions_truncated`).
-        return json({...pageOf(rows, before), ...(bot || before ? {transitions: []}
-          : {transitions: [PENDING], transitions_truncated: true})});
+        return json({...pageOf(rows, before), transitions: []});
       }
       if (p === '/api/v2/history') {
         const q = Object.fromEntries(url.searchParams);
@@ -182,7 +177,7 @@ declare function settingsHistoryShow(view?: string): void;
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.setViewportSize({width: 1280, height: 800});
 
-    // The owner's Changes: page one carries the change in progress; each Show older appends the next page.
+    // The owner's Changes: each Show older appends the next page.
     await page.goto('https://tico-ui.test/#/settings/history');
     assert.deepEqual(await page.evaluate(() => [100000, 250000].map(tokens => settingsValue('compact_at', tokens))), ['100k', '250k'],
       'a Compact at change is labelled with its size, 100k included');
@@ -192,15 +187,10 @@ declare function settingsHistoryShow(view?: string): void;
     assert.deepEqual(await changeIds(owner), ['h1', 'o1']);
     assert.deepEqual(calls.at(-1), {bot: '', before: ''});
     assert.equal(await showMore(owner).innerText(), 'Show older');
-    assert.equal(await page.locator(`${owner} [data-transition-review]`).count(), 1);
     await showMore(owner).click();
     await waitForChanges(owner, 4);
     assert.deepEqual(await changeIds(owner), ['h1', 'o1', 'h2', 'h3']);
     assert.deepEqual(calls.at(-1), {bot: '', before: 'o1'});
-    assert.equal(await page.locator(`${owner} [data-transition-review]`).count(), 1,
-      'the change in progress is not drawn twice');
-    assert.equal(await page.locator(owner, {hasText: 'Some older in-progress changes are not listed here.'}).count(), 1,
-      'the list still says older in-progress changes are left out');
     await showMore(owner).click();
     await waitForChanges(owner, 6);
     assert.deepEqual(calls.at(-1), {bot: '', before: 'h3'});

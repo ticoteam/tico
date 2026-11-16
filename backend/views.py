@@ -1282,17 +1282,6 @@ def operation_issues(c, who, auth):
                     + " hours ago; check backup.log and the timers on the server.",
                     action="Check backup.log and the server timers.",
                 )
-        for row in c.execute("SELECT id,bot,error FROM bot_transitions WHERE state='failed'"):
-            # A version conflict means settings already moved; the failed checkpoint is leftover.
-            if "while the checkpoint was being prepared" in (row["error"] or ""):
-                continue
-            add(
-                "settings",
-                "A prepared settings change failed",
-                row["error"] or "Review or cancel the change.",
-                bot=row["bot"],
-                action="Review or cancel the failed change in Settings → Bots.",
-            )
     return issues
 
 
@@ -1587,33 +1576,6 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     return execution
 
 
-# What needs a person, in the order they work it. Work that traces back to a person leads: a person asked for it,
-# or it hangs under a task a person asked for. Work bots made for themselves or each other follows, unless it is
-# pressing: due within a day or overdue, or waiting PRESSING_DAYS (DECISIVE_DAYS for an approval or a question,
-# which holds its bot up). Within a tier the decisive kinds lead, then the queue in rank order, oldest first.
-PRESSING_DAYS = 3
-DECISIVE_DAYS = 1
-# A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {
-    "approval": 0,
-    "question": 1,
-    "ask": 1,
-    "waiting": 1,
-    "setup": 1,
-    "declined": 2,
-    "stale": 3,
-    "task": 3,
-    "report": 4,
-    # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
-    # mention or an unread DM is a person's to read.
-    "thread_ask": 1,
-    "thread_held": 1,
-    "thread_capped": 1,
-    "thread_mention": 2,
-    "thread_dm": 2,
-}
-
-
 _VISIBLE_TASK_SQL = f"SELECT * FROM {H.TASKS} tasks WHERE id=? AND (%s)"
 
 
@@ -1683,16 +1645,6 @@ def person_origin(c, row, visible_sql, me=None):
         if H.is_human(parent["requester_id"]):
             return parent["requester_id"]
     return None
-
-
-def pressing(it, now=None):
-    """A bot's item that may go ahead of a person's: due within a day or overdue, or waiting long enough."""
-    now = now or H.now()
-    due = it.get("due_at")
-    if due and str(due) <= H.shift(now, days=1):
-        return True
-    days = DECISIVE_DAYS if KIND_RANK.get(it.get("kind"), 9) <= 1 else PRESSING_DAYS
-    return bool(it.get("created_at")) and str(it["created_at"]) <= H.shift(now, days=-days)
 
 
 CHECKOUT_BEHIND_HOURS = 1
@@ -1785,32 +1737,6 @@ def checkout_issue(add, row, busy=0):
             restart_issue(add, row, busy, since=stamp)
     elif checkout.get("running") and checkout.get("head") and checkout["running"] != checkout["head"]:
         restart_issue(add, row, busy)
-
-
-DUE_SOON_DAYS = 7
-
-
-def needs_order(kind, created, rank=None, person=None, urgent=False, ask_missing=False, due=None):
-    """Needs you is the person's queue. A card still waiting for its bot to say what it needs goes last, whatever
-    else it is; above that, what is overdue or due within DUE_SOON_DAYS first, soonest first (a date further off
-    does not jump the queue); then what traces back to a person, or presses; then within that what blocks a bot (an
-    approval, a question), then declined work, then their own tasks in rank order."""
-    soon = str(due) if due and str(due) <= H.shift(H.now(), days=DUE_SOON_DAYS) else ""
-    return (
-        1 if ask_missing else 0,
-        0 if soon else 1,
-        soon,
-        0 if person or urgent else 1,
-        KIND_RANK.get(kind, 9),
-        rank if rank is not None else float("inf"),
-        str(created or ""),
-    )
-
-
-def deadline(item):
-    """When the card is due: a person's task's due date. A bot's own task's due is when it looks again, not a date
-    anyone owes it by."""
-    return item.get("due_at") if item.get("kind") != "approval" and not H.is_bot(item.get("owner_id")) else None
 
 
 def _clip(text, n=280):
@@ -3565,77 +3491,6 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             return fleet_snapshot(c, auth, request.state.identity, task_view)
 
-    def task_chat(c, who, tid, text=None, expected_recipient=None):
-        human_only(who)
-        task = auth.task(c, who, tid)
-        candidates = [task["owner_id"], task["requester_id"], H.task_origin(c, task)]
-        # No assistant fallback since its chat was retired: a task with no bot has nobody to chat to.
-        slug = next(
-            (
-                H.actor_id(p)
-                for p in candidates
-                if str(p).startswith("bot:") and auth.visible_bot(c, who, H.actor_id(p)) and H.bot(c, H.actor_id(p))
-            ),
-            None,
-        )
-        if slug:
-            from .shared_bots import route
-
-            slug = H.actor_id(route(c, who.actor, "bot:" + slug))
-        if H.task_private(c, task) and slug and not H.task_private_readable(c, "bot:" + slug, task):
-            slug = None
-        bot = (H.bot(c, slug) if slug else None) or {}
-        allowed = bool(slug) and may_chat(c, auth, who, slug)
-        conv = rooms.chat_room(c, auth, who, slug) if allowed else None
-        if H.task_private(c, task) and conv:
-            conv = auth.conversation(c, who, task["conversation_id"])
-        message = None
-        if text is not None:
-            if expected_recipient:
-                expected_recipient = (H.resolve_bot(c, expected_recipient) or {}).get("id", expected_recipient)
-            if expected_recipient and expected_recipient != slug:
-                raise Problem("recipient_changed", "Task ownership changed; refresh before sending", 409)
-            if not slug:
-                raise Problem(
-                    "no_bot",
-                    "No bot owns or asked for this task; assign it to a bot to discuss it, or comment on the task",
-                    409,
-                )
-            if not allowed:
-                auth.require_write(c, who, slug)
-                raise Problem("forbidden", "This bot takes requests in its own Assistant room, not here", 403)
-            privacy.require_destination(c, who, "bot:" + slug, conv["id"], {"task": tid})
-            message = H.say(c, who.actor, "bot:" + slug, text, conversation_id=conv["id"], refs={"task": tid})
-            c.execute(
-                "INSERT INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) VALUES(?,?,?,?,?)",
-                (tid, "bot:" + slug, who.actor, message["id"], H.shift(H.now(), hours=24)),
-            )
-        tagged = [
-            m for m in (privacy.page(c, who, conv["id"])["messages"] if conv else []) if H.message_task_id(m) == tid
-        ]
-        recipient = (
-            {
-                "id": slug,
-                "slug": bot.get("slug") or slug,
-                "name": bot.get("display_name") or bot.get("slug") or slug,
-                "can_chat": allowed,
-            }
-            if slug
-            else None
-        )
-        return {"bot": slug, "recipient": recipient, "conversation": conv, "message": message, "messages": tagged}
-
-    @app.get("/api/v2/tasks/{tid}/chat")
-    def task_chat_read(request: Request, tid: str):
-        with store.read() as c:
-            return task_chat(c, request.state.identity, tid)
-
-    @app.post("/api/v2/tasks/{tid}/chat")
-    def task_chat_write(request: Request, tid: str, body: M.TaskChat):
-        return mutate(
-            request, body, lambda c: task_chat(c, request.state.identity, tid, body.text, body.expected_recipient)
-        )
-
     @app.post("/api/employees/{bot}/session/clear")
     def clear_session(request: Request, bot: str, body: M.Empty):
         who = request.state.identity
@@ -3651,20 +3506,6 @@ def install_views(app, store, auth, mutate, task_view):
                 raise Problem("busy", "Wait for this conversation's current turn to finish", 409)
             clear_chat_session(c, auth.settings, who.actor, bot_id, conv["id"])
             return {"cleared": True, "conversation_id": conv["id"]}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/page-chat")
-    def page_chat(request: Request, body: M.PageChat):
-        who = request.state.identity
-        human_only(who)
-
-        def work(c):
-            if not body.task_id:
-                raise Problem("validation", "Page chat covers a single task", 422)
-            if not body.text.strip():
-                raise Problem("validation", "Write a message about this task", 422)
-            return task_chat(c, who, body.task_id, body.text)
 
         return mutate(request, body, work)
 

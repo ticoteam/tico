@@ -56,7 +56,7 @@ SEND_BATCH = 50  # deliveries read per channel per pass
 RECONCILE_AFTER = 60  # an uncertain send waits this long before the history lookup
 RECONCILE_WINDOW = 120  # the lookup starts this long before the uncertain send
 MAX_SEND_TRIES = 2  # an uncertain post found absent this many times fails
-MIRROR_KINDS = ("say", "ask", "answer")
+MIRROR_KINDS = ("say",)
 CHANNEL_ID_RE = re.compile(r"^[CG][A-Z0-9]{6,}$")
 # Slack refusals that mean the link cannot work (the channel, the app's access, the token). Any other refusal fails
 # one message only.

@@ -54,7 +54,7 @@ BOT_REPLY = (
 # What would start a bot or call a model. Refused with EXPLAIN rather than queued for nobody.
 RUNS = re.compile(
     r"^/api(?:/v2)?/(?:tasks/[^/]+/run-now|routines/[^/]+/run|jobs/[^/]+/(?:retry|reconcile)"
-    r"|bots/[^/]+/control|page-chat|docs/ask|judge|decisions|market/curator/sweep"
+    r"|bots/[^/]+/control|docs/ask|judge|decisions|market/curator/sweep"
     r"|(?:runners|computers)/[^/]+/(?:logins|harness-actions|restart)|system/update)$"
 )
 # Writes a public (read-only) demo still takes, so the page can remember what a visitor has read.

@@ -137,6 +137,9 @@ RETIRED = {
     # 20261106084204_retire_memory_tidy drops the retired pilot's cards and their Keeps.
     "memory_tidy_cards",
     "memory_tidy_keeps",
+    # 20261116160154_drop_dead_tables drops the stall verdicts and the old Rules page's suggestions.
+    "stall_triage",
+    "rule_suggestions",
 }
 # Moved from runners to runner_states by backend/migrations/0062_runner_states.py after the renames named them.
 RUNNER_STATE = {name for name, _ in importlib.import_module("backend.migrations.0062_runner_states").STATE}
@@ -162,6 +165,8 @@ DROPPED_INDEXES |= {
 DROPPED_TRIGGERS |= {"changes_task_asks_insert", "changes_task_asks_update"}
 # Dropped by backend/migrations/20261108044824_directory_rules.py: rule sources are organization entities now.
 DROPPED_INDEXES |= {"org_rules_source", "rule_sources_name", "sqlite_autoindex_rule_sources_1"}
+# Dropped by backend/migrations/20261116160154_drop_dead_tables.sql: nothing writes a Slack task-done notice.
+DROPPED_INDEXES.add("slack_task_completion_notices")
 
 # Dropped by backend/migrations/20261110054000_pipelines_v3_cutover.py: the old task engine's tables and task columns
 # (tasks is made again, so its old indexes go with it), and by 20261110110625_drop_old_engine_leftovers.py.

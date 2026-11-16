@@ -227,31 +227,6 @@ def test_the_hub_tools_and_the_model_route_work_for_a_manager_bot(api):
     assert get(api, "tasks/" + task["id"])["run_model"] is None
 
 
-def test_a_manager_bot_follows_its_reports_model_change_without_reading_its_checkpoints(api):
-    lead = bot(api, "lead")
-    bot(api, "counsel", reports_to="lead")
-    task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Check the break clause."})
-    store = api.app.state.store
-    counsel = bot_id(api, "counsel")
-    with store.transaction() as c:
-        room = H.task(c, task["id"])["conversation_id"]
-        message = c.execute("SELECT id FROM messages WHERE conversation_id=? LIMIT 1", (room,)).fetchone()[0]
-        c.execute(
-            "INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
-            "updated_at) VALUES('tr-1',?,'model','{}','human:ana',1,'checkpointing',?,?)",
-            (counsel, H.now(), H.now()),
-        )
-        c.execute(
-            "INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,checkpoint)"
-            " VALUES('tr-1',?,?,'prepared',?)",
-            (room, message, encode({"decisions": ["Drop the break clause"]})),
-        )
-    [seen] = get(api, "settings/transitions/tr-1", token=lead)["checkpoints"]
-    assert seen == {"conversation_id": None, "state": "prepared", "checkpoint": None, "error": None}
-    [full] = get(api, "settings/transitions/tr-1")["checkpoints"]
-    assert full["conversation_id"] == room and full["checkpoint"] == {"decisions": ["Drop the break clause"]}
-
-
 def newer_changes(api, bot_slug, n, created):
     """`n` task-model changes a manager bot made to `bot_slug`, written as the app writes them; `created(i)` is when."""
     bid = bot_id(api, bot_slug)

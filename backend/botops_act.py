@@ -323,7 +323,6 @@ DO = _routes(
     ("DELETE", rf"automations/{_S}/versions/{_S}"),
     ("PATCH", rf"inboxes/{_S}"),
     ("POST", rf"settings/history/{_S}/undo"),
-    ("POST", rf"settings/transitions/{_S}/(apply-without-checkpoint|cancel)"),
     # Goals and KPIs: a goal's or KPI's own rules decide who may change what.
     ("POST", r"goals"),
     ("POST", rf"goals/{_S}"),

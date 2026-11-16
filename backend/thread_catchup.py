@@ -94,7 +94,7 @@ def transcript(c, viewer, thread, scope, me):
         "JOIN conversations cv ON cv.id=m.conversation_id "
         "LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
         f"WHERE {where} AND m.seq>MAX(COALESCE(f.last_read_seq, 0), ?) AND m.created_at>=? AND m.sender_id<>? "
-        "AND m.kind IN ('say','ask','answer','notice') AND m.deleted_at IS NULL "
+        "AND m.kind IN ('say','notice') AND m.deleted_at IS NULL "
         "ORDER BY m.seq DESC LIMIT ?",
         [me, *args, carried, joined, me, SCAN_LIMIT],
     ).fetchall()

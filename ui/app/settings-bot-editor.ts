@@ -40,7 +40,7 @@ type UpdateFeeds = {unreleased?: boolean; templates?: {feed?: string | null; sta
 type ControlField = {value: string; disabled: boolean; defaultValue?: string};
 // A bot's transition (GET /v2/settings/transitions/<id>), as the dialog draws it.
 type TransitionTarget = {harness?: string; runtime?: string; model?: string; effort?: string; label?: string};
-type TransitionRow = {id: string; kind: string; state: string; bot: string; target?: TransitionTarget | null; progress: {prepared: number; total: number}; error?: string; without_checkpoint?: boolean};
+type TransitionRow = {id: string; kind: string; state: string; bot: string; target?: TransitionTarget | null; error?: string};
 
 const settingsOwnerChips = (list: BriefPerson[] | null | undefined) => (list || []).map(o => `<span class="pchip">${personCircle(o.name || o.id, 16)}<span>${esc(firstName(o.name) || o.id)}</span></span>`).join('');
 function settingsBotEditorRows(e: BotEditRow) {
@@ -631,8 +631,8 @@ function settingsConfirmTransition(e: BotEditRow, kind: string, target: string |
     dialog.innerHTML = `<div class="tmodal-head"><h2 id="transition-title">${label} · ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-confirm-cancel aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
       <div class="transition-body"><p>Destination: <strong>${esc(target)}</strong></p>
         <div class="transition-progress"><strong>This starts a fresh provider session.</strong>
-          <p>The bot saves a checkpoint first. History is kept; session-only context is lost.</p></div>
-        <div class="transition-actions"><button class="ghost" type="button" data-confirm-cancel>Cancel</button><button class="primary settings-go" type="button" data-confirm-prepare>Prepare change</button></div></div>`;
+          <p>History is kept; session-only context is lost.</p></div>
+        <div class="transition-actions"><button class="ghost" type="button" data-confirm-cancel>Cancel</button><button class="primary settings-go" type="button" data-confirm-prepare>Change</button></div></div>`;
     dialog.querySelector('[data-confirm-prepare]').onclick = () => finish(true);
     dialog.querySelectorAll('[data-confirm-cancel]').forEach((button: HTMLElement) => button.onclick = () => finish(false));
     dialog.oncancel = (event: Event) => { event.preventDefault(); finish(false); };
@@ -659,21 +659,12 @@ function settingsTransitionTarget(t: TransitionRow) {
     : t.target?.label || 'another computer';
 }
 function settingsTransitionHTML(t: TransitionRow) {
-  const name = settingsBotName(t.bot), progress = t.progress || {prepared:0,total:0};
-  const status = t.state === 'preparing' ? `Checkpointing ${progress.prepared} of ${progress.total} current conversation${progress.total === 1 ? '' : 's'}…`
-    : t.state === 'blocked' ? `Current-session checkpoint blocked: ${t.error || 'The current computer is unavailable.'}`
-    : t.state === 'failed' ? t.error || 'The checkpoint could not be completed.'
-    : t.state === 'applied' ? `${name} now uses ${settingsTransitionTarget(t)}.${t.without_checkpoint ? ' No prepared checkpoint was created.' : t.progress.total ? ' Its conversation checkpoint is saved.' : ' It had no active session to checkpoint.'}`
-    : t.state === 'canceled' ? 'This change was canceled.' : 'Preparing the change…';
-  const pending = ['preparing','blocked','failed','prepared'].includes(t.state);
-  const force = ['blocked','failed'].includes(t.state);
+  const name = settingsBotName(t.bot);
+  const status = t.state === 'applied' ? `${name} now uses ${settingsTransitionTarget(t)}.` : t.error || 'Preparing the change…';
   return `<div class="tmodal-head"><h2 id="transition-title">${t.kind === 'model' ? 'Change model settings' : 'Move bot'} · ${esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-transition-close aria-label="Close"><span class="nav-icon" aria-hidden="true">close</span></button></div>
     <div class="transition-body"><p>Destination: <strong>${esc(settingsTransitionTarget(t))}</strong></p>
-      <div class="transition-progress"><strong>${esc(status)}</strong>${t.state === 'preparing' ? '<p class="muted">It applies when checkpoints are saved. You can close this.</p>' : ''}</div>
-      ${force ? `<p class="err">Without a checkpoint the new session starts with no handoff. History is kept.</p>` : ''}
-      <div class="transition-actions">${force ? '<button class="fail" type="button" data-transition-force>Change without checkpoint</button>' : ''}
-        ${pending ? '<button class="ghost" type="button" data-transition-cancel>Cancel change</button>' : ''}
-        ${t.state === 'applied' ? '<button class="primary" type="button" data-transition-done>Done</button>' : ''}</div></div>`;
+      <div class="transition-progress"><strong>${esc(status)}</strong></div>
+      <div class="transition-actions">${t.state === 'applied' ? '<button class="primary" type="button" data-transition-done>Done</button>' : ''}</div></div>`;
 }
 function settingsWatchTransition(id: string, origin: {control?: HTMLElement; current?: string} = {}) {
   const dialog = settingsTransitionDialog();
@@ -686,26 +677,10 @@ function settingsWatchTransition(id: string, origin: {control?: HTMLElement; cur
     dialog.innerHTML = settingsTransitionHTML(t);
     dialog.querySelector('[data-transition-close]')?.addEventListener('click', () => dialog.close());
     dialog.querySelector('[data-transition-done]')?.addEventListener('click', () => dialog.close());
-    dialog.querySelector('[data-transition-force]')?.addEventListener('click', async (button: MouseEvent & {currentTarget: HTMLButtonElement}) => {
-      const control = button.currentTarget;
-      if (!await settingsConfirm({title: 'Change without a checkpoint?', ok: 'Change without checkpoint',
-        text: `Raw conversation history stays in ${appName()}, but persistent session context will be lost.`})) return;
-      control.disabled = true;
-      try { await post(`/v2/settings/transitions/${encodeURIComponent(id)}/apply-without-checkpoint`, {change_without_checkpoint:true}); await paint(); }
-      catch (error) {toast(errorMessage(error, ''), true); control.disabled = false;}
-    });
-    dialog.querySelector('[data-transition-cancel]')?.addEventListener('click', async (button: MouseEvent & {currentTarget: HTMLButtonElement}) => {
-      button.currentTarget.disabled = true;
-      try { await post(`/v2/settings/transitions/${encodeURIComponent(id)}/cancel`, {}); await paint(); }
-      catch (error) {toast(errorMessage(error, ''), true); button.currentTarget.disabled = false;}
-    });
-    if (['applied','canceled'].includes(t.state)) {
+    if (t.state === 'applied') {
       clearInterval(SETTINGS_TRANSITION_TIMER ?? undefined);
       await loadSettings();
-      if (t.state === 'applied') {
-        const suffix = t.without_checkpoint ? ' · changed without checkpoint' : t.progress.total ? ' · checkpoint saved' : '';
-        toast(`${settingsBotName(t.bot)} ${t.kind === 'model' ? 'now uses' : 'now runs on'} ${settingsTransitionTarget(t)}${suffix}`);
-      }
+      toast(`${settingsBotName(t.bot)} ${t.kind === 'model' ? 'now uses' : 'now runs on'} ${settingsTransitionTarget(t)}`);
     }
   };
   dialog.onclose = () => {

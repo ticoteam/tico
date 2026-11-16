@@ -288,36 +288,16 @@ def _a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_pa
     assert [row["id"] for row in past["changes"]] == [ids[2]] and past["changes"][0]["truncated"] is False
 
 
-def prepared_transitions(api, cid, count, text):
-    """`count` prepared transitions of ops, newest first, each with a checkpoint of `text` in the chat `cid` (the table
-    gives every checkpoint a message of its own, so each one is a copy of the chat's first message)."""
+def prepared_transitions(api, count):
+    """`count` prepared transitions of ops, newest first."""
     stamp = H.now()
     with api.app.state.store.transaction() as c:
-        first = dict(
-            c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone()
-        )
-        clone(
-            c,
-            "messages",
-            {**first, "sender_id": "bot:ops", "recipient_id": "human:ana"},
-            count,
-            created_at=lambda i: H.shift(first["created_at"], seconds=-i - 1),
-            origin_id=lambda i: uuid.uuid4().hex,
-            seq=lambda i: None,
-        )
-        messages = [
-            row[0]
-            for row in c.execute(
-                "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)
-            ).fetchall()
-        ]
-        for i, message in enumerate(messages):
-            tid = H.new_id()
+        for i in range(count):
             c.execute(
                 "INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,"
                 "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (
-                    tid,
+                    H.new_id(),
                     "ops",
                     "model",
                     encode({"model": "fake-model"}),
@@ -328,23 +308,12 @@ def prepared_transitions(api, cid, count, text):
                     stamp,
                 ),
             )
-            c.execute(
-                "INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,"
-                "checkpoint) VALUES(?,?,?,?,?)",
-                (
-                    tid,
-                    cid,
-                    message,
-                    "prepared",
-                    encode({"current_objective": text, "next_recommended_action": "Ask Ana", "open_decisions": []}),
-                ),
-            )
 
 
-def _a_settings_history_first_page_with_transitions_stays_within_its_bytes(api, msg):
-    # Three prepared changes with a checkpoint of about 20 KB each, and a page of changes that fills what they leave.
+def _a_settings_history_first_page_with_transitions_stays_within_its_bytes(api):
+    # Three prepared changes, and a page of changes that fills what they leave.
     # The 120 people who made the changes have long names: the page sends each name beside its id.
-    prepared_transitions(api, msg["conversation_id"], 3, "A checkpoint of the chat's objective. " * 550)
+    prepared_transitions(api, 3)
     text = {"display_name": "Ops", "description": "A long description. " * 80}
     with api.app.state.store.transaction() as c:
         c.executemany(
@@ -376,43 +345,9 @@ def _a_settings_history_first_page_with_transitions_stays_within_its_bytes(api, 
     assert len(page["changes"]) >= 40 and page["next_before"]
 
 
-def _a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_cannot_hold(api, msg):
-    # Twelve prepared changes of about 45 KB each are more than a page. The newest that fit are sent and flagged, and
-    # the page still takes its changes.
-    prepared_transitions(api, msg["conversation_id"], 12, "A checkpoint of the chat's objective. " * 1200)
-    text = {"display_name": "Ops", "description": "A long description. " * 80}
-    with api.app.state.store.transaction() as c:
-        c.executemany(
-            "INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,"
-            "via) VALUES(?,?,?,?,?,?,?,?,?)",
-            [
-                (
-                    H.new_id(),
-                    "ops",
-                    "definition",
-                    encode(text),
-                    encode(text),
-                    "human:ana",
-                    None,
-                    H.shift(H.now(), seconds=-i),
-                    None,
-                )
-                for i in range(5)
-            ],
-        )
-    opened = api.get("/api/v2/settings/history?limit=100", headers=headers())
-    page = opened.json()
-    assert len(opened.content) <= 256 * KB
-    with api.app.state.store.read() as c:
-        newest = [row[0] for row in c.execute("SELECT id FROM bot_transitions ORDER BY created_at DESC")]
-    kept = [row["id"] for row in page["transitions"]]
-    assert page["transitions_truncated"] is True and 0 < len(kept) < 12 and kept == newest[: len(kept)]
-    assert len(page["changes"]) >= 1
-
-
-def _a_settings_history_first_page_flags_the_transitions_past_its_limit(api, msg):
-    # Four small prepared changes on a page of three: the bytes hold them all, but the oldest is left out and flagged.
-    prepared_transitions(api, msg["conversation_id"], 4, "A short objective.")
+def _a_settings_history_first_page_flags_the_transitions_past_its_limit(api):
+    # Four prepared changes on a page of three: the bytes hold them all, but the oldest is left out and flagged.
+    prepared_transitions(api, 4)
     page = api.get("/api/v2/settings/history?limit=3", headers=headers()).json()
     with api.app.state.store.read() as c:
         newest = [row[0] for row in c.execute("SELECT id FROM bot_transitions ORDER BY created_at DESC")]
@@ -422,11 +357,11 @@ def _a_settings_history_first_page_flags_the_transitions_past_its_limit(api, msg
 
 
 def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave_out(api):
-    _, msg, _ = setup_attempt(api)
+    setup_attempt(api)
 
     def clear():
         with api.app.state.store.transaction() as c:
-            for table in ("bot_transition_checkpoints", "bot_transitions", "settings_changes"):
+            for table in ("bot_transitions", "settings_changes"):
                 c.execute(f"DELETE FROM {table}")
 
     for story in (
@@ -438,11 +373,10 @@ def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave
         story(api)
     for story in (
         _a_settings_history_first_page_with_transitions_stays_within_its_bytes,
-        _a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_cannot_hold,
         _a_settings_history_first_page_flags_the_transitions_past_its_limit,
     ):
         clear()
-        story(api, msg["conversation_id"] and msg)
+        story(api)
 
 
 def test_a_brief_row_clips_the_snooze_note_and_the_task_keeps_it_whole(api):

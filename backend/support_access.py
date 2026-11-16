@@ -80,7 +80,7 @@ ALWAYS_REFUSED = re.compile(
     r")"
 )
 # Pages that open a person's own room or calendar: Tico support has neither, so it gets a plain refusal.
-PERSONAL = re.compile(r"/api/v2/(?:tasks/[^/]+/chat|assistant|calendar/upcoming)")
+PERSONAL = re.compile(r"/api/v2/(?:assistant|calendar/upcoming)")
 # The one path form the gate reads: no empty, dot or percent-encoded segment, so the gate and the router read the same
 # address.
 PLAIN_PATH = re.compile(r"/api/v2(?:/[A-Za-z0-9_~@+=:-][A-Za-z0-9._~@+=:-]*)+")

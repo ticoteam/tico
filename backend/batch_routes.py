@@ -62,7 +62,7 @@ def register(app, auth, mutate, send, store, task_view):
             said = []
             for m in c.execute(
                 "SELECT * FROM messages WHERE recipient_id=? AND "
-                "sender_id LIKE 'bot:%' AND kind IN ('say','ask','answer') AND created_at>? "
+                "sender_id LIKE 'bot:%' AND kind='say' AND created_at>? "
                 "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 6",
                 (who.actor, start),
             ).fetchall():
