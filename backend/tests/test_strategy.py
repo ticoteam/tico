@@ -63,10 +63,12 @@ def test_publish_needs_a_wont_and_an_active_bet_rules_out_and_wrong_if_optional(
 
 
 def test_only_the_owner_writes_and_reads_the_draft_a_bot_proposes_at_any_level(api):
+    """Unless the Strategy Owner names a task with the owner's words on it (test_strategy_owners_words.py); it reads
+    the draft so it can write onto its revision then."""
     strategy_token = with_strategy_bot(api, level=3)
     ready(api)
     for token in ("ben-test", "cara-test", strategy_token):
-        assert "draft" not in get(api, "strategy", token=token)
+        assert ("draft" in get(api, "strategy", token=token)) == (token == strategy_token)
         put(api, "strategy/draft", {"revision": 0, "summary": "Mine."}, token=token, expected=403)
         add_bet(api, token=token, expected=403)
         post(api, "strategy/publish", {"revision": 0}, token=token, expected=403)

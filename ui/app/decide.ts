@@ -96,7 +96,15 @@ interface DecState {
   /** What was opened on the right side, per item: `<item id>:vmenu` (the version menu), `<item id>:more:<part>` (a
       part cut to 2 lines, shown in full). */
   open: Set<string>;
+  /** A bot's or a team's Flow mark (decideBotsFlow): only those bots' items (`bots`, actors; empty for all), the crumb's
+      name for them, and who All done's ping asks. `asking`: the ping went out, so All done says "Asking your bots". */
+  bots: string[];
+  botsName: string;
+  ping: DecPing;
+  asking: boolean;
 }
+/** Who All done's "Ping your bots" asks (POST /v2/flow/ping): the person's reports, one bot, or a team's bots. */
+interface DecPing {scope: 'reports' | 'bot' | 'group'; id?: string}
 /** A file added to a note: uploaded to the task's Files at once; its name and id end the note that is sent. */
 interface DecFile {
   key: number;
@@ -158,9 +166,9 @@ const decideOkStale = (v: AskOkView, it: NeedsEntry) => v.page !== decidePage(it
 const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.items.has(k));
 const decideCurrent = (st: DecState) => st.at && !st.gone.has(st.at) ? st.items.get(st.at) || null : null;
 /** The items a walk takes: a stage's only that stage's, a pipeline's those in its stages. */
-const decideInWalk = (st: DecState, it: NeedsEntry) => st.stage
+const decideInWalk = (st: DecState, it: NeedsEntry) => (!st.bots.length || st.bots.includes(needsBotOf(it) || '')) && (st.stage
   ? (st.stage === DEC_OTHER ? !decideStageName(needsStageOf(it)) : needsStageOf(it) === st.stage)
-  : !st.pipeline || decidePipelineOf(needsStageOf(it))?.id === st.pipeline;
+  : !st.pipeline || decidePipelineOf(needsStageOf(it))?.id === st.pipeline);
 const decidePipelines = () => (typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || [];
 const decidePipelineOf = (stage: string) => stage ? decidePipelines().find(p => p.stages.some(s => s.id === stage)) : undefined;
 function decideSync(st: DecState, items: NeedsEntry[]) {
@@ -281,9 +289,7 @@ function decideNeedsText(root: HTMLElement) {
 function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage: string = '', pipeline: string = '', end = false): boolean {
   if (decideNoFlow()) return false;
   const fresh = !DEC;
-  const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), more: '', busy: false, error: '',
-    barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, pipeline, snoozed: 0, snoozedAsks: null, snoozedOpen: false, snzOther: false, files: [], open: new Set(),
-    seen: new Set()};
+  const st: DecState = DEC || {...decideBlank(document.activeElement as HTMLElement | null), stage, pipeline};
   const to0 = (s: string, p: string) => { st.stage = s; st.pipeline = p; st.order = []; st.gone.clear(); st.at = null; };
   // Opening one item from a list walks the list it is in; Flow on a stage or a pipeline walks it, from its first item.
   if ((st.stage !== stage || st.pipeline !== pipeline) && (stage || pipeline || !id)) to0(stage, pipeline);
@@ -298,6 +304,11 @@ function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage
   decideOpinions(st);
   return true;
 }
+/** A screen not open yet: nothing walked, nothing answered, its ping to the person's reports. */
+const decideBlank = (opener: HTMLElement | null): DecState => ({order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(),
+  more: '', busy: false, error: '', barTimer: 0, opener, off: [], stage: '', pipeline: '', snoozed: 0, snoozedAsks: null,
+  snoozedOpen: false, snzOther: false, files: [], open: new Set(), seen: new Set(), bots: [], botsName: '', ping: {scope: 'reports'},
+  asking: false});
 /** "Getting ready to flow" with the mark, for well under a second over the first item, which is drawn and takes input
     under it (decide.css .dc-start). None with reduced motion. */
 function decideStart(d: HTMLDialogElement) {
@@ -413,6 +424,8 @@ async function decideWanted(id: string) {
 function decideRefresh(st: DecState, items: NeedsItem[] | NeedsEntry[] | undefined) {
   const before = st.at;
   decideSync(st, needsAsEntries(items));
+  // On All done, what came in (a pinged bot's question) comes on screen.
+  if (!st.at) { const first = decideLive(st)[0]; if (first) { decideGo(st, first); return void decideOpinions(st); } }
   if (st.at !== before) decideRender(st); else decidePaintHead(st);
   decideOpinions(st);   // asks that joined
 }
@@ -458,6 +471,7 @@ function decideAfter(st: DecState, id: string) {
 // ---- drawing
 /** Where the walk is, as the crumb says it: ['All mine'], then the pipeline, then the stage (or Other). */
 function decideWhere(st: DecState): string[] {
+  if (st.bots.length) return ['All mine', st.botsName || 'Bots'];
   if (st.stage === DEC_OTHER) return ['All mine', 'Other'];
   const p = st.stage ? decidePipelineOf(st.stage) : decidePipelines().find(x => x.id === st.pipeline);
   return ['All mine', ...(p ? [p.name] : []), ...(st.stage ? [decideStageName(st.stage) || 'Stage'] : [])];
@@ -493,6 +507,7 @@ async function decideWalkTo(stage: string, pipeline: string) {
   decideMenu(false);
   if (!needsAll()) await needsReadAll();
   if (!DEC) return;
+  Object.assign(DEC, {bots: [], botsName: '', ping: {scope: 'reports'}});
   if (!decideOpen('', decideSource(), stage, pipeline)) decideOpen('', decideSource());
 }
 /** Nothing left: All done, how many are snoozed (your own tasks snoozed on this visit, and every ask you snoozed for
@@ -507,8 +522,31 @@ function decideDoneHTML(st: DecState): string {
   const said = !n ? '' : asks?.length
     ? `<button type="button" class="linkish dc-sub dc-snzd" data-dc="snoozed" aria-expanded="${st.snoozedOpen}">${n} snoozed</button>`
     : `<p class="dc-sub">${n} snoozed</p>`;
-  return `<div class="dc-done${sug ? ' has' : ''}">${flowMarkHTML(48)}<h2>All done</h2>`
-    + said + list + '<button type="button" class="ghost" data-dc="close">Close</button>' + sug + '</div>';
+  const ping = st.asking ? '<p class="dc-sub dc-asking" role="status">Asking your bots</p>'
+    : '<button type="button" class="primary" data-dc="ping">Want more? Ping your bots</button>';
+  return `<div class="dc-done${sug ? ' has' : ''}">${flowMarkHTML(48, st.asking)}<h2>All done</h2>`
+    + said + list + ping + '<button type="button" class="ghost" data-dc="close">Close</button>' + sug + '</div>';
+}
+/** "Want more? Ping your bots": each bot in the ping's scope is asked for its questions (backend/flow_ping.py); they
+    come in as Needs you items, and decideRefresh brings the first on screen. One a moment ago is asked once. */
+async function decidePing(st: DecState) {
+  st.asking = true; decideRender(st);
+  try {
+    const got = await post('/v2/flow/ping', st.ping) as {pinged: {id: string}[]; recent: {id: string}[]};
+    if (DEC === st && !got.pinged.length && !got.recent.length) { st.asking = false; decideRender(st); toast('No bots to ask'); }
+  } catch (e) {
+    if (DEC === st) { st.asking = false; decideRender(st); }
+    toast(errorMessage(e, 'The bots were not asked'), true);
+  }
+}
+/** A bot's or a team's Flow mark: Flow on those bots' items only, every page of Needs you read first; All done's ping
+    asks them, whoever manages them. */
+async function decideBotsFlow(from: HTMLElement, bots: string[], name: string, ping: DecPing) {
+  if (decideNoFlow()) return;
+  if (!needsAll()) await needsReadAll();
+  if (DEC) decideStop();
+  DEC = {...decideBlank(from), bots, botsName: name, ping};
+  decideOpen('', decideSource(), '', '', true);
 }
 let DEC_SNZ_READ = false;                    // the snoozed asks are being read
 /** The asks the person snoozed for themselves, read for the end screen (decideDoneHTML). */
@@ -1751,6 +1789,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   if (what === 'where') { decideMenu(!!$('.decide .dc-menu')?.hidden); return; }
   if (what === 'voice') { DEC_VOICE = !DEC_VOICE; decidePaintHead(st); $(DEC_VOICE ? '.decide .dc-wave' : '.decide .dc-mic')?.focus(); return; }
   if (what === 'close') { decideStop(); return; }
+  if (what === 'ping') { await decidePing(st); return; }
   if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
   if (what === 'skip') { decideSkip(st); return; }
   if (what === 'go' && b.dataset.dcHref) { decideGoThere(st, b.dataset.dcHref); return; }

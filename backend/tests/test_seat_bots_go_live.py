@@ -530,3 +530,21 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
     assert (first["task"]["id"], own) != (waiting["id"], own) and first["task"]["id"] == own, (first["task"], own)
     again = act(api, attempt, "POST", "bots/feature-owner/go-live", {})
     assert again.status_code == 200 and "own_setup_task_id" not in again.json(), again.text
+
+
+def test_a_seat_bots_own_setup_ends_with_its_one_ping_for_the_owners_questions(environment):
+    """The one automatic ping (backend/flow_ping.py on_setup): a seat bot's own setup task, given once at go-live, ends
+    by running get-aligned for the owner, and the owner's ping is recorded quiet (no run of its own) so the bot may ask
+    them. Nothing pings it again."""
+    api, computer, seats = _company(environment)
+    attempt = _claim(api, computer, "botops")
+    bot, _ = _seat(seats, "feature-owner")
+    _report(api, computer, present=list(seats))
+    act(api, attempt, "POST", "bots/feature-owner/go-live", {})
+    [own] = rows(api, "SELECT body FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + bot,))
+    assert own["body"].rstrip().endswith("ask them, not your manager.") and "skills/get-aligned/SKILL.md" in own["body"]
+    query = "SELECT sender_id, json_extract(refs, '$.quiet') AS quiet FROM messages WHERE recipient_id=? AND json_extract(refs, '$.get_aligned') IS NOT NULL"
+    [ping] = rows(api, query, ("bot:" + bot,))
+    assert ping["sender_id"].startswith("human:") and ping["quiet"]
+    act(api, attempt, "POST", "bots/feature-owner/go-live", {})
+    assert len(rows(api, query, ("bot:" + bot,))) == 1

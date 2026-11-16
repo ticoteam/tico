@@ -5563,6 +5563,9 @@ def create_app(settings=None):
     from . import flow_suggestions
 
     flow_suggestions.install(app, store, auth, mutate)  # Flow's suggested rules, drawn from send-back notes
+    from . import flow_ping
+
+    flow_ping.install(app, store, auth, mutate)  # Flow's "Ping your bots": bots ask the person their questions
     from . import ask_snoozes
 
     ask_snoozes.install(app, store, auth, mutate)  # a person's snooze of one ask in their own Needs you

@@ -271,6 +271,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     ${limited ? '' : '<span class="bot-top-acts" id="bot-top-acts"></span>'}
     ${limited ? '' : '<section class="bot-goal" id="bot-goal" aria-label="Goal"><span class="muted">Loading the goal…</span></section>'}
     ${lockable ? `<button type="button" class="bot-incognito" id="bot-incognito" aria-pressed="false" aria-label="Incognito" title="Incognito: a private chat with this bot, not the team's Home"><span class="nav-icon" aria-hidden="true">lock</span><span class="bi-label">Incognito</span></button>` : ''}
+    ${limited ? '' : `<button type="button" class="bot-flow" id="bot-flow" aria-label="Flow" title="Flow">${flowMarkHTML(18)}</button>`}
     ${pageHeadMore(botMoreItemsHTML(slug, lockable), 'bot-more-btn', 'bot-more-menu')}
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
@@ -428,6 +429,9 @@ async function pageBot(slug: string, tab: string | undefined) {
   if (lockable) void botDmArchiveLoad(slug);
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
+  // Flow on this bot's items alone; its All done pings this bot, whoever manages it.
+  const flow = $('#bot-flow');
+  if (flow) flow.onclick = () => void decideBotsFlow(flow, ['bot:' + slug], botDisplayName(slug), {scope: 'bot', id: slug});
   $('#bot-detail-tabs').onkeydown = (event: KeyboardEvent & {currentTarget: HTMLElement}) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
     const buttons = [...event.currentTarget.querySelectorAll('button')];

@@ -57,7 +57,8 @@ A line is `sender → receiver`, either side any party. It has:
 While the sender is **open**, its lines are exceptions: only `per_day` limits. While it is **nearby**, a line adds a
 receiver beyond its part of the chart, and `per_day` still limits. While it is **closed**, its lines are who it may
 reach: anyone not on a line from the sender (or a team it is in, or Everyone) to the receiver (or a team the receiver is
-in) is refused. The nearest line applies: the sender's own first, then its teams nearest first, then Everyone; on each,
+in) is refused, except its own manager. A bot always reaches its own manager, in every mode, because every refusal
+sends it there; a line to the manager (a `per_day` of 0 included) and the caps still apply. The nearest line applies: the sender's own first, then its teams nearest first, then Everyone; on each,
 the receiver's own first.
 
 ## What counts and when it is checked
@@ -88,9 +89,11 @@ A bot's write is checked on:
 A person is only reached by a bot next to them on the chart: the bot's manager (the owner, for a bot with no manager)
 or a person on its own team, or a person a line allows. A bot two levels down does not reach the owner: it takes the
 work to its manager, who passes it up. Being on a task with the person (reader, former owner, thread member, party to
-a parent task) or having been given some task by them does not open them. Only three things do, for the person who is
+a parent task) or having been given some task by them does not open them. Only four things do, for the person who is
 the receiver: a direct reply to that person's own message; a write in a conversation where that person wrote to the
-bot in the last 7 days; a write on a task that person handed this bot (they are its requester, the bot its owner).
+bot in the last 7 days; a write on a task that person handed this bot (they are its requester, the bot its owner); and,
+for a day, any write by a bot that person pinged for questions from Flow ([Tasks](tasks.md#needs-you), `reach.pinged`),
+so its questions reach them even when it is not theirs.
 
 Never refused (a person receiver follows the rule above):
 

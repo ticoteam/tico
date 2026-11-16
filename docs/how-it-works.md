@@ -563,8 +563,9 @@ Home and other turns share one more. BotOps (and any bot set to `session: task`)
 thread its own provider thread, so unrelated requesters stay separate; `session: bot` keeps
 everything on one thread. A subtask someone else filed continues its parent task's thread when the bot owns both; one
 the bot filed for itself gets its own (`subtask_session: own` gives every subtask its own). Each bot task has its own
-thread, so the main thread reads only the Home plus a quiet line when a task starts, is done or closed
-([Tasks](tasks.md#done-closed-and-reopen)). Wakes about the same task resume its thread. A task's set-up worktrees
+thread, so the main thread reads only the Home plus a quiet line when a task starts
+([Tasks](tasks.md#done-closed-and-reopen)); a task's end is a quiet note in the task's own thread, which the main
+thread does not read. Wakes about the same task resume its thread. A task's set-up worktrees
 on that computer join its session (Claude Code's `--add-dir`), and the prompt carries each repo's
 AGENTS.md (else CLAUDE.md), labelled as rules for writing code there that never grant access;
 a link out of the worktree is refused, the whole is capped at 16 KB, and a resumed thread gets

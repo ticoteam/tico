@@ -156,11 +156,13 @@ became lenses; `GET /api/v2/strategy/guides` is deprecated and lists the Default
 |---|---|---|---|
 | The owner | the draft and every version | yes, on the page or with `tico strategy draft` and `tico strategy bet` | yes, with a note |
 | Any human on the team | the published versions | no | no |
-| The Strategy Owner | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms. The one exception is the vision the owner sends on its "What is this team for?" question, saved in their words while there is none (`tico strategy vision`, [Goals and KPIs](goals-and-kpis.md)) | never |
+| The Strategy Owner | the draft and every version | only the owner's words: what they told it on a task of its own (an answer to its question, or a task their Assistant filed for them), into the sections and bets those words are about, naming that task (`tico strategy draft --task <id>`, `tico strategy bet add\|update --task <id>`). From its own reading it proposes, at every level, with one `strategy_draft` proposal the owner confirms. The vision the owner sends on its "What is this team for?" question is saved in their words while there is none (`tico strategy vision`, [Goals and KPIs](goals-and-kpis.md)) | on the owner's words, naming that task (`tico strategy publish --task <id>`) |
 | Every other bot, and an external agent over MCP | the published versions (`tico strategy show`, `tico strategy summary`) | no | never |
 
-**The draft is the owner's.** `GET /strategy` returns `draft` only to the owner (`may_edit`); everyone else, every
-bot included, sees the published version. A bot never sees an unpublished "What we won't do". The draft carries a
+**The draft is the owner's.** `GET /strategy` returns `draft` to the owner (`may_edit`) and to the Strategy Owner, which
+writes it on their words; everyone else, every other bot included, sees the published version. No other bot sees an
+unpublished "What we won't do". When the Strategy Owner writes on the owner's words, the draft's history keeps whose
+words and which task, and a version it publishes says so in its note ("From Ana's words on ..."). The draft carries a
 `revision`, so two editors get a conflict (`409`), not a silent overwrite.
 
 If you see **Changed elsewhere, reloaded**, review the refreshed draft and reapply your edit.
@@ -168,7 +170,8 @@ A failed bet move also reloads the list; check the order before trying again.
 
 The Strategy Owner proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
 any of the summary, the vision, sections and bets. Confirming it writes those into the draft as the owner; nothing is
-published. Publishing is the one click that tells the whole team something changed, so it stays a person's. The
+published. Publishing is the one step that tells the whole team something changed, so it stays a person's: the owner's
+click, or the Strategy Owner doing what they told it. The
 owner's level choice for the Strategy Owner is on [Your Strategy Owner](strategy-bot.md#the-three-levels).
 
 ## What the Strategy Owner does with it

@@ -77,7 +77,7 @@
     null
    ]
   ],
-  "stdout": "{\n  \"error\": \"forbidden\",\n  \"detail\": \"Only the owner writes the strategy; a bot proposes a change with tico_proposal_create, kind strategy_draft\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stdout": "{\n  \"error\": \"forbidden\",\n  \"detail\": \"Only the owner (or the Strategy Owner, on their words) writes the strategy; a bot proposes a change with tico_proposal_create, kind strategy_draft\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
  },
