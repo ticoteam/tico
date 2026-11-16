@@ -168,24 +168,24 @@ commands! {
 async fn task_picker(
     state: State<'_, Shared>,
     query: String,
-    kind: Option<String>,
+    pipeline: Option<String>,
     offset: usize,
 ) -> Result<Value, String> {
     let (config, destination) = lock(&state).task_picker_context();
-    let kind = kind.unwrap_or_default();
+    let pipeline = pipeline.unwrap_or_default();
     picker_search(
         move || tico_recorder_native::network::Tico::saved(&config, &destination),
-        move |tico| tico.search_tasks(&query, &kind, offset),
+        move |tico| tico.search_tasks(&query, &pipeline, offset),
     )
     .await
 }
 
 #[tauri::command]
-async fn task_types(state: State<'_, Shared>) -> Result<Value, String> {
+async fn task_pipelines(state: State<'_, Shared>) -> Result<Value, String> {
     let (config, destination) = lock(&state).task_picker_context();
     picker_search(
         move || tico_recorder_native::network::Tico::saved(&config, &destination),
-        |tico| tico.task_types(),
+        |tico| tico.pipelines(),
     )
     .await
 }
@@ -410,7 +410,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             more_task_links,
             task_picker,
-            task_types,
+            task_pipelines,
             link_selected_tasks,
             accept_link_item,
             unlink_item,

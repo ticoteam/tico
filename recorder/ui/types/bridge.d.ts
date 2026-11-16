@@ -459,8 +459,8 @@ export interface Commands {
     args: { id?: string | null; action?: 'send' | 'link' | null; body?: Record<string, unknown> };
     reply: SharedReply;
   };
-  task_picker: { args: { query: string; kind?: string; offset: number }; reply: TaskPage };
-  task_types: { args: None; reply: OrgRef[] };
+  task_picker: { args: { query: string; pipeline?: string; offset: number }; reply: TaskPage };
+  task_pipelines: { args: None; reply: OrgRef[] };
   sign_out: { args: { id: string }; reply: null };
   meeting_link: { args: { id: string; destination: string; confirmed: boolean; copy: boolean }; reply: MeetingLink };
   share_screen: { args: { id: string; expectedTeam: boolean }; reply: null };

@@ -42,14 +42,14 @@ type FormText = 'microphone' | 'transcription_url' | 'transcription_model' | 'tr
 type FormFlag = 'calendar' | 'meeting_audio' | 'streaming';
 /** The plain text fields of S.ui an input's data-model names. */
 type TextModel =
-  'search' | 'ask' | 'addItem' | 'ownerQuery' | 'shareQuery' | 'tq' | 'key' | 'xai' | 'editDraft' | 'taskQuery' | 'taskKind';
+  'search' | 'ask' | 'addItem' | 'ownerQuery' | 'shareQuery' | 'tq' | 'key' | 'xai' | 'editDraft' | 'taskQuery' | 'taskPipeline';
 type Ui = {
   search: string; ask: string; addItem: string; ownerQuery: string; shareQuery: string; tq: string; signin: string | null;
   key: string; xai: string;
   editLine: { id: string; seq: number } | null; editDraft: string; editInitial: string; removeLine: { id: string; seq: number } | null;
   hot: number; mention: Mention | null; address: boolean;
   pop: Pop | null; tsearch: boolean; showAudio: boolean; confirm: string | null; hideSide: boolean;
-  share: ShareDraft | null; finish: FinishDraft | null; taskPicker: TaskPicker | null; taskQuery: string; taskKind: string;
+  share: ShareDraft | null; finish: FinishDraft | null; taskPicker: TaskPicker | null; taskQuery: string; taskPipeline: string;
   form: SettingsDraft | null; saving: boolean; titleDraft: string | null; notesDraft: string | null; prevPage: Page; stick: boolean;
   // Set once used.
   signingDesktop?: string; profiled?: boolean; adding?: boolean; createOk?: string | null; copied?: boolean;
@@ -117,7 +117,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
       editLine: null, editDraft: '', editInitial: '', removeLine: null, // { id, seq }: a draft or question belongs to one meeting
       hot: 0, mention: null, address: false,
       pop: null, tsearch: false, showAudio: false, confirm: null, hideSide: false,
-      share: null, finish: null, taskPicker: null, taskQuery: '', taskKind: '',
+      share: null, finish: null, taskPicker: null, taskQuery: '', taskPipeline: '',
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
     },
   };
@@ -724,13 +724,13 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
 
   // ---- Transcript sidebar ----
   let taskSearchTimer: number | undefined;
-  let taskTypes: { scope: string | null; list: OrgRef[] } = { scope: null, list: [] };
-  /** The org's task types, once per org, for the picker's filter. */
-  async function loadTaskTypes(picker: TaskPicker) {
-    if (taskTypes.scope === picker.scope) return;
+  let pipelines: { scope: string | null; list: OrgRef[] } = { scope: null, list: [] };
+  /** The org's pipelines, once per org, for the picker's filter. */
+  async function loadPipelines(picker: TaskPicker) {
+    if (pipelines.scope === picker.scope) return;
     try {
-      const list = await invoke('task_types');
-      taskTypes = { scope: picker.scope, list: Array.isArray(list) ? list : [] };
+      const list = await invoke('task_pipelines');
+      pipelines = { scope: picker.scope, list: Array.isArray(list) ? list : [] };
       if (S.ui.taskPicker === picker) render();
     } catch {}
   }
@@ -754,7 +754,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     render();
     try {
       // More shows only while there is a next page.
-      const reply = await invoke('task_picker', { query: S.ui.taskQuery.trim(), kind: S.ui.taskKind || '', offset: more ? picker.next! : 0 });
+      const reply = await invoke('task_picker', { query: S.ui.taskQuery.trim(), pipeline: S.ui.taskPipeline || '', offset: more ? picker.next! : 0 });
       if (S.ui.taskPicker !== picker || picker.request !== request || picker.scope !== JSON.stringify(S.meeting?.actions.link_scope)) return;
       picker.rows = more ? picker.rows.concat(reply.tasks) : reply.tasks;
       picker.next = reply.next_offset;
@@ -776,9 +776,9 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
       const on = p.picks.includes(task.id);
       return `<button class="menu-item task-row ${on ? 'on' : ''}" data-act="task-pick" data-id="${esc(task.id)}" aria-pressed="${on}"><span class="pick">${on ? icon('check', 11) : ''}</span><span class="grow">${task.number ? `<span class="num">#${esc(task.number)}</span> ` : ''}${esc(task.title)}<span class="faint"> · ${esc(task.status)}</span></span></button>`;
     };
-    const types = taskTypes.scope === p.scope ? taskTypes.list : [];
-    const kind = S.ui.taskKind || '';
-    const filter = types.length > 1 ? `<select class="field" data-model="taskKind" aria-label="Type"><option value="">All types</option>${types.map((t) => `<option value="${esc(t.id)}" ${t.id === kind ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>` : '';
+    const choices = pipelines.scope === p.scope ? pipelines.list : [];
+    const pipeline = S.ui.taskPipeline || '';
+    const filter = choices.length > 1 ? `<select class="field" data-model="taskPipeline" aria-label="Pipeline"><option value="">All pipelines</option>${choices.map((t) => `<option value="${esc(t.id)}" ${t.id === pipeline ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>` : '';
     const count = p.picks.length;
     return `<div class="scrim" data-act="task-picker-close"></div><div class="sheet tasks" id="sheet" role="dialog" aria-modal="true" aria-label="Link tasks"><h2>Link tasks</h2><div class="task-search"><label class="search-box">${icon('search', 13)}<input class="field" data-model="taskQuery" placeholder="Search or #number" spellcheck="false" aria-label="Search tasks">${p.loading ? '<span class="spin"></span>' : ''}</label>${filter}</div><div class="pop-list ${p.loading ? 'stale' : ''}" aria-busy="${!!p.loading}">${rows.map(row).join('')}</div>${!p.loading && !rows.length && !p.error ? '<div class="pop-text">No tasks</div>' : ''}${p.error ? `<div class="sheet-error">${esc(p.error)}</div>` : ''}<div class="sheet-foot">${p.next != null ? `<button class="link" data-act="task-picker-more" ${p.loading ? 'disabled' : ''}>More</button>` : ''}<span class="grow"></span><button class="btn quiet" data-act="task-picker-close">Cancel</button><button class="btn primary" data-act="task-picker-link" ${!count ? 'disabled' : ''}>${count ? `Link ${count}` : 'Link'}</button></div></div>`;
   }
@@ -1915,9 +1915,9 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     },
     'task-picker-open': () => {
       S.ui.taskQuery = ''; S.ui.pop = null; S.ui.share = null; S.ui.finish = null;
-      S.ui.taskKind = '';
+      S.ui.taskPipeline = '';
       S.ui.taskPicker = { rows: [], picks: [], picked: {}, next: null, scope: JSON.stringify(S.meeting?.actions.link_scope) };
-      S.ui.focusNext = '[data-model="taskQuery"]'; loadTaskPicker(); loadTaskTypes(S.ui.taskPicker);
+      S.ui.focusNext = '[data-model="taskQuery"]'; loadTaskPicker(); loadPipelines(S.ui.taskPicker);
     },
     'task-picker-close': () => { S.ui.taskPicker = null; render(); },
     'task-picker-more': () => loadTaskPicker(true),
@@ -2077,7 +2077,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
       render();
     } else if (el.tagName === 'SELECT' && el.dataset.model) {
       setModel(el.dataset.model, el.value);
-      if (el.dataset.model === 'taskKind') loadTaskPicker();
+      if (el.dataset.model === 'taskPipeline') loadTaskPicker();
       else render();
     }
   });
