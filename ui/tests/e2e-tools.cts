@@ -187,6 +187,8 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   await go(page, '#/tools/mailbox/' + MAILBOX);
   await page.locator('[data-ib-detail="mailbox"] [data-ib-detail-body] h1, [data-ib-detail="mailbox"] [data-ib-detail-body] h2')
     .first().waitFor({timeout: t(15000)});
+  // Wait for Recent's answer (the refusal, drawn as a line), so assertClean below always sees the mail read.
+  await page.locator('#tools-inbox [data-mb-recent] p.muted').waitFor({timeout: t(15000)});
   assert.match(await page.locator('#tools-inbox').innerText(), new RegExp(MAILBOX.replace('.', '\\.')), `${where}: the mailbox page`);
   assert.equal(await sideways(page), false, `${where}: the mailbox page has no sideways scroll`);
   assertClean(page, `${where}: mailbox`);
