@@ -3,7 +3,8 @@ import type {Page, Route} from 'playwright';
 // stages is one quiet line of stage chips in its place, so a pipeline with tasks in two of thirteen stages shows every
 // task without scrolling at 1440, 1280 and 1100 px in an 800 px window, and a long chip line wraps with no chip past the
 // list's edge. A chip opens its stage's editor on a click and from the keyboard, with a pill-shaped focus ring. A
-// pipeline with nothing open is one empty state whose New task opens the new-task form with this pipeline chosen.
+// pipeline with nothing open is one empty state whose New task opens the new-task form with this pipeline chosen; while
+// the server has more tasks to give, every stage keeps its header.
 // pipeline-view-unit.cts checks what is drawn in each case (runs, snoozed, search, paging, columns, phone).
 // Run: npm run build:ui && node ui/tests/pipeline-fold.cts
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -25,6 +26,9 @@ const brief = (id: string, stageId: string) => ({id, title: `Task ${id}`, number
   status: 'open', owner_id: 'human:ana', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: null, version: 1, created_at: '2026-11-09T10:00:00Z', updated_at: '2026-11-09T10:00:00Z'});
 let TASKS: ReturnType<typeof brief>[] = [];
+let MORE = false;   // the server says another page of tasks is to come
+// A second pipeline, the team's General one: the new-task form picks it unless told which pipeline.
+const general = {...pipeline, id: 'general', name: 'General', prefix: 'G', preset: 'general', stages: stages.slice(0, 1)};
 
 async function serve(page: Page, errors: string[]): Promise<void> {
   page.on('pageerror', (error: Error) => errors.push(error.message));
@@ -39,10 +43,10 @@ async function serve(page: Page, errors: string[]): Promise<void> {
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([]);
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
-    if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
+    if (p === '/api/v2/pipelines') return json({pipelines: [general, pipeline]});
     if (p === '/api/v2/pipelines/eng') return json({pipeline});
     if (p === '/api/v2/factories') return json({factories: [], pipelines: []});
-    if (p === '/api/v2/tasks' && r.method() === 'GET') return json({tasks: TASKS});
+    if (p === '/api/v2/tasks' && r.method() === 'GET') return json(MORE ? {tasks: TASKS, next_after: 'x'} : {tasks: TASKS});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -79,6 +83,8 @@ async function list(page: Page, ready: string): Promise<void> {
     const narrow = await browser.newPage({viewport: {width: 1100, height: 800}, serviceWorkers: 'block', locale: 'en-US', timezoneId: 'UTC'});
     await serve(narrow, errors);
     await list(narrow, '.pv-fold');
+    // At 1100 px the twelve chips just fit one row: narrow the line so they must wrap.
+    await narrow.addStyleTag({content: '.pv-fold{max-width:420px}'});
     const wrap = await narrow.evaluate(() => {
       const fold = document.querySelector('.pv-fold')!, edge = (document.querySelector('.pv') ?? fold.parentElement!).getBoundingClientRect().right;
       const chips = [...fold.querySelectorAll('.pv-chip')].map(c => c.getBoundingClientRect());
@@ -87,6 +93,7 @@ async function list(page: Page, ready: string): Promise<void> {
     });
     assert.equal(wrap.n, 12);
     assert.equal(wrap.past, 0, 'no chip past the list\'s edge');
+    assert.ok(wrap.lines >= 2, `a chip line too long for one row wraps (${wrap.lines} rows)`);
     assert.ok(!wrap.sideways, `the page does not scroll sideways (${JSON.stringify(wrap)})`);
 
     // A chip opens its stage's editor: by click, and by Tab and Enter with a pill-shaped focus ring.
@@ -112,11 +119,23 @@ async function list(page: Page, ready: string): Promise<void> {
     await list(empty, '.pv-none');
     assert.equal((await empty.locator('.pv-none').innerText()).replace(/\s+/g, ' ').trim(), 'No open tasks in Engineering New task');
     assert.equal(await empty.locator('.pv-chip, .pv-group').count(), 0, 'no stage names in the empty state');
+    assert.equal(await empty.locator('.pv-none svg').getAttribute('aria-hidden'), 'true', 'a screen reader skips the drawing');
     await empty.locator('.pv-none [data-pv-new]').click();
     const pick = empty.locator('#task-create-form select[name="pipeline"]');
     await pick.waitFor();
     await empty.waitForFunction(() => (document.querySelector('#task-create-form select[name="pipeline"]') as HTMLSelectElement | null)?.value === 'eng');
     await empty.close();
+
+    // More tasks still to come from the server: the page tells the view, which keeps every stage's header.
+    TASKS = [brief('a', 's4')];
+    MORE = true;
+    const paged = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block', locale: 'en-US', timezoneId: 'UTC'});
+    await serve(paged, errors);
+    await list(paged, '.pv-group');
+    assert.equal(await paged.locator('.pv-group').count(), NAMES.length, 'every stage keeps its header while tasks are still to load');
+    assert.equal(await paged.locator('.pv-fold, .pv-none').count(), 0);
+    await paged.close();
+    MORE = false;
 
     assert.deepEqual(errors, []);
     console.log('pipeline fold: ok');
