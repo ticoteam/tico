@@ -58,7 +58,7 @@ async function visualHandshake(browser: Browser) {
   await page.addInitScript({content:`
     (() => {
     if (window.top !== window) return;
-    window.EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource;
+    window.EventSource = class { readyState = 0; addEventListener() {} removeEventListener() {} close() {} };
     window.__calls = []; window.__pending = []; window.__nativeOrigin = ''; window.__boot = [];
     window.__TAURI__ = {core:{invoke: (command, args) => {
       if (command === 'bridge' && args.name === 'bootTiming') window.__boot.push(args.body);
@@ -326,7 +326,7 @@ async function hostedHandshake(browser: Browser, current: boolean) {
   await page.addInitScript({content:`
     (() => {
     if (window.top !== window) return;
-    window.EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource;
+    window.EventSource = class { readyState = 0; addEventListener() {} removeEventListener() {} close() {} };
     window.__calls = []; window.__pending = [];
     window.__TAURI__ = {core:{invoke: (command, args) => {
       if (command !== 'bridge' || args.name !== 'visualOrigin') return Promise.resolve(null);
