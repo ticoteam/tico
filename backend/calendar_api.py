@@ -32,9 +32,11 @@ from pydantic import Field
 
 from . import audit_log as _audit_log
 from . import calendar_derived as _derived
+from . import calendar_events as _calendar_events
 from . import calendar_store as _store
 from . import connectors as _connectors
 from . import gcal_live as _gcal
+from . import gcal_watch as _gcal_watch
 from . import google_workspace as _workspace
 from . import groups as _groups
 from . import people as _people
@@ -52,6 +54,8 @@ groups: Any = _groups
 people_mod: Any = _people
 reach: Any = _reach
 gcal: Any = _gcal
+gcal_watch: Any = _gcal_watch
+calendar_events: Any = _calendar_events
 derived: Any = _derived
 cal_store: Any = _store
 
@@ -1516,12 +1520,17 @@ def _record_google(c: Any, who: Any, caller: Row, action: str, occ: Row, calenda
         )
     target = "calendar_google:" + str(occ.get("occurrence_id") or calendar_id)
     audit_log.write(c, caller["actor"], target, None, {"calendar": "google:" + calendar_id, "action": action})
-    H.event(
+    occurrence = str(occ.get("occurrence_id") or "")
+    written = str(occ.get("event_id") or "") or occurrence.removeprefix("google:" + calendar_id + ":")
+    # The watcher then takes this write as Tico's own and does not announce it a second time.
+    gcal_watch.own_write(c, calendar_id, written, cancelled=action == "cancelled")
+    calendar_events.emit(
         c,
         who.actor,
-        "calendar.event." + action,
+        action,
         str(occ.get("event_id") or occ.get("occurrence_id") or ""),
-        {"calendar_id": "google:" + calendar_id, "home": "google", **({"bot": bot} if bot else {})},
+        calendar_events.google_detail(calendar_id, occurrence or None, **({"bot": bot} if bot else {})),
+        mailbox=calendar_id,
     )
     c.execute(
         "INSERT INTO changes(topic, kind, subject_id, ref, actor, created_at) VALUES('calendar','google',?,?,?,?)",

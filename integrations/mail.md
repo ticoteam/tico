@@ -53,8 +53,8 @@ copies of another system's notifications, so bots do not see them twice.
 Inside a turn `HUB_BOT` and `HUB_DIR` are set, so the tool knows who you are; `--as <slug>`
 is for running it by hand. Add `--mailbox <address>` when you hold more than one.
 
-For appointments, prefer the Hub tools. `tico_calendar_schedule` returns a durable action, not
-instant success. Poll `tico_calendar_status`; only `succeeded` confirms the event. `unknown` means
+For appointments, prefer the Hub tools. `tico_calendar_schedule` returns a receipt; only `succeeded`
+confirms the event (`tico_calendar_status` reads it again). `unknown` means
 the provider result could not be reconciled and must be inspected before any retry. This grant
 does not allow the bot to draft or send unrelated email.
 
