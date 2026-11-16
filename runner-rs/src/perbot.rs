@@ -110,6 +110,7 @@ pub fn mcp_for_run(
     granted: &BTreeSet<String>,
     runtime: &str,
     harness: &str,
+    proxied: &[crate::env::ProxiedTool],
 ) -> (Vec<Value>, Vec<String>) {
     let Some(declared) = crate::manifest::read(path) else {
         return (vec![], vec![]);
@@ -120,7 +121,7 @@ pub fn mcp_for_run(
         .filter(|(k, _)| granted.contains(*k))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let (servers, mut problems) = crate::mcp::servers_for_run(&tools, &visible);
+    let (servers, mut problems) = crate::mcp::servers_for_run(&tools, &visible, proxied);
     for (server, why) in crate::mcp::unsupported(&servers, runtime, harness) {
         problems.push(format!(
             "{}: MCP server not passed. {why}",
@@ -150,7 +151,7 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         let granted: BTreeSet<String> = ["LINEAR_KEY".to_string()].into_iter().collect();
-        let (servers, problems) = mcp_for_run(&dir, &env, &granted, "codex", "");
+        let (servers, problems) = mcp_for_run(&dir, &env, &granted, "codex", "", &[]);
         assert_eq!(
             servers
                 .iter()
@@ -161,7 +162,7 @@ mod tests {
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert!(problems[0].starts_with("notion: MCP server not passed, NOTION_KEY is not granted"));
         assert!(problems[1].starts_with("docs: MCP server not passed. Codex cannot use it"));
-        let (servers, _) = mcp_for_run(&dir, &env, &granted, "claude", "");
+        let (servers, _) = mcp_for_run(&dir, &env, &granted, "claude", "", &[]);
         assert_eq!(servers.len(), 2);
         std::fs::remove_dir_all(dir).ok();
     }

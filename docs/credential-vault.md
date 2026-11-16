@@ -37,7 +37,8 @@ An API tool's keys (Tools) are delivered one of two ways. **Proxy**, the default
 the key never leaves the server. In its place the run gets a proxy token in the key's variable and the proxy's address
 in `TICO_TOOL_<ID>_URL`; it calls `$TICO_TOOL_<ID>_URL/<path>` with the token where the key goes (or `tico tool call`),
 and `/api/v2/tool-proxy/<id>/<path>` checks the token, picks the key by the caller's level (a Read caller gets the read
-key; with no read key it may only make GET, HEAD and OPTIONS calls), sends the call on with the vendor's auth, scrubs
+key; with no read key it may only make GET, HEAD and OPTIONS calls, and POSTs that are MCP calls which only read: the
+session's set-up, listings, and `tools/call` of a tool the server's own `tools/list` marks `readOnlyHint`), sends the call on with the vendor's auth, scrubs
 the key out of the answer and logs one row (path and query keys, never values or bodies) on the tool's Activity. A token
 is signed by the server, names one tool and one bot, and works only while the run it was made for is leased or running
 (a watcher's while its bot is assigned to that computer, for at most 12 hours); taking the level away stops the next
@@ -45,7 +46,14 @@ call. The proxy sends only to a public https address: it resolves the tool's nam
 address it resolves to is not public (a cell's metadata service, this machine, a private network), and connects to the
 address it checked, keeping the name for Host and TLS (backend/egress.py). **Computer** is the older way, and what every tool stored before Tools had: the value goes to the run's
 environment as above, so whoever controls that computer can read it. Tools lists those under Needs you with
-"Move to proxy".
+"Move to proxy". One exception holds a bot at Read to reads on a computer tool too: a bot granted Read gets the tool's
+read key when there is one, else (only a Read and write key) a proxy token as for a proxied tool, so its calls go through
+the proxy's Read rules; a tool with no API address cannot be held to reads, and Who can use it marks that bot's row.
+
+A remote MCP server a bot declares in bot.yaml whose key Tico holds (a proxied tool, or Read as above) is reached
+through the proxy too: the runner sends it to `$TICO_TOOL_<ID>_URL` plus the server's path under the tool's API address,
+with the run's proxy token in its header, and the proxy puts the key in its place. A server whose address is not under
+the tool's API address is not passed, and the turn's diagnostics say which address to set.
 
 Model credentials named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY` infer
 that variable when the optional variable field is blank. An explicit variable always wins. For a stored API key or token,

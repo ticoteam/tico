@@ -89,7 +89,7 @@ def mcp(name, servers):
         return {"use": "mcp", "server": name, "present": False, "servers": sorted(servers or {})}
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
     headers.update(server.get("headers") or {})
-    statuses, tools, text = [], [], ""
+    statuses, tools, text, errors = [], [], "", []
 
     def rpc(method, params=None, rid=None):
         message = {"jsonrpc": "2.0", "method": method, **({"params": params} if params is not None else {})}
@@ -97,6 +97,8 @@ def mcp(name, servers):
             message["id"] = rid
         status, body, answer_headers = _send(server["url"], data=json.dumps(message).encode(), headers=headers)
         statuses.append(status)
+        if not 200 <= status < 300:
+            errors.append(body[:300])
         session = answer_headers.get("Mcp-Session-Id") or answer_headers.get("mcp-session-id")
         if session:
             headers["Mcp-Session-Id"] = session
@@ -113,7 +115,16 @@ def mcp(name, servers):
         if tools:
             done = rpc("tools/call", {"name": tools[0], "arguments": {"order": "42"}}, 3)
             text = " ".join(c.get("text", "") for c in (done.get("result") or {}).get("content", []))
-    return {"use": "mcp", "server": name, "present": True, "statuses": statuses, "tools": tools, "text": text}
+    return {
+        "use": "mcp",
+        "server": name,
+        "present": True,
+        "url": server["url"],
+        "statuses": statuses,
+        "errors": errors,
+        "tools": tools,
+        "text": text,
+    }
 
 
 def login(site):

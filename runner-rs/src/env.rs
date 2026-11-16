@@ -215,6 +215,8 @@ pub struct ProxiedTool {
     pub env: String,
     pub url_env: String,
     pub url: String,
+    /// The vendor address the proxy forwards to (the tool's API address), or empty from an older server.
+    pub base: String,
 }
 
 /// The proxy address a grant names, or None for a grant that carries its real value (a `computer` tool, or a server
@@ -242,6 +244,7 @@ pub fn proxied_tool(item: &Value, server: &str) -> Option<ProxiedTool> {
         env,
         url_env: url_env.to_string(),
         url,
+        base: item["base_url"].as_str().unwrap_or_default().to_string(),
     })
 }
 

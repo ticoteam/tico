@@ -120,6 +120,30 @@ def _held(c, tool_id, subject):
     return out
 
 
+def computer_way(c, row, subject):
+    """How one key of a tool whose keys go to computers reaches `subject`'s run:
+    - `key`: as it is;
+    - `skip`: held at Read, and a read key of the same tool goes instead (the read key is preferred);
+    - `proxy`: held at Read with only a Read and write key: the run gets a proxy token, and the proxy lets only reads
+      through (backend/tool_proxy.py);
+    - `unenforced`: as `key`, because nothing can hold it to reads: the tool has no API address the proxy can call.
+    A key on no tool, or held at Read and write, is `key`."""
+    if not row["tool_id"] or row["access_level"] == "read":
+        return "key"
+    held = _held(c, row["tool_id"], subject_of(c, subject))
+    mine = [level for key, level in held if key["id"] == row["id"]]
+    if not mine or mine[0] != "read":
+        return "key"
+    if any(key["access_level"] == "read" and key["ciphertext"] is not None for key, _level in held):
+        return "skip"
+    tool = c.execute("SELECT * FROM tools WHERE id=?", (row["tool_id"],)).fetchone()
+    from .tool_proxy import address_problem
+
+    if tool is not None and not address_problem(tool["base_url"] or "", tool["name"] or tool["id"]):
+        return "proxy"
+    return "unenforced"
+
+
 def subject_level(c, tool_id, subject):
     """`read`, `read_write` or None: the highest level `subject` holds on the tool over its effective grants."""
     levels = [level for _key, level in _held(c, tool_id, subject_of(c, subject))]
@@ -426,10 +450,17 @@ def access_rows(c, who, tool_id, admins, auth=None):
         subject = "bot:" + row["bot"] if row["bot"] else row["actor"]
         if (row["at"] or "") > used.get(subject, ""):
             used[subject] = row["at"]
+    tool = c.execute("SELECT delivery FROM tools WHERE id=?", (tool_id,)).fetchone()
+    on_computers = tool is not None and tool["delivery"] != "proxy"
     out = []
     for subject, level in found.items():
         name = label.get(subject) or H.actor_id(subject)
-        out.append({"subject": subject, **_person(subject, name), "level": level, "last_used_at": used.get(subject)})
+        row = {"subject": subject, **_person(subject, name), "level": level, "last_used_at": used.get(subject)}
+        # Read on a computer tool is held to reads by the proxy; with no API address nothing can, and the row says so.
+        if on_computers and level == "read" and subject.startswith("bot:"):
+            if any(computer_way(c, k, subject) == "unenforced" for k in keys.values() if k["ciphertext"] is not None):
+                row["read_not_enforced"] = True
+        out.append(row)
     return sorted(out, key=lambda r: (r["kind"] != "person", r["name"].lower()))
 
 

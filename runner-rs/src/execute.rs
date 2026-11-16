@@ -1691,9 +1691,16 @@ impl Runner {
         granted: &std::collections::BTreeSet<String>,
         runtime: &str,
         config: &Value,
+        proxied: &[crate::env::ProxiedTool],
     ) -> Vec<Value> {
-        let (servers, problems) =
-            crate::perbot::mcp_for_run(path, env, granted, runtime, &text_of(&config["harness"]));
+        let (servers, problems) = crate::perbot::mcp_for_run(
+            path,
+            env,
+            granted,
+            runtime,
+            &text_of(&config["harness"]),
+            proxied,
+        );
         for line in problems {
             self.diagnose(aid, &line);
         }
@@ -2519,7 +2526,7 @@ impl Runner {
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                 add_dirs: crate::company_skills::with_dir(p.add_dirs.clone(), company_skills.as_deref()),
                 company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config),
+                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault.names, &runtime, &config, &vault.tools),
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.private),
@@ -3122,7 +3129,7 @@ impl Runner {
                     gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                     add_dirs: crate::company_skills::with_dir(place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(), company_skills.as_deref()),
                     company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                    mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config),
+                    mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault.names, &hop.runtime, &hop_config, &vault.tools),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
                     memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.private)),

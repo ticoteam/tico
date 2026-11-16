@@ -16,6 +16,11 @@ derived from the vault's data key, and names the tool, the grant subject and wha
 - `g`: an external agent's standing credential (backend/agents.py); valid while it is not revoked, for TTL.
 Every call also re-reads the subject's level, so taking a level away stops the next call, not the next run.
 
+At Read with only a Read and write key, the proxy lets through GET, HEAD and OPTIONS, and a POST only as MCP calls that
+read (`MCP_READS`, and `tools/call` of a tool the server's own tools/list marked `readOnlyHint`). A bot held at Read on a
+tool whose keys go to computers is sent here too, when the tool has an API address (backend/api_tools.py
+`computer_way`).
+
 Refusals are the app's error envelope with a `detail` that names the one setting that would change it.
 """
 
@@ -43,6 +48,25 @@ TOKEN_RE = re.compile(r'tpx1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+')
 SAFE = frozenset(('GET', 'HEAD', 'OPTIONS'))
 METHODS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']
 MAX_BODY = 25 * 1024 * 1024
+# MCP over HTTP is JSON-RPC in POST bodies. At Read with only a Read and write key these calls pass, as reads: the
+# session's own set-up and listings, and `tools/call` of a tool the server's own tools/list marked readOnlyHint.
+MCP_READS = frozenset(
+    (
+        'initialize',
+        'ping',
+        'tools/list',
+        'resources/list',
+        'resources/templates/list',
+        'resources/read',
+        'prompts/list',
+        'prompts/get',
+        'completion/complete',
+        'logging/setLevel',
+    )
+)
+READ_ONLY_TOOLS = {}  # {tool id: {MCP tool name}}: what the vendor's latest tools/list marked read-only
+MAX_LISTING = 4 * 1024 * 1024
+MAX_NAMES = 5000
 TTL = 12 * 3600  # a watcher's or an agent's token; a run's lasts exactly as long as its attempt
 TIMEOUT = httpx.Timeout(120.0, connect=10.0, pool=10.0)
 RESOLVE_BUDGET = 10.0
@@ -126,6 +150,8 @@ def runtime_item(c, vault, settings, row, tool, subject, *, attempt='', runner='
         'tool': tool['name'] or tool['id'],
         'proxy_url': proxy_url(settings, tool['id']),
         'url_env': url_env(tool['id']),
+        # The vendor address the proxy forwards to: the runner sends a declared MCP server under it through the proxy.
+        'base_url': tool['base_url'] or '',
     }
 
 
@@ -196,6 +222,67 @@ def found_token(request, scheme):
         if match:
             return match.group(0), where
     return '', ''
+
+
+def rpc_calls(body):
+    """[(method or None, params)] for a JSON-RPC body, one message or a batch; None when the body is not JSON-RPC. A
+    message without a method is the client's answer to the server (None)."""
+    try:
+        data = json.loads(body or b'')
+    except ValueError:
+        return None
+    items = data if isinstance(data, list) else [data]
+    if not items or not all(isinstance(m, dict) and m.get('jsonrpc') == '2.0' for m in items):
+        return None
+    out = []
+    for m in items:
+        method = m.get('method')
+        if method is None and ('result' in m or 'error' in m):
+            out.append((None, {}))
+        elif isinstance(method, str):
+            out.append((method, m.get('params') if isinstance(m.get('params'), dict) else {}))
+        else:
+            return None
+    return out
+
+
+def mcp_write(tool_id, calls):
+    """'' when every call only reads, else the first call that may write, named for the refusal."""
+    for method, params in calls:
+        if method is None or method in MCP_READS or method.startswith('notifications/'):
+            continue
+        if method == 'tools/call':
+            name = str(params.get('name') or '')
+            if name and name in READ_ONLY_TOOLS.get(tool_id, ()):
+                continue
+            return f'the MCP tool {name or "(unnamed)"}, which its server does not mark read-only'
+        return f'the MCP call {method}'
+    return ''
+
+
+def learn_read_only(tool_id, data):
+    """Note which tools a tools/list answer (JSON, or server-sent `data:` lines) marks `readOnlyHint`; a tool listed
+    without it is taken off."""
+    messages = []
+    try:
+        messages.append(json.loads(data))
+    except ValueError:
+        for line in data.splitlines():
+            if line.startswith(b'data:'):
+                try:
+                    messages.append(json.loads(line[5:]))
+                except ValueError:
+                    continue
+    known = READ_ONLY_TOOLS.setdefault(tool_id, set())
+    for m in messages:
+        tools = ((m or {}).get('result') or {}).get('tools') if isinstance(m, dict) else None
+        for t in tools if isinstance(tools, list) else []:
+            if not isinstance(t, dict) or not isinstance(t.get('name'), str):
+                continue
+            if (t.get('annotations') or {}).get('readOnlyHint') is True and len(known) < MAX_NAMES:
+                known.add(t['name'])
+            else:
+                known.discard(t['name'])
 
 
 def logged_path(rest, query):
@@ -306,6 +393,15 @@ def outgoing_query(query, tool, key):
     return '&'.join(kept + [quote(param, safe='') + '=' + quote(key, safe='')])
 
 
+def read_only_detail(who, name, mcp=''):
+    if mcp:
+        return (
+            f"{who}'s level on {name} is Read: GET calls and MCP calls that only read, and {mcp} may write. "
+            'Add a read key or set Read and write.'
+        )
+    return f"{who}'s level on {name} is Read: only GET calls. Add a read key or set Read and write."
+
+
 def refused(status, code, detail):
     return JSONResponse(
         {'error': {'code': code, 'detail': detail, 'retryable': False}},
@@ -374,14 +470,10 @@ def install(app, store):
             problem = address_problem(tool['base_url'] or '', name)
             if problem:
                 return (403, 'tool_address', problem, log), None
-            if level == 'read' and credential['access_level'] != 'read' and method not in SAFE:
-                who = api_tools._label(c, subject)
-                return (
-                    403,
-                    'forbidden',
-                    f"{who}'s level on {name} is Read: only GET calls. Add a read key or set Read and write.",
-                    log,
-                ), None
+            reads_only = level == 'read' and credential['access_level'] != 'read'
+            who = api_tools._label(c, subject) if reads_only else ''
+            if reads_only and method not in SAFE and method != 'POST':
+                return (403, 'forbidden', read_only_detail(who, name), log), None
             key = vault.cipher.decrypt(c, credential)
             return None, {
                 'tool': dict(tool),
@@ -390,6 +482,9 @@ def install(app, store):
                 'where': where,
                 'subject': subject,
                 'level': level,
+                'reads_only': reads_only,
+                'who': who,
+                'name': name,
             }
 
     @app.api_route(PREFIX + '{tool_id}/{path:path}', methods=METHODS, include_in_schema=False)
@@ -410,6 +505,7 @@ def install(app, store):
                     None, record, tool_id, None, log[0], log[1], method, shown, status, 'refused', detail, began
                 )
             return refused(status, code, detail)
+        assert ready is not None  # plan answers a refusal or a plan
         tool, credential, key = ready['tool'], ready['credential'], ready['key']
         secrets = secrets_of(key, credential.get('username') or '')
         log = lambda status, result, detail: loop().run_in_executor(
@@ -437,6 +533,15 @@ def install(app, store):
                 await log(413, 'refused', 'Request body over 25 MB')
                 return refused(413, 'too_large', 'A tool call sends at most 25 MB.')
             chunks.append(chunk)
+        calls = rpc_calls(b''.join(chunks)) if method == 'POST' else None
+        if ready['reads_only'] and method == 'POST':
+            # A POST passes at Read only as MCP calls that only read.
+            write = mcp_write(tool_id, calls) if calls is not None else 'not MCP'
+            if write:
+                detail = read_only_detail(ready['who'], ready['name'], '' if calls is None else write)
+                await log(403, 'refused', detail)
+                return refused(403, 'forbidden', detail)
+        listing = bool(calls) and any(m == 'tools/list' for m, _ in calls)
         url = tool['base_url'].rstrip('/') + '/' + rest.lstrip('/')
         query = outgoing_query(query, tool, key)
         url += ('?' + query) if query else ''
@@ -480,16 +585,21 @@ def install(app, store):
             and not name.lower().startswith(RESPONSE_DROP_PREFIXES)
         ]
         scrubber = Scrubber(secrets)
+        heard = [] if listing else None
 
         async def body():
             try:
                 async for chunk in upstream.aiter_bytes():
+                    if heard is not None and sum(map(len, heard)) < MAX_LISTING:
+                        heard.append(chunk)
                     out = scrubber.feed(chunk)
                     if out:
                         yield out
                 tail = scrubber.end()
                 if tail:
                     yield tail
+                if heard:
+                    learn_read_only(tool_id, b''.join(heard))
             finally:
                 await upstream.aclose()
                 await client.aclose()
