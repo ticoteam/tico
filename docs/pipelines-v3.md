@@ -1453,14 +1453,29 @@ Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and 
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
 - **Right: the task's chat.** Its own thread, as on the task page (a message here is there too, and the reverse), with
-  the ask as the asker's last message: who asked, when, "needs you" and "#80 ↗", then "Approve the spec for Checkout
+  the ask as the asker's last message: who asked and when on one line (the name cut first), "#80 ↗" at its right end
+  (a paused or stuck asker is a small mark, never a card), then "Approve the spec for Checkout
   flow", its one why line and any choices to tap. Under the chat's box only "Approve" (main; "Approve with comments"
   while the box has words, which go with the approval, as its note or, on an OK bound to exactly what it shows, as a
   comment after it), the snooze icon and ⋯. The box's arrow sends the words: on an OK that is its send back (the
   answer "no", the words its note, as before); on a bot's question a reply named for it, which wakes the bot, and the
   question leaves your Flow until the bot writes on the task again (or a week passes): the bot takes the reply as the
   answer and withdraws its question, or asks again; a person's or a stage's question takes the words as its answer.
-  On a phone the task folds to its title, with "Read the task" ("Read the spec · v3" on a page) to open it.
+  A page's OK always asks its question ("OK the spec?"), then one line of what changed (else Jev's take) and your
+  points; your note on the version before is your own message above the ask, never inside it. A Validate or QA OK
+  shows its question, then the verdict as up to 3 short check rows (the ask's brief), else one line, and Proof, which
+  opens the Proof tab on a phone; a long review is the asker's message above it. A task's chat is named for the task
+  as it is now, so its box reads "Message <task title>".
+  An action's OK holds a small receipt in the ask (the amount large, then To, From, When and the document), and its
+  forward button says what it does: "Pay $1,240.00", "Send email"; a Validate or QA OK's says "OK".
+  On a phone one row holds the task's title and two tabs: Chat, where each item opens (nothing is remembered from the
+  last), and a second named for what it holds: Spec, Proof (a Validate or QA OK), Invoice or Email (an action's OK), else
+  Task. It shows the task open, never behind a chevron: title, text, page, files, a live browser. The chat sits on its
+  box: the ask last, older messages above. One bottom row: Snooze left, the forward action stretched in the middle, ⋯
+  at the far right (a sheet from the bottom edge with a grab line and 52 px rows over a dim backdrop; a tap
+  outside or Esc closes it); a question with no button action has the chat's box as
+  that middle. With words typed on an OK the arrow goes quiet, "Approve with comments" the one filled control. A
+  browser ask's forward action is "Open browser", then "Done" once back from it.
 
 **Opening a task opens its ask.** A task waiting on your own answer (any of its waits, not only the first) opens on this screen from anywhere (the board, a
 task list, a `#/task/<id>` link, a link in chat, a bot's page), with ‹ › through the rest of Needs you; any other task
@@ -1489,8 +1504,9 @@ The phone view is in [S17](#s17-on-a-phone). What changed since the version you 
   closes the task with what is typed in the item's box as the reason, with no confirm, and moves on; ↶ reopens it. The
   reason goes on the close in the task's history, and a bot that asked for the task (not the one that owns it) hears
   "Closed: <title>" with it on its next run.
-- **After an answer:** ↶ alone in the top bar, named Undo, with no word beside it; it fades after 4 seconds, and stays
-  while it has the keyboard's focus.
+- **After an answer:** the next item shows at once, and Tico's line reads "✓ Approved with comments · Undo" (what was
+  done) for about 5 seconds, then the new item's line; it stays while Undo has the keyboard's focus. Tico's line wraps
+  to two lines and is never cut; a green thumb leads it when Tico would approve.
 - **Snooze:** one menu, 1 hour, 1 day, 1 week, 1 month (each exactly that long from now) and Other (a date and time of
   your own, in the same menu). On an ask it is a quiet clock icon at the end of the answer row, in Skip's place, and
   snoozes the ask for you alone (#3769): it stays in everyone else's Needs you and its bot is not told. On your own
@@ -1822,7 +1838,7 @@ Rules:
 - A long sentence wraps on a phone.
 - On an ask the screen scrolls as one: the thing asked about, then the question, Notes and Attach. Approve, Send back
   and Snooze (or the ask's own buttons) sit in a bar pinned to the bottom, solid, above the keyboard when it is up.
-  "Approved · Undo" shows above that bar, never over it. An ask with nothing to show opens on its question.
+  "✓ Approved · Undo" shows in Tico's line, never over that bar. An ask with nothing to show opens on its question.
 - On a phone Send back is always on; with Notes empty it sends nothing and puts the cursor in Notes, "Say what to change".
 - After an answer or Skip, the next item's buttons take no taps for 400 ms, so a second tap does not answer it unread.
 - A pipeline shows one stage at a time.

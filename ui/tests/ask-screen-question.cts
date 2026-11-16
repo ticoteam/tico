@@ -2,13 +2,13 @@ import type {Locator, Page, Route} from 'playwright';
 // Offline browser check of a question on Flow's ask screen (#3786; Tasks spec "Bots ask people a question with
 // choices"), against a fake of the routes, on a 390 px phone and a 1280 px desktop. The question is answered in its
 // task's chat (decide.ts decideChatMount):
-// - the question once, in full, as the asker's last message: who asked, the date, "needs you", #N ↗;
+// - the question once, in full, as the asker's last message: who asked, the date, #N ↗ at the right;
 // - in it the bot's why line and its choices (each with its line, Recommended on the one it recommends) to tap;
 // - under the chat's box only Snooze and ⋯ (Close task, Give to…), ⋯ last; it opens and moves by keyboard, Esc closes
 //   it onto ⋯;
 // - the composer's arrow sends a reply named for the question and leaves it with the bot (snoozed for the person);
 //   a person's question takes the words as its answer;
-// - the task: on the left, open, on a wide screen; folded to its title with Read the task on a phone;
+// - the task, open (no chevron): on the left on a wide screen; in the Task tab on a phone, which opens on Chat;
 // - nothing is said twice: the question and the task's title each show once.
 // FLOW_SHOTS_DIR=build/flow-shots writes question-phone.png and question-desktop.png.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -106,12 +106,12 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       await bg.locator('.dc-md').waitFor({state: 'attached'});   // the task's read has come
 
       // The question once, in full, as the asker's last message; the task's title once, on the left.
-      const all = await dialog.evaluate(el => (el as HTMLElement).innerText + ' ' + [...el.querySelectorAll('details:not([open]) .dc-bg-body')].map(d => d.textContent).join(' '));
+      const all = await dialog.evaluate(el => (el as HTMLElement).innerText + ' ' + '');
       assert.equal(await dialog.locator('.dc-q').count(), 1, label);
       assert.equal(await dialog.locator('.dc-chat .dc-msg-ask .dc-q').innerText(), Q[0], `${label}: the question as asked`);
       assert.equal(times(all, Q[0]!), 1, `${label}: the question shows once`);
       assert.equal(times(all, 'Short title 1'), 0, `${label}: the ask's short title is not a heading`);
-      assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Reviewer 2·.+·needs you·#1 ↗$/, label);
+      assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Reviewer 2·.+#1 ↗$/, label);
       assert.equal(await dialog.locator('.dc-why').innerText(), WHY, label);
       assert.deepEqual(await dialog.locator('.dc-choice .dc-choice-name').allInnerTexts(), CHOICES, label);
       assert.deepEqual(await dialog.locator('.dc-choice .dc-choice-line').allInnerTexts(), DETAILS, label);
@@ -126,18 +126,18 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       const end = await box(dialog.locator('.dc-side [data-key] > .dc-acts'));
       assert.ok(row[0]!.x < row[1]!.x && end.x + end.width - (row[1]!.x + row[1]!.width) <= 20, `${label}: Snooze · ⋯, ⋯ last`);
 
-      // The task: on the left, open, on a wide screen; on a phone folded to its title, Read the task opens it.
+      // The task: on the left, open, on a wide screen; on a phone in the Task tab, open, no chevron.
       if (phone) {
-        assert.equal(await dialog.locator('.dc-thing').isVisible(), false, `${label}: the task folds away`);
-        assert.equal(await dialog.locator('.dc-fold h3').innerText(), TITLES[0], label);
-        await dialog.locator('[data-dc="fold"]').click();
-        if (!await bg.evaluate(el => (el as HTMLDetailsElement).open)) await bg.locator('summary').click();
+        assert.equal(await dialog.locator('.dc-thing').isVisible(), false, `${label}: it opens on the Chat tab`);
+        await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click();
+        assert.equal(await bg.locator('.dc-bg-t').innerText(), TITLES[0], label);
+        assert.equal(await dialog.locator('.dc-thing details, .dc-thing summary').count(), 0, `${label}: the task open, no chevron`);
         await bg.locator('.dc-md').waitFor();
         assert.match(await bg.locator('.dc-md').innerText(), /Needs from the owner/, `${label}: it opens to the task's text`);
-        await dialog.locator('[data-dc="fold"]').click();
+        await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').click();
       } else {
         const thing = await box(dialog.locator('.dc-thing')), side = await box(dialog.locator('.dc-side'));
-        assert.equal(await bg.evaluate(el => (el as HTMLDetailsElement).open), true, `${label}: open on the left`);
+        assert.ok(await bg.locator('.dc-md').isVisible(), `${label}: open on the left, no chevron`);
         assert.ok(thing.x + thing.width <= side.x + 1, `${label}: the task is the left pane`);
       }
       const sideways = await page.evaluate(() => Math.max(document.documentElement.scrollWidth, document.querySelector('#need-card')!.scrollWidth) - innerWidth);
@@ -176,13 +176,13 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       await calm();
 
       // A person's question: its choices answer it.
-      assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Ben·.+·needs you·#3 ↗$/, label);
+      assert.match(await dialog.locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^Ben·.+#3 ↗$/, label);
       await dialog.locator('[data-dc-choice="Green"]').click();
       await page.waitForFunction(() => !document.querySelector('#need-card [data-dc-choice="Green"]'));
       assert.deepEqual(writes.find(w => w.p.endsWith('/r3/answer')), {p: '/api/v2/tasks/t3/asks/r3/answer', body: {value: 'Green', version: 3}}, label);
       assert.deepEqual(errors, [], label);
       await page.close();
     }
-    console.log('PASS: a question in its task\'s chat: once, in full, with who asked; its choices to tap; the arrow replies and leaves it with the bot; ⋯ by keyboard; the task on the left or folded on a phone.');
+    console.log('PASS: a question in its task\'s chat: once, in full, with who asked; its choices to tap; the arrow replies and leaves it with the bot; ⋯ by keyboard; the task open on the left or in a phone\'s Task tab.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

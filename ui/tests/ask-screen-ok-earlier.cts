@@ -3,7 +3,8 @@ import type {Route} from 'playwright';
 // Tico Team's task #72 showed only its title, and Tico's line said "Ask shows no release content".
 // - It shows the task's page from the earlier stage (the QA page, at its version), not the task's title and text;
 // - the ask, as the asker's last message in the task's chat, says who asked, when, that stage, the page's version and
-//   the task (#72 ↗), on desktop and phone, where the page is behind Read the task;
+//   the task (#72 ↗), on desktop and phone, where the page is in the Proof tab; under the question the verdict, as up to
+//   3 short check rows (the ask's brief details), and on a phone Proof, which opens the Proof tab;
 // - Approve stays on and answers the OK alone (no page version: it is not a page's OK);
 // - an OK the server gave no earlier page (none, or one the reader may not open) shows the task's title and text.
 // TICO_UI_SHOTS=<dir> saves ok-release-page-desktop.png and ok-release-page-phone.png.
@@ -25,7 +26,8 @@ const need = (task: string, title: string, number: number, hour: number, earlier
   kind: 'ask', id: `v-${task}:${RID}`, task_id: task, requirement_id: RID, line: 'OK the release', since: `2026-11-15T${hour}:00:00Z`,
   task: brief(task, title, number),
   ask: {requirement_id: RID, kind: 'ok', line: 'OK the release', who: 'human:chris', asked_by: null, choices: null, may: ['ok', 'no'],
-    met: false, shows: [], standing: 'waiting', answer: null, ...(earlier ? {earlier} : {})}});
+    met: false, shows: [], standing: 'waiting', answer: null, ...(earlier ? {earlier} : {}),
+    brief: {why: 'QA passed on the release candidate.', details: ['Checks pass at 9f3c2a1', 'Cart kept when the tab closes', 'No console errors', 'Phone layout holds'], recommend: null}}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:chris', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
   stages: ['product-qa:QA', 'product-ok-release:OK release'].map(s => ({id: s.split(':')[0], name: s.split(':')[1], purpose: '', owner: null,
@@ -80,12 +82,18 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
 
       // OK release on #72: the QA page, and the ask's one byline in the chat.
       await dialog.locator('.dc-q', {hasText: 'OK the release'}).waitFor();
-      if (label === 'phone') await dialog.locator('[data-dc="fold"]').click();   // the page is behind Read the task
+      // The verdict in the ask: up to 3 short check rows, no long review; Proof (a phone's) opens the Proof tab.
+      assert.deepEqual(await dialog.locator('.dc-msg-ask .dc-checks li').allInnerTexts(), ['Checks pass at 9f3c2a1', 'Cart kept when the tab closes', 'No console errors']);
+      if (label === 'phone') {
+        if (process.env.TICO_UI_SHOTS) { await page.waitForTimeout(900); await page.screenshot({path: path.join(process.env.TICO_UI_SHOTS, 'ok-release-chat-phone.png')}); }
+        await dialog.locator('.dc-msg-ask .dc-proof-link').click();
+        assert.equal(await dialog.locator('[role="tab"][data-dc-tab="task"]').getAttribute('aria-selected'), 'true', 'Proof selects the Proof tab');
+      }
       await frame.waitFor();
       assert.match(await frame.getAttribute('srcdoc') ?? '', /QA: saved carts/);
       assert.equal(await dialog.locator('.dc-thing .dc-title').count(), 0, `${label}: the page, not the task's title and text`);
       const meta = dialog.locator('.dc-side .dc-msg-by');
-      assert.match((await meta.innerText()).replace(/\s*·\s*/g, '·').trim(), /^Ana·.+·QA·v2·needs you·#72 ↗$/);
+      assert.match((await meta.innerText()).replace(/\s*·\s*/g, '·').trim(), /^Ana·.+·QA·v2\s*#72 ↗$/);
       assert.equal(await dialog.locator('.dc-owner').count(), 0, 'who asked is said once, on the byline');
       const pane = (await dialog.locator('.dc-thing').boundingBox())!, box = (await frame.boundingBox())!;
       assert.ok(box.height >= pane.height - 60, `${label}: the page fills the pane (${box.height} of ${pane.height})`);
@@ -98,7 +106,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
       // #73: the server gave no page this reader may open: the task's title and text, as before.
       if (label === 'phone') await page.keyboard.press('ArrowRight');
       else await dialog.locator('[data-dc="next"]').click();
-      if (label === 'phone') { await dialog.locator('.dc-fold h3', {hasText: 'Dark mode toggle'}).waitFor(); await dialog.locator('[data-dc="fold"]').click(); }
+      if (label === 'phone') { await dialog.locator('.dc-q', {hasText: 'OK the dark mode'}).or(dialog.locator('.dc-msg-ask')).first().waitFor(); await dialog.locator('[role="tab"][data-dc-tab="task"]').click(); }
       await dialog.locator('.dc-thing .dc-title', {hasText: 'Dark mode toggle'}).waitFor();
       assert.equal(await frame.count(), 0);
       assert.match(await dialog.locator('.dc-thing').innerText(), /A toggle in Settings for dark mode/);

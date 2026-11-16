@@ -194,21 +194,24 @@ async function start(browser: import('playwright').Browser, hash: string, width:
       assert.deepEqual(errors, [], 'offline: no page errors');
       await page.close();
     }
-    // The ask screen: inline at 1440, full screen at 390; Done answers "Done".
+    // The ask screen: inline at 1440; at 390 Open browser is the bottom row's forward action, full screen, and back from
+    // it the forward action is Done, which answers "Done" (as the view's own Done does).
     for (const width of [1440, 390]) {
       const tag = width < 500 ? 'phone' : 'desktop';
       const {page, errors, sent} = await start(browser, '#/tasks', width, frame);
       await page.locator('[data-need="r1"]').first().waitFor();
       await page.locator('#task-play').click();
       const card = page.locator('#need-card');
-      await card.locator('.dc-browser').waitFor();
+      await card.locator('.dc-browser').waitFor({state: 'attached'});
       await card.locator('[data-dc-choice="Done"]').waitFor();
       let view = card.locator('.dc-browser .bv');
       if (tag === 'phone') {
-        await card.locator('.dc-browser [data-bv-launch]').waitFor();
+        const go = card.locator('.dc-side [data-dc="browse"]');
+        await go.waitFor();
+        assert.equal((await go.innerText()).trim(), 'Open browser', 'phone: Open browser is the forward action');
         assert.equal(await sideways(page), false, 'phone: the ask has no sideways scroll');
         await shot(page, `ask-${tag}`);
-        await card.locator('.dc-browser [data-bv-launch]').click();
+        await go.click();
         view = page.locator('dialog.bv-dialog[open] .bv');
       }
       await view.locator('[data-bv-img]:visible').waitFor();
@@ -233,7 +236,17 @@ async function start(browser: import('playwright').Browser, hash: string, width:
         assert.equal(await sideways(page), false, 'desktop: no sideways scroll');
       }
       await shot(page, `ask-view-${tag}`);
-      await view.locator('[data-bv-done]').click();
+      if (tag === 'phone') {
+        // Back from it, the forward action is Done.
+        await view.locator('[data-bv-close]').click();
+        const done = card.locator('.dc-side [data-dc="browse-done"]');
+        await done.waitFor();
+        assert.equal((await done.innerText()).trim(), 'Done', 'phone: back from the browser, the forward action is Done');
+        await shot(page, `ask-back-${tag}`);
+        await done.click();
+      } else {
+        await view.locator('[data-bv-done]').click();
+      }
       await card.locator('.dc-bar:not([hidden])').waitFor();
       assert.equal(sent('/api/v2/tasks/t-r1/asks/r1/answer')[0]?.value, 'Done', `${tag}: Done answers the ask`);
       await page.locator('dialog.bv-dialog').waitFor({state: 'detached', timeout: 3000});   // the view is closed

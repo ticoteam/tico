@@ -1,14 +1,13 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of the ask screen on a 390 px phone (task #454, spec "Review on a phone"), against a fake of the
 // new routes. An ask is answered in its task's chat (decide.ts decideChatMount):
-// - the task folds to its title (Read the task opens it); the chat and its row take the rest, the row at the bottom;
+// - two tabs, Chat (where each item opens) and Task; the chat and its row take the rest, the row at the bottom;
 // - Approve and Snooze stay fully visible, at least 44 px tall and tappable while ↶ shows: it sits in the top bar;
 // - ‹ › show on the phone, 8 px clear of ✕: next opens the next item and previous comes back;
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
 // - a question shows on screen in its chat, above the row;
 // - with the keyboard up (the visible area shrinks, viewport.ts) the row stays inside it;
-// - an OK with nothing attached (a pitch is the task itself) folds to its task's title, which Read the task opens to its
-//   text; an OK whose only show is a page shows the page and not the task's text;
+// - an OK with nothing attached (a pitch is the task itself) shows its task's title and text in the Task tab; an OK whose only show is a page shows the page and not the task's text;
 // - at 1440 px: two columns, the chat column 420 px, ‹ ›, no tap guard.
 // Each check is collected, so a run on the old code lists every one that fails.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -113,8 +112,8 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-open.png')});
 
     // The task folds to its title; the chat fills the rest, its row at the bottom; each button 44 px.
-    check(!await page.locator('#need-card .dc-thing').isVisible(), 'the task folds away');
-    check(await page.locator('#need-card .dc-fold [data-dc="fold"]').isVisible(), 'Read the task is there');
+    check(!await page.locator('#need-card .dc-thing').isVisible(), 'it opens on the Chat tab');
+    check(await page.locator('#need-card [data-dc="tab"][data-dc-tab="task"]').isVisible(), 'the Task tab is there');
     await page.locator('#need-card .dc-chat .p-text').waitFor();
     const bar = (await box(page, `${approve} >> xpath=..`))!;
     check(VIEW.height - (bar.y + bar.height) <= 24, `the row is at the bottom of the screen (${bar.y + bar.height})`);
@@ -143,8 +142,8 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     }
     await page.locator(`${approve}:not([disabled])`).waitFor();
 
-    // Approve: ↩ in the top bar, left of ‹ ›, over nothing: not the page, not the buttons; all three buttons visible,
-    // 44 px, and reached by a tap.
+    // Approve: "✓ Approved · Undo" in Tico's line slot, over nothing else: not the page, not the buttons; all three
+    // buttons visible, 44 px, and reached by a tap.
     const spot = (await box(page, approve))!;
     await page.mouse.click(spot.x + spot.width / 2, spot.y + spot.height / 2);
     await at(2);
@@ -153,18 +152,18 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     check(await dialog.locator('.dc-bar:not([hidden])').count() === 1, 'the message still shows');
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-approved.png')});
     const toast = (await box(page, '#need-card .dc-bar'))!, row = (await box(page, `${approve} >> xpath=..`))!;
-    const dcHead = (await box(page, '#need-card .dc-head'))!, nav = (await box(page, '#need-card .dc-nav'))!;
-    check(toast.y >= dcHead.y && toast.y + toast.height <= dcHead.y + dcHead.height && toast.x + toast.width <= nav.x + 1, `the undo sits in the top bar, left of ‹ › (${JSON.stringify(toast)})`);
+    const slot = (await box(page, '#need-card .dc-sayw'))!;
+    check(Math.abs(toast.y - slot.y) < 1 && Math.abs(toast.height - slot.height) < 1, `the undo sits in Tico's line slot (${JSON.stringify(toast)} vs ${JSON.stringify(slot)})`);
+    check((await page.locator('#need-card .dc-bar').innerText()).startsWith('✓ Approved'), 'it says what was done');
     check(toast.y + toast.height <= row.y, `the undo is clear of the buttons (${toast.y + toast.height} > ${row.y})`);
     const undoBtn = (await box(page, '#need-card .dc-bar [data-dc="undo"]'))!;
     check(undoBtn.width >= 44 && undoBtn.height >= 44, `the undo is a 44 px target (${undoBtn.width}x${undoBtn.height})`);
-    check(await page.locator('#need-card .dc-bar [data-dc="undo"]').getAttribute('aria-label') === 'Undo', 'named Undo, no action word');
-    check(!await page.locator('#need-card .dc-bar [role="status"]').evaluate(e => e.getBoundingClientRect().width > 2), 'icon only');
+    check((await page.locator('#need-card .dc-bar [data-dc="undo"]').innerText()).trim() === 'Undo', 'the button says Undo');
     // Nothing of the bar's own moves for it, and it covers nothing: what is under its middle is the undo itself.
     const covers = await page.evaluate(() => {
       const r = document.querySelector('#need-card .dc-bar')!.getBoundingClientRect();
       const under = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      const others = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-nav), #need-card .dc-nav > button')]
+      const others = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-nav):not(.dc-sayw), #need-card .dc-nav > button')]
         .filter(e => e.offsetParent).map(e => e.getBoundingClientRect())
         .filter(o => o.width && o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top);
       return [!!under?.closest('.dc-bar'), others.length];
@@ -216,11 +215,10 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     await bare.locator('[data-need="r5"]').click();
     await bare.locator('#need-card .dc-q', {hasText: 'OK to go ahead?'}).waitFor();
     await bare.locator(`${approve}:not([disabled])`).waitFor();
-    check(await bare.locator('#need-card .dc-fold h3').textContent() === 'Pitch: a weekly digest', 'a bare OK folds to its task\'s title');
-    await bare.locator('#need-card [data-dc="fold"]').click();
+    await bare.locator('#need-card [data-dc="tab"][data-dc-tab="task"]').click();
     const pitch = bare.locator('#need-card .dc-thing .dc-md', {hasText: 'one email on Monday'});
     await pitch.waitFor();
-    check(await bare.locator('#need-card .dc-thing').getByText('Pitch: a weekly digest').count() === 1, 'Read the task: its title once, then its text');
+    check(await bare.locator('#need-card .dc-thing').getByText('Pitch: a weekly digest').count() === 1, 'the Task tab: its title once, then its text');
     if (shots) await bare.screenshot({path: path.join(shots, 'ask-phone-390-empty-ok.png')});
     if (process.env.FLOW_SHOTS) await bare.locator('#need-card .dc-start').waitFor({state: 'detached'}).then(() => bare.screenshot({path: path.join(process.env.FLOW_SHOTS, 'phone-bare-ok.png')}));
     await bare.close();
@@ -233,7 +231,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     await paged.goto('http://tico-ui.test/#/tasks');
     await paged.locator('[data-need="r6"]').click();
     await paged.locator('#need-card .dc-q', {hasText: 'OK the launch plan?'}).waitFor();
-    await paged.locator('#need-card [data-dc="fold"]').click();
+    await paged.locator('#need-card [data-dc="tab"][data-dc-tab="task"]').click();
     await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().waitFor({state: 'attached'});
     check(await paged.locator('#need-card .dc-thing').isVisible(), 'an OK showing only a page keeps its pane');
     check(await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().isVisible(),
@@ -254,7 +252,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     const side = (await box(wide, '#need-card .dc-side'))!, thing = (await box(wide, '#need-card .dc-thing'))!;
     check(Math.abs(side.width - 420) <= 1 && side.y === thing.y, `1440: two columns, the chat column 420 px (${side.width})`);
     check(await wide.locator('#need-card [data-dc="next"]').isVisible(), '1440: › shows');
-    check(!await wide.locator('#need-card .dc-fold').isVisible(), '1440: the task is the left column, not folded');
+    check(!await wide.locator('#need-card .dc-tabs').isVisible(), '1440: the task is the left column, no tabs');
     // The 400 ms tap guard is a phone's: a desktop's buttons answer at once after Approve.
     await wide.locator(approve).click();
     await wide.locator('#need-card .dc-q', {hasText: Q[1]!}).waitFor();
@@ -264,6 +262,6 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
 
     assert.deepEqual(errors, []);
     assert.deepEqual(fails, [], `\n- ${fails.join('\n- ')}`);
-    console.log('PASS: on a phone the task folds to its title above its chat, the row stays tappable under ↶, ‹ › step, a second tap is ignored, a question opens on itself and a bare OK opens to its task.');
+    console.log('PASS: on a phone each item opens on its Chat tab, Task shows the task, the row stays tappable under ↶, ‹ › step, a second tap is ignored, a question opens on itself and a bare OK opens to its task.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

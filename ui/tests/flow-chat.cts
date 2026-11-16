@@ -7,7 +7,7 @@ import type {Route} from 'playwright';
 //   for the person (POST /needs-you/snooze) and moves on; a tapped choice answers;
 // - an OK: Approve alone, "Approve with comments" while the composer has words, which go with the approval as its
 //   note; the arrow sends it back with the words as the note (answer no); ⋯ holds Close task and Give to…;
-// - on a phone the task folds to one row, its title and Read the task, and the chat and its row take the rest; the ask's
+// - on a phone two tabs in one tight row, Chat (where each item opens) and Task (the task open, no chevron); the ask's
 //   byline stays one line, the name cut first; Flow's chat has the day divider only, no "New" line.
 // FLOW_SHOTS=<folder> saves a question, an OK empty and with words, after a reply, and ⋯ open, desktop and phone.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -110,7 +110,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     const ask = chat.locator('.dc-msg-ask');
     await ask.waitFor();
     assert.equal(await chat.locator('.thv-list > :last-child .dc-msg-ask, .thv-list > .dc-msg-ask:last-child').count() >= 1, true, 'the ask is the last message');
-    assert.match(await ask.locator('.dc-msg-by').innerText(), /Agent Services Product Owner.*needs you/s);
+    assert.match(await ask.locator('.dc-msg-by').innerText(), /^Agent Services Product Owner/);
     assert.equal(await ask.locator('.dc-q').innerText(), 'Can you answer my seven setup questions, or take my suggested answers?');
     assert.equal(await ask.locator('.dc-why').innerText(), 'Without them I cannot count who uses these services.');
     assert.deepEqual(await ask.locator('.dc-rec-tag').allInnerTexts(), ['Recommended']);
@@ -169,26 +169,55 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await dialog.getByText('All done').waitFor();
     assert.deepEqual(writes[n], {p: '/api/v2/tasks/t2/asks/r2/answer', body: {value: 'no', version: 3, note: 'Fine, but amber only when more than 3 are stuck'}});
 
-    // ---- 3. On a phone: the task folds to its title, Read the task opens it.
+    // ---- 3. On a phone: two tabs, Chat (where each item opens) and Task (the task open, no chevron).
     needs = [ok()];
     await page.setViewportSize({width: 390, height: 844});
     await dialog.locator('[data-dc="close"]').first().click();
     await page.evaluate('v2Refresh()');
     await page.evaluate('decideFlow(document.body)');
     await approve.and(page.locator(':not([disabled])')).waitFor();
-    assert.equal(await dialog.locator('.dc-thing').isVisible(), false, 'the task folds away');
-    assert.equal(await dialog.locator('.dc-fold h3').innerText(), 'Pipeline boards show where work waits');
-    // One tight row: the title (cut) on the left, Read the task on the right; the ask's byline on one line, #N whole.
-    const [h, read] = [await dialog.locator('.dc-fold h3').boundingBox(), await dialog.locator('[data-dc="fold"]').boundingBox()];
-    assert.ok(h && read && Math.abs((h.y + h.height / 2) - (read.y + read.height / 2)) <= 2 && h.x + h.width <= read.x, `the fold is one row (${JSON.stringify([h, read])})`);
+    const chatTab = dialog.locator('[data-dc="tab"][data-dc-tab="chat"]'), taskTab = dialog.locator('[data-dc="tab"][data-dc-tab="task"]');
+    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat is selected');
+    assert.equal(await dialog.locator('.dc-thing').isVisible(), false, 'Chat: the task is in its own tab');
+    const [c, t] = [await chatTab.boundingBox(), await taskTab.boundingBox()];
+    assert.ok(c && t && c.height >= 44 && Math.abs(c.y - t.y) <= 1, `the tabs are one row of 44 px targets (${JSON.stringify([c, t])})`);
+    // The ask's byline on one line, #N whole.
     const by = chat.locator('.dc-msg-ask .dc-msg-by');
     await by.evaluate(e => { e.querySelector<HTMLElement>('.dc-meta-who')!.textContent = 'A very long name for the bot that asked, longer than a phone line'; });
     const [line, tag] = [await by.boundingBox(), await by.locator('.dc-task-link').boundingBox()];
     assert.ok(line && tag && Math.abs((tag.y + tag.height / 2) - (line.y + line.height / 2)) <= 2 && tag.x + tag.width <= line.x + line.width + 5, `the byline is one line, #N whole (${JSON.stringify([line, tag])})`);
     assert.equal(await by.locator('.dc-meta-who').evaluate(e => e.scrollWidth > e.clientWidth), true, 'the name gives way first');
-    await dialog.locator('[data-dc="fold"]').click();
-    assert.equal(await dialog.locator('.dc-thing').isVisible(), true, 'Read the task opens it');
-    await dialog.locator('[data-dc="fold"]').click();
+    await taskTab.click();
+    assert.equal(await dialog.locator('.dc-thing').isVisible(), true, 'Task shows the task');
+    assert.equal(await dialog.locator('.dc-chat').isVisible(), false, 'and not the chat');
+    assert.match(await dialog.locator('.dc-thing').innerText(), /Your area and its products\./, 'its body, open');
+    assert.equal(await dialog.locator('.dc-thing details, .dc-thing summary').count(), 0, 'no chevron');
+    await chatTab.click();
+    // ⋯ is a sheet from the bottom edge: a grab line, full-width rows apart from the page, a dim backdrop over the rest;
+    // a tap on the backdrop closes it, and so does Esc.
+    await dialog.locator('.dc-side [data-key] [data-dc="ask-more"]').click();
+    const sheet = dialog.locator('.dc-askw .dc-snz');
+    await sheet.waitFor();
+    const look = await sheet.evaluate(e => {
+      const r = e.getBoundingClientRect(), grab = getComputedStyle(e, '::before'), dim = getComputedStyle(e.parentElement!, '::before');
+      const rows = [...e.querySelectorAll<HTMLElement>('.dc-mi')].map(m => [m.getBoundingClientRect().width, m.getBoundingClientRect().height]);
+      return {x: r.left, w: r.width, bottom: r.bottom, grab: [grab.width, grab.height], dim: [dim.position, dim.backgroundColor], rows};
+    });
+    assert.ok(look.x === 0 && look.w === 390 && look.bottom === 844, `the sheet is full width at the bottom (${JSON.stringify(look)})`);
+    assert.deepEqual(look.grab, ['36px', '4px'], 'it has a grab line');
+    assert.ok(look.dim[0] === 'fixed' && /rgba\(0, 0, 0, 0\.5\)/.test(look.dim[1]!), `a dim backdrop (${look.dim})`);
+    assert.ok(look.rows.every(([w, h]) => w === 390 && h! >= 52), `full-width 52 px rows (${JSON.stringify(look.rows)})`);
+    if (process.env.FLOW_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.screenshot({path: require('node:path').join(process.env.FLOW_SHOTS, 'more-sheet-phone.png')});
+    }
+    await page.mouse.click(195, 200);
+    await sheet.waitFor({state: 'detached'});
+    assert.equal(await dialog.isVisible(), true, 'a tap on the backdrop closes the sheet, not Flow');
+    await dialog.locator('.dc-side [data-key] [data-dc="ask-more"]').click();
+    await sheet.waitFor();
+    await page.keyboard.press('Escape');
+    await sheet.waitFor({state: 'detached'});
     // Approve with comments: the words and a file in the box, put back from a draft, go with the approval as its note.
     await composer.fill('Ship it');
     await chat.locator('.p-file').setInputFiles({name: 'proof.txt', mimeType: 'text/plain', buffer: Buffer.from('ok')});
@@ -228,6 +257,6 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
 
     assert.deepEqual(errors, []);
     await page.close();
-    console.log('PASS: an ask in its task\'s chat: the ask as the last message; the arrow replies (a question snoozes until the bot writes) or sends an OK back; Approve with comments; ⋯; the phone folds the task.');
+    console.log('PASS: an ask in its task\'s chat: the ask as the last message; the arrow replies (a question snoozes until the bot writes) or sends an OK back; Approve with comments; ⋯; a phone\'s Chat and Task tabs.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

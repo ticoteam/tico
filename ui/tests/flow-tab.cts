@@ -2,7 +2,8 @@ import type {Page} from 'playwright';
 // Offline browser check of Flow's way in (ui/app/decide.ts decideFlow, tasks.ts flowTabPaint), against a fake of the new routes:
 // - at phone width the bar is Team, Flow, Assistant, Tasks, More; Flow's mark is the tabs' grey with nothing waiting and
 //   jade with something, with no number, and the Tasks tab has no mark;
-// - with nothing waiting Flow opens on All done, with no suggested rules (removed), and Close and ✕ give focus back to the tab;
+// - with nothing waiting Flow opens on All done, with no suggested rules (removed) and no Close of its own, and ✕ gives focus
+//   back to the tab;
 // - with something waiting the tab starts Flow on the first item;
 // - Threads is in More, and More carries its count;
 // - at desktop width Flow's mark beside Tasks is a button: hidden with nothing waiting, and pressed it starts Flow
@@ -102,16 +103,11 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?'];
       assert.equal(await more.getAttribute('aria-label'), '3 to catch up');
       await shot(page, 'phone-nothing-waiting');
 
-      // Nothing waiting: All done, and Close gives focus back to the tab.
+      // Nothing waiting: All done, with one button (no Close of its own), and ✕ gives focus back to the tab.
       await page.locator('#mobile-flow').tap();
       await dialog(page).locator('.dc-done h2', {hasText: 'All done'}).waitFor();
       await shot(page, 'phone-all-done');
-      await dialog(page).locator('.dc-done [data-dc="close"]').tap();
-      await dialog(page).waitFor({state: 'hidden'});
-      assert.equal(await focused(page, '#mobile-flow'), true, 'Close: focus is back on Flow');
-      // ✕ does the same.
-      await page.locator('#mobile-flow').tap();
-      await dialog(page).locator('.dc-done').waitFor();
+      assert.equal(await dialog(page).locator('.dc-done [data-dc="close"]').count(), 0, 'All done has no Close of its own');
       await dialog(page).locator('.dc-nav [data-dc="close"]').tap();
       await dialog(page).waitFor({state: 'hidden'});
       assert.equal(await focused(page, '#mobile-flow'), true, '✕: focus is back on Flow');

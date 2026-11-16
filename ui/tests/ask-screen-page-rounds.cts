@@ -2,8 +2,9 @@ import type {Page, Route} from 'playwright';
 // Offline browser check of a page that comes back on the ask screen (spec #263, backend/page_rounds.py). The OK of a
 // page at version 3, which Ana sent back at versions 1 and 2:
 // - the right side is in parts, not one paragraph: one meta line (who asked · Spec · v3 · date · Jev's word · #80 ↗; the
-//   line opens a menu with it all in full and Jev's reason, never a p-value), What changed in v3 (the bot's lines), Your note on v2 (cut to 2 lines, with more) and
-//   Your points (✓ done / ✗ not done, with why);
+//   line opens a menu with it all in full and Jev's reason, never a p-value), the question ("OK the spec?"), one line of
+//   what changed in v3 (the bot's lines) and Your points (✓ done / ✗ not done, with why); Your note on v2 is Ana's
+//   message above the ask, in full;
 // - the version in the meta line is a menu: each version on one line (date, Jev's mark, the answer), which opens that
 //   version in the page viewer, and "Changes since v2";
 // - the page opens clean, even though Ana sent v2 back; Changes since v2 marks each block not in v2 in its margin;
@@ -113,25 +114,28 @@ async function open(page: Page, errors: string[]) {
     const page = await browser.newPage({viewport: {width: 1100, height: 900}, serviceWorkers: 'block'});
     const dialog = await open(page, errors);
     const side = dialog.locator('.dc-side');
-    assert.equal(await side.locator('.dc-said').count(), 0, "the paragraph of today is gone");
+    assert.equal(await side.locator('.dc-said').count(), 1, "the paragraph of today is gone: one line");
+    assert.equal(await side.locator('.dc-msg-ask .dc-q').innerText(), 'OK the spec?', 'the ask asks its question');
+    assert.equal(await side.locator('.dc-msg-ask .dc-one').innerText(), 'Sources on every evidence row; Cut the repeated second section', 'then one line of what changed');
     // Why Ana is asked again, and the conflict her OK hands to the Builder, stay on the face, before the history.
     assert.deepEqual(await side.locator('.dc-notice').allInnerTexts(), ["New commits since Ana's OK.", CONFLICT]);
-    assert.ok(await side.locator('.dc-meta ~ .dc-notice + .dc-part').count() > 0, 'the notices come after the meta line, before the parts');
+    assert.ok(await side.locator('.dc-meta ~ .dc-notice + .dc-msg-b').count() > 0, 'the notices come after the meta line, before the question');
     assert.doesNotMatch(await side.innerText(), /p 0\.73|between 0\.2/, 'no p-value on the face');
     assert.doesNotMatch(await side.innerText(), /Version 3, after the send back/, "their note is not quoted back in the heading");
     const asker = await page.evaluate(() => actorLabel('bot:pm'));
-    assert.equal((await side.locator('.dc-meta').innerText()).replace(/\s+/g, ' ').trim(), `${asker} · Spec · v3 · Nov 13 · ✓ Meets · #80 ↗`);
+    assert.equal((await side.locator('.dc-meta').innerText()).replace(/\s+/g, ' ').trim(), `${asker} · Spec · v3 · Nov 13 · ✓ Meets #80 ↗`);
     // The ask is the asker's last message in the task's chat; the chat's box and Approve under it.
-    const order = await side.locator('.dc-q, .dc-meta, .dc-open-task, .dc-part h4, .p-text, [data-dc="approve"]').evaluateAll(
-      els => els.map(e => e.matches('.dc-part h4') ? (e.textContent || '').replace(/\s+\S+ \d+$/, '').trim() : e.className.split(' ')[0] || e.getAttribute('data-dc')));
-    assert.deepEqual(order, ['dc-q', 'dc-meta', 'What changed in v3', 'Your note on v2', 'Your points', 'p-text', 'primary']);
+    // Your note on v2 is your message above it, not in it.
+    const order = await side.locator('.dc-msg-said, .dc-msg-ask > .dc-meta, .dc-msg-ask .dc-q, .dc-one, .dc-points, .dc-open-task, .dc-part, .p-text, [data-dc="approve"]').evaluateAll(
+      els => els.map(e => ['dc-msg-said', 'dc-meta', 'dc-q', 'dc-one', 'dc-points', 'dc-open-task', 'dc-part', 'p-text'].find(c => e.classList.contains(c)) || e.getAttribute('data-dc')));
+    assert.deepEqual(order, ['dc-msg-said', 'dc-meta', 'dc-q', 'dc-one', 'dc-points', 'p-text', 'approve']);
 
     // The line is one control; its menu says it in full: who, stage, version and date, then Jev's word and reason.
     const ctl = side.locator('[data-dc-vmenu]');
     await ctl.click();
     assert.deepEqual(await side.locator('.dc-vmenu .dc-vinfo').allInnerTexts(), [`${asker} · Spec · v3 · Nov 13`,
       'Jev: Meets · Clear and complete; the counts cite their queries']);
-    await side.locator('.dc-q').click();
+    await side.locator('.dc-msg-said .th-body').click();   // a click off the menu (above it: the menu opens down over the question)
 
     // The version menu: one line per version, its date, Jev's mark and Ana's answer, then Changes since v2.
     await ctl.click();
@@ -142,18 +146,13 @@ async function open(page: Page, errors: string[]) {
       'Jev: Unsure · Cannot tell who uses it', "Jev: Doesn't · No sources on the counts", 'Jev: Meets · Clear and complete; the counts cite their queries']);
     assert.equal(await steps.nth(2).getAttribute('aria-current'), 'true');
     assert.equal(await side.locator('.dc-vmenu [data-dc-since]').innerText(), 'Changes since v2');
-    await side.locator('.dc-q').click();
+    await side.locator('.dc-msg-said .th-body').click();   // a click off the menu (above it: the menu opens down over the question)
     assert.equal(await side.locator('.dc-vmenu:not([hidden])').count(), 0, 'a click elsewhere closes the menu');
 
-    // What changed, Your note (2 lines, then more), Your points.
-    assert.deepEqual(await side.locator('.dc-changed-list li').allInnerTexts(), ['Sources on every evidence row', 'Cut the repeated second section']);
-    const note = side.locator('.dc-clamp');
-    const cut = await note.evaluate(e => [e.clientHeight, parseFloat(getComputedStyle(e).lineHeight), e.scrollHeight]);
-    assert.ok(cut[0]! <= cut[1]! * 2 + 1 && cut[2]! > cut[0]!, `the note is cut to 2 lines (${cut})`);
-    assert.match(await side.locator('.dc-part h4', {hasText: 'Your note on v2'}).innerText(), /Nov 12/);
-    await side.locator('[data-dc-more="note"]').click();
-    assert.equal(await side.locator('.dc-clamp.open').innerText(), NOTE);
-    assert.equal(await side.locator('[data-dc-more]').count(), 0);
+    // Your note on v2, in full, as your message above the ask; Your points in the ask.
+    const note = side.locator('.dc-msg-said');
+    assert.equal(await note.locator('.th-body').innerText(), NOTE);
+    assert.match((await note.locator('.th-head').innerText()).replace(/\s+/g, ' '), /^You Nov 12 on v2$/);
     assert.deepEqual(await side.locator('.dc-points li').evaluateAll(els => els.map(e => [e.getAttribute('data-done'), (e as HTMLElement).innerText.replace(/\s+/g, ' ').trim()])), [
       ['true', '✓ Sources on the evidence table each row links its query'],
       ['false', "✗ Phone picture it needs a person's phone; the 390 px render is attached"]]);
@@ -201,7 +200,7 @@ async function open(page: Page, errors: string[]) {
     await page.locator('#task-play').click();
     await dialog.locator('.dc-meta').waitFor();
     await dialog.locator('[data-dc="next"]').click();
-    await dialog.locator('.dc-q', {hasText: 'Paste images'}).waitFor();
+    await dialog.locator('.dc-tabs-t', {hasText: 'Paste images'}).waitFor({state: 'attached'});
     await dialog.locator('.dc-jev-wait').waitFor();
     assert.equal(await dialog.locator('.dc-jev-wait').innerText(), 'Jev checking');
     assert.equal(await dialog.locator('.dc-vmenu [data-dc-ver]').count(), 0);

@@ -108,7 +108,7 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     await page.locator('#task-play').click();
     const dialog = page.locator('#need-card');
     const approve = dialog.locator('[data-dc="approve"]');
-    const next = async (line: string) => {
+    const next = async (line: string | RegExp) => {
       await dialog.locator('[data-dc="next"]').click();
       await dialog.locator('.dc-q', {hasText: line}).waitFor();
     };
@@ -181,7 +181,7 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     assert.equal(await dialog.locator('.dc-doc .dc-details .dc-raw').count(), 1, 'the exact content is under Details');
 
     // r8: a page requirement's OK: off until the page at version 2 is shown; Approve sends that version.
-    await next('Spec page');
+    await next(/^OK the \w+\?$/);   // a page's OK asks its question: "OK the spec?"
     await page.waitForTimeout(300);
     assert.equal(await approve.isDisabled(), true, 'Approve waits for the page at its version');
     specPage.open();

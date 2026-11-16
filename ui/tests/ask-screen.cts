@@ -4,8 +4,8 @@ import type {Route} from 'playwright';
 // - an OK shows exactly what GET /api/v2/oks/{id} returned, and Approve sends that preview's hash;
 // - when the engine says it changed (409 task_changed), the new content is shown with "It changed. Look again." and
 //   nothing is sent again until a new click, which sends the new hash;
-// - after Approve the top bar has ↶ named Undo (no word beside it; POST /api/v2/answers/{id}/undo) and the next item
-//   shows; ↶ fades after a few seconds, and stays while it has the keyboard's focus;
+// - after Approve the next item shows at once, and Tico's line reads "✓ Approved · Undo" (POST /api/v2/answers/{id}/undo)
+//   for about 5 s, then the new item's line; it stays while Undo has the keyboard's focus;
 // - a question answers with its choice; then All done;
 // - ⋯ is last on an OK's row and holds Close task: it closes the task with what is typed in the chat as the reason, moves
 //   on with no confirm, and ↶ reopens it (with a why, which a reopen needs).
@@ -114,12 +114,11 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
     assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/asks/r1/ok', body: {shown_hash: 'b'.repeat(64)}});
     const undo = dialog.locator('.dc-bar [data-dc="undo"]');
-    assert.deepEqual([await undo.getAttribute('aria-label'), await undo.getAttribute('title'), (await undo.innerText()).trim()], ['Undo', 'Undo', ''], '↶ alone, named Undo');
-    assert.equal(await dialog.locator('.dc-bar [role="status"]').evaluate(e => e.getBoundingClientRect().width <= 1), true, 'what was done, for a screen reader only');
-    assert.ok(await dialog.locator('.dc-head .dc-bar').count() === 1, 'the undo is in the top bar');
-    // ↶ stays while it has the keyboard's focus, and fades a few seconds after it is left.
+    assert.equal((await dialog.locator('.dc-sayw > .dc-bar').innerText()).replace(/\s+/g, ' ').trim(), '✓ Approved Undo', "in Tico's line slot: what was done, then Undo");
+    assert.equal((await undo.innerText()).trim(), 'Undo');
+    // Undo stays while it has the keyboard's focus, and fades a few seconds after it is left.
     await undo.focus();
-    await page.waitForTimeout(4600);
+    await page.waitForTimeout(5600);
     assert.equal(await dialog.locator('.dc-bar:not([hidden]):not(.dc-bar-out)').count(), 1, 'focused, it stays');
     await undo.blur();
     await dialog.locator('.dc-bar[hidden]').waitFor({state: 'attached', timeout: 6000});
@@ -167,6 +166,6 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     assert.deepEqual(writes[n + 1], {p: '/api/v2/tasks/t3/move', body: {to: 'reopen', why: 'Undone'}});
 
     assert.deepEqual(errors, []);
-    console.log('PASS: You lists the asks; an OK sends the hash of what it showed, shows a change and waits for a new click; a choice answers; ↶ Undo fades; Close task from ⋯.');
+    console.log('PASS: You lists the asks; an OK sends the hash of what it showed, shows a change and waits for a new click; a choice answers; ✓ Approved · Undo in Tico\'s line fades; Close task from ⋯.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
