@@ -422,7 +422,8 @@ def export_rows(people, today):
 
 
 def load_customers(b, people):
-    """Ana loads the store's customer export in Growth at the build moment, the day Growth computes its figures from."""
+    """Ana loads the store's customer export in Growth a second before the build moment, the day Growth computes its
+    figures from."""
     b.call("POST", "growth/customers", {"rows": export_rows(people, b.now.astimezone(ZONE).date())})
 
 
@@ -728,7 +729,9 @@ def seed(b):
             )
     for k, monday in enumerate(runs):
         steps.append((moment(monday, 7), lambda k=k, monday=monday: weekly(b, s, days, runs, k, monday, people)))
-    steps.append((b.now, lambda: load_customers(b, people)))
+    # The demo clock advances a microsecond per timestamp it hands out, so a load at the build moment would stamp its
+    # rows just after it. The load is a second earlier, so all its rows and its audit event are dated before the build.
+    steps.append((b.now - timedelta(seconds=1), lambda: load_customers(b, people)))
     steps.append((b.now, lambda: schedule(b, s)))
     for when, work in sorted(steps, key=lambda step: step[0]):
         b.clock.at = when
