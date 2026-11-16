@@ -55,9 +55,10 @@ def _managers(conn: "sqlite3.Connection", named: list[str], skip: set[str]) -> l
 
 
 def _github(conn: "sqlite3.Connection", stages: list[Row]) -> tuple[bool, str]:
-    """Whether a stage waits on an open pull request (the work goes to GitHub), and the repository a GitHub requirement
-    names, '' when it leaves it to the server's (pipeline_settings: release_repo)."""
-    from . import task_requirements as R
+    """Whether a stage waits on an open pull request (the work goes to GitHub), and where: the repository a GitHub
+    requirement names (pipeline_settings: release_repo), else the repositories In use, as a task there is told before
+    any PR is linked (stage_inputs.in_use), joined by "or"; '' when GitHub was never set up."""
+    from . import stage_inputs, task_requirements as R
 
     github, repo = False, ""
     for stage in stages:
@@ -67,6 +68,8 @@ def _github(conn: "sqlite3.Connection", stages: list[Row]) -> tuple[bool, str]:
             github = github or req.get("condition") == "pr_open"
             settings: Row = req.get("settings") or {}
             repo = repo or str(settings.get("release_repo") or "").strip()
+    if github and not repo:
+        repo = " or ".join(stage_inputs.in_use(conn))
     return github, repo
 
 

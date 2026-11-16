@@ -100,6 +100,14 @@ def test_the_github_line_names_the_repository_a_pipeline_sets(c):
     assert "GitHub (acme/payroll)" in _file(c)["private_readers"]
 
 
+def test_with_no_repository_set_the_github_line_names_the_repository_in_use(c):
+    """Review 1: a pipeline whose requirement sets no repository names the one In use, as its tasks are told."""
+    _engineering(c)
+    c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES('r1','acme/payroll',1,?)", (H.now(),))
+    c.execute("INSERT INTO repositories(id,full_name,enabled,bot_repo) VALUES('r2','acme/bot-builder',1,1)")
+    assert "GitHub (acme/payroll), where" in _file(c)["private_readers"]
+
+
 def test_a_task_that_is_not_private_tells_nobody_anything(c):
     """Criterion 3: no line, no history."""
     _engineering(c)
@@ -174,3 +182,25 @@ def test_the_app_and_the_dry_run_say_it_before_anything_is_filed(api):
     assert "reviewer-1 or reviewer-2" in dry["private_readers"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == before
+    # The create a bot's command really makes: its reply carries the same line.
+    made = api.post(
+        "/api/v2/tasks",
+        headers=ana,
+        json={"title": "Fix the totals", "body": "Rounds pay.", "owner": B1, "pipeline": "eng", "private": True},
+    )
+    assert made.status_code == 200, made.text
+    assert made.json()["private_readers"] == dry["private_readers"]
+
+
+def test_the_window_says_it_for_a_bot_that_keeps_its_tasks_private(api):
+    """Review 1: a new task for a bot whose tasks are private by default is private, so the window tells."""
+    from backend import bot_settings as BS
+
+    with api.app.state.store.transaction() as c:
+        _bots(c)
+        _engineering(c)
+        BS.write(
+            c, "builder", {"name": "builder", "runtime": "fake", "status": "active", "private_tasks_default": True}
+        )
+    got = api.get("/api/v2/pipelines/eng/private-readers", params={"owner": B1}, headers=headers("ana-test")).json()
+    assert got["private"] and "reviewer-1 or reviewer-2" in got["line"]

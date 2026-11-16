@@ -74,9 +74,11 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
       });
       // Who else reads a private task in its pipeline (Product #449): the new-task window asks before Create.
       await page.route(url => /^\/api\/v2\/pipelines\/[^/]+\/private-readers$/.test(url.pathname), route => {
-        const q = new URL(route.request().url()).searchParams;
-        posted.push({p: new URL(route.request().url()).pathname, body: Object.fromEntries(q)});
-        const line = q.get('parent') ? 'Private, but these can read it as it moves through General: Reviewer.' : null;
+        const u = new URL(route.request().url()), q = u.searchParams;
+        posted.push({p: u.pathname, body: Object.fromEntries(q)});
+        // Product names a stage bot; Operations names none.
+        const named = u.pathname.split('/')[4] === 'product' && (q.get('parent') || q.get('task'));
+        const line = named ? 'Private, but these can read it as it moves through Product: Reviewer.' : null;
         return route.fulfill({contentType: 'application/json', body: JSON.stringify({private: !!line, line})});
       });
       await page.route(url => /^\/api\/v2\/bots\/[^/]+\/definition$/.test(url.pathname), route => {
@@ -141,6 +143,12 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await openDetails(page, 't-12');
     await page.locator('#task-modal[open][data-task="t-12"] [data-prop-row="visible"]', {hasText: 'Team'}).waitFor();
     assert.equal(await win.locator('[data-prop-row="visible"] [data-prop="readers"]').count(), 0);
+    // In a pipeline, Visible to › Private says who still reads it as it moves (Product #449).
+    await win.locator('[data-prop-row="visible"] [data-prop="visible"]').click();
+    const note = page.locator('#task-modal .prop-pop [data-prop-pick="private"] .prop-vis-note');
+    await note.waitFor();
+    assert.match(await note.innerText(), /moves through Product: Reviewer/);
+    await page.keyboard.press('Escape');
     // No parent: nothing to add one with (backend/task_relations.py relate refuses a parent).
     assert.equal(await win.locator('[data-prop-row="parent"]').count(), 0, 'no parent: no Part of row, nothing to add');
 
@@ -190,8 +198,13 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await create.locator('[name=message]').fill('For the newsletter.');
     const told = create.locator('#task-create-readers');
     await told.waitFor({state: 'visible'});
-    assert.match(await told.innerText(), /can read it as it moves through General: Reviewer/);
-    assert.equal(posted.find(x => x.p.endsWith('/private-readers'))!.body['parent'], 't-11');
+    assert.match(await told.innerText(), /can read it as it moves through Product: Reviewer/);
+    assert.equal(posted.findLast(x => x.p.endsWith('/private-readers'))!.body['parent'], 't-11');
+    // Another pipeline that names nobody: the line goes; back to Product: it comes back.
+    await create.locator('[name=pipeline]').selectOption('ops');
+    await told.waitFor({state: 'hidden'});
+    await create.locator('[name=pipeline]').selectOption('product');
+    await told.waitFor({state: 'visible'});
     await create.locator('[type=submit]').click();
     await page.waitForFunction(() => !(document.querySelector('#task-create') as HTMLDialogElement).open);
     const made = posts.find(x => x.p === '/api/v2/tasks')!.body;
