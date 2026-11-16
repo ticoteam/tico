@@ -44,7 +44,7 @@ def test_work_and_credentials_reach_only_the_computer_they_concern_without_value
         assert JIRA not in json.dumps(sent) and set(sent[0][1]) == {"seq", "kind", "bots"}
 
 
-def test_the_migration_dropping_a_bots_subscription_refreshes_only_its_computer_without_values(api):
+def test_dropping_a_bots_subscription_choice_refreshes_only_its_computer_without_values(api):
     a, b = runner(api, label="A"), runner(api, label="B")
     assign(api, a, "ops")
     assign(api, b, "cpo")
@@ -56,7 +56,7 @@ def test_the_migration_dropping_a_bots_subscription_refreshes_only_its_computer_
     cursor = newest(api)
     # One login per AI tool per computer (#1259): the bot's choice goes, and its computer moves it to its own login.
     with api.app.state.store.transaction() as c:
-        H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
+        c.execute("DELETE FROM subscription_assignments WHERE scope='bot'")
     sent, after, reset, _ = told(api, a, cursor)
     assert [data["kind"] for _, data in sent] == ["assignments", "work"]
     assert not reset and all(data["bots"] == ["ops"] for _, data in sent)

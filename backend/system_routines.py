@@ -33,22 +33,6 @@ from .store import H, Problem
 
 LOG = logging.getLogger("tico.system_routines")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS system_runs(
- id TEXT PRIMARY KEY, job TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, ok INTEGER NOT NULL DEFAULT 1,
- result TEXT NOT NULL DEFAULT '', route TEXT, fallback TEXT, cost_usd REAL, runs INTEGER NOT NULL DEFAULT 1,
- first_started_at TEXT);
-CREATE INDEX IF NOT EXISTS system_runs_job ON system_runs(job, started_at);
-"""
-
-
-def ensure(c):
-    """Add what SCHEMA's table gained since a database was made: `first_started_at`, the first of a folded row's quiet
-    repeats (its `started_at` moves to the latest), so counts can spread `runs` over the time they happened."""
-    if "first_started_at" not in {row[1] for row in c.execute("PRAGMA table_info(system_runs)")}:
-        c.execute("ALTER TABLE system_runs ADD COLUMN first_started_at TEXT")
-
-
 KEEP = 50  # rows per job
 # A repeat (a quiet run with the same words, or a failure with the same reason) moves the job's last row at most this
 # often. Nothing times a job by a quiet repeat's start: a controlled job's shortest preset is 15 minutes.

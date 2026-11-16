@@ -6,7 +6,6 @@ from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: 
 from backend.tests.helpers.login_holds import at, limit
 from backend.tests.helpers.model_logout import report
 from backend.tests.helpers.subscriptions import set_runtime
-from backend import bot_settings as BS
 
 
 def heartbeat(api, machine, *, current, signed=True):
@@ -48,14 +47,6 @@ def test_a_retained_default_home_shares_old_primary_and_new_fallback_holds(api, 
     rid = machine['runner_id']
     # This hold predates the handshake: do not discard it or alias it to another account.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO subscription_assignments VALUES('bot','ops','engineering',NULL,NULL)")
-        before = c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0]
-        H._apply(c, H.ONE_LOGIN_PER_COMPUTER_SCHEMA)
-        assert not c.execute("SELECT 1 FROM subscription_assignments WHERE scope='bot'").fetchone()
-        assert (
-            c.execute(f"SELECT {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot='ops'").fetchone()[0]
-            == before
-        )
         login_holds.record(c, rid, 'work', 'codex', H.now(), bot='finance')
     assert get(api, 'config', machine['token'])['computer_logins_v1'] is True
     heartbeat(api, machine, current=True)

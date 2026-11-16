@@ -91,31 +91,6 @@ def release_cleared_overrides(c):
     )
 
 
-def migrate(c):
-    if metadata(c, 'repositories-access-migrated').get('done'):
-        return
-    for bot, repos in metadata(c, 'github-extra-repos').items():
-        if not repos:
-            continue
-        row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
-        if row:
-            config = json.loads(row[0] or '{}')
-            config['repo_access_mode'] = 'chosen'
-            BS.write(c, bot, config)
-        for repo in repos:
-            c.execute(
-                'INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) '
-                'ON CONFLICT(full_name) DO UPDATE SET enabled=1',
-                (uuid.uuid4().hex, repo, H.now()),
-            )
-            c.execute(
-                "INSERT INTO bot_repo_access VALUES(?,?,'write') ON CONFLICT(bot,full_name) DO UPDATE SET access='write'",
-                (bot, repo),
-            )
-
-    save_metadata(c, 'repositories-access-migrated', {'done': True})
-
-
 def unreachable(c):
     marks = metadata(c, 'repositories-confirmed-missing')
     return {

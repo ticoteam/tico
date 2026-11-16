@@ -22,11 +22,8 @@ from .store import Problem
 PREFIX = '/public/roadmaps/'
 
 
-def migrate(c):
-    c.execute(
-        'CREATE TABLE IF NOT EXISTS roadmap_actions('
-        'day TEXT NOT NULL,ip_hash TEXT NOT NULL,actions INTEGER NOT NULL,PRIMARY KEY(day,ip_hash))'
-    )
+def seed_secret(c):
+    """The install's own secret for hashing visitors' addresses, made at its first start."""
     c.execute(
         "INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmap_ip_secret',?)",
         (json.dumps(secrets.token_hex(32)),),

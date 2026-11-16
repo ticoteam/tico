@@ -39,14 +39,6 @@ WAIT_HOURS = 1
 # Tickets asked about in one call (backend/decide_groups.py), all of one bot. One until the replay through real Jev
 # shows grouped verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
 GROUP = 1
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS watcher_pending(
- bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
- later TEXT NOT NULL DEFAULT '[]', found TEXT, PRIMARY KEY(bot, key));
-CREATE TABLE IF NOT EXISTS watcher_triage(
- bot TEXT NOT NULL, key TEXT NOT NULL, label TEXT NOT NULL, held INTEGER NOT NULL, detail TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(bot, key));
-"""
 
 
 def applies(name, event):

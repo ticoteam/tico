@@ -528,34 +528,6 @@ def test_the_api_model_bounds_what_a_turn_reports(api):
         M.UpdatePost(body="- a", learnings_saved=16)
 
 
-def _migration(name):
-    spec = importlib.util.spec_from_file_location(
-        name, Path(__file__).resolve().parents[1] / "migrations" / f"{name}.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_migration_adds_the_columns_once_and_marks_old_updates_version_one():
-    conn = sqlite3.connect(":memory:")
-    conn.execute(
-        "CREATE TABLE updates(id TEXT PRIMARY KEY, bot TEXT, kind TEXT, day TEXT, headline TEXT, body TEXT, "
-        "created_at TEXT, updated_at TEXT)"
-    )
-    conn.execute(
-        "CREATE TABLE update_queue(id TEXT PRIMARY KEY, bot TEXT, kind TEXT, day TEXT, rank INTEGER, state TEXT)"
-    )
-    conn.execute("INSERT INTO updates VALUES('u','ops','daily','2026-09-28','h','- one','t','t')")
-    migration = _migration("20261105010000_update_format_and_delivery")
-    migration.up(conn)
-    migration.up(conn)
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(updates)")}
-    assert {"format_version", "learnings_saved", "suggestions_seen", "delivery_batch_id"} <= cols
-    assert conn.execute("SELECT format_version FROM updates").fetchone()[0] == 1
-    assert {"delivery_only", "run_id"} <= {r[1] for r in conn.execute("PRAGMA table_info(update_queue)")}
-
-
 def test_dispatch_with_build_off_never_starts_a_queue(api):
     store = api.app.state.store
     with store.transaction() as c:

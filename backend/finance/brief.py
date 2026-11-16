@@ -7,7 +7,7 @@ rollup rows the reader's view covers), so nothing here shows a number the reader
 
 Shape. `compute` reads the lines now: at most MAX_LINES, each cut to LINE_CHARS, none when the reader has nothing there,
 and none for a reader with no Finance view at all. `brief` keeps one row per reader in `fin_briefs` (see
-migrations/20261107074031_finance_brief.sql): a fingerprint of the lines. Same fingerprint keeps the stored `as_of`;
+backend/migrations/baseline.sql): a fingerprint of the lines. Same fingerprint keeps the stored `as_of`;
 when the lines change, `as_of` moves to now and `changed_since` takes the `as_of` the previous lines had. So the people
 page and the bots' turn start see the same brief, and a brief is re-issued only when its numbers move.
 

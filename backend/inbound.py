@@ -34,25 +34,6 @@ RETENTION = 90 * 86400  # bodies and codes; metadata stays
 PURGE_EVERY = 600  # reads refuse expired content before the next purge
 CONNECTION_TIMEOUT = 15  # includes headers and a slow-drip response, not just each socket read
 now = time.time  # tests' controlled clock
-SCHEMA = '''
-CREATE TABLE IF NOT EXISTS inbound_inboxes(
- inbox_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, address TEXT NOT NULL,
- state TEXT NOT NULL, created_by TEXT NOT NULL, period_end REAL, cancel_pending INTEGER NOT NULL DEFAULT 0,
- used_for TEXT NOT NULL DEFAULT '', audience TEXT NOT NULL DEFAULT 'company', group_id TEXT);
-CREATE TABLE IF NOT EXISTS inbound_messages(
- seq INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL UNIQUE, inbox_id TEXT NOT NULL,
- kind TEXT NOT NULL, received_at REAL NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL,
- preview TEXT NOT NULL, body TEXT, code TEXT, spam INTEGER NOT NULL DEFAULT 0, truncated INTEGER NOT NULL DEFAULT 0,
- retention_removed INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS inbound_messages_inbox ON inbound_messages(inbox_id,seq);
-CREATE INDEX IF NOT EXISTS inbound_messages_retention ON inbound_messages(retention_removed,received_at);
-CREATE TABLE IF NOT EXISTS inbound_sync(
- singleton INTEGER PRIMARY KEY CHECK(singleton=1), cursor INTEGER NOT NULL DEFAULT 0,
- last_synced_at REAL, error TEXT NOT NULL DEFAULT '', gaps TEXT NOT NULL DEFAULT '[]');
-INSERT OR IGNORE INTO inbound_sync(singleton) VALUES(1);
-'''
-
-
 AUDIENCES = ('company', 'team')
 
 

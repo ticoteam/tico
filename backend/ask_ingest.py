@@ -80,20 +80,6 @@ DECISION, CHORE, STATUS, OWN_WORK, SETUP = "decision", "chore", "status", "own_w
 UNRECORDED = "ask_ingest.unrecorded"
 REPLAY = "replay"
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS ask_ingest_settings(
- person TEXT PRIMARY KEY, mode TEXT NOT NULL, budget INTEGER NOT NULL, chores_budget INTEGER NOT NULL,
- criteria TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS ask_ingest_items(
- id TEXT PRIMARY KEY, person TEXT NOT NULL, asker TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
- message_id TEXT, mode TEXT NOT NULL, outcome TEXT NOT NULL, would TEXT NOT NULL, reason TEXT NOT NULL, load INTEGER NOT NULL,
- call_id TEXT, created_at TEXT NOT NULL, let_through_at TEXT, let_through_by TEXT, merged_into TEXT, passed_at TEXT);
-CREATE INDEX IF NOT EXISTS ask_ingest_items_person ON ask_ingest_items(person, created_at);
-CREATE INDEX IF NOT EXISTS ask_ingest_items_ref ON ask_ingest_items(ref);
-CREATE INDEX IF NOT EXISTS ask_ingest_items_merged ON ask_ingest_items(merged_into) WHERE merged_into IS NOT NULL;
-"""
-
-
 # ---- settings ---------------------------------------------------------------------------------------------------
 
 

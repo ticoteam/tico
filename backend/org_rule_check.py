@@ -131,13 +131,6 @@ OPERATIONS = {
 }
 DRAFT_AS = {"message": "message", "comment": "comment", "task": "task_create", "assign": "task_owner"}
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS org_rule_verdicts(digest TEXT PRIMARY KEY, broken TEXT NOT NULL, "
-    "call_id TEXT, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created_at)",
-    "CREATE INDEX IF NOT EXISTS org_rule_holds_task ON org_rule_holds(task_id) WHERE task_id IS NOT NULL",
-)
-
 # Send anyway's writes, by operation: fn(c, bot identity, hold, replay data, ingest) -> the write's answer. Registered
 # by the module that owns the write (backend/app.py, execution, automations), so the replay is the normal write.
 REPLAY = {}
@@ -151,11 +144,6 @@ AUDIENCE = {}
 PATH = contextvars.ContextVar("org_rule_path", default="")
 CHECK_FAILED = "The rule check could not run, so nothing was written. Try again."
 SUMMARY_RULES, SUMMARY_CHARS, SUMMARY_NAMES = 3, 200, 10  # a hold summary's rule previews, their length, its names
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def replayer(operation, prepare=None, audience=None):
@@ -3187,7 +3175,6 @@ __all__ = [
     "check_as",
     "checked_as",
     "digest",
-    "ensure",
     "health_findings",
     "held_for",
     "held_note",

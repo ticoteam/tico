@@ -45,18 +45,6 @@ from . import people as P
 from . import read_cache
 from .store import H, Problem, encode
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS cards (
-  id TEXT PRIMARY KEY, template TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}', title TEXT NOT NULL DEFAULT '',
-  made_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by_id TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS pins (
-  id TEXT PRIMARY KEY, place TEXT NOT NULL, item TEXT NOT NULL, position INTEGER NOT NULL,
-  size TEXT NOT NULL DEFAULT 'medium', made_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(place, item));
-CREATE INDEX IF NOT EXISTS pins_item ON pins(item);
-CREATE TABLE IF NOT EXISTS pin_places (
-  place TEXT PRIMARY KEY, audience TEXT, saved_at TEXT NOT NULL, saved_by TEXT NOT NULL);
-"""
-
 SIZES = ("small", "medium", "large")
 PLACE_MAX = 60  # pins at one place: a page of cards, not an archive
 CARDS_MAX = 2000

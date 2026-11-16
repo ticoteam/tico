@@ -7,17 +7,10 @@ from .store import H, readiness_document
 from . import bot_settings as BS
 
 START_SECONDS = 180
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS start_places(
- attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
- start_until TEXT, managed INTEGER NOT NULL DEFAULT 0, wait_reason TEXT NOT NULL DEFAULT '', waiting_since TEXT
-);
-"""
 
 
 def restore_waits(c):
     """An upgrade gives every leased attempt without one a start place, waiting on nothing."""
-    H.add_column(c, "start_places", "managed", "INTEGER NOT NULL DEFAULT 0")
     for row in c.execute(
         "SELECT a.id FROM attempts a WHERE a.state='leased' "
         "AND NOT EXISTS(SELECT 1 FROM start_places p WHERE p.attempt_id=a.id)"

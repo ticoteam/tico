@@ -39,22 +39,6 @@ def test_company_goals_are_the_owners_and_a_sub_goal_gets_its_first_colour_from_
     post(api, f"goals/{mine['id']}/status", {"status": "red", "note": "Nope."}, token="cara-test", expected=403)
 
 
-def test_a_person_goal_with_goals_under_it_becomes_the_company_goal_on_upgrade(api):
-    """Before an owner existed for goals, a goal with no parent and goals under it was the company goal."""
-    old = post(api, "goals", {"title": "Grow", "owner": "ana"})["goal"]
-    post(api, "goals", {"title": "Ship", "owner": "ben", "parent_id": old["id"]})
-    alone = post(api, "goals", {"title": "Rest", "owner": "cara"})["goal"]
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM cloud_migrations WHERE version=43")
-    api.app.state.store.initialize(seed_market=False)
-    assert owner_of(api, old["id"]) == "company" and owner_of(api, alone["id"]) == "human:cara"
-
-
-def owner_of(api, goal_id):
-    with api.app.state.store.read() as c:
-        return c.execute("SELECT owner_id FROM goals WHERE id=?", (goal_id,)).fetchone()[0]
-
-
 def test_a_finished_goal_is_reopened_by_whoever_may_set_its_colour_and_undo_puts_its_colour_back(api):
     top = company_goal(api)
     mine = post(

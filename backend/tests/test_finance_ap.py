@@ -7,7 +7,6 @@ import time
 
 import pytest
 
-from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend.credentials import Vault
 from backend.finance import actions as FA
 from backend.finance import sync
@@ -928,14 +927,13 @@ def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_captu
         assert labels["GitHub"] == 800 and labels["Globex"] == 2_000  # the newest row's text; the alias's contact
 
 
-def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books):
-    """Phase 2 keys a vendor name a budget kept as phase 1 wrote it, and the budget counts lines under that key. A key is
-    folded whole (two long names never meet by truncation) and folding it again changes nothing. A contact's id is never
-    another vendor's name, and a stored contact id never goes by an alias."""
+def test_a_budget_vendor_name_is_keyed_and_never_takes_a_contact_id(books):
+    """A budget counts lines under its vendor's key. A key is folded whole (two long names never meet by truncation) and
+    folding it again changes nothing. A contact's id is never another vendor's name, and a stored contact id never goes
+    by an alias."""
     from backend.finance import budgeting
     from backend.finance.core.ledger import name_key
     from backend.finance.store import budgets as SB
-    from backend.finance.store import schema
     from backend.tests.helpers.finance_fixtures import spend
 
     assert name_key("A" * 79 + "ß") != name_key("A" * 79 + "s")
@@ -962,11 +960,6 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
 
         bid = budget("Acme", line, "acme cloud")
         spend(c, "6100", 10_000, vendor="acme cloud")
-        # As phase 1 left the budget: its vendor under the name as written, no label.
-        c.execute("UPDATE fin_budgets SET vendor='ACME CLOUD' WHERE id=?", (bid,))
-        c.execute("DELETE FROM fin_vendor_labels")
-        schema.create(c)
-        schema.phase2(c)
         assert c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (bid,)).fetchone()[0] == "acme cloud"
         assert budgeting.budget_state(c, bid, AT).actual == 10_000
         vendor = _vendor(c, "Acme Cloud")
@@ -980,28 +973,15 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
         assert SB.budgets(c, book)[held].vendor == vendor
 
 
-def test_the_upgrade_drops_fin_vendor_legacy_and_vendor_keys_still_follow_aliases(books):
-    """Migration 0005 removes fin_vendor_legacy from an install that has it; a vendor's keys still come from its contact's
-    id and its names (vendor_keys reads no legacy table)."""
+def test_vendor_keys_follow_aliases(books):
+    """A vendor's keys come from its contact's id and its names, aliases included."""
     from backend.finance.store import ap as SAP
-    from backend.finance.store import schema
 
     with books.transaction() as c:
         book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
         vendor = _vendor(c, "Acme Supplies")
         SAP.alias_add(c, book, "acme supplies co", vendor, AT)
-        restore_config(c)
-        forget_from(c, "0005")
-        c.execute(
-            "CREATE TABLE fin_vendor_legacy (book_id TEXT NOT NULL, raw TEXT NOT NULL, name_key TEXT NOT NULL, "
-            "PRIMARY KEY (book_id, raw))"
-        )
-        c.execute("INSERT INTO fin_vendor_legacy VALUES(?, 'ACME SUPPLIES CO', 'acme supplies co')", (book,))
-    books.initialize(seed_market=False)
     with books.read() as c:
-        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_vendor_legacy'").fetchone()
-        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0005_drop_fin_vendor_legacy'").fetchone()
-        assert "fin_vendor_legacy" not in schema.table_names()
         keys = SAP.vendor_keys(c, book, vendor)
         assert keys[0] == vendor and "acme supplies co" in keys and "ACME SUPPLIES CO" not in keys
 

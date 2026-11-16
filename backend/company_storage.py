@@ -23,13 +23,6 @@ from . import models as M
 from .blobs import Blobs, Location
 from .store import H, Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS company_storage(
- id TEXT PRIMARY KEY, bucket TEXT NOT NULL, prefix TEXT NOT NULL DEFAULT '', region TEXT NOT NULL,
- access_key_id TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, created_by TEXT NOT NULL, retired_at TEXT);
-CREATE UNIQUE INDEX IF NOT EXISTS company_storage_one_active ON company_storage(active) WHERE active=1;
-"""
 BUCKET = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 REGION = re.compile(r"^[a-z]{2}(-[a-z]+)+-\d{1,2}$")
 PREFIX = re.compile(r"^[A-Za-z0-9!_.*'()/-]{0,200}$")

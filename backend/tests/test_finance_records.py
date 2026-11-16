@@ -1,85 +1,12 @@
-"""Shared records (backend/records) as Finance uses them: migration 76 keeps every project tag and moves the project
-dimension to a record, a bill line's item supplies its account and an inactive item is refused, a line's location or
+"""Shared records (backend/records) as Finance uses them: a bill line's item supplies its account and an inactive item is refused, a line's location or
 project tag must name an active record, and a price change asks before it takes effect."""
 
 import sqlite3
 
 import pytest
 
-from backend.finance.store import schema as FS
 from backend.records import store as RS
 from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
-
-# The line tags and dimensions tables as migration 75 left them: kinds without location, class, or item.
-OLD_LINE_TAGS = """CREATE TABLE fin_line_tags (
-  line_id TEXT NOT NULL REFERENCES fin_lines(id),
-  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom')), value TEXT NOT NULL,
-  created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (line_id, kind))"""
-OLD_DIMENSIONS = """CREATE TABLE fin_dimensions (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project','custom')), value TEXT NOT NULL,
-  name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
-  UNIQUE (kind, value))"""
-
-
-def _as_before_76(c, table: str, ddl: str) -> None:
-    """Rebuild `table` with its old definition, keeping its rows (what migration 75 left on an install)."""
-    c.execute(f"ALTER TABLE {table} RENAME TO {table}_now")
-    c.execute(ddl)
-    cols = ",".join(str(r[1]) for r in c.execute(f"PRAGMA table_info({table}_now)").fetchall())
-    c.execute(f"INSERT INTO {table}({cols}) SELECT {cols} FROM {table}_now")
-    c.execute(f"DROP TABLE {table}_now")
-
-
-def _projects(c) -> dict[str, tuple[str, int]]:
-    return {str(r[0]): (str(r[1]), int(r[2])) for r in c.execute("SELECT id, name, archived_at IS NULL FROM projects")}
-
-
-def test_a_legacy_project_tag_keeps_its_value_and_the_project_dimension_becomes_a_record(books):
-    with books.transaction() as c:
-        for pid in ("site", "Bldg 7"):
-            c.execute(
-                "INSERT INTO projects(id, name, status, archived_at, created_at, created_by_id) "
-                "VALUES(?,?,'open',NULL,?,?)",
-                (pid, pid, AT, OWNER),
-            )
-        posted = act(
-            c,
-            OWNER,
-            "journal",
-            {
-                "date": "2026-10-10",
-                "memo": "Tagged",
-                "lines": [
-                    {"account_id": account(c, "5100"), "amount": 1_000, "tags": {"project": "site"}},
-                    {"account_id": account(c, "5100"), "amount": 400, "tags": {"project": "Bldg 7"}},
-                    {"account_id": account(c, "1000"), "amount": -1_400},
-                ],
-            },
-        )
-        assert posted.status == "committed", posted.reason
-        # Install state before migration 76: the project was a dimension and no record existed.
-        c.execute("DELETE FROM projects")
-        c.execute(
-            "INSERT INTO fin_dimensions(id, kind, value, name, active, created_at, created_by) "
-            "VALUES('dim-site','project','site','Site (dimension)',1,?,?)",
-            (AT, OWNER),
-        )
-        _as_before_76(c, "fin_line_tags", OLD_LINE_TAGS)
-        _as_before_76(c, "fin_dimensions", OLD_DIMENSIONS)
-        c.execute("DELETE FROM cloud_migrations WHERE version=76")
-
-        FS.catalog(c, AT)
-        assert _projects(c) == {"site": ("Site (dimension)", 1), "Bldg 7": ("Bldg 7", 1)}
-        assert c.execute("SELECT COUNT(*) FROM fin_dimensions WHERE kind='project'").fetchone()[0] == 0
-        assert sorted(str(r[0]) for r in c.execute("SELECT value FROM fin_line_tags WHERE kind='project'")) == [
-            "Bldg 7",
-            "site",
-        ]
-        assert "'location'" in str(c.execute("SELECT sql FROM sqlite_master WHERE name='fin_line_tags'").fetchone()[0])
-        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_line_tags_value'").fetchone() is not None
-        before = _projects(c)
-        FS.catalog(c, AT)  # a second run changes nothing
-        assert _projects(c) == before
 
 
 def test_a_bill_line_naming_an_item_takes_its_expense_account_and_an_inactive_item_is_refused(books):

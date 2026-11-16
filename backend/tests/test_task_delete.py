@@ -201,11 +201,7 @@ def test_a_file_attached_when_the_task_was_made_is_locked_in_the_trash_and_count
     for token in ("ben-test", "priya-test"):
         assert api.get(attachment["url"], headers=headers(token)).content == b"%PDF wrong one"
     post(api, f"tasks/{task['id']}/delete", {}, token="ben-test")
-    with store.transaction() as c:  # a task deleted before the table existed is found in its trash row
-        from backend.task_delete import ensure
-
-        c.execute("DELETE FROM task_trash_assets")
-        ensure(c)
+    with store.transaction() as c:
         assert [r[0] for r in c.execute("SELECT blob_id FROM task_trash_assets")] == [attachment["id"]]
     # Not even its uploader opens it while the task is in the trash; a restore gives it back.
     for token in ("ben-test", "priya-test"):

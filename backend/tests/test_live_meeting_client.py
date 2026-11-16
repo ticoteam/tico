@@ -53,13 +53,3 @@ def test_recorder_private_pause_end_finalize_approve_and_count(live):
             (mid, 100, "meeting.bot_reply", "{}", H.now()),
         )
         assert tuple(c.execute(query).fetchone()) == ("tico-recorder", 1, 1)
-
-
-def test_existing_meetings_upgrade_to_null_client():
-    with sqlite3.connect(":memory:") as c:
-        c.execute("CREATE TABLE live_meetings(id TEXT PRIMARY KEY)")
-        c.execute("INSERT INTO live_meetings VALUES('old')")
-        c.executescript(H.LIVE_MEETINGS_CLIENT_SCHEMA)
-        assert c.execute("SELECT client FROM live_meetings").fetchone() == (None,)
-        with pytest.raises(sqlite3.IntegrityError):
-            c.execute("UPDATE live_meetings SET client='unknown'")

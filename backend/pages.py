@@ -25,28 +25,12 @@ from .store import H, Problem
 from . import visual_specs
 from clients import bot_files as BF
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS pages(
- file_id TEXT PRIMARY KEY REFERENCES bot_files(id),
- cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
- as_of TEXT, replaced_by_id TEXT, audience TEXT, deleted_at TEXT, archived INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL, spec TEXT);
-CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by_id) WHERE replaced_by_id IS NOT NULL;
-"""
-
 CADENCES = {"none": 0, "daily": 1, "weekly": 7, "monthly": 30}
 # A page is stale once 1.5x its cadence has passed without a new version.
 STALE_FACTOR = 1.5
 LIST_MAX = 50
 IDS_MAX = 50
 AS_OF = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-
-def ensure(c):
-    """Unversioned, like the trash: an older release never reads the table. Runs inside initialize's transaction."""
-    for statement in SCHEMA.split(";"):
-        if statement.strip():
-            c.execute(statement)
 
 
 class PageEdit(M.Contract):

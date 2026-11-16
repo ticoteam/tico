@@ -43,11 +43,6 @@ HOLD_AFTER = 5  # fast failures in a row that hold the bot
 PROBE_FIRST = 30 * 60  # seconds a held bot waits before its first try; doubles for each failed try, up to MAX_WAIT
 ERROR_CHARS = 300
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS run_backoff(bot TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, wait_until TEXT, "
-    "error_class TEXT, error TEXT, last_failed_at TEXT, held_at TEXT, task_id TEXT, released_at TEXT, released_by TEXT)",
-)
-
 # A provider's limit named anywhere in an error: "You've hit your weekly limit", "usage limit reached", "rate limit".
 LIMIT_RE = re.compile(
     r"hit your (?:[a-z-]+ ){0,2}limit|\b(?:weekly|usage|session|monthly|spend(?:ing)?|rate|\d+-hour) "
@@ -66,11 +61,6 @@ CLASS_WORDS = {
     GATEWAY: "the Tico AI Gateway refused the run",
     OTHER: "an error before any work",
 }
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def is_limit(text, now=None):

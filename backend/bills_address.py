@@ -31,14 +31,6 @@ from .auth import validate_identity
 from .models import Contract
 from .store import H, Problem
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bills_inbound(
- id TEXT PRIMARY KEY, delivery TEXT NOT NULL, received_at TEXT NOT NULL, sender TEXT NOT NULL DEFAULT '',
- subject TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', mime TEXT NOT NULL, sha256 TEXT NOT NULL,
- state TEXT NOT NULL DEFAULT 'waiting', file_id TEXT, action_id TEXT, code TEXT NOT NULL DEFAULT '',
- tries INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS bills_inbound_state ON bills_inbound(state, updated_at);
-"""
 ACTOR = "bot:finance-owner"
 READABLE = ("application/pdf", "image/png", "image/jpeg", "image/webp", "image/heic")
 SHA256 = re.compile(r"[0-9a-f]{64}")

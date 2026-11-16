@@ -7,11 +7,6 @@ from .store import H
 LEVELS = 'company-turn-levels'
 INCIDENT = 'company-turn-incident'
 REASON = "Your company is at its limit; Tico is fixing what's stuck."
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS org_turn_waits(
- job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE, created_at TEXT NOT NULL
-);
-"""
 
 
 def saved(c, key):

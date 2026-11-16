@@ -21,7 +21,6 @@ from backend.finance.store import ap as SAP
 from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
-from backend.finance.store import schema
 from backend.finance.store import tico as T
 from backend.tests.helpers.finance_ap import _bill as _native_bill
 from backend.tests.helpers.finance_ap import _ingest, _txn
@@ -2770,38 +2769,6 @@ def test_two_transfers_on_one_account_in_one_journal_each_match_their_own_leg_an
         assert [tuple(r) for r in rows] == [(-3000, "matched", entry), (-2500, "matched", entry)]
         assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 1
         assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == 0
-
-
-def test_migration_75_gives_a_row_matched_before_lines_were_kept_its_line_and_running_it_again_changes_nothing(books):
-    with books.transaction() as c:
-        entry = act(
-            c,
-            OWNER,
-            "journal",
-            {
-                "date": "2026-10-05",
-                "memo": "rent",
-                "lines": [
-                    {"account_id": account(c, "6100"), "amount": 1500},
-                    {"account_id": account(c, "1000"), "amount": -1500},
-                ],
-            },
-        )
-        assert entry.status == "committed", entry
-        _bank_on(c, "1000", -1500, "2026-10-05", "Acme Software")
-        row = str(c.execute("SELECT id FROM fin_feed_txns").fetchone()[0])
-        line = str(
-            c.execute(
-                "SELECT id FROM fin_lines WHERE entry_id=? AND account_id=?",
-                (entry.result["entry_id"], account(c, "1000")),
-            ).fetchone()[0]
-        )
-        c.execute("UPDATE fin_feed_txns SET status='matched', entry_id=? WHERE id=?", (entry.result["entry_id"], row))
-        c.execute("DROP INDEX fin_feed_txns_entry_line")
-        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN entry_line_id")
-        schema.feed_lines(c)
-        schema.feed_lines(c)
-        assert c.execute("SELECT entry_line_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[0] == line
 
 
 def test_a_revised_transfer_keeps_each_bank_row_on_its_own_leg_of_the_new_entry(books):

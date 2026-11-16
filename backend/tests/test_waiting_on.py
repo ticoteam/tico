@@ -77,9 +77,6 @@ def test_a_bot_that_cannot_run_shows_paused_with_the_cause(c, general):
 
 
 def test_a_task_waiting_for_a_worktree_is_paused_and_nobody_is_woken_for_it(c, general):
-    from backend import worktree_waits
-
-    worktree_waits.ensure(c)
     row = X.new_task(c, ANA, "Fix the login page", assignee="bot:builder")
     other = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     c.execute(

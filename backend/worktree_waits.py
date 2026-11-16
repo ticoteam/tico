@@ -32,23 +32,6 @@ SWEEP_EVERY = 60  # seconds between the scheduler's sweeps while anything waits
 _last = {'at': 0.0}
 log = logging.getLogger('tico.worktree_waits')
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS worktree_waits(id TEXT PRIMARY KEY, task_id TEXT NOT NULL, owner TEXT NOT NULL, "
-    "repo TEXT NOT NULL, generation INTEGER NOT NULL, attempt_id TEXT, state TEXT NOT NULL, link_id TEXT, "
-    "reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT)"
-)
-
-
-def ensure(c):
-    """Unversioned and idempotent, like the task trash: an older release never reads the table."""
-    c.execute(SCHEMA)
-    c.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS worktree_waits_open ON worktree_waits(task_id, repo COLLATE NOCASE) "
-        "WHERE state IN ('waiting','reserved')"
-    )
-    c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_state ON worktree_waits(state, owner, created_at)")
-    c.execute("CREATE INDEX IF NOT EXISTS worktree_waits_link ON worktree_waits(link_id) WHERE link_id IS NOT NULL")
-
 
 def _exists(c):
     return H._has_table(c, 'worktree_waits')  # remembered per connection once seen (no read a task)

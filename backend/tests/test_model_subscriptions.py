@@ -1398,35 +1398,6 @@ def test_an_api_key_has_no_owner_and_a_company_saves_many(api):
     assert [k["kind"] for k in MS.kinds() if k["owned"]] == ["claude_token", "codex_login"]
 
 
-def test_the_owner_migration_backfills_a_plan_from_a_person_who_added_it_and_skips_a_new_file():
-    import importlib
-    import sqlite3
-
-    owner = importlib.import_module("backend.migrations.0059_subscription_owner")
-    conn = sqlite3.connect(":memory:")
-    owner.up(conn)  # a new file: nothing there yet
-    conn.executescript(
-        "CREATE TABLE model_subscriptions(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT "
-        "NOT NULL, preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT "
-        "'new', status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,"
-        " updated_at TEXT NOT NULL);"
-        "CREATE TABLE subscription_connects(login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',"
-        " subscription_id TEXT NOT NULL DEFAULT '');"
-        "INSERT INTO model_subscriptions(id,name,kind,sealed,added_by,created_at,updated_at) VALUES"
-        " ('a','A','claude_token','x','human:ana','t','t'),('b','B','claude_token','x','keeper','t','t'),"
-        " ('c','C','anthropic_key','x','human:ana','t','t');"
-        "INSERT INTO subscription_connects(login_id,kind) VALUES('l','claude_token');"
-    )
-    owner.up(conn)
-    owner.up(conn)  # idempotent
-    assert conn.execute("SELECT id,owner_id FROM model_subscriptions ORDER BY id").fetchall() == [
-        ("a", "human:ana"),
-        ("b", ""),
-        ("c", ""),
-    ]
-    assert conn.execute("SELECT owner_id FROM subscription_connects").fetchall() == [("",)]
-
-
 def usage_of(api, sid):
     return next(s for s in listed(api) if s["id"] == sid)["usage"]
 
@@ -1809,23 +1780,3 @@ def test_a_plan_list_runs_the_month_cost_query_only_when_an_api_key_is_saved(api
     assert not any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
     add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")
     assert any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
-
-
-def test_the_credential_time_migration_starts_each_plan_from_its_last_change_and_skips_a_new_file():
-    import importlib
-    import sqlite3
-
-    credential = importlib.import_module("backend.migrations.0069_subscription_credential_at")
-    conn = sqlite3.connect(":memory:")
-    credential.up(conn)  # a new file: no table yet
-    conn.executescript(
-        "CREATE TABLE model_subscriptions(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT "
-        "NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);"
-        "INSERT INTO model_subscriptions(id,name,kind,sealed,created_at,updated_at) VALUES"
-        " ('a','A','claude_token','x','2026-10-01T00:00:00.000000Z','2026-10-09T00:00:00.000000Z');"
-    )
-    credential.up(conn)
-    credential.up(conn)  # idempotent
-    assert conn.execute("SELECT id,credential_at FROM model_subscriptions").fetchall() == [
-        ("a", "2026-10-09T00:00:00.000000Z")
-    ]

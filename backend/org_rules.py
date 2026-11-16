@@ -58,34 +58,6 @@ DUE_PER_RULE = 20  # the due dates a rule's view names; the rest are counted (`d
 SETTINGS_TASK_CAPS = 20  # the task limits a bot's settings name; the rest are counted
 SCOPE_KEYS = ("everyone", "all_bots", "outside_editions", "groups", "bots", "people", "names")
 
-SCHEMA = (
-    # Rule sources are organization entities now (store.rule_sources; migration 20261108044824 moved the rows).
-    "CREATE TABLE IF NOT EXISTS org_rules(id TEXT PRIMARY KEY, "
-    "kind TEXT NOT NULL CHECK (kind IN ('internal','external')), text TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', "
-    "source_entity_id TEXT, cite TEXT, who TEXT NOT NULL, with_scope TEXT NOT NULL DEFAULT '{}', "
-    "where_terms TEXT NOT NULL DEFAULT '[]', "
-    "if_broken TEXT NOT NULL DEFAULT 'block' CHECK (if_broken IN ('block','escalate','warn')), reviewer TEXT, "
-    "status TEXT NOT NULL CHECK (status IN ('suggested','active','retired')), suggested_by TEXT NOT NULL, "
-    "decided_by TEXT, decided_at TEXT, via TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, "
-    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
-    "document_entity_id TEXT, toward_scope TEXT NOT NULL DEFAULT '[]', applies_when TEXT, "
-    "party_side TEXT CHECK (party_side IN ('our_side', 'their_side')))",
-    "CREATE INDEX IF NOT EXISTS org_rules_status ON org_rules(status, kind, created_at)",
-    "CREATE TABLE IF NOT EXISTS org_rule_holds(id TEXT PRIMARY KEY, operation TEXT NOT NULL, payload TEXT NOT NULL, "
-    "author TEXT NOT NULL, destinations TEXT NOT NULL DEFAULT '[]', rule_ids TEXT NOT NULL DEFAULT '[]', "
-    "verdict TEXT NOT NULL DEFAULT '{}', why TEXT NOT NULL DEFAULT '', nonce TEXT NOT NULL, "
-    "state TEXT NOT NULL CHECK (state IN ('held','sent','kept')), reviewer TEXT, task_id TEXT, created_at TEXT NOT NULL, "
-    "decided_at TEXT, decided_by TEXT, check_kind TEXT NOT NULL DEFAULT 'judged')",
-    "CREATE INDEX IF NOT EXISTS org_rule_holds_author ON org_rule_holds(author, state)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-    # A database made before `where:` got org_rules.where_terms from migration 0047.
-    D.ensure(c)
-
 
 # ----------------------------------------------------------------------------- small helpers
 def _text(value, limit, what):
@@ -1848,7 +1820,6 @@ def install(app, store, auth, mutate):
 
 
 __all__ = [
-    "ensure",
     "matching",
     "applies_to",
     "may_manage",

@@ -1,8 +1,7 @@
-"""Migration 0092's backfill (backend/mailbox_access.py `backfill`): every access people and bots have today is written
+"""The mailbox backfill (backend/mailbox_access.py `backfill`, which migration 0092 ran): every access people and bots have today is written
 as mailboxes and grants, a second run writes nothing, and a company with no inbox bots (TIDY) upgrades to almost
 nothing. A manager's automatic view of their reports' mail is the one thing dropped."""
 
-import importlib
 import json
 
 from backend import bot_settings as BS
@@ -11,7 +10,6 @@ from backend.store import H, encode
 
 ANA, BEN, CARA = "ana@acme.example", "ben@acme.example", "cara@acme.example"
 SUPPORT = "support@acme.example"
-UP = importlib.import_module("backend.migrations.0092_mailboxes").up
 
 
 def tx(api):
