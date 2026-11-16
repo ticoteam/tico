@@ -30,12 +30,11 @@ WRITE = re.compile(
 READ = re.compile(r"\b(?:FROM|JOIN)\s+[\"`]?(fin_\w+)", re.IGNORECASE)
 # A Finance table named in quotes outside Finance is a list that a delete loop could run (devcopy once had one).
 NAMED = re.compile(r"[\"'`](fin_\w+)[\"'`]")
-# The schema's own lists name every table by design: the status lists the CHECKs come from, the rename tooling and the
-# test that lists every table's row model, and the rename test's list of the indexes migrations dropped.
+# The schema's own lists name every table by design: the status lists the CHECKs come from, the rename tooling, and the
+# rename test's list of the indexes migrations dropped.
 NAMED_OK = (
     "backend/status_values.py",
     "scripts/cleanup/",
-    "backend/tests/test_rows_schema.py",
     "backend/tests/test_schema_renames.py",
 )
 INNER = re.compile(

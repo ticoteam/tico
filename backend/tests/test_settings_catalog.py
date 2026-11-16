@@ -184,35 +184,6 @@ def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_di
         assert c.execute("SELECT created_by FROM triggers WHERE name='Orders'").fetchone()[0] == "human:cara"
 
 
-def test_catalogue_resolves_the_bot_for_id_addressed_transitions(api, botops):
-    from backend.tests.helpers.api import as_member
-    from backend.tests.helpers.member_bots import register
-
-    ana = turn(api, botops, person="cara-test", text="Make me a bot")
-    made = register(api, ana, "routine-owner")
-    assert made.status_code == 200, made.text
-    finish(api, botops, ana)
-
-    # The id resolves the bot for transition controls, including the read-only permission answer.
-    now = H.now()
-    with api.app.state.store.transaction() as c:
-        owner_id = H.resolve_bot(c, "routine-owner")["id"]
-        c.execute(
-            "INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,updated_at) "
-            "VALUES('tr-owner',?,'model','{}','human:cara',1,'prepared',?,?)",
-            (owner_id, now, now),
-        )
-    err, shown = mcp(api, "tico_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "cara-test")
-    assert not err and shown["you_may"] is True, shown
-
-    # An admin retains access; an unrelated ordinary member does not inherit the bot owner's rights.
-    err, admin = mcp(api, "tico_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
-    assert not err and admin["you_may"] is True, admin
-    as_member(api, "ben@acme.example")
-    err, unrelated = mcp(api, "tico_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
-    assert not err and unrelated["you_may"] is False, unrelated
-
-
 def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_runs(api, botops):
     """Settings stage 3, acceptance 13: a group's pool is `groups/<id>`, two segments of its route, so the card names
     the route Settings uses and the admin's tap sets it. Before, the id was one escaped segment and no card could be

@@ -2,8 +2,8 @@
 
 import json
 import re
+from typing import TypedDict
 
-from .rows import AttemptRow
 from .store import H
 from . import bot_settings as BS
 
@@ -27,6 +27,61 @@ LAPSED = 'Its computer took the run and never started it, renewed its lease or h
 UNSTARTED_CATEGORIES = {HANDED_BACK: 'handed_back', LAPSED: 'lapsed_unstarted'}
 # A silent lapse as Runs says it: the computer by its name, so a person sees which machine to look at.
 LAPSED_NAMED = '{computer} took it and never started it'
+
+
+class AttemptRow(TypedDict):
+    """One `attempts` row (SELECT *): a run, its lease and its record. The lease columns are NULL together on a run
+    recorded with no lease (migration 0072); the record's columns are NULL on one that failed before it had one."""
+
+    id: str
+    job_id: str | None
+    bot_id: str
+    runner_id: str | None
+    generation: int | None
+    token_hash: str | None
+    state: str | None
+    lease_until: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    thread_id: str | None
+    result: str | None
+    final_text: str | None
+    last_seq: int
+    stop_requested_at: str | None
+    gateway_key_id: str | None
+    handed_runtime: str | None
+    handed_model: str | None
+    acting_person: str | None
+    lane: str
+    wake: str | None
+    model: str | None
+    settled_at: str | None
+    trigger: str | None
+    message_id: str | None
+    task_id: str | None
+    exit: str | None
+    summary: str | None
+    trigger_kind: str | None
+    trigger_source: str | None
+    purpose: str | None
+    rule_id: str | None
+    writes: int | None
+    outcome: str | None
+    did_nothing: int | None
+    rotated: str | None
+    session_kind: str | None
+    session_why: str | None
+    input_tokens: int | None
+    cached_tokens: int | None
+    cache_write_tokens: int | None
+    output_tokens: int | None
+    prompt_tokens: int | None
+    usage_model: str | None
+    provider: str | None
+    est_cost_usd: float | None
+    billing: str | None
+    usage_reason: str | None
 
 
 def clean_stop_reported(c, attempt_id):

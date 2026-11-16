@@ -215,9 +215,9 @@ it off. Only codes are logged, never the key.
 Bot settings, new bots, fallbacks and bulk model changes use three separate fields:
 **Harness / provider**, then **Model**, then **Effort**. Model choices follow the selected harness
 and the team's enabled providers; effort choices follow that model. For an existing bot's primary model, choose
-all three and press **Apply** to use the existing confirmation and checkpoint transition. Changing
+all three and press **Apply** to confirm the change, which applies at once with a fresh session. Changing
 a field alone does not switch the running bot. Cancel restores the saved selection. In the bot editor,
-**Save bot** with a model picked but not applied opens the same confirmation; press **Prepare change** to
+**Save bot** with a model picked but not applied opens the same confirmation; press **Change** to
 save the bot and start the change, or **Cancel** to keep the editor open with "Model change not applied".
 Everything else in the bot editor (fallback, task model, access, owners, computer, profile, run budget) is held until
 **Save bot**, which saves it all together; a line above the button lists what is not saved yet. If something can't be

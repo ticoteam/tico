@@ -64,7 +64,6 @@ backend/roadmaps.py:11
 backend/roster_clock.py:2
 backend/row_clock.py:2
 backend/rule_due.py:4
-backend/rule_suggestions.py:2
 backend/rules.py:4
 backend/rules_schema.py:6
 backend/run_backoff.py:1
@@ -73,11 +72,10 @@ backend/screening.py:2
 backend/slack_app.py:1
 backend/slack_channels.py:1
 backend/sleep_idle_schema.py:1
-backend/stall_triage.py:1
 backend/start_places.py:2
 backend/status_values.py:5
 backend/storage_schema.py:11
-backend/store.py:164
+backend/store.py:163
 backend/strategy.py:5
 backend/subscriptions_schema.py:2
 backend/support.py:2

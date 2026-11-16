@@ -14,7 +14,6 @@ NOW = "2026-10-29T14:00:00.000Z"
 TIDY_STATS = [
     ("messages", "messages_from_kind", "16209 181 99"),
     ("messages", "messages_reply_kind", "16209 6 6"),
-    ("messages", "slack_task_completion_notices", "23 1 1 1"),
     ("messages", "messages_conversation", "16209 8 1"),
     ("messages", "messages_to_delivered", "16209 173 3"),
     ("messages", "sqlite_autoindex_messages_1", "16209 1"),

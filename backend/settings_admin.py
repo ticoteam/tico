@@ -1393,11 +1393,6 @@ class SettingsAdmin:
         )
         if unchanged:
             raise Problem("unchanged", "That setting is already selected", 409)
-        existing = c.execute(
-            "SELECT id FROM bot_transitions WHERE bot=? AND state IN ('preparing','blocked','prepared')", (bot,)
-        ).fetchone()
-        if existing:
-            raise Problem("transition_pending", "Finish or cancel the existing prepared change first", 409)
         if field == "placement" and current["generation"] != body.expected_generation:
             raise Problem("version_conflict", "Machine assignment changed; refresh before preparing the move", 409)
 
@@ -1427,11 +1422,11 @@ class SettingsAdmin:
         self._apply(c, who, c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone())
         return self.get(c, who, transition_id)
 
-    def _apply(self, c, who, transition, *, without_checkpoint=False):
+    def _apply(self, c, who, transition):
         self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
         config = self._config(c, transition["bot"])
         if config["revision"] != transition["expected_revision"]:
-            raise Problem("version_conflict", "Bot settings changed while the checkpoint was being prepared", 409)
+            raise Problem("version_conflict", "Bot settings changed while the change was being prepared", 409)
         self.execution.expire(c)
         target, bot, field = _json(transition["target"], {}), transition["bot"], transition["kind"]
         field = "model" if field == "model" else "placement"
@@ -1482,7 +1477,7 @@ class SettingsAdmin:
                 generation = current["generation"] if current else 0
                 if generation != transition["expected_generation"]:
                     raise Problem(
-                        "version_conflict", "Machine assignment changed while the checkpoint was being prepared", 409
+                        "version_conflict", "Machine assignment changed while the change was being prepared", 409
                     )
                 c.execute("UPDATE bot_config SET owner_id=? WHERE bot=?", (runner["owner_id"], bot))
                 self.execution.assign(
@@ -1499,9 +1494,8 @@ class SettingsAdmin:
                 )
             now = H.now()
             c.execute(
-                "UPDATE bot_transitions SET state='applied',error=NULL,without_checkpoint=?,"
-                "updated_at=?,applied_at=? WHERE id=?",
-                (int(without_checkpoint), now, now, transition["id"]),
+                "UPDATE bot_transitions SET state='applied',error=NULL,updated_at=?,applied_at=? WHERE id=?",
+                (now, now, transition["id"]),
             )
             H.event(
                 c,
@@ -1511,7 +1505,6 @@ class SettingsAdmin:
                 {
                     "transition": transition["id"],
                     "kind": transition["kind"],
-                    "checkpointed": not without_checkpoint,
                     "sessions_reset": reset,
                 },
             )
@@ -1526,30 +1519,8 @@ class SettingsAdmin:
         if not transition:
             raise Problem("not_found", "Prepared change not found", 404)
         self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
-        # A checkpoint holds what a conversation decided and did. A manager bot may follow its report's model change,
-        # not read the conversations it checkpoints: it sees only each one's state.
-        full = who.role == "owner" or self.auth.bot_manager(c, who, transition["bot"])
-        checkpoints = []
-        for row in c.execute(
-            "SELECT * FROM bot_transition_checkpoints WHERE transition_id=? ORDER BY conversation_id", (transition_id,)
-        ):
-            checkpoints.append(
-                {
-                    "conversation_id": row["conversation_id"],
-                    "state": row["state"],
-                    "checkpoint": _json(row["checkpoint"]),
-                    "error": row["error"],
-                }
-                if full
-                else {"conversation_id": None, "state": row["state"], "checkpoint": None, "error": None}
-            )
         value = dict(transition)
         value["target"] = _json(value.pop("target"), {})
-        value["checkpoints"] = checkpoints
-        value["progress"] = {
-            "prepared": sum(row["state"] == "prepared" for row in checkpoints),
-            "total": len(checkpoints),
-        }
         if value["state"] == "applied":
             # What the bot runs on now, checked on the computer it is on now (a model change or a move).
             effective = providers.fill(
@@ -1566,52 +1537,6 @@ class SettingsAdmin:
                 self.settings.public_url,
             )
         return value
-
-    def force(self, c, who, transition_id):
-        transition = c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone()
-        if transition:
-            self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
-        if not transition or transition["state"] in ("applied", "canceled"):
-            raise Problem("state", "This prepared change is no longer pending", 409)
-        active = c.execute(
-            "SELECT 1 FROM bot_transition_checkpoints p JOIN jobs j ON j.message_id=p.message_id "
-            "WHERE p.transition_id=? AND j.state IN ('leased','running','input')",
-            (transition_id,),
-        ).fetchone()
-        if active:
-            raise Problem("busy", "A checkpoint is currently running; wait for it to finish", 409)
-        c.execute(
-            "UPDATE jobs SET state='canceled' WHERE message_id IN "
-            "(SELECT message_id FROM bot_transition_checkpoints WHERE transition_id=?) AND state='queued'",
-            (transition_id,),
-        )
-        self._apply(c, who, transition, without_checkpoint=True)
-        return self.get(c, who, transition_id)
-
-    def cancel(self, c, who, transition_id):
-        transition = c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone()
-        if transition:
-            self._manager(c, who, transition["bot"], report=self._transition_scope(transition))
-        if not transition or transition["state"] in ("applied", "canceled"):
-            raise Problem("state", "This prepared change is no longer pending", 409)
-        if c.execute(
-            "SELECT 1 FROM bot_transition_checkpoints p JOIN jobs j ON j.message_id=p.message_id "
-            "WHERE p.transition_id=? AND j.state IN ('leased','running','input')",
-            (transition_id,),
-        ).fetchone():
-            raise Problem("busy", "A checkpoint is currently running; wait for it to finish", 409)
-        c.execute(
-            "UPDATE jobs SET state='canceled' WHERE message_id IN "
-            "(SELECT message_id FROM bot_transition_checkpoints WHERE transition_id=?) AND state='queued'",
-            (transition_id,),
-        )
-        c.execute(
-            "UPDATE bot_transition_checkpoints SET state='canceled' WHERE transition_id=? AND state='queued'",
-            (transition_id,),
-        )
-        c.execute("UPDATE bot_transitions SET state='canceled',updated_at=? WHERE id=?", (H.now(), transition_id))
-        H.event(c, who.actor, "bot.transition_canceled", transition["bot"], {"transition": transition_id})
-        return self.get(c, who, transition_id)
 
     def history(self, c, who, limit=100, bot="", before=""):
         """One page of the settings changes the caller may see, newest first, and `next_before` for the page after it.

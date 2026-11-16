@@ -30,7 +30,7 @@ SCAN_MAX = 20000  # rows read per source, shown or not; past it the replay is cu
 TEXT_MAX = 1200
 SNAPSHOT_MAX = 300
 DELETED_BOT = "Deleted bot"  # what a person reads for a bot no longer on the roster
-MESSAGE_KINDS = ("say", "ask", "answer")
+MESSAGE_KINDS = ("say",)
 # The engine's history kinds a replay shows: a move (`task.status` or `task.stage`) and a reassignment (`task.owner`).
 TASK_FIELDS = ("move", "reassign")
 

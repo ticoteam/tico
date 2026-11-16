@@ -12,7 +12,6 @@ import pytest
 
 from backend import ask_ingest as A
 from backend import hubdb as H
-from backend.tests.old_asks import old_ask
 from backend.tests.helpers.api import unrelated_task_managers
 from backend.tests.helpers.task_readers import run_on
 from backend.tests.helpers.task_readers import task as private_task
@@ -558,8 +557,7 @@ def test_a_replay_judges_a_past_day_as_on_and_moves_nothing(gate):
         A.save(c, "human:ben", "human:ben", {"mode": "off", "budget": 10, "chores_budget": 5, "criteria": []})
     plate(api, 15)
     tid = file(api, token)["task"]["id"]  # Off: both items land as filed
-    with api.app.state.store.transaction() as c:  # an old loose ask, as an older file holds it
-        old_ask(c, "bot:ops", "human:ben", "Which venue do you want?")
+    venue = file(api, token, "Book the venue", "Which venue do you want?")["task"]["id"]
     with api.app.state.store.transaction() as c:
         A.save(c, "human:ben", "human:ben", {"mode": "on", "budget": 10, "chores_budget": 5, "criteria": []})
     before, calls_before = (on_plate(api, tid), len(items(api))), len(calls(api))
@@ -576,11 +574,11 @@ def test_a_replay_judges_a_past_day_as_on_and_moves_nothing(gate):
     rest = api.post(
         "/api/v2/ask-ingest/replay", json={"person": "ben", "date": day, "offset": 1}, headers=headers("ben-test")
     ).json()
-    assert [i["kind"] for i in rest["items"]] == ["loose"] and rest["next_offset"] is None
+    assert [(i["kind"], i["ref"]) for i in rest["items"]] == [("task", venue)] and rest["next_offset"] is None
     assert (on_plate(api, tid), len(items(api))) == before, "nothing on the plate moved, no item rows"
     replayed = calls(api)[calls_before:]
     assert len(replayed) == 2 and all('"mode": "replay"' in str(row) for row in replayed)
-    assert all("Which venue" not in str(row) and "Pick the launch date" not in str(row) for row in replayed)
+    assert all("Book the venue" not in str(row) and "Pick the launch date" not in str(row) for row in replayed)
 
 
 def test_a_replay_is_the_persons_own_or_an_admins(gate):
@@ -659,21 +657,19 @@ def test_a_replay_shows_an_admin_only_the_titles_they_may_read(gate, monkeypatch
     )
     assert r.status_code == 200, r.text
     file(api, token, "Pick the launch date")
-    with api.app.state.store.transaction() as c:
-        old_ask(c, "bot:ops", "human:ben", "Which doctor do you see?")
     day = H.now()[:10]
     admin = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("priya-test"))
     assert admin.status_code == 200, admin.text
     shown = sorted(i["title"] for i in admin.json()["items"])
-    assert shown == ["", "", "Pick the launch date"]
-    assert "salary" not in admin.text and "doctor" not in admin.text
+    assert shown == ["", "Pick the launch date"]
+    assert "salary" not in admin.text
     own = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("ben-test"))
-    assert {"Ben's private salary review", "Which doctor do you see?"} <= {i["title"] for i in own.json()["items"]}
+    assert "Ben's private salary review" in {i["title"] for i in own.json()["items"]}
 
 
 def test_a_replay_hides_a_private_task_the_filter_kept_with_its_bot(gate):
     """A private task sent back stays the bot's: the person is no party to it, so their own replay shows no title. Their
-    own task, and a question to them outside any task, they always see."""
+    own task they always see."""
     api, model, token = gate
     with api.app.state.store.transaction() as c:
         kept = H.task_create(c, "bot:ops", "Bot-only vendor margin", "", "bot:ops", lint=False, private=True)
@@ -681,8 +677,6 @@ def test_a_replay_hides_a_private_task_the_filter_kept_with_its_bot(gate):
         assert not A._shown(c, None, "human:ben", {"kind": "task", "ref": kept["id"]})
         assert not A._shown(c, "human:ben", "human:ben", {"kind": "task", "ref": kept["id"]})
         assert A._shown(c, None, "human:ben", {"kind": "task", "ref": mine["id"]})
-        assert A._shown(c, None, "human:ben", {"kind": "loose", "ref": "m1"})
-        assert not A._shown(c, "human:priya", "human:ben", {"kind": "loose", "ref": "m1"})
 
 
 def test_a_replay_shows_a_bot_task_only_where_the_viewer_may_read_it(gate):

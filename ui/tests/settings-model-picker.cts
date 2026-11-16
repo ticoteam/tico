@@ -82,7 +82,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
           }
           return json({name: e.id, revision: e.revision});
         }
-        if (p === '/api/v2/settings/transitions/t1') return json({id: 't1', kind: 'model', state: 'applied', bot: 'researcher', progress: {prepared: 1, total: 1}});
+        if (p === '/api/v2/settings/transitions/t1') return json({id: 't1', kind: 'model', state: 'applied', bot: 'researcher'});
         if (p === '/api/me') return json({id: 'ana', role, name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
         if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
         if (p === '/api/employees') return json(role === 'owner' ? bots : bots.map(b => ({...b, can_manage: false})));

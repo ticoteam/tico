@@ -289,13 +289,9 @@ def _bot_target(c, e, target):
     object_id = target.get("id")
     if not object_id:
         return ""
-    if e.route.startswith("routines/{id}"):
-        table = "schedules"
-    elif e.route.startswith("settings/transitions/{id}/"):
-        table = "bot_transitions"
-    else:
+    if not e.route.startswith("routines/{id}"):
         return ""
-    found = c.execute(f"SELECT bot FROM {table} WHERE id=?", (object_id,)).fetchone()
+    found = c.execute("SELECT bot FROM schedules WHERE id=?", (object_id,)).fetchone()
     return found["bot"] if found else ""
 
 

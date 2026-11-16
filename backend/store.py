@@ -393,9 +393,6 @@ CREATE TABLE IF NOT EXISTS slack_posts(
  state TEXT NOT NULL DEFAULT 'ready', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT,
  slack_ts TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, recipient_actor TEXT);
 CREATE INDEX IF NOT EXISTS slack_posts_state ON slack_posts(state, next_attempt_at);
-CREATE INDEX IF NOT EXISTS slack_task_completion_notices ON messages(
- json_extract(refs,'$.task'), json_extract(refs,'$.task_completion.status'), created_at)
- WHERE json_extract(refs,'$.task_completion.notify')=1;
 """
 SCHEMA += SLACK_SCHEMA
 
@@ -1312,15 +1309,9 @@ class Store:
             from . import memory_history as _memory_history
 
             c.executescript(_memory_history.SCHEMA)
-            from . import stall_triage as _stall_triage
-
-            c.executescript(_stall_triage.SCHEMA)
             from . import ask_ingest as _ask_ingest
 
             c.executescript(_ask_ingest.SCHEMA)
-            from . import rule_suggestions as _rule_suggestions
-
-            c.executescript(_rule_suggestions.SCHEMA)
             from . import system_routines as _system_routines
 
             c.executescript(_system_routines.SCHEMA)

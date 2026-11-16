@@ -26,8 +26,7 @@ touched by anything in this file.
 ## Rules for every new module
 
 - `# pyright: strict` in the first 10 lines. `scripts/check_pyright_ratchet.py` refuses a new backend module without it.
-- A new table gets a row shape in `backend/rows.py`, a line in `backend/tests/test_rows_schema.py` and a class in
-  `backend/devcopy.py` (keep, history or empty).
+- A new table gets a class in `backend/devcopy.py` (keep, history or empty).
 - No foreign key from a new table to `tasks`.
 - Every function takes the caller's open write transaction `conn` and never commits, unless it says otherwise.
 

@@ -125,7 +125,7 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
         for created, answered in conn.execute(
             "SELECT m.created_at, (SELECT min(r.created_at) FROM messages r WHERE r.conversation_id=m.conversation_id "
             "AND r.sender_id=? AND r.created_at>m.created_at) FROM messages m WHERE m.recipient_id=? AND m.sender_id!=? "
-            "AND m.kind IN ('say','ask') AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at DESC LIMIT 500",
+            "AND m.kind='say' AND m.created_at>? AND m.created_at<=? ORDER BY m.created_at DESC LIMIT 500",
             (actor, actor, actor, since, end),
         ).fetchall():
             first, then = H.parse_ts(created), H.parse_ts(answered)

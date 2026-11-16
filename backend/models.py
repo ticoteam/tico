@@ -146,17 +146,6 @@ class ChangelogRead(Contract):
     ids: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(max_length=250)
 
 
-class TaskChat(Contract):
-    text: Text
-    expected_recipient: ID | None = None
-
-
-class PageChat(Contract):
-    page: Literal["tasks"]
-    text: str = Field(default="", max_length=200_000)
-    task_id: str | None = None
-
-
 Lane = Literal["company", "product"]
 # A task's number: one sequence for the whole team, like one board's ticket numbers.
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
@@ -2314,10 +2303,6 @@ class BotTransitionCreate(Contract):
         if self.kind == "machine" and (not self.runner_id or self.model or self.effort or self.harness):
             raise ValueError("A machine transition requires only runner_id")
         return self
-
-
-class BotTransitionApply(Contract):
-    change_without_checkpoint: Literal[True]
 
 
 class SettingsUndo(Contract):

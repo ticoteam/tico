@@ -447,10 +447,8 @@ backend/route_memo.py
 backend/route_renames.py
 backend/routines.py
 backend/row_clock.py
-backend/rows.py
 backend/rule_due.py
 backend/rule_due_routine.py
-backend/rule_suggestions.py
 backend/rules.py
 backend/rules_schema.py
 backend/run_backoff.py
@@ -491,7 +489,6 @@ backend/sleep_idle_schema.py
 backend/source_outages.py
 backend/sources.py
 backend/sql.py
-backend/stall_triage.py
 backend/start_jobs.py
 backend/start_places.py
 backend/status_values.py

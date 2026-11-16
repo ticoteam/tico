@@ -52,6 +52,6 @@ def test_an_ask_that_showed_a_page_goes_dark_for_whoever_may_no_longer_open_it(a
         if deleted:
             assert api.delete("/api/v2/files/" + fid, headers=headers()).status_code == 200
         assert api.get("/api/v2/pages/" + fid, headers=headers("cara-test")).status_code == 404
-        for path in (f"tasks/{tid}", f"tasks/{tid}/comments", f"tasks/{tid}/chat", f"tasks/{tid}/context"):
+        for path in (f"tasks/{tid}", f"tasks/{tid}/comments", f"tasks/{tid}/context"):
             shown = json.dumps(get(api, path, token="cara-test"))
             assert label not in shown and fid not in shown, (deleted, path, shown)

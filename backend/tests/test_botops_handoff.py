@@ -158,7 +158,6 @@ def test_a_carried_request_lends_only_for_work_items_never_settings_or_bots(api,
         "/api/v2/settings/history/h1/undo",
         "/api/v2/bots/ops/copy",
         "/api/v2/bots/ops/placement",
-        "/api/v2/settings/transitions/t1/apply-without-checkpoint",
     ]
     for path in guarded + ["/api/v2/tasks/qa-handoff"]:
         _identity_route(api, path, "POST")
