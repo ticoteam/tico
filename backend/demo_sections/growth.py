@@ -728,7 +728,8 @@ def seed(b):
             )
     for k, monday in enumerate(runs):
         steps.append((moment(monday, 7), lambda k=k, monday=monday: weekly(b, s, days, runs, k, monday, people)))
-    steps.append((b.now, lambda: load_customers(b, people)))
+    # A second before the build moment: the clock ticks on each write, so a step at b.now dates its rows after the build.
+    steps.append((b.now - timedelta(seconds=1), lambda: load_customers(b, people)))
     steps.append((b.now, lambda: schedule(b, s)))
     for when, work in sorted(steps, key=lambda step: step[0]):
         b.clock.at = when
