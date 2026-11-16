@@ -6984,6 +6984,7 @@ class Execution:
         # restart safety judgement: local work may continue, while used OKs and outside actions stay held.
         failure = None
         source_pause = False
+        worked = False  # set only when source_pause is; read only under it
         quota_acted = False
         notice_only = False
         if body.outcome in ('failed', 'interrupted') and not row['stop_requested_at']:
