@@ -12,7 +12,7 @@ import type * as E2E from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
-const {journey, open, go, must, call, assertClean, sideways, t, SEEDS} = require('./support/e2e.cts') as E2E.Api;
+const {journey, open, go, must, call, assertClean, expectFailure, sideways, t, SEEDS} = require('./support/e2e.cts') as E2E.Api;
 
 // The hub's answers this journey reads (only the fields it checks).
 interface ToolRow {
@@ -180,7 +180,10 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   assertClean(page, `${where}: Ledger export`);
   await shots(page, `computer-${where}`);
 
-  // The mailbox's page under Tools.
+  // The mailbox's page under Tools. Since mail watch (#3827) the shared mailbox is not connected to Google on this hub, so
+  // its mail read is refused (403 not_connected) and the page says so; that answer lands before or after the heading,
+  // which made this step fail about half the time.
+  expectFailure(page, 403, /^\/api\/v2\/mail\/messages$/, 'GET');
   await go(page, '#/tools/mailbox/' + MAILBOX);
   await page.locator('[data-ib-detail="mailbox"] [data-ib-detail-body] h1, [data-ib-detail="mailbox"] [data-ib-detail-body] h2')
     .first().waitFor({timeout: t(15000)});
