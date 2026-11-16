@@ -365,7 +365,7 @@ def _channel_body(api, args, keys):
 # Every Growth read's answer carries these two (backend/growth_setup.py).
 SETUP_NOTE = (
     " you_may: what you may do, per action (change settings, add or change any channel, add or change sources, record "
-    "months; a bot that owns a channel still changes its own why, stage and budget). setup: while Growth is not set up, "
+    "months; a channel's own bot may change its why, stage and budget). setup: while Growth is not set up, "
     "each step and the next one with its command, its tool and who may do it; then only done."
 )
 
@@ -841,19 +841,16 @@ def growth_customers_delete(api, args):
 
 @tool(
     "tico_growth_numbers",
-    "The growth numbers over the last months: each month's total, each channel's economics, "
-    "the KPI tree with its series, and the markers. line: the month joined source to KPI as the Growth page draws it: "
-    "each source with its health and what it fills, each channel's numbers (value, source, quality, synced_at, stale), "
-    "its CAC, LTV:CAC and payback with formula, inputs and a sentence saying how each was made, the KPIs it moves and "
-    "is held to, and the headline sentence. may_edit: you may record months." + SETUP_NOTE,
+    "Monthly totals, channel economics, KPI tree, markers, and line: one month joined source to channel "
+    "to KPI, with how each number was made. may_edit: may record months." + SETUP_NOTE,
     {
         "months": {
             "type": "integer",
             "minimum": 1,
             "maximum": 24,
-            "description": "How many months back, ending at month; default 12",
+            "description": "Months back; default 12",
         },
-        "month": _s("The last month read and the line's month, YYYY-MM; default the newest with numbers"),
+        "month": _s("Last month, YYYY-MM; default newest"),
     },
 )
 def growth_numbers(api, args):
