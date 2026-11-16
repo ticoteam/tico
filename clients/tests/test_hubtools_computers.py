@@ -153,6 +153,16 @@ def test_cloud_show_names_bots_and_the_computer_and_set_sends_only_what_changed(
     code, got = cli(monkeypatch, api, "cloud", "show")
     assert got["shared"]["bots"] == ["builder", "reviewer-1"] and got["shared"]["computer"] == "Shared cloud machine"
     assert got["sizes"] == [{"name": "default", "cpu": 4, "memory_gb": 8, "disk_gb": 51, "usd_per_hour": 0.045}]
+    # Which sizes Tico recommends, and why not, reach the agent as the server said them.
+    api.routes[("GET", "cloud-machines")] = {
+        **CLOUD,
+        "sizes": [
+            {"name": "large", "recommended": True},
+            {"name": "xlarge", "recommended": False, "note": "Costs more"},
+        ],
+    }
+    code, got = cli(monkeypatch, api, "cloud", "show")
+    assert got["sizes"][1] == {"name": "xlarge", "recommended": False, "note": "Costs more"}
 
     code, got = cli(monkeypatch, api, "cloud", "set", "--no-always-on", "--pause-minutes", "60")
     assert api.calls[-1] == ("POST", "cloud-machines/shared", {"always_on": False, "pause_minutes": 60})

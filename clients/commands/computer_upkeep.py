@@ -186,7 +186,11 @@ def cloud_show(api, args):
         "offered": True,
         "shared": shared or None,
         "sizes": [
-            {k: s.get(k) for k in ("name", "cpu", "memory_gb", "disk_gb", "usd_per_hour", "start_usd") if k in s}
+            {
+                k: s.get(k)
+                for k in ("name", "cpu", "memory_gb", "disk_gb", "usd_per_hour", "start_usd", "recommended", "note")
+                if k in s
+            }
             for s in seen.get("sizes") or []
         ],
         "caps": seen.get("caps") or {},
@@ -197,9 +201,11 @@ def cloud_show(api, args):
     "tico_cloud_set",
     "Change the shared cloud machine (the Owner or an admin; it spends the company's credit): its `size` (a running "
     "machine restarts at it once its turns finish), `always_on`, `pause_minutes` (5 to 1440 idle minutes before it "
-    "pauses) and `grow_storage`. Left out: unchanged. Example: tico cloud set --size large --pause-minutes 60",
+    "pauses) and `grow_storage`. Left out: unchanged. Large is the size Tico recommends: XLarge costs about as much as "
+    "three Large machines, so for more room give busy bots their own Large machine; setting XLarge works and the answer's "
+    "`note` says why it is not recommended. Example: tico cloud set --size large --pause-minutes 60",
     {
-        "size": _s("small, default, large or xlarge (tico cloud show lists them)"),
+        "size": _s("small, default, large (recommended at most) or xlarge (tico cloud show lists them)"),
         "always_on": {"type": "boolean", "description": "Keep it running when idle"},
         "pause_minutes": {
             "type": "integer",

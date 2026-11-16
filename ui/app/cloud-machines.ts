@@ -44,6 +44,8 @@ interface CloudMachineSize {
   disk_gb?: number;
   available?: boolean;
   reason?: string;
+  recommended?: boolean;  // false: offered, but Tico advises against it (XLarge: about the price of three Large)
+  note?: string;          // why Tico does not recommend it, with HQ's prices: the words agents read from the API too
 }
 const CLOUD_SIZE_NAMES = ['small', 'default', 'large', 'xlarge'];
 // The Computer select's values for the two cloud machines; any other value is a computer's id.
@@ -68,10 +70,12 @@ async function cloudMachineSizes(): Promise<CloudMachineSize[]> {
 // A size the plan cannot start says why after it: "XLarge · 16 CPU · … — needs a higher plan".
 function cloudSizeLabel(size: CloudMachineSize): string {
   const why = size.available === false ? ` — ${cloudSizeReason(size)}` : '';
-  if (!size.cpu) return cloudSizeName(size.name) + why;
+  // "XLarge (not recommended) · 16 CPU …": first, so a narrow list still shows it.
+  const name = cloudSizeName(size.name) + (size.recommended === false ? ' (not recommended)' : '');
+  if (!size.cpu) return name + why;
   const hourly = Number(size.usd_per_hour).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
   const disk = size.disk_gb ? ` · ${size.disk_gb} GB disk` : '';
-  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB${disk} · $${hourly}/h${why}`;
+  return `${name} · ${size.cpu} CPU · ${size.memory_gb} GB${disk} · $${hourly}/h${why}`;
 }
 function cloudSizeReason(size: CloudMachineSize): string {
   const why = size.reason || 'Needs a higher plan';
@@ -106,10 +110,21 @@ function cloudMachineRowHTML(e: CloudMachineBot): string {
       <input type="number" min="5" max="1440" step="1" class="settings-inline-select" data-bot-cloud-pause="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.pause_minutes}" value="${m.pause_minutes}" aria-label="Pause after, in minutes, for ${what}" ${pauseOff}>
       <span class="muted">min</span>
     </div><span></span></div>
+    <div class="sb-sub" data-bot-cloud-size-note ${cloudSizeNote(m.size) ? '' : 'hidden'}>${esc(cloudSizeNote(m.size))}</div>
     <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>
     ${scope === 'own' && settingsIsAdmin() && (m.runner_id || !['none', 'deleted'].includes(m.state ?? '') || (m.state === 'deleted' && m.problem)) ? `<div class="sb-row"><span></span><div>
       <button type="button" class="ghost" data-bot-cloud-replace="${esc(e.id)}">Replace machine</button>
     </div><span></span></div>` : ''}`;
+}
+// The advice under Size for the chosen size: only a size Tico does not recommend has one (XLarge's cost).
+function cloudSizeNote(name: string | undefined): string {
+  return CLOUD_SIZES?.find(size => size.name === name)?.note || '';
+}
+function cloudSizeNoteShow(select: HTMLSelectElement): void {
+  const note = select.closest('[data-bot-cloud-row]')?.parentElement?.querySelector('[data-bot-cloud-size-note]');
+  if (!(note instanceof HTMLElement)) return;
+  note.textContent = cloudSizeNote(select.value);
+  note.hidden = !note.textContent;
 }
 // HQ's sizes, with their prices, once they are read; the choice in the select stays as it is.
 async function cloudMachineMount(rows: ParentNode | null | undefined, slug: string): Promise<void> {
@@ -117,6 +132,7 @@ async function cloudMachineMount(rows: ParentNode | null | undefined, slug: stri
   const sizes = await cloudMachineSizes();
   if (!sizes.length || !select.isConnected) return;
   select.innerHTML = cloudSizeOptions(sizes, select.value, select.dataset.machineSize);
+  cloudSizeNoteShow(select);
 }
 // A size with less disk than the machine has now is off: a disk cannot shrink. So is one the company's plan cannot
 // start (HQ's `available` false), shown with its reason rather than hidden, so people see larger sizes exist.

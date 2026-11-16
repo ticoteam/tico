@@ -581,3 +581,21 @@ def test_a_limit_set_before_the_overload_is_declared_is_not_called_over_for_turn
     _busy(api, r, start, range(5, 10))
     (o,) = _overloads(api, r)
     assert o["bots"] == [{"bot": "ops", "runs": 3, "limit": 2}]
+
+
+def test_repeated_overloads_with_the_same_bot_advise_its_own_large_machine_on_a_shared_computer():
+    def over(*bots):
+        return {"bots": [{"bot": b} for b in bots]}
+
+    busiest = [{"bot": b} for b in ("reviewer-1", "reviewer-2", "builder", "ops")]
+    assert P.advice([over("reviewer-1", "ops"), over("reviewer-1", "builder")], busiest) == {
+        "text": "Give reviewer-1 its own Large machine.",
+        "bots": ["reviewer-1"],
+    }
+    both = P.advice([over("reviewer-1", "reviewer-2", "ops")] * 3, busiest)
+    assert both["text"] == "Give reviewer-1 and reviewer-2 their own Large machine."
+    # One overload, no bot in every one, a hidden bot only, or nobody else on the computer: no advice.
+    assert P.advice([over("reviewer-1")], busiest) is None
+    assert P.advice([over("ops"), over("builder")], busiest) is None
+    assert P.advice([over(""), over("")], busiest) is None
+    assert P.advice([over("ops"), over("ops")], [{"bot": "ops"}]) is None

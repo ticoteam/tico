@@ -1060,14 +1060,15 @@ ENTRIES = TEAM_RULES + [
     S(
         "bot.cloud_machine",
         "Cloud machine",
-        BOTS + " > Bot editor",
+        BOTS + " > Bot editor > Computer",
         "bot",
         "confirm",
         "POST",
         "bots/{bot}/cloud-machine",
         value="json",
         card=_card("bots"),
-        words="cloud machine shared own size always on pause after minutes computer grow storage disk",
+        words="cloud machine shared own size xlarge large bigger machine more room cpu always on pause after minutes "
+        "computer grow storage disk",
     ),
     S(
         "bot.cloud_machine.replace",
@@ -1084,14 +1085,15 @@ ENTRIES = TEAM_RULES + [
     S(
         "cloud.shared_machine",
         "Shared cloud machine",
-        BOTS + " > Bot editor",
+        BOTS + " > Bot editor > Computer",
         "admin",
         "confirm",
         "POST",
         "cloud-machines/shared",
         value="json",
         card=_card("bots"),
-        words="shared cloud machine size always on pause after minutes grow storage disk",
+        words="shared cloud machine size xlarge large bigger machine more room cpu always on pause after minutes grow "
+        "storage disk",
     ),
     S(
         "cloud.shared_machine.replace",
