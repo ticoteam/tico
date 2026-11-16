@@ -44,7 +44,7 @@ async function refresh(force = false): Promise<void> {
   } catch (e) { S.overviewRosterFresh = false; }
   await Promise.all([v2, computers]);
   overviewRefresh();
-  if (S.me?.cloud) void updUnreadRefresh();
+  if (S.me) void updUnreadRefresh();
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster(); pageChatFollowRoster(); document.dispatchEvent(new CustomEvent('tico:roster'));
   tipRefresh();
   botAlertDraw();
@@ -110,7 +110,7 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
 /** A bot's live status line: the bot, and its status (absent when the bot has none). */
 interface LiveBotEvent { bot: string; status?: V2BotState; }
 function liveWire(): void {
-  if (!S.me?.cloud || !liveAvailable()) return;
+  if (!S.me) return;
   let tasks: LiveTaskEvent[] = [];
   liveOn('tasks', (d: LiveTaskEvent) => { tasks.push(d); liveSoon('tasks', () => { const batch = tasks; tasks = []; liveTasksApply(batch); }, 200); });
   liveOn('bots', (d: LiveBotEvent) => {

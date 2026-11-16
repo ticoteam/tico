@@ -259,7 +259,7 @@ async function memoryBody(body: Blob | FormData, digests: Map<Blob, string> | nu
 const formRequestOnce = async (url: string, body: Blob | FormData, opts: ApiWriteOptions = {}): Promise<Response> => {
   if (SESSION.out) throw signedOutError(true);
   getForget();
-  const digests = S.me?.cloud ? new Map<Blob, string>() : null;
+  const digests = S.me ? new Map<Blob, string>() : null;
   body = await memoryBody(body, digests);
   if (!digests) return fetch(url, {method:'POST', body});
   const fields: unknown[][] = [];

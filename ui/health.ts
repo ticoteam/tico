@@ -207,7 +207,7 @@ let HL_METRICS: HlMetrics | null = null;   // owners and admins: the last hour f
 let HL_FINDINGS: HlFindings | null = null;  // Check health's open findings and the team rule (GET /api/v2/health/findings)
 
 async function hlRefresh(): Promise<HlHealth | null> {
-  if (!S.me?.cloud) return null;
+  if (!S.me) return null;
   const seq = ++HL_LOAD;
   // The last hour and the monitor are drawn only on the Health page: the minute poll elsewhere (the dot, the stuck
   // bots, a new version) reads the checks alone. On the page, once the checks have said who this is (their audience),
@@ -586,11 +586,11 @@ window.hlBoot = function () {
   // down multiplied that work across tabs. Returning to the tab still refreshes at once.
   let at = 0;
   setInterval(() => {
-    if (document.hidden || !S.me?.cloud || Date.now() - at < 119000) return;
+    if (document.hidden || !S.me || Date.now() - at < 119000) return;
     at = Date.now(); void hlRefresh();
   }, 60000);
   // A shown tab reads once: the refresh also restarts the 2-minute timer, so the next tick does not read again.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me?.cloud) { at = Date.now(); void hlRefresh(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.me) { at = Date.now(); void hlRefresh(); } });
 };
 
 document.addEventListener('change', event => {

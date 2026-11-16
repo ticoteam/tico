@@ -276,7 +276,7 @@ async function v2ChatLoad(slug: string, room: ChatRoom | null = null) {
   if (room) {
     const x = room.execution;
     Object.assign(state, {conv: room.conv, messages: room.messages || [], nextBefore: room.nextBefore, execution: x,
-                          live: S.me?.cloud && v2RunLive(x) ? {text: x.text || ''} : null, listed: true, loaded: true});
+                          live: S.me && v2RunLive(x) ? {text: x.text || ''} : null, listed: true, loaded: true});
     v2ChatRender(state);
   } else if (seen && seen.mode === mode && !chatJumpRoom(slug)) {
     Object.assign(state, {conv: seen.conv, messages: seen.messages, nextBefore: seen.nextBefore, execution: seen.execution,
@@ -310,7 +310,7 @@ async function v2ChatLoad(slug: string, room: ChatRoom | null = null) {
       return;
     }
     // Live events carry every change to this chat (ui/app/live.js); the poll reads it only without them.
-    if (state.liveOff && liveAvailable()) return;
+    if (state.liveOff) return;
     v2ChatMessages(state).then(() => v2ChatRender(state));
     void chatGoalLoad(state);
   }, 15000);
@@ -381,14 +381,14 @@ async function v2BotsOpen(state: ChatState, cid: string) {
 async function v2ChatMessages(state: ChatState) {
   if (!state.conv) return false;
   const sent = state.mine.length;
-  const d: ChatPage | null = await v2Get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/${S.me?.cloud ? 'snapshot' : 'messages'}?${CHAT_PAGE}`);
+  const d: ChatPage | null = await v2Get(`/v2/conversations/${encodeURIComponent(state.conv.id)}/snapshot?${CHAT_PAGE}`);
   if (V2C !== state || !d) return false;
   // A message sent while this was loading is newer than the copy that came back: keep it, and leave the
   // live turn to the stream (this copy has not seen it start).
   const late = state.mine.slice(sent).filter(m => !(d.messages || []).some(x => x.id === m.id));
   state.messages = [...(d.messages || []), ...late];
   state.nextBefore = d.next_before;
-  if (S.me?.cloud && !late.length) {
+  if (S.me && !late.length) {
     state.execution = d.execution;
     state.live = v2RunLive(d.execution) ? {text: d.execution.text} : null;
   }
@@ -689,7 +689,7 @@ function v2MessageHTML(m: ChatMessage) {
         : m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(text)}</div>`
         : messageMd('md', text, m.sender_id, {shortLinks: true})}${chatCopyHTML(m.body, fb)}</div>
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
-    ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
+    ${S.me ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${mine ? v2RunHTML(m) : ''}${v2MessageCards(m)}</div></div>`;
 }
 // A message sent while the bot answers here is written into that turn, or held for the next one (`delivery`, from the
@@ -758,7 +758,7 @@ function chatSideItemHTML(m: ChatMessage) {
   const when = m.created_at ? `<time class="chat-time" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
   return `<div class="cs-item" data-message="${esc(m.id || '')}">
     <div class="cs-head">${chatSideHeadHTML(m)}${when}</div>
-    ${messageMd('cs-text md', text, m.sender_id, {shortLinks: true})}${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
+    ${messageMd('cs-text md', text, m.sender_id, {shortLinks: true})}${S.me ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
 }
 // A run of side items is one muted line: one item reads as itself, more as "12 updates · Dots, BotOps, tasks · 2h".
@@ -826,7 +826,7 @@ const REPLY_WAIT_MS = 20 * 60000;
 // {word, tip, mode}: mode 'run' animates the dots, 'wait' breathes them slowly.
 function v2PendingText(state: ChatState) {
   const x = state.execution, name = botDisplayName(state.slug);
-  if (!S.me?.cloud) return {word: '', tip: `${name} is thinking`, mode: 'run'};
+  if (!S.me) return {word: '', tip: `${name} is thinking`, mode: 'run'};
   if (state.live?.interrupted) return SESSION.out ? {word: 'Signed out', tip: "You've been signed out", mode: 'wait'}
     : {word: 'Reconnecting', tip: 'Connection interrupted — reconnecting', mode: 'wait'};
   return pendingRunText(x, state.slug);
@@ -862,8 +862,8 @@ function v2PendingHTML(state: ChatState) {
   if (state.dismissed === key) return '';
   const sent = Date.parse(state.messages.find(m => m.id === x?.message_id)?.created_at || '') || state.sentAt || 0;
   clearTimeout(state.waitTimer);
-  const late = S.me?.cloud && sent && Date.now() - sent >= REPLY_WAIT_MS;
-  if (S.me?.cloud && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
+  const late = S.me && sent && Date.now() - sent >= REPLY_WAIT_MS;
+  if (S.me && sent && !late) state.waitTimer = setTimeout(() => v2ChatRender(state), sent + REPLY_WAIT_MS - Date.now() + 50);
   const hint = pendingHintHTML(x);
   // A quiet bot (the style guide's chat window): still dots, the words, and Dismiss.
   if (late && !hint) return `<div class="thinking late" data-pending="${esc(key)}"><span class="typing wait" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -1266,7 +1266,6 @@ const CHAT_SOON_MS = 30;
 interface ChatLiveEvent { conversation_id?: string | undefined; goal_id?: string | undefined; output?: unknown }
 function v2ChatStream(state: ChatState, loaded = false) {
   if (!state.conv) return;
-  if (!liveAvailable()) return;                   // the 15 s poll reads it instead
   const cid = state.conv.id;
   if (!loaded) liveSoon('chat:' + cid, () => v2ChatSnapshot(state), 120);
   if (state.liveOff && state.liveCid === cid) return;

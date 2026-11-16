@@ -717,7 +717,7 @@ function decideOpRound(st: DecState) {
     if (now()) decideOpinionsTake(st, sent, got);
   }, () => {
     if (!now()) return;
-    DEC_OP.off = true;   // missing (404), refused or failing: no line this visit, no more asking, buttons as they were
+    DEC_OP.off = true;   // refused or failing: no line this visit, no more asking, buttons as they were
     decidePaintHead(st);
     decidePaintSide(st);
   }).finally(() => {

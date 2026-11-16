@@ -235,8 +235,8 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
 
   // The search box finds files by their words.
   // On a phone with threads, Threads takes Search's place in the bottom bar (ui/app/threads.ts): open it as the menu does.
-  if (phone && await page.locator('#mobile-search').isHidden()) await page.evaluate(() => searchOpen());
-  else await page.locator(phone ? '#mobile-search' : '#search-open').click();
+  if (phone) await page.evaluate(() => searchOpen());
+  else await page.locator('#search-open').click();
   await page.locator('#search-input').fill('funnel');
   const hit = page.locator('#search-results li', {hasText: 'Signup funnel'});
   await hit.waitFor({timeout: t(5000)});

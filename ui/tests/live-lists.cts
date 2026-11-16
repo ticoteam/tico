@@ -343,8 +343,8 @@ const holdNext = (match: Held['match']): Held => {
     }
   }), {whole: 1, version: 'p5', ids: ['e']});
 
-  // A list's order holds as rows come and change: queue order is by rank then age, Done most recent first, and the
-  // plain Threads list by title.
+  // A list's order holds as rows come and change: queue order is by rank then age, Done most recent first, and a
+  // renamed thread stays where the rail has it until its next read.
   assert.deepEqual(await page.evaluate(() => {
     const ids = (rows: {id: string}[]) => rows.map(r => r.id).join(' ');
     const q = [{id: 'a', rank: 1, created_at: '1'}, {id: 'c', rank: 3, created_at: '1'}, {id: 'n', rank: null, created_at: '1'}];
@@ -353,13 +353,13 @@ const holdNext = (match: Held['match']): Held => {
     taskRowsPut(q, {id: 'a', rank: 4, created_at: '1'}, 'a', () => true, taskQueueOrder);
     const done = [{id: 'x', done_at: '2026-11-09'}, {id: 'y', done_at: '2026-11-08'}];
     taskRowsPut(done, {id: 'y', done_at: '2026-11-10'}, 'y', () => true, taskFinishedOrder);
-    const kept = {rail: THREADS.rail, threads: THREADS.threads, pinned: THREADS.pinned};
+    const kept = {threads: THREADS.threads, pinned: THREADS.pinned};
     try {
-      Object.assign(THREADS, {rail: false, pinned: [], threads: [{id: 'th1', title: 'Alpha', audience: 'company', me: {member: true}}, {id: 'th2', title: 'Beta', audience: 'company', me: {member: true}}]});
+      Object.assign(THREADS, {pinned: [], threads: [{id: 'th1', title: 'Alpha', audience: 'company', me: {member: true}}, {id: 'th2', title: 'Beta', audience: 'company', me: {member: true}}]});
       threadsPut({id: 'th1', title: 'Zulu', audience: 'company', me: {member: true}});
       return {added, ranked: ids(q), done: ids(done), threads: THREADS.threads.map(t => t.title).join(' ')};
     } finally { Object.assign(THREADS, kept); }
-  }), {added: 'a b c n', ranked: 'b c a n', done: 'y x', threads: 'Beta Zulu'});
+  }), {added: 'a b c n', ranked: 'b c a n', done: 'y x', threads: 'Zulu Beta'});
 
   assert.deepEqual(errors, []);
   await browser.close();

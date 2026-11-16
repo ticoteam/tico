@@ -1461,7 +1461,7 @@ SEND_WAY_PAINT.add(() => { for (const v of THV_VIEWS) if (v.composer?.ways && !v
 // The newest run in a bot's Home or DM, as the old chat read it (its conversation snapshot's execution: a thread id is a
 // conversation id, docs/dev/threads-contract.md); Stop shows while it runs (chat.js chatRunning).
 async function thvRunRead(view: ThvView) {
-  if (!view.goals || !S.me?.cloud) return;
+  if (!view.goals || !S.me) return;
   const id = view.id;
   const d = id ? await v2Get(`/v2/conversations/${encodeURIComponent(id)}/snapshot?limit=1`, {fresh: true}) : null;
   if (view.gone || view.id !== id) return;

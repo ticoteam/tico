@@ -1107,8 +1107,7 @@ const botScreenKey = (s: ScreenRow): string => [s.state, s.id, s.machine?.screen
 const SCREEN_SETUP_PENDING = new Set<string>(), SCREEN_SAVING = new Set<string>();
 
 // app/redesign-org.ts
-// The groups with their leads: GET /v2/groups when it has answered (a list, or {groups} from an older hub), else the
-// roster's copy, which carries no leads.
+// The groups with their leads: GET /v2/groups when it has answered, else the roster's copy, which carries no leads.
 const rdoGroups = (): OrgGroup[] => RDO?.groups || S.orgGroups || [];
 
 // app/settings-bots.ts

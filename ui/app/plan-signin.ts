@@ -159,9 +159,7 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
       found = sub ? await subsConfirmed(start, running => ({title: `Reconnect ${sub.name}?`, text: `${subsStopWords(running)}, and their sessions start fresh.`, ok: 'Reconnect', danger: false})) : await start(false);
     } catch (error) {
       if (mine !== run) return;
-      // A server from before the sign-in route has only the value to take.
       if (errorCode(error) === 'offline') { halt(); show('none'); }
-      else if (errorStatus(error) === 404) { halt(); show('paste'); }
       else failed(errorMessage(error, 'The sign-in did not start'));   // with the server's reference after it, when it sent one
       return;
     }

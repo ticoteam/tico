@@ -67,7 +67,7 @@ interface MaintRun {
   steps?: MaintRunStep[];
 }
 
-/** The whole of GET /v2/maintenance. `steps` and `settings` are checked at runtime (auMaintOk): an older hub lacks them. */
+/** The whole of GET /v2/maintenance. `steps` and `settings` are checked at runtime (auMaintOk). */
 interface MaintView {
   steps: MaintStep[];
   settings: MaintSettings;
@@ -148,7 +148,7 @@ function auMaintRow(m: MaintView) {
     ...(last ? {last_run: {id: last.id, started_at: last.started_at, status: auMaintRunStatus(last)}} : {}),
     next_run: m.next_run_at || null};
 }
-// The list with Maintenance and System jobs beside it first; an older hub (no steps) leaves it as it is.
+// The list with Maintenance and System jobs beside it first; a reply without steps leaves it as it is.
 // Generic, as auHeartList is: a list comes back as the type it went in (automations.js passes one it has not typed).
 function auMaintList<T extends Array<Pick<import('../types/api').Automation, 'id'>>>(list: T, m: MaintView): T {
   if (!auMaintOk(m)) return list;
@@ -171,9 +171,9 @@ async function auMaintLoad(state: AutomationsState, opts?: {keepEdits?: boolean}
   try {
     const m: MaintView = await get<MaintView>('/v2/maintenance');
     if (automationsState() !== state || state.mtGen !== gen) return;
-    state.maintError = auMaintOk(m) ? '' : 'Maintenance needs a newer hub';
+    state.maintError = '';
     if (auMaintOk(m)) auMaintAdopt(state, m, opts);
-  } catch (e) { if (automationsState() === state && state.mtGen === gen) state.maintError = [403, 404].some(code => code === errorStatus(e)) ? 'Maintenance needs a newer hub' : errorMessage(e, ''); }
+  } catch (e) { if (automationsState() === state && state.mtGen === gen) state.maintError = errorMessage(e, ''); }
 }
 
 // -------------------------------------------------------------------------------------------- drawing
