@@ -11,13 +11,16 @@ process, as Claude Code does. RECALL answers with the code word only when the pr
 as a model with no other memory of the conversation would. With $FAKE_CLAUDE_LIMIT set, every turn ends at the session
 limit as Claude Code's does (runner-rs/tests/fixtures/claude/session-limit.jsonl): a rejected `rate_limit_event`, the
 synthetic `rate_limit` message and an error `result`, having used no tokens (or some, when $FAKE_LIMIT_SPENDS names
-claude)."""
+claude). Credential markers (CALL, FILE, MCPCALL, LOGIN, ECHO; credential_use.py) use what the turn was given, its
+remote MCP servers read from `--mcp-config`, and add a line each to the reply."""
 
 import json
 import os
 import re
 import sys
 import time
+
+import credential_use
 
 GRANTED = ("ACME_API_KEY", "HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET", "HOME", "CODEX_HOME")
 
@@ -175,6 +178,7 @@ def main():
         if "RECALL" in text:
             word = re.search(r"code word is (\w+)", text)
             reply = f"The code word is {word.group(1)}." if word else "I do not know the code word."
+        reply += credential_use.act(text, credential_use.claude_servers(args), record)
         if os.environ.get("ACME_API_KEY"):
             reply += " The key is " + os.environ["ACME_API_KEY"]
         for chunk in (reply[:5], reply[5:]):
