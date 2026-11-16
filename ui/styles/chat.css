@@ -369,6 +369,11 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 /* the Assistant page (ui/app/assistant-page.ts): an empty chat offers a few things to ask, just above the composer */
 .asst-empty{display:flex;min-height:100%;align-items:flex-end;justify-content:center;padding:16px 0 4px}
 .asst-hints{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+/* "Earlier chats" on the Assistant page (ui/app/assistant-page.ts): the owner's old Strategy Owner chat, read-only. */
+.asst-earlier{margin:0 0 var(--s2)}
+.asst-earlier>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
+.asst-earlier-list{max-height:40vh;overflow:auto;display:flex;flex-direction:column;gap:var(--s2);padding:var(--s2) 0}
+.asst-earlier-msg .md{margin-top:2px}
 /* "What it has learned" (ui/app/learned.ts): the link at the top of the chat, and the page, one readable column. */
 .asst-learned{order:2;margin-left:auto;align-self:center;font-size:var(--t-sm);white-space:nowrap}
 .learned-page{max-width:var(--read-width,720px);margin:0 auto;display:flex;flex-direction:column;gap:var(--s3)}

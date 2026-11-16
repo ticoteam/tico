@@ -2917,6 +2917,18 @@ def open_conversation(
     return made
 
 
+def chat_home(conn, actor, other, kind="chat", *, create=True):
+    """The Home a message with no room named goes to, when the pair is a person and a bot whose chats have moved into the
+    bot's Home (backend/bot_home_merge.py home_for_chat), else None. `kind` is the pair's kind as `_pair_conversation`
+    takes it: an ask or a notice is never a chat."""
+    if kind != "chat" or is_human(actor) == is_human(other):
+        return None
+    from . import bot_home_merge
+
+    person, bot = (actor, other) if is_human(actor) else (other, actor)
+    return bot_home_merge.home_for_chat(conn, person, actor_id(bot), create=create)
+
+
 def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
     """The live conversation of this kind between these two, opened if there is none."""
     want = {actor, other}
@@ -2927,6 +2939,9 @@ def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
         dm = threads._open_dm(conn, actor, [other])
         if dm:
             return conversation(conn, dm)
+    home = chat_home(conn, actor, other, kind)
+    if home:
+        return conversation(conn, home)
     for row in _rows(
         conn.execute(
             "SELECT * FROM conversations WHERE kind=? AND closed_at IS NULL AND task_id IS NULL "
@@ -3020,7 +3035,15 @@ def _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, 
         refuse(conn, actor, "self", "a bot cannot send work to itself")
 
     if conversation_id:
+        # A person's old chat with a bot moved into the bot's Home: what still names it (an old task's room, a run
+        # that started before the move) is written there (backend/bot_home_merge.py). Only a closed room can have moved.
         conv = conversation(conn, conversation_id)
+        if conv and conv.get("closed_at"):
+            from . import bot_home_merge
+
+            moved = bot_home_merge.home_for(conn, conversation_id)
+            if moved:
+                conversation_id, conv = moved, conversation(conn, moved)
         if not conv:
             refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
     else:
@@ -3219,6 +3242,15 @@ def _write_message(
 ):
     if actor == "bot:librarian":
         body = librarian_text(body)
+    if conv and ("closed_at" not in conv or conv.get("closed_at")):
+        # A person's old chat with a bot is the bot's Home now: whatever writes to the room (a task's notice, a reconnect
+        # notice, a run's reply) writes to the Home (backend/bot_home_merge.py). Only a closed room can have moved, so an
+        # open one, the common case, costs no lookup.
+        from . import bot_home_merge
+
+        moved = bot_home_merge.home_for(conn, conv["id"])
+        if moved and moved != conv["id"]:
+            conv = conversation(conn, moved)
     if (VIA.get() or BY_TOKEN.get()) and is_human(actor):
         # The Assistant, BotOps or a personal token wrote this for the person: not by their hand (delegated).
         refs = {**(refs or {}), "via": VIA.get() or "token"}
@@ -3286,9 +3318,10 @@ def _write_message(
             refuse(conn, actor, "cap", f"{n} messages in this conversation in the last hour; the cap is {CAP_PER_HOUR}")
     conn.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, "
-        "in_reply_to, created_at, delivered_at, read_at, expires_at, wait_s, origin_id, revision, restricted) "
-        "VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, :in_reply_to, :created_at, "
-        ":delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, :restricted)",
+        "in_reply_to, created_at, delivered_at, read_at, expires_at, wait_s, origin_id, revision, restricted, "
+        "legacy_audience) VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, "
+        ":in_reply_to, :created_at, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
+        ":restricted, :legacy_audience)",
         row,
     )
     if is_human(actor) and is_bot(target) and row["body"].lstrip().startswith("/"):
@@ -5173,22 +5206,30 @@ def task_comments(conn, task_id, *, actor=None):
     row = task(conn, task_id)
     if not row or not row.get("conversation_id"):
         return []
-    cid = row["conversation_id"]
-    conv = conversation(conn, cid)
-    out = []
+    # A person's old chat with the bot moved into its Home, comments and all: read from where it was written and from
+    # the Home it is in now (backend/bot_home_merge.py history_ids).
+    from . import bot_home_merge
+
+    cids = bot_home_merge.history_ids(conn, row["conversation_id"])
+    conv = conversation(conn, cids[-1])
+    out, clauses, args = [], [], []
     # In a bot's room, only the messages that name the task (backend/message_links.py), not the whole room.
     from .message_links import named
 
-    ids = named(conn, task_id, cid)
-    if ids is None:
-        sql, args = "conversation_id=?", [cid]
-    else:
-        sql, args = "+conversation_id=? AND id IN (SELECT value FROM json_each(?))", [cid, _dump(sorted(ids))]
+    for cid in cids:
+        ids = named(conn, task_id, cid)
+        if ids is None:
+            clauses.append("conversation_id=?")
+            args.append(cid)
+        else:
+            clauses.append("(+conversation_id=? AND id IN (SELECT value FROM json_each(?)))")
+            args += [cid, _dump(sorted(ids))]
+    sql = "(" + " OR ".join(clauses) + ")"
     if actor is not None:
         # The rows below are read in the snapshot their checks use, so each check takes the row as stored.
         privacy.snapshot(conn)
     rows = _rows(
-        conn.execute("SELECT * FROM messages WHERE (" + sql + ") AND deleted_at IS NULL ORDER BY created_at", args)
+        conn.execute("SELECT * FROM messages WHERE " + sql + " AND deleted_at IS NULL ORDER BY created_at", args)
     )
     for m in rows:
         m["refs"] = _json(m.get("refs"), {}) or {}
@@ -5264,10 +5305,13 @@ def review_answers(conn, message_id, *, actor=None):
 def comment_on(conn, task_row, message_id):
     """The message `message_id` when it is on this task's thread the way `task_comments` finds it
     (deleted or not, any kind), else None."""
+    from . import bot_home_merge
+
     msg = message(conn, message_id, include_deleted=True)
     if not msg or not task_row or not task_row.get("conversation_id"):
         return None
-    if msg["conversation_id"] != task_row["conversation_id"]:
+    # The task's history: its room, and the Homes a person's old chat moved into (bot_home_merge.history_ids).
+    if msg["conversation_id"] not in bot_home_merge.history_ids(conn, task_row["conversation_id"]):
         return None
     return msg if message_task_id(msg, conversation(conn, msg["conversation_id"])) == task_row["id"] else None
 
@@ -5276,7 +5320,8 @@ def is_comment(msg):
     """Written by `task_comment`: a say tagged `comment`. Not a question, an answer, a notice,
     a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
-    # The marks its way and a bot-to-bot hold leave (threads.PRIMARY_MARKS).
+    # `moved_home`: the mark a comment in a room that moved into a Home carries (bot_home_merge._mark_moved); the
+    # rest are the marks its way and a bot-to-bot hold leave (threads.PRIMARY_MARKS).
     return (
         msg.get("kind") == "say"
         and bool(refs.get("comment"))
@@ -5290,6 +5335,7 @@ def is_comment(msg):
                 "rule",
                 "wake_immediate",
                 "delivery",
+                "moved_home",
                 "send_way",
                 "send_defer_for",
                 "send_people",
@@ -7635,7 +7681,7 @@ def conversations_for(conn, actor, limit=100):
 
 
 def chats_with(conn, actor, bot_actor_id):
-    """The actor's open chats with this bot, newest first.
+    """The actor's open chat with this bot, or its readable Home after the bot's chats move, newest first.
     Found directly, not from the newest conversations: a bot's page opened a month after the last
     message still finds its chat (conversations_for scans a recent window only)."""
     out = []
@@ -7650,6 +7696,17 @@ def chats_with(conn, actor, bot_actor_id):
         row["participants"] = _json(row.get("participants"), []) or []
         if actor in row["participants"] and bot_actor_id in row["participants"]:
             out.append(row)
+    from . import bot_home_merge
+
+    home_id = bot_home_merge.home_for_chat(conn, actor, bot_actor_id, create=False)
+    if home_id:
+        home = _one(conn, "SELECT * FROM conversations WHERE id=?", (home_id,))
+        if home and all(row["id"] != home_id for row in out):
+            home["participants"] = _json(home.get("participants"), []) or []
+            out.append(home)
+            out.sort(
+                key=lambda row: (row.get("last_message_at") or row.get("created_at") or "", row["id"]), reverse=True
+            )
     return out
 
 

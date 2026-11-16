@@ -9,11 +9,18 @@
 // messages; a message goes to /v2/assistant/messages, which answers a lookup at once and hands the rest to a turn of
 // the assistant bot, shown live like any bot's reply (with files, /v2/uploads/assistant/messages). Proposals are
 // Confirm / Cancel cards (ui/assistant.ts). The page is the same for everyone, the owner
-// included. "What it has learned" at the top opens ui/app/learned.ts.
+// included: the owner's earlier chat with the Strategy Owner, from before it became a helper, stays readable under
+// "Earlier chats" (GET /v2/assistant `earlier`), above the Assistant thread with its own older messages.
+// "What it has learned" at the top opens ui/app/learned.ts.
+// GET /v2/assistant: your own Assistant room with its messages, and the earlier chat with the Strategy Owner, when there is one.
+interface AssistantEarlier { room_id?: string; name?: string }
 // The composer pill of the Assistant page (ui/app/pill.ts makePill), with the fields this page adds to it.
 type AssistantPill = Omit<ReturnType<typeof makePill>, 'el' | 'files'> & { el: HTMLElement; files: File[]; outbox?: AssistantOut[]; sending?: boolean };
 // A message on its way: the text as sent, what was typed in the box with it, its files and its session scope.
 interface AssistantOut { text: string; typed?: string; files: File[]; scope?: string }
+// One message of an earlier chat, and one page of them (GET /v2/conversations/{id}/messages).
+interface EarlierMessage { sender_id?: string; created_at?: string; body?: string; deleted_at?: string | null }
+interface EarlierPage { messages?: EarlierMessage[]; has_more?: boolean; next_before?: string | null }
 function assistantPill(): AssistantPill {
   const slug = myChatBot();
   if (ASSISTANT_PILL && ASSISTANT_PILL.slug === slug) return ASSISTANT_PILL;
@@ -37,6 +44,7 @@ async function pageAssistant() {
     <div class="botid"><div class="bot-nameline"><h1>${esc(myChatName())}</h1></div></div></div>
     <a class="ghost asst-learned" href="${LEARNED}">What it has learned</a></div>
   <div class="bot-work" id="bot-work"><div id="pane-chat">
+    <details class="asst-earlier" id="asst-earlier" hidden><summary>Earlier chats</summary><div class="asst-earlier-list"></div></details>
     <section class="card conv" id="conv">
       <div class="conv-older" id="conv-older"></div>
       <div id="conv-thread" data-assistant><div class="empty">Loading…</div></div>
@@ -58,6 +66,8 @@ async function pageAssistant() {
     return;
   }
   if (load !== ASSISTANT_LOAD || S.route !== ASSISTANT) return;
+  // Earlier chats are stored history: readable while the Assistant is off too.
+  assistantEarlier(d.earlier, load);
   if (!d.available) {
     assistantOff($('#conv-thread'), d, {post, esc, after: () => { if (S.route === ASSISTANT) pageAssistant(); }});
     return;
@@ -125,6 +135,41 @@ function assistantRestore(P: AssistantPill, outs: AssistantOut[]) {
   box.dispatchEvent(new Event('input', {bubbles: true}));
   P.files.unshift(...outs.flatMap(o => o.files));
   pillChips(P); pillButtons(P); chatDraftSave(P);
+}
+
+// "Earlier chats": the owner's earlier chat with the Strategy Owner, by its name, read-only, newest page first and older
+// pages on request. Loaded when opened; nothing is sent from here.
+function assistantEarlier(earlier: AssistantEarlier | null | undefined, load: number) {
+  const box = $('#asst-earlier');
+  if (!box) return;
+  const roomId = earlier?.room_id;
+  box.hidden = !roomId;
+  if (box.hidden || !earlier || !roomId) return;
+  const list = box.querySelector('.asst-earlier-list');
+  box.querySelector('summary').textContent = 'Earlier chats with ' + (earlier.name || 'Strategy Owner');
+  let before: string | null | undefined = null, busy = false;
+  const line = (m: EarlierMessage) => {
+    const mine = m.sender_id === 'human:' + (S.me?.id || '');
+    return `<div class="asst-earlier-msg"><b>${esc(mine ? 'You' : earlier.name || 'Assistant')}</b>
+      <span class="muted" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span>${messageMd('md', m.body || '', m.sender_id, {shortLinks: true})}</div>`;
+  };
+  const more = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const q = before ? `?before=${encodeURIComponent(before)}` : '';
+      const page = await get<EarlierPage>(`/v2/conversations/${encodeURIComponent(roomId)}/messages${q}`);
+      if (load !== ASSISTANT_LOAD || !list.isConnected) return;
+      list.querySelector('[data-earlier-more]')?.remove();
+      list.insertAdjacentHTML('afterbegin', (page.messages || []).filter(m => !m.deleted_at).map(line).join('')
+        || (before ? '' : '<div class="muted">No messages.</div>'));
+      before = page.next_before;
+      if (page.has_more && before) list.insertAdjacentHTML('afterbegin', '<button class="ghost" type="button" data-earlier-more>Show older</button>');
+    } catch (e) { list.insertAdjacentHTML('afterbegin', `<div class="err">${esc(errorMessage(e, ''))}</div>`); }
+    finally { busy = false; }
+  };
+  box.ontoggle = () => { if (box.open && !list.childElementCount) void more(); };
+  list.onclick = (ev: MouseEvent) => { if (eventElement(ev)?.closest('[data-earlier-more]')) void more(); };
 }
 
 // The rail: the assistant's active tasks, its latest update and its files, each only when it has

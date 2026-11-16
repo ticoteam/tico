@@ -111,7 +111,8 @@ def _home_count(api, home_id, token="ben-test"):
 def test_a_reply_whose_run_read_a_refused_page_stays_hidden_on_every_load(api, monkeypatch):
     """AC-2 (spec P09): a reply inherits the file refusal of what its run read (task_privacy.attempt_pages_readable).
     With the page deleted after the run, that reply is hidden on the first load after a provenance change (runs primed
-    whole) and on the loads after it (only the runs' messages primed), the same as with no priming at all."""
+    whole) and on the loads after it (only the runs' messages primed), the same as with no priming at all; and again
+    once the Home holds shared-room history, where every message takes the whole check."""
     _, attempt = turn(api)
     fid = page(api, attempt).json()["page"]["file_id"]
     home = _home(api, "bot:ops")
@@ -127,9 +128,13 @@ def test_a_reply_whose_run_read_a_refused_page_stays_hidden_on_every_load(api, m
             c.execute("UPDATE provenance_clock SET value=value+1 WHERE id=1")
         return [_home_count(api, home["id"]) for _ in range(3)]
 
-    monkeypatch.setattr(thread_rail, "_prime", primed)
-    batched = loads()
-    monkeypatch.setattr(thread_rail, "_prime", lambda c, rows: None)
-    alone = loads()
-    assert batched == alone, (batched, alone)
-    assert batched == [2, 2, 2], batched  # the reply whose run read the deleted page is hidden
+    for legacy in (False, True):
+        if legacy:
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE messages SET legacy_audience='shared:ops', restricted=1 WHERE id=?", (named["id"],))
+        monkeypatch.setattr(thread_rail, "_prime", primed)
+        batched = loads()
+        monkeypatch.setattr(thread_rail, "_prime", lambda c, rows: None)
+        alone = loads()
+        assert batched == alone, (legacy, batched, alone)
+        assert batched == [2, 2, 2], (legacy, batched)  # the reply whose run read the deleted page is hidden

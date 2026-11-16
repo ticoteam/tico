@@ -29,9 +29,9 @@ The columns, tables, triggers and indexes below are migration `backend/migration
 also makes the search index and the tables of the thread helpers, the Slack bridge and Tico Meet calls, and tables
 that migration 0058 drops. It runs once; a change to any of that SQL is a new migration. `threads_primary_delivery` is made again by
 `backend/migrations/0048_tasks_conversation.sql` with hubdb's `delivery_counts_sql` (the task-thread mention rule). The
-message indexes are migration `backend/migrations/20261116172132_threads_legacy_out.py`. The one-time data migration (§7)
-ran on every database this release opens; `registry_metadata` key `threads-migration` still records the last seq it
-carried over, which is never unread.
+five message indexes are migration `backend/migrations/20261116172132_threads_legacy_out.py`. The one-time data migration
+(§7) ran up to v0.6.0-rc.1, recorded under `registry_metadata` key `threads-migration`; its code is gone, and what it
+left is still read.
 
 ### 1.1 `conversations` (a thread)
 
@@ -78,7 +78,7 @@ ALTER TABLE messages ADD COLUMN seq INTEGER;                       -- per-instal
 ALTER TABLE messages ADD COLUMN origin_id TEXT;                    -- '<uuidv7>@<install id>' (§6)
 ALTER TABLE messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN restricted INTEGER NOT NULL DEFAULT 0;  -- needs the per-message check (§2.3)
-ALTER TABLE messages ADD COLUMN legacy_audience TEXT;              -- always NULL now (§7); kept on the runner wire
+ALTER TABLE messages ADD COLUMN legacy_audience TEXT;              -- 'shared:<slug>' on migrated shared-room history
 -- edited_at, deleted_at already exist
 -- Not unique: an insert that copies another row's seq or origin_id must not fail; the stamp trigger replaces both
 -- (a copied origin also marks the row restricted). seq is unique by the sequence; (origin_id, revision) by
@@ -174,7 +174,7 @@ CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT N
 | `members` | `thread_members` actors; a `group:<id>` member resolves live | hidden: not listed, not searchable, no existence leak (404) |
 | `task` | whoever may read the task (`auth.task`, `task_private_readable`) | today's task-discussion rule |
 | `home` | the Read audience of `owner_actor` (bot, person or group), its managers (Manage ⇒ Read) | posting needs Read **and** Write on the owner |
-| `personal` | `thread_members` (leaving removes reading, its starter's too), plus `owner_actor` for a special room (`room_key`); **no owner bypass** | all new DMs; migrated personal/Assistant/Librarian/Strategy rooms |
+| `personal` | `thread_members` (leaving removes reading, its starter's too), plus `owner_actor` for a special room (`room_key`); **no owner bypass**; the Strategy owner-seat rule stays | all new DMs; migrated personal/Assistant/Librarian/Strategy rooms |
 | `participants` | actors in `participants`, plus the company owner (today's inspection) | migrated `direct` rows only |
 | `meeting` | `live_privacy.require_conversation` as today | migrated meeting rooms (`room_key` starts `live_privacy.ROOM_PREFIX`) |
 
@@ -202,12 +202,23 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
 
 ### 2.3 Per-message checks (inside the audience)
 - Unchanged rule: `task_privacy.message_readable` (meeting provenance, referenced private tasks, bot limits).
-- **`restricted`** is computed at write time: 1 when the message has an `in_reply_to` to anything
-  but a plain message (restricted 0, not deleted: `threads._plain_parent`), any
+- **`restricted`** is computed at write time: 1 when the message has `legacy_audience`, an `in_reply_to` to anything
+  but a plain message (restricted 0, no `legacy_audience`, not deleted: `threads._plain_parent`), any
   `refs` key outside `threads.SAFE_REF_KEYS`, structure under a safe key other than one level under
   `threads.NESTED_REF_KEYS` (`origin`, `mentions`, `warnings`), any string in refs that names a task (`task:`, a task
-  link, or any task's id), sits in a `task` or `meeting` thread, or attaches files. A message with
+  link, or any task's id), sits in a `task` or `meeting` thread, or attaches files. The migration computes the same in
+  SQL (`json_tree`). A message with
   `restricted=0` skips `message_readable` once the audience check passed (the SSE and timeline fast path).
+- **`legacy_audience='shared:<slug>'`**: readable by exactly today's live predicate, no more and no less:
+  `rooms.shared_member(c, auth, actor, slug)` with bot Read for people; participants and the room's bot for an
+  agent; a run's grant. Home readers outside it see one collapsed **Earlier messages** row (`{"id", "seq", "hidden":
+  true, "earlier": true}` in a timeline, consecutive ones as one; nothing on SSE). `thread.earlier` (`{"count"}`) on
+  the Home's root is the bot's manager's alone, whether or not they read that history.
+- **A migrated Home** (the bot's open shared room, `audience='home'` stored): everything new (`legacy_audience`
+  NULL, any sub-thread) follows Home Read. An old reader without Home Read still opens the Home's root
+  (`threads.legacy_reader_only`) but sees only that history: the timeline lists only legacy messages, `last_seq`
+  and `last_message_at` are the history's, unread is 0, no sub-thread opens, and SSE, `tico sql` and the legacy
+  per-message check (`task_privacy.message_readable` → `threads.legacy_gate`) hide new messages from them.
 - A hidden message renders as a quiet "not shown" row in timelines and is skipped on SSE.
 - New posts can't widen anything (`H.path_mentioned`, `guard_write` keep running in the write door).
 
@@ -217,19 +228,20 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
 viewer = threads.viewer(auth, who)          # per-request: Identity + Auth + caches (never across requests)
 threads.readable(c, viewer, thread_or_message) -> bool
     # thread row/dict/id: the audience predicate on its root. message row/dict/id: its thread's predicate, then
-    # (restricted only) task_privacy.message_readable.
+    # legacy audience, then (restricted only) task_privacy.message_readable.
 threads.require(c, viewer, thread_id, *, write=False) -> thread row   # 404 when unreadable (never 403: no leak)
 threads.denial(c, viewer, row) -> None | (404, "not_found", msg)      # Auth.conversation asks it: unreadable = 404;
                                                                        # a person who left / sign-in off reads nothing
 threads.can_post(c, viewer, thread) -> bool                            # read + audience post rule (home: Write too)
 threads.can_manage(c, viewer, thread) -> bool                          # starter/owner member, or admin
 threads.readable_sql(c, viewer, alias="conversations") -> str          # SQL boolean over a conversations row
+threads.message_sql(c, viewer, alias="messages") -> str                # legacy-audience term for a messages row
 threads.readable_ids(c, viewer, ids) -> set                            # the SSE rendering: one query over ids
 threads.AUDIENCES, threads.PRIVATE_AUDIENCES, threads.SAFE_REF_KEYS
 ```
 
 - **Python** rendering: `threads.readable` (and `Auth.conversation`, which now calls it).
-- **`tico sql`** rendering: `sql.guarded()` uses `readable_sql` for `conversations`; `messages` follow their thread.
+- **`tico sql`** rendering: `sql.guarded()` uses `readable_sql` for `conversations` and `message_sql` for `messages`.
 - **SSE** rendering: `events._Viewer.conversation` uses `readable_ids` (one query per batch over the changed ids).
 - One fixture (`backend/tests/test_threads_privacy.py`) runs the privacy matrix through all three and asserts
   they agree.
@@ -588,28 +600,57 @@ stays. Each batch writes one `thread.purged` event and one audit row.
 - `message_revisions` holds every `(origin_id, revision)` seen, durable for the life of the message.
 - Local holds and screening change only local delivery state, never the canonical message.
 
-## 7. Migration (done)
-The one-time threads migration (audience, root, path, seq and origin on every existing row; each bot's open shared room
-made its Home) and the later move of each person's personal chat with a bot into that bot's Home ran on every database
-this release opens: 0.6 opens only databases made on it or upgraded from a 0.5 one with no tasks
-(`migrations.refuse_old_tasks`), and both ran at the first start of either. Their code is gone. Migration
-`20261116172132_threads_legacy_out` cleared what they left: shared-room history still kept for its old readers
-(`legacy_audience`) was deleted as a person's delete deletes a message, and the record of which chats moved
-(`home_merges`) was dropped.
+## 7. Migration (ran up to v0.6.0-rc.1; what it left is still read)
+Every database this release opens ran the steps below (`threads.migrate`) and the move of chats into Homes
+(`bot_home_merge.run_once`) at a start up to rc.1. Both writers are gone (the move is kept as a test fixture,
+`backend/tests/helpers/bot_home_merge.py`, to build a database as rc.1 left it); every rule below that reads their
+results stays.
 
 Existing conversations (and conversations any legacy writer inserts later) keep `audience` NULL. **Who reads a root
-with no stored audience is decided by the pre-threads rules** (`threads._legacy_denial`, and the legacy term of
-`threads.readable_sql`): a task room by the task; a person by `scope` (personal: its owner; shared:
-`rooms.shared_member_ids` plus Read on the bot, live; otherwise the owner or a participant), a bound meeting room by
-the meeting; an agent bot by participation or `rooms.room_bot`; a run by its attempt's grant. A person who left, or
-whose sign-in is off, reads nothing. The audience *label* is derived live from `room_key`, `scope`, `kind` and
-`task_id` (`threads.audience_of`) for sessions, wakes and posting rules, because legacy writers set those columns after
-the insert. A sub-thread of such a root reads as its root.
+with no stored audience is decided by the pre-threads rules, exactly** (`threads._legacy_denial`, and the legacy term
+of `threads.readable_sql`): a task room by the task; a person by `scope` (personal: its owner, the Strategy room
+owner-only; shared: `rooms.shared_member_ids` plus Read on the bot, live; otherwise the owner or a participant), a
+bound meeting room by the meeting; an agent bot by participation or `rooms.room_bot`; a run by its attempt's grant.
+The only narrowing: a person who left, or whose sign-in is off, reads nothing. The audience *label* is still derived live from
+`room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
+because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written.
+Threads made by `threads.create`/`home`/`sub_thread` store an audience, and so does each bot's open shared room: the
+migration stores `audience='home'`, `owner_actor='bot:<slug>'` on it. Archived duplicate shared rooms, and a shared
+room `rooms.sync_shared_room` opens after the migration (a bot newly in shared mode), stay unstored and read by the
+live shared-room rule as before.
+
+| today | audience | notes |
+|---|---|---|
+| `scope='personal'` (Assistant, Librarian, Strategy, legacy archives) | `personal` | `room_key` kept |
+| `scope='task'` / `kind='task'` | `task` | |
+| `scope='direct'` (any mix of humans and bots) | `participants` | |
+| `room_key` starting `live_privacy.ROOM_PREFIX` | `meeting` | |
+| `scope='shared'` | `home`, `owner_actor='bot:<slug>'` | every existing message gets `legacy_audience='shared:<slug>'`, `restricted=1` |
+
+- Every row: `root_id=id`, `path='/<id>/'`, `parent_id` NULL; messages: `seq=rowid`, `origin_id` minted,
+  `revision=0`, `restricted` computed. `sequences('messages')` starts at `MAX(rowid)`.
+- Counters start at the migrated `MAX(seq)` and every existing reader's `last_read_seq` = that (backfill is never
+  unread).
+- Homes for bots without a shared room, people and groups are created lazily (`threads.home`).
+- Managers of a bot with legacy history: `threads.open_earlier_messages(c, principal, slug)` clears
+  `legacy_audience` on that Home's messages, from the Home's menu or its Earlier messages row. A notice once told each
+  manager, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake); none is sent now, and an old one
+  still shows its Open button.
+- Later, once (`bot_home_merge.run_once`, registry_metadata `bot-chats-to-home`, Nov 3 decision): each person's open
+  personal room with a bot (`room_key` the bot) moves into that bot's Home and is read by the Home's readers. Messages
+  keep ids, seqs and `legacy_audience`; the room closes with `room_key='<key>:home:<home id>'` and a `home_merges`
+  row, and a write that names it lands in the Home (`bot_home_merge.home_for`). The moved history is read for everyone
+  who reads the Home: its messages are history for every reader (`refs.moved_home`, never unread), in the Home and in
+  each moved sub-thread, so old unread state is discarded. A reader's mark moves up to what moved in, never past an
+  original Home message still unread for them. A task's history reads every Home its bot has had (`history_ids`). A person's chat with the bot that opens later is the Home too (`bot_home_merge.home_for_chat`). A file scoped to a moved room takes the
+  Home's scope, unless the Home already has a file of that identity or another moved room's file took it first; that
+  file keeps its room's scope and reads as the Home (`bot_home_merge.scope_home`, for file access and attachments). The
+  Assistant's rooms stay.
 
 ## 8. Sessions (`clients/sessions.py`, `runner-rs/src/execute.rs`)
 The server adds `root_id` and `audience_class` (`public` | `private`) to the turn's `conversation`. `private` =
 audience `members|personal|participants|meeting`, a private task's thread, an input (or the message a carrier carries)
-narrower than its thread (`threads.message_narrower`: a private task or a meeting; a reply flagged
+narrower than its thread (`threads.message_narrower`: a legacy audience, a private task or a meeting; a reply flagged
 `restricted` for its `turn_id` alone is not), or a thread's notes wake (§4.4).
 
 | mode | task turn | non-task turn, public | non-task turn, private |

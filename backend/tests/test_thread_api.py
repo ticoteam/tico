@@ -371,6 +371,18 @@ def test_a_reaction_is_one_per_person_and_needs_read_on_the_message(api):
     )
 
 
+def test_open_earlier_is_a_bot_homes_and_only_its_managers_open_it(api):
+    home = api.get("/api/v2/threads/home/bot:ops", headers=headers()).json()
+    opened = api.post(f"/api/v2/threads/{home['id']}/open-earlier", headers=headers())
+    assert opened.status_code == 200 and opened.json() == {"home": "bot:ops", "messages": 0}, opened.text
+    thread = new_thread(api, members=("human:ben",))
+    assert api.post(f"/api/v2/threads/{thread['id']}/open-earlier", headers=headers()).status_code == 422
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["cara"]})
+    assert api.post(f"/api/v2/threads/{home['id']}/open-earlier", headers=headers("cara-test")).status_code == 403
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": []}, {"people": []})
+    assert api.post(f"/api/v2/threads/{home['id']}/open-earlier", headers=headers("cara-test")).status_code == 404
+
+
 def test_the_sidebar_with_an_actor_lists_the_threads_they_are_in_that_the_viewer_reads(api):
     shared = new_thread(api, title="With Ben", members=("human:ben",))
     other = new_thread(api, title="Cara only", members=("human:cara",))

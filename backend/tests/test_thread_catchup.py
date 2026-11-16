@@ -8,7 +8,6 @@ import pytest
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import thread_catchup, threads, updates
 from backend.auth import Identity
-from backend.store import H
 from backend.tests.helpers.api import as_member, post  # noqa: F401
 
 BEN = Identity("human:ben", "human", "ben@acme.example")
@@ -35,12 +34,6 @@ def catch_up(api, thread_id, scope="subtree", token="ben-test", expected=200):
     return post(api, f"threads/{thread_id}/catch-up", {"scope": scope}, token=token, expected=expected)
 
 
-def hide_from_ben(c, message_id):
-    """The message names Cara's private task, which Ben may not read."""
-    task = H.task_create(c, "human:cara", "Ben's offer", "", "human:cara", private=True, lint=False)
-    c.execute("UPDATE messages SET refs=?, restricted=1 WHERE id=?", (json.dumps({"task": task["id"]}), message_id))
-
-
 def assistant_bodies(api):
     with api.app.state.store.read() as c:
         return [r["body"] for r in c.execute("SELECT body FROM messages WHERE refs LIKE '%catch_up%'").fetchall()]
@@ -55,7 +48,7 @@ def test_the_summary_never_includes_what_the_person_cannot_read(api, monkeypatch
     visible = say(api, tid, "Lease renewal is due Friday.")
     hidden = say(api, tid, "Ben's offer is confidential.")
     with api.app.state.store.transaction() as c:
-        hide_from_ben(c, hidden["id"])
+        c.execute("UPDATE messages SET legacy_audience='shared:nobody', restricted=1 WHERE id=?", (hidden["id"],))
         viewer = threads.viewer(api.app.state.auth, BEN)
         assert threads.readable(c, viewer, visible["id"])
         assert not threads.readable(c, viewer, hidden["id"])
@@ -131,7 +124,7 @@ def test_a_message_revoked_while_the_model_reads_is_not_posted(api, monkeypatch)
 
     def writer(system, user):
         with api.app.state.store.transaction() as c:
-            hide_from_ben(c, secret["id"])
+            c.execute("UPDATE messages SET legacy_audience='shared:nobody', restricted=1 WHERE id=?", (secret["id"],))
         return {"summary": "Lease renewal is due Friday. Ben's offer is confidential."}
 
     monkeypatch.setattr(updates, "writer_for", lambda *a, **k: writer)
@@ -191,8 +184,9 @@ def test_what_the_migration_carried_and_imported_history_are_not_new(api, monkey
     with api.app.state.store.transaction() as c:
         tid = threads.create(c, "human:cara", title="All hands", audience="company")["id"]
     say(api, tid, "Before the earlier-messages cut")
-    say(api, tid, "Another message the migration carried")
+    opened = say(api, tid, "Earlier message opened to everyone")
     with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET legacy_audience=NULL WHERE id=?", (opened["id"],))
         carried = c.execute("SELECT value FROM sequences WHERE name='messages'").fetchone()[0]
         c.execute(
             "INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",

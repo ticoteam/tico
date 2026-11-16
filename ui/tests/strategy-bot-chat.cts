@@ -1,6 +1,7 @@
 // The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.ts myChatBot): the
-// page and their own page's tab read the Assistant, and the composer takes words and files. An admin keeps the
-// Assistant, and a helper's own page (#/bot/botops, #/bot/strategy-owner) opens for them with no composer.
+// page and their own page's tab read the Assistant, the composer takes words and files, and their earlier chat with the
+// Strategy Owner stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
+// and a helper's own page (#/bot/botops, #/bot/strategy-owner) opens for them with no composer.
 // Fixtures only.
 import type {Browser, Page} from 'playwright';
 const {chromium}: typeof import('playwright') = require('playwright');
@@ -13,7 +14,7 @@ const {threadsFake} = require('./support/threads-fake.cts') as import('./support
 interface Person {id: string; role: string; name: string; email: string; cloud: boolean; bot_admin?: boolean}
 interface View {
   available: boolean; state: string; can_turn_on: boolean; room_id: string; has_more: boolean; next_before: string | null;
-  execution: null; actions: Record<string, unknown>; pending: unknown[];
+  execution: null; actions: Record<string, unknown>; pending: unknown[]; earlier: {room_id: string; bot: string; name: string} | null;
   messages: unknown[]; bot?: string; name?: string;
 }
 
@@ -25,7 +26,7 @@ async function open(browser: Browser, me: Person, view: View, strategyName: stri
   const context = await browser.newContext({viewport: {width: 1280, height: 900}, serviceWorkers: 'block'});
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin: 'https://tico-ui.test'});
   const page = await context.newPage();
-  const errors: string[] = [], sent: {path: string; body: unknown}[] = [];
+  const errors: string[] = [], read: (string | null)[] = [], sent: {path: string; body: unknown}[] = [];
   const helpers = ['botops', 'strategy-owner'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, sender_id: 'bot:' + bot, body: 'Nothing to report.'}]}));
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
@@ -52,10 +53,16 @@ async function open(browser: Browser, me: Person, view: View, strategyName: stri
       return json({message: msg('s' + sent.length, 'human:' + me.id, 'sent'), });
     }
     if (p === `/api/v2/conversations/${view.room_id}/snapshot`) return json({messages: view.messages, execution: null, has_more: false, next_before: null});
+    if (p === '/api/v2/conversations/old1/messages') {
+      read.push(url.searchParams.get('before'));
+      return json(url.searchParams.get('before')
+        ? {messages: [msg('o1', 'human:ana', 'Book the offsite')], has_more: false, next_before: null}
+        : {messages: [msg('o2', 'human:ana', 'Plan my week'), msg('o3', 'bot:assistant', 'Done: three tasks for Monday')], has_more: true, next_before: 'o2'});
+    }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
-  return {page, errors, sent};
+  return {page, errors, read, sent};
 }
 
 // The person's own copy and paste: words, or a screenshot, put on the clipboard and pasted with the keyboard.
@@ -71,16 +78,17 @@ async function paste(page: Page, what: string) {
 }
 
 const view = (over: Partial<View>): View => ({available: true, state: 'active', can_turn_on: false, room_id: 'room1', has_more: false, next_before: null,
-  execution: null, actions: {}, pending: [], messages: [], ...over});
+  execution: null, actions: {}, pending: [], earlier: null, messages: [], ...over});
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
-    // The owner: the Assistant, by name.
+    // The owner: the Assistant, by name, and the earlier Strategy Owner chat under Earlier chats.
     const owner: Person = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
-    const mine = view({bot: 'assistant', name: 'Assistant', room_id: 'assistant1', messages: [msg('c1', 'bot:assistant', 'Revenue is on track.')]});
+    const mine = view({bot: 'assistant', name: 'Assistant', room_id: 'assistant1', messages: [msg('c1', 'bot:assistant', 'Revenue is on track.')],
+      earlier: {room_id: 'old1', bot: 'strategy-owner', name: 'Chief'}});
     {
-      const {page, errors, sent} = await open(browser, owner, mine, 'Chief');
+      const {page, errors, read, sent} = await open(browser, owner, mine, 'Chief');
       await page.goto('https://tico-ui.test/#/assistant');
       await page.locator('#chat-composer .p-text').waitFor();
       assert.equal(await page.locator('#main .asst-top h1').innerText(), 'Assistant', 'owner: the page is their Assistant');
@@ -101,19 +109,30 @@ const view = (over: Partial<View>): View => ({available: true, state: 'active', 
       assert.equal(sent[1]?.path, '/api/v2/uploads/assistant/messages', 'owner: a picture goes up as an upload');
       assert.match(sent[1]!.body as string, /name="text"\r\n\r\nAttached files\./);
       assert.match(sent[1]!.body as string, /filename="[^"]*\.png"/);
+      // Earlier chats: closed, loaded when opened, read-only, older pages on request.
+      const earlier = page.locator('#asst-earlier');
+      assert.equal(await earlier.isVisible(), true, 'owner: Earlier chats is there');
+      assert.deepEqual(read, [], 'owner: nothing loaded until opened');
+      await earlier.locator('summary').click();
+      await earlier.getByText('Done: three tasks for Monday').waitFor();
+      await earlier.locator('[data-earlier-more]').click();
+      await earlier.getByText('Book the offsite').waitFor();
+      assert.deepEqual(read, [null, 'o2'], 'owner: newest page, then the older one');
+      assert.equal(await earlier.locator('textarea, input, [data-confirm]').count(), 0, 'owner: nothing to send from there');
       await page.goto('https://tico-ui.test/#/person/ana');
       await page.locator('#ptabs button').first().waitFor();
       assert.equal(await page.locator('#ptabs button').first().innerText(), 'Assistant', 'owner: the tab on their own page');
       assert.deepEqual(errors, [], 'owner: no page errors');
       await page.close();
     }
-    // An admin is not the owner: the Assistant, as before.
+    // An admin is not the owner: the Assistant, as before, and no Earlier chats.
     {
       const admin: Person = {id: 'ben', role: 'human', bot_admin: true, name: 'Ben', email: 'ben@example.test', cloud: true};
       const {page, errors, sent} = await open(browser, admin, view({bot: 'assistant', name: 'Assistant'}), 'Strategy Owner');
       await page.goto('https://tico-ui.test/#/assistant');
       await page.locator('#chat-composer .p-text').waitFor();
       assert.equal(await page.locator('#main .asst-top h1').innerText(), 'Assistant', 'admin: the Assistant page');
+      assert.equal(await page.locator('#asst-earlier').isHidden(), true, 'admin: no Earlier chats');
       // The Assistant takes a picture with the words: both go up together.
       assert.equal(await page.locator('#chat-composer .p-attach').count(), 1, 'admin: the clip');
       await paste(page, 'image');

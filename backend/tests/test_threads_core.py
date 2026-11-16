@@ -100,6 +100,7 @@ def test_the_threads_contracts_on_the_demo_world(tmp_path, demo_template, subtes
         _the_inbox_reads_deliveries_not_to_actor,
         _reactions_need_read_access_and_are_one_per_emoji,
         _a_runs_reply_goes_to_the_sub_thread_of_its_parent_and_never_across_trees,
+        _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new,
         _outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot,
         _a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read,
         _a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read,
@@ -766,6 +767,97 @@ def test_a_write_that_names_a_task_anywhere_in_its_refs_is_restricted(live):
         assert threads.restricted_for(None, {"via": "assistant", "origin": {"install": "slack:acme"}}, None, c=c) == 0
 
 
+def _a_migrated_home_shows_old_readers_only_its_history_and_home_readers_only_whats_new(world, monkeypatch):
+    """Spec section 4: the shared room is its bot's Home. Its history keeps exactly its old readers until a manager
+    opens it; everything new follows Home Read. Pinned in Python, in SQL and in the legacy per-message check."""
+    from backend import task_privacy
+
+    store, auth, who = world
+    with store.transaction() as c:
+        homeless = [a for a in sorted(who) if a.startswith("bot:") and threads.home(c, a, create=False) is None]
+        bot = homeless[0]
+        slug = H.actor_id(bot)
+        old_reader, home_reader = people(who)[:2]
+        room = H.open_conversation(
+            c,
+            old_reader,
+            [old_reader, bot],
+            kind="chat",
+            subject="Shared room",
+            scope="shared",
+            room_key=slug,
+            allow_held=True,
+        )
+        old = H.say(c, old_reader, bot, "Old roadmap", conversation_id=room["id"])
+        # What the migration does to a shared room: its history keeps its readers, the room becomes the Home.
+        c.execute("UPDATE messages SET legacy_audience=?, restricted=1 WHERE id=?", ("shared:" + slug, old["id"]))
+        # As the threads migration (up to rc.1) made a bot's open shared room its Home.
+        c.execute("UPDATE conversations SET audience='home', owner_id=? WHERE id=?", ("bot:" + slug, room["id"]))
+        assert threads.home(c, bot, create=False)["id"] == room["id"]
+        new = threads.post(c, bot, room["id"], "New plan")
+    real_home = threads.Viewer.can_read_home
+    monkeypatch.setattr(
+        threads.Viewer,
+        "shared_slugs",
+        lambda self, c, slugs: {x for x in slugs if x == slug and self.actor == old_reader},
+    )
+    monkeypatch.setattr(
+        threads.Viewer,
+        "can_read_home",
+        lambda self, c, owner: self.actor == home_reader if owner == bot else real_home(self, c, owner),
+    )
+
+    def sees(c, actor):
+        v = threads.viewer(auth, who[actor])
+        python = {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)}
+        sql = {
+            r[0]
+            for r in c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages") + " AND "
+                "conversation_id IN (SELECT id FROM conversations WHERE "
+                + threads.readable_sql(c, v, "conversations")
+                + ")",
+                (room["id"],),
+            )
+        }
+        legacy = {m for m in (old["id"], new["id"]) if task_privacy.message_readable(c, actor, H.message(c, m))}
+        return python, sql, legacy, threads.readable(c, v, room["id"])
+
+    with store.read_transaction() as c:
+        assert sees(c, old_reader) == ({old["id"]}, {old["id"]}, {old["id"]}, True)
+        listed = threads.timeline(c, threads.viewer(auth, who[old_reader]), room["id"])
+        assert [m["id"] for m in listed["messages"]] == [old["id"]], "an old reader never sees what is new"
+        assert listed["thread"]["last_seq"] == old["seq"] and listed["thread"]["me"]["unread"] == 0
+        python, sql, legacy, opens = sees(c, home_reader)
+        assert (python, sql, opens) == ({new["id"]}, {new["id"]}, True)
+        assert old["id"] not in legacy
+        # An internal bot that reads the Home, in a turn not granted the old room, sees only what is new too.
+        from backend.auth import Identity
+
+        peer = next(a for a in sorted(who) if a.startswith("bot:") and a != bot)
+        v = threads.viewer(auth, Identity(peer, "bot", attempt_id="att-none"))
+        monkeypatch.setattr(
+            threads.Viewer,
+            "can_read_home",
+            lambda self, c, owner: self.actor in (home_reader, peer) if owner == bot else real_home(self, c, owner),
+        )
+        v._hidden = None
+        sql = {
+            r[0]
+            for r in c.execute(
+                "SELECT id FROM messages WHERE conversation_id=? AND " + threads.message_sql(c, v, "messages"),
+                (room["id"],),
+            )
+        }
+        assert {m for m in (old["id"], new["id"]) if threads.readable(c, v, m)} == {new["id"]} == sql
+    with store.transaction() as c:
+        threads.open_earlier_messages(c, H.KEEPER, slug)
+    with store.read_transaction() as c:
+        python, sql, _legacy, opens = sees(c, home_reader)
+        assert python == sql == {old["id"], new["id"]} and opens
+        assert sees(c, old_reader)[3] is False, "once opened, the Home is read by its Read audience alone"
+
+
 def _outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_moot(world):
     store, auth, who = world
     with store.transaction() as c:
@@ -825,6 +917,8 @@ def _a_public_turns_page_flags_only_what_some_reader_of_the_thread_may_not_read(
         open_task = H.task_create(c, owner.actor, "Acme launch", "", owner.actor, private=False, lint=False)
         tied = threads.post(c, owner, tid, "On it", refs={"task": secret["id"]})
         tied_open = threads.post(c, owner, tid, "Also on it", refs={"task": open_task["id"]})
-        page = [{"id": m["id"]} for m in (plain, reply, tied, tied_open)]
+        kept = threads.post(c, owner, tid, "Old readers only")
+        c.execute("UPDATE messages SET legacy_audience='shared:finance' WHERE id=?", (kept["id"],))
+        page = [{"id": m["id"]} for m in (plain, reply, tied, tied_open, kept)]
         threads.mark_narrower(c, page)
-    assert [bool(m.get("audience_limited")) for m in page] == [False, False, True, False]
+    assert [bool(m.get("audience_limited")) for m in page] == [False, False, True, False, True]

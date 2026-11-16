@@ -788,6 +788,18 @@ def thread_update(api, args):
 
 
 @tool(
+    "tico_thread_open_earlier",
+    "Open a bot's earlier messages to the people who read its Home. Only a manager of the "
+    "bot may. The answer is its Home and the messages.",
+    {"thread_id": THREAD_ID},
+    required=("thread_id",),
+    writes=True,
+)
+def thread_open_earlier(api, args):
+    return api.post(_thread_path(args["thread_id"], "open-earlier"), {}, key=_key(args))
+
+
+@tool(
     "tico_thread_delete",
     "Delete a message you wrote. It leaves a marker with no text and its sub-thread stays. "
     "Notices cannot be deleted by their writers this way.",
@@ -952,6 +964,11 @@ CLI = (
     ),
     Command("thread react", "add your reaction to a message, such as :+1:", example="tico thread react msg_1 :+1:"),
     Command("thread unreact", "remove your reaction from a message", example="tico thread unreact msg_1 :+1:"),
+    Command(
+        "thread open-earlier",
+        "open a bot's earlier messages to the people who read its Home (a manager of the bot)",
+        example="tico thread open-earlier th_1",
+    ),
     Command(
         "thread task",
         "make a task from a message: private unless the thread is company-wide",

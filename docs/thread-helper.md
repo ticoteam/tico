@@ -1,4 +1,4 @@
-# Thread helper: Needs attention, catch up, update cards
+# Thread helper: Needs attention, earlier messages, catch up, update cards
 
 The thread helper is the person's Assistant, acting with that person's rights. It does three things with threads,
 and each one shows up where the person already looks.
@@ -38,9 +38,11 @@ digest an hour. An install that does not sign in with a Tico account sends none.
 browser's prompt. While Tico is in the background, a new thread item sends one browser notification, once. The memory is
 kept per person (their id). A live change and a refresh both check it, one after another, so an item notifies once.
 
-## Unanswered questions
+## Unanswered questions and earlier messages
 
 Tico posts no nudge in a thread for an unanswered question.
+
+A bot's manager opens a Home's closed history from the Home's menu or its **Earlier messages** row.
 
 ## Catch up
 

@@ -35,6 +35,7 @@ def test_thread_deletes_reactions_dms_uploads_and_call_steps_run_as_the_person_w
         ("PUT", "messages/m1/reactions/:thumbsup:"),
         ("DELETE", "messages/m1/reactions/:thumbsup:"),
         ("POST", "threads/dm"),
+        ("POST", "threads/t1/open-earlier"),
         ("POST", "uploads/threads/t1/messages"),
         ("POST", "slack/links"),
         ("DELETE", "slack/links/L1"),

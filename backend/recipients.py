@@ -1,5 +1,5 @@
-"""Who a message may go to: every send's recipient gate (require_recipient), and whether an actor can read a task's
-question (can_answer). System actors have no inbox."""
+"""Who a message may go to: every send's recipient gate (require_recipient), its room (named_destination), and whether
+an actor can read a task's question (can_answer). System actors have no inbox."""
 
 from copy import copy
 from types import SimpleNamespace
@@ -67,6 +67,22 @@ def _recipient_auth(c):
     return policy
 
 
+def named_destination(c, who, body, auth, create=True):
+    """The conversation a message lands in, named before any check reads it, so each check and the write see the same
+    one. A room that moved names its Home (backend/bot_home_merge.py). A bot's message to a person that names no room
+    lands in that person's chat Home when there is one (hubdb.chat_home): where `H.say` would put it, but otherwise
+    only after the checks had run, so a private run's words would reach a Home that others read. A message to a bot,
+    or from a person with no room named, costs no lookup here."""
+    from . import bot_home_merge
+
+    if body.conversation_id:
+        return bot_home_merge.home_for(c, body.conversation_id, create=create) or body.conversation_id
+    if H.is_human(who.actor) or str(body.to).lower() == "assistant" or str(body.to).startswith("bot:"):
+        return None
+    to = body.to if str(body.to).startswith("human:") else auth.target(c, who, body.to)
+    return H.chat_home(c, who.actor, to, "notice" if body.kind == "notice" else "chat", create=create)
+
+
 def require_recipient(
     c,
     who,
@@ -123,7 +139,7 @@ def require_recipient(
     )
     body.to = target
     if not existing:
-        body.conversation_id = body.conversation_id or None
+        body.conversation_id = named_destination(c, who, body, auth)
     in_assistant_room = False
     if str(body.to).lower() == "assistant":
         if who.role not in ("human", "owner") or who.via:

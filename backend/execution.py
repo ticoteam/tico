@@ -17,6 +17,7 @@ from . import (
     org_turns,
     check_models,
     learned,
+    rooms,
     rules as wake_rule_engine,
     updates_chat,
     gateway_connection,
@@ -1896,7 +1897,7 @@ def thread_payload(c, conv, msg):
     return {
         **conv,
         "root_id": conv.get("root_id") or conv.get("id"),
-        "audience_class": "private" if private else threads.audience_class(conv),
+        "audience_class": "private" if private else threads.audience_class(conv, source),
     }
 
 
@@ -5581,7 +5582,8 @@ class Execution:
                 # place "updates": the recent updates that person may read and open, read now as them
                 # (backend/updates_chat.py). None for every other turn.
                 "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
-                "config": config,
+                # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
+                "config": rooms.session_config(conv, row["bot_id"], config),
                 # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                 # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
                 "session_epoch": session_epoch["epoch"] if session_epoch else 0,

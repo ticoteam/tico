@@ -124,6 +124,7 @@ function threadSettingsHTML(view: ThvView): string {
       <select id="ths-keep">${lengths.map(([d, label]) => `<option value="${d}"${d === days ? ' selected' : ''}>${label}</option>`).join('')}</select></div>`,
     `<div class="ths-row ths-acts"><button type="button" class="ghost small" data-ths="catchup">Summarize</button>
       <button type="button" class="ghost small" data-ths="read">Mark all read</button>${
+      t.earlier ? '<button type="button" class="ghost small" data-ths="earlier">Open earlier messages to Read</button>' : ''}${
       (manage && !home) || thvDeletable(t) ? '<span class="spacer"></span>' : ''}${
       manage && !home ? `<button type="button" class="ghost small" data-ths="archive">${t.archived_at ? 'Unarchive' : 'Archive'}</button>` : ''}${
       thvDeletable(t) ? '<button type="button" class="ghost small danger" data-ths="delete">Delete</button>' : ''}</div>`,
@@ -211,6 +212,7 @@ function threadSettingsOpen(view: ThvView): void {
     b.disabled = true; status.textContent = '';
     try {
       if (key === 'catchup') { dlg.close(); await threadCatchUp(t); return; }
+      if (key === 'earlier') { dlg.close(); await threadEarlierOpen(view, view.id); return; }
       if (key === 'read') { await post(thvPath(t.id) + '/read-all', {}); threadsMarkedRead(t.id, Number(t.last_seq) || 0); dlg.close(); return; }
       if (key === 'archive' && await save(async path => patch(path, {archived: !thdLoaded(view).archived_at}))) dlg.close();
       // Delete asks first; a deleted thread leaves the page, and its panel with it.
@@ -227,4 +229,10 @@ async function threadCatchUp(t: ThreadRow): Promise<void> {
   const r: {posted?: boolean; words?: string} | null = await post(thvPath(t.id) + '/catch-up', {scope: 'subtree'});
   if (r?.posted) toast('Summary ready', false, {label: 'Open', run: () => { location.hash = ASSISTANT; }});
   else toast(r?.words || 'Nothing new');
+}
+// A bot's manager opens its Home's closed history to the Home's readers, from the Home or from the notice in a DM.
+async function threadEarlierOpen(view: ThvView, homeId: string | undefined): Promise<void> {
+  await post(thvPath(homeId) + '/open-earlier', {});
+  toast('Earlier messages open');
+  if (homeId === view.id) await thvRefresh(view);
 }

@@ -271,6 +271,7 @@ THREADS = _routes(
     ("PUT", rf"messages/{_S}/reactions/{_S}"),
     ("DELETE", rf"messages/{_S}/reactions/{_S}"),
     ("POST", r"threads/dm"),
+    ("POST", rf"threads/{_S}/open-earlier"),
     ("POST", rf"uploads/threads/{_S}/messages"),
 )
 

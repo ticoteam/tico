@@ -226,6 +226,7 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 .home-card-acts{margin-left:auto;min-width:0}
 .home-card-acts:empty{display:none}
 .thv-blank .thv-scroll{display:none}
+.th-earlier-open{margin-top:6px}
 
 /* Members and settings */
 .thd-lbl{color:var(--muted);font-size:var(--t-sm);font-weight:600}

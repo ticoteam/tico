@@ -62,6 +62,7 @@ backend/bookkeeper.py
 backend/boot.py
 backend/bot_access.py
 backend/bot_copy.py
+backend/bot_home_merge.py
 backend/bot_hours.py
 backend/bot_rows.py
 backend/bot_seats_routes.py

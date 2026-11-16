@@ -142,6 +142,9 @@ that stays yours (below) comes back to you as a proposal or an ask to OK. Your o
 the Assistant reads each one back in your chat, and only your yes saves it ([Goals, agreed in words](assistant.md#goals-agreed-in-words)). The Strategy Owner's goal suggestions are read back the same way: a yes in your chat confirms one, and it leaves **Needs you**.
 Bots still message it, in its goals session.
 
+An earlier DM with the Strategy Owner stays yours as read-only history under **Earlier chats** on your Assistant page.
+If you hand ownership to someone else (Settings > People), that earlier DM goes with the owner seat to the new owner.
+
 ## What it has learned
 
 For the owner, your Assistant keeps two layers, both on **What it has learned** at the top of your DM (`#/assistant/learned`):

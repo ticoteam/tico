@@ -164,14 +164,15 @@ def test_a_bots_mention_of_the_person_is_listed_and_its_plain_post_is_not(api):
 
 
 def test_an_unread_dm_shows_only_the_message_the_person_can_read(api):
-    """A later message the person cannot read (it names Cara's private task) must not set the item's sender or time."""
+    """A later message the person cannot read must not set the item's sender or time. Ben is a plain member here: the
+    owner reads every migrated shared room, so Ana could read the hidden message too."""
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:
         dm = threads.dm(c, "human:cara", ["human:ben"], title="Lease")["id"]
     visible = say(api, dm, "Call me when you can.")
     with api.app.state.store.transaction() as c:
-        offer = H.task_create(c, "human:cara", "Ana's offer", "", "human:cara", private=True, lint=False)
-        threads.post(c, "human:cara", dm, "Ana's offer is confidential.", refs={"task": offer["id"]})
+        hidden = threads.post(c, "human:cara", dm, "Ana's offer is confidential.")
+        c.execute("UPDATE messages SET legacy_audience='shared:nobody', restricted=1 WHERE id=?", (hidden["id"],))
     item = needs(api, "thread_dm", token="ben-test")[0]
     assert item["created_at"] == visible["created_at"]
 

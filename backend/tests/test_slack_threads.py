@@ -582,33 +582,23 @@ def test_a_channel_that_cannot_be_verified_on_slack_is_paused_and_nothing_is_sen
 
 
 # ----------------------------------------------------------------------------- P1-2: per-message privacy
-def unreadable_when_restricted(monkeypatch):
-    """No channel member reads a restricted message, as when it names a task none of them may read."""
-    real = TH.message_readable
-    monkeypatch.setattr(
-        TH, "message_readable", lambda c, v, m, **kw: False if m.get("restricted") else real(c, v, m, **kw)
-    )
-
-
-def test_a_restricted_message_that_a_channel_member_cannot_read_never_reaches_the_channel(world, monkeypatch):
-    unreadable_when_restricted(monkeypatch)
+def test_a_restricted_message_that_a_channel_member_cannot_read_never_reaches_the_channel(world):
     activate_marketing(world)
     message_id = send_as_ana(world, "Private to the thread")
     with world.hub.transaction() as c:
-        c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message_id,))
+        c.execute("UPDATE messages SET restricted=1, legacy_audience='shared:legal' WHERE id=?", (message_id,))
     assert [r["state"] for r in world.bridge.outbound()] == ["moot"]
     assert world.slack.posts == []
 
 
-def test_a_posted_message_comes_down_when_the_channel_can_no_longer_read_it(world, monkeypatch):
-    unreadable_when_restricted(monkeypatch)
+def test_a_posted_message_comes_down_when_the_channel_can_no_longer_read_it(world):
     activate_marketing(world)
     message_id = send_as_ana(world, "Shared then withdrawn")
     world.bridge.outbound()
     sent_ts = world.slack.posts[0]["ts"]
     with world.hub.transaction() as c:
         TH.edit_message(c, WHO, message_id, "Shared then withdrawn, edited")  # the edit makes Tico look at it again
-        c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message_id,))
+        c.execute("UPDATE messages SET restricted=1, legacy_audience='shared:legal' WHERE id=?", (message_id,))
     world.bridge.outbound()
     assert world.slack.deletes == [(MARKETING, sent_ts)]
     assert world.slack.updates == []
@@ -892,7 +882,7 @@ def test_a_member_who_joins_later_is_in_the_restricted_message_check_from_the_ne
     activate_marketing(world, members=("U1",))
     message_id = send_as_ana(world, "For Ana to read, not the channel")
     with world.hub.transaction() as c:
-        c.execute("UPDATE messages SET restricted=1 WHERE id=?", (message_id,))
+        c.execute("UPDATE messages SET restricted=1, legacy_audience='shared:legal' WHERE id=?", (message_id,))
     world.slack.members[MARKETING] = ["U1", "U2", BOT_USER]  # Ben joins: a mapped member who cannot read it
     assert [r["state"] for r in world.bridge.outbound()] == ["moot"]
     assert world.slack.posts == []

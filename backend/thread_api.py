@@ -405,6 +405,7 @@ def _match(c, v, actors):
 
 def install(app, store, auth, mutate, rule_check):
     from .media import upload_contract
+    from . import bot_home_merge
 
     def recipients(c, who, thread_id, to):
         """Who a thread write is for, as the org-rule check reads it (`org_rule_check.thread_people`). The recipient and
@@ -766,6 +767,8 @@ def install(app, store, auth, mutate, rule_check):
         """A message in the thread (in its sub-thread with `parent_message_id`). A person's or a bot's message passes the
         org-rule check first, outside the write; a held one writes nothing but its hold."""
         who = request.state.identity
+        # A room that moved is checked and written as its Home (bot_home_merge.named_home), named before the check.
+        thread_id = bot_home_merge.named_home(store, thread_id)
         _delivery_words(body)
         rc = check(who, thread_id, body)
 
@@ -982,6 +985,22 @@ def install(app, store, auth, mutate, rule_check):
         who = request.state.identity
         return mutate(request, Nothing(), lambda c: threads.unreact(c, threads.viewer(auth, who), message_id, emoji))
 
+    @app.post("/api/v2/threads/{thread_id}/open-earlier")
+    def open_earlier(request: Request, thread_id: str):
+        """A manager of a bot opens its Home's earlier shared-room messages to the Home's readers. Only a bot's Home has
+        them (422 otherwise); a viewer who may not manage the bot gets 403 from the service."""
+        who = request.state.identity
+
+        def work(c):
+            v = threads.viewer(auth, who)
+            row = threads.get(c, v, thread_id)
+            owner = str(row.get("owner_id") or "")
+            if row.get("audience") != "home" or not owner.startswith("bot:"):
+                raise Problem("home", "Only a bot's Home has earlier messages to open", 422)
+            return threads.open_earlier_messages(c, v, owner[4:])
+
+        return mutate(request, Nothing(), work)
+
     @app.post("/api/v2/uploads/threads/{thread_id}/messages", openapi_extra=upload_contract(ThreadUpload))
     async def thread_upload(request: Request, thread_id: str):
         """A person's message with files in a thread, stored as a chat's files are: each one linked to the message, under
@@ -991,6 +1010,7 @@ def install(app, store, auth, mutate, rule_check):
 
         who = request.state.identity
         human_only(who)
+        thread_id = bot_home_merge.named_home(store, thread_id)  # as post_message names it: the Home, before the check
         checked = {}
 
         def admit(body):

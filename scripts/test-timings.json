@@ -432,6 +432,7 @@
   "backend/tests/test_bot_copy.py": 10.89,
   "backend/tests/test_bot_default_model.py": 3.88,
   "backend/tests/test_bot_file_names.py": 3.5,
+  "backend/tests/test_bot_home_merge.py": 27.05,
   "backend/tests/test_bot_hours.py": 2.85,
   "backend/tests/test_bot_id_threads.py": 1.59,
   "backend/tests/test_bot_ids.py": 33.5,

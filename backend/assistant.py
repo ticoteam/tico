@@ -553,7 +553,7 @@ def instruction(c, who, ref):
         refuse("That message was edited after it was posted, so it does not say what they asked")
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
-    # Only the person's own Assistant room.
+    # Only the person's own Assistant room: the owner's earlier Strategy Owner chat (`rooms.STRATEGY_ROOM`) is history.
     if (
         not msg
         or msg["sender_id"] != who.actor
@@ -1575,15 +1575,21 @@ def create_proposal(
 
 # ------------------------------------------------------------------ the room
 def speaker(c, settings, room, proposer):
-    """The bot that says a card and its result in `room`: the Assistant for its own cards, the page's owner in the
+    """The bot that says a card and its result in `room`: the room's bot for the Assistant, the page's owner in the
     person's chat with it for a page card (`page:<page>`), else the proposer itself (BotOps)."""
     from . import page_chat_cards
 
     if not proposer or proposer == "assistant":
-        return settings.assistant_bot
+        return room_bot(settings, room)
     if page_chat_cards.proposer_page(proposer):
-        return page_chat_cards.writer(c, room) or settings.assistant_bot
+        return page_chat_cards.writer(c, room) or room_bot(settings, room)
     return proposer
+
+
+def room_bot(settings, room):
+    """The bot that talks in this person's own room: the Assistant, and the Strategy Owner in the owner's earlier
+    Strategy Owner chat (its old cards and their results)."""
+    return strategy_bot.SLUG if (room or {}).get("room_key") == rooms.STRATEGY_ROOM else settings.assistant_bot
 
 
 def find_room(c, actor):
@@ -1630,7 +1636,8 @@ def ensure_room(c, actor, bot):
 # helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Owner
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
-# (`move_strategy_room`).
+# (`move_strategy_room`). Up to v0.6.0-rc.1 each start moved the cards still waiting in it to the owner's Assistant room,
+# so none is left there.
 # The Tools Owner works a Tools change it was handed with the person's rights (backend/tools_delegation.py).
 HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.RULES_OWNER, H.TOOLS_OWNER)
 
@@ -1648,6 +1655,53 @@ def chat_bot(c, settings, who):
 
 def chat_name(c, settings, bot):
     return strategy_bot.name(c) if bot == strategy_bot.SLUG else settings.assistant_name
+
+
+def find_strategy_room(c, actor=None):
+    """The owner's earlier Strategy Owner chat: the owner seat's one room. With `actor`, only while it is theirs."""
+    row = c.execute(
+        "SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
+        "ORDER BY created_at LIMIT 1",
+        (rooms.STRATEGY_ROOM,),
+    ).fetchone()
+    room = H.conversation(c, row["id"]) if row else None
+    return room if room and (actor is None or room.get("owner_id") == actor) else None
+
+
+def move_strategy_room(c, actor, to):
+    """The earlier Strategy Owner chat goes with the owner seat to `to`, the new owner, as history. A card still in it
+    is withdrawn: it ran as the old owner, who is no longer the owner."""
+    room = find_strategy_room(c)
+    if not room or room.get("owner_id") == to:
+        return room
+    before = room.get("owner_id")
+    c.execute(
+        "UPDATE conversations SET owner_id=?, participants=? WHERE id=?",
+        (to, json.dumps([to, "bot:" + strategy_bot.SLUG]), room["id"]),
+    )
+    c.execute(
+        "UPDATE assistant_actions SET status='canceled', decided_at=? WHERE conversation_id=? AND owner=? "
+        "AND status='pending'",
+        (H.now(), room["id"], before),
+    )
+    H.event(c, actor, "strategy_bot.chat_moved", room["id"], {"from": before, "to": to})
+    return H.conversation(c, room["id"])
+
+
+def earlier_chat(c, settings, who):
+    """ "Earlier chats" on the owner's Assistant page: their earlier Strategy Owner chat, read-only (GET
+    /api/v2/conversations/<id>/messages), once it has a message. None for anyone else."""
+    if who.role != "owner":
+        return None
+    old = find_strategy_room(c, who.actor)
+    if (
+        not old
+        or not c.execute(
+            "SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL LIMIT 1", (old["id"],)
+        ).fetchone()
+    ):
+        return None
+    return {"room_id": old["id"], "bot": strategy_bot.SLUG, "name": strategy_bot.name(c)}
 
 
 def chat_room(c, settings, who, create=True):
@@ -1702,6 +1756,10 @@ def action_view(row, c=None):
         "diff": json.loads(row.get("diff") or "[]"),
         "result": result,
     }
+    if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
+        # A card the Strategy Owner put in the owner's earlier chat with it says it is the Strategy Owner's, by its name.
+        if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.STRATEGY_ROOM:
+            view["by_name"] = strategy_bot.name(c)
     if c is not None and str(view["proposer"] or "").startswith("page:") and view["conversation_id"]:
         # A page card is said by the page's owner in the person's chat with it, by its name.
         from . import page_chat_cards
@@ -1845,6 +1903,7 @@ def install(app, store, auth, mutate, onboarding):
             )
         ]
         info = availability(c, settings, who)
+        earlier = earlier_chat(c, settings, who)
         return {
             **info,
             "room_id": room["id"] if room else None,
@@ -1854,6 +1913,7 @@ def install(app, store, auth, mutate, onboarding):
             "execution": snap["execution"],
             "actions": actions_for(c, who.actor, ids),
             "pending": pending,
+            "earlier": earlier,
         }
 
     @app.get("/api/v2/assistant")

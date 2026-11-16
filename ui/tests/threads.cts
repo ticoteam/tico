@@ -19,7 +19,7 @@ type Thr = {id: string; title?: string; me: {pinned?: boolean; following?: boole
 type Timeline = {thread: Thr; messages: Record<string, unknown>[]; breadcrumb?: unknown; next_cursor?: unknown};
 type Sse = {queue: unknown[]; seq: number; latest: import('playwright').Request | null; done: boolean};
 type Seen = {errors: string[]; posts: {text: string}[]; reads: string[]; readSeqs: string[]; homes: string[]; steps: string[]; tasks: unknown[]; calls: string[];
-  catchUps: unknown[]; follows: unknown[]; withdrawn: unknown[]; patches: unknown[]; readAll: string[]; pins: string[]; created: unknown[];
+  catchUps: unknown[]; follows: unknown[]; earlier: string[]; withdrawn: unknown[]; patches: unknown[]; readAll: string[]; pins: string[]; created: unknown[];
   browsed: (string | null)[]; rails: number; threadGets: string[]; callSeats: Set<string>};
 declare var THV_VIEWS: ThvView[];
 declare var thvDraw: (view: ThvLive) => void;
@@ -134,6 +134,14 @@ const timeline: Record<string, () => Timeline> = {
   // Empty Homes: one the viewer may post to, one they may not.
   'h-cy': () => ({thread: {id: 'h-cy', audience: 'home', home: {actor: 'human:cy'}, last_seq: 0, me: me()}, breadcrumb: [], next_cursor: null, messages: []}),
   'h-di': () => ({thread: {id: 'h-di', audience: 'home', home: {actor: 'human:di'}, last_seq: 0, me: me(0, {can_post: false})}, breadcrumb: [], next_cursor: null, messages: []}),
+  // A migrated Home: its closed history is one row, with the control for the bot's manager.
+  'h-old': () => ({thread: {id: 'h-old', title: 'Old room', audience: 'home', home: {actor: 'bot:ops'}, last_seq: 3, earlier: {count: 2}, me: me()}, breadcrumb: [], next_cursor: null, messages: [
+    {id: 'e1', seq: 1, thread_id: 'h-old', depth: 0, hidden: true, earlier: true},
+    {...msg('e3', 3, 'bot:ops', 'New plan.'), thread_id: 'h-old'},
+  ]}),
+  't-notice': () => ({thread: {id: 't-notice', title: '', audience: 'personal', last_seq: 1, me: me(), members: [{actor: 'human:ana'}, {actor: 'bot:ops'}]}, breadcrumb: [], next_cursor: null, messages: [
+    {...msg('nt1', 1, 'keeper', "Ops's earlier messages are closed to its Home's readers.", {kind: 'notice', refs: {earlier_messages: {thread_id: 'h-old'}}}), thread_id: 't-notice'},
+  ]}),
   't-edit': () => ({thread: thread('t-edit', 'Edits', 1), breadcrumb: [{id: 't-edit', title: 'Edits'}], next_cursor: null, messages: [
     {...msg('ed1', 1, 'human:ana', 'Open at 40.'), thread_id: 't-edit'},
   ]}),
@@ -153,7 +161,7 @@ let startGate: Gate[] | null = null, leaveGate: Gate[] | null = null, callLive: 
 async function open(browser: import('playwright').Browser, who: string, {phone = false, sse = null}: {phone?: boolean; sse?: Sse | null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const seen: Seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], withdrawn: [], patches: [],
+  const seen: Seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: [],
     readAll: [], pins: [], created: [], browsed: [], rails: 0, threadGets: [], callSeats: new Set()};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
@@ -300,12 +308,15 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
     // Needs you holds tasks, asks, paused causes and mentions (backend/views.py needs_items); a held message is on its thread.
     if (p === '/api/v2/needs-you' && !bob) return json({actor: 'human:ana', items: [], count: 0, version: 'v1'});
     if (p === '/api/v2/rule-holds/hold1') return json({id: 'hold1', can_send: false});
-    const asked = p.match(/^\/api\/v2\/threads\/([^/]+)\/(catch-up|follow)$/);
+    const asked = p.match(/^\/api\/v2\/threads\/([^/]+)\/(catch-up|follow|open-earlier)$/);
     if (asked) {
       if (asked[2] === 'catch-up') { seen.catchUps.push({thread: asked[1], ...JSON.parse(req.postData() || '{}')}); return json({thread_id: asked[1], messages: 2, posted: {id: 'cu1'}}); }
-      const body = JSON.parse(req.postData() || '{}'); seen.follows.push(body.notify);
-      if (asked[1] === 't-open') joined.push({...openHouse, me: {...openHouse.me, following: true}});
-      return json({notify: body.notify});
+      if (asked[2] === 'follow') {
+        const body = JSON.parse(req.postData() || '{}'); seen.follows.push(body.notify);
+        if (asked[1] === 't-open') joined.push({...openHouse, me: {...openHouse.me, following: true}});
+        return json({notify: body.notify});
+      }
+      seen.earlier.push(asked[1]!); return json({home: 'bot:ops', messages: 2});
     }
     const react = p.match(/^\/api\/v2\/messages\/([^/]+)\/reactions\/(.+)$/);
     // The server answers a reaction with the message's reactions, a bare list.
@@ -718,6 +729,22 @@ let browser: import('playwright').Browser | null = null;
     await page.keyboard.press('Escape');
     assert.equal(await (await settings()).locator('[data-notify][aria-pressed="true"]').textContent(), 'Digest', 'the panel shows the current setting');
     await page.keyboard.press('Escape');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+
+    // A migrated Home: one "Earlier messages" row and the manager's control; the notice in a DM opens the same history.
+    await page.goto('https://tico-ui.test/#/thread/h-old');
+    await page.getByText('New plan.').waitFor();
+    assert.equal(await page.locator('.th-earlier').count(), 1);
+    assert.match((await page.locator('.th-earlier').textContent())!, /Earlier messages/);
+    await shot(page, 'earlier-desktop');
+    await page.locator('.th-earlier [data-th-earlier]').click();
+    await page.locator('.toast', {hasText: 'Earlier messages open'}).waitFor();
+    assert.deepEqual(seen.earlier, ['h-old']);
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+    await page.goto('https://tico-ui.test/#/thread/t-notice');
+    await page.locator('.th-earlier-open').click();
+    await page.waitForFunction(() => document.querySelector<HTMLElement>('.toast')?.textContent!.includes('Earlier messages open'));
+    assert.deepEqual(seen.earlier, ['h-old', 'h-old']);
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
     // New message: teammates as chips (a team she has Write on among them, not one without); with no thread of exactly

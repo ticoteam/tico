@@ -99,8 +99,8 @@ def test_the_reader_of_a_hidden_parent_still_sees_the_sub_thread_title(api):
 
 
 def test_a_title_stored_before_the_fix_is_hidden_from_a_reader_of_a_hidden_parent(api):
-    """A sub-thread titled by hand with its parent's first line: reads hide it from the reader who cannot read the
-    parent."""
+    """A sub-thread titled with its parent's first line (as one made before the title rule is): reads hide it from the
+    reader who cannot read the parent."""
     _, _, sub_id = hidden_sub_thread(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Secret launch plan for the board", sub_id))

@@ -313,8 +313,8 @@ def from_a_hub_before_threads(monkeypatch):
 @pytest.mark.parametrize("setup", [{"bot": {"session": "bot"}}])
 def test_the_first_turn_after_the_update_gets_its_own_threads_history_and_no_other(api, computer, monkeypatch):
     """A `session: bot` bot with an old shared thread and history. Its first chat turns after the update start fresh with
-    the conversation's latest messages: a public thread's holds no DM text and nothing some of its readers may not read;
-    a DM's its own. A task turn stays on the old thread."""
+    the conversation's latest messages: a public thread's holds no DM text and nothing kept from its readers; a DM's its
+    own. A task turn stays on the old thread."""
     settled_count = lambda: len([a for a in computer.attempts() if a["result"]])
     new_hub = from_a_hub_before_threads(monkeypatch)
     computer.start()
@@ -326,12 +326,9 @@ def test_the_first_turn_after_the_update_gets_its_own_threads_history_and_no_oth
     until(lambda: settled_count() == 2, "the old public reply")
     old_session = computer.prompts()[0]["argv"][computer.prompts()[0]["argv"].index("--session-id") + 1]
     assert computer.prompts()[1]["argv"][computer.prompts()[1]["argv"].index("--resume") + 1] == old_session
-    kept = post(api, f"threads/{public['id']}/messages", {"text": "Kept for its task's readers"})
+    kept = post(api, f"threads/{public['id']}/messages", {"text": "Kept for its old readers"})
     with api.app.state.store.transaction() as c:
-        secret = H.task_create(c, "human:ana", "Acme acquisition", "", "human:ana", private=True, lint=False)
-        c.execute(
-            "UPDATE messages SET refs=?, restricted=1 WHERE id=?", (json.dumps({"task": secret["id"]}), kept["id"])
-        )
+        c.execute("UPDATE messages SET legacy_audience='shared:finance' WHERE id=?", (kept["id"],))
     assert earlier["id"]
     new_hub()
 
@@ -344,13 +341,13 @@ def test_the_first_turn_after_the_update_gets_its_own_threads_history_and_no_oth
         "Earlier words in public" in first_public["prompt"] and "please read the launch plan" in first_public["prompt"]
     )
     assert "Private words from Ana" not in first_public["prompt"]
-    assert "Kept for its task's readers" not in first_public["prompt"]
+    assert "Kept for its old readers" not in first_public["prompt"]
 
     post(api, f"threads/{public['id']}/messages", {"text": "@ops and after that?"})
     until(lambda: settled_count() == 4, "the second public turn")
     second_public = computer.prompts()[-1]
     assert "--resume" in second_public["argv"] and "first turn on a new session" not in second_public["prompt"]
-    assert "Kept for its task's readers" not in second_public["prompt"]
+    assert "Kept for its old readers" not in second_public["prompt"]
 
     post(api, "chat/ops", {"text": "Back to our chat"})
     until(lambda: settled_count() == 5, "the first DM turn after the update")

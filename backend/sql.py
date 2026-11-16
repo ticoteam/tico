@@ -434,6 +434,8 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         meeting=lambda cid: function("meeting_room") + f"({cid})",
         conversation=lambda cid: function("conversation") + f"({cid})",
     )
+    # A message migrated from a shared bot room keeps that room's readers (threads.message_sql).
+    legacy_messages = threads.message_sql(c, viewer, "", inner=inner)
     tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
     msg_gate = function("message") + "(id,conversation_id,refs,in_reply_to)"
@@ -526,7 +528,12 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "conversations": conversations,
         # Rooms are the small authorization set, unlike message/run history.
         # Build their id set once rather than re-evaluate the room view per message.
-        "messages": ("conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND " + msg_gate),
+        "messages": (
+            "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
+            + legacy_messages
+            + " AND "
+            + msg_gate
+        ),
         # Thread membership and follows are read with their thread; mentions with their message.
         "thread_members": "thread_id IN (SELECT id FROM conversations)",
         "thread_followers": "thread_id IN (SELECT id FROM conversations)",
@@ -1037,6 +1044,8 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             "pin_places",
             "teammate_accesses",
             "task_trash_assets",
+            "home_merges",
+            "home_merge_messages",
             "blob_media",
             "live_meetings",
             "live_meeting_access",

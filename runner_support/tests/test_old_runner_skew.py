@@ -29,7 +29,7 @@ from runner_support.tests.test_threads_e2e_turns import (  # noqa: F401
     test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them,
     test_a_thread_keeps_its_provider_session_and_no_other_thread_shares_it,
     test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots_history,
-    test_a_public_turn_never_carries_a_direct_message_or_narrower_text,
+    test_a_public_turn_never_carries_a_direct_message_or_legacy_text,
 )
 from backend.tests.threads_e2e import call, create_thread, ok, require_threads_api, say
 from runner_support.tests.test_conformance import (  # noqa: F401

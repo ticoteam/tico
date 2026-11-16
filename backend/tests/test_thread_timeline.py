@@ -165,7 +165,55 @@ def test_a_see_only_viewer_reads_no_branch_of_a_home(api):
     assert bodies(timeline(api, home["id"])["messages"]) == ["Parent", "Reply"]
 
 
-def test_a_task_private_message_is_one_plain_hidden_row(api):
+def closed_home(api, slug="ops"):
+    """A migrated Home: its shared-room history keeps its old readers (ana, in the room); what is new follows Home Read."""
+    bot = "bot:" + slug
+    with api.app.state.store.transaction() as c:
+        room = H.open_conversation(
+            c,
+            "human:ana",
+            ["human:ana", bot],
+            kind="chat",
+            subject="Ops room",
+            scope="shared",
+            room_key=slug,
+            allow_held=True,
+        )
+        for text in ("Old one", "Old two"):
+            H.say(c, "human:ana", bot, text, conversation_id=room["id"])
+        c.execute(
+            "UPDATE messages SET legacy_audience=?, restricted=1 WHERE conversation_id=?",
+            ("shared:" + slug, room["id"]),
+        )
+        # As the threads migration (up to rc.1) made a bot's open shared room its Home.
+        c.execute("UPDATE conversations SET audience='home', owner_id=? WHERE id=?", ("bot:" + slug, room["id"]))
+        threads.post(c, bot, room["id"], "New plan")
+    return room["id"]
+
+
+def test_closed_history_is_one_row_marked_earlier_and_only_a_manager_gets_the_count(api):
+    home = closed_home(api)
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": []})
+
+    # Cara reads the Home and not its history: one row that says what it is, with no text and no count.
+    page = timeline(api, home, token="cara-test")
+    rows = page["messages"]
+    assert [r.get("hidden", False) for r in rows] == [True, False] and rows[0]["earlier"] is True
+    assert rows[0].keys() == {"id", "seq", "thread_id", "depth", "hidden", "earlier"} and "Old" not in str(rows)
+    assert "earlier" not in page["thread"]
+
+    # The owner manages the bot and reads the history; the control to open it is still theirs.
+    mine = timeline(api, home)
+    assert bodies(mine["messages"])[:2] == ["Old one", "Old two"]
+    assert mine["thread"]["earlier"] == {"count": 2}
+
+    opened = api.post(f"/api/v2/threads/{home}/open-earlier", headers=headers("ana-test"))
+    assert opened.status_code == 200 and opened.json()["messages"] == 2
+    assert bodies(timeline(api, home, token="cara-test")["messages"]) == ["Old one", "Old two", "New plan"]
+    assert "earlier" not in timeline(api, home)["thread"]
+
+
+def test_a_task_private_message_stays_a_plain_hidden_row_not_earlier(api):
     t = new_thread(api, members=("human:ben",))
     with api.app.state.store.transaction() as c:
         secret = H.task_create(c, "human:ana", "Acme acquisition", "", "human:ana", private=True, lint=False)
@@ -175,5 +223,4 @@ def test_a_task_private_message_is_one_plain_hidden_row(api):
         headers=headers("ana-test"),
     )
     assert posted.status_code == 200, posted.text
-    [row] = timeline(api, t["id"], token="ben-test")["messages"]
-    assert row.keys() == {"id", "seq", "thread_id", "depth", "hidden"} and "Secret" not in str(row)
+    assert "earlier" not in timeline(api, t["id"], token="ben-test")["messages"][0]

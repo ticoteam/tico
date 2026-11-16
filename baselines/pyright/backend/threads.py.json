@@ -34,6 +34,22 @@
                 }
             },
             {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 35,
+                    "endColumn": 39,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 63,
+                    "endColumn": 67,
+                    "lineCount": 1
+                }
+            },
+            {
                 "code": "reportOptionalMemberAccess",
                 "range": {
                     "startColumn": 25,
@@ -46,6 +62,14 @@
                 "range": {
                     "startColumn": 45,
                     "endColumn": 49,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalMemberAccess",
+                "range": {
+                    "startColumn": 16,
+                    "endColumn": 19,
                     "lineCount": 1
                 }
             },
@@ -988,6 +1012,14 @@
             {
                 "code": "reportOptionalSubscript",
                 "range": {
+                    "startColumn": 13,
+                    "endColumn": 16,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
                     "startColumn": 17,
                     "endColumn": 20,
                     "lineCount": 1
@@ -996,8 +1028,8 @@
             {
                 "code": "reportOptionalSubscript",
                 "range": {
-                    "startColumn": 61,
-                    "endColumn": 64,
+                    "startColumn": 30,
+                    "endColumn": 33,
                     "lineCount": 1
                 }
             },
@@ -1046,6 +1078,14 @@
                 "range": {
                     "startColumn": 55,
                     "endColumn": 59,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 6,
+                    "endColumn": 14,
                     "lineCount": 1
                 }
             }

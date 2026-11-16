@@ -10,7 +10,7 @@ Who reads (C1). Every thread has an `audience`, evaluated on its root (a sub-thr
     members       the actors in `thread_members` (a `group:<id>` member names everyone in it, live); hidden
     task          whoever may read the task (auth.task)
     home          whoever holds Read on `owner_id` (a bot, a person or a group; backend/teammate_access.py)
-    personal      `owner_id` and the members; no owner bypass
+    personal      `owner_id` and the members; no owner bypass; the Strategy chat stays with the owner seat
     participants  the actors in `participants`, and the company owner (migrated direct conversations)
     meeting       backend/live_privacy.py, as before (migrated meeting rooms)
 
@@ -21,9 +21,10 @@ company or team standing read. The same rule is said three times: in Python (`re
 `Auth.conversation` calls), as SQL for `tico sql` (`readable_sql`, `message_sql`) and for the SSE stream
 (`readable_ids`). backend/tests/test_threads_privacy.py runs one matrix through all three.
 
-Inside a readable thread a message can still be hidden: a message marked `restricted` at write time (a reply, a
-reference to a task or meeting, an unknown refs key, a task or meeting thread) passes task_privacy.message_readable
-too. An unrestricted message needs nothing more than its thread.
+Inside a readable thread a message can still be hidden: history migrated from a shared bot room keeps its old
+readers (`legacy_audience`, evaluated live by rooms.shared_member_bots), and a message marked `restricted` at write
+time (a reply, a reference to a task or meeting, an unknown refs key, a task or meeting thread) passes
+task_privacy.message_readable too. An unrestricted message needs nothing more than its thread.
 
 Writes (C2, C3, C5). Every message is written by hubdb._write_message, which calls `stamp` before its insert and
 `record` after it; `post` is the new door that REST, the CLI and MCP use, and it ends in hubdb.say (with an
@@ -113,6 +114,7 @@ NOTES_READ = 500  # waiting notes one claim looks through for those
 NOTE_WAKE = "thread_notes"  # the notice that starts a run in a thread for the notes waiting there
 NOTE_WAKE_THREADS = 20  # threads one claim starts such a run in; the rest at the bot's next run
 MIGRATION_KEY = "threads-migration"
+STRATEGY_ROOM = "ceo"  # rooms.STRATEGY_ROOM, read here without importing rooms
 EDITABLE_KINDS = ("say",)
 MAX_TITLE = 200
 MAX_PAGE = 200
@@ -180,9 +182,13 @@ def _derived_owner(r):
 
 
 def _backfill_sql(r):
-    """SQL: a message written as history (`refs.import`, `refs.replay`): never unread."""
+    """SQL: a message written as history (`refs.import`, `refs.replay`), or moved into a Home from a room
+    (`refs.moved_home`, backend/bot_home_merge.py): never unread."""
     refs = f"CASE WHEN json_valid({r}.refs) THEN {r}.refs END"
-    return f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL)"
+    return (
+        f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL "
+        f"OR json_extract({refs},'$.moved_home') IS NOT NULL)"
+    )
 
 
 # ----------------------------------------------------------------------------- small helpers
@@ -326,6 +332,7 @@ class Viewer:
         self._chain = self._hidden = self._shared = self._admin = self._tasks = self._standing = self._known = None
         self._backfill = None
         self._threads = {}
+        self._legacy = {}
         # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
         self._members: dict | None = None
         self._member_rows = {}  # {thread id: its member actors}, read once a request (`_member_rows`)
@@ -406,8 +413,7 @@ class Viewer:
             return False
 
     def shared_slugs(self, c, slugs):
-        """Of these bots, those whose shared room (a root with no stored audience) this viewer reads
-        (rooms.shared_member_bots)."""
+        """Of these bots, those whose legacy shared-room history this viewer reads (rooms.shared_member_bots)."""
         if not self.actor.startswith("human:"):
             return set()
         if self._shared is None:
@@ -543,12 +549,19 @@ def denial(c, v, row):
     if audience == "members":
         return None if _is_member(c, v, root["id"]) else _MISSING
     if audience == "home":
-        return None if v.can_read_home(c, home_owner(root)) else _MISSING
+        if v.can_read_home(c, home_owner(root)):
+            return None
+        # A migrated Home also opens (its root only) to its shared room's old readers, for that history alone.
+        found = _legacy_home(c, v, root["id"]) if row["id"] == root["id"] else None
+        return None if found and v.shared_slugs(c, sorted(found["slugs"])) else _MISSING
     if audience == "personal":
         # A DM reads by its membership, so whoever leaves it stops reading, its starter too. A special room (room_key: a
-        # bot's personal chat) has no member rows and stays its owner's.
+        # bot's personal chat, Strategy) has no member rows and stays its owner's.
         owns = bool(root.get("room_key")) and v.actor == personal_owner(root)
         if not owns and not _is_member(c, v, root["id"]):
+            return _MISSING
+        # The owner's Strategy chat belongs to the owner seat (backend/assistant.py move_strategy_room).
+        if root.get("room_key") == STRATEGY_ROOM and v.role != "owner":
             return _MISSING
         return None
     # participants
@@ -582,7 +595,11 @@ def _legacy_denial(c, v, row, root, index):
         return None
     scope = root.get("scope") or "direct"
     if scope == rooms.PERSONAL:
-        return None if v.actor == personal_owner(root) else _MISSING
+        if v.actor != personal_owner(root):
+            return _MISSING
+        if root.get("room_key") == STRATEGY_ROOM and v.role != "owner":
+            return _MISSING
+        return None
     if scope == rooms.SHARED:
         bot = rooms.room_bot(root)
         return None if bot and v.shared_slugs(c, [bot]) else _MISSING
@@ -678,11 +695,111 @@ def thread_readable(c, v, thread):
     return v._threads[key]
 
 
+def _legacy_homes(c):
+    """{thread id: (root id, owner)} for every thread of a migrated Home that still holds shared-room history: one
+    query per snapshot (read_cache), so a page of messages checks each against a dict."""
+    from . import read_cache
+
+    def build():
+        return {
+            r[0]: (r[1], r[2])
+            for r in c.execute(
+                "SELECT x.id, r.id, r.owner_id FROM conversations r JOIN conversations x ON x.root_id=r.id "
+                "WHERE r.audience='home' AND EXISTS (SELECT 1 FROM messages lm WHERE lm.conversation_id=r.id "
+                "AND lm.legacy_audience IS NOT NULL)"
+            )
+        }
+
+    return read_cache.value(c, ("threads_legacy_homes",), build, shared=True)
+
+
+def legacy_home(c, conversation_id):
+    """For a thread of a migrated Home that still holds shared-room history: {"root", "owner", "slugs"} (its root, the
+    Home's owner and the bots whose old readers read that history), else None."""
+    found = _legacy_homes(c).get(conversation_id)
+    if found is None:
+        return None
+    from . import read_cache
+
+    slugs = read_cache.value(
+        c,
+        ("threads_legacy_slugs", found[0]),
+        lambda: {
+            str(r[0])[len("shared:") :]
+            for r in c.execute(
+                "SELECT DISTINCT legacy_audience FROM messages WHERE conversation_id=? AND legacy_audience LIKE 'shared:%'",
+                (found[0],),
+            )
+        },
+    )
+    return {"root": found[0], "owner_id": found[1], "slugs": set(slugs)}
+
+
+def _legacy_home(c, v, conversation_id):
+    if conversation_id not in v._legacy:
+        v._legacy[conversation_id] = legacy_home(c, conversation_id)
+    return v._legacy[conversation_id]
+
+
+def legacy_reader_only(c, v, thread):
+    """A person who opens a migrated Home only as one of its shared room's old readers (no Home Read): they see the
+    history they read before and nothing new (spec section 4)."""
+    if not v.is_person:
+        return False
+    found = _legacy_home(c, v, thread["id"])
+    return bool(found) and not v.can_read_home(c, found["owner_id"]) and bool(v.shared_slugs(c, sorted(found["slugs"])))
+
+
+def legacy_hidden(c, v, message):
+    """A message of a migrated Home this viewer may not read: shared-room history is read by exactly its old readers
+    (evaluated live: room members for people; participants and the room's bot for an agent, any thread a run is
+    granted), and everything new by the Home's Read audience."""
+    message = message or {}
+    legacy = message.get("legacy_audience")
+    if legacy and str(legacy).startswith("shared:"):
+        slug = str(legacy)[len("shared:") :]
+        if v.is_bot:
+            thread = thread_row(c, message.get("conversation_id"))
+            if thread is None:
+                return True
+            if v.runner_turn and _bot_grant(c, v, thread):
+                return False
+            root = root_of(c, thread) or {}
+            return not (v.actor in (root.get("participants") or []) or v.actor == "bot:" + slug)
+        return slug not in v.shared_slugs(c, [slug])
+    if not v.is_person or not message.get("conversation_id"):
+        return False
+    found = _legacy_home(c, v, message["conversation_id"])
+    return bool(found) and not v.can_read_home(c, found["owner_id"])
+
+
+def legacy_gate(c, principals, message):
+    """The migrated-Home rule for the per-message check (task_privacy.message_readable), which the legacy readers
+    (/conversations, inboxes, claims) pass: each person principal is checked as `legacy_hidden` does. A bot principal
+    there acts in a run, which reads by its grant."""
+    message = dict(message or {})
+    cid = message.get("conversation_id")
+    names = principals if isinstance(principals, tuple) else (principals,)
+    people = [a for a in names if str(a).startswith("human:")]
+    if not cid or not people or cid not in _legacy_homes(c):
+        return True
+    if "legacy_audience" not in message:
+        row = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message.get("id"),)).fetchone()
+        message["legacy_audience"] = row[0] if row else None
+    for actor in people:
+        v = actor_viewer(c, actor)
+        if v is None or legacy_hidden(c, v, message):
+            return False
+    return True
+
+
 def readable_before_deletion(c, v, message):
     """Whether the viewer read a deleted message before it went (its thread already checked): only then is its
     tombstone shown, else the quiet hidden row. The per-message check, run on the row as it stands."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     message = dict(message)
+    if legacy_hidden(c, v, message):
+        return False
     if message.get("restricted") == 0 and "restricted" in message:
         return True
     from . import task_privacy
@@ -702,6 +819,8 @@ def message_readable(c, v, message, *, thread_checked=False):
     if message.get("deleted_at"):
         return False
     if not thread_checked and not thread_readable(c, v, message["conversation_id"]):
+        return False
+    if legacy_hidden(c, v, message):
         return False
     if message.get("restricted") == 0 and "restricted" in message:
         return True
@@ -827,7 +946,7 @@ def readable_sql(
     owner = v.role == "owner"
     person = v.is_person
     homes = only is None or "home" in only
-    legacies = only is None or None in only
+    legacies = only is None or None in only or "home" in only
     chain = _qlist(v.chain(c)) if person else "()"
     hidden = v.hidden_read(c) if (person or v.is_bot) and homes else None
     owner_sql = f"COALESCE(r.owner_id,{_derived_owner('r')})"
@@ -839,6 +958,7 @@ def readable_sql(
     shared = sorted(v.shared_slugs(c, [b["id"] for b in H.bots(c)])) if person and legacies else []
     legacy = (
         f"(CASE COALESCE(r.scope,'direct') WHEN 'personal' THEN COALESCE(r.owner_id,{_FIRST_HUMAN.format(r='r')})={me} "
+        f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
         f"WHEN 'shared' THEN {_LEGACY_ROOM_BOT.format(r='r')} IN {_qlist(shared)} ELSE {participant} END "
         f"OR (r.kind='task' AND r.task_id IS NOT NULL))"
     )
@@ -851,14 +971,58 @@ def readable_sql(
         f"WHEN 'home' THEN {home} "
         f"WHEN 'personal' THEN ((COALESCE(r.room_key,'')<>'' AND COALESCE(r.owner_id,{_FIRST_HUMAN.format(r='r')})={me}) "
         f"OR {member}) "
+        f"AND (COALESCE(r.room_key,'')<>'{STRATEGY_ROOM}' OR {1 if owner else 0}) "
         f"WHEN 'participants' THEN {participant} "
         f"WHEN 'meeting' THEN {meeting_term} ELSE 0 END END"
     )
     if not person or not v.in_good_standing(c):
         return "0"
     bound = f" OR {meeting(x + 'id')}" if meeting else ""
+    # A migrated Home's root also opens to its shared room's old readers (legacy_reader_only).
+    if shared:
+        bound += (
+            f" OR {x}id IN (SELECT lm.conversation_id FROM {t('messages')} lm JOIN {t('conversations')} lr ON "
+            f"lr.id=lm.conversation_id WHERE lr.audience='home' AND lm.legacy_audience IN "
+            f"{_qlist(['shared:' + s for s in shared])})"
+        )
     out = f"(COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE {root}){bound}) AND {fence}"
     return f"({out}) AND {conversation(x + 'id')}" if conversation else out
+
+
+def message_sql(c, v, alias="messages", *, legacy_slugs=None, inner=None):
+    """A SQL boolean over a messages row: its legacy audience admits the viewer. (The thread term and the
+    restricted check stay the caller's.) `legacy_slugs` is the viewer's readable shared bots when known."""
+    v = viewer(None, v) if not isinstance(v, Viewer) else v
+    t = inner or (lambda name: name)
+    x = (alias + ".") if alias else ""
+    if v.is_bot:
+        # Shared-room history: the room's bot, a participant, or (an internal bot) any thread its turn is granted.
+        granted = ""
+        if v.runner_turn:
+            granted = (
+                f" OR {x}conversation_id IN (SELECT gx.id FROM {t('conversations')} gx WHERE "
+                f"{_grant_sql(v, 'gx.id', 'gx.root_id', t)})"
+            )
+        return (
+            f"({x}legacy_audience IS NULL OR substr({x}legacy_audience,8)={_q(H.actor_id(v.actor))} OR EXISTS "
+            f"(SELECT 1 FROM {t('conversations')} lr, {_PARTICIPANTS.format(r='lr')} WHERE "
+            f"lr.id={x}conversation_id AND value={_q(v.actor)}){granted})"
+        )
+    slugs = [
+        r[0][len("shared:") :]
+        for r in c.execute("SELECT DISTINCT legacy_audience FROM messages WHERE legacy_audience LIKE 'shared:%'")
+    ]
+    if legacy_slugs is None:
+        legacy_slugs = v.shared_slugs(c, slugs)
+    # Everything new in a migrated Home is read by its Read audience, whoever read the old room.
+    blocked = sorted("bot:" + s for s in slugs if not v.can_read_home(c, "bot:" + s))
+    new = f"{x}legacy_audience IS NULL"
+    if blocked:
+        new += (
+            f" AND {x}conversation_id NOT IN (SELECT lx.id FROM conversations lx JOIN conversations lr ON "
+            f"lr.id=COALESCE(lx.root_id,lx.id) WHERE lr.audience='home' AND lr.owner_id IN {_qlist(blocked)})"
+        )
+    return f"(({new}) OR substr({x}legacy_audience,8) IN {_qlist(sorted(legacy_slugs))})"
 
 
 def readable_ids(c, v, ids):
@@ -962,12 +1126,12 @@ def restricted_for(conv, refs, in_reply_to, attachments=False, c=None):
 
 
 def _plain_parent(c, message_id):
-    """Whether a reply's parent is a plain message (restricted 0, not deleted): the reply's provenance walk
+    """Whether a reply's parent is a plain message (restricted 0, no shared-room history): the reply's provenance walk
     (task_privacy.message_tasks) finds nothing there, so a reply in its thread is read as any message is."""
     if c is None:
         return False
-    row = c.execute("SELECT restricted, deleted_at FROM messages WHERE id=?", (message_id,)).fetchone()
-    return bool(row) and row[0] == 0 and row[1] is None
+    row = c.execute("SELECT restricted, legacy_audience, deleted_at FROM messages WHERE id=?", (message_id,)).fetchone()
+    return bool(row) and row[0] == 0 and row[1] is None and row[2] is None
 
 
 def stamp(c, row, conv, refs):
@@ -977,6 +1141,7 @@ def stamp(c, row, conv, refs):
     row["origin_id"] = str(origin.get("origin_id") or "") or mint_origin(c)
     row["revision"] = int(origin.get("revision") or 0)
     row["restricted"] = restricted_for(conv, refs, row.get("in_reply_to"), (POSTING.get() or {}).get("attachments"), c)
+    row["legacy_audience"] = None
     return row
 
 
@@ -1803,12 +1968,13 @@ def wake_mode(c, thread, message, bot, reason):
     return rules.thread_wake(c, message, bot, thread, mode)
 
 
-NO_WAKE_REF_KEYS = ("follow_up", "card")
+NO_WAKE_REF_KEYS = ("follow_up", "card", "earlier_messages")
 
 
 def quiet_notice(message):
-    """A legacy follow-up nudge (refs.follow_up) or an update card (refs.card) is read, never a reason to start a
-    run."""
+    """A legacy follow-up nudge (refs.follow_up), an update card or a closed-history notice (refs.card, refs.earlier_messages)
+    is read,
+    never a reason to start a run."""
     refs = (message or {}).get("refs") or {}
     if not isinstance(refs, dict):
         return False
@@ -2071,8 +2237,8 @@ def _run_session(c, attempt_id):
 def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, way=None):
     """A keeper notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
     read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance
-    by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable).
-    `way` (named_way): a queued carrier stays out of a running turn
+    by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
+    and its legacy audience is copied. `way` (named_way): a queued carrier stays out of a running turn
     (execution.inputs); a deferred one is quiet, and starts no run until its deadline."""
     if not _source_readable(c, thread, message, bot):
         return None
@@ -2096,11 +2262,12 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
         [*sources, *({"file": fid} for fid in sorted(page_references(message, c)))],
         refs,
     )
+    legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     dumped, created = H._dump(refs), _now()
     c.execute(
         "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
-        "origin_id,revision,restricted) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1)",
-        (cid, thread["id"], H.KEEPER, bot, body, dumped, created, mint_origin(c)),
+        "origin_id,revision,restricted,legacy_audience) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?)",
+        (cid, thread["id"], H.KEEPER, bot, body, dumped, created, mint_origin(c), legacy[0] if legacy else None),
     )
     from .enqueue import enqueue
 
@@ -2434,6 +2601,11 @@ def _post(
     actor, v = _actor_of(principal)
     if origin and origin.get("origin_id") and start is not None:
         raise Problem("start", "A replicated message posts into a linked thread", 422)
+    if thread_id:
+        # A person's old chat with a bot is now part of the bot's Home (backend/bot_home_merge.py).
+        from . import bot_home_merge
+
+        thread_id = bot_home_merge.home_for(c, thread_id) or thread_id
     if start is not None or (
         parent_message_id
         and not c.execute("SELECT 1 FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
@@ -2999,6 +3171,7 @@ def search(c, v, query, *, limit=20, before=None):
         c,
         query,
         thread_sql=readable_sql(c, v, "cv"),
+        message_sql=message_sql(c, v, "m"),
         readable=lambda m: message_readable(c, v, m),
         limit=limit,
         before=before,
@@ -3765,9 +3938,9 @@ def _finish_sql(t="t"):
 
 def revived_roots(c, v, roots=None):
     """The root ids (of `roots`, else every finished-task thread) that a post the viewer reads brings back. A plain post
-    (not restricted) is counted in SQL by task_open_sql. A restricted post is read as any other message is
-    (message_readable: its thread, task privacy, meetings), so a reader who may not read it is not shown that the
-    thread has moved again."""
+    (not restricted, no legacy audience) is counted in SQL by task_open_sql. A restricted or legacy post is read as any
+    other message is (message_readable: its thread, task privacy, meetings, legacy readers), so a reader who may not
+    read it is not shown that the thread has moved again."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     scope = f" AND r.id IN {_qlist(sorted(roots))}" if roots is not None else ""
     rows = c.execute(
@@ -3775,7 +3948,7 @@ def revived_roots(c, v, roots=None):
         "JOIN conversations s ON s.root_id=r.id JOIN messages m ON m.conversation_id=s.id "
         f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r')}{scope} "
         "AND m.kind<>'notice' AND m.deleted_at IS NULL "
-        "AND (m.restricted IS NULL OR m.restricted<>0) "
+        "AND (m.restricted IS NULL OR m.restricted<>0 OR m.legacy_audience IS NOT NULL) "
         f"AND m.created_at>{_finish_sql('t')}"
     ).fetchall()
     found = set()
@@ -3796,7 +3969,7 @@ def task_open_sql(c, v, r="r", revived=frozenset()):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     plain = (
         f"EXISTS (SELECT 1 FROM conversations s JOIN messages m ON m.conversation_id=s.id WHERE s.root_id={r}.id "
-        f"AND m.kind<>'notice' AND m.deleted_at IS NULL AND m.restricted=0 "
+        f"AND m.kind<>'notice' AND m.deleted_at IS NULL AND m.restricted=0 AND m.legacy_audience IS NULL "
         f"AND m.created_at>{_finish_sql('t')} AND {readable_sql(c, v, 's')})"
     )
     kept = f" OR {r}.id IN {_qlist(sorted(revived))}" if revived else ""
@@ -3829,7 +4002,10 @@ def _subtree_unread_sql(c, v, root_ids):
     mark, subtree = _subtree_mark(c, v), _SUBTREE.format(me=":me")
     args = {"me": v.actor, **{f"root{i}": root for i, root in enumerate(root_ids)}}
     marks = ",".join(f":root{i}" for i in range(len(root_ids)))
-    columns = "SELECT s.root_id AS root, s.id AS thread, s.last_unread_seq, m.id, m.seq, (m.restricted=0) AS plain "
+    columns = (
+        "SELECT s.root_id AS root, s.id AS thread, s.last_unread_seq, m.id, m.seq, "
+        "(m.restricted=0 AND m.legacy_audience IS NULL) AS plain "
+    )
     where = f"s.root_id IN ({marks}) AND {_SUBTREE_OPEN} AND s.last_unread_seq>{mark} AND m.seq>{mark}"
     return (
         columns + f"FROM {subtree}CROSS JOIN messages m INDEXED BY messages_thread_human ON "
@@ -4373,6 +4549,13 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None, 
         out["home"] = {"actor": home_owner(root)}
     elif v is not None:
         out["owner_id"] = v.known(c).name(out["owner_id"], root["id"])
+    only_old = v is not None and legacy_reader_only(c, v, row)
+    if only_old:
+        last = c.execute(
+            "SELECT MAX(seq), MAX(created_at) FROM messages WHERE conversation_id=? AND legacy_audience IS NOT NULL",
+            (row["id"],),
+        ).fetchone()
+        out.update(last_seq=int(last[0] or 0), last_unread_seq=int(last[0] or 0), last_message_at=last[1])
     if v is not None:
         f = (
             follower
@@ -4382,7 +4565,13 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None, 
                 (row["id"], v.actor),
             ).fetchone()
         )
-        u = summary if summary is not None else unread(c, v, row["id"], follower=(f["last_read_seq"],) if f else None)
+        u = (
+            {"unread": 0, "activity": False}
+            if only_old
+            else summary
+            if summary is not None
+            else unread(c, v, row["id"], follower=(f["last_read_seq"],) if f else None)
+        )
         out["me"] = {
             "member": _is_member(c, v, root["id"]) or v.actor in (root.get("participants") or []),
             "following": bool(f and f["following"]),
@@ -4398,7 +4587,7 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None, 
                 (pins if pins is not None else pin_rows(c, v.actor, [root["id"]])).get(root["id"]),
             ),
         }
-        if summary and summary.get("new_at"):
+        if summary and not only_old and summary.get("new_at"):
             out["new_at"] = summary["new_at"]
         if out["audience"] in ("personal", "participants") and not row.get("parent_id"):
             out.update(dm or dm_with(c, v, [root]).get(root["id"]) or {})
@@ -4648,18 +4837,20 @@ def _depth(row):
 def _timeline_rows(c, v, rows, thread_id, depth):
     """Messages of one thread (`thread_id` None: of each row's own thread), as given, each through the per-message
     check: the message, its tombstone for a viewer who read it before it went, or the quiet hidden row. Consecutive
-    hidden rows collapse into one."""
+    hidden rows of one kind collapse into one; a row that stands for shared-room history the viewer's Home Read doesn't
+    reach says so (`earlier`), the "Earlier messages" row."""
     known = v.known(c)
     from .files import prime_page_references
 
     prime_page_references(c, [_message_out(m) for m in rows])  # the pages every row names, in one lookup
-    out, hidden_open = [], False
+    out, hidden_open = [], None
     for m in rows:
         shown = (
             readable_before_deletion(c, v, m) if m.get("deleted_at") else message_readable(c, v, m, thread_checked=True)
         )
         if not shown:
-            if not hidden_open:
+            kind = "earlier" if m.get("legacy_audience") and legacy_hidden(c, v, m) else "plain"
+            if hidden_open != kind:
                 out.append(
                     {
                         "id": m["id"],
@@ -4667,12 +4858,13 @@ def _timeline_rows(c, v, rows, thread_id, depth):
                         "thread_id": thread_id or m["conversation_id"],
                         "depth": depth,
                         "hidden": True,
+                        **({"earlier": True} if kind == "earlier" else {}),
                     }
                 )
-            hidden_open = True
+            hidden_open = kind
             continue
         out.append({**known.message(_message_out(m)), "depth": depth})
-        hidden_open = False
+        hidden_open = None
     return out
 
 
@@ -4693,8 +4885,8 @@ def _branch_tails(c, ids):
 def _branch_stats(c, v, branches, below):
     """{thread id: {"count", "older", "unseen", "unread"}} of the messages the viewer reads: how many there are, how many
     sit below the rendered tail (`below`, a seq per thread), how many of those are past the viewer's mark, and the unread
-    count (`unread`'s rule). The counts come from one query. Only the rows it can't decide, the restricted ones, are
-    checked one by one, up to BRANCH_CHECKS, so a count never gives away a message the viewer can't read."""
+    count (`unread`'s rule). The counts come from one query. Only the rows it can't decide, restricted or from an old
+    room, are checked one by one, up to BRANCH_CHECKS, so a count never gives away a message the viewer can't read."""
     me = v.actor
     cuts = ",".join(["(?,?,?)"] * len(branches))
     args = [x for b in branches for x in (b["id"], below[b["id"]], b["mark"])]
@@ -4706,7 +4898,7 @@ def _branch_stats(c, v, branches, below):
         "message_deliveries d WHERE d.message_id=m.id AND d.recipient=? "
         f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')}))) "
         "FROM cut JOIN messages m ON m.conversation_id=cut.tid WHERE m.seq IS NOT NULL AND m.deleted_at IS NULL "
-        "AND m.restricted=0 GROUP BY cut.tid",
+        "AND m.restricted=0 AND m.legacy_audience IS NULL GROUP BY cut.tid",
         (*args, me, me, me),
     ):
         stats[r[0]].update(count=r[1], older=r[2] or 0, unseen=r[3] or 0, unread=r[4] or 0)
@@ -4714,7 +4906,7 @@ def _branch_stats(c, v, branches, below):
     marks = {b["id"]: b["mark"] for b in branches}
     for m in c.execute(
         f"SELECT * FROM messages WHERE conversation_id IN ({','.join('?' * len(ids))}) AND seq IS NOT NULL "
-        "AND deleted_at IS NULL AND restricted<>0 ORDER BY seq DESC LIMIT ?",
+        "AND deleted_at IS NULL AND (restricted<>0 OR legacy_audience IS NOT NULL) ORDER BY seq DESC LIMIT ?",
         (*ids, BRANCH_CHECKS),
     ).fetchall():
         m = dict(m)
@@ -4855,12 +5047,15 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     max_bytes = min(int(max_bytes or MAX_PAGE_BYTES), MAX_PAGE_BYTES)
     below = int(cursor) if cursor not in (None, "") else (1 << 62)
-    places = _open_subtree(c, v, row) if flat else [row["id"]]
+    # An old reader of a migrated Home opens only its root, for the history they read: there is no branch for them.
+    old_only = legacy_reader_only(c, v, row)
+    only_old = " AND legacy_audience IS NOT NULL" if old_only else ""
+    places = _open_subtree(c, v, row) if flat and not old_only else [row["id"]]
     rows = [
         dict(r)
         for r in c.execute(
             f"SELECT * FROM messages WHERE conversation_id IN ({','.join('?' * len(places))}) "
-            "AND seq IS NOT NULL AND seq<? ORDER BY seq DESC LIMIT ?",
+            f"AND seq IS NOT NULL AND seq<?{only_old} ORDER BY seq DESC LIMIT ?",
             (*places, below, limit + 1),
         )
     ]
@@ -4870,7 +5065,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
         branches = {}
     else:
         tops = _timeline_rows(c, v, rows[:limit], row["id"], _depth(row))
-        branches = _branches(c, v, tops)
+        branches = {} if old_only else _branches(c, v, tops)
     every = tops + [r for b in branches.values() for r in b["rows"]]
     shown = [r["id"] for r in every if not r.get("hidden")]
     marks = reactions(c, shown)
@@ -4918,7 +5113,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
         pages.append(rows_of)
     next_cursor = pages[-1][0]["seq"] if more and pages else None
     out = {
-        "thread": view(c, v, row),
+        "thread": {**view(c, v, row), **_earlier(c, v, row)},
         "breadcrumb": breadcrumb(c, v, row),
         "messages": [r for rows_of in reversed(pages) for r in rows_of],
         "next_cursor": next_cursor,
@@ -4978,6 +5173,14 @@ def _attention_roots(c, v):
         if root is not None and _involved(c, v, root):
             roots.setdefault(root["id"], {}).update(capped=row["count"], capped_since=row["oldest"])
     return roots
+
+
+def _history_only_roots(c, v):
+    """The migrated Homes this viewer reads only as an old reader (legacy_reader_only): nothing new in them may rank or
+    date a row of theirs."""
+    if not v.is_person:
+        return []
+    return sorted({root for root, _ in _legacy_homes(c).values() if legacy_reader_only(c, v, {"id": root})})
 
 
 def bot_dm_unread(c, v):
@@ -5213,20 +5416,28 @@ def _sidebar_page(c, v, cursor, limit, sort):
     readable = readable_sql(c, v, "r")
     names = v.member_names(c)
     needing = _attention_roots(c, v)
+    history = _history_only_roots(c, v)
     args = {
         "me": v.actor,
         "needing": json.dumps(sorted(needing)),
+        "history": json.dumps(history),
         "fetch": limit * 3,
         **{f"name{i}": name for i, name in enumerate(names)},
     }
     marks = ",".join(f":name{i}" for i in range(len(names)))
     is_needing = "r.id IN (SELECT value FROM json_each(:needing))"
-    activity = f"COALESCE((SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id AND {_SUBTREE_OPEN}),0)"
+    is_history = "r.id IN (SELECT value FROM json_each(:history))"
+    activity = (
+        f"COALESCE(CASE WHEN {is_history} THEN (SELECT MAX(h.seq) FROM messages h WHERE h.conversation_id=r.id "
+        f"AND h.legacy_audience IS NOT NULL) ELSE (SELECT MAX(s.last_seq) FROM conversations s "
+        f"WHERE s.root_id=r.id AND {_SUBTREE_OPEN}) END,0)"
+    )
     by_person, to_viewer = unread_terms(c, v)
-    place = f"CASE WHEN {is_needing} THEN 0 WHEN {by_person} OR {to_viewer} THEN 1 ELSE 2 END"
+    place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
     from . import thread_rank
 
-    importance = f"({thread_rank.importance_sql('r')})"
+    # Someone who reads only a migrated Home's old history gets the middle level for it: its level comes from all of it.
+    importance = f"(CASE WHEN {is_history} THEN {thread_rank.DEFAULT} ELSE {thread_rank.importance_sql('r')} END)"
     # The order a page is ranked and paged by, ascending: Needs attention (0) first, then by `sort`.
     rank = {
         None: "place",
@@ -5313,7 +5524,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
             item["importance"] = r["importance"]
             if needing.get(r["id"], {}).get("new_at"):
                 item["new_at"] = needing[r["id"]]["new_at"]
-            if summary.get("last_message_at"):
+            if r["id"] not in history and summary.get("last_message_at"):
                 item["last_message_at"] = summary["last_message_at"]
             budget -= len(json.dumps(item, default=str))
             if budget < 0:
@@ -5414,11 +5625,48 @@ def settle_delivery(c, delivery_id, state, error=None):
     return {"id": delivery_id, "state": state}
 
 
+# ----------------------------------------------------------------------------- a migrated Home's earlier messages
+def _earlier(c, v, row):
+    """`{"earlier": {"count": n}}` for a manager of a bot on its Home's root while shared-room history is still closed:
+    what the control to open it needs, whether or not this manager already reads that history. Nobody else gets a count."""
+    found = legacy_home(c, row["id"]) if row["id"] == (row.get("root_id") or row["id"]) else None
+    owner = str((found or {}).get("owner_id") or "")
+    if not owner.startswith("bot:") or not v.is_person:
+        return {}
+    from . import teammate_access
+
+    if not teammate_access.can(c, v.who, "manage", owner, auth=v.auth):
+        return {}
+    count = c.execute(
+        "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND legacy_audience IS NOT NULL", (row["id"],)
+    ).fetchone()[0]
+    return {"earlier": {"count": count}} if count else {}
+
+
+def open_earlier_messages(c, principal, slug):
+    """A manager of the bot opens its Home's earlier (shared-room) messages to the Home's Read audience."""
+    actor, v = _actor_of(principal)
+    owner = "bot:" + H.actor_id("bot:" + str(slug))
+    if v is not None:
+        from . import teammate_access
+
+        if not teammate_access.can(c, v.who, "manage", owner, auth=v.auth):
+            raise Problem("forbidden", "Only whoever manages this bot opens its earlier messages", 403)
+    n = c.execute("UPDATE messages SET legacy_audience=NULL WHERE legacy_audience=?", ("shared:" + str(slug),)).rowcount
+    _event(c, actor, "thread.earlier_opened", owner, {"messages": n})
+    _audit(c, actor, "home:" + owner, {"legacy_audience": "shared:" + str(slug)}, {"legacy_audience": None})
+    return {"home": owner, "messages": n}
+
+
 # ----------------------------------------------------------------------------- sessions (contract §8)
-def audience_class(conv):
-    """`private` for a members, personal, participants or meeting thread, else `public`. The runner keys a turn's
-    session on it (clients/sessions.py)."""
-    if conv and audience_of(conv) in PRIVATE_AUDIENCES:
+def audience_class(conv, message=None):
+    """`private` for a members, personal, participants or meeting thread, or a legacy-audience input; else
+    `public`. The runner keys a turn's session on it (clients/sessions.py)."""
+    if not conv:
+        return "public"
+    if audience_of(conv) in PRIVATE_AUDIENCES:
+        return "private"
+    if message and message.get("legacy_audience"):
         return "private"
     return "public"
 
@@ -5428,10 +5676,17 @@ _NO_STANDING = "bot:~audience"
 
 
 def _narrower_than_thread(c, message):
+    if message.get("legacy_audience"):
+        return True
     if not message.get("restricted"):
         return False
     from . import task_privacy
 
+    refs = H._json(message.get("refs"), {}) or {}
+    if isinstance(refs, dict) and refs.get("carries"):
+        source = c.execute("SELECT * FROM messages WHERE id=?", (refs["carries"],)).fetchone()
+        if source and source["legacy_audience"]:
+            return True
     return not task_privacy.message_readable(c, _NO_STANDING, message, current=True)
 
 
@@ -5443,8 +5698,8 @@ def message_narrower(c, message):
 
 
 def mark_narrower(c, history):
-    """Flag the messages of a public turn's page that some reader of the thread may not read (`audience_limited`): a
-    message tied to a private task or a meeting. A public session is read back into a
+    """Flag the messages of a public turn's page that some reader of the thread may not read (`audience_limited`): history
+    kept for its old readers, or a message tied to a private task or a meeting. A public session is read back into a
     thread everyone there reads, so the runner never gives it these (contract section 8). The page itself stays whole:
     the runner's cursor is a message id on it."""
     if not history:
