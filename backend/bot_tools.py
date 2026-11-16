@@ -334,7 +334,8 @@ def granted(c, bot, raw):
 
     The runner reports only what its computer holds (a secrets file, a profile); a vault grant arrives with each run
     (`GET /api/v2/credential-runtime`), so the computer cannot see it but this server can. Only a grant a run would receive
-    counts: not revoked, its delegation intact, and a stored value behind it. A GitHub GH_TOKEN/GITHUB_TOKEN also counts
+    counts: not revoked, its delegation intact, and a stored value behind it, and so does a setting of a tool it holds
+    such a key of (backend/tool_settings.py). A GitHub GH_TOKEN/GITHUB_TOKEN also counts
     when the connected GitHub App mints it for the bot. Names only, never a value."""
     if any(_app_token(e) for e in raw) and github_app_covers(c, bot):
         raw = [dict(e, credential="present", github_app=True) if _app_token(e) else e for e in raw]
@@ -350,6 +351,9 @@ def granted(c, bot, raw):
         for row in rows(c, "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''")
         if row["env"] in missing and row["id"] in held
     }
+    from .tool_settings import names
+
+    have |= missing & set(names(c, held))  # a setting of a tool it holds a key of arrives with each run too
     return [
         dict(e, credential="present", granted=True) if e.get("credential") == "missing" and e.get("env") in have else e
         for e in raw

@@ -24,6 +24,7 @@
 mod accounts;
 mod afterwatch;
 mod backlog;
+mod bot_files;
 mod browser;
 mod browser_exit;
 mod capture;
@@ -58,7 +59,6 @@ mod gitrun;
 #[cfg(test)]
 mod gittests;
 mod goals;
-mod harness_memory;
 mod harness_tools;
 mod hosts;
 mod idle_load;

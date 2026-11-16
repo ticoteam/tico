@@ -250,27 +250,6 @@ fn meeting_routes_go_to_api_v2_which_runner_hostnames_route() {
     );
 }
 #[test]
-fn an_older_tico_without_v2_meeting_routes_gets_the_old_path() {
-    let missing = || Some(json!({"status":404}));
-    let lines = send_one_item(vec![
-        Some(json!({"actor":"human:test"})),
-        Some(json!({"id":"meeting-fixture"})),
-        missing(),
-        Some(json!({"sections":{"task":[]}})),
-        missing(),
-        Some(json!({"item":{"id":"proposal-fixture"}})),
-    ]);
-    assert_eq!(
-        &lines[2..],
-        [
-            "GET /api/v2/meetings/meeting-fixture/items",
-            "GET /api/meetings/meeting-fixture/items",
-            "POST /api/v2/meetings/meeting-fixture/items",
-            "POST /api/meetings/meeting-fixture/items",
-        ]
-    );
-}
-#[test]
 fn a_pending_earlier_turn_holds_back_later_source_turns_and_silence_does_not_block() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
@@ -984,10 +963,15 @@ fn your_tico_transcribes_through_its_relay_with_the_person_token() {
         down.to_string(),
         "Your Tico can't transcribe right now — HTTP 503"
     );
-    let old = speech::plain(anyhow::anyhow!(OLD_TICO), "transcribe");
+    let missing = speech::plain(
+        anyhow::anyhow!(
+            "Server returned HTTP 404 (request_failed). Check the connection or retry."
+        ),
+        "transcribe",
+    );
     assert_eq!(
-        old.to_string(),
-        "Your Tico can't transcribe yet. Update Tico, or use your own keys."
+        missing.to_string(),
+        "Your Tico can't transcribe right now — HTTP 404"
     );
 }
 #[test]
@@ -1232,9 +1216,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
     let (result, requests) = pass(vec![
         Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":true,"event_id":9})),
         Some(json!({"id":"live-fixture","seq":4,"revision":2,"replayed":false,"event_id":10})),
-        Some(
-            json!({"status":422,"error":{"code":"validation","message":"Transcript text is required"}}),
-        ),
+        Some(json!({"id":"live-fixture","seq":6,"revision":2,"replayed":false,"event_id":11})),
     ]);
     result.unwrap();
     assert_eq!(first[1], requests[0], "the retry is the same request");
@@ -1253,7 +1235,7 @@ fn streamed_finals_reach_the_meeting_at_once_and_the_finished_transcript_correct
                 "/api/v2/live-meetings/live-fixture/chunks/4/corrections".into(),
                 json!({"revision":2,"speaker":"Me","start_ms":3000,"end_ms":3550,"text":"and friends"})
             ),
-            // No finished words: emptied (Tico refuses empty text for now, and keeps "uh").
+            // No finished words: emptied. rc.1 takes empty text (it clears the chunk), so the streamed "uh" goes.
             (
                 "/api/v2/live-meetings/live-fixture/chunks/6/corrections".into(),
                 json!({"revision":2,"speaker":"Me","start_ms":6000,"end_ms":6250,"text":""})
@@ -2223,34 +2205,30 @@ fn item_send_discovers_a_remote_pause_before_export() {
 }
 
 #[test]
-fn old_tico_refuses_private_connect_without_dropping_visibility() {
+fn a_private_connect_is_sent_private_and_a_refusal_links_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let record = store.create("Private synthetic replay").unwrap();
     let (tico, seen, worker) = server(vec![
         Some(json!({"actor":"human:test"})),
         Some(json!({"status":422})),
-        Some(json!({"status":422})),
     ]);
     let error = tico
         .connect(&store, &record.id, Some("private"))
         .unwrap_err();
     worker.join().unwrap();
-    assert!(error.to_string().contains("nothing was shared"));
+    assert!(format!("{error:#}").contains("HTTP 422"), "{error:#}");
     assert!(store.context(&record.id).unwrap().live_id.is_empty());
     let requests = seen.lock().unwrap();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 2);
     assert!(requests[0].0.starts_with("GET /api/v2/me "));
-    for (request, body, _) in requests.iter().skip(1) {
-        assert!(request.starts_with("POST /api/v2/live-meetings "));
-        assert_eq!(body["visibility"], "private");
-    }
+    assert!(requests[1].0.starts_with("POST /api/v2/live-meetings "));
+    assert_eq!(requests[1].1["visibility"], "private");
     assert_eq!(requests[1].1["client"], "tico-recorder");
-    assert!(requests[2].1.get("client").is_none());
 }
 
 #[test]
-fn a_calendar_event_goes_with_the_new_live_meeting_and_an_older_tico_drops_it_first() {
+fn a_calendar_event_goes_with_the_new_live_meeting_and_a_refused_one_is_dropped() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let record = store.create("Weekly sync").unwrap();
@@ -2264,13 +2242,12 @@ fn a_calendar_event_goes_with_the_new_live_meeting_and_an_older_tico_drops_it_fi
         Some(json!({"actor":"human:test"})),
         Some(json!({"status":422})),
         Some(json!({"status":422})),
-        Some(json!({"status":422})),
     ]);
     tico.connect(&store, &record.id, Some("private"))
         .unwrap_err();
     worker.join().unwrap();
     let requests = seen.lock().unwrap();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 3);
     let bodies: Vec<&Value> = requests.iter().skip(1).map(|request| &request.1).collect();
     assert_eq!(
         bodies[0]["calendar_event"],
@@ -2279,7 +2256,6 @@ fn a_calendar_event_goes_with_the_new_live_meeting_and_an_older_tico_drops_it_fi
     assert_eq!(bodies[0]["client"], "tico-recorder");
     assert!(bodies[1].get("calendar_event").is_none());
     assert_eq!(bodies[1]["client"], "tico-recorder");
-    assert!(bodies[2].get("calendar_event").is_none() && bodies[2].get("client").is_none());
     for body in bodies {
         assert_eq!(body["title"], "Weekly sync");
         assert_eq!(body["visibility"], "private");
@@ -2291,7 +2267,7 @@ fn a_calendar_event_goes_with_the_new_live_meeting_and_an_older_tico_drops_it_fi
         .collect();
     assert_eq!(
         keys.iter().collect::<std::collections::BTreeSet<_>>().len(),
-        3
+        2
     );
 }
 
@@ -2388,8 +2364,8 @@ fn browser_links_require_server_support_and_a_safe_browser_address() {
 }
 
 #[test]
-fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
-    for (old, oauth) in [(false, false), (true, false), (true, true), (false, true)] {
+fn task_links_never_send_without_a_browser_address() {
+    for status in [404, 503] {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
         let record = transcript(&store, "Synthetic task links");
@@ -2403,15 +2379,10 @@ fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
                 Ok(())
             })
             .unwrap();
-        let mut replies = vec![
+        let (tico, seen, worker) = server(vec![
             Some(json!({"actor":"human:test","name":"Fixture"})),
-            Some(json!({"status": if old {404} else {503}})),
-        ];
-        if old {
-            replies.push(Some(json!({"task":{"id":"synthetic-task"}})));
-        }
-        let (mut tico, seen, worker) = server(replies);
-        tico.oauth = oauth;
+            Some(json!({"status": status})),
+        ]);
         let result = tico.send_task(
             &store,
             &record.id,
@@ -2422,36 +2393,18 @@ fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
         );
         worker.join().unwrap();
         let requests = seen.lock().unwrap();
-        if old {
-            result.unwrap();
-            assert!(
-                requests
-                    .iter()
-                    .any(|row| row.0.starts_with("POST /api/v2/tasks "))
-            );
-            let task_url = &store.context(&record.id).unwrap().items[0].task_url;
-            if oauth {
-                assert!(
-                    task_url.is_empty(),
-                    "An older OAuth server must not link to its runner hostname"
-                );
-            } else {
-                assert!(task_url.ends_with("/#/task/synthetic-task"));
-            }
-        } else {
-            assert!(
-                result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("task was not sent")
-            );
-            assert!(requests.iter().all(|row| !row.0.starts_with("POST")));
-            assert!(
-                store.context(&record.id).unwrap().items[0]
-                    .task_id
-                    .is_empty()
-            );
-        }
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("task was not sent")
+        );
+        assert!(requests.iter().all(|row| !row.0.starts_with("POST")));
+        assert!(
+            store.context(&record.id).unwrap().items[0]
+                .task_id
+                .is_empty()
+        );
     }
     let (tico, _, worker) = server(vec![Some(json!({"url":"https://acme.example"}))]);
     assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
@@ -2527,7 +2480,7 @@ fn saved_pending_item_uses_atomic_push_and_live_send_names_its_source() {
 }
 
 #[test]
-fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_only() {
+fn a_save_is_filed_for_who_was_chosen_and_a_refused_participants_save_files_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
     let team = transcript(&store, "Standup");
@@ -2568,9 +2521,8 @@ fn a_save_is_filed_for_who_was_chosen_and_an_older_tico_refuses_participants_onl
     );
     let refused = tico
         .send_to(&store, &narrow.id, false, "participants")
-        .unwrap_err()
-        .to_string();
-    assert!(refused.contains("participants only"), "{refused}");
+        .unwrap_err();
+    assert!(format!("{refused:#}").contains("HTTP 422"), "{refused:#}");
     tico.send_to(&store, &live.id, false, "participants")
         .unwrap();
     worker.join().unwrap();
@@ -2631,7 +2583,6 @@ fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
         Some(json!({"actor":"human:test"})),
         Some(json!({"id":"local-fixture"})),
         Some(json!({"status":404})),
-        Some(json!({"id":"live-live","state":"ended"})),
     ]);
     tico.keep_local(&store, &kept.id).unwrap();
     let context = store.context(&kept.id).unwrap();
@@ -2642,12 +2593,12 @@ fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
         tico.send_to(&store, &kept.id, false, "team").unwrap(),
         "local-fixture"
     );
-    let error = tico.keep_local(&store, &older.id).unwrap_err().to_string();
-    assert!(error.contains("keeps the live transcript"), "{error}");
+    // A refused discard keeps the meeting live here: nothing is marked removed.
+    let error = format!("{:#}", tico.keep_local(&store, &older.id).unwrap_err());
+    assert!(error.contains("discard"), "{error}");
     let context = store.context(&older.id).unwrap();
     assert!(context.live_discarded && !context.live_removed);
-    assert_eq!(context.live_state, "ended");
-    assert!(tico.send_to(&store, &older.id, false, "team").is_err());
+    assert_eq!(context.live_state, "live");
     worker.join().unwrap();
     let calls = seen.lock().unwrap();
     assert!(
@@ -2662,8 +2613,11 @@ fn keeping_a_live_share_local_removes_it_from_tico_and_it_can_be_saved_later() {
     );
     assert!(calls[3].0.contains("meetings/import"));
     assert_eq!(calls[3].1["external_id"], json!(kept.id));
-    assert!(calls[5].0.contains("/live-meetings/live-live/control"));
-    assert_eq!(calls[5].1, json!({"action":"end"}));
+    assert!(
+        calls[4]
+            .0
+            .contains("/api/v2/live-meetings/live-live/discard")
+    );
 }
 
 fn live_delivery(store: &Store, id: &str, status: &str, receipt: Value) {

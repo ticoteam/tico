@@ -221,6 +221,11 @@ pub struct ProxiedTool {
     pub base: String,
 }
 
+/// A tool's setting (backend/tool_settings.py): a plain variable, delivered as is and never masked.
+pub fn is_setting(item: &Value) -> bool {
+    item["kind"].as_str() == Some("setting")
+}
+
 /// The proxy address a grant names, or None for a grant that carries its real value (a `computer` tool, or a server
 /// older than the proxy). Its path is joined to the address this runner reaches the server by, which a Docker or
 /// private-network runner may know under another name than the server's public one. Only a `TICO_TOOL_*_URL` name.
@@ -388,7 +393,13 @@ pub async fn environment_with(
             .as_array()
             .cloned()
             .unwrap_or_default();
-        vault.values = items.iter().map(|i| text_of(&i["value"])).collect();
+        // A tool's setting (kind "setting": a host, a region, a project id) is not a secret: it is never masked in
+        // what the turn shows. Every other item is.
+        vault.values = items
+            .iter()
+            .filter(|i| !is_setting(i))
+            .map(|i| text_of(&i["value"]))
+            .collect();
         let usable: Vec<&Value> = items
             .iter()
             .filter(|i| !reserved_credential(i["env"].as_str().unwrap_or_default()))
@@ -470,6 +481,9 @@ pub async fn environment_with(
                 env.insert(key.to_string(), path.display().to_string());
             } else {
                 env.insert(key.to_string(), value);
+                if is_setting(item) {
+                    continue; // a plain value: no 1Password reference, never one of SECRET_KEYS
+                }
             }
             vault_keys.insert(key.to_string());
         }
@@ -716,6 +730,39 @@ pub(crate) mod tests {
         assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
         assert!(!vault.names.contains("CLAUDE_CONFIG_DIR"));
         assert_eq!(env["ACME_API_KEY"], "acme-synthetic");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_tools_setting_reaches_the_turn_as_is_and_is_never_masked() {
+        let dir = std::env::temp_dir().join(format!(
+            "tico-env-setting-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = EnvContext {
+            url: "http://hub.invalid",
+            projects_dir: &dir,
+            state_dir: &dir,
+        };
+        let granted = serde_json::json!({"credentials": [
+            {"id": "c1", "name": "Acme", "env": "ACME_API_KEY", "kind": "api_key", "value": "acme-synthetic-key"},
+            {"id": "setting:s1", "name": "ACME_HOST", "env": "ACME_HOST", "kind": "setting",
+             "value": "eu.acme.example", "tool": "Acme"},
+        ]});
+        let mut vault = Vault::default();
+        let env = environment_with(
+            &ctx,
+            &serde_json::json!({"bot": "ops", "token": "t"}),
+            &mut vault,
+            Some(granted),
+        )
+        .await
+        .unwrap();
+        assert_eq!(env["ACME_HOST"], "eu.acme.example");
+        assert_eq!(env["ACME_API_KEY"], "acme-synthetic-key");
+        assert_eq!(vault.values, ["acme-synthetic-key"]);
+        assert!(vault.names.contains("ACME_HOST"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -270,8 +270,14 @@ The Owner can still delete a learning there.
 
 **Tools** (`#/tools`) lists every way the company reaches the outside world: API tools (a service bots call with a key),
 mailboxes, Tico addresses and numbers, physical mail, Slack, the GitHub App, meeting importers, Listening, outgoing
-webhooks, and tools bots declare in `bot.yaml` that have no API tool yet. Each row shows its status, how it is reached,
-who can use it, and whether it needs you. Incoming webhooks and triggers live in Automations, not here.
+webhooks, and tools bots declare in `bot.yaml` that have no API tool yet. Each row shows who can use it and, only when
+something is wrong, a pill; a lock means Tico holds the key (the proxy adds it to each call and bots never see it), an
+eye-off that only those listed can see the tool. The list has one row a vendor: Raygun's website login, its MCP token
+and its API key are one **Raygun** row, its pill its worst tool's. The row opens the vendor's page
+(`#/tools/vendor/<vendor>`, one read: `GET /api/v2/tool-vendors/<vendor>`), a card for each tool with its keys at their
+levels, who can use it and its settings, each opening the tool's own page. A vendor with one tool, and anything that is
+no vendor's (a mailbox, a Tico number, Tico's own tools), is its own row under its own name. Search reads tool and
+vendor names. Incoming webhooks and triggers live in Automations, not here.
 
 The owner and admins see every row. Anyone else sees their own (their mailbox, webhooks they made) and the company's rows
 they may read: an API tool they were given a level on, Slack and GitHub once connected, Tico addresses and numbers in
@@ -279,9 +285,10 @@ their audience, meeting importers if they read meetings, physical mail, and List
 The Listening row shows its worst source's state. Bots named are only those you may see.
 
 `GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
-who_total, needs_you, href}], counts, next}`, at most 500 rows and 192 KB a page; follow `next` with `cursor`. CLI:
-`tico tool index`; MCP: `tico_tool_index` (BotOps reads it with the rights of the person who asked; the Tools page's owner
-bot reads every tool the company sees, with who holds which level, never a key).
+who_total, needs_you, href, vendor, vendor_name}], counts, next}` (an API tool's row adds `service` and `delivery`), at most
+500 rows and 192 KB a page; follow `next` with `cursor`. CLI: `tico tool index`; MCP: `tico_tool_index` (BotOps reads
+it with the rights of the person who asked; the Tools page's owner bot reads every tool the company sees, with who holds
+which level, never a key).
 
 ### API tools
 
@@ -292,6 +299,20 @@ there is one, else the full key at Read. Only credential administrators add keys
 reads the tool's page.
 
 Status: **Working**, **Key rejected** (the check got 401 or 403), **Check failed**, **Expires in N days** (14 or fewer),
-**Not checked**, or **Key on computers** (the key still goes to each run's environment, as every key stored before API
-tools did; move it to the proxy on the tool's page). Tico checks each proxied tool every 30 minutes; `tico tool check
+or **Not checked**. Only a real problem puts a tool under Needs you: how its key reaches runs never does (a key on
+computers goes to each run's environment, as every key stored before API tools did; Move to proxy on the tool's page
+changes that).
+
+A tool's **vendor** is its `service` when one is set (a credential administrator types it on the tool's Edit; a known
+service sets it itself; `aws-production` is AWS's and `google-ads` Google's), else a known vendor any word of its name or
+its keys' variables names (`TIDY_AWS_READONLY` is AWS's, `GH_TOKEN` GitHub's, `GSC_*` Google's), else its address's,
+MCP server's or site's domain (`raygun.com`), else its name's first word ("Raygun production"). The GitHub App and Slack rows are
+GitHub's and Slack's.
+
+**Settings** are a tool's non-secret values: a host, a region, a profile, a project id, a bucket. Each is a variable and
+its plain value, shown in the clear on the tool's page, changed by credential administrators
+(`POST /api/v2/api-tools/<id>/settings {name, value}`, `PATCH|DELETE …/settings/<setting id>`), and set in the
+environment of every run that holds any level on the tool, on the proxy or on computers. A setting is never a key: a
+value that looks like one (a key shape, a URL with a password or a token in it) is refused, and a name with TOKEN,
+SECRET, PASSWORD or API_KEY in it belongs under Keys. A key the run holds under the same variable wins. Tico checks each proxied tool every 30 minutes; `tico tool check
 <id>` (MCP `tico_tool_check`) checks now. Checks and calls older than 90 days are deleted.

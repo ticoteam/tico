@@ -169,14 +169,32 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await dialog.getByText('All done').waitFor();
     assert.deepEqual(writes[n], {p: '/api/v2/tasks/t2/asks/r2/answer', body: {value: 'no', version: 3, note: 'Fine, but amber only when more than 3 are stuck'}});
 
-    // ---- 3. On a phone: two tabs, Chat (where each item opens) and Task (the task open, no chevron).
-    needs = [ok()];
+    // ---- 3. On a phone: two tabs, Chat and the document's (open, no chevron). A question opens on Chat, with a
+    // full-width box and no "To <name>" line under it, Snooze and ⋯ in the tabs row; an OK opens on its document.
+    const chatTab = dialog.locator('[data-dc="tab"][data-dc-tab="chat"]'), taskTab = dialog.locator('[data-dc="tab"][data-dc-tab="task"]');
+    needs = [{...question(), id: 'v9:r9'}];
     await page.setViewportSize({width: 390, height: 844});
     await dialog.locator('[data-dc="close"]').first().click();
     await page.evaluate('v2Refresh()');
     await page.evaluate('decideFlow(document.body)');
+    await chat.locator('.dc-q', {hasText: 'seven setup questions'}).waitFor();
+    assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'a question opens on Chat');
+    assert.equal(await chat.locator('.p-foot, .p-reach').count(), 0, 'no "To <name>" line under the box');
+    const [tabsRow, icons, pill] = [await dialog.locator('.dc-tabs').boundingBox(), await dialog.locator('.dc-side [data-key]').boundingBox(), await chat.locator('.p-pill').boundingBox()];
+    assert.ok(tabsRow && icons && icons.y >= tabsRow.y - 1 && icons.y + icons.height <= tabsRow.y + tabsRow.height + 1, `Snooze and ⋯ sit in the tabs row (${JSON.stringify([tabsRow, icons])})`);
+    assert.ok(pill && pill.width >= 350, `the box is full width (${pill?.width})`);
+    if (process.env.FLOW_SHOTS) {
+      await dialog.locator('.dc-start').waitFor({state: 'detached'});
+      await page.screenshot({path: path.join(process.env.FLOW_SHOTS, 'phone-question-opens-chat.png')});
+    }
+    needs = [ok()];
+    await dialog.locator('[data-dc="close"]').first().click();
+    await page.evaluate('v2Refresh()');
+    await page.evaluate('decideFlow(document.body)');
     await approve.and(page.locator(':not([disabled])')).waitFor();
-    const chatTab = dialog.locator('[data-dc="tab"][data-dc-tab="chat"]'), taskTab = dialog.locator('[data-dc="tab"][data-dc-tab="task"]');
+    assert.equal(await taskTab.getAttribute('aria-selected'), 'true', 'an OK opens on its document tab');
+    assert.equal(await dialog.locator('.dc-chat').isVisible(), false, 'the chat waits in its tab');
+    await chatTab.click();
     assert.equal(await chatTab.getAttribute('aria-selected'), 'true', 'Chat is selected');
     assert.equal(await dialog.locator('.dc-thing').isVisible(), false, 'Chat: the task is in its own tab');
     const [c, t] = [await chatTab.boundingBox(), await taskTab.boundingBox()];
@@ -242,6 +260,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await page.evaluate('v2Refresh()');
     await page.evaluate('decideFlow(document.body)');
     await approve.and(page.locator(':not([disabled])')).waitFor();
+    await chatTab.click();   // an OK opens on its document
     await composer.fill('Send it Monday');
     await page.waitForTimeout(450);
     const k = writes.length;

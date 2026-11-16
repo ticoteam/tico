@@ -55,9 +55,6 @@ enum Command {
         local_test_gateway: bool,
     },
     List,
-    ImportLegacy {
-        directory: std::path::PathBuf,
-    },
     Record {
         #[arg(long, default_value_t = 5)]
         seconds: u64,
@@ -291,9 +288,6 @@ fn main() -> Result<()> {
             store.recover()?;
             match command {
                 Command::List => println!("{}", serde_json::to_string_pretty(&store.list()?)?),
-                Command::ImportLegacy { directory } => {
-                    println!("Imported {} recordings", store.import_legacy(&directory)?)
-                }
                 Command::Record {
                     seconds,
                     microphone,

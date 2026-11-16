@@ -216,10 +216,8 @@ impl Tico {
         if !context.calendar_event.is_empty() {
             body["calendar_event"] = json!(context.calendar_event);
         }
-        // Tico refuses unknown fields. An older Tico has no `calendar_event` (the meeting is then not linked to
-        // its calendar event, and a refused event id is dropped the same way); before v0.5.0 no `client` (the
-        // meeting is just not labelled "From Tico Recorder"); before v0.4.10 no `visibility`, so a private meeting
-        // is never opened to the team.
+        // Tico refuses unknown fields, and rc.1 has no `calendar_event`: a refusal retries without it, so the
+        // meeting is then not linked to its calendar event (a refused event id is dropped the same way).
         let mut attempts = vec![(body.clone(), "")];
         if body.get("calendar_event").is_some() {
             let mut unlinked = body.clone();
@@ -228,9 +226,6 @@ impl Tico {
                 .map(|fields| fields.remove("calendar_event"));
             attempts.push((unlinked, ":unlinked"));
         }
-        let mut older = attempts[attempts.len() - 1].0.clone();
-        older.as_object_mut().map(|fields| fields.remove("client"));
-        attempts.push((older, ":unlabelled"));
         let mut answer = Err(anyhow::anyhow!("Tico was not asked"));
         for (body, suffix) in attempts {
             answer = self.call(
@@ -242,16 +237,7 @@ impl Tico {
                 break;
             }
         }
-        let reply = answer
-            .map_err(|error| {
-                if visibility.is_some() && format!("{error:#}").contains("HTTP 422") {
-                    anyhow::anyhow!(
-                        "This Tico can't keep live meetings private yet, so nothing was shared. Update Tico to add bots or people."
-                    )
-                } else {
-                    error
-                }
-            })?;
+        let reply = answer?;
         let live_id = reply["id"]
             .as_str()
             .context("Tico did not return a live meeting ID")?
@@ -453,7 +439,7 @@ impl Tico {
                 &format!("recorder:{id}:live:{seq}:r{revision}:{}", hash(&payload)),
             ) {
                 Ok(_) => 1,
-                Err(error) if correction_refused(&error, &payload) => 2,
+                Err(error) if correction_refused(&error) => 2,
                 Err(error) => {
                     crate::diag!(
                         "live: rec={short} corrections sent {sent}, refused {}, then failed: {error:#}",
@@ -560,8 +546,7 @@ impl Tico {
         })
     }
     /// Keeps a live-shared meeting on this computer only: Tico ends it and removes what was said
-    /// (and the transcript it filed for review, if Finish got that far). A Tico without the
-    /// discard call still ends the meeting, then says what stays there.
+    /// (and the transcript it filed for review, if Finish got that far).
     pub fn keep_local(&self, store: &Store, id: &str) -> Result<()> {
         let _guard = store.live_lock();
         let _drain = store.task_links_lock();
@@ -600,39 +585,16 @@ impl Tico {
             store.remove_delivery(id, &self.destination.id)?;
         }
         let prefix = format!("/api/v2/live-meetings/{}", context.live_id);
-        let removed = self.call(
+        self.call(
             &format!("{prefix}/discard"),
             Some(&json!({})),
             &format!("recorder:{id}:keep-local"),
-        );
-        let older = match &removed {
-            Ok(_) => false,
-            // A Tico without the discard route answers 404, which reads as the older-Tico message.
-            Err(error)
-                if error
-                    .chain()
-                    .any(|cause| cause.to_string() == crate::network::OLD_TICO) =>
-            {
-                true
-            }
-            Err(_) => return removed.map(|_| ()),
-        };
-        if older && context.live_state != "ended" {
-            self.call(
-                &format!("{prefix}/control"),
-                Some(&json!({"action":"end"})),
-                &format!("recorder:{id}:live:end"),
-            )?;
-        }
+        )?;
         store.update_context(id, |c| {
             c.live_state = "ended".into();
-            c.live_removed = !older;
+            c.live_removed = true;
             Ok(())
         })?;
-        ensure!(
-            !older,
-            "Ended in Tico. This Tico keeps the live transcript until it is updated."
-        );
         Ok(())
     }
     pub fn finish_live(&self, store: &Store, id: &str) -> Result<()> {
@@ -729,15 +691,10 @@ impl Tico {
 }
 
 /// Tico refuses this correction for good: it would break the transcript's time order
-/// (`sequence_order`, the only timing refusal the corrections route makes), or an older server
-/// refuses clearing a turn's text. Tico then keeps the revision it has and later revisions
-/// proceed. Any other refusal retries with the sync's normal backoff.
-fn correction_refused(error: &anyhow::Error, payload: &Value) -> bool {
-    let error = format!("{error:#}");
-    let clear = payload["text"]
-        .as_str()
-        .is_some_and(|text| text.trim().is_empty());
-    error.contains("HTTP 422 (sequence_order)") || clear && error.contains("HTTP 422 (validation)")
+/// (`sequence_order`, the only timing refusal the corrections route makes). Tico then keeps the
+/// revision it has and later revisions proceed. Any other refusal retries with the sync's normal backoff.
+fn correction_refused(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("HTTP 422 (sequence_order)")
 }
 
 /// The outbox state each meeting's last refused batch was repaired to, so a refusal the repair

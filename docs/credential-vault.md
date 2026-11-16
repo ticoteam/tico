@@ -315,6 +315,13 @@ channel. A bot created after the upgrade inherits no shared tool credentials. Mi
 never restores a revoked grant. A pending one-time migration waits for a runner version that supports
 it; an older, pinned or offline runner does not consume the step. The `HUB_` migration needs a
 runner reporting 0.2.31 or newer. Legacy files stay available to operator tools, but are no longer a source for run environments.
+A variable that is a setting rather than a key, a name ending in `_HOST`, `_REGION`, `_PROFILE`, `_PROJECT_ID`,
+`_BUCKET` or `_URL` whose value does not look like a credential (one line, no key shape, no user, password or token in a
+URL), comes in as a **Setting** on the tool of its vendor the bot holds a key of (`POSTHOG_HOST` beside `POSTHOG_API_KEY`
+on PostHog), so every run that can use that tool gets it in the clear. With no such tool, or one that already has
+another value under that name, it comes in as a key, as before. Keys stored before Settings existed move the same way
+once, at the server's start, and only where every bot or person holding the key still gets the variable from the tool;
+the key goes after its setting is there (backend/tool_settings.py).
 On isolated Computers, the supervisor owns these files. A Computer without process isolation still has the shared
 filesystem trust boundary described in [SECURITY.md](../SECURITY.md); environment filtering does not isolate its shell.
 Use Credentials or its thread card for new values; grant them to the bot that needs them.

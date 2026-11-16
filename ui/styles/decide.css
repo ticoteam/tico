@@ -385,10 +385,15 @@ button.dc-jev{cursor:pointer}
   .decide.dc-chatmode .dc-side>[data-key]>.dc-acts>.dc-snzw:not(.dc-askw) .dc-snz{left:0;right:auto}
   .decide.dc-chatmode .dc-side>[data-key]>.dc-acts>button{order:1;flex:1;min-height:44px}
   .decide.dc-chatmode .dc-side>[data-key]>.dc-acts>.dc-askw{order:2;margin-left:auto}
-  .decide.dc-chatmode:not(.dc-on-task) .dc-side{position:relative}
-  .decide.dc-chatmode:not(.dc-on-task) .dc-side:not(:has(>[data-key]>.dc-acts>button))>[data-key]{position:absolute;left:0;right:0;bottom:0;background:none;pointer-events:none}
-  .decide.dc-chatmode:not(.dc-on-task) .dc-side:not(:has(>[data-key]>.dc-acts>button))>[data-key] .dc-acts>*{pointer-events:auto}
-  .decide.dc-chatmode:not(.dc-on-task) .dc-side:not(:has(>[data-key]>.dc-acts>button)) .dc-chat .thv-composer{padding-left:60px;padding-right:60px;padding-bottom:calc(8px + env(safe-area-inset-bottom))}
+  /* With no forward action (a question, a chat-only item) the composer is full width and Snooze and ⋯ are two icons at
+     the right end of the title and tabs row (⋯ last), on either tab; a Give to… field keeps the row at the bottom */
+  .dc-main:has(>.dc-side>.dc-chat){position:relative}
+  .decide.dc-chatmode .dc-side:not(:has(>[data-key]>.dc-acts>button)):not(:has(>[data-key] :is(.dc-more,.err)))>[data-key]{position:absolute;top:2px;right:4px;left:auto;bottom:auto;z-index:4;padding:0;border:0;background:none}
+  .decide.dc-chatmode .dc-side:not(:has(>[data-key]>.dc-acts>button)):not(:has(>[data-key] :is(.dc-more,.err)))>[data-key]>.dc-acts{gap:0}
+  .decide.dc-chatmode .dc-side:not(:has(>[data-key]>.dc-acts>button)):not(:has(>[data-key] :is(.dc-more,.err)))>.dc-tabs{padding-right:96px}
+  /* up there, Snooze's menu opens down, from the right */
+  .decide.dc-chatmode .dc-side:not(:has(>[data-key]>.dc-acts>button))>[data-key]>.dc-acts>.dc-snzw:not(.dc-askw) .dc-snz{top:calc(100% + 6px);bottom:auto;left:auto;right:0}
+  .decide.dc-chatmode .dc-side:not(:has(>[data-key]>.dc-acts>button)) .dc-chat .thv-composer{padding-bottom:calc(8px + env(safe-area-inset-bottom))}
   /* 9. words on an OK: the arrow sends a comment alone, so it goes quiet; the forward button is the filled one */
   .decide.dc-typed-ok .dc-chat .p-send{background:none;border:1px solid var(--line);color:var(--muted)}
   /* 12. ⋯ opens as a sheet from the bottom edge, full-width 52 px rows */

@@ -15,21 +15,18 @@
 Unversioned and idempotent (`ensure`), like backend/strategy.py.
 """
 
-import calendar
 import json
 import sqlite3
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import audit_log
+from . import automation_due
 from . import hubdb as H
 from .store import Problem
 
-REPEATS = ("once", "weekly", "monthly", "quarterly", "yearly")
-STEP_MONTHS = {"monthly": 1, "quarterly": 3, "yearly": 12}
 STATUSES = ("overdue", "due_soon", "upcoming", "satisfied")
 WINDOW_DAYS = 30  # "due soon" without a routine window
-ROUTINE_DAYS = 14  # a routine's lead time when its trigger names none (automation_due.OPEN_DAYS)
 MAX_OCCURRENCES = 5000  # a backstop: a weekly date from decades ago still walks in a few hundred steps
 HISTORY = 5  # the last status rows a list shows for a due date
 OPEN_DAYS = 20  # the open occurrences a detail names (the count is always exact)
@@ -78,8 +75,8 @@ def parse_zone(value):
 
 
 def parse_repeats(value):
-    if value not in REPEATS:
-        raise Problem("validation", "Repeats is " + ", ".join(REPEATS), 422)
+    if value not in automation_due.REPEATS:
+        raise Problem("validation", "Repeats is " + ", ".join(automation_due.REPEATS), 422)
     return value
 
 
@@ -87,22 +84,12 @@ def local_today(zone):
     return datetime.now(ZoneInfo(zone)).date()
 
 
-def occurrence(first, repeats, n):
-    """The nth occurrence (from 0) counted from the first date, or None past the last one."""
-    if repeats == "once":
-        return first if n == 0 else None
-    if repeats == "weekly":
-        return first + timedelta(weeks=n)
-    months = first.month - 1 + STEP_MONTHS[repeats] * n
-    year, month = first.year + months // 12, months % 12 + 1
-    return date(year, month, min(first.day, calendar.monthrange(year, month)[1]))
-
-
 def occurrences(first, repeats, until):
-    """Ascending occurrences up to `until`, plus the first one after it (that one is the next to fall due)."""
+    """Ascending occurrences up to `until`, plus the first one after it (that one is the next to fall due). The day of
+    the nth occurrence is automation_due.occurrence: one rule for both readers, so a routine's run and its due day agree."""
     out = []
     for n in range(MAX_OCCURRENCES):
-        day = occurrence(first, repeats, n)
+        day = automation_due.occurrence(first, repeats, n)
         if day is None:
             break
         out.append(day)
@@ -196,7 +183,7 @@ def task_days(c, rows):
         ):
             trigger = json.loads(r["flow"]).get("trigger") or {}
             if trigger.get("type") == "due":
-                out[r["id"]] = int(trigger.get("open_days", ROUTINE_DAYS))
+                out[r["id"]] = automation_due.open_days_of(trigger)
     return out
 
 
