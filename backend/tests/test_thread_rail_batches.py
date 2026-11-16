@@ -225,3 +225,17 @@ def test_a_post_in_a_sub_thread_the_reader_may_not_read_does_not_bring_its_task_
     monkeypatch.setattr(read_cache, "cache", lambda c: None)
     assert {a: _revived(api, a) for a in batched} == batched
     assert root not in batched["human:ben"] and root in batched["human:ana"], batched
+
+
+def test_catch_up_counts_a_legacy_homes_plain_unread_messages(api):
+    """Catch up reads every unread message of a migrated Home's thread for the whole check, plain ones included, since
+    the Home's old readers decide them (the json_each half of its batched read). A person's Home that still holds
+    shared-room history and has three plain unread messages from a teammate shows all three, not none."""
+    home = _home(api, "human:cara", token="cara-test")
+    with api.app.state.store.transaction() as c:
+        old = threads.post(c, "human:cara", home["id"], "From the shared room")
+        c.execute("UPDATE messages SET legacy_audience='shared:ops', restricted=1 WHERE id=?", (old["id"],))
+        for i in range(3):
+            threads.post(c, "bot:ops", home["id"], f"Plain {i}")
+    [item] = get(api, "threads/catch-up", "cara-test")["items"]
+    assert item["thread"]["id"] == home["id"] and item["new_count"] == 3, item["new_count"]
