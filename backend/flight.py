@@ -1643,7 +1643,8 @@ def install(app, store, auth):
                 row.pop("actor", None)
         return out
 
-    allowance = WebAllowance()
+    # On app.state so a test can hold the minute still (backend/tests/test_web_timings.py).
+    allowance = app.state.web_allowance = WebAllowance()
 
     @app.post("/api/v2/web-timings", status_code=202)
     async def web_timings(request: Request):
