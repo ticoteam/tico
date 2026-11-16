@@ -137,6 +137,4 @@ def test_a_reply_whose_run_read_a_refused_page_stays_hidden_on_every_load(api, m
         monkeypatch.setattr(thread_rail, "_prime", lambda c, rows: None)
         alone = loads()
         assert batched == alone, (legacy, batched, alone)
-        assert batched[0] in (2, 3) and len(set(batched)) == 1, (legacy, batched)
-        if not legacy:
-            assert batched == [2, 2, 2], batched  # the reply whose run read the deleted page is hidden
+        assert batched == [2, 2, 2], (legacy, batched)  # the reply whose run read the deleted page is hidden
