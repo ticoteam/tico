@@ -33,6 +33,7 @@ TELEMETRY: dict[str, str] = {
     "automations": "automations",
     "email": "email_drain",
     "workspace_check": "google_workspace",
+    "calendar_watch": "calendar_watch",
 }
 
 
@@ -205,7 +206,8 @@ class Worker:
 
 class Drains:
     """The server's drain workers: `automations` (the queue's runs, then their Gmail actions), `email` (Workspace
-    inboxes' queued sends) and `workspace_check` (a pending or failing Workspace key, checked again)."""
+    inboxes' queued sends), `workspace_check` (a pending or failing Workspace key, checked again) and `calendar_watch`
+    (Google calendars' changes)."""
 
     def __init__(
         self,
@@ -248,7 +250,18 @@ class Drains:
             on_error=on_error,
             stopping=stopping,
         )
-        self.all = (self.automations, self.email, self.workspace_check)
+        from . import gcal_watch
+
+        # Google calendars' own changes, as calendar.event.* (backend/gcal_watch.py); each calendar every 90 s.
+        self.calendar_watch = Worker(
+            "calendar_watch",
+            lambda budget: gcal_watch.tick(store, budget=budget),
+            store=store,
+            budget=budget,
+            on_error=on_error,
+            stopping=stopping,
+        )
+        self.all = (self.automations, self.email, self.workspace_check, self.calendar_watch)
         self.hub = hub
 
     def start(self) -> "Drains":

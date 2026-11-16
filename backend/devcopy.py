@@ -59,6 +59,9 @@ EMPTY = (
     "update_queue",
     "task_reminders",
     "calendar_actions",
+    # The Google calendar watcher's sync tokens and what it saw: a copy's watcher learns its calendars again quietly.
+    "calendar_watches",
+    "calendar_watch_events",
     "suggestions",  # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries",
     "worktree_waits",

@@ -220,7 +220,10 @@ def test_a_non_publisher_computer_can_sync_a_botless_workspace_mailbox(api, know
     publish(api, machine["token"], PERSONAL)
 
 
-def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api, known_person):
+def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api, known_person, monkeypatch):
+    from backend import gcal_live
+
+    monkeypatch.setattr(gcal_live, "events", lambda c, *a, **k: [])
     chosen, other = computers(api)
     publish(api, chosen["token"], PERSONAL)
     publish(api, other["token"], PERSONAL, expected=403)
@@ -228,13 +231,14 @@ def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api
     post(api, "automations/mail-actions/claim", {"mailbox": PERSONAL}, other["token"], expected=403)
     health(api, chosen["token"], ok=[PERSONAL])
     health(api, other["token"], ok=[PERSONAL], expected=403)
+    # The Workspace key reaches this calendar, so the server reads it live and no computer is asked for it.
     targets = get(api, "connectors/calendar/targets", chosen["token"])
-    assert targets["people"] == [{"id": "cara", "email": PERSONAL}]
+    assert targets["people"] == []
     assert (targets["hours"], targets["days"]) == (24, 14)  # hours for a computer from before days
     snapshot = {"snapshots": [{"email": PERSONAL, "events": []}]}
-    post(api, "connectors/calendar/snapshots", snapshot, chosen["token"])
     post(api, "connectors/calendar/snapshots", snapshot, other["token"], expected=403)
-    assert get(api, "calendar/appointments?calendar=" + PERSONAL, "cara-test")["updated_at"]
+    read = get(api, "calendar/appointments?calendar=" + PERSONAL, "cara-test")
+    assert read["updated_at"] and read["stale"] is False
     offline(api, chosen)
     publish(api, other["token"], PERSONAL)
     assert post(api, "automations/mail-actions/claim", {"mailbox": PERSONAL}, other["token"])["actions"] == []

@@ -1,5 +1,6 @@
 """Live Google Calendar reads and writes: the viewer's token, Google's sharing, the contract's occurrence shape."""
 
+import json
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -308,6 +309,14 @@ def test_connected_needs_the_company_key_for_this_address_and_a_calendar_scope(m
     assert not G.connected(None, "someone@other.example")
     row["authorized_scopes"] = '["https://www.googleapis.com/auth/gmail.modify"]'
     assert not G.connected(None, ANA)
+    from backend import google_connect as GC
+
     monkeypatch.setattr(W, "authority", lambda c, address: "personal")
     row["authorized_scopes"] = None
-    assert not G.connected(None, ANA)  # a person's own Connect Google keeps the computer path
+    grant = {"grant_scopes": json.dumps(GC.READ_SCOPES)}
+    monkeypatch.setattr(google_tokens, "grant_row", lambda c, address: grant)
+    assert G.connected(None, ANA)  # a person's own Connect Google grant is read on the server too
+    grant["grant_scopes"] = json.dumps([GC.G + "gmail.readonly", GC.G + "calendar.freebusy"])
+    assert not G.connected(None, ANA)  # a grant that cannot list events
+    monkeypatch.setattr(google_tokens, "grant_row", lambda c, address: None)
+    assert not G.connected(None, ANA)

@@ -184,11 +184,11 @@ the same routes and `backend/hubdb.py` rules; there is no privileged path.
 Calendar appointments are three shared Tico tools available to every bot:
 `tico_calendar_list`, `tico_calendar_schedule`, and `tico_calendar_status`. Events and bookings have their own
 tools: `tico_calendar_events`, `tico_calendar_free`, `tico_calendar_search`, and the writes `tico_calendar_add`,
-`tico_calendar_move`, `tico_calendar_cancel`. Reads come from the
-bounded calendar snapshot, limited to the team owner's or the bot operator's calendar
-([calendar paths](mail.md#calendar)). A schedule call writes an idempotent Tico action; the private calendar tool
-claims it once, creates the Google event and invitations locally, and reports the result. Bots must
-see `succeeded` before saying the appointment exists. This path grants no generic Gmail authority.
+`tico_calendar_move`, `tico_calendar_cancel`. Reads come live from Google on the server,
+limited to the team owner's or the bot operator's calendar ([calendar paths](mail.md#calendar)). A schedule call
+makes the Google event on the server in the same request and queues its invitation as an email through the send
+rules; its receipt says `succeeded`, `failed` or `unknown`. Bots must see `succeeded` before saying the appointment
+exists. This path grants no generic Gmail authority.
 
 One of those tools is a second model, the decision model. `tico_decision_ask` (`tico decision ask`) sends a JSON state and typed
 questions to the decision model, and gets a calibrated answer per question back:
