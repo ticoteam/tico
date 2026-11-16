@@ -36,7 +36,8 @@ pub(crate) fn client() -> Result<Client> {
 pub const VERSION: &str = env!("TICO_RECORDER_VERSION");
 pub const VERSION_HEADER: &str = "X-Tico-Recorder-Version";
 pub const INSTALL_HEADER: &str = "X-Tico-Recorder-Install";
-/// A Tico without an endpoint the recorder uses answers 404 or 405 with no Tico error code.
+/// A Tico without an endpoint the recorder calls answers 404 or 405 with no Tico error code. Only endpoints
+/// rc.1 lacks (Meet call claims and presence, a calendar occurrence) can answer so.
 pub const OLD_TICO: &str = "This Tico doesn't support this yet. Update Tico to use it.";
 pub(crate) fn response(response: reqwest::blocking::Response) -> Result<Value> {
     let status = response.status();
@@ -377,7 +378,6 @@ pub struct Tico {
     token: String,
     client: Client,
     browser: std::sync::Mutex<Option<String>>,
-    oauth: bool,
 }
 impl Tico {
     pub fn saved(config: &Settings, id: &str) -> Result<Self> {
@@ -388,9 +388,7 @@ impl Tico {
             .context("Choose a Tico connection")?
             .clone();
         let token = crate::signin::token(id)?;
-        let mut tico = Self::new(destination, token)?;
-        tico.oauth = !settings::secret(&format!("tico-grant:{id}"))?.is_empty();
-        Ok(tico)
+        Self::new(destination, token)
     }
     pub fn new(destination: Destination, token: String) -> Result<Self> {
         settings::safe_url(&destination.base_url)?;
@@ -400,7 +398,6 @@ impl Tico {
             token,
             client: client()?,
             browser: std::sync::Mutex::new(None),
-            oauth: false,
         })
     }
     /// Every call to Tico carries the token, this build's version and this copy's install id. Only calls to Tico:
@@ -538,15 +535,9 @@ impl Tico {
         }
         Ok(out)
     }
-    /// Meeting routes under `/api/v2`, the only API a runner hostname routes. A Tico from before
-    /// they moved answers there as an old Tico; then the same request goes to the old `/api` path.
+    /// Meeting routes under `/api/v2`, the only API a runner hostname routes.
     pub fn call_meeting(&self, path: &str, body: Option<&Value>, key: &str) -> Result<Value> {
-        match self.call(&format!("/api/v2{path}"), body, key) {
-            Err(error) if error.chain().any(|cause| cause.to_string() == OLD_TICO) => {
-                self.call(&format!("/api{path}"), body, key)
-            }
-            result => result,
-        }
+        self.call(&format!("/api/v2{path}"), body, key)
     }
     /// The server supplies the browser address; an OAuth runner host may serve only API routes.
     pub fn browser_url(&self) -> Result<String> {
@@ -572,17 +563,8 @@ impl Tico {
         Ok(browser)
     }
     fn task_browser_url(&self) -> Result<String> {
-        match self.browser_url() {
-            Ok(browser) => Ok(browser),
-            Err(error) if error.chain().any(|cause| cause.to_string() == OLD_TICO) => {
-                if self.oauth {
-                    Ok(String::new())
-                } else {
-                    settings::safe_url(&self.destination.base_url)
-                }
-            }
-            Err(error) => Err(error).context("Could not resolve Tico links; the task was not sent"),
-        }
+        self.browser_url()
+            .context("Could not resolve Tico links; the task was not sent")
     }
     pub fn verify(&self) -> Result<Value> {
         let who = self.call("/api/v2/me", None, "")?;
@@ -804,7 +786,7 @@ impl Tico {
                         Some(&body),
                         &format!("recorder:{id}:import:{}", hash(&body)),
                     )
-                    .map_err(|error| refused_audience(error, audience))?;
+                    .map_err(already_sent)?;
                 ensure!(
                     reply["status"] != "deleted",
                     "This meeting was deleted in Tico"
@@ -838,8 +820,8 @@ impl Tico {
                         "approve".to_owned(),
                     ),
                 };
-                // Approved before for another audience: name this one, so Tico re-files it (a first approval
-                // leaves it out for the Team, which an older Tico would refuse).
+                // Approved before for another audience: name this one, so Tico re-files it. A first approval
+                // for the Team names none: Tico reads private:false as the Team.
                 if delivery.receipt["approved"] == true {
                     let refiles = delivery.receipt["refiles"].as_u64().unwrap_or(0) + 1;
                     delivery.receipt["refiles"] = json!(refiles);
@@ -855,7 +837,7 @@ impl Tico {
                         Some(&approve),
                         &format!("recorder:{id}:{key}"),
                     )
-                    .map_err(|error| refused_audience(error, audience))?;
+                    .map_err(already_sent)?;
                 let refiles = delivery.receipt.get("refiles").cloned();
                 store.update_delivery(id, &mut delivery, |current| {
                     if let Some(title) = reviewed["title"].as_str() {
@@ -1518,9 +1500,8 @@ pub fn ready(record: &Recording) -> Result<()> {
     );
     Ok(())
 }
-/// A Tico that refuses `audience` (HTTP 422) is older than "Participants only": nothing was filed.
-fn refused_audience(error: anyhow::Error, audience: &str) -> anyhow::Error {
-    // Narrowing after the transcript went into a task: Tico says where to change it.
+/// Narrowing after the transcript went into a task: Tico says where to change it.
+fn already_sent(error: anyhow::Error) -> anyhow::Error {
     if let Some(sent) = error
         .chain()
         .map(|cause| cause.to_string())
@@ -1528,13 +1509,7 @@ fn refused_audience(error: anyhow::Error, audience: &str) -> anyhow::Error {
     {
         return anyhow::anyhow!(sent);
     }
-    if audience == "participants" && format!("{error:#}").contains("HTTP 422") {
-        anyhow::anyhow!(
-            "This Tico can't save for participants only yet, so nothing was shared. Update Tico or save it for the org."
-        )
-    } else {
-        error
-    }
+    error
 }
 fn import_body(record: &Recording, context: &MeetingContext, audience: &str) -> Value {
     let mut body = json!({"title":record.title,"source":"tico-recorder","external_id":record.id,"started_at":record.started_at,"duration_seconds":record.chunks.iter().map(|chunk|chunk.end_ms).max().unwrap_or(0).div_ceil(1000),"private":audience != "team","review":"live","notes":context.notes,"participants":context.participants,"transcript":transcript::lines(record).iter().map(|line|json!({"speaker":line.speaker,"start_ms":line.start_ms,"end_ms":line.end_ms,"text":line.text})).collect::<Vec<_>>()});

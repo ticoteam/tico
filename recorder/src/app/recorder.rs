@@ -3669,17 +3669,6 @@ impl Recorder {
             config.meeting_audio = meeting_audio;
         });
     }
-    pub fn import_legacy(&mut self, directory: &str) {
-        let directory = directory.trim().to_owned();
-        if directory.is_empty() || self.active.is_some() {
-            return;
-        }
-        let store = self.store.clone();
-        self.job("import", move || {
-            let count = store.import_legacy(std::path::Path::new(&directory))?;
-            Ok(json!({"message":format!("Imported {count} recordings")}))
-        });
-    }
     /// A link macOS delivered to the app: `connect` asks to sign in to that Tico; `open` (Record in the Tico desktop
     /// app) chooses that Tico for what comes next when the Recorder is signed in to it, and asks to sign in when not.
     /// Neither starts a recording. `record` (a call started in Tico, or Join on a calendar event) records it
