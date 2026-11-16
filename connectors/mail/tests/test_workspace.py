@@ -230,6 +230,23 @@ class CredentialOrder(Base):
         self.assertEqual(self.server.calls, [])
         self.assertEqual(ServiceAccount.loaded, [])
 
+    def test_a_grant_the_server_holds_is_asked_of_the_server_even_beside_a_key_file(self):
+        """A grant connected through the server (`broker`) is the server's: this computer asks it for the token, and a
+        leftover copy here is never refreshed (the server no longer refreshes copies)."""
+        self.with_registration()
+        oauth.save(
+            {"grants": {"ana@acme.example": {"refresh_token": "1//old", "client_id": "c", "broker": "server"}}},
+            self.grants,
+        )
+        self.write_key()
+        creds = self.credentials()
+        self.assertEqual(creds.token, "ya29.workspace")
+        self.assertEqual(
+            self.server.calls,
+            [("connectors/mail/workspace/token", {"mailbox": "ana@acme.example", "service": "gmail"})],
+        )
+        self.assertEqual(ServiceAccount.loaded, [])
+
     def test_a_key_file_on_this_computer_is_used_and_the_server_is_not_asked(self):
         self.with_registration()
         self.write_key()

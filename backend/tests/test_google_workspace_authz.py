@@ -5,6 +5,8 @@ person's grant. A publisher is refused there, as is a cloud computer that owns n
 Google's token endpoint is replaced, so nothing leaves the test.
 """
 
+import json
+
 import pytest
 
 from backend import google_connect, google_rights
@@ -58,28 +60,14 @@ def age_reports(api, machine, minutes=120, account=None):
             )
 
 
-def begin_ana(api):
-    """Ana starts Connect Google, and Google sends her back with a code."""
-    _, query = connect.start(api, "ana-test")
-    connect.back(api, "ana-test", state=query["state"], code="c-1")
-
-
-def finish_ana(api, machine, monkeypatch, refresh_token):
-    """`machine` takes the connect Ana started, exchanges its code for a grant with `refresh_token`, and answers it."""
-    claimed = post(api, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])["connect"]
-    assert claimed and claimed["action"] == "connect"
-    monkeypatch.setattr(
-        google_connect,
-        "post_token",
-        connect.FakeGoogle({"access_token": "ya29.ana", "expires_in": 3599, "refresh_token": refresh_token}),
+def connect_ana(api, monkeypatch, refresh_token="1//ana"):
+    """Ana connects her own mailbox (her message bot's, BOX) with Connect Google; later refreshes answer `ya29.ana`."""
+    connect.signed_in(api, "ana-test", email=BOX, refresh_token=refresh_token)
+    google = connect.FakeGoogle(
+        {"access_token": "ya29.ana", "expires_in": 3599, "scope": connect.oauth.G + "gmail.readonly"}
     )
-    post(api, f"connectors/mail/google/{claimed['id']}/exchange", {}, machine["token"])
-    post(
-        api,
-        f"connectors/mail/google/{claimed['id']}/result",
-        {"status": "connected", "can": ["read"]},
-        machine["token"],
-    )
+    monkeypatch.setattr(google_connect, "post_token", google)
+    return google
 
 
 def test_a_workspace_mailbox_is_read_by_the_computer_running_its_bot(api, workspace_key):
@@ -108,16 +96,23 @@ def test_the_token_route_answers_only_the_bot_s_computer(api, workspace_key):
     assert token(api, bot_mac["token"], "lena@other.example", expected=403)["error"]["kind"] == "not_connected"
 
 
-def test_a_personal_grant_is_never_minted_by_the_workspace_key(api, workspace_key, google):
+def test_a_personal_grant_wins_over_the_workspace_key_and_only_its_owner_gets_its_token(
+    api, workspace_key, google, monkeypatch
+):
     seed_org(api)
+    declare(api, BOX)
     office = runner(api, label="Office Mac")
     bot_mac = runner(api, operator="ben", label="Bot Mac")
     place(api, bot_mac)
-    connect.exchanged(api, office)  # Cara's grant, held by the office computer
-    assert token(api, office["token"], PERSONAL, expected=403)["error"]["kind"] == "personal_grant"
-    assert token(api, bot_mac["token"], PERSONAL, expected=403)["error"]["kind"] == "personal_grant"
-    assert publish(api, office["token"], PERSONAL)  # the holder reads it
-    assert publish(api, bot_mac["token"], PERSONAL, expected=403)["error"]["kind"] == "personal_grant"
+    refreshes = connect_ana(api, monkeypatch)
+    minted = len(workspace_key)
+    answer = token(api, bot_mac["token"])
+    assert answer["access_token"] == "ya29.ana" and answer["scopes"] == [connect.oauth.G + "gmail.readonly"]
+    assert refreshes.calls[-1]["refresh_token"] == "1//ana" and len(workspace_key) == minted  # never the key
+    assert "1//ana" not in json.dumps(answer)
+    assert token(api, office["token"], expected=403)["error"]["kind"] == "workspace_owned"
+    assert publish(api, bot_mac["token"])
+    assert publish(api, office["token"], expected=403)["error"]["kind"] == "personal_grant"
 
 
 def test_a_failing_key_keeps_each_mailbox_with_its_owner(api, workspace_key):
@@ -221,111 +216,31 @@ def test_a_fresh_computer_still_fails_an_account_whose_row_is_old(api, workspace
         assert BOX in google_rights.failing_accounts(c, "mail", H.now())
 
 
-def test_a_holder_whose_bot_moved_away_cannot_refresh_its_grant(api, google, monkeypatch):
-    seed_org(api)
-    declare(api, BOX)
-    old = runner(api, operator="ben", label="Old Mac")  # not a publisher
-    new = runner(api, operator="ben", label="New Mac")
-    place(api, old)
-    ready(api, old, [])
-    begin_ana(api)
-    finish_ana(api, old, monkeypatch, "1//grant")
-    google_calls = connect.FakeGoogle()
-    monkeypatch.setattr(google_connect, "post_token", google_calls)
-    assert connect.refresh(api, old["token"], mailbox=BOX).status_code == 200
-    place(api, new)  # the bot moves; the grant stays on the old computer
-    r = connect.refresh(api, old["token"], mailbox=BOX)
-    assert r.status_code == 403 and r.json()["error"]["code"] == "not_this_grant"
-    assert len(google_calls.calls) == 1  # only the refresh before the move reached Google
-
-
-def test_a_reconnect_moves_the_grant_to_the_bot_s_computer_and_the_old_holder_keeps_nothing(api, google, monkeypatch):
+def test_a_personal_mailbox_moves_with_its_bot_and_needs_no_reconnect(api, google, monkeypatch):
     seed_org(api)
     declare(api, BOX)
     old = runner(api, operator="ben", label="Old Mac")
     new = runner(api, operator="ben", label="New Mac")
     place(api, old)
-    ready(api, old, [])
-    begin_ana(api)
-    finish_ana(api, old, monkeypatch, "1//first")
-    place(api, new)  # the bot moves; Ana reconnects
-    ready(api, new, [])
-    begin_ana(api)
-    assert post(api, "connectors/mail/google/claim", {"holds_mail": True}, old["token"])["connect"] is None
-    assert get(api, "runners/connectors", old["token"])["connectors"] == []
-    finish_ana(api, new, monkeypatch, "1//second")  # the new computer takes and finishes it
-    monkeypatch.setattr(google_connect, "post_token", connect.FakeGoogle())
-    assert connect.refresh(api, new["token"], mailbox=BOX, refresh_token="1//second").status_code == 200
-    r = connect.refresh(api, old["token"], mailbox=BOX, refresh_token="1//first")
-    assert r.status_code == 403 and r.json()["error"]["code"] == "not_this_grant"
-    # Once the grant is the new computer's, the old one is neither holder, publisher nor bot host: the claim gate refuses it.
-    refused = post(api, "connectors/mail/google/claim", {"holds_mail": True}, old["token"], expected=403)
-    assert refused["error"]["code"] == "forbidden"
+    connect_ana(api, monkeypatch)
+    assert get(api, "runners/connectors", old["token"])["connectors"] == ["mail", "calendar"]
+    assert token(api, old["token"])["access_token"] == "ya29.ana"
+    place(api, new)  # the bot moves: its new computer reads the mailbox, with the same grant on the server
+    assert token(api, new["token"])["access_token"] == "ya29.ana"
+    assert token(api, old["token"], expected=403)["error"]["kind"] == "not_this_mailbox"
     assert get(api, "runners/connectors", old["token"])["connectors"] == []
 
 
-def test_a_first_connect_waits_for_the_bot_s_computer_even_while_it_is_offline(api, google, monkeypatch):
+def test_a_personal_mailbox_without_a_bot_computer_goes_to_its_person_s_own_online_computer(api, google, monkeypatch):
     seed_org(api)
     declare(api, BOX)
-    office = runner(api, label="Office Mac")  # the owner's: a publisher
-    bot_mac = runner(api, operator="ben", label="Bot Mac")  # the bot's computer, not yet online
-    place(api, bot_mac)
-    begin_ana(api)
-    assert post(api, "connectors/mail/google/claim", {"holds_mail": True}, office["token"])["connect"] is None
-    ready(api, bot_mac, [])  # the bot's computer comes online and takes the connect
-    finish_ana(api, bot_mac, monkeypatch, "1//host")
-    assert publish(api, bot_mac["token"], expected=200)  # the bot's computer owns the grant it connected
-    assert publish(api, office["token"], expected=403)["error"]["kind"] == "personal_grant"
-
-
-def test_a_holder_with_no_bot_computer_refreshes_and_reconnects_its_grant(api, google, monkeypatch):
-    seed_org(api)
-    declare(api, BOX)
-    holder = runner(api, operator="ben", label="Bot Mac")  # not a publisher: it took the connect as the bot's host
-    place(api, holder)
-    ready(api, holder, [])
-    begin_ana(api)
-    finish_ana(api, holder, monkeypatch, "1//first")
-    unplace(api)  # the bot has no live computer now
-    monkeypatch.setattr(google_connect, "post_token", connect.FakeGoogle())
-    assert connect.refresh(api, holder["token"], mailbox=BOX, refresh_token="1//first").status_code == 200
-    assert publish(api, holder["token"], expected=200)  # the holder still owns the grant it holds
-    begin_ana(api)
-    finish_ana(api, holder, monkeypatch, "1//second")  # with no bot computer, the holder takes the reconnect
-    assert connect.refresh(api, holder["token"], mailbox=BOX, refresh_token="1//second").status_code == 200
-    r = connect.refresh(api, holder["token"], mailbox=BOX, refresh_token="1//first")
-    assert r.status_code == 403 and r.json()["error"]["code"] == "not_this_grant"
-
-
-def test_a_revoked_bot_computer_is_no_host_so_a_publisher_takes_the_first_connect(api, google, monkeypatch):
-    seed_org(api)
-    declare(api, BOX)
-    office = runner(api, label="Office Mac")  # a publisher
-    bot_mac = runner(api, operator="ben", label="Bot Mac")
-    place(api, bot_mac)
-    ready(api, bot_mac, [])
-    revoke(api, bot_mac)  # the bot's computer is removed: no live host
-    begin_ana(api)
-    finish_ana(api, office, monkeypatch, "1//office")  # the publisher takes the first connect
-    assert publish(api, office["token"], expected=200)  # and the publisher owns the grant it holds
-
-
-def test_a_publisher_without_mail_takes_a_first_connect_beside_a_non_publisher_grant(api, google, monkeypatch):
-    seed_org(api)
-    declare(api, BOX)
-    holder = runner(api, operator="ben", label="Bot Mac")  # not a publisher: it hosts Ana's bot and holds her grant
-    place(api, holder)
-    ready(api, holder, [])
-    begin_ana(api)
-    finish_ana(api, holder, monkeypatch, "1//ana")
-    _, query = connect.start(api, "cara-test")  # Cara's first connect: no bot computer, no holder
-    connect.back(api, "cara-test", state=query["state"], code="c-2")
-    office = runner(api, label="Office Mac")  # a publisher with no mail credentials
-    claimed = post(api, "connectors/mail/google/claim", {"holds_mail": False}, office["token"])["connect"]
-    assert claimed and claimed["action"] == "connect" and claimed["mailbox"] == PERSONAL
-    with api.app.state.store.read() as c:  # Cara's connect: the claim names the operation, not the person
-        owner = c.execute("SELECT person_id FROM google_connects WHERE operation_id=?", (claimed["id"],)).fetchone()
-    assert owner[0] == "cara"
+    mine = runner(api, label="Ana's Mac")  # Ana's own computer
+    others = runner(api, operator="ben", label="Ben's Mac")
+    ready(api, mine, [])
+    ready(api, others, [])
+    connect_ana(api, monkeypatch)
+    assert publish(api, mine["token"])
+    assert publish(api, others["token"], expected=403)["error"]["kind"] == "personal_grant"
 
 
 def test_a_revoked_computers_fresh_failure_does_not_count(api, workspace_key):

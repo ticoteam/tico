@@ -900,8 +900,8 @@ def plan(c):
     # Live Connect Google grants: the mailbox its person connected.
     if _table(c, "google_connects"):
         have = _columns(c, "google_connects")
-        live = "grant_hash IS NOT NULL AND " if "grant_hash" in have else ""
-        for row in c.execute(f"SELECT person_id, mailbox FROM google_connects WHERE {live}status<>'disconnected'"):
+        live = "grant_sealed IS NOT NULL" if "grant_sealed" in have else "status<>'disconnected'"
+        for row in c.execute(f"SELECT person_id, mailbox FROM google_connects WHERE {live}"):
             address = box(row["mailbox"], "personal")
             if address and row["person_id"] in live_people:
                 give_(address, "person", row["person_id"], "read_write")

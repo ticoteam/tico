@@ -166,8 +166,9 @@ def _service(scopes):
 
 
 def workspace_credentials(mailbox, scopes=None):
-    """A token from the Tico server's Google Workspace connection, for a computer with no key file
-    (oauth.server_workspace_token). One service at a time, as a person's own grant is."""
+    """A token from the Tico server, from the person's own Connect Google grant or the Workspace key
+    (oauth.server_workspace_token). One service at a time; a personal grant's token carries the scopes it holds, which
+    oauth.require refuses writes by."""
     service = _service(scopes)
     if not service:
         raise Failure(f"{mailbox}'s Google access is given one service at a time", "Ask for gmail or calendar.")
@@ -188,9 +189,11 @@ def workspace_credentials(mailbox, scopes=None):
 def credentials(mailbox, scopes=None, path=None, key_only=False):
     """A credential that acts as `mailbox`. Requires the google-auth library.
 
-    Order: the runner's supervisor (a turn), a person's own grant (a refused grant never falls back), this computer's
-    key file, and then, only when there is no key file and the runner gave this process its way to the server, the
-    Google Workspace connection on the server."""
+    Order: the runner's supervisor (a turn); a grant made here with a team's own Desktop client (a refused grant never
+    falls back); then, when the runner gave this process its way to the server, the server's token for that mailbox
+    (`workspace_credentials`), which the server takes from the person's Connect Google grant or the Workspace key: a
+    grant this computer kept from before the server held it is not used, and neither is a key file for such a
+    mailbox; and last, this computer's key file."""
     if not key_only and path is None:
         granted = supervisor_token(mailbox, scopes)
         if granted:
@@ -201,9 +204,10 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
                 creds._tico_granted = [str(s) for s in granted["scopes"]]
             return creds
     found = oauth.grant(mailbox, oauth.grants_path(path) if path else None)
-    if found:
+    server = oauth.broker_configured()
+    if found and not (server and found.get("broker") == "server"):
         return person_credentials(mailbox, found, scopes)
-    if not key_file_present(path) and oauth.broker_configured():
+    if server and (found or not key_file_present(path)):
         return workspace_credentials(mailbox, scopes)
     try:
         from google.oauth2 import service_account

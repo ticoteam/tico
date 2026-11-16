@@ -6,9 +6,10 @@ mailbox and one service; the server signs a JWT with the key, impersonating that
 token only (`mint`). The key covers mailboxes on the Workspace's domain (`covers`).
 
 Who may use a mailbox is `authority`: `personal` when the person's own Connect Google grant is live (it always wins),
-`workspace` when the active key covers it, otherwise `legacy`, which is what Tico did before. A computer's share of
-the work (`owned_mailboxes`) follows the same split: a workspace mailbox follows its inbox bot, or gets one eligible
-online sync computer when it has no host; a personal one belongs to the computer that takes its grant.
+`workspace` when the active key covers it, otherwise `legacy`, which is what Tico did before. Both credentials stay on
+this server (backend/google_tokens.py is the one door to a token). A computer's share of the work (`owned_mailboxes`)
+is the same for both: a covered mailbox follows its inbox bot, or gets one eligible online sync computer when it has
+no host.
 
 Nothing here logs a token or a key. Google's refusals reach a caller as a kind, never as Google's text.
 """
@@ -99,6 +100,11 @@ def _cipher():
     if _VAULT is None:
         raise Problem("vault_unavailable", "The server's secret store is not ready yet", 503)
     return _VAULT.cipher
+
+
+def cipher():
+    """The vault's cipher, which seals the key, the OAuth secret and people's grants (backend/google_tokens.py)."""
+    return _cipher()
 
 
 def scope_urls():
@@ -204,8 +210,7 @@ def google_address(c, actor):
     if not str(actor or "").startswith("human:"):
         return None
     found = c.execute(
-        "SELECT mailbox FROM google_connects WHERE person_id=? AND holder IS NOT NULL AND grant_hash IS NOT NULL "
-        "AND status<>'disconnected' LIMIT 1",
+        "SELECT mailbox FROM google_connects WHERE person_id=? AND grant_sealed IS NOT NULL LIMIT 1",
         (H.actor_id(actor),),
     ).fetchone()
     return str(found[0]).strip().lower() if found and found[0] else None
@@ -277,22 +282,24 @@ def covers(c, mailbox):
 def _live(c, box):
     return (
         c.execute(
-            "SELECT 1 FROM google_connects WHERE lower(mailbox)=? AND holder IS NOT NULL AND "
-            "grant_hash IS NOT NULL AND status<>'disconnected' LIMIT 1",
-            (box,),
+            "SELECT 1 FROM google_connects WHERE lower(mailbox)=? AND grant_sealed IS NOT NULL LIMIT 1", (box,)
         ).fetchone()
         is not None
     )
 
 
 def _live_mailboxes(c):
-    return {
-        row[0]
+    return {row[0] for row in c.execute("SELECT lower(mailbox) FROM google_connects WHERE grant_sealed IS NOT NULL")}
+
+
+def personal_mailboxes(c):
+    """The mailboxes a live Connect Google grant covers, as sync targets: {address, person_id, kind}."""
+    return [
+        {"address": str(row["mailbox"]).lower(), "person_id": row["person_id"], "kind": "personal"}
         for row in c.execute(
-            "SELECT lower(mailbox) FROM google_connects WHERE holder IS NOT NULL AND "
-            "grant_hash IS NOT NULL AND status<>'disconnected'"
+            "SELECT person_id, mailbox FROM google_connects WHERE grant_sealed IS NOT NULL ORDER BY mailbox"
         )
-    }
+    ]
 
 
 def _decide(box, row, live):
@@ -329,14 +336,16 @@ def workspace_mailboxes(c):
     ]
 
 
-def workspace_sync_owners(c):
-    """One sync computer per Workspace mailbox. Placement wins; fallback uses an isolated company server or the
-    person's own computer, never an unrelated person's private computer. Shared mailboxes fall back to servers only."""
+def sync_owners(c):
+    """One sync computer per covered mailbox: a Workspace one, or one a person's Connect Google grant covers (the
+    server holds both credentials, so either follows the same rule). Placement wins; fallback uses an isolated company
+    server or the person's own computer, never an unrelated person's private computer. Shared mailboxes fall back to
+    servers only."""
     from . import access, google_rights
     from .store import readiness_document
 
     row, live = active(c), _live_mailboxes(c)
-    if not row:
+    if not row and not live:
         return {}
     runners = google_rights.live_runners(c)
     placed = {
@@ -347,9 +356,9 @@ def workspace_sync_owners(c):
     hosts = {}
     for box in routines.message_bot_mailboxes(c):
         address = box["address"]
-        if box["bot"] in placed and _decide(address, row, live) == "workspace":
+        if box["bot"] in placed and _decide(address, row, live) != "legacy":
             hosts.setdefault(address, set()).add(placed[box["bot"]])
-    # A message-bot host stays authoritative while offline, just as personal grants do. Without that placement,
+    # A message-bot host stays authoritative while offline. Without that placement,
     # only computers currently answering can take the mail. Isolated runners supervise the connectors side job.
     online = {
         r["id"]: r
@@ -380,7 +389,9 @@ def workspace_sync_owners(c):
     personal_hosts = {}
     for rid in sorted(online):
         personal_hosts.setdefault(online[rid]["owner_id"], rid)
-    for box in workspace_mailboxes(c):
+    people = {p["id"] for p in routines._roster(c).get("people", []) if not p.get("hidden")}
+    covered = workspace_mailboxes(c) + [box for box in personal_mailboxes(c) if box["person_id"] in people]
+    for box in covered:
         if box["address"] not in hosts:
             person = box["person_id"] if box["kind"] != "shared" else None
             helper = (
@@ -395,30 +406,18 @@ def workspace_sync_owners(c):
 
 
 def owned_mailboxes(c, runner_id):
-    """The mailboxes this computer may publish, claim, read the calendar of and report on, and nothing else:
-    Workspace mailboxes follow their message bot's non-revoked host, as before. Without a host, a known active mailbox
-    follows the person's Assistant's online host, else an online isolated server owned by an owner or admin, else the person's own online computer. Shared mailboxes fall back to servers only. Among equals,
-    the lowest runner id wins; with no eligible computer, no one syncs. Online means contact within
-    google_rights.ONLINE_SECONDS; an offline or revoked fallback owner is replaced on the next check. This is sync
-    authority only: it grants no bot access to the mailbox. Personal mailboxes follow the live grant this computer
-    takes, through google_rights.takes: the live computer hosting the person's message bot, or, with no host (or while the
-    grant is ending), its live holder. Revoked computers take nothing. When the bot moves, its new computer owns the
-    grant but cannot refresh it until the person reconnects (the health says so), and the old holder keeps nothing."""
+    """The mailboxes this computer may publish, claim, read the calendar of and report on, and nothing else (`sync_owners`):
+    a covered mailbox, Workspace or personal, follows its message bot's non-revoked host. Without a host, a known
+    mailbox follows the person's Assistant's online host, else an online isolated server owned by an owner or admin, else
+    the person's own online computer. Shared mailboxes fall back to servers only. Among equals, the lowest runner id wins;
+    with no eligible computer, no one syncs. Online means contact within google_rights.ONLINE_SECONDS; an offline or
+    revoked fallback owner is replaced on the next check. This is sync authority only: it grants no bot access to the
+    mailbox, and the computer gets each token from the server (backend/google_tokens.py)."""
     from . import google_rights
 
-    runners = google_rights.live_runners(c)
-    if runner_id not in runners:
+    if runner_id not in google_rights.live_runners(c):
         return set()
-    grants = c.execute(
-        "SELECT * FROM google_connects WHERE grant_hash IS NOT NULL AND status<>'disconnected'"
-    ).fetchall()
-    owned = set()
-    if grants:
-        hosts = google_rights.inbox_hosts(c)
-        for grant in grants:
-            if google_rights.takes(runner_id, False, grant, hosts, runners):
-                owned.add(str(grant["mailbox"]).lower())
-    owned.update(address for address, owner in workspace_sync_owners(c).items() if owner == runner_id)
+    owned = {address for address, owner in sync_owners(c).items() if owner == runner_id}
     from . import mailbox_access
 
     return owned - mailbox_access.stopped(c)
@@ -1056,7 +1055,7 @@ def _reachable(settings):
     return (urllib.parse.urlsplit(settings.runner_url).hostname or "") not in LOOPBACK
 
 
-IN_FLIGHT = ("signing_in", "ready", "finishing", "disconnecting", "revoking")
+IN_FLIGHT = ("signing_in", "finishing")
 
 
 def _person_status(mailbox, grants, attempt, row):
@@ -1088,8 +1087,8 @@ def team_statuses(c, after=""):
         own.setdefault(box["person_id"], box["address"])
     row = active(c)
     live, attempts = {}, {}
-    for grant in c.execute("SELECT person_id,mailbox,status,holder,grant_hash FROM google_connects"):
-        if grant["holder"] and grant["grant_hash"] and grant["status"] != "disconnected":
+    for grant in c.execute("SELECT person_id,mailbox,status,grant_sealed FROM google_connects"):
+        if grant["grant_sealed"]:
             live.setdefault(str(grant["mailbox"] or "").lower(), []).append(grant)
         attempts[grant["person_id"]] = grant
     out, order = [], {}
@@ -1375,7 +1374,7 @@ def install(app, store):
             )
             marked = c.execute(
                 "UPDATE google_connects SET status='failed',kind='reconnect',message=NULL,hint=NULL,"
-                "updated_at=? WHERE status IN ('connected','failed') AND grant_hash IS NOT NULL AND "
+                "updated_at=? WHERE status IN ('connected','failed') AND grant_sealed IS NOT NULL AND "
                 "client_id IS NOT NULL AND client_id<>?",
                 (now, body.client_id),
             ).rowcount

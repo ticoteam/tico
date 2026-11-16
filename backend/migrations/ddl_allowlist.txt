@@ -29,7 +29,7 @@ backend/finance/store/tico.py:1
 backend/flight.py:7
 backend/general_manager.py:2
 backend/github_app.py:2
-backend/google_connect.py:4
+backend/google_connect.py:2
 backend/maintenance_health.py:2
 backend/hook_relay_schema.py:3
 backend/hubdb.py:226

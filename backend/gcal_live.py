@@ -1,9 +1,10 @@
 # pyright: strict
-"""Read and write Google calendars on the server with the company's Workspace key, storing nothing.
+"""Read and write Google calendars on the server, storing nothing.
 
-The Google home of Calendar (docs/dev/calendar-contract.md). Every read impersonates the viewer (`as_mailbox`) and asks
+The Google home of Calendar (docs/dev/calendar-contract.md). Every read acts as the viewer (`as_mailbox`) and asks
 for the other calendar by its id, so Google's own sharing decides what comes back: full details, time only, or nothing.
-Reads mint the read-only calendar scope; writes the full one. Only the token cache in google_workspace survives a call.
+Each token comes from the one door, backend/google_tokens.py: reads ask for the read-only calendar scope, writes for
+the write one. Only the token caches there survive a call.
 Occurrences come out in the contract's shape; nothing outside this module knows Google's event fields.
 """
 
@@ -20,7 +21,7 @@ from typing import Any, NoReturn, cast
 
 from connectors.mail import calendar as mail_calendar
 
-from . import google_workspace
+from . import google_tokens, google_workspace
 from .store import Problem
 
 Json = dict[str, Any]
@@ -31,9 +32,8 @@ When = datetime | str
 _meeting_url = cast("Callable[[Json], str]", mail_calendar._meeting_url)  # pyright: ignore[reportPrivateUsage]
 
 
-def _mint(c: Conn, mailbox: str, scopes: list[str]) -> str:
-    mint = cast("Callable[..., Json]", google_workspace.mint)
-    return str(mint(c, mailbox, "calendar", scopes=scopes)["access_token"])
+def _token(c: Conn, mailbox: str, write: bool) -> str:
+    return str(cast("Callable[..., str]", google_tokens.token)(c, mailbox, "calendar", write=write))
 
 
 def _active(c: Conn) -> Json | None:
@@ -158,16 +158,11 @@ def _call(
 
 
 def _read_token(c: Conn, mailbox: str) -> str:
-    # A key from before the read-only scopes were authorized holds only the full scope; Google refuses any other.
-    row = _active(c) if c is not None else None
-    held = set(_authorized(row)) if row else set[str]()
-    readonly, full = READ_ONLY_SCOPES["calendar"], WORKSPACE_SCOPES["calendar"]
-    scopes = full if row and not set(readonly) <= held and set(full) <= held else readonly
-    return _mint(c, mailbox, scopes)
+    return _token(c, mailbox, False)
 
 
 def _write_token(c: Conn, mailbox: str) -> str:
-    return _mint(c, mailbox, WORKSPACE_SCOPES["calendar"])
+    return _token(c, mailbox, True)
 
 
 def connected(c: Conn, address: str) -> bool:

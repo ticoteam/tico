@@ -28,6 +28,7 @@ SECRET_TABLES = (
     "bot_session_epochs",
     "settings_changes",
     "backup_verified_blobs",
+    "google_connects",  # people's sealed Google grants
     "sqlite_temp_master",
     "sqlite_sequence",
     "_litestream_seq",

@@ -1,8 +1,8 @@
 """Bounded reads and queued writes through explicitly authorized local connectors.
 
-The cloud never receives Google credentials. A computer that owns a mailbox asks for a short-lived access token for it
-(`/connectors/mail/workspace/token`, from the server's Google Workspace key; backend/google_workspace.py), and the
-personal grants stay with the computer holding them. Calendar reads use the provider-normalized snapshot published by
+No computer holds a Google credential. A computer that owns a mailbox asks for a short-lived access token for it
+(`/connectors/mail/workspace/token`), which the server takes from the Workspace key or the person's own Connect Google
+grant (backend/google_tokens.py, the one door). Calendar reads use the provider-normalized snapshot published by
 the runner; writes are durable actions that the same runner claims once. Who may act for which mailbox is decided in
 backend/google_rights.py.
 """
@@ -396,20 +396,16 @@ def install_connectors(app, store, execution, mutate):
     @app.get("/api/v2/runners/connectors")
     def assigned(request: Request):
         """Which connector jobs this computer runs: all of them when the owner named it an operator in
-        TICO_PROCESSING_OPERATORS; mail and calendar when it owns a mailbox (a Google Workspace one whose message bot it
-        hosts, or a person's Connect Google grant it holds); and mail while a person's Connect Google waits for a computer
-        (the owner's when no operator is named, or the one hosting that person's message bot)."""
+        TICO_PROCESSING_OPERATORS, and mail and calendar when it owns a mailbox a Google Workspace key or a person's
+        Connect Google grant covers (google_workspace.owned_mailboxes)."""
         with store.read() as c:
             runner = execution.runner(c, request.state.identity)
             named = runner["owner_id"] in store.settings.processing_operators
-            if named:
+            if named or workspace.owned_mailboxes(c, runner["id"]):
                 return {"connectors": ["mail", "calendar"]}
-            if workspace.owned_mailboxes(c, runner["id"]):
-                return {"connectors": ["mail", "calendar"]}
-            waiting = google_connect.pending(c, runner["id"], google_rights.publishes(store, execution, c, runner))
-            return {"connectors": ["mail"] if waiting else []}
+            return {"connectors": []}
 
-    google_connect.install(app, store, member, mutate)
+    google_connect.install(app, store, mutate)
 
     @app.get("/api/v2/connectors/calendar/targets")
     def targets(request: Request):
@@ -916,22 +912,19 @@ def install_connectors(app, store, execution, mutate):
 
     @app.post("/api/v2/connectors/mail/workspace/token")
     def workspace_token(request: Request, body: WorkspaceToken):
-        """A short-lived access token, for one service, for a mailbox this computer owns: the Google Workspace's, minted
-        here from the server's key. Allowed for the mailboxes it owns (the connector: its sync and the actions the server
-        leased it) and for those its turns hold a level on now (backend/mailbox_access.py: its bots', a live Assistant
-        turn's person's), checked again on every mint. A turn's mailbox held read only gets the read-only scopes. Never
-        through mutate(): tokens stay out of the idempotency store."""
+        """A short-lived access token, for one service, for a mailbox this computer owns: from the Google Workspace key,
+        or from the person's own Connect Google grant, which wins (backend/google_tokens.py). Allowed for the mailboxes
+        it owns (the connector: its sync and the actions the server leased it) and for those its turns hold a level on
+        now (backend/mailbox_access.py: its bots', a live Assistant turn's person's), checked again on every mint. A
+        turn's mailbox held read only gets the read-only scopes, and a personal grant never more than it holds (the
+        answer's `scopes`, which the computer refuses writes by). Never through mutate(): tokens stay out of the
+        idempotency store."""
+        from . import google_tokens
+
         box = body.mailbox.strip().lower()
         with store.read() as c:
             runner, named = member(c, request.state.identity)
             auth = workspace.authority(c, box)
-            if auth == "personal":
-                raise Problem(
-                    "personal_grant",
-                    google_rights.MESSAGES["personal_grant"].format(box=box),
-                    403,
-                    extra={"kind": "personal_grant"},
-                )
             if auth == "legacy":
                 raise Problem(
                     "not_connected", "The Google Workspace does not cover " + box, 403, extra={"kind": "not_connected"}
@@ -955,21 +948,12 @@ def install_connectors(app, store, execution, mutate):
                     403,
                     extra={"kind": kind},
                 )
+            scopes = "allowed" if held == "read_write" else "read"
+            if auth == "personal":
+                return google_tokens.access(c, box, body.service, scopes)
             row = workspace.active(c)
-            if row is None:
-                raise Problem(
-                    "not_connected",
-                    "The Google Workspace connection is not set up",
-                    403,
-                    extra={"kind": "not_connected"},
-                )
-            scopes = (
-                None
-                if held == "read_write"
-                else workspace.minting_scopes(body.service, dict.fromkeys(workspace.PERMISSIONS, False), row)
-            )
             try:
-                answer, failure = workspace.mint(c, box, body.service, row=row, scopes=scopes), None
+                answer, failure = google_tokens.access(c, box, body.service, scopes), None
             except Problem as refused:
                 answer, failure = None, refused
         with store.transaction() as c:

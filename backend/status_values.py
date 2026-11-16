@@ -56,16 +56,7 @@ PAYMENT_STATUSES = (
     "unknown",
 )
 TRANSFER_STATUSES = ("queued", "submitted", "unknown", "failed", "posted", "canceled")
-GOOGLE_CONNECT_STATUSES = (
-    "signing_in",
-    "ready",
-    "finishing",
-    "revoking",
-    "disconnecting",
-    "connected",
-    "disconnected",
-    "failed",
-)
+GOOGLE_CONNECT_STATUSES = ("signing_in", "finishing", "connected", "disconnected", "failed")
 
 
 class Column:

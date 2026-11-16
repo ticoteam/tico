@@ -175,7 +175,7 @@ def without_known_sender(body):
 
 
 class ConnectorPublisher:
-    def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, google=None, action=None):
+    def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, action=None):
         self.config = config
         self.client = client or Client(config["url"], config["token"], timeout=35, retries=1)
         # When a hub last refused known_sender (one from before the field); None while it takes the field.
@@ -188,7 +188,6 @@ class ConnectorPublisher:
         self.fetch = fetch or self.calendar
         self.run_mail = mail or self.mail_cli
         self.create_event = event or self.calendar_event
-        self.finish_google = google or self.google_finish
         self.run_action = action or self.mail_action
         self.mail_boxes = None  # the mailboxes this computer reads, from the last mail targets
         self.stop = threading.Event()
@@ -209,7 +208,7 @@ class ConnectorPublisher:
 
     def mail_env(self):
         """The environment of the local mail CLI: the runner's, without its hub token, with the key where the
-        supervisor keeps it, and with this registration for the server that refreshes Connect Google grants."""
+        supervisor keeps it, and with this registration for the server that hands out Google tokens."""
         return mail_cli_env(self.config, mail_secret_path(self.config))
 
     def mail_secret(self):
@@ -297,84 +296,6 @@ class ConnectorPublisher:
         if not isinstance(payload, dict) or not payload.get("event_id"):
             raise RuntimeError("Local calendar event creation returned no event")
         return payload
-
-    def google_finish(self, request):
-        """Run `mail.sh google finish` (or `google revoke`) for one claimed Connect Google. The request goes on stdin,
-        never a command line; the CLI asks the server to exchange the code, and the grant stays in this computer's
-        protected file. Returns
-        the result for the hub: the outcome and why, never a token."""
-        connect = request["action"] == "connect"
-        args = ["google", "finish"] if connect else ["google", "revoke", "--mailbox", request["mailbox"], "--json"]
-        payload = {key: request.get(key) for key in ("id", "mailbox", "client_id", "broker")} if connect else None
-        result = subprocess.run(
-            [str(self.script), *args],
-            cwd=self.script.parents[1],
-            input=json.dumps(payload) if connect else "",
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=self.mail_env(),
-            **mail_umask(),
-        )
-        try:
-            answer = json.loads(result.stdout or "{}")
-        except ValueError:
-            answer = {}
-        if not isinstance(answer, dict):
-            answer = {}
-        if connect and answer.get("status") == "connected" and not result.returncode:
-            return {"status": "connected", "can": [str(c) for c in answer.get("can") or []][:20]}
-        if not connect and answer.get("status") == "revoked" and not result.returncode:
-            if answer.get("absent"):  # nothing here to revoke: the grant, if any, is on another computer
-                return {
-                    "status": "failed",
-                    "kind": "not_here",
-                    "message": "This computer doesn't hold the Google access for " + request["mailbox"] + ".",
-                    "hint": "Try again in a few minutes.",
-                }
-            return {"status": "disconnected"}
-        return {
-            "status": "failed",
-            "kind": str(answer.get("kind") or "error")[:40],
-            "message": str(answer.get("message") or "")[:500],
-            "hint": str(answer.get("hint") or "")[:500],
-        }
-
-    def google_connect_tick(self, limit=5):
-        """Finish the Connect Google sign-ins and disconnects people started in Tools > Settings > Email."""
-        done = 0
-        for _ in range(limit):
-            if self.stop.is_set():
-                break
-            # Whether this computer already holds mail credentials: a first connect goes to such a computer.
-            claimed = self.client.post(
-                "connectors/mail/google/claim", {"holds_mail": mail_credential_present(self.config)}
-            )
-            request = claimed.get("connect") if isinstance(claimed, dict) else None
-            if not request:
-                break
-            try:
-                body = self.finish_google(request)
-            except subprocess.TimeoutExpired:
-                body = {
-                    "status": "failed",
-                    "kind": "network",
-                    "message": "Finishing the sign-in timed out.",
-                    "hint": "Connect again.",
-                }
-            except Exception as exc:
-                body = {"status": "failed", "kind": "error", "message": type(exc).__name__, "hint": "Connect again."}
-            try:
-                # `id` is this connect or disconnect, not the person (backend/google_connect.py).
-                self.client.post(f"connectors/mail/google/{request['id']}/result", body)
-            except APIError as exc:
-                if exc.code != "stale":
-                    raise
-                # The person connected again or disconnected meanwhile: this answer is for nothing current, and the
-                # next claim takes the one that replaced it.
-                log(f"Connect Google {request['id']} was replaced before its result was sent; nothing changed")
-            done += 1
-        return done
 
     def calendar_action_tick(self, limit=10):
         completed = 0
@@ -779,13 +700,6 @@ class ConnectorPublisher:
             "mail refresh working again",
             progress=600,
         )
-        google = Outage(
-            "Tico connectors",
-            "Connect Google failed",
-            "Connect Google still failing",
-            "Connect Google working again",
-            progress=600,
-        )
         actions = Outage(
             "Tico connectors",
             "mail actions failed",
@@ -800,11 +714,6 @@ class ConnectorPublisher:
         while not self.stop.is_set():
             try:
                 self.ready()
-                self.google_connect_tick()  # first: a person waits on it, and it needs no key
-                google.recovered()
-            except Exception as exc:
-                google.failed(exc)
-            try:
                 self.tick()
                 cloud.recovered()
             except Exception as exc:
