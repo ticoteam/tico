@@ -125,7 +125,7 @@ class Hub:
     def finish_setup(self):
         self.call(
             "put",
-            "onboarding",
+            "setup",
             {
                 "names": {"company_name": "First Day", "app_name": "Tico", "assistant_name": "Assistant"},
                 "answers": {"what_we_do": "We sell a booking app to salons.", "customers": "businesses"},
