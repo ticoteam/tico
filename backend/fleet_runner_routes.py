@@ -85,8 +85,7 @@ def register(
 
     @app.post("/api/v2/runners/{rid}/turns-at-once")
     def runner_turns_at_once(request: Request, rid: str, body: M.RunnerTurnsAtOnce):
-        """How many turns a computer runs at once; null is automatic, its own capacity. A computer that cannot take a
-        raised number (no turns_at_once_v1) runs at most the capacity it reports. Owners and admins."""
+        """How many turns a computer runs at once; null is automatic, its own capacity. Owners and admins."""
         who = request.state.identity
 
         def work(c):

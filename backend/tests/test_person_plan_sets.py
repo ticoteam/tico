@@ -393,7 +393,7 @@ def test_a_reading_a_turn_reports_on_a_plan_in_a_persons_set_is_that_plans_usage
         {
             "version": "test",
             "platform": "test",
-            "capabilities": [MS.CAPABILITY, "computer_logins_v1"],
+            "capabilities": ["model_subscriptions_v1", "computer_logins_v1"],
             "readiness": {
                 "schema_version": 1,
                 "bots": {"ops": {"runtime": "claude", "ready": True}},

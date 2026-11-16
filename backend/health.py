@@ -1280,8 +1280,6 @@ HELD = {
         "Update {computer} to use one login per AI tool; its bots wait without changing accounts",
         COMPUTERS,
     ),
-    # A bot with Browse through runs only on a runner that takes it there (backend/browser_exit.py CAPABILITY).
-    "browser_exit_update": ("Update {computer} to use Browse through", COMPUTERS),
     # A Tico model runs only where bots run as their own user (execution.claim_refusal): the bot waits, it never fails.
     "not_isolated": (
         "{computer} can't run Tico Gateway work (it needs Tico's Docker runner): it waits for another "
@@ -1295,9 +1293,6 @@ HELD = {
     "profile": ("Its subscription profile is not signed in or not reported on {computer}", COMPUTERS),
     "config": ("Its settings cannot be read", BOT_SETTINGS),
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
-    # A private meeting's turn runs only on a runner with private lanes (execution.PRIVATE_LANES).
-    "private_update": ("{computer} needs a Tico update before it can join private meetings", COMPUTERS),
-    "make_page_upgrade": ("Update {computer} to make pages", COMPUTERS),
     "unreadable": ("Its queued message is one it may not read", RUNS),
     # Tico stopped the bot (backend/bot_stops.py): a person releases it. A back-off is a short pause after a failed run.
     "run_hold": (
@@ -2916,8 +2911,7 @@ def _prime_claims(c, settings=None):
     readers that take them from the snapshot (prime_bot_rows, RUNNER_SQL)."""
     from . import claim_loads
     from .events import prime_bot_rows
-    from .execution import RUNNER_SQL, capability_set
-    from . import browser_exit
+    from .execution import RUNNER_SQL
     from .read_cache import cache, prime
 
     slugs = [row[0] for row in c.execute("SELECT id FROM bots")]
@@ -2925,8 +2919,7 @@ def _prime_claims(c, settings=None):
     if cache(c) is not None:
         prime_bot_rows(c, slugs)
         prime(c, RUNNER_SQL, {(rid,): row for rid, row in runners.items()})
-    exits = any(browser_exit.CAPABILITY not in capability_set(row["capabilities"]) for row in runners.values())
-    return claim_loads.read(c, settings, runners, slugs, exits=exits)
+    return claim_loads.read(c, settings, runners, slugs)
 
 
 def view(c, who, settings, auth, github, config, filing=False):

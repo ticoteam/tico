@@ -225,7 +225,7 @@ def test_a_persons_own_message_on_a_snoozed_task_starts_a_run(c, general, monkey
     enqueue(c, {"id": carrier, "sender_id": H.KEEPER, "recipient_id": BUILDER, "refs": refs, "created_at": H.now()})
     job = dict(c.execute("SELECT * FROM jobs WHERE id=?", (carrier,)).fetchone())
     assert task_wakes.may_start(c, carrier)
-    assert execution.job_refusal(c, job, {}, set(), set(), False, False) is None
+    assert execution.job_refusal(c, job, {}, set(), set()) is None
 
 
 def _start(company, c, message_id):

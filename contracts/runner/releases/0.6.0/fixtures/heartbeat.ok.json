@@ -52,8 +52,17 @@
    "model_switch_type_v1",
    "model_remove_v1",
    "model_switch_to_key_v1",
+   "model_connect_v1",
    "turns_at_once_v1",
-   "private_lanes_v1"
+   "private_lanes_v1",
+   "model_subscriptions_v1",
+   "model_subscription_activation_v1",
+   "browser_exit_v1",
+   "memory_tidy_packets_v1",
+   "threads_v1",
+   "memory_tidy_keep_v1",
+   "harness_allocation_v1",
+   "make_page"
   ],
   "capacity": 4,
   "kind": "docker",
@@ -80,13 +89,13 @@
    "schema_version": 1,
    "worktrees": true
   },
-  "release": "0.5.0",
+  "release": "0.6.0-rc.1",
   "update": {
    "error": "",
    "state": "idle",
    "target": ""
   },
-  "version": "0.5.0",
+  "version": "0.5.4",
   "worktrees": []
  },
  "status": 200

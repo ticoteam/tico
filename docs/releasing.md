@@ -226,7 +226,7 @@ What a server accepts is what the code enforces. This is the matrix the release 
 | Part | Accepted | Enforced by |
 |---|---|---|
 | Database | made or upgraded by v0.6.0-rc.1 (the compatibility floor) or later, up to this release's migrations | `backend/migrations` `preflight`, before the first write |
-| Runner | release `MIN_RUNNER_RELEASE` (0.4.0) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
+| Runner | release `MIN_RUNNER_RELEASE` (0.6.0-rc.1) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
 | Runner wire | the current and previous minor release, both directions | `scripts/check_wire_contract.py`, [runner-wire-contract.md](runner-wire-contract.md) |
 | Desktop app | the release's own version, or the previous release's files when the shell did not change | the release workflow; see [Desktop apps follow the release](#desktop-apps-follow-the-release) |
 

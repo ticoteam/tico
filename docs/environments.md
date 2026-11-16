@@ -77,7 +77,7 @@ GB), at least 4 and at most 64. Turns mostly wait on their model provider, so th
 number is kept (up to 256), so set `"capacity": 80` to go higher. The `"capacity": 4` that setups before October 14,
 2026 wrote becomes `"auto"` once (`capacity_auto` marks it done); set 4 again to keep it. The owner's **Turns at once**
 for a computer (Settings > Computers) replaces this number for that computer, up to 256: the runner takes it from its
-heartbeat reply, and a runner that predates `turns_at_once_v1` runs at most the capacity it reports. Mode 0600 is
+heartbeat reply. Mode 0600 is
 enforced on every command. Profiles add three more keys:
 
 ```json

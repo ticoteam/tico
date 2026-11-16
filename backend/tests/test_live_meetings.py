@@ -1426,61 +1426,6 @@ def test_a_private_meetings_turns_run_in_its_own_lane_whose_checkout_goes_when_i
     assert asked() == [{**mine, "status": "done"}]
 
 
-def test_a_runner_without_private_lanes_never_takes_a_private_meetings_turn(live):
-    """An older runner would run a private meeting's turn in the bot's own checkout with write tokens: the server does
-    not hand it one. The turn waits, the meeting says once why, and the runner takes it after its update."""
-    from backend.execution import queued_reasons
-
-    machine = runner(live)
-    assign(live, machine, "ops")
-    ready(live, machine, ["ops"], capabilities=["task_lanes_v2"])
-    private = post(live, "live-meetings", {"title": "Private", "visibility": "private", "cooldown_seconds": 0})
-    attach(live, private["id"], "ops")
-    chunk(live, private["id"], 1, 0, 1000, "Ops, the press embargo lifts Nov 17 9am PT. Got it?")
-    chunk(live, private["id"], 2, 1000, 2000, "Ops, and the launch price is $40?")
-    assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
-    with live.app.state.store.read() as c:
-        reasons = [why for _, why in queued_reasons(c, live.app.state.store.settings, machine["runner_id"], "ops")]
-        waiting = [
-            json.loads(r["payload"])
-            for r in c.execute(
-                "SELECT payload FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting'",
-                (private["id"],),
-            )
-        ]
-    assert reasons and set(reasons) == {"private_update"}
-    assert [(w["bot"], w["reason"], w["detail"]) for w in waiting] == [
-        ("ops", "runner_update", "Test Mac needs a Tico update before it can join private meetings")
-    ], "said once"
-    notices = get(live, f"live-meetings/{private['id']}")["notices"]
-    assert [(n["kind"], n["bot"], n.get("detail") or n.get("reason")) for n in notices] == [
-        ("waiting", "ops", "Test Mac needs a Tico update before it can join private meetings"),
-        ("deferred", "ops", "replying_in_meeting"),
-    ], "the view says it too, oldest first"
-    team = post(live, "live-meetings", {"title": "Team", "visibility": "team", "cooldown_seconds": 0})
-    attach(live, team["id"], "ops")
-    chunk(live, team["id"], 1, 0, 1000, "Ops, the standup moved to 10. Got it?")
-    attempt = claimed_turn(live, machine)
-    assert attempt["lane"] == "main" and "standup" in attempt["message"]["body"], (
-        "a team meeting's turn still goes to it"
-    )
-    post(
-        live,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "text": "Got it.", "last_seq": 0},
-        token=machine["token"],
-    )
-    ready(live, machine, ["ops"], ["task_lanes_v2", "private_lanes_v1"])
-    attempt = claimed_turn(live, machine)
-    assert attempt["lane"] == "private:" + attempt["conversation"]["id"]
-    post(
-        live,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "text": "Got it.", "last_seq": 0},
-        token=machine["token"],
-    )
-
-
 def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says_why_once(live):
     """runner-rs sessions::PRIVATE_COPY_FAILED: a computer that can make no private copy of the bot's repository would
     fail every retry alike, so the turn ends, the job is not resumed, and the meeting gets one plain notice."""

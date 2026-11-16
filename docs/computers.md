@@ -57,8 +57,8 @@ behind the sign-in, is the fallback when no computer can run it: the token from 
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
 session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
-subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
-picker until it updates.
+subscription does the same on each computer that had it. A computer below the minimum release (0.6.0-rc.1) is paused, and shows no
+picker, until it updates.
 
 Settings → Models lists subscriptions under each owner's avatar and name, yours first, with API keys under **No
 owner**. Inside a group each tool's plans are in the order a person's plans are used: the plan in use names its computer,
@@ -133,8 +133,7 @@ allocated process on start-place and started requests, so neither the runner nor
 allocation’s memory use. The boundary stays crossed through fallback. If a lazy harness acknowledges its start but
 fails to launch, its fallback checks memory locally until it allocates a process, keeping the running turn's place.
 It does not request pre-start admission again. Runners advertise allocation reporting through the
-`harness_allocation_v1` heartbeat capability. For runners without it, memory pressure never revokes an existing
-start grant. A runner talking to an older hub drops the new field or capability if that hub refuses it.
+`harness_allocation_v1` heartbeat capability. Every runner the server accepts advertises it (the minimum release is 0.6.0-rc.1). A runner talking to an older hub drops the new field or capability if that hub refuses it.
 The Mac runner never parks a turn on local memory readings;
 macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
 tools already running inside a turn, or change your account, model or computer size.
@@ -307,7 +306,7 @@ changes.
   else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.
 - If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
   Gateway) until someone saves a new value with **Reconnect**. The computer's own login is left alone.
-- A computer on an older runner does not take subscriptions; its bots run as before until it updates.
+- A computer below the minimum release (0.6.0-rc.1) is paused and takes no subscriptions until it updates.
 
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
 while a turn runs on a subscription, another bot's turn on the same computer could read it.

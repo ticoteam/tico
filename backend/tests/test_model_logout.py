@@ -28,7 +28,7 @@ def cleared(api, rid):
         ]
 
 
-def test_only_the_operator_or_an_admin_signs_out_and_an_old_runner_is_never_asked(api):
+def test_only_the_operator_or_an_admin_signs_out(api):
     r = online(api)
     rid = r["runner_id"]
     post(api, f"runners/{rid}/logouts", {"runtime": "codex"}, token="cara-test", expected=403)
@@ -36,15 +36,6 @@ def test_only_the_operator_or_an_admin_signs_out_and_an_old_runner_is_never_aske
     get(api, f"runners/{rid}/logouts/bots?runtime=codex", token="cara-test", expected=403)
     post(api, f"runners/{rid}/logouts", {"runtime": "codex"}, token=r["token"], expected=403)
     assert cleared(api, rid) == []
-    # A runner that does not know these kinds would start a sign-in instead: it is told to update.
-    old = online(api, capabilities=[])
-    refused = post(api, f"runners/{old['runner_id']}/logouts", {"runtime": "codex"}, expected=409)
-    assert "Update" in refused["error"]["detail"]
-    post(api, f"runners/{old['runner_id']}/logins", {"runtime": "codex", "switch": True}, expected=409)
-    assert pending(api, old) == [] and cleared(api, old["runner_id"]) == []
-    # A plain sign-in still works there.
-    post(api, f"runners/{old['runner_id']}/logins", {"runtime": "codex"})
-    assert [row.get("kind", "sign_in") for row in pending(api, old)] == ["sign_in"]
 
 
 def test_a_sign_out_marks_the_login_signed_out_until_a_person_signs_in_again(api):
@@ -247,7 +238,7 @@ def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_
     assert key_off(api, rid) == [] and has_key()
 
 
-def test_switch_to_subscription_is_for_the_operator_or_an_admin_on_a_runner_that_knows_it(api):
+def test_switch_to_subscription_is_for_the_operator_or_an_admin(api):
     r = online(api, SWITCHES_TYPE)
     rid = r["runner_id"]
     post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "subscription"}, token="cara-test", expected=403)
@@ -257,11 +248,6 @@ def test_switch_to_subscription_is_for_the_operator_or_an_admin_on_a_runner_that
     post(api, f"runners/{rid}/logins", {"runtime": "codex", "switch": True, "to": "subscription"}, expected=422)
     post(api, f"runners/{rid}/logins", {"runtime": "codex", "to": "api_key"}, expected=422)
     assert pending(api, r) == []
-    # A runner that does not know it would run a plain sign-in and leave the key on: it is told to update.
-    old = online(api)
-    refused = post(api, f"runners/{old['runner_id']}/logins", {"runtime": "codex", "to": "subscription"}, expected=409)
-    assert "Update" in refused["error"]["detail"]
-    assert pending(api, old) == []
     # Claude Code on a Mac keeps its login in the keychain: no side to sign in on, as for Switch account.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (rid,))
@@ -323,7 +309,7 @@ def test_remove_takes_a_leftover_subscription_off_the_computer(api):
         ).fetchone()
 
 
-def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_an_admin_on_a_runner_that_knows_it(api):
+def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_an_admin(api):
     r = online(api, REMOVES)
     rid = r["runner_id"]
     with_profile(api, r)
@@ -333,13 +319,6 @@ def test_remove_is_for_a_named_subscription_on_this_computer_by_its_operator_or_
     post(api, f"runners/{rid}/removals", {"runtime": "codex", "profile": "other"}, expected=404)
     post(api, f"runners/{rid}/removals", {"runtime": "claude", "profile": "work"}, expected=404)
     assert pending(api, r) == []
-    # A runner that does not know Remove would start a sign-in instead: it is told to update.
-    old = online(api)
-    with_profile(api, old)
-    beat(api, old["token"], CAPABLE)
-    refused = post(api, f"runners/{old['runner_id']}/removals", {"runtime": "codex", "profile": "work"}, expected=409)
-    assert "Update" in refused["error"]["detail"]
-    assert pending(api, old) == []
 
 
 def test_botops_never_removes_a_subscription_even_with_a_persons_rights(api):

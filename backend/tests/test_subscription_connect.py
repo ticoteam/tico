@@ -11,7 +11,7 @@ from backend.tests.helpers.api import assign, claim, get, headers, post, runner
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, codex_file, company, give, on
 
-CAPS = [MS.CAPABILITY, ML.SIGN_OUT_CAPABILITY, ML.CONNECT_CAPABILITY]
+CAPS = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1"]
 
 
 def computer(api, caps=CAPS, label="Test Mac", operator="ana", claude=True, bot=None):
@@ -147,13 +147,12 @@ def test_only_a_person_who_may_save_starts_one_and_only_for_a_plan(api):
     post(api, "model-subscriptions/connect", {"subscription": "nope"}, expected=404)
 
 
-def test_connect_needs_a_computer_that_is_online_up_to_date_and_has_the_tool(api):
+def test_connect_needs_a_computer_that_is_online_and_has_the_tool(api):
     setup(api)
     company(api)
     assert get(api, "model-subscriptions")["connect"] == []
     start = {"kind": "claude_token", "name": "Max"}
     assert post(api, "model-subscriptions/connect", start, expected=409)["error"]["code"] == "offline"
-    computer(api, caps=[MS.CAPABILITY, ML.SIGN_OUT_CAPABILITY], label="Old")  # an older runner
     computer(api, claude=False, label="No Claude")  # no Claude Code on it
     assert get(api, "model-subscriptions")["connect"] == ["codex_login"]
     post(api, "model-subscriptions/connect", start, expected=409)

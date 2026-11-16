@@ -2821,7 +2821,7 @@ def sign_in_report(cloud, computer, authenticated):
         {
             "version": "test",
             "platform": "linux",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {"claude": {"installed": True, "authenticated": authenticated}},
@@ -3657,7 +3657,7 @@ def codex_heartbeat(cloud, computer):
         {
             "version": "test",
             "platform": "linux",
-            "capabilities": [MS.CAPABILITY],
+            "capabilities": ["model_subscriptions_v1"],
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {
@@ -3838,7 +3838,7 @@ def _beat(cloud, token):
     body = {
         "version": "test",
         "platform": "linux",
-        "capabilities": [MS.CAPABILITY, "model_sign_out_v1", "model_connect_v1"],
+        "capabilities": ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1"],
     }
     post(cloud.api, "runners/heartbeat", {**body, "readiness": {"schema_version": 1, "runtimes": tools}}, token=token)
 

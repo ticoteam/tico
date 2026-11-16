@@ -3502,6 +3502,28 @@ def session_root(conn, bot, task_id, config=None):
     return root
 
 
+SESSION_ROOT_ROW_SQL = "SELECT id,owner_id,requester_id,private FROM tasks WHERE id=?"
+
+
+def prime_session_roots(conn, task_ids):
+    """What session_root reads for these tasks and every ancestor it can reach, one query a level for all of them (their
+    parents by prime_ancestry, their rows here), so each job's walk in this snapshot reads none of them again. Without a
+    read snapshot it reads nothing: the walk then reads for itself."""
+    from .read_cache import cache, prime
+
+    if cache(conn) is None:
+        return
+    met = TR.prime_ancestry(conn, task_ids)
+    rows = {}
+    for part in chunks(sorted(met)):
+        for row in conn.execute(
+            "SELECT id,owner_id,requester_id,private FROM tasks WHERE id IN (%s)" % ",".join("?" * len(part)),
+            part,
+        ):
+            rows[row["id"]] = row
+    prime(conn, SESSION_ROOT_ROW_SQL, {(tid,): rows.get(tid) for tid in met})
+
+
 def _same_readers(conn, one, other):
     """Whether two tasks may share a session: both public, or both private with every party of each able to
     read the other, so nothing one session turn says reaches a reader of either task who could not read both."""

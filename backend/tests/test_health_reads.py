@@ -3,10 +3,19 @@
 import re
 from collections import Counter
 
-from backend.tests.helpers.api import headers  # noqa: F401
-from backend.tests.helpers.status_reads import busy, setup
-from backend.tests.helpers.task_lanes import new_task, task_bot
+from backend.tests.helpers.api import headers, ready  # noqa: F401
 from backend.tests.helpers.health_reads import counted
+from backend.tests.helpers.run_backoff import setup as bare_setup
+from backend.tests.helpers.status_reads import busy
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES, new_task, task_bot
+
+
+def setup(api, monkeypatch, tasks=8):
+    """A computer that reports the capabilities of the oldest supported release (0.6.0-rc.1): its claims take the
+    session root and lane rules every computer runs, so the query counts below measure those."""
+    machine = bare_setup(api, monkeypatch, tasks=tasks)
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
+    return machine
 
 
 def warmed(api, monkeypatch, path, trace):
