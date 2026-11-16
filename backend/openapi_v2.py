@@ -1281,7 +1281,8 @@ STABLE = [
         "what we sell, one active bet, what we won't do), each only while that part of the draft is empty or still "
         "Unconfirmed (the bet only while none is active), and `more` (the guide's other sections, for Keep going). "
         "Each has its `key`, the section's `title`, the guide's `question`, a `suggest`ed answer (the draft's "
-        "unconfirmed text, or the top proposed bet, `bet_id`), the draft's `revision`, and `titles`, every section's "
+        "unconfirmed text, or the top proposed bet, `bet_id`), its `max` (the longest answer it holds whole), the draft's "
+        "`revision`, and `titles`, every section's "
         "name by key (the bet's is the guide's own word). Empty for anyone but the owner. Answers are saved through the Strategy routes (PUT /api/v2/strategy/draft, POST /api/v2/strategy/bets)",
         "FlowQuestions",
     ),
@@ -1290,10 +1291,11 @@ STABLE = [
         "post",
         "Needs you",
         "splitFlowRamble",
-        "Owner only: one long typed answer (`text`, at most 6000 characters) to the question for `section` as short "
-        "`lines`, each `{section, text}` for one section or a bet, in the owner's own words, cut to the page's limits; "
+        "Owner only: one long typed answer (`text`, at most the question's `max`; longer is refused with 422 too_long, "
+        "never cut) to the question for `section` as short `lines`, each `{section, text}` for one section or a bet, in "
+        "the owner's own words, cut to the page's limits with what was cut as `left` (shown as not kept); "
         "never the summary or the vision. One metered model call, no retry, nothing of the text stored or logged; at "
-        "most 30 a day per person. With no model (`why`: no_model), at the spend cap (spend_cap), at the daily limit "
+        "most 30 a day per person, counted and taken in one write. With no model (`why`: no_model), at the spend cap (spend_cap), at the daily limit "
         "(limit) or on a failure (failed), `split` is false and `lines` holds the whole text for `section`. Writes "
         "nothing to the strategy",
         "FlowRambleLines",
@@ -3912,6 +3914,7 @@ SCHEMAS = {
             "question": "s",
             "suggest": "s",
             "bet_id": {"type": ["string", "null"]},
+            "max": "i",
         }
     ),
     "FlowRambleLines": obj(
@@ -3925,6 +3928,7 @@ SCHEMAS = {
                         },
                         "text": "s",
                         "why": "s",
+                        "left": "s",
                     },
                     required=["section", "text"],
                 )

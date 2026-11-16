@@ -22,7 +22,10 @@ first publish (strategy.vision), so Flow writes only sections and bets. Nothing 
 call leaves a `flow.ramble` audit row with no detail, which counts the person's calls against DAILY_MAX, and the spend
 row `judge.metered` writes (label, model, cost). With no writer (no key, demo, rehearsal), at the spend cap, at the
 daily limit, or when the call fails or returns no usable line, the answer says why (`why`) and holds the text whole as
-one line for the section asked, so a person is never stuck on a model.
+one line for the section asked, so a person is never stuck on a model. Nothing is cut silently: an answer longer than
+its question can hold whole (`answer_max`, each question's `max`) is refused with 422, and a model line cut to its
+section's limit carries what was cut as `left`, which the page shows as not kept. The day's count is checked and the
+slot taken in one write transaction, so two calls at once cannot both pass the limit.
 """
 
 import json
@@ -116,7 +119,14 @@ def questions(c: Any, who: Any) -> Row:
     for key in KEYS:
         if key not in asks:
             continue
-        item: Row = {"key": key, "title": names[key], "question": asks[key], "suggest": "", "bet_id": None}
+        item: Row = {
+            "key": key,
+            "title": names[key],
+            "question": asks[key],
+            "suggest": "",
+            "bet_id": None,
+            "max": answer_max(key),
+        }
         if key == BET:
             if S.bets(c, "active"):
                 continue
@@ -137,6 +147,14 @@ def limits() -> dict[str, int]:
     return {**{k: int(S.SECTION_MAX) for k in KEYS if k != BET}, BET: int(S.STATEMENT_MAX)}
 
 
+def answer_max(section: str) -> int:
+    """The longest answer `section` holds whole: a section's limit; for a bet, one sentence and the rest as its why.
+    The sentence is cut at a word past 60% of its limit (`_cut`), so the why gets the rest of what this allows."""
+    if section != BET:
+        return int(S.SECTION_MAX)
+    return int(S.STATEMENT_MAX * 0.6) + int(S.BET_TEXT_MAX)
+
+
 def _cut(text: str, limit: int) -> str:
     """`text` within `limit` characters, cut at a word where one is near."""
     text = text.strip()
@@ -148,13 +166,14 @@ def _cut(text: str, limit: int) -> str:
 
 
 def whole(text: str, section: str) -> list[Row]:
-    """The fallback: the answer as one line for the section asked. A bet keeps the rest of its words as its why."""
+    """The fallback: the answer as one line for the section asked, never cut (the route refuses one over answer_max).
+    A bet keeps the rest of its words as its why."""
     text = text.strip()
     if section != BET:
-        return [{"section": section, "text": _cut(text, int(S.SECTION_MAX))}]
+        return [{"section": section, "text": text}]
     statement = _cut(text, int(S.STATEMENT_MAX))
     rest = text[len(statement) :].strip()
-    return [{"section": BET, "text": statement, **({"why": _cut(rest, int(S.BET_TEXT_MAX))} if rest else {})}]
+    return [{"section": BET, "text": statement, **({"why": rest} if rest else {})}]
 
 
 def _words(text: str) -> list[str]:
@@ -163,7 +182,8 @@ def _words(text: str) -> list[str]:
 
 def read(answer: Any, text: str) -> list[Row]:
     """The model's lines that hold: a known section (never summary or vision), some text, mostly the owner's own words,
-    each cut to its section's limit; at most LINES_MAX, BETS_MAX of them bets."""
+    each cut to its section's limit (what was cut is its `left`, shown as not kept); at most LINES_MAX, BETS_MAX of
+    them bets."""
     if not isinstance(answer, dict):
         return []
     raw = cast(Row, answer).get("lines")
@@ -184,7 +204,9 @@ def read(answer: Any, text: str) -> list[Row]:
             if bets >= BETS_MAX:
                 continue
             bets += 1
-        out.append({"section": section, "text": _cut(words, room[section])})
+        kept = _cut(words, room[section])
+        left = words[len(kept) :].strip()
+        out.append({"section": section, "text": kept, **({"left": left} if left else {})})
         if len(out) >= LINES_MAX:
             break
     return out
@@ -228,20 +250,22 @@ def fallback(text: str, section: str, why: str) -> Row:
 def ramble(store: Any, who: Any, text: str, section: str) -> Row:
     """POST /flow/ramble for the owner (checked by the route): the lines, or the whole text and why not."""
     with store.read() as c:
-        used = int(judge.used_today(c, who.actor, action=ACTION))
         row = cast(Row, S.draft(c) or {})
         gid = str(row.get("guide") or S.DEFAULT_GUIDE)
-        write = writer(c, store) if used < DAILY_MAX else None
+        write = writer(c, store)
         capped = write is not None and judge.over_spend_cap(c, store.settings) is not None
-    if used >= DAILY_MAX:
-        return fallback(text, section, "limit")
     if write is None:
         return fallback(text, section, "no_model")
     if capped:
         return fallback(text, section, "spend_cap")
-    # Counted before the call, so a call that fails still counts. No detail: nothing of the text.
+    # The day's count read and the slot taken in one write transaction (the store's writer gate), so two calls at once
+    # cannot both pass; taken before the call, so a call that fails still counts. No detail: nothing of the text.
     with store.transaction() as c:
-        H.event(c, who.actor, ACTION, "", None)
+        full = int(judge.used_today(c, who.actor, action=ACTION)) >= DAILY_MAX
+        if not full:
+            H.event(c, who.actor, ACTION, "", None)
+    if full:
+        return fallback(text, section, "limit")
     try:
         with J.within(DEADLINE):
             answer = metered(store, write, prompt(text, section, gid))
@@ -290,4 +314,7 @@ def install(app: Any, store: Any, auth: Any) -> None:
         """Owner only: one long answer as lines per section, in the owner's words; with no model, the whole text."""
         who = request.state.identity
         owner(auth, who)
+        if len(body.text.strip()) > answer_max(body.section):
+            # Never cut: the page caps its box at the question's `max`, and anything longer is refused whole.
+            raise Problem("too_long", f"An answer here holds at most {answer_max(body.section)} characters", 422)
         return ramble(store, who, body.text, body.section)

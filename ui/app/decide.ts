@@ -272,7 +272,7 @@ function decideDialog(): HTMLDialogElement {
     // The person's own typing in Notes: Tico's note never fills it after that (decidePaintSide).
     if (ev.isTrusted && box.id === 'dc-notes' && DEC.at) DEC_OP.typed.add(DEC.at);
     if (box.id === 'dc-sug-say') DEC_SUG.draft = box.value;
-    if (box.id === 'dc-q-say') DEC_Q.typed = box.value;
+    if (box.id === 'dc-q-say' && box instanceof HTMLTextAreaElement) { DEC_Q.typed = box.value; decideQCount(box); }
     if (box instanceof HTMLInputElement && box.id === 'dc-snz-at') box.setCustomValidity('');
     decideNeedsText(root);
   });
@@ -324,7 +324,7 @@ function decideDialog(): HTMLDialogElement {
 function decideNeedsText(root: HTMLElement) {
   for (const b of root.querySelectorAll<HTMLButtonElement>('[data-dc-needs]')) {
     const box = root.querySelector<HTMLTextAreaElement | HTMLInputElement>(b.dataset.dcNeeds!);
-    b.disabled = !box?.value.trim() || !!DEC?.busy;
+    b.disabled = !box?.value.trim() || !!DEC?.busy || DEC_Q.busy;
   }
 }
 /** Opens the item `id`, or the first of the list with none. `items` is the list to walk, Needs you as the page shows

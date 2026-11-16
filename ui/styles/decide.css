@@ -294,8 +294,18 @@ button.dc-jev{cursor:pointer}
 .dc-qg h4{margin:0;color:var(--muted);font-size:var(--t-xs);font-weight:600}
 .dc-qg li:first-child{border-top:0}
 .dc-qg li>span{flex:1;min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+.dc-qgs{display:flex;flex-direction:column;gap:14px}
+.dc-qg{display:flex;flex-direction:column;gap:4px}
+/* A part's text as it would publish: three lines, a tap shows it whole. */
+.dc-qt{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;width:100%;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;cursor:pointer}
+.dc-qt.open{display:block;-webkit-line-clamp:unset}
+.dc-qg li>.dc-qt{flex:1;min-width:0}
+.dc-qmine li{min-height:36px;padding:2px 0;border-top:0;color:var(--muted);font-size:var(--t-xs)}
+.dc-qmine li>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-ql .tx .dc-q-left{display:block;color:var(--muted);overflow-wrap:anywhere;white-space:pre-wrap}
+.dc-q-count{position:absolute;right:52px;bottom:8px;color:var(--muted);font-size:var(--t-xs);pointer-events:none}
+.dc-q-count[hidden]{display:none}
 .dc-q-pub{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
-.dc-q-pub .dc-sub{flex:1 1 100%}
 .dc-q-pub .primary{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
 /* "Getting ready to flow": over the first item for well under a second; the item under it is drawn and takes every
    tap and key (no pointer events here). None with reduced motion (decideStart). */

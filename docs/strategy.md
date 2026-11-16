@@ -264,23 +264,31 @@ the owner gets none.
   is opened from the Strategy page: Flow's mark beside **Publish**, or the link `#/decide?setup=strategy`. With no
   asks waiting, Flow opens on them instead of All done. They do not count in Needs you and do not light the Flow tab.
 - **A card.** The question, the suggested answer first (the draft's own unconfirmed text, or the top proposed bet), a
-  box and **Skip**. Skip is kept in this browser (a link from the Strategy page asks skipped ones again). The mic puts
-  the cursor in the box, so a phone keyboard's own dictation types into it; nothing is recorded.
+  box and **Skip**. Skip is kept in this browser (a link from the Strategy page asks skipped ones again). The box holds
+  what the question keeps whole (its `max`: 4,000 characters for a section; for a bet, a sentence and the rest as its
+  why), and a count shows only near that, so no word is cut. The mic puts the cursor in the box, so a phone keyboard's
+  own dictation types into it; nothing is recorded.
 - **Saving.** Tapping the suggestion keeps it: the drafted text loses its marker, or the proposed bet is made active.
   A typed answer is added after what the section holds, never over confirmed text (unconfirmed drafted text is
   replaced). A bet is made active. Every save goes to the draft through the routes the page uses, with the draft's
   revision; on a 409 Flow reads the draft again and sends once more. Flow never writes the summary or the vision.
 - **A long answer** (over 200 characters) goes to `POST /api/v2/flow/ramble`, which splits it into short lines, each
   for one section or a bet, in the owner's own words (a line that is not mostly their words is dropped), cut to the
-  page's limits. The owner strikes any line with ✕ and saves the rest at once. It is one metered model call with no
-  retry, labelled `flow-ramble` in spend, at most 30 a day per person; the text is sent to the model as data and
-  nothing of it is stored or logged (the day's count is one audit row with no text). With no model, at the spend
-  cap or the day's limit, or on any failure, it says so (`why`) and Flow saves the whole answer under the question
-  asked.
-- **The end.** "Saved to your draft. Bots use it after you publish.", every line saved, by section (✕ takes one out
-  again, as a draft save), the parts Publish would change (including the owner's earlier edits), and **Publish** or
-  what still stops it (each opens its question). After Publish there is no ✕ and no Undo. Then **Keep going** or
-  **Done**.
+  page's limits; what a cut leaves out comes back as `left` and shows struck through, not kept. The owner strikes any
+  line with ✕ and saves the rest at once. It is one metered model call with no retry, labelled `flow-ramble` in spend,
+  at most 30 a day per person (the count is read and the call's slot taken in one write, so two at once cannot both
+  pass); one Send makes one call. The text is sent to the model as data and nothing of it is stored or logged (the
+  day's count is one audit row with no text). An answer longer than the question's `max` is refused (422
+  `too_long`), never cut. With no model, at the spend cap or the day's limit, or on any failure, it says so (`why`)
+  and Flow saves the whole answer under the question asked.
+- **The end.** "Saved to your draft. Bots use it after you publish.", then every part Publish would change, with its
+  text as it would publish (three lines, a tap shows it whole), the owner's edits made anywhere included; under each,
+  the lines Flow saved there. ✕ takes one out again, as a draft save, only where Flow put it: if the section was
+  edited since, nothing is written and the ✕ goes. **Publish** sends the revision on screen; if the draft changed
+  since, nothing is published, the screen is read again and Publish waits for another tap. Or what still stops
+  Publish (each opens its question). **Keep going** reads the questions again (a part a long answer filled is not
+  asked); Publish shows again whenever the draft differs from what is published. A line published has no ✕, and
+  Publish has no Undo. Then **Keep going** or **Done**.
 
 Nothing Flow saves reaches a bot, or anyone but the owner, until the owner publishes: it is the draft.
 
@@ -367,8 +375,8 @@ Every command has an MCP tool of the same name and arguments (`tico_strategy_sho
 | `GET /strategy/summary` | any bot or human | plain text: the summary, one line per active bet with its wrong-if, "version N" |
 | `POST /strategy/draft-from`, `GET /strategy/draft-from/{job}` | the owner | setup research from `{url?, text?}`: fills the empty sections the pages support, marked unconfirmed, and proposes bets; gives up, reporting what it found, if the owner wrote the draft meanwhile. States are in [Setup](#setup); 422 for a missing or internal address |
 | `GET /strategy/guides` | any reader | deprecated: the Default guide only |
-| `GET /flow/questions` | any person; empty but for the owner | `{questions, more, revision, titles}`: the open setup questions, each `{key, title, question, suggest, bet_id}` ([Flow](#flow)) |
-| `POST /flow/ramble` | the owner only | `{text, section}` (at most 6,000 characters) to `{lines: [{section, text, why?}], split, why}`: one metered call, nothing stored; `split` false with the whole text for `section` when `why` is `no_model`, `spend_cap`, `limit` or `failed` ([Flow](#flow)) |
+| `GET /flow/questions` | any person; empty but for the owner | `{questions, more, revision, titles}`: the open setup questions, each `{key, title, question, suggest, bet_id, max}` ([Flow](#flow)) |
+| `POST /flow/ramble` | the owner only | `{text, section}` (at most the question's `max`, else 422 `too_long`) to `{lines: [{section, text, why?, left?}], split, why}`: one metered call, nothing stored; `split` false with the whole text for `section` when `why` is `no_model`, `spend_cap`, `limit` or `failed` ([Flow](#flow)) |
 | `/lenses/...` | see [Lenses](lenses.md#hub-and-the-api) | list, run, read, add a change to the draft, sharpen |
 
 A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, market_id?, text?, check_by}`. The

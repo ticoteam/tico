@@ -4,9 +4,13 @@ import type {Page} from 'playwright';
 // - after the owner's asks the questions come, as a card of their own: the suggested answer first, a box, Skip;
 // - tapping the suggestion saves it to the draft with the draft's revision (a drafted section loses its marker; a
 //   proposed bet is made active); a 409 is read again and sent again, once;
-// - a long answer is split into lines under their sections' names; ✕ drops one, one Save sends the rest;
-// - the end screen lists what was saved, by section, what Publish changes, and Publish; ✕ takes a line out again (a
-//   draft save) until Publish, and there is none after it;
+// - the box holds what the question keeps whole, a count showing near it; Send makes one call however often pressed;
+// - a long answer is split into lines under their sections' names, what a limit cut struck through; ✕ drops one, one
+//   Save sends the rest;
+// - the end screen shows each part Publish changes with its text, edits made elsewhere included; ✕ takes a line out
+//   again (a draft save) only where Flow put it, and leaves one edited since; Publish sends the revision on screen, so
+//   a draft changed since is read again for a second tap, never published unseen; after Publish, Keep going reads the
+//   questions again (a part filled by a long answer is not asked) and Publish comes back for what is new;
 // - opened from the Strategy page (#/decide?setup=strategy) the questions come first, an ask waiting after them; with
 //   Publish refused the end screen says what is missing instead; Skip is kept in this browser;
 // - anyone but the owner sees none of it, and nothing is read for them.
@@ -29,11 +33,16 @@ const PROPOSED = 'Small landlords will trust a bot with tenant messages';
 const RAMBLE = 'We will not take enterprise property managers, even when they ask, because they want custom work. '
   + 'Forty landlords already pay us, which is our proof so far. We also think we should hire a support person next quarter '
   + 'but that is not settled yet and may change.';
+const KNOW = 'We ran rentals for ten years.';
 const LINES = [
   {section: 'not', text: 'We will not take enterprise property managers, even when they ask.'},
-  {section: 'proof', text: 'Forty landlords already pay us.'},
+  {section: 'proof', text: 'Forty landlords already pay us.', left: 'which is our proof so far'},
   {section: 'how', text: 'We should hire a support person next quarter.'},
+  {section: 'know', text: 'Landlords hate portals.'},
 ];
+const NOW = 'Rents went up a fifth this year.';
+const HOW = 'Hire slowly.';
+const MAX = {bet: 2180, section: 4000};
 const ASK = {
   serve: 'Who has this problem worst?', sell: 'What do you make?', bet: 'What do you believe that others do not?',
   not: "What won't you do?", proof: 'What shows it works?', now: 'Why now?', know: 'What do you know that others do not?',
@@ -62,7 +71,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
   try {
     // The draft as the server holds it, and what was sent to it.
     let sections: Record<string, string> = {}, bets: Bet[] = [], revision = 1, current: Json | null = null, n = 0;
-    let needs: Json[] = [], conflicts = 0, role = 'owner';
+    let needs: Json[] = [], conflicts = 0, role = 'owner', hold: Promise<void> | null = null;
     const errors: string[] = [], sent: Sent[] = [], reads: string[] = [];
     const reset = (s: Record<string, string>, b: Bet[]) => { sections = {...s}; bets = b.map(x => ({...x})); revision = 1; current = null; n = 0; sent.length = 0; reads.length = 0; };
     const open = (k: string) => !(sections[k] || '').trim() || (sections[k] || '').startsWith('_Unconfirmed:');
@@ -72,10 +81,10 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
         if (key === 'bet') {
           if (bets.some(b => b.status === 'active')) return [];
           const top = bets.find(b => b.status === 'proposed');
-          return [{key, title: TITLE[key], question: ASK[key], suggest: top?.statement || '', bet_id: top?.id || null}];
+          return [{key, title: TITLE[key], question: ASK[key], suggest: top?.statement || '', bet_id: top?.id || null, max: MAX.bet}];
         }
         if (!open(key)) return [];
-        return [{key, title: TITLE[key], question: ASK[key], suggest: (sections[key] || '').replace(MARK, ''), bet_id: null}];
+        return [{key, title: TITLE[key], question: ASK[key], suggest: (sections[key] || '').replace(MARK, ''), bet_id: null, max: MAX.section}];
       };
       return {questions: (['serve', 'sell', 'bet', 'not'] as Key[]).flatMap(q), more: (['proof', 'now', 'know', 'how'] as Key[]).flatMap(q), revision, titles: TITLE};
     };
@@ -89,7 +98,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
         reducedMotion: 'reduce', ...(phone ? {isMobile: true, hasTouch: true} : {})});
       const page = await context.newPage();
       page.on('pageerror', (error: Error) => errors.push(error.message));
-      await page.route('**/*', route => {
+      await page.route('**/*', async route => {
         const r = route.request(), url = new URL(r.url()), p = url.pathname, method = r.method();
         const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
         const conflict = () => json({error: {code: 'conflict', message: 'The draft changed. Reload it.'}, revision}, 409);
@@ -112,7 +121,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
         if (p.startsWith('/api/v2/strategy') || p.startsWith('/api/v2/flow/ramble') || p.includes('/asks/')) sent.push({method, path: p, body});
         const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/answer$/);
         if (m) { needs = []; return json({task: brief(m[1]!), answer_id: 'a-' + m[2], requirement_id: m[2]}); }
-        if (p === '/api/v2/flow/ramble') return json({lines: LINES, split: true, why: null});
+        if (p === '/api/v2/flow/ramble') { if (hold) await hold; return json({lines: LINES, split: true, why: null}); }
         if (p === '/api/v2/strategy/draft' && method === 'PUT') {
           if (stale(body)) return conflict();
           Object.assign(sections, body['sections'] as Record<string, string>);
@@ -153,7 +162,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
 
     // ---- A phone: an ask first, then the questions; each kind of save; the end screen and Publish.
     {
-      reset({serve: MARK + DRAFTED}, [{id: 'b1', statement: PROPOSED, status: 'proposed', rank: 1}]);
+      reset({serve: MARK + DRAFTED, know: KNOW}, [{id: 'b1', statement: PROPOSED, status: 'proposed', rank: 1}]);
       needs = [ask()];
       const page = await start(true, '#/updates');
       const d = page.locator('#need-card');
@@ -200,43 +209,99 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       await d.locator('.dc-qs[data-q="not"]').waitFor();
       assert.deepEqual(writes().at(-1), {method: 'POST', path: '/api/v2/strategy/bets/b1', body: {status: 'active', revision: 4}});
 
-      // A long answer: its lines under their sections' names; ✕ drops one, then one Save.
-      await d.locator('#dc-q-say').fill(RAMBLE);
+      // The box holds what this question keeps whole; its count shows only near that.
+      const box = d.locator('#dc-q-say');
+      assert.equal(await box.getAttribute('maxlength'), String(MAX.section));
+      await box.fill('x'.repeat(3700));
+      assert.equal(await d.locator('.dc-q-count').textContent(), `3700/${MAX.section}`);
+      assert.equal(await d.locator('.dc-q-count').isVisible(), true);
+      // A long answer: one call however often Send is pressed while it runs.
+      await box.fill(RAMBLE);
+      assert.equal(await d.locator('.dc-q-count').isVisible(), false, 'no count far from the limit');
+      let release = () => {};
+      hold = new Promise<void>(resolve => { release = resolve; });
       await d.locator('[data-dc="q-send"]').tap();
+      await page.waitForFunction(() => DEC_Q.busy);
+      assert.equal(await d.locator('[data-dc="q-send"]').isDisabled(), true, 'Send stays off while the split runs');
+      await page.evaluate(() => { const b = document.querySelector<HTMLButtonElement>('[data-dc="q-send"]')!; b.disabled = false; b.click(); });
+      release(); hold = null;
+      // Its lines under their sections' names, what a limit cut struck through; ✕ drops one, then one Save.
       await d.locator('[data-q-strike]').waitFor();
-      const ramble = sent.find(s => s.path === '/api/v2/flow/ramble')!;
-      assert.deepEqual(ramble.body, {text: RAMBLE, section: 'not'}, 'only the words and the section asked');
-      assert.deepEqual(await d.locator('.dc-ql .tx span').allTextContents(), [TITLE.not, TITLE.proof, TITLE.how]);
+      const rambles = sent.filter(s => s.path === '/api/v2/flow/ramble');
+      assert.equal(rambles.length, 1, 'one call for one Send');
+      assert.deepEqual(rambles[0]!.body, {text: RAMBLE, section: 'not'}, 'only the words and the section asked');
+      assert.deepEqual(await d.locator('.dc-ql .tx span').allTextContents(), [TITLE.not, TITLE.proof, TITLE.how, TITLE.know]);
       assert.deepEqual(await d.locator('.dc-ql .tx b').allTextContents(), LINES.map(l => l.text));
+      assert.deepEqual(await d.locator('.dc-ql .tx del[aria-label="Not kept"]').allTextContents(), [LINES[1]!.left]);
       await d.locator('.dc-ql').nth(2).locator('[data-dc="q-drop"]').tap();
       assert.equal(await d.locator('.dc-ql.off').count(), 1);
       await shot(page, 'strike-screen');
       const before = writes().length;
       await d.locator('[data-dc="q-save"]').tap();
 
-      // The end: what was saved, by section; what Publish changes; Publish.
+      // The end: each part Publish changes, with its text as it would publish; under it the lines Flow saved there.
       const end = d.locator('[data-q-end]');
       await end.locator('[data-dc="q-publish"]').waitFor();
-      assert.deepEqual(writes().slice(before).map(s => s.body), [{revision: 5, sections: {not: LINES[0]!.text, proof: LINES[1]!.text}}], 'one save');
+      const appended = `${KNOW}\n\n${LINES[3]!.text}`;
+      assert.deepEqual(writes().slice(before).map(s => s.body),
+        [{revision: 5, sections: {not: LINES[0]!.text, proof: LINES[1]!.text, know: appended}}], 'one save');
       assert.equal(sections['how'], undefined, 'the dropped line is not saved');
       assert.equal(await end.locator('.dc-q-said').textContent(), 'Saved to your draft. Bots use it after you publish.');
-      assert.deepEqual(await end.locator('.dc-qg h4').allTextContents(), [TITLE.serve, TITLE.sell, TITLE.bet, TITLE.not, TITLE.proof]);
-      assert.deepEqual(await end.locator('.dc-qg li>span').allTextContents(), [DRAFTED, SELL, PROPOSED, LINES[0]!.text, LINES[1]!.text]);
-      assert.equal(await end.locator('[aria-label="Publish changes"]').textContent(), `${TITLE.serve} · ${TITLE.sell} · ${TITLE.not} · ${TITLE.proof} · Bets`);
+      const groups = async () => end.locator('.dc-qg').evaluateAll(gs => gs.map(g => [g.querySelector('h4')?.textContent,
+        g.querySelector('.dc-qt')?.textContent ?? null, [...g.querySelectorAll('li>span')].map(x => x.textContent)]));
+      assert.deepEqual(await groups(), [
+        [TITLE.serve, DRAFTED, []], [TITLE.sell, SELL, []], [TITLE.not, LINES[0]!.text, []], [TITLE.proof, LINES[1]!.text, []],
+        [TITLE.know, appended, [LINES[3]!.text]], ['Bets', PROPOSED, []],
+      ], 'a part that is just Flow\'s line carries its ✕; else Flow\'s lines are listed under the text');
+      assert.equal(await end.locator('.dc-qg li [data-dc="q-unsave"]').count(), 6);
+      // A long text is clamped; a tap shows it whole.
+      const know = end.locator('.dc-qg', {hasText: TITLE.know}).locator('.dc-qt');
+      await know.click();
+      assert.equal(await know.getAttribute('aria-expanded'), 'true');
       await shot(page, 'end-screen');
 
-      // ✕ before Publish: the line taken out of the draft again, a revision-checked save.
+      // ✕ on a line edited elsewhere since: nothing written, the edit kept, and its ✕ gone.
+      sections['proof'] = `${LINES[1]!.text} Twelve more signed in May.`; revision++;
+      const edited = writes().length;
       await end.locator('.dc-qg li', {hasText: LINES[1]!.text}).locator('[data-dc="q-unsave"]').tap();
-      await end.locator('.dc-qg li', {hasText: LINES[1]!.text}).waitFor({state: 'detached'});
-      assert.deepEqual(writes().at(-1)!.body, {revision: 6, sections: {proof: ''}});
-      assert.equal(await end.locator('[aria-label="Publish changes"]').textContent(), `${TITLE.serve} · ${TITLE.sell} · ${TITLE.not} · Bets`);
+      await end.locator('.dc-qt', {hasText: 'Twelve more'}).waitFor();
+      assert.equal(writes().length, edited, 'no write over the edit');
+      assert.equal(sections['proof'], `${LINES[1]!.text} Twelve more signed in May.`);
+      assert.equal(await end.locator('.dc-qg', {hasText: TITLE.proof}).locator('[data-dc="q-unsave"]').count(), 0);
+      // ✕ on a line Flow added after what was there: exactly that taken out, the rest as it was.
+      await end.locator('.dc-qg li', {hasText: LINES[3]!.text}).locator('[data-dc="q-unsave"]').tap();
+      await end.locator('.dc-qg li', {hasText: LINES[3]!.text}).waitFor({state: 'detached'});
+      assert.deepEqual(writes().at(-1)!.body, {revision: 7, sections: {know: KNOW}});
 
-      // Publish: the whole draft, no note; then no ✕ and no Undo.
+      // Publish sends the revision on screen: the draft changed elsewhere since, so nothing is published; the screen is
+      // read again, showing that change, and Publish waits for another tap.
+      sections['now'] = NOW; revision++;
+      await end.locator('[data-dc="q-publish"]').tap();
+      await end.locator('.dc-qt', {hasText: NOW}).waitFor();
+      assert.deepEqual(writes().at(-1), {method: 'POST', path: '/api/v2/strategy/publish', body: {note: '', revision: 8}});
+      assert.equal(n, 0, 'nothing published unseen');
+      assert.equal(await end.locator('[role="alert"]').textContent(), 'It changed. Check it, then Publish.');
       await end.locator('[data-dc="q-publish"]').tap();
       await end.locator('.dc-q-said', {hasText: 'Published v1'}).waitFor();
-      assert.deepEqual(writes().at(-1), {method: 'POST', path: '/api/v2/strategy/publish', body: {note: '', revision: 7}});
+      assert.deepEqual(writes().at(-1), {method: 'POST', path: '/api/v2/strategy/publish', body: {note: '', revision: 9}});
       assert.equal(await end.locator('[data-dc="q-unsave"]').count(), 0);
+      assert.equal(await end.locator('[data-dc="q-publish"]').count(), 0, 'nothing left to publish');
       assert.equal(await d.locator('[data-dc="undo"][aria-label*="ublish"]').count(), 0, 'no Undo for Publish');
+
+      // Keep going reads the questions again: proof, know and now are filled now, so only how is asked.
+      const read = reads.length;
+      await end.locator('[data-dc="q-more"]').tap();
+      await d.locator('.dc-qs[data-q="how"]').waitFor();
+      assert.equal(reads.length, read + 1);
+      await d.locator('#dc-q-say').fill(HOW);
+      await d.locator('[data-dc="q-send"]').tap();
+      // A new answer after Publish: Publish again, with ✕ for it alone.
+      await end.locator('[data-dc="q-publish"]').waitFor();
+      assert.equal(await end.locator('.dc-q-said').textContent(), 'Saved to your draft. Bots use it after you publish.');
+      assert.deepEqual(await end.locator('.dc-qg', {has: page.locator('[data-dc="q-unsave"]')}).locator('h4').allTextContents(), [TITLE.how]);
+      await end.locator('[data-dc="q-publish"]').tap();
+      await end.locator('.dc-q-said', {hasText: 'Published v2'}).waitFor();
+      assert.deepEqual(writes().at(-1), {method: 'POST', path: '/api/v2/strategy/publish', body: {note: '', revision: 11}});
       await end.locator('[data-dc="q-done"]').tap();
       await d.waitFor({state: 'hidden'});
       await page.context().close();
@@ -323,11 +388,12 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
 
     assert.deepEqual(writes(), []);
     assert.deepEqual(errors, []);
-    console.log('PASS: the owner\'s Strategy questions come after their asks and first from the Strategy page; saves carry the revision (a 409 sent again once); a long answer\'s lines are struck and saved once; the end screen publishes or says what is missing; no one else sees them.');
+    console.log('PASS: the owner\'s Strategy questions come after their asks and first from the Strategy page; saves carry the revision (a 409 sent again once); one Send, one split, cut words shown; ✕ takes out only Flow\'s own line; Publish sends the revision on screen and comes back for new answers; Keep going reads again; no one else sees them.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
 declare const S: {me?: unknown};
+declare const DEC_Q: {busy: boolean};
 declare function v2Refresh(): Promise<void>;
 declare function decideFlow(from: HTMLElement): void;
 declare function decideStageOpen(stage: string): Promise<boolean>;

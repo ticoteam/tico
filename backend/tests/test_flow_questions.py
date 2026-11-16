@@ -5,6 +5,7 @@ failure the text comes back whole for the section asked; nothing of the text is 
 nothing anyone but the owner reads until Publish. Examples use Acme."""
 
 import json
+import threading
 
 import pytest
 
@@ -74,6 +75,8 @@ def test_the_owners_basics_come_from_the_guide_in_order_and_others_get_none(api)
     assert asks["serve"]["title"] == "Who we serve" and asks["bet"]["title"] == "Bet"
     assert all(q["suggest"] == "" for q in found["questions"]) and found["revision"] == draft(api)["revision"]
     assert found["titles"] == {**{k: S.TITLES[k] for k in FQ.KEYS if k != "bet"}, "bet": "Bet"}
+    # Each question says the longest answer it keeps whole, so the page caps its box there.
+    assert asks["serve"]["max"] == S.SECTION_MAX and asks["bet"]["max"] == FQ.answer_max("bet")
     # Anyone but the owner: nothing, not even the draft's revision.
     assert get(api, "flow/questions", token=MEMBER) == {"questions": [], "more": [], "revision": None, "titles": {}}
 
@@ -164,10 +167,28 @@ def test_one_call_gives_lines_in_the_owners_words_cut_to_the_limits(api, model):
 def test_long_lines_are_cut_and_bets_and_lines_are_capped(api, model):
     long = "landlords " * 60
     model({"lines": [{"section": "bet", "text": long}] * 5 + [{"section": "serve", "text": long}] * 20})
-    lines = ramble(api, text=long * 10)["lines"]
+    lines = ramble(api, text=long * 6)["lines"]
     assert len(lines) == FQ.LINES_MAX and sum(x["section"] == "bet" for x in lines) == FQ.BETS_MAX
     assert all(len(x["text"]) <= (S.STATEMENT_MAX if x["section"] == "bet" else S.SECTION_MAX) for x in lines)
-    assert all(len(x["text"]) <= S.STATEMENT_MAX for x in lines if x["section"] == "bet")
+    # What a cut leaves out comes back as `left`, for the page to show as not kept: no word is dropped unseen.
+    bets = [x for x in lines if x["section"] == "bet"]
+    assert all((x["text"] + " " + x["left"]).split() == long.split() for x in bets)
+    assert all("left" not in x for x in lines if x["section"] == "serve")
+
+
+def test_an_answer_too_long_to_keep_whole_is_refused_never_cut(api, model, monkeypatch):
+    fake = model({"lines": []})
+    over = "landlords " * (S.SECTION_MAX // 10) + "and more"
+    assert ramble(api, text=over, section="not", expected=422)["error"]["code"] == "too_long"
+    bet = "landlords " * (FQ.answer_max("bet") // 10) + "and more"
+    assert ramble(api, text=bet, section="bet", expected=422)["error"]["code"] == "too_long"
+    assert fake.calls == [] and events(api, FQ.ACTION) == []
+    # Up to the limit nothing is lost, even with no model: a bet's sentence and its why hold every word.
+    monkeypatch.setattr(FQ, "writer", lambda c, store: None)
+    most = "landlords " * (FQ.answer_max("bet") // 10 - 1)
+    [line] = ramble(api, text=most, section="bet")["lines"]
+    assert (line["text"] + " " + line["why"]).split() == most.split()
+    assert len(line["text"]) <= S.STATEMENT_MAX and len(line["why"]) <= S.BET_TEXT_MAX
 
 
 def test_a_failure_is_not_retried_and_gives_the_whole_text(api, model):
@@ -193,6 +214,29 @@ def test_the_daily_limit_and_the_spend_cap_send_no_call(api, model, monkeypatch)
     monkeypatch.setattr(FQ, "DAILY_MAX", 30)
     monkeypatch.setattr(FQ.judge, "over_spend_cap", lambda c, settings: (10.0, 10.0))
     assert ramble(api)["why"] == "spend_cap" and len(fake.calls) == 2
+
+
+def test_two_calls_at_once_cannot_both_pass_the_daily_limit(api, model, monkeypatch):
+    """The count is read and the slot taken in one write: both callers reach the model lookup together, and only one
+    of them gets a call."""
+    monkeypatch.setattr(FQ, "DAILY_MAX", 1)
+    fake = Writer({"lines": []}, {"lines": []})
+    both = threading.Barrier(2, timeout=5)
+
+    def meet(c, store):
+        both.wait()
+        return fake
+
+    monkeypatch.setattr(FQ, "writer", meet)
+    store, ana = api.app.state.store, Identity("human:ana", "human", "ana@acme.example")
+    whys: list[object] = []
+    runs = [threading.Thread(target=lambda: whys.append(FQ.ramble(store, ana, RAMBLE, "serve")["why"])) for _ in "ab"]
+    for run in runs:
+        run.start()
+    for run in runs:
+        run.join(10)
+    assert sorted(map(str, whys)) == ["failed", "limit"] and len(fake.calls) == 1
+    assert len(events(api, FQ.ACTION)) == 1
 
 
 def test_what_flow_saves_changes_nothing_a_non_owner_reads_before_publish(api):
