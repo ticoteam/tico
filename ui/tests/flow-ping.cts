@@ -106,7 +106,8 @@ const question = (n: number, bot: string, line: string): Item => {
     await page.evaluate("S.emps.find(e => e.slug === 'pm').reports_to = 'human:ana'; decidePaintSide(DEC)");
     await more.click();
     await closeIt.waitFor();
-    await more.click();
+    await page.keyboard.press('Escape');   // on a phone ⋯ is a sheet over its own button
+    await closeIt.waitFor({state: 'detached'});
     await page.evaluate('S.me.mover = true');
     await dialog.locator('[data-dc-choice="Yes"]').click();
     await dialog.getByText('All done').waitFor();

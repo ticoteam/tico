@@ -163,7 +163,7 @@ function world(over: {title?: string} = {}) {
         assert.equal(await card(page).locator('.dc-q').innerText(), LONG, 'the question in full, never its short title');
         const left = await card(page).locator('.dc-thing').innerText();
         assert.ok(!left.includes(LONG.slice(0, 40)), 'the question is not on the left');
-        assert.match(await card(page).locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^PM·.+·needs you·#\d+ ↗$/);
+        assert.match(await card(page).locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^PM·.+#\d+ ↗$/);
         assert.equal(await card(page).locator('.dc-thing .dc-md strong').innerText(), 'load test', 'the task text is the background');
         assert.equal(await card(page).locator('[data-dc="go"]').count(), 0, 'no place named, no Go to');
         await card(page).locator('.dc-chat .p-text').fill('What do you mean by validation?');

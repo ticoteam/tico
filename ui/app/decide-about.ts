@@ -40,8 +40,6 @@ const DEC_HELD = new Map<string, DecHeld>();
 /** The items whose reply is on its way: a second Send waits for the first (the walk may move on meanwhile). */
 const DEC_SENDING = new Set<string>();
 let DEC_RESUME = '';                             // the item Go to left from: ▶ picks up there
-/** A question shorter than this opens with its task's background shown on a phone: it may need the context. */
-const DEC_BG_OPEN_UNDER = 40;
 
 // ---- reading
 /** The task behind an item, read once while the screen is open; on arrival the item on screen draws again. */
@@ -124,18 +122,14 @@ function decideAboutHTML(it: NeedsEntry, kind: AskKind, head = ''): string {
   const chips = decideAboutChips(t!, text), bare = !head && !text && !chips && !quote ? ' dc-bare' : '';
   return `<div class="dc-doc${bare}">${head}${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
 }
-/** A question's background: its task's title, cut to one line, which opens to the task's text, links and files.
-    `open` as it was drawn last for this item, else open on a wide screen (the left pane is there for it) and on a
-    phone only under a short question. A task with no text or chips is its title alone, nothing to open. */
-function decideBgHTML(it: NeedsEntry, open: boolean | undefined): string {
+/** A question's task: its title, then its text, links and files, open (the left pane; a phone's Task tab). */
+function decideBgHTML(it: NeedsEntry): string {
   const v = decideAboutOf(it), t = v?.task || null, title = t?.title || it.task?.title || '';
   const text = decideAboutText(t), chips = t ? decideAboutChips(t, text) : '';
-  const summary = `<span class="dc-bg-t">${esc(title)}</span>`;
   const inner = !v || v.state === 'loading' ? skelRows(3) : v.state === 'failed' ? `<p class="muted">${esc(v.error)}</p>`
     : (text ? `<div class="md dc-md">${md(text)}</div>` : '') + chips;
-  if (!inner) return `<div class="dc-bg dc-bg-only">${summary}</div>`;
-  const shown = open ?? (!decidePhone() || decideQuestionOf(it).length < DEC_BG_OPEN_UNDER);
-  return `<details class="dc-bg"${shown ? ' open' : ''}><summary>${summary}</summary><div class="dc-bg-body">${inner}</div></details>`;
+  // The task open, never behind a chevron: its title, then its text, links and files.
+  return `<div class="dc-bg"><h3 class="dc-bg-t">${esc(title)}</h3>${inner ? `<div class="dc-bg-body">${inner}</div>` : ''}</div>`;
 }
 /** A question as its asker wrote it: a stage's typed question, else the ask's own sentence. */
 const decideQuestionOf = (it: NeedsEntry): string => String(it.ask?.typed?.question || it.ask?.line || it.line || '').trim();

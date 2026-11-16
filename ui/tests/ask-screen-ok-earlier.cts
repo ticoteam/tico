@@ -3,7 +3,7 @@ import type {Route} from 'playwright';
 // Tico Team's task #72 showed only its title, and Tico's line said "Ask shows no release content".
 // - It shows the task's page from the earlier stage (the QA page, at its version), not the task's title and text;
 // - the ask, as the asker's last message in the task's chat, says who asked, when, that stage, the page's version and
-//   the task (#72 ↗), on desktop and phone, where the page is behind Read the task;
+//   the task (#72 ↗), on desktop and phone, where the page is in the Proof tab;
 // - Approve stays on and answers the OK alone (no page version: it is not a page's OK);
 // - an OK the server gave no earlier page (none, or one the reader may not open) shows the task's title and text.
 // TICO_UI_SHOTS=<dir> saves ok-release-page-desktop.png and ok-release-page-phone.png.
@@ -80,12 +80,12 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
 
       // OK release on #72: the QA page, and the ask's one byline in the chat.
       await dialog.locator('.dc-q', {hasText: 'OK the release'}).waitFor();
-      if (label === 'phone') await dialog.locator('[data-dc="fold"]').click();   // the page is behind Read the task
+      if (label === 'phone') await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click();   // the page is in the Task tab
       await frame.waitFor();
       assert.match(await frame.getAttribute('srcdoc') ?? '', /QA: saved carts/);
       assert.equal(await dialog.locator('.dc-thing .dc-title').count(), 0, `${label}: the page, not the task's title and text`);
       const meta = dialog.locator('.dc-side .dc-msg-by');
-      assert.match((await meta.innerText()).replace(/\s*·\s*/g, '·').trim(), /^Ana·.+·QA·v2·needs you·#72 ↗$/);
+      assert.match((await meta.innerText()).replace(/\s*·\s*/g, '·').trim(), /^Ana·.+·QA·v2\s*#72 ↗$/);
       assert.equal(await dialog.locator('.dc-owner').count(), 0, 'who asked is said once, on the byline');
       const pane = (await dialog.locator('.dc-thing').boundingBox())!, box = (await frame.boundingBox())!;
       assert.ok(box.height >= pane.height - 60, `${label}: the page fills the pane (${box.height} of ${pane.height})`);
@@ -98,7 +98,7 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
       // #73: the server gave no page this reader may open: the task's title and text, as before.
       if (label === 'phone') await page.keyboard.press('ArrowRight');
       else await dialog.locator('[data-dc="next"]').click();
-      if (label === 'phone') { await dialog.locator('.dc-fold h3', {hasText: 'Dark mode toggle'}).waitFor(); await dialog.locator('[data-dc="fold"]').click(); }
+      if (label === 'phone') { await dialog.locator('.dc-q', {hasText: 'OK the dark mode'}).or(dialog.locator('.dc-msg-ask')).first().waitFor(); await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click(); }
       await dialog.locator('.dc-thing .dc-title', {hasText: 'Dark mode toggle'}).waitFor();
       assert.equal(await frame.count(), 0);
       assert.match(await dialog.locator('.dc-thing').innerText(), /A toggle in Settings for dark mode/);

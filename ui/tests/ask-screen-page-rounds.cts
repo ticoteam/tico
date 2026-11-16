@@ -120,7 +120,7 @@ async function open(page: Page, errors: string[]) {
     assert.doesNotMatch(await side.innerText(), /p 0\.73|between 0\.2/, 'no p-value on the face');
     assert.doesNotMatch(await side.innerText(), /Version 3, after the send back/, "their note is not quoted back in the heading");
     const asker = await page.evaluate(() => actorLabel('bot:pm'));
-    assert.equal((await side.locator('.dc-meta').innerText()).replace(/\s+/g, ' ').trim(), `${asker} · Spec · v3 · Nov 13 · ✓ Meets · #80 ↗`);
+    assert.equal((await side.locator('.dc-meta').innerText()).replace(/\s+/g, ' ').trim(), `${asker} · Spec · v3 · Nov 13 · ✓ Meets #80 ↗`);
     // The ask is the asker's last message in the task's chat; the chat's box and Approve under it.
     const order = await side.locator('.dc-q, .dc-meta, .dc-open-task, .dc-part h4, .p-text, [data-dc="approve"]').evaluateAll(
       els => els.map(e => e.matches('.dc-part h4') ? (e.textContent || '').replace(/\s+\S+ \d+$/, '').trim() : e.className.split(' ')[0] || e.getAttribute('data-dc')));

@@ -39,7 +39,8 @@
 .dc-say{flex:1;display:flex;align-items:center;gap:6px;min-width:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
 .dc-say:empty{cursor:default}
 .dc-say-i{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
-.dc-say-t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-say-t{flex:1;min-width:0;overflow-wrap:anywhere}   /* never cut: it wraps (at most 80 characters, two lines) */
+.dc-say-i.dc-say-ok{color:var(--ok)}
 .dc-say[aria-expanded=true] .dc-say-t{white-space:normal;overflow-wrap:anywhere}
 /* The next ask Tico is still thinking about, faint, before ‹ ›; none on a phone. */
 .dc-up{flex:0 1 auto;max-width:28%;min-width:0;color:var(--muted);opacity:.7;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -73,7 +74,7 @@
 .dc-details>summary:hover{color:var(--ink)}
 .dc-details[open]>summary{color:var(--ink)}
 .dc-quote{margin:12px 0 0;padding:8px 12px;border-left:3px solid var(--line);color:var(--ink)}
-.dc-changed{margin:0 0 12px;padding:8px 12px;border-radius:8px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-weight:600}
+.dc-changed{margin:0 0 12px;color:var(--ink);font-weight:600}
 .dc-ref{margin:0;color:var(--muted)}
 /* a page fills the pane and scrolls inside itself; several pages each take the pane's height */
 .dc-page{display:block;flex:1 0 100%;width:100%;min-height:320px;border:1px solid var(--line);border-radius:6px;background:#fff}
@@ -131,14 +132,7 @@
 .dc-askw{flex:none}
 .dc-acts .dc-snzw+.dc-askw{margin-left:0}
 .dc-bg{min-width:0}
-.dc-bg>summary{display:flex;align-items:center;gap:8px;min-height:44px;color:var(--muted);cursor:pointer;list-style:none}
-.dc-bg>summary::-webkit-details-marker{display:none}
-.dc-bg>summary::after{content:"";flex:none;width:6px;height:6px;margin:0 4px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg) translateY(-2px);transition:transform .15s}
-.dc-bg[open]>summary::after{transform:rotate(-135deg) translateY(-1px)}
-.dc-bg>summary:hover{color:var(--ink)}
-.dc-bg-t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-.dc-bg[open] .dc-bg-t{white-space:normal;color:var(--ink)}
-.dc-bg-only{display:flex;align-items:center;min-height:44px;color:var(--muted)}
+.dc-bg-t{margin:0 0 8px;font-size:var(--t-base);font-weight:600;color:var(--ink)}
 .dc-bg-body{display:flex;flex-direction:column;gap:12px;padding-top:4px}
 .dc-links{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
 .dc-links .dc-open-task{margin:0}
@@ -191,10 +185,13 @@
 /* What was just done, with ↩ to take it back: in the top bar left of ‹ ›, laid over the bar's own end (the faint
    next-up line) so nothing moves, never over the page or the buttons (decide.ts decideBar). */
 .dc-nav{position:relative}
-.dc-bar{position:absolute;right:100%;top:50%;transform:translateY(-50%);z-index:2;display:flex;align-items:center;margin-right:4px;padding-left:8px;background:var(--bg);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;transition:opacity .4s}
+.dc-sayw{position:relative}
+/* What was just done, in Tico's line slot over the next item's line for 5 s: "✓ Approved with comments · Undo" */
+.dc-bar{position:absolute;inset:0;z-index:2;display:flex;align-items:center;gap:8px;padding:0 4px 0 12px;border-radius:10px;background:var(--surface2);color:var(--ink);font-size:var(--t-sm);white-space:nowrap;transition:opacity .4s}
 .dc-bar[hidden]{display:none}
 .dc-bar.dc-bar-out{opacity:0}
-.dc-bar button{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 8px;border:0;border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
+.dc-bar-w{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.dc-bar button{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 10px;border:0;border-radius:8px;background:none;color:inherit;font:inherit;font-weight:600;text-decoration:underline;cursor:pointer}
 .dc-bar button:hover{color:var(--ink);background:var(--surface2)}
 .dc-bar-i{flex:none}
 .dc-bar-err{color:var(--fail)}
@@ -231,10 +228,10 @@
 .dc-jev{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
 button.dc-jev{cursor:pointer}
 .dc-jev[data-v="met"]{border-color:color-mix(in srgb,var(--ok) 40%,var(--line));background:var(--ok-bg);color:var(--ok)}
-.dc-jev[data-v="unsure"],.dc-jev[data-v="failed"]{border-color:color-mix(in srgb,var(--wait) 40%,var(--line));background:var(--wait-bg);color:var(--wait-ink,var(--ink))}
+.dc-jev[data-v="unsure"],.dc-jev[data-v="failed"]{color:var(--muted)}
 .dc-jev[data-v="not_met"]{border-color:color-mix(in srgb,var(--fail) 40%,var(--line));background:var(--fail-bg);color:var(--fail)}
 .dc-jev-wait{border-style:dashed;color:var(--muted);font-weight:400}
-.dc-notice{margin:0;padding:6px 10px;border-left:3px solid var(--wait,var(--line));border-radius:4px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-size:var(--t-sm);overflow-wrap:anywhere}
+.dc-notice{margin:0;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}   /* one muted line, never an amber callout */
 .dc-step-ans{color:var(--muted);white-space:nowrap}
 .dc-step-ans[data-a="Sent back"]{color:var(--fail)}
 .dc-step-ans[data-a="OK'd"]{color:var(--ok)}
@@ -260,8 +257,8 @@ button.dc-jev{cursor:pointer}
 /* .dc-side>div makes it a column: centred, the mark and Close at their own size. */
 .dc-side>.dc-done{align-items:center;justify-content:center}
 /* An ask answered in the task's chat (decideChatMount): the thread (threads.css) fills the side, the ask its last
-   message; the row under the composer holds Approve, Snooze and ⋯. The fold (the task's title, Read the task) is the
-   phone's. */
+   message; the row under the composer holds Approve, Snooze and ⋯. The tabs (the task's title, Chat and the second
+   tab) are the phone's. */
 .decide.dc-chatmode .dc-side{overflow:hidden;padding:0}
 .decide.dc-chatmode .dc-side>.dc-chat{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:0}
 .dc-chat>.thv{flex:1 1 auto;min-height:0}
@@ -271,17 +268,23 @@ button.dc-jev{cursor:pointer}
 .dc-chat>.thv-list{padding:20px;overflow-y:auto}
 .decide.dc-chatmode .dc-side>[data-key]{flex:none;gap:8px;padding:8px 20px 16px}
 .decide.dc-chatmode .dc-side>[data-key]>.dc-acts{flex-wrap:nowrap}
-.dc-side>.dc-fold{display:none}
+.dc-side>.dc-tabs{display:none}
+
 .dc-msg-ask{margin:12px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2)}
 .dc-msg-ask .dc-msg-by{display:flex;flex-wrap:nowrap;align-items:center;gap:0 6px;margin:0 0 6px;min-height:0;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 /* one line: the asker's name gives way first, with an ellipsis; when, "needs you" and #N stay whole */
 .dc-msg-ask .dc-msg-by>*{flex:none}
 .dc-msg-ask .dc-msg-by>.dc-meta-who{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.dc-msg-ask .dc-msg-by>.dc-task-link,.dc-meta>.dc-task-link{margin-left:auto}   /* #N ↗ pinned right */
+.dc-mark{margin-left:4px;color:var(--muted)}
+/* An action's OK as a small receipt: the amount large, what it does, its facts */
+.dc-receipt{margin:4px 0 8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.dc-amt{margin:0;font-size:var(--t-xl);font-weight:700}
+.dc-receipt .dc-act-line{margin:2px 0 6px;color:var(--muted);font-weight:400}
 /* Flow's chat has the day divider only: the thread's "New" line is left out here */
 .dc-chat .th-newline{display:none}
 .dc-msg-ask .dc-q{margin:0 0 4px}
 .dc-msg-ask .dc-why{margin:0 0 8px;color:var(--muted)}
-.dc-needs{color:var(--wait-ink)}
 /* "Getting ready to flow": over the first item for well under a second; the item under it is drawn and takes every
    tap and key (no pointer events here). None with reduced motion (decideStart). */
 .dc-start{position:absolute;inset:0;z-index:4;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--bg);color:var(--muted);pointer-events:none;animation:dc-start .6s ease-in forwards}
@@ -305,9 +308,9 @@ button.dc-jev{cursor:pointer}
   /* Tico's line under the bar: a quiet callout from the mark (its caret at --dc-caret-x, set by decidePaintHead), up
      to two lines, not cut in half; none while Tico is still working. */
   .dc-sayw{display:block;order:9;flex-basis:100%;min-width:0;position:relative;margin:4px 0 10px}
-  .dc-sayw:has(>.dc-say:empty){display:none}
+  .dc-sayw:has(>.dc-say:empty):not(:has(>.dc-bar:not([hidden]))){display:none}
   .dc-sayw::before{content:"";position:absolute;top:-6px;left:calc(var(--dc-caret-x,24px) - 6px);border:6px solid transparent;border-top:0;border-bottom-color:var(--surface2)}
-  /* one line, cut; a tap shows it whole */
+  /* up to two lines, never cut */
   .dc-say{width:100%;min-height:44px;box-sizing:border-box;padding:6px 12px;border-radius:10px;background:var(--surface2);font-size:var(--t-sm);line-height:1.4}
   .dc-up{display:none}
   .dc-where{flex:0 1 auto;max-width:calc(100% - 236px)}
@@ -320,9 +323,6 @@ button.dc-jev{cursor:pointer}
   /* The answer row: out of the scroll, pinned to the bottom of the screen (.decide), solid, over the safe area. The
      scroll keeps its height clear at the end (--dc-bar-h, measured by decideBarRoom). */
   .dc-side>div:not(.dc-done)>.dc-acts:last-child{position:absolute;left:0;right:0;bottom:0;z-index:1;margin:0;padding:8px 16px calc(8px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--bg)}
-  /* the undo: ↩ alone, its word for screen readers; a failed undo keeps its words */
-  .dc-bar:not(.dc-bar-err) .dc-bar-w{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
-  .dc-bar button{min-width:44px;justify-content:center;padding:0}
   /* A page's meta line (who asked, check, version, mark, task): pinned on the answer row, always on the card; Notes
      and the parts stay under the page in the scroll. */
   .dc-side>div:not(.dc-done)>.dc-meta:has(~.dc-acts:last-child){position:absolute;left:0;right:0;bottom:var(--dc-acts-h,0px);z-index:2;box-sizing:border-box;min-height:44px;margin:0;padding:0 16px;border-top:1px solid var(--line);background:var(--bg)}
@@ -345,34 +345,49 @@ button.dc-jev{cursor:pointer}
   .dc-qmain>.dc-side{order:1;flex:none;border-top:0}
   .dc-qmain>.dc-thing{order:2;flex:none;padding:0 16px 16px}
   .dc-qmain>.dc-thing>.dc-bg{border-top:1px solid var(--line)}
-  .dc-qmain>.dc-thing>.dc-bg>summary,.dc-qmain>.dc-thing>.dc-bg-only{min-height:48px}
   /* Notes starts one line tall (rows in decide.ts) and grows with its text */
   .dc-side textarea[data-dc-grow]{min-height:44px}
   .dc-q{font-size:var(--t-lg)}
   /* a page's OK: the page names the thing; the task's title is left to the wide screen */
   .dc-q-page{display:none}
-  /* An ask in the task's chat: the task folds to its title (Read the task opens it), the chat and its row take the rest */
+  /* An ask in the task's chat: the chat and its row take the rest */
   .dc-main:has(>.dc-side>.dc-chat){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
-  .decide.dc-chatmode:not(.dc-unfold) .dc-thing{display:none}
-  /* a live browser the ask shows (website tools) is what the person acts on: it stays, above the chat, alone */
-  .decide.dc-chatmode:not(.dc-unfold) .dc-thing:has(>.dc-browser){display:flex;order:0;flex:none;padding:8px 16px}
-  .decide.dc-chatmode:not(.dc-unfold) .dc-thing:has(>.dc-browser)>:not(.dc-browser){display:none}
-  /* so does an action OK's summary (a payment, an email: what will happen), above the chat, before Approve; a spec or
-     any page stays folded behind Read the spec */
-  .decide.dc-chatmode:not(.dc-unfold) .dc-thing:has(>.dc-doc.dc-act){display:flex;order:0;flex:0 1 auto;max-height:50%;overflow-y:auto;padding:12px 16px;border-bottom:1px solid var(--line)}
-  .decide.dc-chatmode.dc-unfold .dc-side>.dc-chat{display:none}
+  /* Chat and Task: two tabs, one tight row; Chat shows the task's chat, Task the task open; the row stays at the bottom */
+  .decide.dc-chatmode:not(.dc-on-task) .dc-thing{display:none}
+  .decide.dc-chatmode.dc-on-task .dc-side>.dc-chat{display:none}
   .decide.dc-chatmode .dc-side{order:1;flex:1 1 auto;border-top:0}
-  /* Read the task: the fold, the task, then the row, still at the bottom */
-  .decide.dc-chatmode.dc-unfold .dc-side{display:contents}
-  .decide.dc-chatmode.dc-unfold .dc-side>.dc-fold{order:0}
-  .decide.dc-chatmode.dc-unfold .dc-thing{order:1;flex:1 1 auto;min-height:0;overflow-y:auto}
-  .decide.dc-chatmode.dc-unfold .dc-side>[data-key]{order:2}
-  .dc-side>.dc-fold{display:flex;flex-direction:row;align-items:center;gap:12px;flex:none;padding:0 16px;border-bottom:1px solid var(--line)}
-  .dc-fold h3{flex:1 1 auto;min-width:0;margin:0;font-size:var(--t-base);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .dc-fold button{flex:none;min-height:44px}
+  .decide.dc-chatmode.dc-on-task .dc-side{display:contents}
+  .decide.dc-chatmode.dc-on-task .dc-side>.dc-tabs{order:0}
+  .decide.dc-chatmode.dc-on-task .dc-thing{order:1;flex:1 1 auto;min-height:0;overflow-y:auto}
+  .decide.dc-chatmode.dc-on-task .dc-side>[data-key]{order:2}
+  /* 2. one row: the task's title (cut), then Chat and the second tab */
+  .dc-side>.dc-tabs{display:flex;flex-direction:row;align-items:center;gap:8px;flex:none;padding:2px 8px 2px 16px;border-bottom:1px solid var(--line)}
+  .dc-tabs-t{flex:1 1 auto;min-width:0;margin:0;font-size:var(--t-base);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dc-tabs [role="tablist"]{flex:none;display:flex;gap:2px;padding:2px;border-radius:10px;background:var(--surface2)}
+  .dc-tabs [role="tab"]{min-width:56px;min-height:44px;padding:0 10px;border:0;border-radius:8px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
+  .dc-tabs [role="tab"][aria-selected="true"]{background:var(--bg);color:var(--ink)}
+  /* 1. the chat sits on the composer: the ask last, older messages scroll up, no gap under them */
+  .dc-chat .thv-scroll{display:flex;flex-direction:column}
+  .dc-chat .thv-list{margin-top:auto}
+  /* 4. one bottom row: Snooze left, the forward action stretched, ⋯ far right; with no button action (a question) the
+     composer is the middle of that row */
+  .decide.dc-chatmode .dc-side>[data-key]>.dc-acts{gap:8px}
+  .decide.dc-chatmode .dc-side>[data-key]>.dc-acts>.dc-snzw{order:0;margin-left:0}
+  .decide.dc-chatmode .dc-side>[data-key]>.dc-acts>.dc-snzw:not(.dc-askw) .dc-snz{left:0;right:auto}
+  .decide.dc-chatmode .dc-side>[data-key]>.dc-acts>button{order:1;flex:1;min-height:44px}
+  .decide.dc-chatmode .dc-side>[data-key]>.dc-acts>.dc-askw{order:2;margin-left:auto}
+  .decide.dc-chatmode:not(.dc-on-task) .dc-side{position:relative}
+  .decide.dc-chatmode:not(.dc-on-task) .dc-side:not(:has(>[data-key]>.dc-acts>button))>[data-key]{position:absolute;left:0;right:0;bottom:0;background:none;pointer-events:none}
+  .decide.dc-chatmode:not(.dc-on-task) .dc-side:not(:has(>[data-key]>.dc-acts>button))>[data-key] .dc-acts>*{pointer-events:auto}
+  .decide.dc-chatmode:not(.dc-on-task) .dc-side:not(:has(>[data-key]>.dc-acts>button)) .dc-chat .thv-composer{padding-left:60px;padding-right:60px;padding-bottom:calc(8px + env(safe-area-inset-bottom))}
+  /* 9. words on an OK: the arrow sends a comment alone, so it goes quiet; the forward button is the filled one */
+  .decide.dc-typed-ok .dc-chat .p-send{background:none;border:1px solid var(--line);color:var(--muted)}
+  /* 12. ⋯ opens as a sheet from the bottom edge, full-width 52 px rows */
+  .dc-askw .dc-snz{position:fixed;left:0;right:0;bottom:0;top:auto;z-index:20;width:auto;max-width:none;margin:0;padding:8px 0 calc(8px + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;box-shadow:0 -8px 24px rgba(0,0,0,.35)}
+  .dc-askw .dc-snz .dc-mi{width:100%;min-height:52px;padding:0 20px;text-align:left}
   .dc-chat>.thv-card .thv-scroll,.dc-chat>.thv-card .thv-composer{padding-left:16px;padding-right:16px}
   .decide.dc-chatmode .dc-side>[data-key]{padding:8px 16px calc(8px + env(safe-area-inset-bottom))}
-  .decide.dc-chatmode .dc-side>[data-key]>.dc-acts:last-child{position:static;padding:0;border:0}
+  .decide.dc-chatmode .dc-side>[data-key]>.dc-acts:last-child{position:static;padding:0;border:0;background:none}
   .dc-meta{min-height:44px}
   .dc-vbtn,.dc-task-link{min-height:44px}
   /* the ask's meta line draws its task link 28 px tall: on a phone it is a 44 px target either way */

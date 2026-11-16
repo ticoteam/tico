@@ -1,9 +1,9 @@
 import type {Route} from 'playwright';
 // Offline browser check of a page's OK on a 390 px phone (the owner's review of a v3 page after two send backs), the
 // ask answered in its task's chat (decide.ts decideChatMount):
-// - Tico's line is a callout under the bar with a caret at the mark, only once the line is ready, inside the bar; one
-//   line, cut, a tap shows it whole; a thumb down stands for its leading "Send back.", the whole line its name;
-// - the task folds to its title above the chat, with "Read the spec · v3"; that opens the page, which fills the screen
+// - Tico's line is a callout under the bar with a caret at the mark, only once the line is ready, inside the bar; it
+//   wraps to two lines and is never cut; a thumb down stands for its leading "Send back.", the whole line its name;
+// - two tabs, Chat (where it opens) and Task; Task shows the page, which fills the screen
 //   down to the row (no short box that cuts it), its text sized for a phone (an h1 near 22 px, side padding);
 // - it opens clean: no blocks marked and no diff; the version control in the ask's one meta line lists each version
 //   and "Changes since v2", which marks the changed blocks;
@@ -109,10 +109,10 @@ const VIEW = {width: 390, height: 844};
     check(!await say.isVisible(), 'no empty callout while Tico is working');
 
     // The task folds to its title; Read the spec opens the page, which fills the screen down to the row.
-    const fold = dialog.locator('[data-dc="fold"]');
-    check(await fold.innerText() === 'Read the spec · v3', `the fold says Read the spec · v3 (${await fold.innerText()})`);
-    check(!await dialog.locator('.dc-thing').isVisible(), 'the page is folded away');
-    await fold.click();
+    // Two tabs, Chat (open) and Task: the page is in Task.
+    check(await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').getAttribute('aria-selected') === 'true', 'Chat is the tab it opens on');
+    check(!await dialog.locator('.dc-thing').isVisible(), 'the page is in the Task tab');
+    await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click();
     await dialog.locator('.dc-thing .dc-doc').first().waitFor();
     const hasFrame = await frame.count() > 0;
     check(hasFrame, 'the page opens as the page, not a diff');
@@ -137,13 +137,13 @@ const VIEW = {width: 390, height: 844};
     check(await dialog.locator('.dc-diff').count() === 0, 'no diff');
     check(await dialog.locator('.dc-since, .dc-switch').count() === 0, 'no "Changes since" row over the page');
 
-    // Back to the chat: the ask's meta line: stage, version, Jev, #80 ↗; no cards, no Open task row.
-    await fold.click();
+    // Back on Chat: the ask's meta line: stage, version, Jev, #80 ↗; no cards, no Open task row.
+    await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').click();
     const meta = dialog.locator('.dc-meta');
     check(await meta.count() === 1, 'one meta line');
     if (await meta.count()) {
       const text = (await meta.innerText()).replace(/\s+/g, ' ').trim();
-      check(text === 'Tasks Product Owner · Spec · v3 · ✓ · #80 ↗', `the meta line reads who asked · Spec · v3 · ✓ · #80 ↗ (${text})`);
+      check(text === 'Tasks Product Owner · Spec · v3 · ✓ #80 ↗', `the meta line reads who asked · Spec · v3 · ✓, #80 ↗ at the right (${text})`);
       check(await meta.locator('button:visible, a:visible').count() === 2, 'the meta line is two tap targets: the line and the task');
       // A long name gives way first: the line stays one line and ends with the task.
       const cut = await meta.evaluate(e => {
@@ -204,20 +204,16 @@ const VIEW = {width: 390, height: 844};
       check(!/rgba\(0, 0, 0, 0\)|transparent/.test(look.bg) && look.radius >= 6, `the line is a callout (${look.bg}, ${look.radius})`);
       check(look.caret && Math.abs(look.caretX - look.markX) <= 4, `its caret points at the mark (${look.caretX} vs ${look.markX})`);
       check(look.bottom <= look.headBottom, `the callout stays inside the bar (${look.bottom} > ${look.headBottom})`);
-      // One line, cut, with a thumb down for Send back in place of its word; the name keeps the whole line.
-      const t = say.locator('.dc-say-t'), one = () => t.evaluate(e => [e.getBoundingClientRect().height, e.scrollWidth > e.clientWidth] as const);
-      const cut = await one();
-      check(cut[0] <= 24 && cut[1], `the line is one line, cut (${cut})`);
+      // Never cut: it wraps (two lines at most), with a thumb down for Send back in place of its word; the name keeps the
+      // whole line.
+      const t = say.locator('.dc-say-t');
+      const fit = await t.evaluate(e => [e.getBoundingClientRect().height, e.scrollWidth > e.clientWidth, e.scrollHeight > e.clientHeight + 1] as const);
+      check(fit[0] > 24 && fit[0] <= 48 && !fit[1] && !fit[2], `the line wraps to two lines, never cut (${fit})`);
       check(await say.locator('.dc-say-i').textContent() === 'thumb_down' && await say.locator('.dc-say-i').getAttribute('title') === 'Send back', 'a thumb down stands for Send back');
       check(await t.textContent() === LINE.replace('Send back. ', ''), `the icon takes the leading word (${await t.textContent()})`);
-      check(await say.getAttribute('aria-label') === LINE && await say.getAttribute('aria-expanded') === 'false', 'its name is the whole line');
+      check(await say.getAttribute('aria-label') === LINE, 'its name is the whole line');
       check(Math.round((await say.boundingBox())!.height) >= 44, 'the line is a 44 px target');
-      await say.click();
-      const whole = await one();
-      check(await say.getAttribute('aria-expanded') === 'true' && whole[0] > 24 && !whole[1], `a tap shows it whole (${whole})`);
       if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-line-open.png')});
-      await say.click();
-      check(await say.getAttribute('aria-expanded') === 'false' && (await one())[0] <= 24, 'another tap cuts it again');
       check(await dialog.locator('.dc-chat .p-text').inputValue() === '', 'Tico never types for the person');
       if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-after.png')});
     }
@@ -225,6 +221,6 @@ const VIEW = {width: 390, height: 844};
 
     assert.deepEqual(errors, []);
     assert.deepEqual(fails, [], `\n- ${fails.join('\n- ')}`);
-    console.log("PASS: on a phone a page's OK folds to Read the spec, which gives the page the screen; it opens clean, keeps versions and changes in the ask's meta line, and Tico's line is a callout at the mark.");
+    console.log("PASS: on a phone a page's OK opens on Chat and its Task tab gives the page the screen; it opens clean, keeps versions and changes in the ask's meta line, and Tico's line is a callout at the mark.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

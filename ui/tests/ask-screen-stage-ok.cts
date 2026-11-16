@@ -80,8 +80,8 @@ const pages: Record<string, string> = {
       await page.locator('#task-play').click();
       const dialog = page.locator('#need-card');
       const frame = dialog.locator('iframe.dc-page');
-      // On a phone the task folds to its title above the chat: Read the spec opens its page.
-      const read = async () => { if (label === 'phone') await dialog.locator('[data-dc="fold"]').click(); };
+      // On a phone the page is in the Task tab; each item opens on Chat.
+      const read = async () => { if (label === 'phone') await dialog.locator('[data-dc="tab"][data-dc-tab="task"]').click(); };
 
       // The first ask: its own page, headed by its task.
       await dialog.locator('.dc-q', {hasText: 'Talk to the right bot from a pipeline board'}).waitFor();
