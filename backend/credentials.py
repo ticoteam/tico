@@ -926,6 +926,29 @@ def last_used(c, cid):
     }
 
 
+def same_value(c, cipher, env, value):
+    """The id of the oldest stored credential under `env` holding exactly `value`, for the computer file migration to
+    share by grant instead of storing a copy; None when there is none. Not a login, not a key of an Only listed tool
+    (whoever runs the migration may not see that tool), and not a key on the proxy: the bot used the value itself from
+    its file (an MCP header, an SDK), and a proxy token in its place would break that. The value is only compared,
+    never logged or returned."""
+    rows = c.execute(
+        'SELECT v.* FROM credentials v LEFT JOIN tools t ON t.id=v.tool_id '
+        "WHERE v.env=? AND v.kind!='login' AND v.ciphertext IS NOT NULL AND t.audience IS NULL "
+        "AND (t.id IS NULL OR t.delivery='computer') "
+        'ORDER BY v.created_at,v.id',
+        (env,),
+    ).fetchall()
+    for row in rows:
+        try:
+            held = cipher.decrypt(c, row)
+        except Problem:
+            continue  # a row this key cannot open is never a match
+        if hmac.compare_digest(held.encode(), value.encode()):
+            return row['id']
+    return None
+
+
 def install_credentials(app, store, delegate=None, propose=None):
     from . import runner_versions
 
@@ -1013,14 +1036,35 @@ def install_credentials(app, store, delegate=None, propose=None):
                     (item.env, subject),
                 ).fetchone():
                     continue
-                cid, gid, now = H.new_id(), H.new_id(), H.now()
-                ciphertext, nonce = vault.cipher.encrypt(c, cid, item.value.get_secret_value())
+                from . import api_tools
+
+                value, gid, now = item.value.get_secret_value(), H.new_id(), H.now()
+                # Bots on one computer often hold the same value (one Slack token, one AWS profile): it becomes ONE
+                # credential, shared by grant, never a copy per bot. Never on a key of an Only listed tool.
+                shared = same_value(c, vault.cipher, item.env, value)
+                if shared:
+                    c.execute(
+                        'INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)',
+                        (gid, shared, subject, who.actor, now),
+                    )
+                    H.event(
+                        c,
+                        who.actor,
+                        'credential.migrated',
+                        shared,
+                        {'env': item.env, 'bot': bot, 'grant': gid, 'shared': True},
+                    )
+                    api_tools.ensure_tool(c, who, shared, from_computer=True)
+                    continue
+                cid = H.new_id()
+                ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
+                taken = c.execute('SELECT 1 FROM credentials WHERE name=?', (item.env,)).fetchone()
                 c.execute(
                     'INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created_at,updated_at,updated_by) '
                     'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                     (
                         cid,
-                        f'{item.env} ({label})',
+                        f'{item.env} ({label})' if taken else item.env,
                         item.kind,
                         item.env,
                         '••••••',
@@ -1037,8 +1081,6 @@ def install_credentials(app, store, delegate=None, propose=None):
                     (gid, cid, subject, who.actor, now),
                 )
                 H.event(c, who.actor, 'credential.migrated', cid, {'env': item.env, 'bot': bot, 'grant': gid})
-                from . import api_tools
-
                 api_tools.ensure_tool(c, who, cid, from_computer=True)  # already in use from the computer
             if first:
                 pending.remove(bot)
