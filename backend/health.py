@@ -876,10 +876,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
     }
     # A starter bot still waiting for its first setup holds its work on purpose: not slow (`unfinished_setup` warns
     # once the hold is old).
-    parked = {
-        r["bot"]
-        for r in c.execute("SELECT bot FROM bot_config WHERE onboarding_state IN ('needs_setup','needs_onboarding')")
-    }
+    parked = {r["bot"] for r in c.execute("SELECT bot FROM bot_config WHERE onboarding_state='needs_setup'")}
     # A bot in the middle of a turn has its next message waiting behind it: busy, not stuck (partial index).
     from . import org_turns
 

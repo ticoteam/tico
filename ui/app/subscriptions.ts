@@ -386,6 +386,10 @@ function subsPickerHTML(machine: SubsMachine, runtime: string) {
   const set = given?.person ? given.set : null;
   const current = set ? null : subsAssigned(machine.id, runtime);
   const value = given?.person ? SUBS_PERSON + given.person : current?.id || '';
+  // A key (the computer's own, or a shared one) keeps its chip beside the picker: the picker reads "This computer's own
+  // login" for either, and the chip says which it is. A plain login has no chip here; the picker already says it.
+  const keys = machineShown(machine).filter(conn => conn.runtime === runtime && (conn.shared || conn.value?.key));
+  const keyChips = keys.length ? `<span class="machine-chips">${keys.map(conn => machineChipHTML(machine, conn)).join('')}</span>` : '';
   // People first (each one who owns a plan for this tool, with their count), single plans next with their owner, this
   // computer's own login (or what runs it without one) last.
   const people = SUBS.people.filter(person => Number(person[runtime]) > 0);
@@ -396,8 +400,8 @@ function subsPickerHTML(machine: SubsMachine, runtime: string) {
     ${people.length ? `<optgroup label="People">${people.map(person => option(SUBS_PERSON + person.id, subsPersonPlans(person.name, Number(person[runtime])))).join('')}</optgroup>` : ''}
     ${options.length ? `<optgroup label="Single plans">${options.map(sub => option(sub.id, sub.owner_name && subsOwned(sub.kind) ? `${sub.name} · ${sub.owner_name}` : sub.name)).join('')}</optgroup>` : ''}
     ${option('', subsNoneWords(machine, runtime) === 'Signed in here' ? "This computer's own login" : subsNoneWords(machine, runtime))}</select>`;
-  if (set) return `<span class="subs-cell subs-cell-set">${select}<span class="subs-set-line muted" data-subs-set-line>${esc(subsSetLine(machine, runtime, set))}</span></span>`;
-  return `<span class="subs-cell">${select}${current?.status === 'needs_reconnect' ? subsStatusHTML(current) : ''}</span>`;
+  if (set) return `<span class="subs-cell subs-cell-set">${keyChips}${select}<span class="subs-set-line muted" data-subs-set-line>${esc(subsSetLine(machine, runtime, set))}</span></span>`;
+  return `<span class="subs-cell">${keyChips}${select}${current?.status === 'needs_reconnect' ? subsStatusHTML(current) : ''}</span>`;
 }
 // A change: PUT, and when runs would stop, an in-page confirm with the counts, then PUT again with confirm.
 async function subsPick(select: HTMLSelectElement) {
