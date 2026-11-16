@@ -313,6 +313,17 @@ def test_migration_shares_one_credential_per_value_by_grant(api):
     migrate('cpo', 'fixture-shared-value-1')
     assert len(rows()) == 3
 
+    # A key on the proxy is never shared this way either: the bot keeps getting the value itself, not a proxy token.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE tools SET audience=NULL, delivery='proxy' WHERE id IN "
+            "(SELECT tool_id FROM credentials WHERE env='QA_SHARED_KEY')"
+        )
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), FILE_MIGRATION))
+        c.execute("DELETE FROM credential_grants WHERE subject='bot:ops'")
+    migrate('ops', 'fixture-shared-value-1')
+    assert len(rows()) == 4
+
 
 def test_a_reserved_variable_name_is_refused_and_an_old_one_is_named_in_health(api):
     setup(api)

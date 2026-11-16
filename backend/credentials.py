@@ -928,11 +928,14 @@ def last_used(c, cid):
 
 def same_value(c, cipher, env, value):
     """The id of the oldest stored credential under `env` holding exactly `value`, for the computer file migration to
-    share by grant instead of storing a copy; None when there is none. Not a login, and not a key of an Only listed
-    tool (whoever runs the migration may not see that tool). The value is only compared, never logged or returned."""
+    share by grant instead of storing a copy; None when there is none. Not a login, not a key of an Only listed tool
+    (whoever runs the migration may not see that tool), and not a key on the proxy: the bot used the value itself from
+    its file (an MCP header, an SDK), and a proxy token in its place would break that. The value is only compared,
+    never logged or returned."""
     rows = c.execute(
         'SELECT v.* FROM credentials v LEFT JOIN tools t ON t.id=v.tool_id '
         "WHERE v.env=? AND v.kind!='login' AND v.ciphertext IS NOT NULL AND t.audience IS NULL "
+        "AND (t.id IS NULL OR t.delivery='computer') "
         'ORDER BY v.created_at,v.id',
         (env,),
     ).fetchall()
