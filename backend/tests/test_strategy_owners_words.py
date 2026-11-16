@@ -19,7 +19,7 @@ def revision(api):
 
 
 def asked(api, said=SAID, title="Who we serve"):
-    """A get-aligned question of the Strategy Owner's, which Ana answered on its task."""
+    """An add-to-flow question of the Strategy Owner's, which Ana answered on its task."""
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, G.AUTO_ACTOR, title, "Write it into the strategy.", G.AUTO_ACTOR, lint=False)
         if said:
@@ -110,7 +110,7 @@ def test_a_task_body_never_counts_as_the_owners_words(api):
 
 
 def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_strategy(api):
-    """The get-aligned round trip: the Strategy Owner asks Ana on a task of its own, she answers in free text, and it
+    """The add-to-flow round trip: the Strategy Owner asks Ana on a task of its own, she answers in free text, and it
     writes her answer into "Who we serve" (and the bet it changes), then publishes citing the task. Only that section
     moves: the summary stays as it was."""
     goal_manager(api, level=2)
@@ -121,7 +121,7 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
         token="ana-test",
     )
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, G.AUTO_ACTOR, "Who do we serve?", "A get-aligned question.", G.AUTO_ACTOR, lint=False)
+        task = H.task_create(c, G.AUTO_ACTOR, "Who do we serve?", "An add-to-flow question.", G.AUTO_ACTOR, lint=False)
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
         json={
@@ -166,7 +166,7 @@ def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
     as_bot(api, "strategy-owner")
     with api.app.state.store.transaction() as c:
         task = H.task_create(
-            c, G.AUTO_ACTOR, "Small landlords first?", "A get-aligned question.", G.AUTO_ACTOR, lint=False
+            c, G.AUTO_ACTOR, "Small landlords first?", "An add-to-flow question.", G.AUTO_ACTOR, lint=False
         )
     sections = {"serve": "Small landlords.", "not": "Enterprise."}
     assert draft(api, {"sections": sections, "task": task["id"]}, 422)["error"]["code"] == "invalid"  # nothing of hers

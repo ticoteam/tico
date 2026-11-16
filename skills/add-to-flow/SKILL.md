@@ -1,9 +1,9 @@
 ---
-name: get-aligned
-description: Read when a person pings you for questions ("Any questions for me?", from Flow), when your setup task says to run it, or before you guess at something your supervisor would have a view on. Ask at most three plain questions, each its own task; zero is a good result.
+name: add-to-flow
+description: Put a question in a person's Flow. Read when a person pings you for questions ("Any questions for me?", from Flow), when your setup task says to run it, or when you need a person's view before you act. Ask at most three plain questions, each its own task; zero is a good result.
 ---
 
-# Get aligned
+# Add to Flow
 
 You ask the questions whose answers would change what you do next, and nothing else.
 

@@ -1328,7 +1328,7 @@ STABLE = [
         "pingFlowBots",
         "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), "
         "`bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; "
-        "never BotOps or the Assistant. Each gets one message from you pointing at the get-aligned skill; its questions "
+        "never BotOps or the Assistant. Each gets one message from you pointing at the add-to-flow skill; its questions "
         "come back as tasks of its own, each with one ask to you, in your Needs you. A bot you pinged in the last 10 "
         "minutes is listed in `recent` and not messaged again. Calls no model",
         "FlowPinged",

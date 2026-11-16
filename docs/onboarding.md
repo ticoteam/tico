@@ -239,7 +239,7 @@ second). It reaches no computer.
   - it does not count toward a member's bot limit while parked.
 - A **seat bot** setup made (one that goes live with no person step) gets its own "Set yourself up" task once, at go-live
   (`backend/setup_live.py`). When the bot reports to the owner (a default company's team managers), that task ends with
-  the setup's one automatic ping, the button's default scope: run Tico's `skills/get-aligned/SKILL.md` for the owner, so
+  the setup's one automatic ping, the button's default scope: run Tico's `skills/add-to-flow/SKILL.md` for the owner, so
   its first questions (zero to three) wait in their Flow. The owner's ping is recorded then, with no run of its own, so
   the bot may ask them. The bots under a manager get none, so the owner is not asked by every bot at once, and nothing
   pings a bot automatically again ([Tasks](tasks.md#needs-you)).

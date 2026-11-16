@@ -125,7 +125,7 @@ Show what they decide on with `--show page:12` (a page you published) rather tha
   bot that waits on the same person. Ask once, on the task.
 When you are woken with the answer, act on it. Never ask again about what was answered.
 When a person pings you for questions, or before you guess at something your supervisor would have a view on, read
-Tico `skills/get-aligned/SKILL.md` and follow it.
+Tico `skills/add-to-flow/SKILL.md` and follow it.
 
 ## Deciding with the decision model (`tico decision ask`)
 When a step is a decision rather than writing — which bucket, is this already covered, does this

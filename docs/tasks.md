@@ -180,7 +180,7 @@ never a task's title, a page or anyone's name.
 and `/feedback` act on one. Added rules do not show in the stage editor yet.
 
 **Want more? Ping your bots.** All done offers this button: each bot you manage gets one message from you pointing
-at Tico's `skills/get-aligned/SKILL.md`, and the screen says "Asking your bots" while their questions come in. A bot
+at Tico's `skills/add-to-flow/SKILL.md`, and the screen says "Asking your bots" while their questions come in. A bot
 reads what is written down first and asks only what would change what it does next: at most three, each its own task
 of its own with one free-form ask to you, so they arrive in Flow as they are filed. Asking nothing is a good result.
 The Flow mark on a bot's page, or a team's, opens Flow on that bot's (or team's bots') items only, and its ping goes to

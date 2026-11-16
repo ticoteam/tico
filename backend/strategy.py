@@ -1112,7 +1112,7 @@ def save_asked_vision(c, actor, task_id, text):
 
 def owners_words(c, actor, task_id):
     """The Strategy Owner writes the draft or publishes only on what the owner told it: a task of its own on which the
-    owner wrote on: any comment or answer of their own, a tapped choice or "Yes" included (the answer to a get-aligned
+    owner wrote on: any comment or answer of their own, a tapped choice or "Yes" included (the answer to a add-to-flow
     question). Never the task's body: the bot can write that (filed "for" them, or edited after). Returns whose words,
     for the history: {task, person}."""
     from . import goals as G
