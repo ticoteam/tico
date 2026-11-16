@@ -276,8 +276,6 @@ button.ghost.code-retry{padding:1px 8px;font-size:var(--t-sm);line-height:18px}
 #task-modal .task-side .prop[data-prop-row="followers"] .prop-tags{flex-wrap:nowrap;min-width:0}
 #task-modal .task-side .prop[data-prop-row="followers"] .prop-chip{flex:0 1 auto;min-width:0}
 #task-modal .task-side .prop[data-prop-row="followers"] :is(.prop-v,.prop-add){flex:none}
-/* The request, the chat's first message, reads like any other (a long one stops at ten lines with Show more). */
-#task-modal .task-chat .th-request .th-body-wrap>.msg-more{margin-top:2px}
 /* The older window's rules (task-list.css) do not reach the new rows: a status row is a status row, and the Snoozed
    chip keeps a width limit inside the head's actions. */
 #task-modal .task-chat .th-status.task-wait{margin:0;color:inherit;font-size:var(--t-sm)}

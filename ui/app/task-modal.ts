@@ -811,7 +811,7 @@ const taskEventNote = (x: ModalLine) => x.kind === 'event' && x.field !== 'githu
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
 function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '') {
   if (x.kind === 'request') {
-    const said = taskClampedMd(x.id, x.body, x.who);
+    const said = messageMd('th-body md', x.body, x.who);
     return `<div class="th-msg tcomment tmsg th-request${x.who && x.who === myActor() ? ' th-mine' : ''}" data-message="${esc(x.id)}"><div class="th-av">${actorAvatar(x.who || x.label, 28)}</div>
     <div class="th-main"><div class="th-head">${x.who ? taskMsgWho({sender_id: x.who, refs: {}} as unknown as ModalComment) : `<span class="th-who">${esc(x.label)}</span>`}<time datetime="${esc(x.ts)}" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>
     <div class="th-body-wrap">${said}</div></div></div>`;
@@ -864,12 +864,9 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
   return `<div class="th-msg tcomment tmsg${me ? ' th-mine from-me' : ''}${bot ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="th-av">${taskMsgFace(m)}</div>
     <div class="th-main"><div class="th-head">${taskMsgWho(m)}${kind}${roadmapCommentMark(m, taskId)}<time datetime="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
       m.refs?.quiet ? '<span class="th-state muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}</div>
-    ${taskStepsHTML(m)}<div class="th-body-wrap"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? taskClampedMd(m.id, body, m.sender_id) : ''}
+    ${taskStepsHTML(m)}<div class="th-body-wrap"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? messageMd('th-body md', body, m.sender_id) : ''}
     ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id, files) : ''}${fbRowHTML(fb, m.body || '')}</div></div></div>`;
 }
-// A message's words, stopped at ten lines with Show more when long, as the chat does it (ui/app/chat.ts chatClampCls).
-const taskClampedMd = (id: string | null | undefined, text: string, sender: string | null | undefined) =>
-  messageMd('th-body md' + chatClampCls(id, text), text, sender) + chatMoreHTML(id, text);
 // The task's request as the chat's first message: who asked, when, the words. Left out when the task has no words
 // beyond its title, or when its first message already says them.
 function taskRequestLine(t: ModalTask | null | undefined, said: ModalComment[]): ModalLine[] {
@@ -1278,7 +1275,6 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
     roadmapCommentsBind(state);
-    chatClampSync(thread);          // a long message that fits after all shows in full, with no Show more
     fbSync();
     if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
       reload: () => taskChatRead(state)});
@@ -1452,8 +1448,7 @@ function taskTabShow(d: ModalDialog, tab: TaskTab, picked = true) {
   d.taskTab = tab; taskTabPaint(d);
   if (tab === 'chat' && was !== 'chat' && TASK_CHAT?.dialog === d) {
     const thread = $('.task-comments', TASK_CHAT.host);
-    // A long message drawn while Chat was out of sight is measured now (chat.ts chatClampSync).
-    if (thread) { chatClampSync(thread); stickScroll(thread).toBottom(); }
+    if (thread) stickScroll(thread).toBottom();
   }
 }
 function taskTabsBind(d: ModalDialog) {

@@ -38,10 +38,10 @@ const VIEW_READS = [
   // A bot's page: its ⋯ (the detail views), the lock and Incognito in ⋯ (they only move between its chats), and the
   // rail's ⋯ (the task lists that did not fit). The private chat's Archive in that ⋯ is a write: hidden (VIEW_HIDDEN).
   '#bot-more-btn', '#bot-incognito', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
-  // The task window: opening a subtask or a related task (and unfolding the subtasks), Show more on a long message,
-  // opening a file, copying a session's resume command, and the head's ⋯, which in a view holds only reads (Copy link,
+  // The task window: opening a subtask or a related task (and unfolding the subtasks), opening a file, copying a session's
+  // resume command, and the head's ⋯, which in a view holds only reads (Copy link,
   // Copy session ID, Watch the session; task-props.ts leaves the rest out).
-  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-msg-more]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
+  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
   // Replay, Changelog, Usage, Roadmap and What it has learned (the pages a view opens; Usage and Learnings answer a bot
   // with an error): Retry after a failed load, the shared filter icon, and in the shared popover a filter's choices and
   // its search.

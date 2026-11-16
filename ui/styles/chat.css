@@ -452,10 +452,6 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 .chat-day.chat-quiet::before,.chat-day.chat-quiet::after{flex:0 0 32px}
 /* steered and queued: a small mark beside the time */
 .chat-way{display:inline-grid;place-items:center;flex:none;align-self:center;width:14px;height:14px;font-size:14px;color:var(--muted)}
-/* a long message: ten lines, then Show more */
-.msg-clamp{max-height:10lh;overflow:hidden}
-.msg-more{display:block;margin-top:2px}
-.msg-more[hidden]{display:none}
 /* Your messages (ui/app/chat-index.ts): one faint tick per message the reader sent, in a narrow strip on the feed's
    right edge, inset from its top and bottom. Ticks on screen are brighter; the one pointed at and its two neighbours
    grow a little, like a dock, and the message shows beside it. Only the ticks take the pointer, never the strip. */
