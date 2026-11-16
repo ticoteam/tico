@@ -166,8 +166,9 @@ def _service(scopes):
 
 
 def workspace_credentials(mailbox, scopes=None):
-    """A token from the Tico server's Google Workspace connection, for a computer with no key file
-    (oauth.server_workspace_token). One service at a time, as a person's own grant is."""
+    """A token from the Tico server, from the person's own Connect Google grant or the Workspace key
+    (oauth.server_workspace_token). One service at a time; a personal grant's token carries the scopes it holds, which
+    oauth.require refuses writes by."""
     service = _service(scopes)
     if not service:
         raise Failure(f"{mailbox}'s Google access is given one service at a time", "Ask for gmail or calendar.")
@@ -188,9 +189,12 @@ def workspace_credentials(mailbox, scopes=None):
 def credentials(mailbox, scopes=None, path=None, key_only=False):
     """A credential that acts as `mailbox`. Requires the google-auth library.
 
-    Order: the runner's supervisor (a turn), a person's own grant (a refused grant never falls back), this computer's
-    key file, and then, only when there is no key file and the runner gave this process its way to the server, the
-    Google Workspace connection on the server."""
+    Order: the runner's supervisor (a turn); then, whenever the runner gave this process its way to the server, the
+    server's token for that mailbox and nothing on this computer (`workspace_credentials`): the server holds every
+    credential, applies a person's own grant before the Workspace key and gives a read-only grant only its read scopes,
+    so no key file or grant copy here may answer for a mailbox first. Only a mail CLI run by hand, without that way,
+    uses a grant made here with a team's own Desktop client (a refused grant never falls back) or this computer's key
+    file."""
     if not key_only and path is None:
         granted = supervisor_token(mailbox, scopes)
         if granted:
@@ -200,11 +204,11 @@ def credentials(mailbox, scopes=None, path=None, key_only=False):
             if isinstance(granted.get("scopes"), list):  # a connected account: what it granted
                 creds._tico_granted = [str(s) for s in granted["scopes"]]
             return creds
+    if oauth.broker_configured():  # the supervisor's own mint (key_only) too
+        return workspace_credentials(mailbox, scopes)
     found = oauth.grant(mailbox, oauth.grants_path(path) if path else None)
     if found:
         return person_credentials(mailbox, found, scopes)
-    if not key_file_present(path) and oauth.broker_configured():
-        return workspace_credentials(mailbox, scopes)
     try:
         from google.oauth2 import service_account
     except ImportError:

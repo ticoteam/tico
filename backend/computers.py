@@ -34,20 +34,12 @@ def disconnect(store, runner_id):
 
 
 def _service_holds(c):
-    """Exclusions for services a computer may hold: a Google grant or mail hold, an enabled meeting importer. Some of
-    these tables are made by their module on first use, so only the ones present are checked."""
+    """Exclusions for services a computer may hold: an enabled meeting importer. Its table is made by its module on
+    first use, so it is checked only when present."""
     have = {
-        r[0]
-        for r in c.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
-            "('google_connects','google_mail_holders','meeting_importers')"
-        )
+        r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('meeting_importers')")
     }
     sql = ""
-    if "google_connects" in have:
-        sql += " AND NOT EXISTS (SELECT 1 FROM google_connects g WHERE g.runner_id=r.id OR g.holder=r.id)"
-    if "google_mail_holders" in have:
-        sql += " AND NOT EXISTS (SELECT 1 FROM google_mail_holders g WHERE g.runner_id=r.id)"
     if "meeting_importers" in have:
         sql += " AND NOT EXISTS (SELECT 1 FROM meeting_importers i WHERE i.runner_id=r.id AND i.enabled=1)"
     return sql

@@ -447,11 +447,11 @@ def test_authority_follows_a_live_personal_grant_then_the_key_then_legacy(api, p
     assert who("eve@acme.example") == "legacy"
     connected(api, private)
     assert who("eve@acme.example") == "workspace" and who("x@other.example") == "legacy"
-    personal(api, "cara", "cara@acme.example", holder="r1", grant="g1")
+    personal(api, "cara", "cara@acme.example", grant="g1")
     assert who("cara@acme.example") == "personal"  # a live grant always wins
-    personal(api, "dan", "dan@acme.example", status="disconnected", holder=None, grant=None)
+    personal(api, "dan", "dan@acme.example", status="disconnected", grant=None)
     assert who("dan@acme.example") == "workspace"  # not live: the key covers the domain
-    personal(api, "fay", "fay@acme.example", status="failed", holder="r1", grant="g2", client="old")
+    personal(api, "fay", "fay@acme.example", status="failed", grant="g2", client="old")
     assert who("fay@acme.example") == "personal"  # a failed reconnect keeps the earlier grant
     with store.transaction() as c:
         c.execute("UPDATE google_workspaces SET status='failing'")
@@ -475,9 +475,10 @@ def test_a_cloud_computer_publishes_the_workspace_mailboxes_its_bots_run_on(api,
             )
         c.execute("INSERT INTO assignments VALUES('inbox-cara','cloud-1',1,?,'human:ana')", (H.now(),))
     connected(api, private)
-    personal(api, "cara", "cara@acme.example", holder="cloud-1", grant="g1")
+    personal(api, "cara", "cara@acme.example", grant="g1")
     with store.read() as c:
-        assert W.owned_mailboxes(c, "cloud-1") == {MAILBOX, "cara@acme.example"}
+        # Cara's own grant follows the same rule: no bot of hers runs anywhere and no computer is online for her.
+        assert W.owned_mailboxes(c, "cloud-1") == {MAILBOX}
         assert W.owned_mailboxes(c, "box-2") == set()
 
 

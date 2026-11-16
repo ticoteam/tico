@@ -143,11 +143,27 @@ def connected(api, private, key_id="key-1", mailbox=MAILBOX):
     return answer
 
 
-def personal(api, person, mailbox, status="connected", holder="r1", grant="g1", client=None):
-    """A Connect Google grant as google_connect keeps it: a holder computer and a grant fingerprint make it live."""
+def personal(api, person, mailbox, status="connected", grant="1//g1", client=None, scopes=None):
+    """A Connect Google grant as google_connect keeps it: its refresh token sealed on the server makes it live (`grant`
+    None is a row with no grant)."""
+    from backend import google_tokens
+
+    operation = "gc_" + person
     with api.app.state.store.transaction() as c:
+        sealed = google_tokens.seal(c, person, operation, mailbox, grant) if grant else None
         c.execute(
-            "INSERT INTO google_connects(person_id,mailbox,status,holder,grant_hash,client_id,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (person, mailbox, status, holder, grant, client, H.now(), H.now()),
+            "INSERT INTO google_connects(person_id,mailbox,status,operation_id,grant_operation_id,grant_sealed,"
+            "grant_scopes,client_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                person,
+                mailbox,
+                status,
+                operation,
+                operation if grant else None,
+                sealed,
+                scopes,
+                client,
+                H.now(),
+                H.now(),
+            ),
         )

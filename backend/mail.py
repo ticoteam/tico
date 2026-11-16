@@ -15,7 +15,7 @@ import sqlite3
 
 from fastapi import Request
 
-from . import gmail_live, google_workspace, mailbox_access, routines
+from . import gmail_live, google_tokens, google_workspace, mailbox_access, routines
 from .store import H, Problem
 from .views import human_only, roster
 
@@ -231,8 +231,8 @@ def install_mail(app, store, auth):
                 else:
                     reason = f"You may not organize {addr} (Tools > {addr} > Who can use it)"
                 raise Problem("forbidden", reason, 403)
-            if google_workspace.authority(c, addr) != "workspace":
-                raise Problem("mailbox", "Live organizing needs Whole Workspace", 422)
+            if not google_tokens.covered(c, addr):
+                raise Problem("mailbox", "Live organizing needs Whole Workspace or Connect Google", 422)
             if store.settings.rehearsal or store.settings.demo:
                 raise Problem("rehearsal", "This install does not organize live email", 403)
 
@@ -342,18 +342,18 @@ def install_mail(app, store, auth):
         cap = min(LIMIT_MAX, max(1, int(limit or LIMIT_DEFAULT)))
         since_epoch, until_epoch = epoch_bound(since, "since"), epoch_bound(until, "until")
         with store.read() as c:
-            allowed = visible_addresses(c, who)
+            allowed, addr = visible_addresses(c, who), ""
             if mailbox:
                 addr, allowed = require_mailbox(c, who, mailbox)
                 boxes = [addr]
             else:
                 boxes = allowed
-            if mailbox and google_workspace.authority(c, addr) == "workspace":
+            if addr and google_tokens.covered(c, addr):
                 query = gmail_query(q, label, since_epoch, until_epoch, has_attachment)
                 page = gmail_live.list(c, addr, query, page_token=cursor, limit=min(cap, gmail_live.LIMIT_MAX))
                 domains = mailbox_access.company_domains(c)
                 return {**page, "messages": [live_message_public(addr, item, domains) for item in page["messages"]]}
-            if not mailbox and any(google_workspace.authority(c, box) == "workspace" for box in boxes):
+            if not mailbox and any(google_tokens.covered(c, box) for box in boxes):
                 raise Problem("mailbox", "Choose a mailbox to read live from Gmail", 422)
             after = decode_cursor(cursor) if cursor else None
             match = sanitize_fts(q)
@@ -408,7 +408,7 @@ def install_mail(app, store, auth):
         # anything is returned.
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
-            if google_workspace.authority(c, addr) == "workspace":
+            if google_tokens.covered(c, addr):
                 domains = mailbox_access.company_domains(c)
                 items = [
                     live_message_public(addr, item, domains, body=True) for item in gmail_live.thread(c, addr, tid)
@@ -436,7 +436,7 @@ def install_mail(app, store, auth):
             raise Problem("message", "msg_id is required", 422)
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
-            if google_workspace.authority(c, addr) == "workspace":
+            if google_tokens.covered(c, addr):
                 out = live_message_public(
                     addr, gmail_live.message(c, addr, mid), mailbox_access.company_domains(c), body=True
                 )

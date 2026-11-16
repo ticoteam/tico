@@ -161,16 +161,16 @@ def test_mailboxes_the_server_keeps_and_connect_google_grants_get_rows(api):
         c.execute("INSERT INTO mail_mailboxes(address, person_id) VALUES(?, ?)", (ANA, "ana"))
         now = H.now()
         cols = MA._columns(c, "google_connects")
-        extra = ", grant_hash" if "grant_hash" in cols else ""
-        values = ", 'h'" if extra else ""
+        extra = ", grant_sealed" if "grant_sealed" in cols else ""
+        values = ", 'sealed'" if extra else ""
         c.execute(
             f"INSERT INTO google_connects(person_id, mailbox, status, created_at, updated_at{extra}) "
             f"VALUES('cara', ?, 'connected', ?, ?{values})",
             (CARA, now, now),
         )
         c.execute(
-            f"INSERT INTO google_connects(person_id, mailbox, status, created_at, updated_at{extra}) "
-            f"VALUES('ben', ?, 'disconnected', ?, ?{values})",
+            "INSERT INTO google_connects(person_id, mailbox, status, created_at, updated_at) "
+            "VALUES('ben', ?, 'disconnected', ?, ?)",
             (BEN, now, now),
         )
         MA.backfill(c)

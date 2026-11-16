@@ -48,7 +48,6 @@ interface GoogleConnectPersonal {
   acts?: GoogleConnectActs;
   message?: string | null;
   hint?: string | null;
-  stalled?: boolean;
 }
 interface GoogleConnectState { g: GoogleConnectView; personal: GoogleConnectPersonal | null }
 interface GoogleConnectRows { active: GoogleKeyRow | null; pend: GoogleKeyRow | null; replacing: boolean; flash: string }
@@ -331,7 +330,7 @@ interface Window { mountGoogleConnect: (host: GoogleConnectHost | null, options?
     const reads = !state.configured ? '' : state.app === 'own'
       ? '<p class="muted">With your company\'s Google app, Connect Google can also label, archive and draft mail, and add calendar events. Tico\'s shared app only reads your mail and calendar. Sending stays off.</p>'
       : '<p class="muted">Tico asks Google only to read your mail and calendar. It can\'t send, label, archive or change anything, and sending stays off.</p>';
-    const busy = ['ready', 'finishing', 'disconnecting', 'revoking'].includes(state.status ?? '');
+    const busy = state.status === 'finishing';
     // What the grant can write beyond reading: per service (state.acts = {mail, calendar}), named in the connected line.
     const acts: GoogleConnectActs = state.acts || {};
     const writes = [acts.mail && 'label, archive and draft mail', acts.calendar && 'add calendar events'].filter(Boolean);
@@ -349,12 +348,9 @@ interface Window { mountGoogleConnect: (host: GoogleConnectHost | null, options?
         <p class="muted">If Google said <strong>Access blocked</strong> or <strong>admin_policy_enforced</strong>, your Google Workspace administrator has a policy that blocks Tico. Only they can allow it (Admin console &gt; Security &gt; API controls &gt; App access control); Tico won't ask for more access to get around it.</p>
         <div class="row"><button type="button" class="primary" data-google-connect>Connect Google again</button></div>`;
     } else if (busy) {
-      body = `<p>${state.status?.startsWith('dis') || state.status === 'revoking' ? 'Disconnecting' : 'Finishing the connection for'} ${box}…</p>
-        ${state.stalled ? `<p role="alert"><strong>${esc(state.message)}</strong></p>
-        <p class="muted">Remove Tico now at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>. The computer finishes the disconnect when it is back online.</p>`
-          : '<p class="muted">The computer that syncs your mail finishes this, usually within two minutes.</p>'}`;
+      body = `<p>Finishing the connection for ${box}…</p>`;
     } else {
-      const failed = state.status === 'failed' ? `<p role="alert"><strong>${esc(state.message)}</strong></p><p class="muted">${esc(state.hint)}</p>` : '';
+      const failed = state.message && (state.status === 'failed' || state.status === 'disconnected') ? `<p role="alert"><strong>${esc(state.message)}</strong></p><p class="muted">${esc(state.hint)}</p>` : '';
       body = `${failed}<p>Connect ${box} so your message bot can read your inbox and calendar. You sign in to Google and approve; no administrator or setup is needed.</p>
         <p class="muted">If Google says it hasn't verified this app, this Tico server uses its own private Google app. Continue with Advanced only if you trust whoever runs this server.</p>
         <div class="row"><button type="button" class="primary" data-google-connect>Connect Google</button></div>`;
@@ -756,7 +752,7 @@ interface Window { mountGoogleConnect: (host: GoogleConnectHost | null, options?
         void check(host, true);
       }
     }
-    const personalBusy = !!personal && !personal.error && ['ready', 'finishing', 'disconnecting', 'revoking'].includes(personal.status ?? '');
+    const personalBusy = !!personal && !personal.error && personal.status === 'finishing';
     // Polls for the whole replacement, and while a live command waits for a first key.
     const waitingForKey = !!g.can_admin && (replacing || (isLive && !active));
     if ((personalBusy || waitingForKey) && watchable(host)) {

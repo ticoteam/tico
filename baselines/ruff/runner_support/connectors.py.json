@@ -1,7 +1,7 @@
 {
   "runner_support/connectors.py": {
-    "BLE001": 11,
-    "PLW1510": 5,
+    "BLE001": 9,
+    "PLW1510": 4,
     "S110": 1
   }
 }

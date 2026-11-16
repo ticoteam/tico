@@ -210,8 +210,7 @@ class CredentialOrder(Base):
     def credentials(self, mailbox="ana@acme.example"):
         return auth.credentials(mailbox, GMAIL)
 
-    def test_a_connected_account_is_served_before_the_key_and_the_server(self):
-        self.with_registration()
+    def test_by_hand_a_connected_account_is_served_before_the_key(self):
         self.write_grant()
         self.write_key()
         creds = self.credentials()
@@ -220,8 +219,7 @@ class CredentialOrder(Base):
         self.assertEqual(self.server.calls, [])
         self.assertEqual(ServiceAccount.loaded, [])
 
-    def test_a_refused_connected_account_never_falls_back_to_the_server_or_the_key(self):
-        self.with_registration()
+    def test_by_hand_a_refused_connected_account_never_falls_back_to_the_key(self):
         self.write_grant()
         FakeCredentials.refresh_error = RefreshError("invalid_grant: Token has been expired or revoked.")
         with self.assertRaises(oauth.SignInFailed) as caught:
@@ -230,8 +228,34 @@ class CredentialOrder(Base):
         self.assertEqual(self.server.calls, [])
         self.assertEqual(ServiceAccount.loaded, [])
 
-    def test_a_key_file_on_this_computer_is_used_and_the_server_is_not_asked(self):
+    def test_a_grant_the_server_holds_is_asked_of_the_server_even_beside_a_key_file(self):
+        """A grant connected through the server (`broker`) is the server's: this computer asks it for the token, and a
+        leftover copy here is never refreshed (the server no longer refreshes copies)."""
         self.with_registration()
+        oauth.save(
+            {"grants": {"ana@acme.example": {"refresh_token": "1//old", "client_id": "c", "broker": "server"}}},
+            self.grants,
+        )
+        self.write_key()
+        creds = self.credentials()
+        self.assertEqual(creds.token, "ya29.workspace")
+        self.assertEqual(
+            self.server.calls,
+            [("connectors/mail/workspace/token", {"mailbox": "ana@acme.example", "service": "gmail"})],
+        )
+        self.assertEqual(ServiceAccount.loaded, [])
+
+    def test_with_the_runner_s_registration_the_server_decides_even_beside_a_key_file(self):
+        """A grant the server holds has no copy here, so a key file must never answer for its mailbox: every mailbox
+        is asked of the server, which applies a person's grant first and its read-only scopes."""
+        self.with_registration()
+        self.write_key()
+        creds = self.credentials()
+        self.assertEqual(creds.token, "ya29.workspace")
+        self.assertEqual([path for path, _ in self.server.calls], ["connectors/mail/workspace/token"])
+        self.assertEqual(ServiceAccount.loaded, [])
+
+    def test_by_hand_a_key_file_on_this_computer_is_used(self):
         self.write_key()
         creds = self.credentials()
         self.assertEqual(creds.token, "ya29.key-ana@acme.example")

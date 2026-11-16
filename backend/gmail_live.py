@@ -1,7 +1,8 @@
 """Read, organize and send Workspace mail in Gmail, without retaining messages on the server.
 
-Callers check mailbox access before minting. `send` delivers one frozen email the send queue has already permitted
-(backend/email_sending.py `drain`); it never retries. Only the token cache in google_workspace survives a call;
+Callers check mailbox access before asking for a token. Every token comes from the one door, backend/google_tokens.py:
+the Workspace key or the person's own Connect Google grant. `send` delivers one frozen email the send queue has already
+permitted (backend/email_sending.py `drain`); it never retries. Only the token caches survive a call;
 the connector's pure normalizer supplies the same message fields without loading Google client libraries.
 """
 
@@ -16,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from connectors.mail.gmail import normalize
 
-from . import google_workspace
+from . import google_tokens
 from .store import Problem
 
 BASE = "https://gmail.googleapis.com/gmail/v1/users/"
@@ -85,8 +86,8 @@ def _get(mailbox, path, token, **query):
     return _call(mailbox, path, token, **query)
 
 
-def _token(c, mailbox):
-    return google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.READ_ONLY_SCOPES["gmail"])["access_token"]
+def _token(c, mailbox, write=False):
+    return google_tokens.token(c, mailbox, "gmail", write=write)
 
 
 def _message(raw):
@@ -213,9 +214,7 @@ def resolve_label(c, mailbox, name, *, create=False):
             return row["id"]
     if not create:
         raise Problem("not_found", "Gmail could not find this label", 404)
-    token = google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"])[
-        "access_token"
-    ]
+    token = _token(c, mailbox, write=True)
     row = _call(mailbox, "labels", token, data={"name": name})
     if not row.get("id") or row.get("type") != "user":
         raise Problem("gmail_unavailable", "Gmail returned an incomplete label; try again", 502)
@@ -232,9 +231,7 @@ def organize(c, mailbox, ids, add=(), remove=()):
         raise Problem("gmail_label", "Tico may only change INBOX, UNREAD, STARRED, IMPORTANT or user labels", 422)
     if not ids:
         return
-    token = google_workspace.mint(c, mailbox, "gmail", scopes=google_workspace.WORKSPACE_SCOPES["gmail"])[
-        "access_token"
-    ]
+    token = _token(c, mailbox, write=True)
     for start in range(0, len(ids), 1000):
         _call(
             mailbox,
