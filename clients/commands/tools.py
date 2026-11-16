@@ -94,7 +94,7 @@ def tools_report(api, args):
 
 @tool(
     "tico_tool_add",
-    "Register a tool for a bot you manage (BotOps: one the person who asked you manages): a `tools:` entry for its bot.yaml. The server checks "
+    "Register a tool for yourself, or (the Tools Owner, BotOps, a credential admin, a person who manages it) for any bot: a `tools:` entry for its bot.yaml. The server checks "
     "it and opens a task with the exact YAML for BotOps, or for an External agent profile to configure itself. The tool stays pending until a tool report lists "
     "it. Names and verbs only: never a Credential value. `env` names a stored Credential granted to the bot. To give the bot a vendor's remote MCP server, add `mcp_url`, `transport` and `headers` (the "
     "credential is a ${VAR} placeholder for `env`).",
@@ -186,7 +186,7 @@ def tools_update(api, args):
 
 @tool(
     "tico_tool_remove",
-    "Request removal of a tool from a bot you manage (its id from `tico_tool_list`), or withdraw "
+    "Request removal of a tool from yourself or a bot you may change (its id from `tico_tool_list`), or withdraw "
     "a pending request. BotOps changes bot.yaml; an external profile changes its own tools and reports the list.",
     {"bot": _s("The bot's slug"), "id": _s("The tool id from tico_tool_list")},
     required=("bot", "id"),
@@ -383,8 +383,8 @@ def _bot_of_credentials(listing, ref):
 
 @tool(
     "tico_credential_grant",
-    "Give a bot a stored credential, as the person who asked you (a credential administrator, or the "
-    "person who stored it, for a bot they own or manage): from then "
+    "Give a bot a stored credential, as the person who asked you (BotOps and the Tools Owner: a credential "
+    "administrator, or the person who stored it, for a bot they own or manage): from then "
     "on every run of that bot has it as its variable. A bot never uses a credential that was not granted to it. Safe to repeat. "
     "Never copy a value from one bot to another: if the credential is only in another bot's own secrets file, "
     "tico_credential_import it first. Then run the bot's own read-only check of the connection. Anyone else is "
@@ -662,6 +662,24 @@ def tool_index(api, args):
 )
 def tool_check(api, args):
     return _as_person(api).post('api-tools/' + quote(str(args['id']).removeprefix('api:'), safe='') + '/check', {})
+
+
+@tool(
+    'tico_tool_level',
+    'Set a bot\'s level on an API tool: read, read_write or none. It grants the one key that level uses and takes the '
+    'others away. A credential administrator; the Tools Owner as the person who asked it. Never yourself.',
+    {
+        'id': _s('Its tico_tool_index row id, without api:'),
+        'bot': _s('The bot\'s slug'),
+        'level': {'type': 'string', 'enum': ['read', 'read_write', 'none']},
+    },
+    required=('id', 'bot', 'level'),
+    writes=True,
+)
+def tool_level(api, args):
+    tool_id = quote(str(args['id']).removeprefix('api:'), safe='')
+    subject = quote('bot:' + str(args['bot']).removeprefix('bot:'), safe='')
+    return _as_person(api).call('PUT', f'api-tools/{tool_id}/access/{subject}', {'level': args['level']}, _key(args))
 
 
 @tool(

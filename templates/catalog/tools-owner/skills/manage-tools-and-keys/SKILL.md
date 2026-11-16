@@ -8,22 +8,29 @@ When to use: a person or bot asks to connect a service, store or rotate a key, g
 says a tool stopped working; a message names a key as `[saved NAME]`; your weekly review finds a problem.
 
 ## What you can do, and who does the rest
+When a person asks you in their own chat, or on a task they (or their Assistant, for them) gave you, **do it**: on a
+Tools change your calls carry that person's rights, recorded as theirs "via Tools Owner" with your name on it. You never
+see, type or repeat a value. Never answer "I can't" or file the step back to them without saying what you did or what
+you will do instead.
+
 | Step | Who | How |
 |---|---|---|
-| See every tool, its status and who holds which level (never a value) | you | `tico tool index` (MCP `tico_tool_index`); `tico tool list --bot <bot>` for one bot's declared tools |
+| See every tool, its status and who holds which level (never a value) | you | `tico tool index` (MCP `tico_tool_index`); `tico tool list --bot <bot>` for one bot's tools, declared and granted |
 | Check a tool's keys now | you | `tico tool check <id>` (MCP `tico_tool_check`) |
 | Get a key typed in for a bot | the person, on your card | `tico credential request <VAR> --for-bot <bot> ...` |
 | Grant keys a person dropped in your chat, by tool, level and bots | the person, on your card | MCP `tico_tools_propose_grant` |
-| Add an API or website tool, add or replace its key, set a level, revoke, delete | a credential admin (the owner or an admin) | Tools, on the page you link; or BotOps as them (below) |
-| A bot's `bot.yaml` `tools:` entry, MCP servers included | BotOps | it commits the entry; you file the task |
+| Give a bot a key, set its level, take it back | you, as the person who asked | `tico tool level <tool> <bot> <read, read_write or none>`; `tico credential grant <key> --to <bot>` and `tico credential revoke <key> --from <bot>` for a key on no tool |
+| Add or change an API tool, its settings, an MCP server (sign-in), share a website account with a bot | you, as the person who asked | Tools routes; the person's own rights decide |
+| A bot's `bot.yaml` `tools:` entry, MCP servers included | you (any bot), or the bot itself | `tico tool add <bot> ...` / `tico tool update`; BotOps commits it |
+| A key's value, its reveal, deleting a tool or key, a person's own access | the person, in Tools | link the exact page and say what to click |
 
-You hold no key and grant nothing. Hand a step only a person's rights can make to BotOps, carrying the person's own
-request so BotOps acts as them (or puts it to them as a Confirm card in their BotOps chat):
+The person's rights are the ceiling: a member who may not manage that bot is refused, and the refusal names who can.
+Give keys and levels to the bot that needs them, never to yourself. With no person behind your run (your weekly review),
+your own rights apply: propose instead, on a card or a task to the person who can.
 
-    tico task create --owner botops --request-id turn --title "<the change>" --body "<exact step, bot, tool, level>"
-
-Use `turn` only when the person asked in the message that started this run; else their message id. Never cite a
-person who did not ask. A bot's own request carries only that bot's rights.
+Before you say a bot "has nothing connected", read `tico tool list --bot <bot>`: a key it holds through Tools shows
+there, marked granted, whether or not its bot.yaml declares it. A bot with a working grant needs no bot.yaml entry
+unless it uses an MCP server.
 
 ## Words
 - **Tool**: a service with an address. An **API tool** (`/api/v2/api-tools`) has a base URL, an auth scheme (`bearer`,
@@ -84,8 +91,8 @@ today is in `docs/auth-types.md` (the manual: `tico doc read manual:auth-types`)
 - One value per variable per bot: a bot can hold only one key under `LINEAR_API_KEY`.
 - Read unless the bot's job writes and a person agrees to Read and write. With no Read key, a Read bot's proxied calls
   are limited to GET, HEAD and OPTIONS (and MCP calls that only read, where the proxy carries MCP).
-- A person sets a level in Tools → the tool → Who can use it. Link the tool's row (`href` in `tico tool index`) and name
-  the bot and level in one line, or hand it to BotOps with the person's request (above).
+- When the person asked for it, set the level yourself (section "What you can do"). Otherwise link the tool's row
+  (`href` in `tico tool index`) and name the bot and level in one line.
 
 ## 5. How the key reaches the bot, and what the bot must do
 - **Proxy** (lock on the row): the run gets a proxy token in the key's variable and the proxy's address in
@@ -93,7 +100,7 @@ today is in `docs/auth-types.md` (the manual: `tico doc read manual:auth-types`)
   with the token where the key goes, or `tico tool call <id> GET /<path>`. The token works only while that run is live.
 - **Computer**: the value is in the run's environment under its variable; anyone who controls that computer can read
   it. A credential admin moves it with Move to proxy on the tool's page once the tool has an address.
-- **MCP server**: the bot's `bot.yaml` entry, filed for BotOps (person-asked: `--request-id`):
+- **MCP server**: the bot's `bot.yaml` entry, which you register (`tico tool add`) and BotOps commits:
 
       tools:
         - service: linear
@@ -142,5 +149,7 @@ authenticated GET such as `/me` or `/v1/user`.
 - **The bot's tool shows "pending"**: BotOps has not committed the bot.yaml entry yet, or the computer has not reported it.
 - **422 `looks_like_key`** on a message to you: the person's text still held a key. Tell them to drop it in your chat
   so the page saves it first.
-- **A card refused, 403**: only BotOps and the Tools page's owner may ask for another bot's key, and never for
-  themselves. **409 `no_person`**: nobody who can store it can read the task; ask in a person's chat instead.
+- **A card refused, 403**: only BotOps, the Tools page's owner and a person's own Assistant may ask for another bot's key,
+  and never for themselves. **409 `no_person`**: nobody who can store it can read the task; ask in a person's chat instead.
+- **A `tools:` entry's scope**: any short lowercase name (`page`, `ad_account`, `database`) with a short value or a list.
+  A value or name that looks like a credential is refused: store it as a key and grant it.

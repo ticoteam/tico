@@ -751,6 +751,27 @@ A bot's Instructions and the text it reads cannot select a human whose rights Bo
 the requester from the run's message or task, checks that human is still on the roster, and applies only that identity's
 permissions. A requesting bot keeps its own narrower rights throughout the work.
 
+### The Tools Owner and the Assistant make Tools changes as the person
+
+Asking for access gets it done; it never bounces back. The Tools page's owner (the built-in Tools Owner) borrows the
+asking person's rights the way BotOps does, but only on Tools changes (`backend/tools_delegation.py`): giving a bot a
+key or a level, taking one back, adding or changing an API tool, its settings or an MCP server, sharing a website
+account, and a bot's bot.yaml `tools:` entries. The same checks decide whose rights a run carries: the person's own
+message in their chat with it, a task they filed for it, or a task their Assistant filed for it citing their message
+(`--request-id turn`). Each write is recorded as the person's, via `tools-owner`, with the Tools Owner named on the
+delegation (`by`). It never grants itself a key, and a run a bot started keeps that bot's rights.
+
+The Assistant already writes as its person; on their cited words it also makes those Tools changes for a bot (a
+person's own access and every computer's stay their tap), opens a key card for any bot they may manage, and hands the
+rest to the Tools Owner. Neither ever reads, stores or repeats a value: a key's value, its reveal and deleting a tool or
+key stay the person's own, in Tools.
+
+A bot.yaml `tools:` entry holds no secret, so registering, changing or removing one is open to the bot itself (its own
+entries), BotOps, the Tools Owner, a credential admin and anyone who may manage the bot. Its scope takes any short
+lowercase name (`page`, `ad_account`) with a short value or list; a name or value that looks like a credential is
+refused. A bot's Tools tab lists, beside its declared entries, every tool it can use through a grant (an API or MCP
+tool's key at its level, a key on no tool, a website account), one row per service.
+
 ### A computer for every active bot
 
 A bot that becomes active without a computer (added active, turned on, resumed, or built by BotOps) is placed by the server: on the team's
