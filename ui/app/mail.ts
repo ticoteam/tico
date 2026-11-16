@@ -155,7 +155,7 @@ async function mailFill(st: MailPageState, append: boolean): Promise<void> {
   MAIL_ACC.messages = append ? MAIL_ACC.messages.concat(page.messages || []) : (page.messages || []);
   MAIL_ACC.cursor = page.next_cursor || null;
 }
-function mailDrawList(st: MailPageState, listed: MailPageMessage[], boxes: MailPageBox[]): void {
+function mailDrawList(st: MailPageState, listed: MailPageMessage[]): void {
   // An empty list is the page's one empty line, and the reading pane beside it folds away.
   $('#mail-split')?.classList.toggle('mail-none', !listed.length);
   if (!listed.length) {
@@ -183,7 +183,7 @@ async function mailMore(): Promise<void> {
   try { await mailFill(st, true); }
   catch (e) { toast(errorMessage(e, ''), true); return; }
   if (load !== MAIL_LOAD) return;
-  mailDrawList(st, MAIL_ACC.messages, []);
+  mailDrawList(st, MAIL_ACC.messages);
 }
 // The filter: one popover (task-list-menus.ts tasksMenu) with the label as a choice of one and attachments as a tick.
 function mailFilterMenu(anchor: HTMLElement): void {
@@ -356,7 +356,7 @@ async function pageMail(): Promise<void> {
   const listed = MAIL_ACC.messages;
   const split = $('#mail-split');
   if (split) split.classList.toggle('thread-open', !!st.thread);
-  mailDrawList(st, listed, boxes);
+  mailDrawList(st, listed);
   if (!st.thread) {
     mailNeed('#mail-thread').innerHTML = '';
     return;
