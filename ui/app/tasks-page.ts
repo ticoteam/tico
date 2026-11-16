@@ -416,12 +416,18 @@ function tasksNeedsLive(): void {
   if (!state.pipeline) state.needs = [...(S.v2.needs || [])] as NeedsEntry[];
   tasksRenderSoon(state);   // a stage's ▶ and its count, or You
 }
-/** Draws the page at the next frame, once for every change that asks before it: a flood of live task and Needs you
- * changes (a bot making hundreds of tasks) draws once a frame at most, and a hidden tab not at all until it is shown. */
-let TASKS_FRAME = 0;
+/** Draws the page soon, once for every change that asks meanwhile: at the next frame, and no sooner than TASKS_LIVE_MS
+ * after the last such draw. A flood of live task and Needs you changes (a bot making hundreds of tasks) draws a few
+ * times a second, not once per change, and a hidden tab not at all until it is shown. */
+const TASKS_LIVE_MS = 250;
+let TASKS_SOON = false, TASKS_LIVE_AT = 0;
 function tasksRenderSoon(state: TasksPageState): void {
-  if (TASKS_FRAME || TASKS_ST !== state) return;
-  TASKS_FRAME = requestAnimationFrame(() => { TASKS_FRAME = 0; tasksRender(TASKS_ST); });
+  if (TASKS_SOON || TASKS_ST !== state) return;
+  TASKS_SOON = true;
+  setTimeout(() => requestAnimationFrame(() => {
+    TASKS_SOON = false; TASKS_LIVE_AT = performance.now();
+    tasksRender(TASKS_ST);
+  }), Math.max(0, TASKS_LIVE_AT + TASKS_LIVE_MS - performance.now()));
 }
 
 // ---- drawing

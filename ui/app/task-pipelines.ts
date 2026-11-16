@@ -10,7 +10,7 @@
    the stage's rules (stage-rules.ts); then Flow's mark and how many items in the stage wait on the person opens Flow on
    the stage (decide.ts decideStageOpen); there is no mark where none wait. On a phone the rules mark sits at the end of the stage
    tabs. The columns scroll sideways in their own box, a fade on each edge that has more beyond it; a stage with no
-   tasks is as tall as its header. A stage draws its first 50 tasks, then "Show 250 more" for the rest of it (PV_CAP); a
+   tasks is as tall as its header. A stage draws its first 30 tasks, then "Show 250 more" for the rest of it (PV_CAP); a
    draw changes only the columns that changed (pvPaint), so a flood of live changes does not draw the whole board. The
    page (tasks-page.ts) owns the header, loading the pipeline and its tasks, search, filter, the archive and opening a
    task (any [data-task] element); it calls the hooks set at the end of this file. Moving a task between columns is
@@ -37,12 +37,15 @@ interface PvState {
   open: Set<string>;
   /** What was last drawn in the root, so a draw changes only what changed. */
   drawn: PvDrawn | null;
+  /** The last draw replaced the whole view: the columns' scroll is put back (bind). A draw of some columns keeps the
+   * columns' element and its scroll, and reads and sets nothing (each read would lay the board out on the spot). */
+  whole: boolean;
 }
 /** The view as last drawn: its element, what it was drawn as (the layout and the stages), the bar, and each column's header
  * and cards by stage (columns), or the whole view's HTML (the list, a phone). */
 interface PvDrawn { el: Element; frame: string; bar: string; cols: Map<string, {head: string; body: string}>; whole: string }
 /** A stage draws its first PV_CAP cards and says how many more: a column of 300 is not 300 cards. */
-const PV_CAP = 50;
+const PV_CAP = 30;
 
 let PV: PvState | null = null;
 const PV_BOUND = new WeakSet<HTMLElement>();
@@ -80,7 +83,7 @@ function pvScrollKeep(pipelineId: string, x: number): void {
 function pvStateFor(rec: PipelineRec): PvState {
   if (PV && PV.rec.id === rec.id) return PV;
   PV = {rec, tasks: [], opts: {layout: 'columns', phone: false, q: '', filters: {}}, root: null,
-    stage: pvStageKept(rec.id), moving: new Map(), bar: null, x: pvScrollKept(rec.id), y: 0, open: new Set(), drawn: null};
+    stage: pvStageKept(rec.id), moving: new Map(), bar: null, x: pvScrollKept(rec.id), y: 0, open: new Set(), drawn: null, whole: true};
   return PV;
 }
 
@@ -310,12 +313,15 @@ function pvPaint(state: PvState, root: HTMLElement): void {
         if (h !== kept.head) { head!.innerHTML = h; kept.head = h; }
         if (b !== kept.body) { body!.innerHTML = b; kept.body = b; }
       }
+      state.whole = false;
       return;
     }
   }
   const parts = new Map<string, {head: string; body: string}>(), html = pvHTML(state, parts);
-  if (!columns && was && el && was.el === el && was.whole === html) return;
-  // A phone's stage tabs keep where they were scrolled to.
+  if (!columns && was && el && was.el === el && was.whole === html) { state.whole = false; return; }
+  state.whole = true;
+  // Where the columns are scrolled, taken while they are still there; a phone's stage tabs keep theirs.
+  if (state.root === root) pvScrollRead(state);
   const left = root.querySelector('.pv-tabs')?.scrollLeft || 0;
   root.innerHTML = html;
   const tabs = root.querySelector('.pv-tabs');
@@ -501,10 +507,8 @@ function pvRefusedBar(t: TaskAny, stageId: string, stageName: string, error: unk
 
 /** The view's state for what the page gives it: the pipeline, its open tasks and how to show them. */
 function pvTake(rec: PipelineRec, tasks: TaskAny[], opts: PvOpts): PvState {
-  const again = PV?.rec.id === rec.id;
   const state = pvStateFor(rec);
-  // The page may be about to replace the columns: take where they are scrolled while they are still there.
-  if (again) pvScrollRead(state);
+  state.whole = true;   // as `html` draws it; pvPaint says otherwise
   state.rec = rec;
   state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
   state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
@@ -517,15 +521,20 @@ function pvTake(rec: PipelineRec, tasks: TaskAny[], opts: PvOpts): PvState {
 }
 
 TASK_PAGE_HOOKS.pipeline = {
-  html(rec, tasks, opts) { return pvHTML(pvTake(rec, tasks, opts)); },
+  html(rec, tasks, opts) {
+    const state = pvTake(rec, tasks, opts);
+    // The page is about to replace the columns: take where they are scrolled while they are still there.
+    pvScrollRead(state);
+    return pvHTML(state);
+  },
   draw(root, rec, tasks, opts) { pvPaint(pvTake(rec, tasks, opts), root); },
   bind(root, rec) {
     const state = pvStateFor(rec);
     state.root = root;
     // The page calls bind after each draw. The browser clamps a restore to the columns drawn, so this holds only while
-    // the first board draw has every stage (it does: columns are drawn from the pipeline, not as tasks arrive).
-    pvScrollRestore(state);
-    pvTabsEdges(root);
+    // the first board draw has every stage (it does: columns are drawn from the pipeline, not as tasks arrive). A draw
+    // of some columns kept the columns where they were.
+    if (state.whole) { pvScrollRestore(state); pvTabsEdges(root); }
     if (PV_BOUND.has(root)) return;
     PV_BOUND.add(root);
     // Bound once per element; each event reads the view drawn there now.

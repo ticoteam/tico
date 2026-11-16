@@ -10,12 +10,17 @@
 //    click waits for its handler (the title is clicked every 100 ms; the wait is from the click's own time stamp);
 //  - after: each column's count and cards are right (the order the page reads, snoozed last), the board's DOM stays
 //    small, and the bursts read no task list.
-// Headless timing is noisy: each burst's numbers are taken separately and the better of the two is held to the
-// budget. Budgets scale with TICO_UI_SLOWDOWN, as every wait does.
+// Headless timing is noisy, and a shared CI VM is several times slower than a laptop. So each burst's numbers are taken
+// separately and the better of the two is held to the budget, and the budgets are for the Mac they were set on, scaled
+// by how much slower this box is: a fixed piece of drawing work (BENCH, the best of five) takes BENCH_MS there; on a box
+// where it takes 4 times as long, every time budget is 4 times as large (at most 10, at least 1; and TICO_UI_SLOWDOWN
+// on top, as for every wait). Scaled, a draw of the whole board per change still fails by far: it blocked for seconds
+// on the Mac.
 // Before (Nov 16: every card drawn, the whole board's HTML built, compared and put in again for each burst and for each
-// Needs you change), on a Mac: first draw 405 ms; longest task 3.3 s and 5.6 s, blocking 8.8 s and 10.0 s in a 5 s
-// burst, a click waiting 2.4 s to 3.2 s (p95); 13,012 elements. After (a frame draws at most once, only the columns
-// that changed, 50 cards a column): 73 ms; 55 ms and 53 ms, 8 ms and 5 ms; 28 ms; 7,640 elements.
+// Needs you change), on the Mac: first draw 405 ms; longest task 3.3 s and 5.6 s, blocking 8.8 s and 10.0 s in a 5 s
+// burst, a click waiting 2.4 s to 3.2 s (p95); 13,012 elements. After (live changes draw at most every 250 ms, only
+// the columns that changed, 30 cards a column, cards out of view not laid out): under 50 ms; no task over 50 ms, so no
+// blocking; a click waits 16 to 18 ms; 4,969 elements.
 import type * as PageSupport from './support/page.cts';
 import type * as Routes from './support/routes.cts';
 import type * as TasksPage from './tasks-page.cts';
@@ -38,12 +43,13 @@ interface Marks {
 }
 declare const TASKS_ST: {loading?: boolean} | null;
 
-// Budgets (the better of two bursts, times TICO_UI_SLOWDOWN).
+// Budgets (the better of two bursts; times, on the Mac, scaled by the box's speed).
 const FIRST_DRAW = 400;    // ms from the list's answer to the board drawn
 const LONGEST = 100;       // ms, the longest task during a burst
 const CLICK_P95 = 150;     // ms a click waits for its handler, 95th percentile
 const CEILING = 5;         // requests for a whole burst (ui/tests/live-events-load.cts): none of them a list read
-const NODES = 9000;        // elements on the page after the bursts: about 650 cards of 1,129 (every card drawn is 13,000)
+const NODES = 6000;        // elements on the page after the bursts: about 390 cards of 1,129 (every card drawn is 13,000)
+const BENCH_MS = 25;       // ms BENCH takes on the Mac the budgets were set on (an M-series MacBook, Nov 16)
 
 const EVENTS = 500, BURST_MS = 5000;
 // TIDY's Dev board: 13 stages, Build with a limit.
@@ -125,6 +131,28 @@ function expected(): Map<string, {ids: string[]; count: string}> {
   }));
 }
 
+/** The box's speed: 1,000 card-like boxes built, parsed and laid out, the best of five runs, in ms. */
+const BENCH = () => {
+  const runs: number[] = [];
+  for (let r = 0; r < 5; r++) {
+    const t0 = performance.now();
+    let html = '';
+    for (let i = 0; i < 1000; i++) {
+      html += '<div style="display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid #888">'
+        + `<span>Card ${i} ${'word '.repeat(i % 7)}</span><span style="display:flex;gap:6px"><span style="width:16px;height:16px;border-radius:50%;background:#456"></span>`
+        + `<span style="flex:1"></span><span>${i}m</span></span></div>`;
+    }
+    const box = document.createElement('div');
+    box.style.cssText = 'position:absolute;left:-10000px;top:0;width:300px;display:flex;flex-direction:column;gap:8px';
+    box.innerHTML = html;
+    document.body.append(box);
+    void box.offsetHeight;
+    box.remove();
+    runs.push(performance.now() - t0);
+  }
+  return Math.min(...runs);
+};
+
 const pct = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))]! : 0; };
 
 (async () => {
@@ -193,6 +221,8 @@ const pct = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - 
   }))));
   // Nothing more to read before the bursts.
   for (let seen = -1; seen !== requests.length;) { seen = requests.length; await page.waitForTimeout(t(800)); }
+  const bench = await page.evaluate(BENCH), scale = Math.min(10, Math.max(1, bench / BENCH_MS));
+  const budget = (ms: number) => Math.round(t(ms * scale));
 
   const title = (await page.locator('.tl-head .ph-t').boundingBox())!;
   const runs: {longest: number; blocking: number; p95: number; clicks: number; reads: string[]}[] = [];
@@ -241,15 +271,15 @@ const pct = (xs: number[], p: number) => { const s = [...xs].sort((a, b) => a - 
   const best = {longest: Math.min(...runs.map(r => r.longest)), blocking: Math.min(...runs.map(r => r.blocking)), p95: Math.min(...runs.map(r => r.p95))};
   const line = `first draw ${Math.round(firstDraw)} ms; longest task ${runs.map(r => Math.round(r.longest)).join('/')} ms, `
     + `blocking ${runs.map(r => Math.round(r.blocking)).join('/')} ms, click wait p95 ${runs.map(r => Math.round(r.p95)).join('/')} ms `
-    + `(${runs.map(r => r.clicks).join('/')} clicks); ${nodes} elements; ${OPEN.size} open tasks`;
+    + `(${runs.map(r => r.clicks).join('/')} clicks); ${nodes} elements; ${OPEN.size} open tasks; bench ${Math.round(bench)} ms (budgets x${scale.toFixed(1)})`;
   console.log(line);
   for (const r of runs) {
     assert.deepEqual(r.reads.filter(q => q.startsWith('/api/v2/tasks') || q.startsWith('/api/v2/needs-you')), [], 'a burst read a list');
     assert.ok(r.reads.length <= CEILING, `a burst made ${r.reads.length} requests: ${r.reads.slice(0, 8).join(' ')}`);
   }
-  assert.ok(firstDraw < t(FIRST_DRAW), `the first draw took ${Math.round(firstDraw)} ms (budget ${t(FIRST_DRAW)})`);
-  assert.ok(best.longest < t(LONGEST), `the longest task in a burst was ${Math.round(best.longest)} ms (budget ${t(LONGEST)})`);
-  assert.ok(best.p95 < t(CLICK_P95), `a click waited ${Math.round(best.p95)} ms (p95; budget ${t(CLICK_P95)})`);
+  assert.ok(firstDraw < budget(FIRST_DRAW), `the first draw took ${Math.round(firstDraw)} ms (budget ${budget(FIRST_DRAW)})`);
+  assert.ok(best.longest < budget(LONGEST), `the longest task in a burst was ${Math.round(best.longest)} ms (budget ${budget(LONGEST)})`);
+  assert.ok(best.p95 < budget(CLICK_P95), `a click waited ${Math.round(best.p95)} ms (p95; budget ${budget(CLICK_P95)})`);
   assert.ok(nodes < NODES, `${nodes} elements on the page (budget ${NODES})`);
   assert.deepEqual(errors, []);
   console.log('a 1,000-task board in a flood of live changes: ok');
