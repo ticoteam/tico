@@ -158,3 +158,42 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
     assert published["summary"] == "Acme runs rentals with bots."
     assert [b["statement"] for b in published["bets"]] == ["Small landlords pay for bots"]
     assert history(api, "bet.add")[-1]["from"] == {"task": task["id"], "person": "human:ana"}
+
+
+def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
+    """Any answer or comment the owner wrote on the task counts, a tapped choice or "Yes" included; none still refuses."""
+    goal_manager(api, level=2)
+    as_bot(api, "strategy-owner")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(
+            c, G.AUTO_ACTOR, "Small landlords first?", "A get-aligned question.", G.AUTO_ACTOR, lint=False
+        )
+    sections = {"serve": "Small landlords.", "not": "Enterprise."}
+    assert draft(api, {"sections": sections, "task": task["id"]}, 422)["error"]["code"] == "invalid"  # nothing of hers
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks",
+        json={
+            "to": "ana",
+            "version": task["version"],
+            "line": "Do we serve small landlords first?",
+            "why": "It sets who we sell to.",
+        },
+        headers=headers(BOT),
+    )
+    assert r.status_code == 200, r.text
+    post(api, f"tasks/{task['id']}/asks/{r.json()['requirement_id']}/answer", {"value": "Yes"})
+    draft(api, {"sections": sections, "task": task["id"]})
+    r = api.post(
+        "/api/v2/strategy/bets",
+        json={
+            "statement": "Small landlords pay for bots",
+            "status": "active",
+            "rules_out": "Enterprise.",
+            "task": task["id"],
+        },
+        headers=headers(BOT),
+    )
+    assert r.status_code == 200, r.text
+    r = api.post("/api/v2/strategy/publish", json={"revision": revision(api), "task": task["id"]}, headers=headers(BOT))
+    assert r.status_code == 200, r.text
+    assert get(api, "strategy")["current"]["sections"]["serve"] == "Small landlords."
