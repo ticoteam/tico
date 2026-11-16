@@ -58,7 +58,7 @@ async function visualHandshake(browser: Browser) {
   await page.addInitScript({content:`
     (() => {
     if (window.top !== window) return;
-    window.EventSource = undefined;
+    window.EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource;
     window.__calls = []; window.__pending = []; window.__nativeOrigin = ''; window.__boot = [];
     window.__TAURI__ = {core:{invoke: (command, args) => {
       if (command === 'bridge' && args.name === 'bootTiming') window.__boot.push(args.body);
@@ -326,7 +326,7 @@ async function hostedHandshake(browser: Browser, current: boolean) {
   await page.addInitScript({content:`
     (() => {
     if (window.top !== window) return;
-    window.EventSource = undefined;
+    window.EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource;
     window.__calls = []; window.__pending = [];
     window.__TAURI__ = {core:{invoke: (command, args) => {
       if (command !== 'bridge' || args.name !== 'visualOrigin') return Promise.resolve(null);
@@ -409,7 +409,7 @@ let browser: Browser | undefined;
   const errors: string[] = [], posted: [string, unknown][] = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
-    (window as unknown as MainWin).EventSource = undefined;
+    (window as unknown as MainWin).EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource;
     // What the shell's bridge script provides; every message the page sends it is recorded.
     (window as unknown as MainWin).__posted = [];
     (window as unknown as MainWin).ticoNative = (name: string) => ({postMessage: (body: unknown) => (window as unknown as MainWin).__posted.push([name, body])});

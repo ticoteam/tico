@@ -23,7 +23,7 @@ const DMG = 'https://github.com/ticoteam/tico/releases/download/v0.3.46/Tico.dmg
       page.on('pageerror', (e: Error) => errors.push(e.message));
       let downloads = 0;
       await page.addInitScript((platform: string) => {
-        window.EventSource = undefined as unknown as typeof EventSource;
+        window.EventSource = class { readyState = 0; onerror: unknown = null; addEventListener() {} removeEventListener() {} close() {} } as unknown as typeof EventSource;
         Object.defineProperty(navigator, 'platform', {get: () => platform});
       }, PLATFORM[os]);
       await page.route('**/*', async route => {
