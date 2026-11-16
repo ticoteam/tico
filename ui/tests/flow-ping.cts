@@ -53,7 +53,6 @@ const question = (n: number, bot: string, line: string): Item => {
       const t = p.match(/^\/api\/v2\/tasks\/(t\d+)$/);
       if (t) return json({task: {...(needs.find(x => x.task_id === t[1])?.task as object), created_at: '2026-11-15T09:00:00Z', attachments: [], links: [], body: ''}});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});
-      if (p === '/api/v2/flow/suggestions') return json({state: 'ready', suggestions: []});
       if (p === '/api/v2/flow/ping') { pings.push(JSON.parse(r.postData() || '{}')); return json({pinged, recent: []}); }
       const m = p.match(/^\/api\/v2\/tasks\/(t\d+)\/asks\/(r\d+)\/answer$/);
       if (m && r.method() === 'POST') { needs = needs.filter(x => x.id !== m[2]); return json({task: {id: m[1]}, answer_id: 'a-' + m[2], requirement_id: m[2]}); }
