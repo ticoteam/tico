@@ -115,11 +115,12 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     assert.equal(await dialog.locator('.dc-say').textContent(), '');
     assert.deepEqual(writes, [], 'voice sends nothing');
 
-    // Tico's line: the bar shows it and its pick is the main button; null takes both back.
+    // Tico's line: the bar shows it; a question's choices stay as drawn, none looking chosen before a tap; null takes
+    // the line back.
     await page.evaluate(`decideLineSet('r2', {line: 'Yes. It matches the plan.', pick: 'No'})`);
     assert.equal(await dialog.locator('.dc-say').textContent(), 'Yes. It matches the plan.');
-    const main = (choice: string) => dialog.locator(`[data-dc-choice="${choice}"]`).evaluate(b => b.matches('.primary, .dc-rec'));
-    assert.equal(await main('No'), true);
+    const main = (choice: string) => dialog.locator(`[data-dc-choice="${choice}"]`).evaluate(b => b.matches('.primary, .dc-rec') || b === document.activeElement);
+    assert.equal(await main('No'), false);
     assert.equal(await main('Yes'), false);
     await shot('flow');
     await page.evaluate(`decideLineSet('r2', null)`);

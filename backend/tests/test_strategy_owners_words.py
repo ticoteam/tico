@@ -19,7 +19,7 @@ def revision(api):
 
 
 def asked(api, said=SAID, title="Who we serve"):
-    """A get-aligned question of the Strategy Owner's, which Ana answered on its task."""
+    """An add-to-flow question of the Strategy Owner's, which Ana answered on its task."""
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, G.AUTO_ACTOR, title, "Write it into the strategy.", G.AUTO_ACTOR, lint=False)
         if said:
@@ -110,7 +110,7 @@ def test_a_task_body_never_counts_as_the_owners_words(api):
 
 
 def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_strategy(api):
-    """The get-aligned round trip: the Strategy Owner asks Ana on a task of its own, she answers in free text, and it
+    """The add-to-flow round trip: the Strategy Owner asks Ana on a task of its own, she answers in free text, and it
     writes her answer into "Who we serve" (and the bet it changes), then publishes citing the task. Only that section
     moves: the summary stays as it was."""
     goal_manager(api, level=2)
@@ -121,7 +121,7 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
         token="ana-test",
     )
     with api.app.state.store.transaction() as c:
-        task = H.task_create(c, G.AUTO_ACTOR, "Who do we serve?", "A get-aligned question.", G.AUTO_ACTOR, lint=False)
+        task = H.task_create(c, G.AUTO_ACTOR, "Who do we serve?", "An add-to-flow question.", G.AUTO_ACTOR, lint=False)
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
         json={
@@ -158,3 +158,42 @@ def test_an_answer_about_who_we_serve_ends_up_in_that_section_of_the_published_s
     assert published["summary"] == "Acme runs rentals with bots."
     assert [b["statement"] for b in published["bets"]] == ["Small landlords pay for bots"]
     assert history(api, "bet.add")[-1]["from"] == {"task": task["id"], "person": "human:ana"}
+
+
+def test_a_one_word_answer_of_the_owners_is_enough_to_write_and_publish(api):
+    """Any answer or comment the owner wrote on the task counts, a tapped choice or "Yes" included; none still refuses."""
+    goal_manager(api, level=2)
+    as_bot(api, "strategy-owner")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(
+            c, G.AUTO_ACTOR, "Small landlords first?", "An add-to-flow question.", G.AUTO_ACTOR, lint=False
+        )
+    sections = {"serve": "Small landlords.", "not": "Enterprise."}
+    assert draft(api, {"sections": sections, "task": task["id"]}, 422)["error"]["code"] == "invalid"  # nothing of hers
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks",
+        json={
+            "to": "ana",
+            "version": task["version"],
+            "line": "Do we serve small landlords first?",
+            "why": "It sets who we sell to.",
+        },
+        headers=headers(BOT),
+    )
+    assert r.status_code == 200, r.text
+    post(api, f"tasks/{task['id']}/asks/{r.json()['requirement_id']}/answer", {"value": "Yes"})
+    draft(api, {"sections": sections, "task": task["id"]})
+    r = api.post(
+        "/api/v2/strategy/bets",
+        json={
+            "statement": "Small landlords pay for bots",
+            "status": "active",
+            "rules_out": "Enterprise.",
+            "task": task["id"],
+        },
+        headers=headers(BOT),
+    )
+    assert r.status_code == 200, r.text
+    r = api.post("/api/v2/strategy/publish", json={"revision": revision(api), "task": task["id"]}, headers=headers(BOT))
+    assert r.status_code == 200, r.text
+    assert get(api, "strategy")["current"]["sections"]["serve"] == "Small landlords."

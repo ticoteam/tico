@@ -208,8 +208,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(toast.y + toast.height <= row.y, `the undo is clear of the buttons (${toast.y + toast.height} > ${row.y})`);
     const undoBtn = (await box(page, '#need-card .dc-bar [data-dc="undo"]'))!;
     check(undoBtn.width >= 44 && undoBtn.height >= 44, `the undo is a 44 px target (${undoBtn.width}x${undoBtn.height})`);
-    check(await page.locator('#need-card .dc-bar [data-dc="undo"]').getAttribute('aria-label') === 'Undo: Approved', 'its name says what it takes back');
-    check(!await page.locator('#need-card .dc-bar .dc-bar-w').evaluate(e => e.getBoundingClientRect().width > 2), 'icon only on a phone');
+    check(await page.locator('#need-card .dc-bar [data-dc="undo"]').getAttribute('aria-label') === 'Undo', 'named Undo, no action word');
+    check(!await page.locator('#need-card .dc-bar [role="status"]').evaluate(e => e.getBoundingClientRect().width > 2), 'icon only');
     // Nothing of the bar's own moves for it, and it covers nothing: what is under its middle is the undo itself.
     const covers = await page.evaluate(() => {
       const r = document.querySelector('#need-card .dc-bar')!.getBoundingClientRect();

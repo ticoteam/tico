@@ -33,7 +33,7 @@ const DEC_ABOUT = new Map<string, DecAbout>();   // held while the screen is ope
 let DEC_SENT = '';                               // the item whose reply was just sent: "Sent" shows under its box
 /** A reply an org rule held (the comment's answer, `held`): shown under its box as the task page shows it, with the
     rule and the actions the sender may take. Nothing was written; an "Ask first" hold may still be sent by a reviewer. */
-interface DecHeld { item: string; box: '#dc-reply' | '#dc-other'; hold: RuleHold; words: string; }
+interface DecHeld { item: string; box: '#dc-reply' | '#dc-other' | '#dc-other-note'; hold: RuleHold; words: string; }
 /** Kept per item while the screen is open, so a reply held after the person moved on still shows when they come back. */
 const DEC_HELD = new Map<string, DecHeld>();
 /** The items whose reply is on its way: a second Send waits for the first (the walk may move on meanwhile). */
@@ -228,7 +228,7 @@ function decideReplyHTML(st: DecState, it: NeedsEntry): string {
 /** Reply and Ask back: the words (and the files added with 📎) as a comment on the task that @mentions whoever asked,
     or, given `ask` (a bot's question), that names the question, which the server writes to the bot that asked. The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words
     stay. */
-async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | '#dc-other', ask = '') {
+async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | '#dc-other' | '#dc-other-note', ask = '') {
   const words = decideNote(box), taskId = decideTaskId(it);
   if (!words || !taskId || st.busy || DEC_SENDING.has(it.id)) return;
   const files = await decideFilesReady(st, it.id);
@@ -263,7 +263,7 @@ async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | 
   decidePaintSide(st);
 }
 /** The held reply under its box: what happened in one line, then the hold's card (rule, and Edit and resend). */
-function decideHeldHTML(it: NeedsEntry, box: '#dc-reply' | '#dc-other'): string {
+function decideHeldHTML(it: NeedsEntry, box: '#dc-reply' | '#dc-other' | '#dc-other-note'): string {
   const held = DEC_HELD.get(it.id), h = held?.box === box ? held.hold : null;
   if (!h) return '';
   const line = h.outcome === 'escalated' ? 'Held for a reviewer: a rule asks first. It is posted if they send it anyway.'

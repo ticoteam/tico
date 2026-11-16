@@ -101,11 +101,14 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
       await at(1);
       await approve.and(page.locator(':not([disabled])')).waitFor();
 
-      // The icon: no word, named Snooze, last in the answer row, at least 40 px (44 on a phone); no Skip.
+      // The icon: no word, named Snooze, last in the answer row but for ⋯, at least 40 px (44 on a phone); no Skip.
       assert.equal(await dialog.locator('[data-dc="skip"]').count(), 0, `${label}: an ask has no Skip`);
       assert.equal(await icon.getAttribute('aria-label'), 'Snooze');
       assert.equal((await icon.textContent())!.trim(), '', `${label}: no word beside it`);
-      assert.ok(await icon.evaluate(b => { const row = b.closest('.dc-acts')!; return row.lastElementChild!.contains(b); }), `${label}: last in the row`);
+      assert.ok(await icon.evaluate(b => {
+        const row = b.closest('.dc-acts')!, last = row.lastElementChild!;
+        return last.contains(b) || (!!last.querySelector('[data-dc="ask-more"]') && last.previousElementSibling!.contains(b));
+      }), `${label}: last in the row, ⋯ after it`);
       const ib = (await icon.boundingBox())!, min = label === 'phone' ? 44 : 40;
       assert.ok(ib.width >= min && ib.height >= min, `${label}: Snooze is ${ib.width}x${ib.height}`);
 

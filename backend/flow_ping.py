@@ -1,10 +1,10 @@
 # pyright: strict
-"""Ping: a person asks bots for the questions they have for them (docs/tasks.md, "Needs you"; skills/get-aligned).
+"""Ping: a person asks bots for the questions they have for them (docs/tasks.md, "Needs you"; skills/add-to-flow).
 
-Each bot gets one message from the person, in its chat with them, pointing at the get-aligned skill. The bot does the
+Each bot gets one message from the person, in its chat with them, pointing at the add-to-flow skill. The bot does the
 thinking: its questions come back as ordinary tasks of its own, each with one ask to that person, in their Needs you
 (reach.pinged lets a bot ask the person who pinged it for a day). Nothing here calls a model or keeps a table: the
-message's `refs.get_aligned` is the record, and a bot the same person pinged in the last COOLDOWN_MINUTES is skipped,
+message's `refs.add_to_flow` is the record, and a bot the same person pinged in the last COOLDOWN_MINUTES is skipped,
 so a double press asks once.
 
 Scopes: `reports` (the bots whose manager is the caller), `bot` (one bot) or `group` (a team's bots, the teams under it
@@ -25,8 +25,8 @@ H: Any = H_
 R: Any = R_
 views: Any = views_
 
-REF = "get_aligned"
-SKILL = "skills/get-aligned/SKILL.md"
+REF = "add_to_flow"
+SKILL = "skills/add-to-flow/SKILL.md"
 COOLDOWN_MINUTES = 10
 SCOPES = ("reports", "bot", "group")
 
@@ -74,7 +74,7 @@ def _recent(c: Any, person: str, bot: str) -> bool:
     return (
         c.execute(
             "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? AND created_at>=? "
-            "AND json_extract(refs, '$.get_aligned') IS NOT NULL LIMIT 1",
+            "AND json_extract(refs, '$.add_to_flow') IS NOT NULL LIMIT 1",
             (person, bot, since),
         ).fetchone()
         is not None

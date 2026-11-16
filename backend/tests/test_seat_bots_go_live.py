@@ -534,7 +534,7 @@ def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_liv
 
 def test_only_a_seat_bot_that_reports_to_the_owner_ends_its_setup_with_the_one_ping_for_their_questions(environment):
     """The one automatic ping (backend/flow_ping.py on_setup) takes the button's default scope: a team manager, whose
-    manager is the owner, ends its own setup task by running get-aligned for them, and the owner's ping is recorded
+    manager is the owner, ends its own setup task by running add-to-flow for them, and the owner's ping is recorded
     quiet (no run of its own) so it may ask them; nothing pings it again. A bot under a manager (the Builder) gets
     neither: a default company's every bot asking the owner at once is the flood this avoids."""
     api, computer, seats = _company(environment)
@@ -544,15 +544,15 @@ def test_only_a_seat_bot_that_reports_to_the_owner_ends_its_setup_with_the_one_p
     _report(api, computer, present=list(seats))
     query = (
         "SELECT sender_id, json_extract(refs, '$.quiet') AS quiet FROM messages WHERE recipient_id=? "
-        "AND json_extract(refs, '$.get_aligned') IS NOT NULL"
+        "AND json_extract(refs, '$.add_to_flow') IS NOT NULL"
     )
     for slug in ("product-manager", "feature-owner"):
         act(api, attempt, "POST", f"bots/{slug}/go-live", {})
     [own] = rows(api, "SELECT body FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + manager,))
-    assert own["body"].rstrip().endswith("ask them, not your manager.") and "skills/get-aligned/SKILL.md" in own["body"]
+    assert own["body"].rstrip().endswith("ask them, not your manager.") and "skills/add-to-flow/SKILL.md" in own["body"]
     [ping] = rows(api, query, ("bot:" + manager,))
     assert ping["sender_id"] == "human:owner" and ping["quiet"]
     [builds] = rows(api, "SELECT body FROM tasks WHERE owner_id=? AND title='Set yourself up'", ("bot:" + builder,))
-    assert "get-aligned" not in builds["body"] and not rows(api, query, ("bot:" + builder,))
+    assert "add-to-flow" not in builds["body"] and not rows(api, query, ("bot:" + builder,))
     act(api, attempt, "POST", "bots/product-manager/go-live", {})
     assert len(rows(api, query, ("bot:" + manager,))) == 1
