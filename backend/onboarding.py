@@ -6,7 +6,7 @@ BotOps, which builds every other bot, the Librarian, which answers questions fro
 docs (backend/librarian.py), and the Strategy Owner, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
 names the company, asks the first-run questions, and records the org chart the owner builds department by
 department (the suggestions are backend/recruit.py), and on completion defines the chosen bots. A starter is
-created at once, `needs_onboarding`, and its repository is materialized by the computer; every other template is
+created at once, `needs_setup`, and its repository is materialized by the computer; every other template is
 still a task for BotOps. Nothing here reaches a machine: it writes definitions and tasks.
 """
 
@@ -967,7 +967,7 @@ class Onboarding:
     def _make_starter(self, c, who, slug, template, rank=None):
         """A starter template's bot, as first run creates it: it records the template and its version,
         waits for the computer to materialize its repository (`materialize`), seeds its first routine
-        off, and is `needs_onboarding` until it says its setup is done. Starting the setup turns that
+        off, and is `needs_setup` until it says its setup is done. Starting the setup turns that
         routine on (`arm_routines`). Nothing claims work for it before then except a message from
         a person (execution.candidate)."""
         declared = self._declared(c, slug)
@@ -1679,7 +1679,7 @@ class Onboarding:
             "ORDER BY bc.bot"
         ).fetchall():
             declared = _json(row["config"], {}) or {}
-            # A starter is parked (`needs_onboarding`), so activating it lets it answer a person and nothing else.
+            # A starter is parked (`needs_setup`), so activating it lets it answer a person and nothing else.
             if not ((cards.get(declared.get("template")) or {}).get("bootstrap") or declared.get("materialize")):
                 continue
             self.admin.update_bot(
