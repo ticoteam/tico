@@ -191,6 +191,8 @@ interface ThvOpts {
   tail?: () => string;
   send?: (text: string, files: File[]) => Promise<boolean>;
   typed?: (text: string) => void;
+  // false: no "To <name>" line under the box (who the message reaches); Flow's chat leaves it out.
+  reach?: boolean;
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -210,7 +212,7 @@ interface ThvComposer {
   task: (text: string) => Promise<void>;
   newChat: (() => Promise<void>) | null;
   el: HTMLElement;
-  reach: ReturnType<typeof composeReach> & { update(): void };
+  reach: (ReturnType<typeof composeReach> & { update(): void }) | null;
   goalMode?: boolean;
 }
 // Everything that belongs to one conversation: a view that moves to another (a fresh DM) starts from this again.
@@ -1274,13 +1276,13 @@ function thvComposerDraw(view: ThvView) {
       <span class="p-sendbox"><button class="p-way p-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send"><span class="nav-icon" aria-hidden="true">expand_more</span></button>` : ''}
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>${bot ? `
       <div class="p-menu p-ways" role="menu" aria-label="Ways to send" hidden></div></span>` : ''}</div>
-    ${composeFootHTML()}
+    ${view.opts.reach === false ? '' : composeFootHTML()}
     ${bot ? '<div class="p-cmd" hidden></div>' : ''}
     <div class="p-menu thv-mentions" role="listbox" aria-label="Mention" hidden></div>
     <div class="thv-lib" hidden></div></div>`;
   C.el = host.querySelector('.thv-ask') as HTMLElement;
   // Follow and "Reaches N" under the box (pill.js composeReach): the way Send shows, the words' @mentions, the reply.
-  C.reach = composeReach(C.el.querySelector('.p-foot'), {thread: () => thvDm(view) ? '' : view.id,
+  C.reach = view.opts.reach === false ? null : composeReach(C.el.querySelector('.p-foot'), {thread: () => thvDm(view) ? '' : view.id,
     mode: () => C.ways ? thvWayMode(view) : '', text: () => (C.el.querySelector('.p-text') as HTMLTextAreaElement).value, reply: () => view.replyTo});
   (host.querySelector('.thv-replying') as HTMLElement).onclick = ev => { if (eventElement(ev)?.closest('[data-reply-cancel]')) thvReplyStart(view, null); };
   const box = C.el.querySelector('.p-text') as HTMLTextAreaElement, file = C.el.querySelector('.p-file') as HTMLInputElement, menu = C.el.querySelector('.thv-attach-menu') as HTMLElement;

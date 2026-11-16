@@ -93,7 +93,8 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
       await page.locator('[data-need="v1:r1"]').waitFor();
       await page.locator('#task-play').click();
       const dialog = page.locator('#need-card');
-      const at = (n: number) => dialog.locator('.dc-q', {hasText: Q[n - 1]!}).waitFor();
+      // An OK opens on its document tab on a phone: its ask, in the Chat tab, may be out of sight.
+      const at = (n: number) => dialog.locator('.dc-q', {hasText: Q[n - 1]!}).waitFor({state: 'attached'});
       const icon = dialog.locator('.dc-side [data-dc="snooze"]'), menu = dialog.locator('.dc-snz');
       const approve = dialog.locator('[data-dc="approve"]');
       const focused = () => page.evaluate(() => document.activeElement?.textContent?.trim() || document.activeElement?.getAttribute('aria-label') || '');

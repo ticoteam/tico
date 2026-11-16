@@ -101,7 +101,8 @@ async function open(page: Page, errors: string[]) {
   await page.goto('http://tico-ui.test/#/tasks');
   await page.locator('#task-play').click();
   const dialog = page.locator('#need-card');
-  await dialog.locator('[data-dc-vmenu]').waitFor();   // the rounds are read: the ask in the chat is drawn in parts
+  // The rounds are read: the ask in the chat is drawn in parts (on a phone in the Chat tab; an OK opens on its Spec).
+  await dialog.locator('[data-dc-vmenu]').waitFor({state: 'attached'});
   return dialog;
 }
 

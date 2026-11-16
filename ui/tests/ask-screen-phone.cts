@@ -1,11 +1,13 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of the ask screen on a 390 px phone (task #454, spec "Review on a phone"), against a fake of the
 // new routes. An ask is answered in its task's chat (decide.ts decideChatMount):
-// - two tabs, Chat (where each item opens) and Task; the chat and its row take the rest, the row at the bottom;
+// - two tabs, Chat and the document's; an OK opens on its document, a question on Chat; the chat and its row take the
+//   rest, the row at the bottom;
 // - Approve and Snooze stay fully visible, at least 44 px tall and tappable while ↶ shows: it sits in the top bar;
 // - ‹ › show on the phone, 8 px clear of ✕: next opens the next item and previous comes back;
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
-// - a question shows on screen in its chat, above the row;
+// - a question shows on screen in its chat, above a full-width box; Snooze and ⋯ are two icons at the right end of the
+//   tabs row, the title cut before them;
 // - with the keyboard up (the visible area shrinks, viewport.ts) the row stays inside it;
 // - an OK with nothing attached (a pitch is the task itself) shows its task's title and text in the Task tab; an OK whose only show is a page shows the page and not the task's text;
 // - at 1440 px: two columns, the chat column 420 px, ‹ ›, no tap guard.
@@ -105,15 +107,17 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     // Answers come first in the walk (the question is item 1); open on the first OK.
     await page.locator('[data-need="r1"]').click();
     const dialog = page.locator('#need-card');
-    const at = async (q: number) => { await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor(); };
+    // An OK opens on its document tab, so its ask (in the Chat tab) may be out of sight.
+    const at = async (q: number) => { await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor({state: 'attached'}); };
     const approve = '#need-card [data-dc="approve"]', sendback = '#need-card [data-dc="sendback"]', snooze = '#need-card [data-dc="snooze"]';
     await at(1);
     await page.locator(`${approve}:not([disabled])`).waitFor();
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-open.png')});
 
-    // The task folds to its title; the chat fills the rest, its row at the bottom; each button 44 px.
-    check(!await page.locator('#need-card .dc-thing').isVisible(), 'it opens on the Chat tab');
-    check(await page.locator('#need-card [data-dc="tab"][data-dc-tab="task"]').isVisible(), 'the Task tab is there');
+    // An OK opens on its document tab; Chat holds the chat, its row at the bottom; each button 44 px.
+    check(await page.locator('#need-card [data-dc="tab"][data-dc-tab="task"]').getAttribute('aria-selected') === 'true', 'an OK opens on its document tab');
+    check(await page.locator('#need-card .dc-thing').isVisible() && !await page.locator('#need-card .dc-chat').isVisible(), 'the document shows, not the chat');
+    await page.locator('#need-card [data-dc="tab"][data-dc-tab="chat"]').click();
     await page.locator('#need-card .dc-chat .p-text').waitFor();
     const bar = (await box(page, `${approve} >> xpath=..`))!;
     check(VIEW.height - (bar.y + bar.height) <= 24, `the row is at the bottom of the screen (${bar.y + bar.height})`);
@@ -200,9 +204,19 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     await at(3);
     await dialog.locator('.dc-thing .dc-bg').waitFor({state: 'attached'});   // its task: one line under it (#3786)
     await page.waitForTimeout(100);
-    const head = (await box(page, '#need-card .dc-head'))!, q = (await box(page, '#need-card .dc-q'))!;
-    const row3 = (await box(page, `${snooze} >> xpath=..`))!;
-    check(q.y >= head.y + head.height && q.y + q.height <= row3.y, `the question is on screen in the chat, above the row (${q.y}..${q.y + q.height}, row at ${row3.y})`);
+    check(await dialog.locator('[data-dc="tab"][data-dc-tab="chat"]').getAttribute('aria-selected') === 'true', 'a question opens on Chat');
+    const head = (await box(page, '#need-card .dc-head'))!, q = (await box(page, '#need-card .dc-msg-ask .dc-q'))!;
+    const composer = (await box(page, '#need-card .dc-chat .thv-composer .p-pill'))!;
+    check(q.y >= head.y + head.height && q.y + q.height <= composer.y, `the question is on screen in the chat, above the box (${q.y}..${q.y + q.height}, box at ${composer.y})`);
+    // No forward action: the box is full width, and Snooze and ⋯ are two icons at the right end of the tabs row, ⋯ last.
+    check(composer.width >= VIEW.width - 40, `the box is full width (${composer.width})`);
+    const tabs = (await box(page, '#need-card .dc-tabs'))!, sz = (await box(page, snooze))!, more = (await box(page, '#need-card [data-dc="ask-more"]'))!;
+    const list = (await box(page, '#need-card .dc-tabs [role="tablist"]'))!, title = (await box(page, '#need-card .dc-tabs-t'))!;
+    check([sz, more].every(b => b.y >= tabs.y - 1 && b.y + b.height <= tabs.y + tabs.height + 1 && b.width >= 44 && b.height >= 44),
+      `Snooze and ⋯ are 44 px icons in the tabs row (${JSON.stringify([tabs, sz, more])})`);
+    check(sz.x >= list.x + list.width && more.x >= sz.x + sz.width - 1 && more.x + more.width <= VIEW.width, 'Snooze then ⋯ at the right end, after the tabs');
+    check(title.x + title.width <= list.x + 1 && title.width > 40, `the title gives way, cut before the tabs (${JSON.stringify(title)})`);
+    check(await dialog.locator('.dc-tabs-t').evaluate(e => getComputedStyle(e).textOverflow === 'ellipsis'), 'the title is cut with an ellipsis');
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-question.png')});
     await page.close();
 
@@ -213,9 +227,8 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     await serve(bare);
     await bare.goto('http://tico-ui.test/#/tasks');
     await bare.locator('[data-need="r5"]').click();
-    await bare.locator('#need-card .dc-q', {hasText: 'OK to go ahead?'}).waitFor();
-    await bare.locator(`${approve}:not([disabled])`).waitFor();
-    await bare.locator('#need-card [data-dc="tab"][data-dc-tab="task"]').click();
+    await bare.locator('#need-card .dc-q', {hasText: 'OK to go ahead?'}).waitFor({state: 'attached'});
+    await bare.locator(`${approve}:not([disabled])`).waitFor();   // it opens on its Task tab
     const pitch = bare.locator('#need-card .dc-thing .dc-md', {hasText: 'one email on Monday'});
     await pitch.waitFor();
     check(await bare.locator('#need-card .dc-thing').getByText('Pitch: a weekly digest').count() === 1, 'the Task tab: its title once, then its text');
@@ -230,8 +243,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     await serve(paged);
     await paged.goto('http://tico-ui.test/#/tasks');
     await paged.locator('[data-need="r6"]').click();
-    await paged.locator('#need-card .dc-q', {hasText: 'OK the launch plan?'}).waitFor();
-    await paged.locator('#need-card [data-dc="tab"][data-dc-tab="task"]').click();
+    await paged.locator('#need-card .dc-q', {hasText: 'OK the launch plan?'}).waitFor({state: 'attached'});   // on its document tab
     await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().waitFor({state: 'attached'});
     check(await paged.locator('#need-card .dc-thing').isVisible(), 'an OK showing only a page keeps its pane');
     check(await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().isVisible(),
