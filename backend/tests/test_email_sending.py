@@ -117,6 +117,24 @@ def test_reply_and_address_checks_ask_gmail_and_wait_while_it_does_not_answer(in
         assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
 
 
+def test_a_gmail_refusal_is_not_remembered_as_a_fact_and_the_send_waits(inbox, fake_gmail, monkeypatch):
+    """Gmail answers 403 for a rate limit too, and a token outage refuses: neither is an answer about the address. The
+    send waits (retryable), nothing is blocked or cached, and the next try asks Gmail again."""
+    from backend import gmail_watch
+    from backend.store import Problem
+
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: True)
+    autonomous(inbox, ask_new_address=True)
+    fake_gmail.refused.add(BOX)
+    with pytest.raises(Problem) as waited:
+        queue(inbox, raw=mime(body="To a known sender"))
+    assert waited.value.retryable
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM email_sends WHERE state='blocked'").fetchone()[0] == 0
+    fake_gmail.refused.clear()
+    assert "new_address" not in queue(inbox, raw=mime(body="To a known sender"))["decision"]["reasons"]
+
+
 def test_cli_sending_controls_share_the_email_command_and_api(inbox, monkeypatch, capsys):
     from backend.tests.helpers.automation_cli import Client
     from clients import hubcli, remotecli

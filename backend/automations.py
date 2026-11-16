@@ -4280,13 +4280,20 @@ def install(app, store, auth, mutate):
     def mail_computer(c, who, mailbox):
         """Only the computer that may act for this mailbox claims and reports its actions (google_rights.refusal: the
         computer hosting a Google Workspace mailbox's message bot, the one holding a person's grant, else a publisher),
-        and, once the mailbox has been published, only the runner that did. Which runner that is stays on
-        `mail_mailboxes.runner_id` (its last sync's) until these computer routes go."""
+        and, for a mailbox a computer still syncs, only once it has been published and only by the runner that did
+        (`mail_mailboxes.runner_id`, its last sync's)."""
         from . import google_rights
         from .connectors import human_of
 
+        from . import gmail_watch
+
         runner = google_rights.runner_of(app.state.execution, c, who)
         google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
+        if gmail_watch.watched(c, mailbox):
+            # No computer syncs it, so none publishes it: the computer it is `acts_for` (the check above) acts.
+            if not human_of(c, mailbox):
+                raise Problem("forbidden", "This mailbox is not on the roster", 403)
+            return runner
         box = c.execute("SELECT runner_id FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
         if not box:  # not published yet: no computer has shown it reads this mailbox
             raise Problem("forbidden", "No computer has published this mailbox yet", 403)

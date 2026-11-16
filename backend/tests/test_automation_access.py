@@ -104,6 +104,23 @@ def test_find_mail_reads_only_the_owners_mailboxes_from_gmail_and_moves_past_wha
     assert out["count"] == 0  # the watermark moved past it: the next search starts after its time
 
 
+def test_mail_find_walks_many_messages_of_one_second_one_at_a_time(api, fake_gmail):
+    """59 messages received in the same second, found one a run: the cursor (time, then id) moves past each in turn,
+    never stalls among them, and finds none twice."""
+    second = int(datetime.now(timezone.utc).timestamp()) + 60
+    for n in range(59):
+        fake_gmail.add("ana@acme.example", f"s{n:02d}", subject="Invoice", epoch=second)
+    with api.app.state.store.read() as c:
+        cursor, found = ("", ""), []
+        for _ in range(60):
+            page = automation_actions.find(c, {}, "mail", "Invoice", 1, cursor, mailboxes=["ana@acme.example"])
+            if not page:
+                break
+            found += [item["id"] for item in page]
+            cursor = (page[-1]["at"], page[-1]["id"])
+    assert found == [f"s{n:02d}" for n in range(59)]
+
+
 def test_a_manual_runs_input_names_only_what_the_owner_may_read(api):
     secret = post(
         api, "tasks", {"owner": "cpo", "title": "Ben's secret", "body": "x", "private": True}, token="ben-test"

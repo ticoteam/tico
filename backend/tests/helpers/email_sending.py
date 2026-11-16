@@ -40,7 +40,10 @@ def mime(body="Thanks for the update.", to=None, files=False, subject="Update", 
 
 
 @pytest.fixture
-def inbox(api, fake_gmail):
+def inbox(api, fake_gmail, monkeypatch):
+    from backend import gmail_watch
+
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: True)  # the server reads its Gmail (fake_gmail)
     with api.app.state.store.transaction() as c:
         row = MA.ensure_mailbox(c, BOX, person_id="ana", created_by="human:ana")
         MA.grant(c, "human:ana", row["id"], "bot", "ops", "read_write")

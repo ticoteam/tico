@@ -23,11 +23,8 @@ def assigned(api):
 
 
 def mail_targets(api, token=None):
-    """The mailboxes a computer acts for (automation mail actions, queued sends). It syncs none: `mailboxes` is empty,
-    since the server reads every mailbox's Gmail itself."""
-    answer = get(api, "connectors/mail/targets", token or runner(api)["token"])
-    assert answer["mailboxes"] == []
-    return answer["acts_for"]
+    """The mailboxes a computer acts for (automation mail actions, queued sends)."""
+    return get(api, "connectors/mail/targets", token or runner(api)["token"])["acts_for"]
 
 
 def test_targets_are_the_message_bots_declared_mailboxes_not_every_person(api):
@@ -163,3 +160,19 @@ def test_only_an_owner_or_admin_names_a_message_bot_and_one_bot_serves_one_perso
     named(api, "ben", {"inbox_bot": "assistant", "mailbox": "not an address"}, expected=422)
     with api.app.state.store.read() as c:
         assert routines.token_mailboxes(c, "assistant") == []
+
+
+def test_a_computer_syncs_only_the_mailboxes_the_server_does_not_watch(api, monkeypatch):
+    """The server watches a mailbox its own credential reads; any other one (a person's own grant before the server
+    holds it, or one no server credential covers) is still synced by its computer, which acts for both."""
+    from backend import gmail_watch
+
+    seed_org(api)
+    declare(api, DECLARED)
+    machine = runner(api)["token"]
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: False)
+    answer = get(api, "connectors/mail/targets", machine)
+    assert [b["address"] for b in answer["mailboxes"]] == [DECLARED] == [b["address"] for b in answer["acts_for"]]
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: True)
+    answer = get(api, "connectors/mail/targets", machine)
+    assert answer["mailboxes"] == [] and [b["address"] for b in answer["acts_for"]] == [DECLARED]

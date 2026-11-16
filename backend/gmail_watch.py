@@ -1,18 +1,24 @@
 # pyright: strict
 """The server hears each mailbox's new mail from Gmail itself, on its own drain worker (backend/drains.py `gmail_watch`).
 
-Each pass checks the active mailboxes last checked INTERVAL seconds ago or more, oldest first, WORKERS at a time:
-Gmail's history since the mailbox's history id, each new message read once, then the same three calls a computer's sync
-made (`automations.on_mail`, `email_sending.record_bounces`, Directory `ingest.from_mail`), then the new history id
-saved. Nothing of the message is stored: an automation run sees its body while it runs (the run drops it when it ends).
+Each pass checks the mailboxes it watches (`watched`: a credential on the server reads them) that were last checked
+INTERVAL seconds ago or more, oldest first, WORKERS at a time: Gmail's history since the mailbox's history id, each new
+message read once, then the same three calls a computer's sync made (`automations.on_mail`,
+`email_sending.record_bounces`, Directory `ingest.from_mail`), then where it got to is saved. Nothing of the message is
+stored: an automation run sees its body while it runs (the run drops it when it ends).
 
-A first check saves Gmail's current history id, starts the watch MAIL_LOOKBACK_HOURS back (`automations.mail_watch`) and
-lists the mail received since then. A history id Gmail no longer has (404) lists the mail since the last good check
-less RECHECK_BACK; a message heard twice starts one run, since runs dedupe on `mail:<mailbox>:<id>`. A failed check
-leaves the history id where it was and says why on the mailbox (`check_error`); a refused Google sign-in also goes to
-reconnects, as a computer's report did. Drafts are not heard: they are not mail anyone received.
+Where a check gets to is saved message by message, never past one it has not heard: the pass's budget is checked
+before each message, and the next pass goes on from there. A history record is heard whole before its id is saved (one
+record can add many messages). A first check, or one after Gmail no longer has the history id (404), catches up
+(`catch_up`): it notes Gmail's current history id, lists every message received since the watch began (a first check:
+MAIL_LOOKBACK_HOURS back, `automations.mail_watch`) or since the last good check less RECHECK_BACK, and hears them
+oldest first, saving the last one heard; only once all are heard does it follow the history from the noted id. A
+message heard twice starts one run, since runs dedupe on `mail:<mailbox>:<id>`. A failed check keeps where it got to
+and says why on the mailbox (`check_error`); a refused Google sign-in also goes to reconnects, as a computer's report
+did. Drafts are not heard: they are not mail anyone received.
 """
 
+import json
 import logging
 import sqlite3
 import time
@@ -20,7 +26,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta, timezone
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from . import drains, gmail_live, google_workspace
 from .store import H, Problem
@@ -30,15 +36,21 @@ LOG = logging.getLogger("tico.gmail_watch")
 INTERVAL = 90  # seconds between a mailbox's checks
 RETRY = 90  # seconds before a failed check is tried again
 WORKERS = 4  # mailboxes checked at once
-LIST_MAX = 500  # messages a first check, or one after an expired history id, reads
 RECHECK_BACK = timedelta(hours=1)
 BODY_MAX = 32 * 1024
 REFUSED = ("gmail_refused", "not_connected")  # Google refused the sign-in: only a person fixes it
+# The credentials the server reads mail with. A mailbox another one covers (a person's own Connect Google grant the
+# server does not hold yet, or none) is still synced by its computer (backend/connectors.py mail targets).
+SERVER_READS = ("workspace",)
 
 Json = dict[str, Any]
 Conn = sqlite3.Connection
 
 _TRIED: dict[str, float] = {}  # address -> when its last failed check was (monotonic): a failing mailbox waits RETRY
+
+
+class Left(Protocol):
+    def left(self) -> bool: ...
 
 
 # The untyped modules this one leans on, with the shapes it uses. Looked up on each call, so tests can replace them.
@@ -54,26 +66,31 @@ def _gmail(name: str) -> Callable[..., Any]:
     return cast("Callable[..., Any]", getattr(gmail_live, name))
 
 
+def watched(c: Conn, mailbox: str) -> bool:
+    """Whether the server watches this mailbox's mail itself (a computer no longer syncs it)."""
+    return _authority(c, str(mailbox or "").strip().lower()) in SERVER_READS
+
+
 def due(c: Conn, now: str | None = None) -> list[Json]:
-    """The active mailboxes a pass checks, the longest unchecked first: a person's (once they are matched) or a shared
-    one, whose mail a credential on the server covers."""
+    """The active mailboxes a pass checks, the longest unchecked first (one still catching up at once): a person's
+    (once they are matched) or a shared one, that the server watches."""
     stamp = cast("Callable[..., str]", H.shift)(now or _now(), seconds=-INTERVAL)
     rows = c.execute(
-        "SELECT id,address,person_id,kind,history_id,checked_at,check_error,watching_since_at FROM mailboxes "
+        "SELECT id,address,person_id,kind,history_id,checked_at,check_error,catch_up,watching_since_at FROM mailboxes "
         "WHERE status='active' AND (kind='shared' OR person_id IS NOT NULL) "
-        "AND (checked_at IS NULL OR checked_at<=?) ORDER BY coalesce(checked_at,''), address",
+        "AND (checked_at IS NULL OR checked_at<=? OR catch_up IS NOT NULL) ORDER BY coalesce(checked_at,''), address",
         (stamp,),
     ).fetchall()
     later = time.monotonic() - RETRY
     out: list[Json] = []
     for row in rows:
         box = cast("Json", dict(row))
-        if _TRIED.get(box["address"], 0.0) <= later and _authority(c, box["address"]) in ("workspace", "personal"):
+        if _TRIED.get(box["address"], 0.0) <= later and watched(c, box["address"]):
             out.append(box)
     return out
 
 
-def drain(store: Any, budget: drains.Budget | None = None) -> int:
+def drain(store: Any, budget: Left | None = None) -> int:
     """One pass: the due mailboxes, WORKERS at a time, until the pass's budget is spent. Returns the messages heard."""
     if store.settings.rehearsal or store.settings.demo:
         return 0
@@ -81,12 +98,12 @@ def drain(store: Any, budget: drains.Budget | None = None) -> int:
         boxes: list[Json] = due(c)
 
     def one(box: Json) -> int:
-        return check(store, box)
+        return check(store, box, budget)
 
     heard = 0
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         for start in range(0, len(boxes), WORKERS):
-            if not drains.left(budget):
+            if start and not drains.left(cast("Any", budget)):
                 break  # the rest are the longest unchecked next pass
             heard += sum(pool.map(one, boxes[start : start + WORKERS]))
     return heard
@@ -97,27 +114,6 @@ def _epoch(stamp: str) -> int:
     if at is None:
         raise ValueError("not a timestamp: " + str(stamp))
     return int((at.replace(tzinfo=timezone.utc) if at.tzinfo is None else at).timestamp())
-
-
-def _read(c: Conn, box: Json, now: str) -> tuple[list[str], str, str]:
-    """Gmail's side of one check, under no write lock: (new message ids, the history id reached, the watch start)."""
-    from . import automations
-
-    address, history_id = str(box["address"]), box["history_id"]
-    watch = str(box["watching_since_at"] or cast("Callable[..., str]", automations.mail_watch)(c, address, now))
-    if history_id:
-        try:
-            ids, reached = cast("tuple[list[str], str]", _gmail("history")(c, address, history_id))
-            return ids, reached, watch
-        except Problem as expired:
-            if expired.status != 404:
-                raise
-        since = max(_epoch(box["checked_at"] or now) - int(RECHECK_BACK.total_seconds()), _epoch(watch))
-    else:
-        since = _epoch(watch)
-    reached = str(_gmail("profile")(c, address))
-    ids = cast("list[str]", _gmail("message_ids")(c, address, f"after:{since}", LIST_MAX))
-    return list(reversed(ids)), reached, watch  # Gmail lists newest first; mail is heard oldest first
 
 
 def _internal(addresses: Iterable[str], domains: list[str]) -> bool:
@@ -170,41 +166,123 @@ def _known(c: Conn, address: str, sender: str) -> bool | None:
         return None
 
 
-def _gather(c: Conn, box: Json, now: str) -> tuple[list[SimpleNamespace], str, str]:
-    """Under a read: the new messages to hear, the history id they reach and the watch start."""
-    from . import mailbox_access
+class Reader:
+    """One check's reads under no write lock: each message once, with what hearing it needs."""
 
-    address = str(box["address"])
-    ids, reached, watch = _read(c, box, now)
-    items: list[Json] = []
-    for mid in ids:
+    def __init__(self, c: Conn, address: str, budget: Left | None) -> None:
+        from . import mailbox_access
+
+        self.c, self.address, self.budget = c, address, budget
+        self.domains = cast("list[str]", cast("Callable[[Conn], Any]", mailbox_access.company_domains)(c))
+        self.labels: dict[str, str] | None = None
+        self.known: dict[str, bool | None] = {}
+        self.read = 0
+
+    def go_on(self) -> bool:
+        """Whether to read one more message: always the first of a check, then while the budget lasts."""
+        self.read += 1
+        return drains.left(cast("Any", self.budget)) or self.read == 1
+
+    def item(self, mid: str) -> Json | None:
+        """The message as Gmail has it now, or None when it was deleted meanwhile."""
         try:
-            item = cast("Json", _gmail("message")(c, address, mid))
+            return cast("Json", _gmail("message")(self.c, self.address, mid))
         except Problem as gone:
             if gone.status == 404:
-                continue  # deleted between the history and the read
+                return None
             raise
-        if "DRAFT" not in item["labels"]:
-            items.append(item)
-    labels: dict[str, str] = {}
-    if any(str(label).startswith("Label_") for item in items for label in item["labels"]):
-        labels = {str(row["id"]): str(row["name"]) for row in cast("list[Json]", _gmail("labels")(c, address))}
-    domains = cast("list[str]", cast("Callable[[Conn], Any]", mailbox_access.company_domains)(c))
-    known = {sender: _known(c, address, sender) for sender in {str(item["from"] or "").lower() for item in items}}
-    messages = [_message(item, labels, domains, known[str(item["from"] or "").lower()]) for item in items]
-    return messages, reached, watch
+
+    def hear(self, item: Json) -> SimpleNamespace | None:
+        """What `on_mail` and the rest hear of it; None for a draft."""
+        if "DRAFT" in item["labels"]:
+            return None
+        if self.labels is None and any(str(label).startswith("Label_") for label in item["labels"]):
+            rows = cast("list[Json]", _gmail("labels")(self.c, self.address))
+            self.labels = {str(row["id"]): str(row["name"]) for row in rows}
+        sender = str(item["from"] or "").lower()
+        if sender not in self.known:
+            self.known[sender] = _known(self.c, self.address, sender)
+        return _message(item, self.labels or {}, self.domains, self.known[sender])
 
 
-def check(store: Any, box: Json) -> int:
+def _catch_up(c: Conn, box: Json, now: str) -> Json:
+    """Where catching up starts: Gmail's history id now, and the time to list mail after."""
+    address, watch = str(box["address"]), str(box["watching_since_at"])
+    after = _epoch(watch)
+    if box["checked_at"]:
+        after = max(after, _epoch(str(box["checked_at"] or now)) - int(RECHECK_BACK.total_seconds()))
+    return {"history_id": str(_gmail("profile")(c, address)), "after": after, "id": ""}
+
+
+def _gather(c: Conn, box: Json, now: str, budget: Left | None) -> tuple[list[SimpleNamespace], Json]:
+    """Under a read: the messages to hear and where the mailbox gets to once they are heard (its history_id, catch_up
+    and watching_since_at)."""
+    from . import automations
+
+    address = str(box["address"])
+    if not box["watching_since_at"]:
+        box = {**box, "watching_since_at": cast("Callable[..., str]", automations.mail_watch)(c, address, now)}
+    reader = Reader(c, address, budget)
+    state: Json = {
+        "history_id": box["history_id"],
+        "catch_up": json.loads(box["catch_up"]) if box["catch_up"] else None,
+        "watching_since_at": box["watching_since_at"],
+    }
+    heard: list[SimpleNamespace] = []
+    if state["history_id"] and not state["catch_up"]:
+        try:
+            records, newest = cast(
+                "tuple[list[tuple[str, list[str]]], str | None]",
+                _gmail("history")(c, address, state["history_id"]),
+            )
+        except Problem as expired:
+            if expired.status != 404:
+                raise
+            state["catch_up"] = _catch_up(c, box, now)
+        else:
+            for record, ids in records:
+                found: list[SimpleNamespace] = []
+                for mid in ids:
+                    if not reader.go_on() and heard:
+                        return heard, state  # this record waits, whole, for the next pass
+                    item = reader.item(mid)
+                    message = reader.hear(item) if item else None
+                    if message:
+                        found.append(message)
+                heard += found
+                state["history_id"] = record
+            if newest and int(newest) > int(state["history_id"]):
+                state["history_id"] = newest
+            return heard, state
+    if not state["catch_up"]:
+        state["catch_up"] = _catch_up(c, box, now)
+    mark = cast("Json", state["catch_up"])
+    ids = cast("list[str]", _gmail("all_ids")(c, address, f"after:{max(0, int(mark['after']) - 1)}"))
+    for mid in reversed(ids):  # Gmail lists newest first; mail is heard oldest first
+        if mid == mark["id"]:
+            continue  # the last one heard
+        if not reader.go_on():
+            return heard, state
+        item = reader.item(mid)
+        if not item or (int(item["epoch"]), str(item["id"])) <= (int(mark["after"]), str(mark["id"])):
+            continue
+        message = reader.hear(item)
+        if message:
+            heard.append(message)
+        state["catch_up"] = mark = {**mark, "after": int(item["epoch"]), "id": str(item["id"])}
+    state["history_id"], state["catch_up"] = mark["history_id"], None  # all heard: follow the history from here
+    return heard, state
+
+
+def check(store: Any, box: Json, budget: Left | None = None) -> int:
     """One mailbox's check: read Gmail, then hear each new message in one write. Returns the messages heard."""
-    from . import automations, reconnects
-    from . import email_sending
+    from . import automations, email_sending, reconnects
     from .entities import ingest
 
     address, now = str(box["address"]), _now()
     try:
         with store.read() as c:
-            messages, reached, watch = _gather(c, box, now)
+            messages, state = _gather(c, box, now, budget)
     except Problem as failed:
         _failed(store, box, failed)
         return 0
@@ -212,13 +290,17 @@ def check(store: Any, box: Json) -> int:
     on_mail = cast("Callable[..., Any]", automations.on_mail)
     bounces = cast("Callable[..., Any]", email_sending.record_bounces)
     with store.transaction() as c:
-        current = c.execute("SELECT status,history_id FROM mailboxes WHERE id=?", (box["id"],)).fetchone()
-        if not current or current["status"] != "active" or current["history_id"] != box["history_id"]:
+        current = c.execute("SELECT status,history_id,catch_up FROM mailboxes WHERE id=?", (box["id"],)).fetchone()
+        if (
+            not current
+            or current["status"] != "active"
+            or (current["history_id"], current["catch_up"]) != (box["history_id"], box["catch_up"])
+        ):
             return 0  # stopped, or checked by another pass meanwhile: that check's mail is its own
         for message in messages:
             facts = cast("Json", message.send_facts)
             bounces(c, address, message.from_addr, message.body + "\n" + str(facts.get("delivery-status") or "")[:4096])
-            on_mail(c, address, message, watch)
+            on_mail(c, address, message, state["watching_since_at"])
             headers = {
                 "from_addr": message.from_addr,
                 "from_header": message.from_header,
@@ -228,18 +310,24 @@ def check(store: Any, box: Json) -> int:
             }
             ingest.safely(c, "mail", ingest.from_mail, c, str(box["id"]), headers)
         c.execute(
-            "UPDATE mailboxes SET history_id=?,checked_at=?,check_error=NULL,"
+            "UPDATE mailboxes SET history_id=?,catch_up=?,checked_at=?,check_error=NULL,"
             "watching_since_at=coalesce(watching_since_at,?) WHERE id=?",
-            (reached, now, watch, box["id"]),
+            (
+                state["history_id"],
+                json.dumps(state["catch_up"]) if state["catch_up"] else None,
+                now,
+                state["watching_since_at"],
+                box["id"],
+            ),
         )
-        if box["check_error"] or not box["history_id"]:
+        if box["check_error"] or not box["checked_at"]:
             # It works again, or works for the first time.
             cast("Callable[..., Any]", reconnects.google_good)(c, "mail", [address])
     return len(messages)
 
 
 def _failed(store: Any, box: Json, failed: Problem) -> None:
-    """Why the check failed, on the mailbox; a refused sign-in also to reconnects. The history id stays. A mailbox
+    """Why the check failed, on the mailbox; a refused sign-in also to reconnects. Where it got to stays. A mailbox
     whose person's own grant the server does not hold yet is not a refusal."""
     from . import reconnects
 

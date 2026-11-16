@@ -18,7 +18,10 @@ ANA, BEN = "human:ana", "human:ben"
 
 
 @pytest.fixture
-def store(company, fake_gmail):
+def store(company, fake_gmail, monkeypatch):
+    from backend import gmail_watch
+
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: True)  # the server reads its Gmail (fake_gmail)
     with company.transaction() as c:
         row = MA.ensure_mailbox(c, BOX, person_id="ana", created_by=ANA)
         MA.grant(c, ANA, row["id"], "bot", "ops", "read_write")

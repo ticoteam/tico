@@ -71,9 +71,10 @@ class FakeGmail:
         message_id="",
         headers=None,
         snippet="",
+        same_record=False,
     ):
-        """One message in the mailbox, recorded in its history. Label names that are not system labels become user
-        labels."""
+        """One message in the mailbox, recorded in its history (in the last history record with `same_record`). Label
+        names that are not system labels become user labels."""
         box = self.box(mailbox)
         system = {row["id"] for row in box["labels"] if row["type"] == "system"}
         ids = [label if label in system else self.label(mailbox, label) for label in labels]
@@ -103,8 +104,11 @@ class FakeGmail:
             },
         }
         box["messages"][mid] = raw
-        box["history"].append((box["next"], mid))
-        box["next"] += 1
+        if same_record and box["history"]:
+            box["history"].append((box["history"][-1][0], mid))
+        else:
+            box["history"].append((box["next"], mid))
+            box["next"] += 1
         return raw
 
     def history_id(self, mailbox):
@@ -168,11 +172,11 @@ class FakeGmail:
             start = int(query["startHistoryId"][0])
             if mailbox in self.expired:
                 return 404, {}
-            rows = [
-                {"id": str(hid), "messagesAdded": [{"message": {"id": mid}}]}
-                for hid, mid in box["history"]
-                if hid > start
-            ]
+            records = {}
+            for hid, mid in box["history"]:
+                if hid > start:
+                    records.setdefault(hid, []).append({"message": {"id": mid}})
+            rows = [{"id": str(hid), "messagesAdded": added} for hid, added in records.items()]
             return 200, {"history": rows, "historyId": str(self.history_id(mailbox))}
         if tail == "labels":
             return 200, {"labels": copy.deepcopy(box["labels"])}
@@ -185,8 +189,12 @@ class FakeGmail:
                 (raw for raw in box["messages"].values() if self.matches(mailbox, raw, q)),
                 key=lambda raw: (int(raw["internalDate"]), raw["id"]),
                 reverse=True,
-            )[: int(query.get("maxResults", ["100"])[0])]
-            return 200, {"messages": [{"id": raw["id"], "threadId": raw["threadId"]} for raw in found]}
+            )
+            start, size = int(query.get("pageToken", ["0"])[0]), int(query.get("maxResults", ["100"])[0])
+            page = {"messages": [{"id": raw["id"], "threadId": raw["threadId"]} for raw in found[start : start + size]]}
+            if start + size < len(found):
+                page["nextPageToken"] = str(start + size)
+            return 200, page
         if tail.startswith("threads/"):
             tid = tail.split("/", 1)[1]
             rows = [copy.deepcopy(raw) for raw in box["messages"].values() if raw["threadId"] == tid]

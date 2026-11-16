@@ -768,12 +768,14 @@ FIND = {
 }
 
 
-MAIL_FIND_SCAN = 500  # message ids a mail find lists per mailbox, to start from the oldest past the cursor
+MAIL_FIND_SCAN = 5000  # message ids a mail find lists per mailbox, to start from the oldest past the cursor
 
 
 def _find_mail(c, query, limit, cursor, mailboxes, skip):
-    """Mail from Gmail itself, in the owner's mailboxes: the messages received after the cursor's time whose text
-    matches `query` (a Gmail search), oldest first. Headers and snippets only."""
+    """Mail from Gmail itself, in the owner's mailboxes: the messages received after the cursor (their time, then their
+    id) whose text matches `query` (a Gmail search), oldest first. Headers and snippets only. Messages are read oldest
+    first a page at a time, the ones at or before the cursor passed over, until `limit` are past it and a later second
+    has begun, so many messages of one second are found in id order and none is passed over."""
     from datetime import datetime, timezone
 
     from . import gmail_live
@@ -782,26 +784,38 @@ def _find_mail(c, query, limit, cursor, mailboxes, skip):
     since_at = H.parse_ts(since) if since else None
     after = int(since_at.timestamp()) - 1 if since_at else 0
     terms = " ".join(t for t in (str(query or "").strip(), f"after:{after}" if after > 0 else "") if t)
-    found = []
+    want, found = int(limit), []
     for box in dict.fromkeys(m.lower() for m in mailboxes):
-        ids = [mid for mid in reversed(gmail_live.message_ids(c, box, terms, MAIL_FIND_SCAN)) if mid not in skip]
-        for item in gmail_live.metadata(c, box, ids[: min(int(limit) + 10, gmail_live.LIMIT_MAX)]):
-            at = datetime.fromtimestamp(item["epoch"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-            if (at, item["id"]) <= (since, last):
-                continue
-            found.append(
-                {
-                    "mailbox": box,
-                    "id": item["id"],
-                    "thread": item["thread_id"],
-                    "from": item["from"],
-                    "subject": item["subject"],
-                    "snippet": str(item["snippet"] or "")[:MAX_ITEM],
-                    "date": item["date"],
-                    "at": at,
-                }
-            )
-    return sorted(found, key=lambda row: (row["at"], row["id"]))[: int(limit)]
+        ids = [mid for mid in reversed(gmail_live.all_ids(c, box, terms, MAIL_FIND_SCAN)) if mid not in skip]
+        mine = []
+        for start in range(0, len(ids), gmail_live.LIMIT_MAX):
+            page = gmail_live.metadata(c, box, ids[start : start + gmail_live.LIMIT_MAX])
+            for item in page:
+                at = datetime.fromtimestamp(item["epoch"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                if (at, item["id"]) <= (since, last):
+                    continue
+                mine.append(
+                    {
+                        "mailbox": box,
+                        "id": item["id"],
+                        "thread": item["thread_id"],
+                        "from": item["from"],
+                        "subject": item["subject"],
+                        "snippet": str(item["snippet"] or "")[:MAX_ITEM],
+                        "date": item["date"],
+                        "at": at,
+                    }
+                )
+            mine.sort(key=lambda row: (row["at"], row["id"]))
+            newest = max((item["epoch"] for item in page), default=0)
+            if (
+                len(mine) >= want
+                and datetime.fromtimestamp(newest, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                > mine[want - 1]["at"]
+            ):
+                break  # a later second has begun: nothing older than the ones kept is left on later pages
+        found += mine[:want]
+    return sorted(found, key=lambda row: (row["at"], row["id"]))[:want]
 
 
 # The stale-PR find: an open or draft PR whose last activity (else its creation) is at or before the idle line. The

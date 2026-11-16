@@ -807,12 +807,28 @@ def lint_errors(c, actor, mailbox, snap, reply_id):
 def review_context(c, auth, actor, body, mailbox, snap):
     """What the second reviewer reads beside the email: the thread it answers, read from Gmail now, and the approver's
     instruction, when the send names a person's message that may approve it. Both bounded."""
-    from . import gmail_live
+    from . import gmail_live, gmail_watch
 
     _reply, thread_id = resolve_reply(c, mailbox, snap, body.reply_to_id, body.thread_id)
-    rows = gmail_live.thread(c, mailbox, thread_id)[-5:] if thread_id else []
+    if not thread_id:
+        rows = []
+    elif gmail_watch.watched(c, mailbox):
+        rows = [
+            {"from_addr": r["from"], "subject": r["subject"], "body": r["body"], "snippet": r["snippet"]}
+            for r in gmail_live.thread(c, mailbox, thread_id)[-5:]
+        ]
+    else:  # a mailbox its computer still syncs: that computer's copy
+        rows = list(
+            reversed(
+                c.execute(
+                    "SELECT from_addr,subject,body,snippet FROM mail_messages WHERE mailbox=? AND thread_id=? "
+                    "AND deleted_at IS NULL ORDER BY epoch DESC LIMIT 5",
+                    (mailbox, thread_id),
+                ).fetchall()
+            )
+        )
     thread = "\n\n----\n\n".join(
-        "From: " + r["from"] + "\nSubject: " + r["subject"] + "\n\n" + (r["body"] or r["snippet"]) for r in rows
+        "From: " + r["from_addr"] + "\nSubject: " + r["subject"] + "\n\n" + (r["body"] or r["snippet"]) for r in rows
     )[:THREAD_CHARS]
     instruction = ""
     message = H.message(c, body.approval_id) if body.approval_id else None
@@ -1270,7 +1286,11 @@ def install(app, store, auth, mutate):
 
         runner = google_rights.runner_of(app.state.execution, c, who)
         google_rights.check(c, runner["id"], google_rights.publishes(store, app.state.execution, c, runner), mailbox)
-        # The computer whose last sync published the inbox (its ownership, not its mail) until these routes go.
+        from . import gmail_watch
+
+        if gmail_watch.watched(c, mailbox):
+            return runner  # no computer syncs it: the one it is `acts_for` (the check above) sends
+        # The computer whose last sync published the inbox (its ownership, not its mail).
         published = c.execute("SELECT runner_id FROM mail_mailboxes WHERE address=?", (mailbox,)).fetchone()
         if published and published["runner_id"] and published["runner_id"] != runner["id"]:
             raise Problem("forbidden", "Another computer reads this inbox", 403)

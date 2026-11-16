@@ -27,8 +27,9 @@ INLINE_RAW_MAX = 4 * 1024 * 1024  # a bigger email goes up as a multipart upload
 SECONDS = 10
 LIMIT_MAX = 50
 WORKERS = 10
-HISTORY_MAX = 100  # message ids one history call returns; the rest wait for the next
+HISTORY_MAX = 100  # message ids one history call returns (whole records); the rest wait for the next
 HISTORY_PAGES = 20
+SCAN_MAX = 20000  # message ids `all_ids` lists
 HTTP_MAX_BYTES = 8 * 1024 * 1024
 PAGE_MAX_BYTES = 256 * 1024
 OPEN_MAX_BYTES = 2 * 1024 * 1024
@@ -218,9 +219,11 @@ def profile(c, mailbox):
 
 
 def history(c, mailbox, start, limit=HISTORY_MAX):
-    """The ids of messages added since history id `start`, oldest first, and the history id they reach: at most `limit`
-    ids (the rest wait for the next call from the returned id). An expired `start` is Problem `not_found` (404)."""
-    token, ids, cursor, reached, pages = _token(c, mailbox), [], "", str(start), 0
+    """The history records since history id `start`, oldest first, as [(record id, [message ids added])], and the
+    newest history id once every record was returned (None when more wait). A record is never split: records are added
+    until they hold `limit` message ids, so a record of more than `limit` messages comes whole, alone. The caller
+    saves a record's id once it has heard all its messages. An expired `start` is Problem `not_found` (404)."""
+    token, records, cursor, count, pages = _token(c, mailbox), [], "", 0, 0
     while True:
         query = {"startHistoryId": start, "historyTypes": "messageAdded", "maxResults": 500}
         if cursor:
@@ -230,23 +233,49 @@ def history(c, mailbox, start, limit=HISTORY_MAX):
         if not isinstance(rows, builtins.list) or not isinstance(cursor, str):
             raise Problem("gmail_unavailable", "Gmail returned an incomplete history; try again", 502, retryable=True)
         for row in rows:
-            added = row.get("messagesAdded") if isinstance(row, dict) else None
+            if not isinstance(row, dict) or not str(row.get("id") or "").isdigit():
+                raise Problem(
+                    "gmail_unavailable", "Gmail returned an incomplete history; try again", 502, retryable=True
+                )
+            if records and count >= limit:
+                return records, None
+            added = row.get("messagesAdded")
+            ids = []
             for item in added if isinstance(added, builtins.list) else ():
                 mid = ((item or {}).get("message") or {}).get("id") if isinstance(item, dict) else None
                 if isinstance(mid, str) and mid and mid not in ids:
-                    if len(ids) >= limit:
-                        return ids, reached
                     ids.append(mid)
-            if isinstance(row, dict) and str(row.get("id") or "").isdigit():
-                reached = str(row["id"])
+            records.append((str(row["id"]), ids))
+            count += len(ids)
         pages += 1
         if not cursor:
             newest = str(newest or "")
-            if newest.isdigit() and int(newest) > int(reached):
-                reached = newest
-            return ids, reached
+            return records, newest if newest.isdigit() else None
         if pages >= HISTORY_PAGES:
-            return ids, reached
+            return records, None
+
+
+def all_ids(c, mailbox, query, cap=SCAN_MAX):
+    """Every message id the query finds, newest first (Gmail's order), paging through: at most `cap`."""
+    token, ids, cursor, seen = _token(c, mailbox), [], "", set()
+    while len(ids) < cap:
+        params = {"q": query, "maxResults": 500, "fields": "messages(id),nextPageToken"}
+        if cursor:
+            params["pageToken"] = cursor
+        page = _get(mailbox, "messages", token, **params)
+        rows, cursor = page.get("messages") or [], page.get("nextPageToken") or ""
+        if (
+            not isinstance(rows, builtins.list)
+            or any(not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"] for row in rows)
+            or not isinstance(cursor, str)
+            or cursor in seen
+        ):
+            raise Problem("gmail_unavailable", "Gmail returned an incomplete page; try again", 502, retryable=True)
+        ids.extend(row["id"] for row in rows)
+        if not cursor:
+            break
+        seen.add(cursor)
+    return ids[:cap]
 
 
 def label_total(c, mailbox, label_id):

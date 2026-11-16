@@ -561,6 +561,26 @@ def test_a_lease_another_computer_let_run_out_is_not_run_again_unless_the_action
     assert computer.gmail.sent == []  # the send was never carried out on either computer
 
 
+def test_a_mailbox_the_server_watches_is_acted_for_by_its_computer_with_no_sync_row(api, computer, monkeypatch):
+    """A mailbox added after the server took over the watch is never published by a computer: the computer it is
+    `acts_for` claims and reports its actions; another person's computer still may not."""
+    from backend import gmail_watch
+
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: True)
+    with api.app.state.store.transaction() as c:
+        owned_by_ana(c, "auto_1")
+        c.execute(
+            "INSERT INTO automation_mail_actions(id,automation_id,mailbox,msg_id,action,args,state,created_at) "
+            "VALUES('ma_1','auto_1',?,'m1','send','{}','queued',?)",
+            (BOX, "2026-10-28T09:00:00Z"),
+        )
+        assert not c.execute("SELECT 1 FROM mail_mailboxes WHERE address=?", (BOX,)).fetchone()
+    stranger = runner(api, operator="ben", label="Ben's Mac")
+    claim(api, stranger["token"], expected=403)
+    (action,) = claim(api, computer.token)["actions"]
+    post(api, f"automations/mail-actions/{action['id']}/result", {"ok": True, "detail": "sent"}, computer.token)
+
+
 def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, computer):
     claim(api, computer.token, expected=403)
     with api.app.state.store.transaction() as c:

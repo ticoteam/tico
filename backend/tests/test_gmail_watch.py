@@ -169,7 +169,7 @@ def test_bounces_known_sender_and_the_directory_are_fed_and_no_row_keeps_a_body(
 def test_a_finished_run_of_any_kind_drops_the_body_it_read(api):
     """The database's own rule: any write that finishes a run (or touches a finished one) takes the body out."""
     store = api.app.state.store
-    state = {"payload": {"message": {"subject": "Hi", "body": "Private words"}}, "steps": []}
+    state = {"payload": {"message": {"subject": "Hi", "body": "Private words", "snippet": "Private"}}, "steps": []}
     with store.transaction() as c:
         for rid, status in (("run_a", "running"), ("run_b", "queued")):
             c.execute(
@@ -180,7 +180,7 @@ def test_a_finished_run_of_any_kind_drops_the_body_it_read(api):
         c.execute("UPDATE automation_runs SET status='ok',finished_at=? WHERE id='run_a'", (H.now(),))
         c.execute("UPDATE automation_runs SET saved_state=saved_state WHERE id='run_b'")
         kept = {r[0]: json.loads(r[1]) for r in c.execute("SELECT id,saved_state FROM automation_runs")}
-    assert "body" not in kept["run_a"]["payload"]["message"] and kept["run_a"]["payload"]["message"]["subject"] == "Hi"
+    assert kept["run_a"]["payload"]["message"] == {"subject": "Hi"}  # the body and the snippet cut from it are gone
     assert kept["run_b"]["payload"]["message"]["body"] == "Private words"  # unfinished: the run still reads it
 
 
@@ -222,3 +222,86 @@ def test_no_google_token_reaches_a_response_log_event_or_sql(watched, caplog, mo
         ]
     for text in (*answers, *rows, caplog.text):
         assert secret not in text
+
+
+@pytest.fixture
+def ears(monkeypatch):
+    """The ids each new message `on_mail` is given, in order (an automation's run guard holds back a burst of runs)."""
+    from backend import automations
+
+    got = []
+    real = automations.on_mail
+
+    def on_mail(c, mailbox, message, watch=None):
+        got.append(message.msg_id)
+        return real(c, mailbox, message, watch)
+
+    monkeypatch.setattr(automations, "on_mail", on_mail)
+    return got
+
+
+class Allow:
+    """A drain budget that lets `n` messages through, then is spent."""
+
+    def __init__(self, n):
+        self.n = n
+
+    def left(self):
+        self.n -= 1
+        return self.n >= 0
+
+
+def watch_pass(api, at, budget=None):
+    gmail_watch._TRIED.clear()
+    with time_machine.travel(at, tick=False):
+        return gmail_watch.drain(api.app.state.store, budget=budget)
+
+
+def test_a_first_check_hears_every_message_of_the_day_oldest_first_across_passes(watched, ears):
+    """More than one Gmail page of mail in the lookback: each pass hears what its budget allows, oldest first, and the
+    history id is saved only once the whole day is heard, so nothing older is skipped."""
+    api, gmail, aid = watched
+    for n in range(600):
+        gmail.add(BOX, f"m{n:03d}", epoch=epoch(T0 - timedelta(hours=20)) + n)
+    heard_by_pass = [watch_pass(api, T0 + timedelta(minutes=3 * k), Allow(250)) for k in range(2)]
+    assert box_row(api)["history_id"] is None and box_row(api)["catch_up"]  # still catching up
+    gmail.add(BOX, "during", epoch=epoch(T0 + timedelta(minutes=7)))  # arrives while it catches up
+    heard_by_pass.append(watch_pass(api, T0 + timedelta(minutes=9), Allow(250)))
+    assert box_row(api)["history_id"] and box_row(api)["catch_up"] is None
+    watch_pass(api, T0 + timedelta(minutes=12))
+    assert heard_by_pass[:2] == [250, 250]
+    assert ears[:600] == [f"m{n:03d}" for n in range(600)]  # oldest first, each once
+    assert set(ears) == {f"m{n:03d}" for n in range(600)} | {"during"}
+
+
+def test_an_expired_history_id_catches_up_past_one_page(watched, ears):
+    api, gmail, aid = watched
+    check(api, T0)
+    for n in range(520):
+        gmail.add(BOX, f"x{n:03d}", epoch=epoch(T0) + 30 + n // 10)
+    gmail.expired.add(BOX)
+    watch_pass(api, T0 + timedelta(minutes=3))
+    assert sorted(ears) == [f"x{n:03d}" for n in range(520)]
+
+
+def test_a_history_record_with_many_messages_is_heard_whole_and_once(watched, ears):
+    api, gmail, aid = watched
+    check(api, T0)
+    gmail.add(BOX, "r000", epoch=epoch(T0) + 10)
+    for n in range(1, 101):
+        gmail.add(BOX, f"r{n:03d}", epoch=epoch(T0) + 10, same_record=True)
+    assert watch_pass(api, T0 + timedelta(minutes=3)) == 101
+    assert watch_pass(api, T0 + timedelta(minutes=6)) == 0
+    assert sorted(ears) == [f"r{n:03d}" for n in range(101)]
+
+
+def test_a_spent_budget_stops_between_messages_and_the_next_pass_goes_on(watched):
+    api, gmail, aid = watched
+    check(api, T0)
+    for n in range(5):
+        gmail.add(BOX, f"h{n}", epoch=epoch(T0) + 10 + n)
+    assert watch_pass(api, T0 + timedelta(minutes=3), Allow(2)) == 2
+    assert heard(api, aid) == ["h0", "h1"]
+    assert watch_pass(api, T0 + timedelta(minutes=6), Allow(2)) == 2
+    assert watch_pass(api, T0 + timedelta(minutes=9)) == 1
+    assert heard(api, aid) == [f"h{n}" for n in range(5)]
