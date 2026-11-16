@@ -396,7 +396,7 @@ function decideStop() {
   if (!st) return;
   DEC = null; DEC_VOICE = false;
   decideOpinionsEnd();
-  decideChatStop();
+  decideChatStop(); DEC_APPROVED.clear();
   DEC_ABOUT.clear(); DEC_SENT = ''; DEC_HELD.clear(); DEC_SENDING.clear();
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
@@ -907,7 +907,8 @@ function decidePaintSide(st: DecState) {
     // The task's chat answers it (decideChatMount): under the composer only Approve on an OK, then Snooze and ⋯.
     const v = st.ok.get(decideOkKey(it)), ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
     const label = decideCheckedOk(it) ? 'OK' : 'Approve', words = DEC_CHAT?.item === it.id && DEC_CHAT.typed.trim();
-    body = `<div class="dc-acts dc-acts-row">${kind === 'ok' ? decideBtn('approve', words ? `${label} with comments` : label, true,
+    // An OK approved whose comment did not go has no Approve left: the arrow sends the comment.
+    body = `<div class="dc-acts dc-acts-row">${kind === 'ok' && !DEC_APPROVED.has(it.id) ? decideBtn('approve', words ? `${label} with comments` : label, true,
       ` data-dc-label="${label}"` + (!ready || !(it.ask?.may || []).includes('ok') || st.busy ? ' disabled' : '')) : ''}</div>${decideMoreHTML(st, it)}`;
   } else if (kind === 'ok') {
     const v = st.ok.get(decideOkKey(it)), may = it.ask?.may || [];
@@ -1694,7 +1695,34 @@ function decideChatTyped(text: string) {
   const b = $('.decide [data-dc="approve"]') as HTMLButtonElement | null;
   if (b?.dataset.dcLabel) b.textContent = text.trim() ? `${b.dataset.dcLabel} with comments` : b.dataset.dcLabel;
 }
-const decideChatWords = (): string => DEC_CHAT?.typed.trim() || '';
+/** What the chat's box holds now, read from the box itself (a draft put back counts): its view, words and files, for one
+    submission that keeps them whatever is on screen when it ends. Null when the item has no chat. */
+interface DecChatTake {view: ThvView; box: HTMLTextAreaElement; text: string; files: File[]}
+function decideChatTake(): DecChatTake | null {
+  const view = DEC_CHAT?.view, C = view?.composer, box = C?.el.querySelector<HTMLTextAreaElement>('.p-text');
+  return view && C && box ? {view, box, text: box.value.trim(), files: C.files.slice()} : null;
+}
+/** The words and files of a submission went: that composer clears, the one it was taken from, not what is on screen. */
+function decideChatGone(take: DecChatTake) {
+  take.view.composer.files.splice(0); thvChips(take.view); thvComposerClear(take.view);
+  if (DEC_CHAT?.view === take.view) decideChatTyped('');
+}
+/** The composer's files, up to the task's Files one by one; null (and the error on the item) when one fails. */
+async function decideChatUpload(st: DecState, itemId: string, taskId: string, files: File[]): Promise<DecFile[] | null> {
+  const ups: DecFile[] = [];
+  for (const file of files) {
+    const f: DecFile = {key: ++DEC_FILE_KEY, file, state: 'up', id: '', error: '', run: null};
+    decideFileUpload(st, itemId, taskId, f);
+    await f.run;
+    if (f.state !== 'done') { st.error = `${file.name}: ${f.error}`; decidePaintSide(st); return null; }
+    ups.push(f);
+  }
+  return ups;
+}
+/** OKs approved whose comment did not go (it failed or a rule held it): the item stays with the words, and the arrow
+    sends them as a comment. */
+const DEC_APPROVED = new Set<string>();
+const decideHeldSaid = (held: RuleHold) => held.outcome === 'escalated' ? 'A rule holds this message until someone reviews it.' : 'A rule stopped this message.';
 /** The composer's arrow on an ask: on an OK, its send back with the words as the note; on a bot's question, a reply on
     the task's thread named for the ask (it wakes the bot), and the ask leaves this person's Flow until the bot writes
     back; on a person's or a stage's question, the answer. Files go up to the task's Files first and are named in it.
@@ -1703,25 +1731,30 @@ async function decideChatSend(st: DecState, text: string, files: File[]): Promis
   const it = DEC === st ? decideCurrent(st) : null;
   if (!it || st.busy) return false;
   const taskId = decideTaskId(it), rid = decideRid(it), ver = it.task?.version ?? null;
-  const ups: DecFile[] = [];
-  for (const file of files) {
-    const f: DecFile = {key: ++DEC_FILE_KEY, file, state: 'up', id: '', error: '', run: null};
-    decideFileUpload(st, it.id, taskId, f);
-    await f.run;
-    if (f.state !== 'done') { st.error = `${file.name}: ${f.error}`; decidePaintSide(st); return false; }
-    ups.push(f);
-  }
+  const ups = await decideChatUpload(st, it.id, taskId, files);
+  if (!ups) return false;
   const said = decideWithFiles(text, ups);
-  if (decideKind(it) === 'ok') {
+  const comment = async (body: {text: string; ask?: string}) => {
+    const r = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, body) as {held?: RuleHold | null};
+    if (r?.held) throw new Error(decideHeldSaid(r.held));
+    return r;
+  };
+  if (DEC_APPROVED.has(it.id)) {
+    // Approved already; its comment did not go: the arrow sends the words as that comment.
+    await decideDo(st, it, 'Sent', () => comment({text: said}));
+    if (!st.error) DEC_APPROVED.delete(it.id);
+  } else if (decideKind(it) === 'ok') {
     const page = await decideShownPage(st, it);
     if (page === null) return false;
     await decideDo(st, it, 'Sent back', () => taskAnswer(taskId, rid, 'no', ver, said, page), decideUndoAnswer);
   } else if (decideAsker(it).startsWith('bot:')) {
     const until = new Date(Date.now() + DEC_CHAT_SNOOZE_DAYS * 86_400_000).toISOString();
+    // The snooze first, then the reply: a bot that answers at once always writes after the snooze (waiting_on ends it),
+    // and a retry only snoozes again. A reply that does not go takes the snooze back.
     await decideDo(st, it, 'Sent', async () => {
-      const r = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, {text: said, ask: rid}) as {held?: RuleHold | null};
-      if (r?.held) throw new Error(r.held.outcome === 'escalated' ? 'A rule holds this message until someone reviews it.' : 'A rule stopped this message.');
-      const out = await askSnooze(it.id, until); needsWakeAt(until); return out;
+      const out = await askSnooze(it.id, until);
+      try { await comment({text: said, ask: rid}); } catch (e) { await askUnsnooze(it.id).catch(() => {}); throw e; }
+      needsWakeAt(until); return out;
     }, () => async () => { await askUnsnooze(it.id); });
   } else {
     await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, said, ver), decideUndoAnswer);
@@ -1732,31 +1765,52 @@ async function decideChatSend(st: DecState, text: string, files: File[]): Promis
 async function decideApprove(st: DecState, it: NeedsEntry) {
   const rid = decideRid(it), v = st.ok.get(decideOkKey(it)), taskId = it.task_id;
   if (!v || !taskId || st.busy) return;
+  // The chat's words and files go with this approval, taken now and kept still while it goes: what is on screen when
+  // it ends (another item, its own words) is never sent with it.
+  const take = decideChatTake();
+  const hold = (on: boolean) => { if (take) take.box.readOnly = on; };
   if (v.state === 'none') {
     const page = await decideShownPage(st, it);
     if (page === null) return;
     const files = await decideFilesReady(st, it.id);
     if (!files) { decidePaintSide(st); return; }
-    const said = decideChatWords() || decideNote('#dc-notes');
-    await decideDo(st, it, 'Approved', () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, decideWithFiles(said, files) || undefined, page), decideUndoAnswer);
-    if (said && !st.error && DEC_CHAT?.view?.composer) thvComposerClear(DEC_CHAT.view);
+    hold(true);
+    const ups = await decideChatUpload(st, it.id, taskId, take?.files || []);
+    if (!ups) { hold(false); return; }
+    const said = decideWithFiles(take?.text || decideNote('#dc-notes'), [...files, ...ups]);
+    await decideDo(st, it, 'Approved', () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, said || undefined, page), decideUndoAnswer);
+    hold(false);
+    if (take && said && !st.error) decideChatGone(take);
     return;
   }
   const hash = v.state === 'ready' ? v.hash : null;
   if (!hash) return;
   st.busy = true; st.error = '';
   decidePaintSide(st);
+  hold(true);
   try {
+    const ups = await decideChatUpload(st, it.id, taskId, take?.files || []);
+    if (!ups) { st.busy = false; decidePaintSide(st); return; }
     const r = await okGive(taskId, rid, hash);
     // "Approve with comments" on an OK bound to what it shows: the OK carries nothing else, so the words follow it on
-    // the task's thread, where everyone sees them.
-    const said = decideChatWords();
+    // the task's thread, where everyone sees them. One that does not go stays in the box, with why.
+    const said = take ? decideWithFiles(take.text, ups) : '';
+    let left = '';
     if (said) {
-      await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, {text: said}).catch((e: unknown) => toast(errorMessage(e, 'The comment was not sent.'), true));
-      if (DEC_CHAT?.view?.composer) thvComposerClear(DEC_CHAT.view);
+      try {
+        const c = await post(`/v2/tasks/${encodeURIComponent(taskId)}/comments`, {text: said}) as {held?: RuleHold | null};
+        if (c?.held) left = decideHeldSaid(c.held);
+      } catch (e) { left = errorMessage(e, 'The comment was not sent.'); }
+      if (!left && take) decideChatGone(take);
     }
     if (DEC !== st) return;
     decideBar('Approved', decideUndoAnswer(r));
+    if (left) {
+      DEC_APPROVED.add(it.id);
+      st.busy = false; st.error = `Approved. Your comment did not go: ${left} The arrow sends it again.`;
+      decidePaintSide(st);
+      return;
+    }
     decideAfter(st, it.id);
     void v2Refresh();
   } catch (e) {
@@ -1767,8 +1821,7 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
     st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not approved.');
     decidePaintSide(st);
     if (code === 'task_requirement') void v2Refresh();     // not asked any more: an ask that took its place comes in
-
-  }
+  } finally { hold(false); }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
   const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-walk], [data-dc-more], [data-dc-ver], [data-dc-since], [data-dc-vmenu], [data-dc-say]');

@@ -186,7 +186,8 @@ interface ThvOpts {
   autofocus?: boolean;               // the box takes the focus when the composer first draws
   // Flow's chat on a task (decide.ts): `tail` draws after the messages (the ask, as the asker's last message); `send`
   // takes the composer's words and files in place of a post to the thread, true once they went (the box clears);
-  // `typed` hears each change of the box's words (Approve becomes "Approve with comments").
+  // `typed` hears each change of the box's words, a draft put back included (Approve becomes "Approve with comments");
+  // a composer with `send` offers uploads only.
   tail?: () => string;
   send?: (text: string, files: File[]) => Promise<boolean>;
   typed?: (text: string) => void;
@@ -1268,7 +1269,7 @@ function thvComposerDraw(view: ThvView) {
       ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" class="tap-mark" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
       <span class="thv-attach-wrap"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${ICON_CLIP}</button>
-        <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">Upload</button><button type="button" role="menuitem" data-attach="library">Library file</button></div></span>
+        <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">Upload</button>${view.opts.send ? '' : '<button type="button" role="menuitem" data-attach="library">Library file</button>'}</div></span>
       <input type="file" multiple hidden class="p-file">
       ${bot ? `<button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>
       <span class="p-sendbox"><button class="p-way p-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send"><span class="nav-icon" aria-hidden="true">expand_more</span></button>` : ''}
@@ -1329,6 +1330,7 @@ function thvComposerDraw(view: ThvView) {
   const kept = draft || view.opts.keyDrop ? '' : thvDraftTexts()[thvDraftKey(view)];
   if (draft) { box.value = draft.text; C.files.push(...draft.files); C.lib.push(...draft.lib); thvChips(view); requestAnimationFrame(grow); }
   else if (typeof kept === 'string' && kept) { box.value = kept; requestAnimationFrame(grow); }
+  if (box.value) view.opts.typed?.(box.value);   // a draft put back is words in the box like any typed
   if (view.goals) chatGoalRender(view.goals);
   thvComposerLabel(view);
   thvReplyingDraw(view);
@@ -1638,8 +1640,15 @@ async function thvComposerSend(view: ThvView) {
   if (chatGoalThreadMode(C)) { if (await chatGoalSend(C, text)) thvDraftDrop(view); return; }
   if (!text && !C.files.length && !C.lib.length) { box.focus(); return; }
   // Flow's chat sends the words its own way (an answer, a reply to the ask); the box clears once they went.
+  // The box is locked while they go, so nothing typed meanwhile is cleared with them. (Library files: no such composer
+  // offers them, its routes carry uploads only.)
   if (view.opts.send) {
-    if (!text || !(await view.opts.send(text, C.files.slice()))) return;
+    if (!text) return;
+    const send = C.el.querySelector<HTMLButtonElement>('.p-send');
+    box.readOnly = true; if (send) send.disabled = true;
+    let went = false;
+    try { went = await view.opts.send(text, C.files.slice()); } finally { box.readOnly = false; if (send) send.disabled = false; }
+    if (!went) return;
     C.files.splice(0); C.lib.splice(0); thvChips(view); thvComposerClear(view); view.opts.typed?.('');
     return;
   }

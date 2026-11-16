@@ -273,7 +273,12 @@ button.dc-jev{cursor:pointer}
 .decide.dc-chatmode .dc-side>[data-key]>.dc-acts{flex-wrap:nowrap}
 .dc-side>.dc-fold{display:none}
 .dc-msg-ask{margin:12px 0 4px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2)}
-.dc-msg-ask .dc-msg-by{display:flex;flex-wrap:wrap;align-items:center;gap:0 6px;margin:0 0 6px;min-height:0;font-size:var(--t-sm);color:var(--muted)}
+.dc-msg-ask .dc-msg-by{display:flex;flex-wrap:nowrap;align-items:center;gap:0 6px;margin:0 0 6px;min-height:0;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+/* one line: the asker's name gives way first, with an ellipsis; when, "needs you" and #N stay whole */
+.dc-msg-ask .dc-msg-by>*{flex:none}
+.dc-msg-ask .dc-msg-by>.dc-meta-who{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+/* Flow's chat has the day divider only: the thread's "New" line is left out here */
+.dc-chat .th-newline{display:none}
 .dc-msg-ask .dc-q{margin:0 0 4px}
 .dc-msg-ask .dc-why{margin:0 0 8px;color:var(--muted)}
 .dc-needs{color:var(--wait-ink)}
@@ -356,9 +361,9 @@ button.dc-jev{cursor:pointer}
   .decide.dc-chatmode.dc-unfold .dc-side>.dc-fold{order:0}
   .decide.dc-chatmode.dc-unfold .dc-thing{order:1;flex:1 1 auto;min-height:0;overflow-y:auto}
   .decide.dc-chatmode.dc-unfold .dc-side>[data-key]{order:2}
-  .dc-side>.dc-fold{display:flex;flex-direction:column;align-items:flex-start;flex:none;padding:8px 16px 0;border-bottom:1px solid var(--line)}
-  .dc-fold h3{margin:0;font-size:var(--t-base)}
-  .dc-fold button{min-height:44px}
+  .dc-side>.dc-fold{display:flex;flex-direction:row;align-items:center;gap:12px;flex:none;padding:0 16px;border-bottom:1px solid var(--line)}
+  .dc-fold h3{flex:1 1 auto;min-width:0;margin:0;font-size:var(--t-base);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dc-fold button{flex:none;min-height:44px}
   .dc-chat>.thv-card .thv-scroll,.dc-chat>.thv-card .thv-composer{padding-left:16px;padding-right:16px}
   .decide.dc-chatmode .dc-side>[data-key]{padding:8px 16px calc(8px + env(safe-area-inset-bottom))}
   .decide.dc-chatmode .dc-side>[data-key]>.dc-acts:last-child{position:static;padding:0;border:0}

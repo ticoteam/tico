@@ -161,8 +161,8 @@ const times = (all: string, part: string) => all.split(part).length - 1;
       await answer.fill('Why not show it on the first page instead?');
       await arrow.click();
       await dialog.locator('.dc-q', {hasText: Q[1]!}).waitFor();
-      assert.deepEqual(writes[0], {p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}, label);
-      assert.equal(writes[1]!.p, '/api/v2/needs-you/snooze', label);
+      assert.equal(writes[0]!.p, '/api/v2/needs-you/snooze', `${label}: the snooze first`);
+      assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/comments', body: {text: 'Why not show it on the first page instead?', ask: 'r1'}}, label);
       await calm();
 
       // The Growth question: Tico's line says what is wanted; nothing on the row is lit.
