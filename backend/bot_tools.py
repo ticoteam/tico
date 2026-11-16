@@ -819,18 +819,21 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
 def may_change(c, auth, settings_admin, who, bot, admins=()):
     """Raise unless `who` may register, change or remove `bot`'s `tools:` entries. An entry names a service and a variable,
     never a value (access_entry refuses one), and BotOps writes it into bot.yaml, so this lets in everyone with a reason
-    to: the bot itself, BotOps, the Tools page's owner (also behind a person it acts for: `who.task_actor`), a credential
-    admin, and anyone who may manage the bot (`SettingsAdmin._manager`). The refusal says who can, and how to get it done."""
+    to: the bot itself (also through BotOps or the Tools Owner carrying its request), BotOps and the Tools page's owner
+    with their own rights, a credential admin, and anyone who may manage the bot (`SettingsAdmin._manager`), directly or
+    through a built-in acting for them. The refusal says who can, and how to get it done."""
     from . import page_owners
     from .credentials import administrator
 
-    agents = {who.actor, who.task_actor} - {""}
-    if who.role == "bot" and not who.via and who.actor == "bot:" + bot:
-        return  # its own entries
-    if "bot:" + H.FLEET_MAINTAINER in agents:
+    if who.role == "bot" and who.actor == "bot:" + bot:
+        return  # its own entries, also when BotOps or the Tools Owner carries its request
+    # BotOps and the Tools page's owner with their own rights. Acting for someone, that someone's rights decide below:
+    # a member never changes a bot that is not theirs through either.
+    own = who.role == "bot" and not who.via
+    if own and who.actor == "bot:" + H.FLEET_MAINTAINER:
         return
     tools_owner = page_owners.owner(c, "tools")
-    if tools_owner and tools_owner in agents:
+    if own and tools_owner and who.actor == tools_owner:
         return
     if administrator(c, who, admins):
         return

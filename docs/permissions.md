@@ -767,7 +767,8 @@ rest to the Tools Owner. Neither ever reads, stores or repeats a value: a key's 
 key stay the person's own, in Tools.
 
 A bot.yaml `tools:` entry holds no secret, so registering, changing or removing one is open to the bot itself (its own
-entries), BotOps, the Tools Owner, a credential admin and anyone who may manage the bot. Its scope takes any short
+entries, also when BotOps or the Tools Owner carries its request), BotOps and the Tools Owner with their own rights, a
+credential admin and anyone who may manage the bot. Acting for someone, that someone's rights decide. Its scope takes any short
 lowercase name (`page`, `ad_account`) with a short value or list; a name or value that looks like a credential is
 refused. A bot's Tools tab lists, beside its declared entries, every tool it can use through a grant (an API or MCP
 tool's key at its level, a key on no tool, a website account), one row per service.

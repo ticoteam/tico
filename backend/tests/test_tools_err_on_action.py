@@ -70,9 +70,11 @@ def test_botops_and_the_tools_owner_register_any_bots_entry(api, botops):
     owner_run = turn_of(api, "ops", requester="bot:cpo")  # no person behind it: its own rights
     assert register(api, "cpo", owner_run)["task_id"]
     with api.app.state.store.transaction() as c:
-        H.task_create(c, "bot:cpo", "Add Meta to inbox", "Its ad account.", "bot:botops")
+        H.task_create(c, "bot:cpo", "Add Meta to cpo", "Its ad account.", "bot:botops")
     botops_run = claim(api, machine, "botops")["token"]
-    assert register(api, "inbox", botops_run, {**PAGE_ENTRY, "identity": "Inbox ads"})["task_id"]
+    # Carrying cpo's request, BotOps registers cpo's own entry; another bot's stays closed to cpo's rights.
+    assert register(api, "cpo", botops_run, {**PAGE_ENTRY, "identity": "Cpo ads"})["task_id"]
+    register(api, "inbox", botops_run, {**PAGE_ENTRY, "identity": "Inbox ads"}, expected=403)
 
 
 def test_the_tools_owner_sets_a_level_with_the_rights_of_the_person_who_asked_and_says_so(api):
