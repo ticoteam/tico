@@ -229,7 +229,10 @@ def test_tools_list_one_row_a_vendor_and_a_vendors_page_holds_its_website_mcp_to
     )
     r = api.patch(f"/api/v2/api-tools/{other[4:]}", json={"service": "raygun"}, headers=headers())
     assert r.status_code == 200 and r.json()["vendor"] == "raygun", r.text
-    assert other in {r["id"] for r in get(api, "tool-vendors/raygun")["rows"]}
+    # A bot at Read on a key nothing can hold to reads (no address to proxy through): the vendor's page marks its row.
+    level(api, other[4:], "bot:ops", "read")
+    ledger = next(r for r in get(api, "tool-vendors/raygun")["rows"] if r["id"] == other)
+    assert [(a["subject"], a.get("read_not_enforced")) for a in ledger["access"]] == [("bot:ops", True)]
 
 
 def test_a_vendor_is_read_from_a_service_a_name_a_variable_or_a_domain():

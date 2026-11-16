@@ -21,28 +21,41 @@ holds a key of (`import_for_bot`), and as a key, as before, when the bot holds n
 different value under the name. `move_once` does the same, once, for the credentials stored before Settings existed.
 """
 
-import importlib
 import re
-from types import SimpleNamespace
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import ConfigDict, Field
 
+from clients import access_entry as access_entry_module
+
+from . import auth as auth_mod
 from . import tool_services as tool_services_module
 from .models import Contract
-from .store import H as hub_helpers, Problem
+from .store import H as hub_helpers
+from .store import Problem
 
 # Untyped neighbours, typed as Any at the door (as backend/website_tools.py does).
 TS: Any = tool_services_module
 H: Any = hub_helpers
+access_entry: Any = access_entry_module
+auth_module: Any = auth_mod
 
 
-def _lazy(module: str, name: str = "") -> Any:
-    """A module (or one of its names) imported at call time: those that import this one."""
-    found = importlib.import_module(module if module.startswith("clients") else "backend." + module)
-    return getattr(found, name) if name else found
+def _credentials() -> Any:
+    """backend/credentials.py, imported at call time: it imports this module."""
+    from . import credentials
+
+    return credentials
+
+
+def _api_tools() -> Any:
+    """backend/api_tools.py, imported at call time: it imports this module."""
+    from . import api_tools
+
+    return api_tools
 
 
 SUFFIXES = ("_HOST", "_REGION", "_PROFILE", "_PROJECT_ID", "_BUCKET", "_URL")
@@ -72,7 +85,7 @@ class SettingUpdate(Contract):
 
 def secret_reason(value: Any) -> Any:
     """Why `value` cannot be a setting ("" when it can): it spans lines, looks like a key, or is a URL carrying one."""
-    secret_in: Any = _lazy("clients.access_entry", "secret_in")
+    secret_in: Any = access_entry.secret_in
 
     value = str(value or "")
     if "\n" in value or "\r" in value:
@@ -106,7 +119,7 @@ def is_setting(env: Any, value: Any) -> Any:
 
 
 def _check(c: Any, tool_id: Any, name: Any, value: Any, setting_id: Any = "") -> Any:
-    refuse_reserved: Any = _lazy("credentials", "refuse_reserved")
+    refuse_reserved: Any = _credentials().refuse_reserved
 
     if not NAME.match(name):
         raise Problem("name", "A setting's name is a variable: capitals, digits and _", 422)
@@ -149,8 +162,8 @@ def _insert(c: Any, actor: Any, tool_id: Any, name: Any, value: Any, source: Any
 
 
 def _managed(c: Any, who: Any, tool_id: Any, admins: Any) -> Any:
-    _readable: Any = _lazy("api_tools", "_readable")
-    require_admin: Any = _lazy("credentials", "require_admin")
+    _readable: Any = _api_tools()._readable
+    require_admin: Any = _credentials().require_admin
 
     require_admin(c, who, admins)
     return _readable(c, who, tool_id, admins)
@@ -288,7 +301,7 @@ def _vendor_tools(c: Any, env: Any, tool_ids: Any) -> Any:
 def import_for_bot(c: Any, who: Any, bot: Any, env: Any, value: Any) -> Any:
     """A computer file's variable `env` the bot used, as a setting on the tool of its vendor the bot holds a key of.
     True when the bot now gets it that way (made, or already there with this value); False to store it as a key."""
-    granted: Any = _lazy("credentials", "granted")
+    granted: Any = _credentials().granted
 
     if not is_setting(env, value):
         return False
@@ -304,7 +317,7 @@ def import_for_bot(c: Any, who: Any, bot: Any, env: Any, value: Any) -> Any:
 
 
 def _grantees(c: Any, cid: Any) -> Any:
-    effective_grant: Any = _lazy("credentials", "effective_grant")
+    effective_grant: Any = _credentials().effective_grant
 
     subjects = {
         r[0]
@@ -315,8 +328,8 @@ def _grantees(c: Any, cid: Any) -> Any:
 
 def _move_one(c: Any, vault: Any, row: Any) -> Any:
     """One stored key that is a setting, moved to a tool every one of its holders gets it from; False when none is."""
-    api_tools: Any = _lazy("api_tools")
-    granted: Any = _lazy("credentials", "granted")
+    api_tools: Any = _api_tools()
+    granted: Any = _credentials().granted
 
     try:
         value = vault.cipher.decrypt(c, row)
@@ -391,12 +404,12 @@ def move_once(store: Any, vault: Any) -> Any:
 
 def install(app: Any, store: Any) -> Any:
     """`POST /api/v2/api-tools/{id}/settings`, `PATCH|DELETE …/settings/{setting_id}`: whoever manages the tool."""
-    _Receipt: Any = _lazy("api_tools", "_Receipt")
+    _Receipt: Any = _api_tools()._Receipt
 
     vault = lambda: app.state.vault
 
     def manager(c: Any, w: Any) -> Any:
-        require_admin: Any = _lazy("credentials", "require_admin")
+        require_admin: Any = _credentials().require_admin
 
         require_admin(c, w, vault().admins)
 
@@ -421,7 +434,7 @@ def install(app: Any, store: Any) -> Any:
 
     @app.delete("/api/v2/api-tools/{tool_id}/settings/{setting_id}")
     def delete_api_tool_setting(request: Request, tool_id: str, setting_id: str) -> Any:
-        validate_identity: Any = _lazy("auth", "validate_identity")
+        validate_identity: Any = auth_module.validate_identity
 
         with store.transaction() as c:
             validate_identity(c, request.state.identity)
