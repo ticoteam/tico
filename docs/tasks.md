@@ -187,9 +187,10 @@ The Flow mark on a bot's page, or a team's, opens Flow on that bot's (or team's 
 them, whoever manages them. A pinged bot asks the person who pinged it, for a day, even when they are not its manager
 ([Reach](reach.md)); a bot that uses the skill unprompted asks its own supervisor. A supervisor bot answers only from a
 recorded rule or decision, citing it, and otherwise passes the question up as asked. When the answer comes, the bot
-records it (`memory/decisions.md`, its learnings or its area's page), carries on and closes the question's task. A
-setup-made bot's own "Set yourself up" task ends with the skill, once, for the owner ([Onboarding](onboarding.md)); no
-ping is ever automatic after that. `POST /api/v2/flow/ping` takes `scope` (`reports`, `bot` or `group`) and `id`, and
+updates what it owns first, in the section the answer belongs to (the Strategy Owner, the strategy's sections), then
+remembers it (`memory/decisions.md` or its learnings), and closes the question's task. A setup-made bot that reports to
+the owner ends its own "Set yourself up" task with the skill, once, for them ([Onboarding](onboarding.md)); no ping is
+ever automatic after that. `POST /api/v2/flow/ping` takes `scope` (`reports`, `bot` or `group`) and `id`, and
 reaches only bots you may read, never BotOps or the Assistant; a bot you pinged in the last 10 minutes is listed as
 `recent` and not messaged again. There is no CLI or MCP command for it yet.
 

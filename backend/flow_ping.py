@@ -96,7 +96,11 @@ def ping(c: Any, person: str, hidden: set[str], scope: str = "reports", ident: s
 def on_setup(c: Any, person: str, bot: str) -> str:
     """The one automatic ping, for a bot setup made (backend/setup_live.py start_setup, given once): recorded quiet,
     with no run of its own, because the bot's own setup task asks it to run the skill last, once its files exist.
-    Returns the line that task ends with."""
+    Returns the line that task ends with. The button's default scope: only a bot whose manager is `person` (a default
+    company's team managers), so the owner is not asked by every bot at once; "" for any other."""
+    managers: dict[str, str] = R._managers(R.context(c))
+    if managers.get("bot:" + bot) != person:
+        return ""
     name = H.actor_name(c, person) or "the owner"
     H.say(c, person, "bot:" + bot, text(name), refs={REF: True, "quiet": True})
     return f"- Last, follow Tico's `{SKILL}` once, for {name}, who set the company up: ask them, not your manager."

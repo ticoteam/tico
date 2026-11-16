@@ -238,9 +238,11 @@ second). It reaches no computer.
     waits), so nothing runs until it is set up;
   - it does not count toward a member's bot limit while parked.
 - A **seat bot** setup made (one that goes live with no person step) gets its own "Set yourself up" task once, at go-live
-  (`backend/setup_live.py`). It ends with the setup's one automatic ping: run Tico's `skills/get-aligned/SKILL.md` for the
-  owner, so its first questions (zero to three) wait in their Flow. The owner's ping is recorded then, with no run of its
-  own, so the bot may ask them; nothing pings it automatically again ([Tasks](tasks.md#needs-you)).
+  (`backend/setup_live.py`). When the bot reports to the owner (a default company's team managers), that task ends with
+  the setup's one automatic ping, the button's default scope: run Tico's `skills/get-aligned/SKILL.md` for the owner, so
+  its first questions (zero to three) wait in their Flow. The owner's ping is recorded then, with no run of its own, so
+  the bot may ask them. The bots under a manager get none, so the owner is not asked by every bot at once, and nothing
+  pings a bot automatically again ([Tasks](tasks.md#needs-you)).
   The built-ins and every other template are not parked.
 - Any other template is created `planned` and gets one task for BotOps, as before. Title: `Set up <Display> from the <template> template`.
   Body: the slug, the template, the display name, the reviewed instructions in a fenced block, and the answers.
