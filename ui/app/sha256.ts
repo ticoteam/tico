@@ -2,6 +2,7 @@
    origin (https, or localhost), so a self-hosted hub on a LAN over plain http has none. An upload's idempotency digest
    is the same 32 bytes either way (sha256Bytes), so a retry's key does not depend on the origin. The check against
    Node's webcrypto is ui/tests/sha256-unit.cts. */
+'use strict';
 
 // The first 32 bits of the fractional parts of the cube roots of the first 64 primes (FIPS 180-4, 4.2.2).
 const SHA256_ROUND = new Uint32Array([
