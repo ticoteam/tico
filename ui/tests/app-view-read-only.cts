@@ -43,9 +43,9 @@ const READS = [
   'header.ph > .ph-more', '.ph-menu > .ph-mtabs > .ph-mtab', '.ph-menu .ph-copy',
   // A bot's ⋯ and its rail's ⋯ open lists of views (its detail tabs, Incognito, the task lists that did not fit).
   '#bot-more-btn', '#bot-incognito', '#bot-more-menu [data-bot-incognito]', '.bot-tab-more',
-  // The task window: open a subtask or a related task (or unfold the subtasks), Show more, open a file, copy a session,
+  // The task window: open a subtask or a related task (or unfold the subtasks), open a file, copy a session,
   // and the head's ⋯ (in a view it holds only Copy link; checked open below).
-  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-msg-more]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
+  '[data-open-task]', '[data-sub-open]', '[data-sub-toggle]', '[data-tf-file]', '[data-copy-session]', '[data-task-more]',
   // Retry after a failed load, a page's filter icon, and a filter's choices and search in the shared popover.
   '[data-use-retry]', '[data-rp-retry]', '[data-learned-retry]', '[data-roadmap-retry]', '[data-retry-changes]',
   '.use-filter', '#rp-filter', '[data-cl-filter]', '#task-filter-pop .tl-opt input', '#task-filter-pop .tl-menu-q',
@@ -168,7 +168,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await row('Second for the bot').waitFor({state: 'detached', timeout: t(15000)});
     assert.ok(await row(OWN).count() === 1, 'its own open task stays');
 
-    // What the window's reads need: a subtask (Dana's, so the bot's list keeps its count), a long comment (Show more)
+    // What the window's reads need: a subtask (Dana's, so the bot's list keeps its count), a long comment
     // and a file. A copy is recorded rather than read back from the clipboard.
     await call(hub, dana, 'POST', '/v2/tasks', {title: 'A part of it', body: 'One part.', owner: 'dana', parent: own});
     await call(hub, dana, 'POST', `/v2/tasks/${own}/comments`, {text: Array.from({length: 30}, (_, i) => `Step ${i + 1} of the plan.`).join('\n\n')});
@@ -214,11 +214,12 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await menu.locator('.tl-mi', {hasText: 'Copy link'}).click();
     await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 1, null, {timeout: t(15000)});
     assert.match((await copied())[0]!, new RegExp(`/#/task/${own}$`), 'Copy link copied the task');
-    // Show more opens a long message.
+    // A long message shows in full, with no Show more: nothing of it is cut off below its last step.
     await win.locator('[data-task-tab="chat"]').click();
-    const more = win.locator('[data-msg-more]').first();
-    await more.click();
-    assert.equal(await more.innerText(), 'Show less', 'Show more opened the message');
+    const long = win.locator('.th-body', {hasText: 'Step 30 of the plan.'}).first();
+    await long.waitFor({timeout: t(15000)});
+    assert.equal(await long.evaluate(el => el.scrollHeight <= el.clientHeight + 2), true, 'the whole long message is drawn');
+    assert.equal(await long.locator('xpath=..').getByRole('button', {name: 'Show more'}).count(), 0, 'a long message has no Show more');
     // Copy session copies its resume command; a file opens, and its ✕ closes it.
     await win.locator('[data-task-tab="details"]').click();
     await win.locator('[data-copy-session]').click();

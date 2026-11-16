@@ -838,7 +838,7 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   // The Assistant's read-back of what it will approve is shown exactly as written, never formatted.
   else if (m.refs?.read_back) body = `<div class="th-body read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`;
   // A file the bot names is a link to it (file-mentions.ts).
-  else body = `${messageMd('th-body md' + chatClampCls(m.id, m.body), m.body || '', bot ? m.sender_id : '', {shortLinks: true})}${chatMoreHTML(m.id, m.body)}${
+  else body = `${messageMd('th-body md', m.body || '', bot ? m.sender_id : '', {shortLinks: true})}${
     // The notice a bot's manager got about its Home's closed history (no longer sent; old ones keep their button).
     m.refs?.earlier_messages?.thread_id ? `<button type="button" class="ghost small th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''}`;
   // A bot's reply reads as Claude's does: one folded line of what its run did first (ui/app/chat.ts), then the words,
@@ -1082,7 +1082,6 @@ function thvListDraw(view: ThvView, list: HTMLElement, box: HTMLElement) {
   const rows = thvRowsHTML(view);
   view.listRows = rows;
   patchHTML(list, rows + thvTailHTML(view, rows), visualSwap);
-  chatClampSync(list);
   const reload = () => thvRefresh(view);
   if (list.querySelector('[data-action-host]')) void assistantCards(list, {get, post, esc, toast, reload});
   if (list.querySelector('[data-credential-host]')) void window.credentialCards?.mount(list, {get, post, esc, toast, reload});

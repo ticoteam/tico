@@ -154,7 +154,6 @@ interface ChatState {
   liveCid?: string | null | undefined;
   waitTimer?: number | undefined;
   openFolds?: Set<string> | undefined;
-  openSide?: Set<string | undefined> | undefined;
   openSteps?: Set<string | null | undefined> | undefined;
   steps?: Record<string, string> | undefined;
   dismissed?: string | undefined;
@@ -536,7 +535,7 @@ function v2RunHTML(m: ChatMessage, state: Pick<ChatState, 'openSteps' | 'steps' 
 }
 const chatLine = (text: unknown, n: number) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 // ---- times and lines every chat shares (the style guide's chat window, #sg-chat): a message's time is its clock on
-// its name line; one line names the day wherever it changes; a long message stops at ten lines with Show more.
+// its name line; one line names the day wherever it changes.
 const chatDate = (iso: string | null | undefined) => { const d = new Date(iso || ''); return Number.isNaN(Number(d)) ? null : d; };
 const chatClock = (iso: string | null | undefined) => chatDate(iso)?.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) || '';
 const chatDayKey = (iso: string | null | undefined) => chatDate(iso)?.toDateString() || '';
@@ -571,37 +570,6 @@ const CHAT_WAY_MARK = {
   steer: (tip: string) => `<span class="chat-way nav-icon" role="img" aria-label="${esc(tip)}" title="${esc(tip)}">bolt</span>`,
   queue: (tip: string) => `<span class="chat-way" role="img" aria-label="${esc(tip)}" title="${esc(tip)}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 5v8h13M14 9l4 4-4 4"/></svg></span>`,
 };
-// A long message stops at ten lines with Show more. Only a message that might be that long carries the stop; once
-// drawn, chatClampSync lets one that fits show in full with no button. Opened ones stay open across redraws.
-const CHAT_LONG_OPEN = new Set<string>();
-const chatLong = (text: string | null | undefined) => { const t = String(text || ''); return t.length > 560 || t.split('\n').length > 9; };
-const chatClampCls = (id: string | null | undefined, text: string | null | undefined) => chatLong(text) && !CHAT_LONG_OPEN.has(String(id || '')) ? ' msg-clamp' : '';
-const chatMoreHTML = (id: string | null | undefined, text: string | null | undefined) => {
-  if (!id || !chatLong(text)) return '';
-  const open = CHAT_LONG_OPEN.has(id);
-  return `<button type="button" class="link cs-more msg-more" data-msg-more="${esc(id)}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>`;
-};
-function chatClampSync(root: ParentNode) {
-  for (const el of root.querySelectorAll<HTMLElement>('.msg-clamp')) {
-    // Drawn out of sight (a task window's Chat tab while another tab shows) it measures nothing: it keeps its Show more
-    // until it is measured in sight.
-    if (!el.getClientRects().length) continue;
-    const more = el.parentElement?.querySelector<HTMLElement>(':scope > .msg-more');
-    const fits = el.scrollHeight <= el.clientHeight + 2;
-    if (fits) el.classList.remove('msg-clamp');
-    if (more) more.hidden = fits;
-  }
-}
-document.addEventListener('click', ev => {
-  const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-msg-more]');
-  if (!b) return;
-  const id = b.dataset.msgMore!, open = !CHAT_LONG_OPEN.has(id);
-  CHAT_LONG_OPEN[open ? 'add' : 'delete'](id);
-  const body = b.parentElement?.querySelector<HTMLElement>(':scope > .md');
-  body?.classList.toggle('msg-clamp', !open);
-  b.textContent = open ? 'Show less' : 'Show more';
-  b.setAttribute('aria-expanded', String(open));
-});
 // Folded lines stay as the reader left them across redraws.
 const v2FoldOpen = (m: {id?: string | undefined}, state: Pick<ChatState, 'openFolds'> | null = V2C) => !!(m.id && state?.openFolds?.has(m.id));
 const v2FoldAttrs = (m: ChatMessage) => `data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}`;
@@ -710,16 +678,16 @@ function v2MessageHTML(m: ChatMessage) {
   const fresh = mine && m.refs?.topic_changed ? CHAT_COMPACTED : '';
   // Every message is the same row (the style guide's chat window): avatar, then name, time and its marks on one line,
   // what the run did (one closed line), the words, then what came with them. Nobody's words sit on the right.
-  const text = m.body || '', clamp = chatClampCls(m.id, text);
+  const text = m.body || '';
   return `${fresh}<div class="conv-run chat cw-msg${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <div class="th-av">${relay ? avatar(assistantBot(), 28) : actorAvatar(m.sender_id, 28)}</div>
     <div class="th-main"><div class="th-head"><span class="th-who">${who}</span>${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}${chatTimeHTML(m.created_at)}${v2DeliveryHTML(m)}</div>
     ${mine ? '' : v2RunHTML(m)}<div class="bubble ${mine ? 'you' : 'bot reply'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${
-      mine ? `<div class="md cw-plain${clamp}">${esc(text)}</div>`
+      mine ? `<div class="md cw-plain">${esc(text)}</div>`
         // The Assistant's read-back of what it will approve is shown exactly as written, never formatted: a requesting
         // bot's fields can't hide part of what the person says yes to.
         : m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(text)}</div>`
-        : messageMd('md' + clamp, text, m.sender_id, {shortLinks: true})}${m.refs?.read_back ? '' : chatMoreHTML(m.id, text)}${chatCopyHTML(m.body, fb)}</div>
+        : messageMd('md', text, m.sender_id, {shortLinks: true})}${chatCopyHTML(m.body, fb)}</div>
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
     ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
     ${mine ? v2RunHTML(m) : ''}${v2MessageCards(m)}</div></div>`;
@@ -783,18 +751,15 @@ function chatSideHeadHTML(m: ChatMessage) {
   const head = chatSideHead(m);
   return head ? `<b>${esc(head)}</b>` : '';
 }
-// About two lines at phone width: longer text, or more than one line of it, gets "Show more".
-const CHAT_SIDE_SHORT = 110;
-// One side item, at most two lines; a longer one opens in place with "Show more", with its files.
+// One side item: its words in full, then its files on cloud (as a message's are), then "Earlier messages" where a
+// bot-to-bot preview has older messages behind it.
 function chatSideItemHTML(m: ChatMessage) {
-  const text = plainActors(m.body || ''), long = text.length > CHAT_SIDE_SHORT || /\n/.test(text.trim());
-  const open = long && V2C?.openSide?.has(m.id);
+  const text = plainActors(m.body || '');
   const when = m.created_at ? `<time class="chat-time" data-ago="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>` : '';
-  return `<div class="cs-item${open ? ' open' : ''}" data-message="${esc(m.id || '')}">
+  return `<div class="cs-item" data-message="${esc(m.id || '')}">
     <div class="cs-head">${chatSideHeadHTML(m)}${when}</div>
-    ${messageMd(`cs-text md${open ? '' : ' clamp'}`, text, m.sender_id, {shortLinks: true})}${open && S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
-    ${long ? `<button type="button" class="link cs-more" data-cs-more="${esc(m.id || '')}" aria-expanded="${open}">${open ? 'Show less' : 'Show more'}</button>` : ''}${
-      m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
+    ${messageMd('cs-text md', text, m.sender_id, {shortLinks: true})}${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
+    ${m.elsewhere?.preview ? `<button type="button" class="link cs-more" data-bots-open="${esc(m.elsewhere.id)}">Earlier messages</button>` : ''}</div>`;
 }
 // A run of side items is one muted line: one item reads as itself, more as "12 updates · Dots, BotOps, tasks · 2h".
 function chatSideHTML(messages: ChatMessage[], slug: string | undefined) {
@@ -924,7 +889,6 @@ function v2WithBotTalk(state: ChatState, messages: ChatMessage[]) {
   }
   return out.concat(talk.slice(t));
 }
-const shownById = (state: ChatState, id: string | undefined) => state.messages.find(m => m.id === id) || (state.botTalk || []).find(m => m.id === id);
 // Scrolled up when something new lands: a small pill above the composer takes you to it (ui/app/stick-scroll.ts).
 // Only the conversation counts, and a reply as it streams in; a side item joins its folded line without a pill.
 const v2Latest = (state: ChatState) => state.lastMain ? state.lastMain.id + (state.live?.text ? ':live' : '') : '';
@@ -956,15 +920,6 @@ function v2ChatRender(state: ChatState) {
       if (conv && V2C === state) {
         conv.disabled = true;
         void v2BotsOpen(state, String(conv.dataset.botsOpen)).catch(error => { conv.disabled = false; toast(errorMessage(error, ''), true); });
-        return;
-      }
-      const more = target?.closest<HTMLElement>('[data-cs-more]');
-      if (more && V2C === state) {
-        const id = more.dataset.csMore, item = more.closest('.cs-item'), shown = shownById(state, id);
-        state.openSide ||= new Set();
-        state.openSide[state.openSide.has(id) ? 'delete' : 'add'](id);
-        if (!item || !shown) throw new Error('the side item is gone');
-        item.outerHTML = chatSideItemHTML(shown);
         return;
       }
       if (!target?.closest('[data-pending-dismiss]') || V2C !== state) return;
@@ -1000,7 +955,6 @@ function v2ChatRender(state: ChatState) {
       const focused = thread.contains(document.activeElement) && document.activeElement instanceof HTMLElement ? document.activeElement : null;
       // Only the messages that changed are redrawn; cards both trees share keep their node (ui/app/visual-cards.js).
       patchHTML(thread, html, visualSwap);
-      chatClampSync(thread);
       if (thread.querySelector('[data-hold]')) ruleChatWire(state, thread);
       if (thread.querySelector('[data-action-host]')) void assistantCards(thread, {get, post, esc, toast,
         reload: () => v2ChatMessages(state).then(() => { if (V2C === state) v2ChatRender(state); })});
