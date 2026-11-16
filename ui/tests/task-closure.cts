@@ -35,7 +35,8 @@ const {open, fixtures} = require('./tasks-page.cts') as Tasks.Api;
       assert.equal(tasks.find(t => t.id === 't-4')!.status, 'closed');
       await bot.page.locator('.toast', {hasText: 'Closed'}).getByRole('button', {name: 'Undo'}).click();
       await bot.page.locator('.toast', {hasText: 'Closed'}).waitFor({state: 'detached'});
-      assert.deepEqual(bot.posts[1], {p: '/api/v2/tasks/t-4/move', body: {to: 'reopen', version: 4}});
+      // A reopen needs a why (task_engine.move): Undo gives one.
+      assert.deepEqual(bot.posts[1], {p: '/api/v2/tasks/t-4/move', body: {to: 'reopen', version: 4, why: 'Undone'}});
       assert.deepEqual(bot.errors, []);
       await bot.page.close();
 
