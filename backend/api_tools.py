@@ -252,11 +252,26 @@ def _admin(c, who, admins):
     return administrator(c, who, admins)
 
 
+def tools_reader(c, who):
+    """The Tools page's own owner bot (backend/page_owners.py, never the General Manager standing in) in its own run: it
+    reads every tool the company sees by default (Everyone), with who holds which level and its keys' names, never a
+    value or a preview, so it can propose levels, find duplicates and explain a failing check. It changes nothing: every
+    write here stays a credential administrator's."""
+    if who.support or who.role != "bot" or who.via or who.agent:
+        return False
+    from . import page_owners
+
+    return page_owners.owner(c, "tools", fallback=False) == who.actor
+
+
 def may_read(c, who, tool_id, admins):
-    """A credential administrator, anyone holding an effective grant on one of its keys, or the person who added one."""
+    """A credential administrator, anyone holding an effective grant on one of its keys, the person who added one, or the
+    Tools page's owner bot (`tools_reader`)."""
     if who.support or who.role not in ("owner", "human", "bot"):
         return False
     if who.role in ("owner", "human") and _admin(c, who, admins):
+        return True
+    if tools_reader(c, who):
         return True
     keys = [k["id"] for k in _keys(c, tool_id)]
     if any(effective_grant(c, k, who.actor) for k in keys):
@@ -415,10 +430,10 @@ def _person(subject, name):
 
 def access_rows(c, who, tool_id, admins, auth=None):
     """Who can use the tool: one row per subject with an effective grant, its level and last use. Anyone but an
-    administrator sees only their own row and the grants they made."""
+    administrator (or the Tools page's owner bot, `tools_reader`) sees only their own row and the grants they made."""
     from . import names
 
-    admin = _admin(c, who, admins)
+    admin = _admin(c, who, admins) or tools_reader(c, who)
     keys = {k["id"]: k for k in _keys(c, tool_id)}
     found = {}
     for key_id, key in keys.items():

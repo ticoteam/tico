@@ -155,6 +155,9 @@ AUDIENCE = {
     # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); BotOps for any.
     "tico_api": REQUESTER,
     "tico_credential_request": ("bot", "botops"),
+    # The Tools page's owner bot proposes key grants in its own chat (backend/key_grants.py refuses any other caller); a
+    # person grants on the card. Never the Assistant.
+    "tico_tools_propose_grant": ("bot", "botops"),
     # Org changes: the Strategy Owner's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("tico_group_update", "tico_group_delete", "tico_org_reports_to")},
     # Maintenance: the owner or an admin changes it; the team reads it (backend/maintenance.py may_change).
@@ -179,7 +182,6 @@ AUDIENCE = {
         name: REQUESTER
         for name in (
             "tico_credential_grant",
-            "tico_tools_propose_grant",  # the Tools owner proposes key grants in its own chat; never the Assistant
             "tico_credential_revoke",
             "tico_credential_import",
             "tico_credential_delete",

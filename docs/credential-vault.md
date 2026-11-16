@@ -150,7 +150,8 @@ If saving fails, check the container's AWS credentials, region and key permissio
 Open **Tools → Credentials → Add credential**. Set the type, value and **Bot variable name**
 (the exact variable its Tool needs), then save. In the Credential's **Access** dialog, choose
 the bot under **Grant access to** and press **Grant access**. Storing alone does not grant it.
-BotOps can instead request a Credential card in a thread and store and grant it with your rights.
+BotOps can instead request a Credential card in a thread and store and grant it with your rights; the Tools Owner
+opens the same card for the bot that needs it, and you save it.
 Use file import only to migrate a value already in an older install; never set up a new bot by
 writing `secrets/<bot>.env` or `_shared.env`.
 
@@ -242,7 +243,8 @@ A bot asking from a task (its turn works on one) puts the card in the task's thr
 there, else the first of its operator and the company owner who can read the task (none: the ask is refused), and the
 task is Paused on the card until it is saved (the person sees it in [Needs you](tasks.md#needs-you)):
 saving it wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. BotOps asking on its own
-task does the same, for the person it acts for. Asking again on the same task returns the open card; another task's open
+task does the same, for the person it acts for. A bot asks for its own credential; BotOps and the Tools page's owner (the
+Tools Owner) may ask for any bot's (`--for-bot`), the Tools owner never for itself: it holds none of the keys it connects. Asking again on the same task returns the open card; another task's open
 card for the same variable stays (saving either saves both); canceling the card ends the pause and tells the bot.
 When the task finishes, changes hands, or is made private from the card's person, its card says Not needed and its
 request is canceled; a person who cannot read the task cannot open its request either.
@@ -254,7 +256,8 @@ what it posts and logs. `tico message redact <id>` does the same for one message
 
 ## Keys dropped in the Tools chat
 
-Tools has its owner's chat at the right (the IT Support Specialist by default; Settings > General > Page owners). A company with
+Tools has its owner's chat at the right (the built-in Tools Owner by default, else an IT Support Specialist the company
+hired; Settings > General > Page owners). A company with
 neither has the General Manager's chat there, which stays an ordinary chat: no key guard and no key cards. In that
 chat's composer, and no other, a paste, dropped text or typed words are scanned in the browser before they reach the
 text box, with the rules in `backend/secret_rules.json` (vendor prefixes, PEM blocks, logins in addresses, values after

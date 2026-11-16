@@ -64,6 +64,7 @@ BUILTINS = {
     "design-owner",
     "updates-owner",
     "automations-owner",
+    "tools-owner",
 }
 TWELVE = (
     "operations-manager",
@@ -145,11 +146,11 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up %'")
     assert not rows(
         api,
-        "SELECT bot FROM bot_config WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','general-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner')",
+        "SELECT bot FROM bot_config WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','general-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner','tools-owner')",
     )
     assert not rows(
         api,
-        "SELECT bot FROM assignments WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','general-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner')",
+        "SELECT bot FROM assignments WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','general-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner','tools-owner')",
     )
     machine(api)
     assert {r["bot"] for r in rows(api, "SELECT bot FROM assignments")} <= BUILTINS
@@ -203,7 +204,15 @@ def test_a_file_that_names_no_manager_for_botops_leaves_it_under_the_general_man
     lines = {r["bot"]: r["reports_to"] for r in rows(api, "SELECT bot, reports_to FROM bot_config")}
     assert lines["botops"] == line
     assert lines["general-manager"] == lines["assistant"] == lines["finance-owner"] == "human:owner"
-    for slug in ("librarian", "strategy-owner", "rules-owner", "design-owner", "automations-owner", "updates-owner"):
+    for slug in (
+        "librarian",
+        "strategy-owner",
+        "rules-owner",
+        "design-owner",
+        "automations-owner",
+        "updates-owner",
+        "tools-owner",
+    ):
         assert lines[slug] == "general-manager", slug
     assert done.json()["company_import"]["seats"] == len(summary["seats"])
     # A later start changes no line.

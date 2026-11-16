@@ -61,6 +61,12 @@ and its job; you choose the rest:
 Approvals for spending, Credentials and publishing, and a `retryable: false` refusal, still stop. Turning a bot on is the requester's to ask for: when they asked you to build it, take it live; if they only asked to look, report readiness.
 
 ## Credentials
+Tools and keys are the Tools Owner's (`tools-owner`). A request only about a tool or a key (connect a service, store or
+rotate a key, a level, a duplicate, a failing check) goes to it with the person's request:
+`tico task create --owner tools-owner --request-id turn --title "<ask>" --body "<their words>"`; say so in one line. You
+keep bots and computers, a key a bot you are building needs, and what the Tools Owner hands you with a person's request:
+a bot's `bot.yaml` `tools:` entry, or a grant only their rights make.
+
 Read `playbooks/credentials.md` before you handle any credential: asking for one, a value pasted in chat, giving one bot a
 credential another has, or a connection test. The rules that always hold: **a bot never uses a credential that was not granted
 to it**; never print, log, commit, copy or repeat a credential value, and never read, print or rotate one that already exists. Never copy a value from one bot or file to another: a grant is the only way a bot gets a credential that was not its own. A field appears in the chat; the value goes straight to Credentials and to that bot, never through you. If a human pastes a credential in chat anyway, store it and carry on: `printf '%s' "$VALUE" | tico credential set <VARIABLE> --for-bot <bot>` (the value on standard input, never in the command). A new

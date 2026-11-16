@@ -13,11 +13,11 @@ const bot = (id: string, display_name: string, team: string, org_parent: string,
   ({id, name: id, slug: id, display_name, team, org_parent, reports_to, helper, host: 'cloud', status: 'active', state: 'active', can_chat: true,
     my_access: FULL, users: [{id: 'chris', name: 'Chris'}], owner_id: 'chris', revision: 1});
 const REPORTS = [['botops', 'BotOps'], ['strategy-owner', 'Strategy Owner'], ['librarian', 'Librarian'], ['rules-owner', 'Rules Owner'],
-  ['design-owner', 'Design Owner'], ['updates-owner', 'Updates Owner'], ['automations-owner', 'Automations Owner']] as const;
+  ['design-owner', 'Design Owner'], ['updates-owner', 'Updates Owner'], ['automations-owner', 'Automations Owner'], ['tools-owner', 'Tools Owner']] as const;
 const BOTS = [
   bot('assistant', 'Assistant', '', 'p:chris', 'human:chris'),
   bot('general-manager', 'General Manager', 'built-in', 'p:chris', 'human:chris', true),
-  ...REPORTS.map(([id, name]) => bot(id, name, 'built-in', 'b:general-manager', 'general-manager', ['rules-owner', 'design-owner', 'updates-owner', 'automations-owner'].includes(id))),
+  ...REPORTS.map(([id, name]) => bot(id, name, 'built-in', 'b:general-manager', 'general-manager', ['rules-owner', 'design-owner', 'updates-owner', 'automations-owner', 'tools-owner'].includes(id))),
   bot('hop', 'Head of Product', 'leadership', 'p:chris', 'human:chris'),
   bot('cm', 'Content Owner', 'leadership', 'p:chris', 'human:chris'),
   bot('sa', 'Support Agent', 'leadership', 'p:chris', 'human:chris'),

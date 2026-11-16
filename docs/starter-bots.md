@@ -48,7 +48,7 @@ themselves and never do their team's work.
 
 Five Managers (Product, Engineering, Growth, Success and Corporate) are also `lead: true`. Each has its team's bots under it, runs its team's week, routes the team's work to its owners and manages its team's pipelines: when a task stops, the Manager decides what happens to it. Product and Growth take no group's head seat.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner, Automations Owner and Tools Owner) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
@@ -59,7 +59,9 @@ against, owns all design, and answers each growth bet's brand check (the Video O
 the KPIs and computes their readings; the Finance Owner (`finance-owner`) keeps the books, the Usage page and the weekly cash
 summary; the Rules Owner (`rules-owner`) reads the documents added to Rules and answers can-I questions; the Updates Owner
 (`updates-owner`) drafts each period's company update; the Automations Owner (`automations-owner`) reviews the team's
-automations each week; and the Owners on the core chart each own one result and log readings for the KPI
+automations each week; the Tools Owner (`tools-owner`) owns Tools: it connects services, has keys typed into a card or
+dropped in its Tools chat (it never sees one), proposes each bot's level for a person to grant, and reviews the tools each
+week; and the Owners on the core chart each own one result and log readings for the KPI
 that measures it with `tico kpi log`. Owning a result does not make a bot the only one who logs it. No other template
 owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 

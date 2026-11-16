@@ -1,0 +1,20 @@
+name: tools-owner                    # the slug: it matches the repository bot-tools-owner and the label owner:tools-owner
+display_name: "Tools Owner"
+labels: [owner:tools-owner]
+reads: []                            # other bot repositories this one may clone read-only
+
+# This must agree with the bot's settings on the server, or be left out of this file entirely.
+max_run_minutes: 30
+
+# The routine this bot starts with. The server seeds it once, when the Tools Owner is built in; from then on it is an
+# Automation (docs/routines.md). Set the timezone to the team's own.
+routines:
+  - id: review-the-tools
+    title: Review the tools
+    cron: "0 9 * * 1"
+    timezone: America/Los_Angeles
+    template: playbooks/review-the-tools.md
+    labels: [priority:p3]
+
+# It holds no tool or credential of its own: keys go to the bots that use them (docs/credential-vault.md).
+tools: []
