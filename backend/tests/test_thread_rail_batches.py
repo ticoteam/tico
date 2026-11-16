@@ -10,7 +10,12 @@ from backend.tests.helpers.api import get, headers  # noqa: F401  (the fixture a
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.pages import page
 from backend.tests.helpers.task_privacy_reads import traced_get
-from backend.tests.helpers.thread_rail_batches import home as _home, runner, seed_replies  # noqa: F401  (fixture)
+from backend.tests.helpers.thread_rail_batches import (  # noqa: F401  (the runner fixture)
+    home as _home,
+    runner,
+    seed_finished_task_replies,
+    seed_replies,
+)
 
 
 def _first_page(api, token="ben-test", path="threads/rail"):
@@ -138,3 +143,59 @@ def test_a_reply_whose_run_read_a_refused_page_stays_hidden_on_every_load(api, m
         alone = loads()
         assert batched == alone, (legacy, batched, alone)
         assert batched == [2, 2, 2], (legacy, batched)  # the reply whose run read the deleted page is hidden
+
+
+def _revived(api, actor):
+    with api.app.state.store.read_transaction() as c:
+        return threads.revived_roots(c, threads.actor_viewer(c, actor))
+
+
+def _thread_of(api, task_id):
+    with api.app.state.store.read_transaction() as c:
+        return c.execute("SELECT id FROM conversations WHERE task_id=? AND parent_id IS NULL", (task_id,)).fetchone()[0]
+
+
+def test_bot_replies_after_tasks_finished_keep_the_first_page_flat(api):
+    """AC-1 (spec P09), on production's shape: every message there is restricted, and a finished task's thread comes
+    back on the rail and in Catch up when a post its reader may read follows the finish (threads.revived_roots, asked by
+    the rail and by its Catch up walk). 5 to 50 such threads, each revived by a bot's reply to another bot's reply, add
+    at most 15 statements on the load after a provenance change and on the next. Unbatched they cost about 17 each."""
+    cold, warm = {}, {}
+    done = 0
+    for size in (5, 50):
+        seed_finished_task_replies(api, size - done, f"f{size}")
+        done = size
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE messages SET restricted=1")
+            c.execute("UPDATE provenance_clock SET value=value+1 WHERE id=1")
+        page, cold[size] = _first_page(api)
+        again, warm[size] = _first_page(api)
+        assert again == page
+        assert len(_revived(api, "human:ben")) == size
+    print(f"finished-task replies: cold {cold[5]} -> {cold[50]}, warm {warm[5]} -> {warm[50]} statements")
+    assert cold[50] - cold[5] <= 15 and warm[50] - warm[5] <= 15, (cold, warm)
+
+
+def test_finished_task_revivals_are_the_same_with_and_without_priming(api, monkeypatch):
+    """AC-2 (spec P09): which finished-task threads come back, and every rail and Catch up page, are the same with the
+    batched reads as with none, for a reader who may read a reply's run and for one who may not: Ben may not read the
+    private task whose comment one bot's run read, so that thread stays away for him; Ana, who may, gets it back."""
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Private", "Secret", "human:ana", private=True, lint=False)
+    hidden, *shown = seed_finished_task_replies(api, 4, "eq", private_input=secret["id"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET restricted=1")
+    readers = {"human:ben": "ben-test", "human:ana": "ana-test", "human:cara": "cara-test"}
+    paths = ("threads/rail", "threads/catch-up")
+    batched = {a: _revived(api, a) for a in readers}
+    pages = {(p, t): get(api, p, t) for p in paths for t in readers.values()}
+    monkeypatch.setattr(read_cache, "cache", lambda c: None)
+    for actor in readers:
+        assert _revived(api, actor) == batched[actor], f"priming changed the revived threads for {actor}"
+    for (path, token), page in pages.items():
+        alone = get(api, path, token)
+        page.pop("seq", None), alone.pop("seq", None)
+        assert alone == page, f"priming changed {path} for {token}"
+    every = {_thread_of(api, t) for t in shown}
+    assert batched["human:ben"] == every, batched["human:ben"]
+    assert batched["human:ana"] == every | {_thread_of(api, hidden)}, batched["human:ana"]
