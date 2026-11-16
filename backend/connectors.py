@@ -925,32 +925,14 @@ def install_connectors(app, store, execution, mutate):
             runner, named, owned = reader(c, request.state.identity)
             targets = google_rights.visible(c, runner["id"], named, owned=owned)
             company = workspace.permissions(c)
-            # The server watches the mail its own credential reads (backend/gmail_watch.py): a computer syncs only
-            # the others (`mailboxes`). `acts_for` are all the mailboxes whose automation mail actions and queued sends
-            # this computer carries out (runner_support/connectors.py) until the server does those too.
-            from . import gmail_watch
-
-            synced = [target for target in targets if not gmail_watch.watched(c, target["address"])]
-            freshness = {row["address"]: row for row in c.execute("SELECT * FROM mail_mailboxes")} if synced else {}
-        mailboxes = []
-        for target in synced:
-            row = freshness.get(target["address"])
-            mailboxes.append(
-                {
-                    "address": target["address"],
-                    "person_id": target["person_id"],
-                    "newest_epoch": row["newest_epoch"] if row else None,
-                    "oldest_epoch": row["oldest_epoch"] if row else None,
-                    "message_count": row["message_count"] if row else 0,
-                    "synced_at": row["synced_at"] if row else None,
-                    "error": row["error"] if row else None,
-                }
-            )
+        # The server watches every mailbox's mail itself (backend/gmail_watch.py), so no computer syncs one: `mailboxes`
+        # is empty. `acts_for` are the mailboxes whose automation mail actions and queued sends this computer still
+        # carries out (runner_support/connectors.py) until the server does those too.
         acts_for = [{"address": target["address"], "person_id": target["person_id"]} for target in targets]
         # What Tico may do (Tools), which the mail CLI the runner runs checks every write against
         # (connectors/mail/policy.py runner_company): it reads it here, over the runner's own registration.
         return {
-            "mailboxes": mailboxes,
+            "mailboxes": [],
             "acts_for": acts_for,
             "batch": MAIL_BATCH,
             "retention_days": store.settings.mail_retention_days,

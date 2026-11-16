@@ -38,10 +38,11 @@ RETRY = 90  # seconds before a failed check is tried again
 WORKERS = 4  # mailboxes checked at once
 RECHECK_BACK = timedelta(hours=1)
 BODY_MAX = 32 * 1024
-REFUSED = ("gmail_refused", "not_connected")  # Google refused the sign-in: only a person fixes it
-# The credentials the server reads mail with. A mailbox another one covers (a person's own Connect Google grant the
-# server does not hold yet, or none) is still synced by its computer (backend/connectors.py mail targets).
-SERVER_READS = ("workspace",)
+# Google refused the sign-in or the grant: only a person fixes it (a network failure is retryable, not one of these).
+REFUSED = ("gmail_refused", "not_connected", "google_refused")
+# The credentials the server reads mail with (backend/google_tokens.py): the Workspace key and a person's own Connect
+# Google grant. A mailbox neither covers has no watcher.
+SERVER_READS = ("workspace", "personal")
 
 Json = dict[str, Any]
 Conn = sqlite3.Connection
@@ -67,7 +68,7 @@ def _gmail(name: str) -> Callable[..., Any]:
 
 
 def watched(c: Conn, mailbox: str) -> bool:
-    """Whether the server watches this mailbox's mail itself (a computer no longer syncs it)."""
+    """Whether the server watches this mailbox's mail itself: its Workspace key or its person's own grant covers it."""
     return _authority(c, str(mailbox or "").strip().lower()) in SERVER_READS
 
 
@@ -327,15 +328,13 @@ def check(store: Any, box: Json, budget: Left | None = None) -> int:
 
 
 def _failed(store: Any, box: Json, failed: Problem) -> None:
-    """Why the check failed, on the mailbox; a refused sign-in also to reconnects. Where it got to stays. A mailbox
-    whose person's own grant the server does not hold yet is not a refusal."""
+    """Why the check failed, on the mailbox; a refused sign-in also to reconnects. Where it got to stays."""
     from . import reconnects
 
     _TRIED[str(box["address"])] = time.monotonic()
     code, detail = str(cast("Any", failed).code), str(cast("Any", failed).detail)
-    extra = cast("Json", cast("Any", failed).extra)
     LOG.info("gmail watch of a mailbox failed: %s", code)
-    refused = code in REFUSED and extra.get("kind") != "personal"
+    refused = code in REFUSED and not cast("Any", failed).retryable
     with store.transaction() as c:
         c.execute("UPDATE mailboxes SET check_error=? WHERE id=?", (detail[:300], box["id"]))
         if refused:

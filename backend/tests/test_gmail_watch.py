@@ -305,3 +305,21 @@ def test_a_spent_budget_stops_between_messages_and_the_next_pass_goes_on(watched
     assert watch_pass(api, T0 + timedelta(minutes=6), Allow(2)) == 2
     assert watch_pass(api, T0 + timedelta(minutes=9)) == 1
     assert heard(api, aid) == [f"h{n}" for n in range(5)]
+
+
+def test_a_personal_grant_mailbox_is_watched_on_the_server(api, fake_gmail, monkeypatch):
+    """A mailbox only its person's own Connect Google grant covers: the server reads its Gmail through that grant (the
+    token door) and hears its mail; no computer syncs it."""
+    monkeypatch.setattr(google_workspace, "authority", lambda c, mailbox: "personal" if mailbox == BOX else "legacy")
+    with api.app.state.store.transaction() as c:
+        MA.ensure_mailbox(c, BOX, person_id="ana", created_by="human:ana")
+        MA.ensure_mailbox(c, "nobody@elsewhere.example", kind="shared", created_by="human:ana")
+    aid = post(
+        api,
+        "automations",
+        {"name": "Mail", "owner": "person:ana", "trigger": {"type": "message", "inbox": BOX}, "steps": [NOOP]},
+    )["id"]
+    fake_gmail.add(BOX, "mine", epoch=int(time.time()) - 60)
+    assert gmail_watch.drain(api.app.state.store) == 1
+    assert heard(api, aid) == ["mine"]
+    assert not any("elsewhere" in path for path, _, _ in fake_gmail.calls)  # no credential covers it: not watched

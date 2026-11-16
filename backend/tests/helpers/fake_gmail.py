@@ -17,6 +17,7 @@ import pytest
 from backend import gmail_live, gmail_watch, google_tokens, mail_facts, messaging
 
 CURRENT = {}  # the fixture's fake, for put_mail
+REAL_TOKEN = google_tokens.token  # for a test that fakes the key behind the door instead
 
 
 def _addresses(value):

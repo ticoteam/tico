@@ -8,8 +8,8 @@ enqueue and again at dispatch) asks Gmail once. Callers that hold the write lock
 token that cannot be had refuses), raises a retryable Problem and keeps nothing: a decision that needs a fact waits for
 Gmail, never guesses.
 
-A mailbox the server does not watch (backend/gmail_watch.py `watched`) is still synced by its computer, so its facts
-come from that computer's copy (`mail_messages`) until the computer side goes.
+A mailbox no server credential covers (backend/gmail_watch.py `watched`) cannot be asked: its facts come from the
+last copy its computer synced (`mail_messages`) until the computer side and the copies go.
 """
 
 import collections
@@ -72,7 +72,7 @@ def _found(c: Conn, mailbox: str, q: str) -> bool:
 
 
 def _copy(c: Conn, sql: str, args: tuple[Any, ...]) -> Any:
-    """A row of the computer's copy of a mailbox the server does not watch."""
+    """A row of the last copy a computer synced of a mailbox no server credential covers."""
     return c.execute(sql, args).fetchone()
 
 

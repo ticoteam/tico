@@ -817,7 +817,7 @@ def review_context(c, auth, actor, body, mailbox, snap):
             {"from_addr": r["from"], "subject": r["subject"], "body": r["body"], "snippet": r["snippet"]}
             for r in gmail_live.thread(c, mailbox, thread_id)[-5:]
         ]
-    else:  # a mailbox its computer still syncs: that computer's copy
+    else:  # no server credential covers the mailbox: the last copy its computer synced
         rows = list(
             reversed(
                 c.execute(

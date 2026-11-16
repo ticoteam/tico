@@ -21,15 +21,15 @@ keeps no copy of mail. Opening a message or thread checks access and records `ma
 
 ## How Tico hears new mail
 
-The server watches every active mailbox its Workspace key covers (`backend/gmail_watch.py`, a drain worker): about
+The server watches every active mailbox its Workspace key or a person's own Connect Google grant covers
+(`backend/gmail_watch.py`, a drain worker): about
 every 90 seconds it asks Gmail for the history since the mailbox's last check, reads each new message once, runs the
 mailbox's message automations, notes bounces and feeds the Directory, then keeps only where it got to. Drafts are not
 heard. A mailbox's first check starts its watch a day back and hears all of that day's mail, oldest first, over as many
 passes as it takes; older mail never starts a run. A failed check keeps where it got to and shows why on Tools > the
-mailbox; a refused Google sign-in also asks its person to reconnect. A computer still syncs only the mailboxes the
-server does not watch (a person's own Connect Google grant, until the server holds it), and still carries out the
-automation mail actions and queued sends for the mailboxes it acts for until the server does those too. A finished
-automation run keeps no message body or snippet.
+mailbox; a refused Google sign-in also asks its person to reconnect. No computer syncs mail any more; a computer still
+carries out the automation mail actions and queued sends for the mailboxes it acts for until the server does those
+too. A finished automation run keeps no message body or snippet.
 
 ## Organizing live
 

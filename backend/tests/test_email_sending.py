@@ -484,8 +484,10 @@ def test_never_refuses_and_names_the_setting(inbox):
 
 def workspace(monkeypatch, answer):
     """The inbox as a Workspace key covers it, and a fake Gmail that answers `answer` to every send."""
-    from backend import gmail_live, google_workspace as GW
+    from backend import gmail_live, google_tokens, google_workspace as GW
+    from backend.tests.helpers.fake_gmail import REAL_TOKEN
 
+    monkeypatch.setattr(google_tokens, "token", REAL_TOKEN)  # through the real door, to the faked key
     monkeypatch.setattr(GW, "authority", lambda c, mailbox: "workspace")
     monkeypatch.setattr(
         GW, "mint", lambda c, mailbox, service, row=None, scopes=None: {"access_token": "fixture-token"}
@@ -533,8 +535,8 @@ def test_a_failing_workspace_key_leaves_the_email_pending(inbox, monkeypatch):
     def refused(*args, **kwargs):
         raise Problem("not_connected", "The key is failing", 403)
 
-    monkeypatch.setattr(GW, "mint", refused)
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    monkeypatch.setattr(GW, "mint", refused)  # the key fails after the email was queued
     assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
     with inbox.app.state.store.read() as c:
         assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
@@ -545,9 +547,9 @@ def test_a_mailbox_the_server_cannot_mint_for_is_still_dispatched_by_its_compute
 
     autonomous(inbox)
     calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
-    # No Workspace key covers it: the grant its computer holds sends (a personal grant's own computer is the same path).
-    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    # No server credential covers it any more: the computer that holds one sends.
+    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")
     assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
     machine = runner(inbox)
     assert claim(inbox, machine["token"])["id"] == queued["id"]
@@ -560,10 +562,12 @@ def test_a_mailbox_the_server_cannot_mint_for_is_still_dispatched_by_its_compute
 def own_grant(inbox, monkeypatch, scopes):
     """BOX is connected with its person's own Connect Google grant, held on the server, with `scopes`; Google refreshes
     it to `ya29.own`. Returns the fake Google and the fake Gmail's send calls."""
-    from backend import gmail_live, google_connect
+    from backend import gmail_live, google_connect, google_tokens
+    from backend.tests.helpers.fake_gmail import REAL_TOKEN
     from backend.tests.helpers.google_connect import CLIENT, FakeGoogle
     from backend.tests.helpers.google_workspace import personal
 
+    monkeypatch.setattr(google_tokens, "token", REAL_TOKEN)  # the grant's own token, through the real door
     settings = inbox.app.state.store.settings
     monkeypatch.setattr(settings, "google_oauth_client_id", CLIENT)
     monkeypatch.setattr(settings, "google_oauth_client_secret", "tico-secret")
@@ -602,9 +606,10 @@ def test_a_read_only_personal_grant_fails_its_due_email_without_asking_google(in
 
     autonomous(inbox)
     google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES)
-    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")  # its reply checks read Gmail with the grant
+    asked = len(google.calls)
     store, auth = inbox.app.state.store, inbox.app.state.auth
-    assert S.drain(store, auth) == 0 and calls == [] and google.calls == []
+    assert S.drain(store, auth) == 0 and calls == [] and len(google.calls) == asked
     with store.read() as c:
         row = c.execute("SELECT state,detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
     assert row["state"] == "failed" and "read only" in row["detail"]
