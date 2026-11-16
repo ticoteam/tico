@@ -15,13 +15,12 @@ from backend.tests.helpers.execution_review import aged, job_state, sweep
 CAPS = ['capacity_continue_v1']
 
 
-def lost_mid_reply(api, shells, *, capacity=True, writes=0):
+def lost_mid_reply(api, shells, *, writes=0):
     """Ana's chat message to ops, whose turn ran `shells` (the fields each shell call's start event carries: an older
     runner sends no `reads_only`, an older still no `outside_actions`), then its computer dropped and its lease
     lapsed."""
     machine, message, attempt = setup_attempt(api)
-    if capacity:
-        ready(api, machine, ['ops'], CAPS)
+    ready(api, machine, ['ops'], CAPS)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'same-session'}, machine['token'])
     events = [{'seq': 1, 'kind': 'status', 'payload': {'state': 'active', 'tool_events': True}}]
     for n, fields in enumerate(shells):
@@ -72,15 +71,11 @@ def shell(summary, outside_actions=(), reads_only=True):
 READS = [shell('hub needs-you show'), shell('hub task list'), shell('grep')]
 
 
-@pytest.mark.parametrize('capacity', [True, False])
-def test_a_person_turn_that_only_read_goes_back_in_line_after_its_lease_is_lost(api, capacity):
-    machine, message, attempt = lost_mid_reply(api, READS, capacity=capacity)
+def test_a_person_turn_that_only_read_goes_back_in_line_after_its_lease_is_lost(api):
+    # Every rc.1 runner advertises capacity_continue_v1, so there is no runner that waits out a restore window here.
+    machine, message, attempt = lost_mid_reply(api, READS)
     with api.app.state.store.read() as c:
         assert H.status(c, 'ops')['state'] == 'idle' and 'Resuming' in H.status(c, 'ops')['focus']
-    if not capacity:
-        # Without a session it can continue, its lapsed runner's late result may still come in first.
-        assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-        aged(api, attempt['id'], grace=True)
     assert [d['state'] for d in sweep(api)] == ['queued']
     ready(api, machine, ['ops'], CAPS)
     again = claim(api, machine)
