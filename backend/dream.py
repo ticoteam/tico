@@ -262,8 +262,8 @@ def view(c, who, row):
             said = [
                 m
                 for m in H.task_comments(c, row["id"], actor=privacy.actor(who))
-                if m.get("sender_id") == row["owner_id"]
-            ]
+                if m.get("sender_id") == row["owner_id"] and m.get("kind") not in ("ask", "answer")
+            ]  # old rows
             summary = (said[-1].get("body") or "").strip() if said else ""
         summary = summary[:MAX_TEXT] or None
     else:
