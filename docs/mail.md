@@ -16,9 +16,20 @@ The old `#/mail` route remains available for existing deep links.
 same mailbox access. Output is Markdown by default; add `--json` for the API response. Lists accept `--limit` (up to
 50) and `--cursor` with the previous `next_cursor`. Inbox accepts `--q` to search within INBOX. `tico mail` is postal mail.
 
-The mail API requires a mailbox for live lists; it does not combine inboxes. A mailbox Whole Workspace or a person's own
-Connect Google grant covers is read live; legacy connections keep their existing stored reads. Existing mail sync and
-stored copies are unchanged by live reads. Opening a message or thread checks access and records `mail.read`.
+The mail API requires a mailbox for every list; it does not combine inboxes. Every read asks Gmail at that moment: Tico
+keeps no copy of mail. Opening a message or thread checks access and records `mail.read`.
+
+## How Tico hears new mail
+
+The server watches every active mailbox its Workspace key or a person's own Connect Google grant covers
+(`backend/gmail_watch.py`, a drain worker): about
+every 90 seconds it asks Gmail for the history since the mailbox's last check, reads each new message once, runs the
+mailbox's message automations, notes bounces and feeds the Directory, then keeps only where it got to. Drafts are not
+heard. A mailbox's first check starts its watch a day back and hears all of that day's mail, oldest first, over as many
+passes as it takes; older mail never starts a run. A failed check keeps where it got to and shows why on Tools > the
+mailbox; a refused Google sign-in also asks its person to reconnect. No computer syncs mail any more; a computer still
+carries out the automation mail actions and queued sends for the mailboxes it acts for until the server does those
+too. A finished automation run keeps no message body or snippet.
 
 ## Organizing live
 
@@ -544,28 +555,23 @@ With Whole Workspace set, the `connectors` job on the runner reads the mailboxes
 2. Check: `python -m runner_support --config <runner.json> connectors-doctor`, then Settings shows the mail and calendar
    tool health.
 
-### Which mailboxes the sync covers
+### Which mailboxes a computer acts for
 
-With **Whole Workspace**, the `connectors` job also syncs every known active personal mailbox linked to a person and
-every shared inbox on the key's domain, even without a message bot. Each has one sync computer: its message bot's
-non-revoked host, else the person's Assistant's online host, else an online isolated company server (owned by a
-company owner or admin), else the person's own online computer. Shared mailboxes
-without a message-bot host use only a company server. Among equally eligible computers, the lowest runner ID wins.
-An isolated server is a Linux Docker runner that supervises its own `connectors` job. Another member's personal
-computer is never chosen just because it is online. A fallback owner is replaced when it has not contacted Tico for
-60 seconds or is revoked. If no eligible computer is online, nothing syncs and Health says the mailbox has no sync computer.
-Stopped mailboxes and mailboxes awaiting a person are excluded from this fallback. A mailbox a person's own Connect
-Google grant covers follows the same rule: the server holds the grant and hands that computer a token. Syncing grants no bot access: the person and their Assistant can read their copies;
-other bots still need an explicit mailbox grant, even on the syncing computer.
+With **Whole Workspace**, each known active mailbox has one computer that carries out its automation mail actions and
+queued sends (`acts_for` in `GET /api/v2/connectors/mail/targets`; it syncs none): its message bot's non-revoked host,
+else the person's Assistant's online host, else an online isolated company server (owned by a company owner or admin),
+else the person's own online computer. Shared mailboxes without a message-bot host use only a company server. Among
+equally eligible computers, the lowest runner ID wins. Another member's personal computer is never chosen just because
+it is online. This grants no bot access: other bots still need an explicit mailbox grant.
 
 For each message bot (the bot named as someone's `inbox_bot`), the mailbox is the address the bot declares: the
 identity of its `gmail` entry in `bot.yaml`, which BotOps fills from the `Mailbox: <email>` line in the bot's instructions
-(`{{mailbox}}` in the template). Only when a bot declares none does the sync use its person's email from the roster. A person
+(`{{mailbox}}` in the template). Only when a bot declares none is its person's email from the roster used. A person
 who left, and an archived bot, are skipped.
 
 This is what lets a team sign in on one domain and keep its Google Workspace on another. If the owner signs in as
 `ana@acme-signin.example` but the Workspace, and so the service account's delegation, is for `acme.example`, the message bot declares
-`ana@acme.example` and that is the mailbox that is synced and read. The calendar sync and the bot's token use the same address.
+`ana@acme.example` and that is the mailbox that is watched and read. The calendar sync and the bot's token use the same address.
 
 If the key cannot act for a mailbox's domain (Google answers `unauthorized_client`: no domain-wide delegation there), the job
 does not fail on every cycle. It says so once in the runner's log, skips every mailbox on that domain, tries the domain again

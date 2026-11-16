@@ -1,4 +1,4 @@
-"""Read API over live Workspace Gmail or the existing copy, and live organizing for authorized callers.
+"""Read API over live Gmail (Tico keeps no copy of mail), and live organizing for authorized callers.
 
 People browse the mailboxes they hold a level on (backend/mailbox_access.py), the
 owner and managers included, with no bypass. Reads refuse bots and runners; organizing uses each caller's own level.
@@ -11,7 +11,6 @@ turn, may do on each mailbox it holds.
 
 import json
 import re
-import sqlite3
 
 from fastapi import Request
 
@@ -19,8 +18,6 @@ from . import gmail_live, google_tokens, google_workspace, mailbox_access, routi
 from .store import H, Problem
 from .views import human_only, roster
 
-FTS_TOKEN = re.compile(r"[A-Za-z0-9_@.+'-]+")
-CURSOR = re.compile(r"^(\d+)\|([^|]+)\|([^|]+)$")
 LIMIT_DEFAULT, LIMIT_MAX = 50, 100
 DURATION = {"d": 86400, "h": 3600, "m": 60}
 ORGANIZE_ACTIONS = {
@@ -60,14 +57,6 @@ def organize_selection(body):
     return action, list(dict.fromkeys(ids)) if ids is not None else None, query, limit, label
 
 
-def sanitize_fts(q):
-    """Quoted FTS5 tokens ANDed together. Operators and punctuation never reach MATCH as syntax."""
-    tokens = FTS_TOKEN.findall(q or "")
-    if not tokens:
-        return ""
-    return " AND ".join('"' + token.replace('"', "") + '"' for token in tokens[:32])
-
-
 def visible_addresses(c, who):
     """Mailbox addresses this person may browse, their own first: the ones they hold a level on."""
     if who.role not in ("owner", "human"):
@@ -103,17 +92,6 @@ def epoch_bound(value, name):
     if not at:
         raise Problem("date", f"{name} must be an ISO date/time, a unix epoch, or a duration such as 7d", 422)
     return int(at.timestamp())
-
-
-def decode_cursor(value):
-    match = CURSOR.fullmatch(str(value or ""))
-    if not match:
-        raise Problem("cursor", "Invalid cursor", 422)
-    return int(match[1]), match[2], match[3]
-
-
-def encode_cursor(epoch, mailbox, msg_id):
-    return f"{epoch}|{mailbox}|{msg_id}"
 
 
 def truthy(value):
@@ -188,7 +166,7 @@ def live_message_public(mailbox, item, domains, body=False):
 
 
 def mailbox_view(c, address, people, who, auth):
-    row = c.execute("SELECT * FROM mail_mailboxes WHERE address=?", (address,)).fetchone()
+    row = c.execute("SELECT person_id,checked_at,check_error FROM mailboxes WHERE address=?", (address,)).fetchone()
     person = routines.person_for_mailbox(address, routines.message_bot_mailboxes(c, people), people)
     bot = (person or {}).get("inbox_bot") or ""
     bot_row = H.bot(c, bot) if bot else None
@@ -204,11 +182,12 @@ def mailbox_view(c, address, people, who, auth):
         "address": address,
         "person_id": (person or {}).get("id") or (row["person_id"] if row else None),
         "name": (person or {}).get("name") or "",
-        "synced_at": row["synced_at"] if row else None,
-        "message_count": row["message_count"] if row else 0,
-        "oldest_epoch": row["oldest_epoch"] if row else None,
-        "newest_epoch": row["newest_epoch"] if row else None,
-        "error": row["error"] if row else None,
+        # When the server last read its Gmail (backend/gmail_watch.py), and why the last read failed.
+        "synced_at": row["checked_at"] if row else None,
+        "message_count": 0,
+        "oldest_epoch": None,
+        "newest_epoch": None,
+        "error": row["check_error"] if row else None,
         "agent_bot": bot or None,
         "agent_instructions": bool(instructions and instructions["size"]),
         "agent_updated": instructions["updated_at"] if instructions and instructions["size"] else None,
@@ -342,60 +321,15 @@ def install_mail(app, store, auth):
         cap = min(LIMIT_MAX, max(1, int(limit or LIMIT_DEFAULT)))
         since_epoch, until_epoch = epoch_bound(since, "since"), epoch_bound(until, "until")
         with store.read() as c:
-            allowed, addr = visible_addresses(c, who), ""
-            if mailbox:
-                addr, allowed = require_mailbox(c, who, mailbox)
-                boxes = [addr]
-            else:
-                boxes = allowed
-            if addr and google_tokens.covered(c, addr):
-                query = gmail_query(q, label, since_epoch, until_epoch, has_attachment)
-                page = gmail_live.list(c, addr, query, page_token=cursor, limit=min(cap, gmail_live.LIMIT_MAX))
-                domains = mailbox_access.company_domains(c)
-                return {**page, "messages": [live_message_public(addr, item, domains) for item in page["messages"]]}
-            if not mailbox and any(google_tokens.covered(c, box) for box in boxes):
+            if not mailbox:
+                if not visible_addresses(c, who):
+                    return {"messages": [], "next_cursor": None, "q": q}
                 raise Problem("mailbox", "Choose a mailbox to read live from Gmail", 422)
-            after = decode_cursor(cursor) if cursor else None
-            match = sanitize_fts(q)
-            if str(q or "").strip() and not match:
-                return {"messages": [], "next_cursor": None, "q": ""}
-            if not boxes:
-                return {"messages": [], "next_cursor": None, "q": match}
-            sql = (
-                "SELECT m.mailbox,m.msg_id,m.thread_id,m.epoch,m.date,m.from_addr,m.from_header,"
-                "m.to_addresses,m.cc,m.subject,m.snippet,m.labels,m.attachments,"
-                "m.body_truncated,m.is_internal,m.has_unsubscribe "
-                "FROM mail_messages m WHERE m.deleted_at IS NULL AND m.mailbox IN ({})".format(
-                    ",".join("?" * len(boxes))
-                )
-            )
-            args = list(boxes)
-            if match:
-                sql += " AND (m.mailbox, m.msg_id) IN (SELECT mailbox, msg_id FROM mail_fts WHERE mail_fts MATCH ?)"
-                args.append(match)
-            if label:
-                sql += " AND EXISTS (SELECT 1 FROM json_each(m.labels) WHERE value=?)"
-                args.append(label)
-            if since_epoch is not None:
-                sql += " AND m.epoch>=?"
-                args.append(since_epoch)
-            if until_epoch is not None:
-                sql += " AND m.epoch<=?"
-                args.append(until_epoch)
-            if truthy(has_attachment):
-                sql += " AND json_array_length(m.attachments)>0"
-            if after:
-                sql += " AND (m.epoch, m.mailbox, m.msg_id) < (?, ?, ?)"
-                args.extend(after)
-            sql += " ORDER BY m.epoch DESC, m.mailbox DESC, m.msg_id DESC LIMIT ?"
-            args.append(cap + 1)
-            try:
-                rows = c.execute(sql, args).fetchall()
-            except sqlite3.OperationalError as exc:
-                raise Problem("query", "Search query was refused", 422) from exc
-            more = rows[:cap]
-            nxt = encode_cursor(more[-1]["epoch"], more[-1]["mailbox"], more[-1]["msg_id"]) if len(rows) > cap else None
-            return {"messages": [message_public(row) for row in more], "next_cursor": nxt, "q": match}
+            addr, _ = require_mailbox(c, who, mailbox)
+            query = gmail_query(q, label, since_epoch, until_epoch, has_attachment)
+            page = gmail_live.list(c, addr, query, page_token=cursor, limit=min(cap, gmail_live.LIMIT_MAX))
+            domains = mailbox_access.company_domains(c)
+            return {**page, "messages": [live_message_public(addr, item, domains) for item in page["messages"]]}
 
     @app.get("/api/v2/mail/threads/{thread_id}")
     def thread(request: Request, thread_id: str, mailbox: str = ""):
@@ -408,20 +342,8 @@ def install_mail(app, store, auth):
         # anything is returned.
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
-            if google_tokens.covered(c, addr):
-                domains = mailbox_access.company_domains(c)
-                items = [
-                    live_message_public(addr, item, domains, body=True) for item in gmail_live.thread(c, addr, tid)
-                ]
-            else:
-                rows = c.execute(
-                    "SELECT * FROM mail_messages WHERE mailbox=? AND thread_id=? AND deleted_at IS NULL "
-                    "ORDER BY epoch, msg_id",
-                    (addr, tid),
-                ).fetchall()
-                if not rows:
-                    raise Problem("not_found", "Thread not found", 404)
-                items = [message_public(row, body=True) for row in rows]
+            domains = mailbox_access.company_domains(c)
+            items = [live_message_public(addr, item, domains, body=True) for item in gmail_live.thread(c, addr, tid)]
             out = {"mailbox": addr, "thread_id": tid, "messages": items}
         with store.transaction() as c:
             H.event(c, who.actor, "mail.read", tid, {"mailbox": addr, "kind": "thread", "messages": len(items)})
@@ -436,17 +358,9 @@ def install_mail(app, store, auth):
             raise Problem("message", "msg_id is required", 422)
         with store.read() as c:
             addr, _ = require_mailbox(c, who, mailbox)
-            if google_tokens.covered(c, addr):
-                out = live_message_public(
-                    addr, gmail_live.message(c, addr, mid), mailbox_access.company_domains(c), body=True
-                )
-            else:
-                row = c.execute(
-                    "SELECT * FROM mail_messages WHERE mailbox=? AND msg_id=? AND deleted_at IS NULL", (addr, mid)
-                ).fetchone()
-                if not row:
-                    raise Problem("not_found", "Message not found", 404)
-                out = message_public(row, body=True)
+            out = live_message_public(
+                addr, gmail_live.message(c, addr, mid), mailbox_access.company_domains(c), body=True
+            )
         with store.transaction() as c:
             H.event(c, who.actor, "mail.read", mid, {"mailbox": addr, "kind": "message", "thread_id": out["thread_id"]})
         return out

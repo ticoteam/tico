@@ -14,6 +14,7 @@ import pytest
 from backend import judge, task_asks
 from backend.store import Problem
 from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.email_sending import (
     BOX,
     CONTACT,

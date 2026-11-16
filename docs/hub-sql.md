@@ -43,8 +43,8 @@ else. `SELECT * FROM messages` therefore means "the messages you may read". In p
   bot](permissions.md); a bot they may only see or write to is in the API but not here), every task except
   those a bot they cannot read owns or requested, unless it is theirs, their own private DM, the shared threads they are a member of, and
   the direct threads they take part in. Their own typed and voice notes, files and
-  tool snapshots; nobody else's. Mail copies (`mail_messages`, `mail_mailboxes`,
-  `mail_fts`) are owner-only in SQL; humans browse their visible mail on the Message bots page.
+  tool snapshots; nobody else's. Mail is not in SQL for anyone: Tico reads it live from Gmail, and people browse
+  the mail they may read on the Message bots page.
   Meetings are the exception: every team meeting is
   theirs to read, and a private one only if the invite names them
   ([Meetings](meetings.md), Who can do what).

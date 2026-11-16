@@ -99,17 +99,15 @@ def mail_publish(mailbox="ana@acme.example", messages=None, deleted=None, **extr
     return body
 
 
-def test_mail_tables_are_owner_only_in_sql(api):
-    from backend.tests.helpers.sql import column, query
+def test_no_mail_table_is_readable_in_sql_even_by_the_owner(api):
+    from backend.tests.helpers.sql import query
 
     machine = runner(api)
-    post(api, "connectors/mail/messages", mail_publish(), machine["token"])
-    assert column(api, "SELECT msg_id FROM mail_messages") == ["m-plain"]
-    assert column(api, "SELECT address FROM mail_mailboxes") == ["ana@acme.example"]
-    assert column(api, "SELECT msg_id FROM mail_fts") == ["m-plain"]
-    assert query(api, "SELECT msg_id FROM mail_messages", "ben-test")["rows"] == []
-    assert query(api, "SELECT address FROM mail_mailboxes", "ben-test")["rows"] == []
-    assert query(api, "SELECT msg_id FROM mail_fts", "ben-test")["rows"] == []
+    post(api, "connectors/mail/messages", mail_publish(), machine["token"])  # an old computer's last copy
+    for table, field in (("mail_messages", "msg_id"), ("mail_mailboxes", "address"), ("mail_fts", "msg_id")):
+        for token in ("ana-test", "ben-test"):
+            answer = query(api, f"SELECT {field} FROM {table}", token, expected=422)
+            assert answer["error"]["code"] == "sql" and "m-plain" not in str(answer)
 
 
 class MailHub:

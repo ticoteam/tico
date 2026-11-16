@@ -11,6 +11,7 @@ from backend import email_sending as S
 from backend import task_asks
 from backend.store import H
 from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.email_sending import (
     BOX,
     CONTACT,
@@ -91,6 +92,77 @@ def test_known_correspondent_and_verified_reply_can_send(inbox):
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     assert queued["state"] == "pending"
     assert queued["decision"]["outcome"] == "allow"
+
+
+def test_reply_and_address_checks_ask_gmail_and_wait_while_it_does_not_answer(inbox, fake_gmail):
+    from backend import mail_facts
+    from backend.store import Problem
+
+    autonomous(inbox, ask_new_address=True)
+    known = queue(inbox, raw=mime(body="To a known sender"))
+    assert "new_address" not in known["decision"]["reasons"]  # the contact wrote to the inbox (Gmail from:)
+    stranger = queue(inbox, raw=mime(body="To a stranger", to=["new@vendor.example"]))
+    assert "new_address" in stranger["decision"]["reasons"]
+    searches = [q.get("q", [""])[0] for path, q, _ in fake_gmail.calls if path.endswith("/messages")]
+    assert "from:" + CONTACT in searches and any(s.startswith("in:sent") for s in searches)
+    mail_facts.forget()
+    fake_gmail.down.add(BOX)
+    with inbox.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM email_sends").fetchone()[0]
+    with pytest.raises(Problem) as waited:
+        queue(inbox, raw=mime(body="A reply", In_Reply_To="<inbound@vendor.example>"), reply_to_id="inbound")
+    assert waited.value.retryable
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
+
+
+def test_a_gmail_refusal_is_not_remembered_as_a_fact_and_the_send_waits(inbox, fake_gmail, monkeypatch):
+    """Gmail answers 403 for a rate limit too, and a token outage refuses: neither is an answer about the address. The
+    send waits (retryable), nothing is blocked or cached, and the next try asks Gmail again."""
+    from backend import gmail_watch
+    from backend.store import Problem
+
+    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: True)
+    autonomous(inbox, ask_new_address=True)
+    fake_gmail.refused.add(BOX)
+    with pytest.raises(Problem) as waited:
+        queue(inbox, raw=mime(body="To a known sender"))
+    assert waited.value.retryable
+    with inbox.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM email_sends WHERE state='blocked'").fetchone()[0] == 0
+    fake_gmail.refused.clear()
+    assert "new_address" not in queue(inbox, raw=mime(body="To a known sender"))["decision"]["reasons"]
+
+
+def test_mail_tico_composes_is_queued_while_gmail_is_down_and_decided_when_it_answers(inbox, fake_gmail, monkeypatch):
+    """A calendar invitation (or any email Tico composes inside another write) never fails because Gmail cannot say
+    who is known: it is queued pending, unchecked, and the drain decides it with Gmail's answer before it can go."""
+    from backend import email_sending as S
+
+    monkeypatch.setattr(S, "server_sends", lambda c, mailbox: True)  # the server sends from it (its key is faked)
+    autonomous(inbox, ask_new_address=True)
+    fake_gmail.down.add(BOX)
+    with inbox.app.state.store.transaction() as c:
+        queued = S.enqueue(
+            c,
+            inbox.app.state.auth,
+            "human:ana",
+            S.Enqueue(mailbox=BOX, raw=mime(body="An invitation", to=["new@vendor.example"]), calendar_action_id=""),
+            {"legal_or_money": False, "status": "classified"},
+            wait_for_gmail=True,
+        )
+    assert queued["state"] == "pending" and queued["decision"]["outcome"] == "wait"
+    assert "gmail_unchecked" in queued["decision"]["reasons"]
+    store, auth = inbox.app.state.store, inbox.app.state.auth
+    assert S.drain(store, auth) == 0  # Gmail still down: it waits, nothing is sent or asked
+    with store.read() as c:
+        assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
+    fake_gmail.down.clear()
+    S.drain(store, auth)
+    with store.read() as c:
+        row = c.execute("SELECT state,decision FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
+    assert row["state"] == "waiting_approval" and "new_address" in json.loads(row["decision"])["reasons"]
 
 
 def test_cli_sending_controls_share_the_email_command_and_api(inbox, monkeypatch, capsys):
@@ -442,8 +514,10 @@ def test_never_refuses_and_names_the_setting(inbox):
 
 def workspace(monkeypatch, answer):
     """The inbox as a Workspace key covers it, and a fake Gmail that answers `answer` to every send."""
-    from backend import gmail_live, google_workspace as GW
+    from backend import gmail_live, google_tokens, google_workspace as GW
+    from backend.tests.helpers.fake_gmail import REAL_TOKEN
 
+    monkeypatch.setattr(google_tokens, "token", REAL_TOKEN)  # through the real door, to the faked key
     monkeypatch.setattr(GW, "authority", lambda c, mailbox: "workspace")
     monkeypatch.setattr(
         GW, "mint", lambda c, mailbox, service, row=None, scopes=None: {"access_token": "fixture-token"}
@@ -491,8 +565,8 @@ def test_a_failing_workspace_key_leaves_the_email_pending(inbox, monkeypatch):
     def refused(*args, **kwargs):
         raise Problem("not_connected", "The key is failing", 403)
 
-    monkeypatch.setattr(GW, "mint", refused)
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    monkeypatch.setattr(GW, "mint", refused)  # the key fails after the email was queued
     assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
     with inbox.app.state.store.read() as c:
         assert c.execute("SELECT state FROM email_sends WHERE id=?", (queued["id"],)).fetchone()[0] == "pending"
@@ -503,9 +577,9 @@ def test_a_mailbox_the_server_cannot_mint_for_is_still_dispatched_by_its_compute
 
     autonomous(inbox)
     calls = workspace(monkeypatch, (200, {"id": "gmail-1"}))
-    # No Workspace key covers it: the grant its computer holds sends (a personal grant's own computer is the same path).
-    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    # No server credential covers it any more: the computer that holds one sends.
+    monkeypatch.setattr(GW, "authority", lambda c, mailbox: "legacy")
     assert S.drain(inbox.app.state.store, inbox.app.state.auth) == 0 and calls == []
     machine = runner(inbox)
     assert claim(inbox, machine["token"])["id"] == queued["id"]
@@ -518,10 +592,12 @@ def test_a_mailbox_the_server_cannot_mint_for_is_still_dispatched_by_its_compute
 def own_grant(inbox, monkeypatch, scopes):
     """BOX is connected with its person's own Connect Google grant, held on the server, with `scopes`; Google refreshes
     it to `ya29.own`. Returns the fake Google and the fake Gmail's send calls."""
-    from backend import gmail_live, google_connect
+    from backend import gmail_live, google_connect, google_tokens
+    from backend.tests.helpers.fake_gmail import REAL_TOKEN
     from backend.tests.helpers.google_connect import CLIENT, FakeGoogle
     from backend.tests.helpers.google_workspace import personal
 
+    monkeypatch.setattr(google_tokens, "token", REAL_TOKEN)  # the grant's own token, through the real door
     settings = inbox.app.state.store.settings
     monkeypatch.setattr(settings, "google_oauth_client_id", CLIENT)
     monkeypatch.setattr(settings, "google_oauth_client_secret", "tico-secret")
@@ -560,9 +636,10 @@ def test_a_read_only_personal_grant_fails_its_due_email_without_asking_google(in
 
     autonomous(inbox)
     google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES)
-    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
+    queued = queue(inbox, reply_to_id="inbound", thread_id="thread")  # its reply checks read Gmail with the grant
+    asked = len(google.calls)
     store, auth = inbox.app.state.store, inbox.app.state.auth
-    assert S.drain(store, auth) == 0 and calls == [] and google.calls == []
+    assert S.drain(store, auth) == 0 and calls == [] and len(google.calls) == asked
     with store.read() as c:
         row = c.execute("SELECT state,detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
     assert row["state"] == "failed" and "read only" in row["detail"]

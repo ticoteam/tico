@@ -174,6 +174,15 @@ def without_known_sender(body):
     )
 
 
+def acts_for(targets):
+    """The mailboxes whose automation mail actions and queued sends this computer carries out: the targets' `acts_for`,
+    or, from a server that still had computers sync mail, the mailboxes it synced."""
+    rows = targets.get("acts_for")
+    if rows is None:
+        rows = targets.get("mailboxes")
+    return [box["address"] for box in rows or []]
+
+
 class ConnectorPublisher:
     def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, action=None):
         self.config = config
@@ -356,9 +365,7 @@ class ConnectorPublisher:
         a failed action's retry comes. The hub answers 404 while the redesign is off and 403 for a mailbox another
         computer reads."""
         if self.mail_boxes is None:
-            self.mail_boxes = [
-                box["address"] for box in self.client.get("connectors/mail/targets").get("mailboxes") or []
-            ]
+            self.mail_boxes = acts_for(self.client.get("connectors/mail/targets"))
         done = 0
         for address in self.mail_boxes:
             if self.stop.is_set():
@@ -396,9 +403,7 @@ class ConnectorPublisher:
     def email_send_tick(self):
         """Dispatch one due email per inbox. Pending work lives on the server across runner and server restarts."""
         if self.mail_boxes is None:
-            self.mail_boxes = [
-                box["address"] for box in self.client.get("connectors/mail/targets").get("mailboxes") or []
-            ]
+            self.mail_boxes = acts_for(self.client.get("connectors/mail/targets"))
         done = 0
         for address in self.mail_boxes:
             if self.stop.is_set():
@@ -578,8 +583,8 @@ class ConnectorPublisher:
         self.ready()
         self.cycle += 1
         request = self.client.get("connectors/mail/targets")
-        boxes = request.get("mailboxes") or []
-        self.mail_boxes = [box["address"] for box in boxes]
+        boxes = request.get("mailboxes") or []  # empty from a server that watches mail itself
+        self.mail_boxes = acts_for(request)
         posted = 0
         failing, read = [], []
         live = [box for box in boxes if not self.blocked(box["address"])]

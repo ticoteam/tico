@@ -195,8 +195,9 @@ EMPTY = (
     "email_send_operations",
     "email_send_previews",
     "email_legacy_automations",
-    # mail, Slack, GitHub, Granola, meeting bots, support
+    # mail, Slack, GitHub, Granola, meeting bots, support; the old copies of mail (read live from Gmail now) stay behind
     "mail_mailboxes",
+    "mail_messages",
     "mailboxes",
     "mailbox_accesses",
     "google_connects",
@@ -481,7 +482,6 @@ KEEP = (
             "live_meeting_windows",
             "live_meetings",
             "mail_agent_instructions",
-            "mail_messages",
             "main_pushes",
             "market_citations",
             "entity_links",
