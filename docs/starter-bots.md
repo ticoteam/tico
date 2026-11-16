@@ -35,7 +35,7 @@ Chief of Staff is no longer a default.
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`head-of-people`) | 11 | Hire well, keep good people |
 | Product | `category` | Product Lead (`product-lead`) | 10 | Build what customers need |
-| Engineering | `code` | Head of Engineering (`engineering-manager`) | 18 | Ship reliable software, steadily |
+| Engineering | `code` | Engineering Manager (`engineering-manager`) | 18 | Ship reliable software, steadily |
 | Success | `sentiment_satisfied` | Success Manager (`success-manager`) | 3 | Customers who renew and grow |
 | Corporate | `contract` | Corporate Manager (`corporate-manager`) | 3 | Every deadline kept, every deal read first |
 | Leadership | `star` | Chief of Staff (`chief-of-staff`) | 3 | Keep the leaders focused |
@@ -203,7 +203,7 @@ up.
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
 | `code_blocks` | `reviewer` | Reviewer | A weekday review queue with a finished review per pull request (blocking issues first) for a human to post | common | GitHub connected |
-| `code_blocks` | `builder` | Builder | Takes a task Head of Engineering gives it, builds the change on a branch with a test that proves it, opens the pull request and answers its review and QA comments; merges only under the team's merge rules | common | GitHub connected |
+| `code_blocks` | `builder` | Builder | Takes a task the Engineering Manager gives it, builds the change on a branch with a test that proves it, opens the pull request and answers its review and QA comments; merges only under the team's merge rules | common | GitHub connected |
 | `new_releases` | `release-notes-writer` | Release Notes Writer | A readiness checklist with a go or no-go call, the changelog entry, plain-language release notes and a suggested version | common | GitHub connected |
 | `monitor_heart` | `site-reliability-engineer` | Site Reliability Engineer | An incident timeline, a blameless postmortem, action items followed to done, an on-call handoff and a weekly incident review | common | Tico only; an incident channel or error-tracker exports optional |
 | `description` | `technical-writer` | Technical Writer | A weekly drift report on READMEs and API docs in the product repositories, with the fixes written for an engineer to commit; internal docs stay with the Librarian | niche | GitHub connected |

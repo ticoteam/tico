@@ -1,4 +1,4 @@
-"""The routine a rule's due date can link (docs/rules-plan.md §4, "Linked to a rule's due date"): one "Before a due date"
+"""The routine a rule's due date can link (docs/dev/rules-plan.md §4, "Linked to a rule's due date"): one "Before a due date"
 automation (backend/automations.py, trigger `due`) that opens the due date's task `task_days` before each occurrence.
 
 - The automation is saved through the automations module (`_checked`, `_save`, `remove`), so it has versions, an audit

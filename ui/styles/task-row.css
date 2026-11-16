@@ -1,4 +1,4 @@
-/* ui/styles/task-row.css — a task row in every look (ui/app/task-row.ts, docs/pipelines-v3.md S1): one line, mark,
+/* ui/styles/task-row.css — a task row in every look (ui/app/task-row.ts, docs/dev/pipelines-v3.md S1): one line, mark,
    title, Late, buttons, avatar, age. */
 .tk-row{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px;border-radius:6px;cursor:pointer;color:var(--ink)}
 .tk-row:hover,.tk-row:focus-visible{background:var(--hover)}

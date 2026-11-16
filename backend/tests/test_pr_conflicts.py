@@ -1,4 +1,4 @@
-"""A merge conflict before Merge is the Builder's (backend/pr_conflicts.py, docs/pipelines-v3.md "GitHub").
+"""A merge conflict before Merge is the Builder's (backend/pr_conflicts.py, docs/dev/pipelines-v3.md "GitHub").
 
 Acme rc.3 (Nov 11, 08:48): the Engineering task's PR went conflicting while Reviewer 2 held Review 2 (its page waiting
 on a person then; on a bot now, #3283). The conflict went to Reviewer 2 as a quiet note (it cannot push) and nothing

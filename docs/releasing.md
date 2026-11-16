@@ -19,7 +19,7 @@ GitHub Actions. No bot tags or rolls out Tico releases. Reviewed work reaches ma
 [merge queue](#merge-queue).
 
 The Engineering pipeline, whose Merge and Release stages queue the PRs and wait for a published release, comes in a
-later 0.6 phase ([Engineering](pipelines-v3.md#engineering)).
+later 0.6 phase ([Engineering](dev/pipelines-v3.md#engineering)).
 
 ## The release train
 

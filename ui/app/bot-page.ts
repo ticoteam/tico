@@ -115,7 +115,7 @@ function lastStopOpen(slug: string) {
 }
 // Beside the bot's name only when something is wrong (#514): crashed, quarantined, rate limited,
 // blocked, a failed last run, or an agent that is offline while work waits for it. Idle says nothing.
-// The top line while the bot can't run (docs/pipelines-v3.md S14): a red dot, the server's cause as it is, and the one
+// The top line while the bot can't run (docs/dev/pipelines-v3.md S14): a red dot, the server's cause as it is, and the one
 // fix a person makes. GET /v2/bots/{bot} `cant_run` (backend/org_routes.py), read with the page and again as the status
 // moves, at most every 15 seconds.
 type BotCantRun = NonNullable<import('../types/api').BotDetail['cant_run']>;

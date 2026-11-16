@@ -1,5 +1,5 @@
 # pyright: strict
-"""Pages attached to a page requirement (docs/pipelines-v3.md "The nine requirement kinds", 3; spec S3, S4).
+"""Pages attached to a page requirement (docs/dev/pipelines-v3.md "The nine requirement kinds", 3; spec S3, S4).
 
 The owner attaches a page (a Tico file, `page:<file id>`, at a version) to one page requirement of the task's open visit:
 `tico task attach <task> page:<file id>[@<version>] --req "<requirement>"`, the MCP tool `tico_task_attach` with `req`,

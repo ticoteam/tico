@@ -1,4 +1,4 @@
-"""The 52 scenarios (docs/pipelines-v3.md, "Scenarios the rig and the spot checks must pass"), as named, numbered
+"""The 52 scenarios (docs/dev/pipelines-v3.md, "Scenarios the rig and the spot checks must pass"), as named, numbered
 cases on the rig's world, plus the engine bugs the seeded runs found.
 
 Each scenario builds what it needs on a fresh World (the real migrations and engine, the fake clock, seeded ids), does

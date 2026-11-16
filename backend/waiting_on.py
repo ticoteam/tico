@@ -1,5 +1,5 @@
 # pyright: strict
-"""Whose turn a task is (docs/pipelines-v3.md, "Whose turn it is: the ten states of an open task").
+"""Whose turn a task is (docs/dev/pipelines-v3.md, "Whose turn it is: the ten states of an open task").
 
     waiting_on(conn, task_id) -> list[Wait]
 
@@ -98,7 +98,7 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
     """A wait or a requirement's standing as said to a reader who may open only the tasks `shown` says yes to. Its
     line may come from a task this one filed (`about`: its title, or why it was closed). To anyone who may not open
     that task it says only that a sub-task is open or was closed: never its title, its id or the reason. The one rule
-    for every read and every wake that says what a task waits on (docs/pipelines-v3.md, "Private tasks. Same
+    for every read and every wake that says what a task waits on (docs/dev/pipelines-v3.md, "Private tasks. Same
     engine. Who can see them doesn't change.")."""
     if not said.about or shown(said.about):
         return said
@@ -619,7 +619,7 @@ def on_person(
     conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait], seen: dict[str, str | None] | None = None
 ) -> bool:
     """Whether the task waits only on a person's OK or answer, so it gives up its slot in a stage with a limit
-    (docs/pipelines-v3.md, "Limits"): every wait on it is an ask of a person, and none is a bot's, Jev's, GitHub's or a
+    (docs/dev/pipelines-v3.md, "Limits"): every wait on it is an ask of a person, and none is a bot's, Jev's, GitHub's or a
     sub-task's. A task the ladder brought to a person (level `person`) is stuck work, not review, and so is one whose
     owner bot cannot run (Paused): both keep their slot, or freeing it would hide them."""
     visit: Row = row.get("visit") or {}

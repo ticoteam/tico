@@ -1,5 +1,5 @@
 import type * as Tasks from './tasks-page.cts';
-// Done and Close in a task window's header (docs/pipelines-v3.md S5): Done is the owner's, Close is for whoever may
+// Done and Close in a task window's header (docs/dev/pipelines-v3.md S5): Done is the owner's, Close is for whoever may
 // close it; each is one tap, asks no reason, and the window closes. Done sends POST /tasks/{id}/done with the version,
 // Close moves the task to closed and says "Closed" with Undo, which reopens it. A finished task offers neither. The
 // header fits at desktop and phone widths.

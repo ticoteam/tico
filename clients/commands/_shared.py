@@ -70,7 +70,7 @@ ASKED = _s(
 )
 
 
-# The task engine's commands (docs/pipelines-v3.md S16, docs/dev/pipelines-v3-cutover.md "Bot commands"). Every change
+# The task engine's commands (docs/dev/pipelines-v3.md S16, docs/dev/pipelines-v3-cutover.md "Bot commands"). Every change
 # carries the version the caller was shown: tico_task_show, a list row and every wake print it. The tools are stateless:
 # none reads the task to find a version just before it writes, because a version read then would check nothing. The
 # one exception is a label change (tico_task_label): it only adds or takes off labels, so it reads the labels it changes

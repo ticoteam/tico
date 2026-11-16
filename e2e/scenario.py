@@ -74,7 +74,7 @@ def populate(client):
     assert page.status_code == 200, page.text
     ids["page"] = page.json()["page"]["file_id"]
     settle_media(client)
-    # Held work is an ask on the task (docs/pipelines-v3.md C11): one OK the owner sends back, one still open.
+    # Held work is an ask on the task (docs/dev/pipelines-v3.md C11): one OK the owner sends back, one still open.
     seen = bot.call("get", "tasks/%s" % open_task["id"], token=bot_token)["task"]
     asked = bot.call(
         "post",

@@ -1,4 +1,4 @@
-"""One record for a pipeline, its stages and requirements (backend/pipeline_settings.py, docs/pipelines-v3.md "Stage
+"""One record for a pipeline, its stages and requirements (backend/pipeline_settings.py, docs/dev/pipelines-v3.md "Stage
 settings", "Default pipelines", S11).
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, Ben is an Admin and

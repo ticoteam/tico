@@ -1,5 +1,5 @@
 # pyright: strict
-"""Cutting a release: the Engineering pipeline's Release stage (docs/pipelines-v3.md, "Engineering" and "GitHub").
+"""Cutting a release: the Engineering pipeline's Release stage (docs/dev/pipelines-v3.md, "Engineering" and "GitHub").
 
 Release waits on "In a release": the merge commit inside a published release. A release is made the way the repository
 is set up to make one, which the In a release requirement names in its `release_with` setting:
