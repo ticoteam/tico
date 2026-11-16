@@ -57,7 +57,7 @@ def test_sign_in_permissions(api):
         ('restart', {}),
         ('revoke', {}),
     ]:
-        post(api, f"runners/{rid}/{path}", body, token='cara-test', expected=403)
+        post(api, f"computers/{rid}/{path}", body, token='cara-test', expected=403)
     login = post(api, f"computers/{r['runner_id']}/logins", {'runtime': 'codex'})
     assert login['profile'] == ''
     pending = get(api, 'runner-logins', r['token'])['logins']
