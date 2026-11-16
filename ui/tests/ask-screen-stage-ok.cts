@@ -3,7 +3,7 @@ import type {Route} from 'playwright';
 // is the same on every task in the stage, so two tasks in Spec ask it with one requirement id:
 // - each ask shows its own task's page at its own version, never the other's;
 // - the heading is the task's title, with the version under it, not the person's own name;
-// - the page fills the pane (desktop and phone), scrolling inside itself;
+// - the page fills the pane (desktop, and a phone once Read the spec opens it), scrolling inside itself;
 // - Approve answers the ask's own task with the page it showed;
 // - a page version that is Markdown, not HTML, is drawn as Markdown (headings, lists), not as one run-on paragraph.
 // TICO_UI_SHOTS=<dir> saves a screenshot of each.
@@ -80,9 +80,12 @@ const pages: Record<string, string> = {
       await page.locator('#task-play').click();
       const dialog = page.locator('#need-card');
       const frame = dialog.locator('iframe.dc-page');
+      // On a phone the task folds to its title above the chat: Read the spec opens its page.
+      const read = async () => { if (label === 'phone') await dialog.locator('[data-dc="fold"]').click(); };
 
       // The first ask: its own page, headed by its task.
       await dialog.locator('.dc-q', {hasText: 'Talk to the right bot from a pipeline board'}).waitFor();
+      await read();
       await frame.waitFor();
       assert.match(await frame.getAttribute('srcdoc') ?? '', /Board chat proposals/);
       assert.equal(await dialog.locator('.dc-said').count(), 0, 'the line names only the task and the decision: nothing to add');
@@ -95,6 +98,7 @@ const pages: Record<string, string> = {
       if (label === 'phone') await page.keyboard.press('ArrowRight');     // ‹ › are left off on a phone
       else await dialog.locator('[data-dc="next"]').click();
       await dialog.locator('.dc-q', {hasText: 'Images in bot chat: paste fails'}).waitFor();
+      await read();
       await dialog.locator('iframe.dc-page[title="Version 3"]').waitFor();
       assert.equal(await frame.count(), 1);
       assert.match(await frame.getAttribute('srcdoc') ?? '', /Paste images spec/);
@@ -106,6 +110,7 @@ const pages: Record<string, string> = {
       if (label === 'phone') await page.keyboard.press('ArrowRight');
       else await dialog.locator('[data-dc="next"]').click();
       await dialog.locator('.dc-q', {hasText: 'Paste retries'}).waitFor();
+      await read();
       const doc = dialog.locator('.dc-page-md');
       await doc.waitFor();
       assert.equal(await frame.count(), 0);
@@ -118,6 +123,7 @@ const pages: Record<string, string> = {
       if (label === 'phone') await page.keyboard.press('ArrowLeft');
       else await dialog.locator('[data-dc="prev"]').click();
       await dialog.locator('.dc-q', {hasText: 'Images in bot chat: paste fails'}).waitFor();
+      await read();
       await dialog.locator('iframe.dc-page[title="Version 3"]').waitFor();
 
       if (label === 'desktop') {

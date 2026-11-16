@@ -288,3 +288,30 @@ def test_a_changed_question_ends_the_snooze(api):
         config = PS.read(c, "approval")
         PS.save(c, ANA, config, seen_version=config["settings_version"])
     assert item not in ids(api, "ben-test")
+
+
+def test_a_snooze_ends_when_the_bot_that_asked_writes_on_the_task(api):
+    """Flow snoozes a bot's question once the person replies in the task's chat: it is the bot's turn to read the reply.
+    Their own words leave it snoozed; the asking bot's next message on the task brings it back."""
+    with api.app.state.store.transaction() as c:
+        X.bot(c, "writer")
+        task = H.task_create(c, "bot:writer", "Draft the launch note", "Due Friday.", "bot:writer", lint=False)
+        asked = H.task_ask(
+            c, "bot:writer", task["id"], BEN, "Which launch date?", seen_version=H.task(c, task["id"])["version"]
+        )
+    item = next(
+        i["id"]
+        for i in get(api, "needs-you", token="ben-test")["items"]
+        if i.get("requirement_id") == asked["requirement_id"]
+    )
+    post(api, "needs-you/snooze", {"id": item, "until": at(days=7)}, token="ben-test")
+    post(
+        api,
+        f"tasks/{task['id']}/comments",
+        {"text": "Friday, unless the venue moves.", "ask": asked["requirement_id"]},
+        token="ben-test",
+    )
+    assert item not in ids(api, "ben-test"), "the person's reply leaves it with the bot"
+    with api.app.state.store.transaction() as c:
+        H.task_comment(c, "bot:writer", task["id"], "Thanks. Is Friday the 14th or the 21st?")
+    assert item in ids(api, "ben-test"), "the bot wrote back: the ask is in the person's Flow again"

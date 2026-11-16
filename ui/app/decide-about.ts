@@ -22,6 +22,7 @@ interface DecAboutTask {
   attachments?: {id: string; name?: string | null}[] | null;
   links?: {url: string; title?: string | null; kind?: string | null}[] | null;
   tags?: {owner?: string | null}[] | null;
+  conversation_id?: string | null;   // its thread: Flow's chat on an ask (decide.ts decideChatMount)
 }
 /** One task's read for this screen, by task id: loading (a skeleton), ready, or failed with its words. */
 interface DecAbout {
@@ -59,7 +60,7 @@ function decideAboutLoad(taskId: string) {
     if (!st || !it || decideTaskId(it) !== taskId) return;
     // An OK shows its own content; one with nothing attached shows the task's text (decidePaintBody), and its side stays.
     decidePaintBody(st);
-    if (decideKind(it) !== 'ok') decidePaintSideKeepGive(st, it);
+    if (decideKind(it) !== 'ok' || decideChatOf(it)) decidePaintSideKeepGive(st, it);
   })();
 }
 /** The item on screen, and ahead of it the next item that shows a task's text. An OK shows its own content; one that

@@ -85,6 +85,11 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
 - End every run with the task in one of six states:
   1. Done with the stage: `tico task done <id> -m "what was done" --version N`.
   2. Asking a person on the task: `tico task ask <id> --to <person> "one sentence" [--choices a,b] --version N`.
+     Check what is written down first. The one sentence says what is asked and reads on its own: it is the row in
+     their Needs you. They may reply in the task's chat instead of answering: if it answers, take it and withdraw
+     the ask (`tico task ask <id> --withdraw --why "Answered in the chat: <their words>"`); if not, follow up once.
+     A reply to your OK comes as a send back with their words; if it was only a question, answer it in the chat
+     and put the same OK back (`tico task answer <id> <requirement> again --version N`).
   3. Waiting on a task you filed: `tico task file --parent <id> "title"`.
   4. Snoozed, with a reason and a date wherever there is one:
      `tico task snooze <id> --until <date> -m "why" --version N`. For example "couldn't reproduce, try again Nov 16".

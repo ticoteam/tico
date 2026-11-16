@@ -2,7 +2,8 @@ import type {Route} from 'playwright';
 // Offline browser check of a stage's OK that names nothing to show (#3784): Product's OK release, which follows QA.
 // Tico Team's task #72 showed only its title, and Tico's line said "Ask shows no release content".
 // - It shows the task's page from the earlier stage (the QA page, at its version), not the task's title and text;
-// - its one meta line says who asked, that stage, the page's version and the task (#72 ↗), on desktop and phone;
+// - the ask, as the asker's last message in the task's chat, says who asked, when, that stage, the page's version and
+//   the task (#72 ↗), on desktop and phone, where the page is behind Read the task;
 // - Approve stays on and answers the OK alone (no page version: it is not a page's OK);
 // - an OK the server gave no earlier page (none, or one the reader may not open) shows the task's title and text.
 // TICO_UI_SHOTS=<dir> saves ok-release-page-desktop.png and ok-release-page-phone.png.
@@ -77,20 +78,15 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
       const dialog = page.locator('#need-card');
       const frame = dialog.locator('iframe.dc-page');
 
-      // OK release on #72: the QA page, under the ask, with one meta line.
+      // OK release on #72: the QA page, and the ask's one byline in the chat.
       await dialog.locator('.dc-q', {hasText: 'OK the release'}).waitFor();
+      if (label === 'phone') await dialog.locator('[data-dc="fold"]').click();   // the page is behind Read the task
       await frame.waitFor();
       assert.match(await frame.getAttribute('srcdoc') ?? '', /QA: saved carts/);
       assert.equal(await dialog.locator('.dc-thing .dc-title').count(), 0, `${label}: the page, not the task's title and text`);
-      const meta = dialog.locator('.dc-side .dc-meta');
-      assert.equal((await meta.innerText()).replace(/\s+/g, ' ').trim(), 'Ana · QA · v2 · #72 ↗');
-      assert.equal(await dialog.locator('.dc-owner').count(), 0, 'who asked is said once, on the meta line');
-      const link = (await meta.locator('.dc-task-link').boundingBox())!;
-      if (label === 'phone') {
-        assert.ok(link.height >= 44, `phone: the task link is a 44 px target (${link.height})`);
-        const acts = (await dialog.locator('.dc-side .dc-acts').first().boundingBox())!, line = (await meta.boundingBox())!;
-        assert.ok(line.y + line.height <= acts.y + 1, 'phone: the meta line sits above the buttons, never over them');
-      }
+      const meta = dialog.locator('.dc-side .dc-msg-by');
+      assert.match((await meta.innerText()).replace(/\s*·\s*/g, '·').trim(), /^Ana·.+·QA·v2·needs you·#72 ↗$/);
+      assert.equal(await dialog.locator('.dc-owner').count(), 0, 'who asked is said once, on the byline');
       const pane = (await dialog.locator('.dc-thing').boundingBox())!, box = (await frame.boundingBox())!;
       assert.ok(box.height >= pane.height - 60, `${label}: the page fills the pane (${box.height} of ${pane.height})`);
       await dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
@@ -102,10 +98,11 @@ const QA = '<h1>QA: saved carts</h1><p>Before and after: the cart is kept when t
       // #73: the server gave no page this reader may open: the task's title and text, as before.
       if (label === 'phone') await page.keyboard.press('ArrowRight');
       else await dialog.locator('[data-dc="next"]').click();
+      if (label === 'phone') { await dialog.locator('.dc-fold h3', {hasText: 'Dark mode toggle'}).waitFor(); await dialog.locator('[data-dc="fold"]').click(); }
       await dialog.locator('.dc-thing .dc-title', {hasText: 'Dark mode toggle'}).waitFor();
       assert.equal(await frame.count(), 0);
       assert.match(await dialog.locator('.dc-thing').innerText(), /A toggle in Settings for dark mode/);
-      assert.equal(await dialog.locator('.dc-side .dc-meta').count(), 0);
+      assert.doesNotMatch(await dialog.locator('.dc-side .dc-msg-by').innerText(), /QA/, 'no earlier page, no stage or version');
 
       if (label === 'desktop') {
         await dialog.locator('[data-dc="prev"]').click();

@@ -3,12 +3,10 @@
 // - opened by a #/task/ link, a list row's open (taskModalOpen) or a link in chat: the ask screen on that ask, not the task page;
 // - a task waiting on someone else opens the task page as before; one whose first wait is someone else's but which also
 //   waits on the person's own ask opens on that ask;
-// - "Open task #N ↗" opens the task page, which stays open; closing it leaves no ask screen behind;
-// - Notes is 7 lines in a 420 px column, and grows with its text before it scrolls;
-// - a pasted screenshot and a picked file show under the note with ✕; copied text pastes as text;
-// - Send back waits for the uploads ("Uploading 1 of 2…"), names a failed one with Retry and sends nothing, then sends
-//   the note ending with each file's name and id;
-// - on a 390 px phone Notes starts at 4 lines and nothing scrolls sideways.
+// - "#N ↗" on the ask opens the task page, which stays open; closing it leaves no ask screen behind;
+// - the task's chat is a 420 px column; a file picked in its box goes up to the task before the arrow sends it back,
+//   and is named at the end of the words; one that fails is named and nothing is sent;
+// - on a 390 px phone the box and the buttons are on screen and nothing scrolls sideways.
 // Fixtures only (tasks-page.cts).
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -19,17 +17,6 @@ declare function taskModalOpen(id: string, d?: unknown, opts?: {thread?: boolean
 
 const card = (page: Page) => page.locator('#need-card[open]');
 const taskPage = (page: Page) => page.locator('#task-modal[open] .tmodal-title');
-const lineHeight = (page: Page) => page.locator('#dc-notes').evaluate(el => parseFloat(getComputedStyle(el).lineHeight) || 20);
-/** Pastes into the focused note what a clipboard holds: files, text, or both. */
-const paste = (page: Page, files: {name: string; type: string}[], text = '') => page.locator('#dc-notes').evaluate((el, {files, text}) => {
-  const dt = new DataTransfer();
-  for (const f of files) dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], f.name, {type: f.type}));
-  if (text) dt.setData('text/plain', text);
-  (el as HTMLTextAreaElement).focus();
-  const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
-  el.dispatchEvent(ev);
-  return ev.defaultPrevented;
-}, {files, text});
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -106,7 +93,7 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
         await page.evaluate(() => { void taskModalOpen('t-1'); });
         await card(page).waitFor({timeout: 5000});
         const link = card(page).locator('[data-dc="task"]');
-        assert.equal(await link.innerText(), 'Open task #1 ↗');
+        assert.equal(await link.innerText(), '#1 ↗');
         await link.click();
         await taskPage(page).waitFor({timeout: 5000});
         assert.equal(await taskPage(page).innerText(), 'Checkout flow');
@@ -124,112 +111,51 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
       } finally { await page.close(); }
     }
 
-    // Notes: 420 px column, 7 lines, grows before it scrolls. Screenshots and files: shown with ✕, uploaded to the task,
-    // waited for, named when one fails, and listed by name and id at the end of the note that is sent.
+    // The task's chat: a file picked with 📎 goes up to the task first and is named at the end of the words the arrow
+    // sends back; one that fails is named, nothing is sent, and the words and file stay to send again.
     {
-      let gate: () => void = () => {};
       let fail = true, uploads = 0;
       const {page, errors, posts} = await open(browser, {viewport: {width: 1040, height: 760}, beforeGoto: async p => {
         await p.route(u => /^\/api\/v2\/tasks\/t-1\/files$/.test(u.pathname), async route => {
           if (route.request().method() !== 'POST') return route.fallback();
-          const n = ++uploads, body = route.request().postDataBuffer()?.toString('latin1') || '';
-          const name = /filename="([^"]+)"/.exec(body)?.[1] || 'file';
-          if (name.startsWith('notes')) {
-            if (fail) { fail = false; return route.fulfill({status: 500, contentType: 'application/json', body: JSON.stringify({error: 'internal', detail: 'Disk full'})}); }
-          } else await new Promise<void>(resolve => { gate = resolve; });
-          return route.fulfill({contentType: 'application/json', body: JSON.stringify({file_id: `file-${n}`, version: 1, file: {name}})});
+          const n = ++uploads;
+          if (fail) { fail = false; return route.fulfill({status: 500, contentType: 'application/json', body: JSON.stringify({error: 'internal', detail: 'Disk full'})}); }
+          return route.fulfill({contentType: 'application/json', body: JSON.stringify({file_id: `file-${n}`, version: 1, file: {name: 'notes.txt'}})});
         });
       }});
       try {
         await page.evaluate(() => { void taskModalOpen('t-1'); });
-        await card(page).waitFor({timeout: 5000});
-        const notes = page.locator('#dc-notes'), lh = await lineHeight(page);
+        const box = card(page).locator('.dc-chat .p-text');
+        await box.waitFor({timeout: 5000});
         const side = await page.locator('.decide .dc-side').boundingBox();
-        assert.ok(side && Math.abs(side.width - 420) <= 1, `the answer column is 420 px wide, got ${side?.width}`);
-        await notes.fill('x'.repeat(300));
-        const small = (await notes.boundingBox())!;
-        assert.ok(small.width >= 420 - 2 * 20 - 2, `Notes is the column wide minus padding, got ${small.width}`);
-        assert.ok(small.height >= 7 * lh, `Notes is at least 7 lines tall, got ${small.height} for ${lh} px lines`);
-        await notes.fill('word '.repeat(200));
-        const big = (await notes.boundingBox())!;
-        assert.ok(big.height > small.height + lh, `Notes grew with 1000 characters, ${small.height} -> ${big.height}`);
-
-        // Text on the clipboard pastes as text: the page does not take it.
-        assert.equal(await paste(page, [], 'plain words'), false);
-        // A screenshot pasted, then a file picked with 📎.
-        await paste(page, [{name: 'image.png', type: 'image/png'}]);
-        // Typing goes on in the note after a paste: the files row redraws, the note keeps its focus, caret and words.
-        await page.locator('.dc-file').waitFor();
-        await page.keyboard.type(' typed after');
-        assert.equal(await page.evaluate(() => document.activeElement?.id), 'dc-notes', 'the note keeps the focus after a paste');
-        assert.ok((await notes.inputValue()).endsWith(' typed after'), 'words typed after a paste land in the note');
-        await page.locator('.dc-attach input[type=file]').setInputFiles({name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello')});
-        const rows = card(page).locator('.dc-file');
-        await page.waitForFunction(() => document.querySelectorAll('.dc-file').length === 2);
-        assert.match(await rows.nth(0).locator('.dc-file-name').innerText(), /^screenshot-\d{8}-\d{6}\.png$/);
-        assert.equal(await rows.nth(1).locator('.dc-file-name').innerText(), 'notes.txt');
-        assert.equal(await rows.locator('[data-dc="file-drop"]').count(), 2, 'each file has ✕');
-
-        // The picked file failed: Send back names it, with Retry, and sends nothing.
-        await page.locator('.dc-file[data-state="failed"]').waitFor({timeout: 5000});
-        // An upload ending (here, failing) redraws its row and leaves the note as it was.
-        await page.keyboard.type(' and more');
-        assert.equal(await page.evaluate(() => document.activeElement?.id), 'dc-notes');
-        assert.ok((await notes.inputValue()).endsWith(' typed after and more'));
-        await notes.fill('Needs a mobile layout');
-        await card(page).locator('[data-dc="sendback"]').click();
-        await card(page).locator('.err', {hasText: 'notes.txt did not upload'}).waitFor({timeout: 5000});
+        assert.ok(side && Math.abs(side.width - 420) <= 1, `the chat column is 420 px wide, got ${side?.width}`);
+        await card(page).locator('.dc-chat .p-file').setInputFiles({name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello')});
+        await box.fill('Needs a mobile layout');
+        await card(page).locator('.dc-chat .p-send').click();
+        await card(page).locator('.err', {hasText: 'notes.txt'}).waitFor({timeout: 5000});
         assert.equal(posts.filter(x => x.p.endsWith('/answer')).length, 0, 'nothing sent while a file failed');
-        assert.equal(await notes.inputValue(), 'Needs a mobile layout', 'the note stays');
-        await card(page).locator('[data-dc="file-retry"]').click();
-        await page.locator('.dc-file[data-state="done"]').waitFor({timeout: 5000});
-
-        // The screenshot is still uploading: Send back waits and says so, then sends.
-        await card(page).locator('[data-dc="sendback"]').click();
-        await card(page).locator('[data-dc-status]', {hasText: 'Uploading 2 of 2…'}).waitFor({timeout: 5000});
-        assert.equal(posts.filter(x => x.p.endsWith('/answer')).length, 0, 'nothing sent while a file uploads');
-        gate();
+        assert.equal(await box.inputValue(), 'Needs a mobile layout', 'the words stay');
+        await card(page).locator('.dc-chat .p-send').click();
         await page.waitForFunction(() => document.querySelector('#need-card .dc-q')?.textContent !== 'Approve the spec for Checkout flow', null, {timeout: 5000});
         const sent = posts.filter(x => x.p.endsWith('/tasks/t-1/asks/r1/answer'));
         assert.equal(sent.length, 1);
         assert.equal(sent[0]!.body['value'], 'no');
-        const note = String(sent[0]!.body['note']);
-        assert.match(note, /^Needs a mobile layout\n\nFiles:\n- screenshot-\d{8}-\d{6}\.png \(file-1\)\n- notes\.txt \(file-3\)$/, note);
+        assert.equal(String(sent[0]!.body['note']), 'Needs a mobile layout\n\nFiles:\n- notes.txt (file-2)');
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
 
-    // A phone: Notes starts at 1 line, the buttons are on screen, nothing scrolls sideways.
+    // A phone: the chat's box and the buttons are on screen, nothing scrolls sideways.
     {
-      const tasks = fixtures();
-      const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, tasks});
+      const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, tasks: fixtures()});
       try {
         await page.evaluate(() => { void taskModalOpen('t-1'); });
-        await card(page).waitFor({timeout: 5000});
-        const notes = page.locator('#dc-notes');
-        assert.equal(await notes.getAttribute('rows'), '1');
-        await notes.fill('A note typed on a phone. '.repeat(8));
-        await paste(page, [{name: 'image.png', type: 'image/png'}]);
-        // Measured once the upload has settled, so no redraw runs under the measurement.
-        await page.locator('.dc-file:not([data-state="up"])').waitFor({timeout: 5000});
-        for (const what of ['approve', 'sendback', 'snooze']) {
-          const box = await card(page).locator(`[data-dc="${what}"]`).boundingBox();
+        await card(page).locator('.dc-chat .p-text').waitFor({timeout: 5000});
+        await card(page).locator('.dc-chat .p-text').fill('A note typed on a phone. '.repeat(8));
+        for (const what of ['.dc-chat .p-text', '[data-dc="approve"]', '[data-dc="snooze"]']) {
+          const box = await card(page).locator(what).boundingBox();
           assert.ok(box && box.y >= 0 && box.y + box.height <= 844, `${what} is on screen`);
         }
-        // The keyboard up (420 px left), on a question: the focused "Something else" box, scrolled to as a phone does,
-        // is not under the buttons kept above the keyboard (phone-rules.cts keyboardAudit).
-        await card(page).locator('[data-dc="close"]').click();
-        await page.evaluate(() => { void taskModalOpen('t-2'); });
-        await page.locator('#dc-other').waitFor();
-        await page.setViewportSize({width: 390, height: 420});
-        await page.waitForTimeout(300);
-        const covered = await page.locator('#dc-other').evaluate(el => {
-          (el as HTMLTextAreaElement).focus(); el.scrollIntoView({block: 'nearest'});
-          const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height / 2, 16));
-          return hit && hit !== el && !el.contains(hit) ? `${hit.tagName}.${hit.className} at ${Math.round(r.top)}` : '';
-        });
-        assert.equal(covered, '', 'the focused note is not covered with the keyboard up');
-        await page.setViewportSize({width: 390, height: 844});
         const sideways = await page.evaluate(() => Math.max(document.documentElement.scrollWidth, document.querySelector('#need-card')!.scrollWidth) - innerWidth);
         assert.ok(sideways <= 0, `nothing scrolls sideways (${sideways} px)`);
         assert.deepEqual(errors, []);

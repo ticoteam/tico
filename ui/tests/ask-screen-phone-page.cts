@@ -1,15 +1,15 @@
 import type {Route} from 'playwright';
-// Offline browser check of a page's OK on a 390 px phone (the owner's review of a v3 page after two send backs):
+// Offline browser check of a page's OK on a 390 px phone (the owner's review of a v3 page after two send backs), the
+// ask answered in its task's chat (decide.ts decideChatMount):
 // - Tico's line is a callout under the bar with a caret at the mark, only once the line is ready, inside the bar; one
 //   line, cut, a tap shows it whole; a thumb down stands for its leading "Send back.", the whole line its name;
-// - the page fills the screen between the bar and the buttons (no short box that cuts it), and its text is sized for a
-//   phone: a page with no styles of its own gets an h1 near 22 px and side padding (htmlPreviewDoc's base styles);
-// - it opens clean: no blocks marked and no diff; the version control in the one meta line under it lists each version
+// - the task folds to its title above the chat, with "Read the spec · v3"; that opens the page, which fills the screen
+//   down to the row (no short box that cuts it), its text sized for a phone (an h1 near 22 px, side padding);
+// - it opens clean: no blocks marked and no diff; the version control in the ask's one meta line lists each version
 //   and "Changes since v2", which marks the changed blocks;
-// - the meta line is pinned on the buttons (on the card without scrolling), one control holding who asked (cut first when long), the stage, the version and Jev's mark, then
-//   the task as "#80 ↗"; its menu has the date and Jev's word and reason in full; no history cards, no
-//   "Open task" row, no task title over it on a phone;
-// - Notes is one row with Attach inside it, 44 px tall, and Tico's send-back note fills it in full.
+// - the ask's meta line: who asked (cut first when long), the stage, the version and Jev's mark, then the task as
+//   "#80 ↗"; its menu has the date and Jev's word and reason in full; no history cards, no "Open task" row;
+// - Tico never types for the person: the chat's box stays empty.
 // Each check is collected, so a run on the old code lists every one that fails. FLOW_SHOTS=<dir> saves screenshots.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -84,6 +84,7 @@ const VIEW = {width: 390, height: 844};
       if (at === '/api/v2/needs-you') return json({actor: 'human:ana', count: 1, version: '1', next: null, items: [need]});
       if (at === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);
       if (at === `/api/v2/tasks/t-a/asks/${RID}/rounds`) return json({rounds, notices: []});
+      if (at === '/api/v2/tasks/t-a') return json({task: {...brief('t-a', TITLE), conversation_id: 'c-a'}});
       if (at === '/api/v2/flow/opinions') {
         const ids = (JSON.parse(r.postData() || '{}') as {items: string[]}).items;
         return json({opinions: ids.map(id => ready ? {id, state: 'ready', pick: 'send_back', line: LINE, note: NOTE, score: 60}
@@ -99,7 +100,7 @@ const VIEW = {width: 390, height: 844};
     await p.locator('#task-play').click();
     const dialog = p.locator('#need-card');
     const frame = dialog.locator('.dc-thing iframe.dc-page').first();
-    await dialog.locator('.dc-thing .dc-doc').first().waitFor();
+    await dialog.locator('[data-dc-vmenu]').waitFor();
     await dialog.locator('.dc-start').waitFor({state: 'detached'}).catch(() => {});
     await p.waitForTimeout(300);
 
@@ -107,16 +108,18 @@ const VIEW = {width: 390, height: 844};
     const say = dialog.locator('.dc-say');
     check(!await say.isVisible(), 'no empty callout while Tico is working');
 
-    // The page fills the screen down to the buttons, from near the top.
+    // The task folds to its title; Read the spec opens the page, which fills the screen down to the row.
+    const fold = dialog.locator('[data-dc="fold"]');
+    check(await fold.innerText() === 'Read the spec · v3', `the fold says Read the spec · v3 (${await fold.innerText()})`);
+    check(!await dialog.locator('.dc-thing').isVisible(), 'the page is folded away');
+    await fold.click();
+    await dialog.locator('.dc-thing .dc-doc').first().waitFor();
     const hasFrame = await frame.count() > 0;
     check(hasFrame, 'the page opens as the page, not a diff');
     const bar = (await dialog.locator('[data-dc="approve"] >> xpath=..').boundingBox())!;
     const fb = hasFrame ? (await frame.boundingBox())! : {x: 0, y: 999, width: 0, height: 0};
-    check(fb.y < 140, `the page starts near the top (${fb.y})`);
-    // The meta line (who asked) is pinned on the buttons, on the card without scrolling; the page reaches it.
-    const pin = (await dialog.locator('.dc-meta').boundingBox())!;
-    check(Math.abs(pin.y + pin.height - bar.y) <= 1 && pin.height >= 44 && pin.height <= 48, `the meta line sits on the buttons, one 44 px row (${JSON.stringify(pin)} vs ${bar.y})`);
-    check(fb.y + fb.height >= pin.y - 24, `the page reaches the meta line (${fb.y + fb.height} vs ${pin.y})`);
+    check(fb.y < 200, `the page starts near the top (${fb.y})`);
+    check(fb.y + fb.height >= bar.y - 40, `the page reaches the row (${fb.y + fb.height} vs ${bar.y})`);
     if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-before-line.png')});
 
     // Text sized for a phone, with side padding.
@@ -134,7 +137,8 @@ const VIEW = {width: 390, height: 844};
     check(await dialog.locator('.dc-diff').count() === 0, 'no diff');
     check(await dialog.locator('.dc-since, .dc-switch').count() === 0, 'no "Changes since" row over the page');
 
-    // The meta line: stage, version, date, Jev, #80 ↗; no cards, no Open task row, no title on a phone.
+    // Back to the chat: the ask's meta line: stage, version, Jev, #80 ↗; no cards, no Open task row.
+    await fold.click();
     const meta = dialog.locator('.dc-meta');
     check(await meta.count() === 1, 'one meta line');
     if (await meta.count()) {
@@ -156,37 +160,6 @@ const VIEW = {width: 390, height: 844};
     }
     check(await dialog.locator('.dc-open-task').count() === 0, 'no separate Open task row');
     check(await dialog.locator('.dc-hist, .dc-step').count() === 0, 'no version cards');
-    check(!await dialog.locator('.dc-side').getByText(TITLE).isVisible(), 'no task title over the meta line on a phone');
-
-    // Notes: one row, Attach inside, 44 px, placeholder Notes, an accessible name, no label row.
-    const notes = dialog.locator('#dc-notes'), nb = (await notes.boundingBox())!;
-    check(await notes.getAttribute('placeholder') === 'Notes', 'Notes says Notes');
-    check(await notes.getAttribute('aria-label') === 'Notes', 'Notes has its name');
-    check(nb.height >= 44 && nb.height <= 52, `Notes starts one row, at least 44 px (${nb.height})`);
-    const ab = (await dialog.locator('.dc-attach').boundingBox())!;
-    check(ab.x >= nb.x && ab.x + ab.width <= nb.x + nb.width + 1 && ab.y >= nb.y - 1 && ab.y + ab.height <= nb.y + nb.height + 1,
-      `Attach sits inside Notes (${JSON.stringify(ab)} in ${JSON.stringify(nb)})`);
-    check(ab.width >= 44 && ab.height >= 44, `Attach is 44 px (${ab.width}x${ab.height})`);
-    check(await dialog.locator('.dc-notes > span', {hasText: 'Notes'}).count() === 0, 'no Notes label row');
-
-    // Scrolled to the end: everything under the page, the buttons fixed.
-    await dialog.locator('.dc-main').evaluate(e => { e.scrollTop = e.scrollHeight; });
-    await p.waitForTimeout(100);
-    if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-scrolled.png')});
-    const nb2 = (await notes.boundingBox())!, pin2 = (await dialog.locator('.dc-meta').boundingBox())!;
-    check(nb2.y + nb2.height <= pin2.y, `Notes ends above the pinned meta line at the end of the scroll (${nb2.y + nb2.height} > ${pin2.y})`);
-    check(Math.abs(pin2.y - pin.y) <= 1, 'the meta line stays put while the page scrolls');
-    await dialog.locator('.dc-main').evaluate(e => { e.scrollTop = 0; });
-
-    // Send back with no note takes the person to Notes, under the page: focused, in view over the pinned bar.
-    await dialog.locator('[data-dc="sendback"]').click();
-    await p.waitForTimeout(300);
-    const nb3 = (await notes.boundingBox())!;
-    check(await notes.evaluate(e => e === document.activeElement), 'an empty Send back focuses Notes');
-    check(nb3.y >= 0 && nb3.y + nb3.height <= pin.y + 1, `an empty Send back brings Notes into view (${nb3.y}..${nb3.y + nb3.height} vs ${pin.y})`);
-    check(await notes.getAttribute('placeholder') === 'Say what to change', 'and asks for words');
-    await notes.evaluate(e => e.blur());
-    await dialog.locator('.dc-main').evaluate(e => { e.scrollTop = 0; });
 
     // The version control: each version on one line, and Changes since v2, which marks the changed blocks.
     const ctl = dialog.locator('[data-dc-vmenu]');
@@ -217,7 +190,7 @@ const VIEW = {width: 390, height: 844};
       check(await dialog.locator('[data-dc-vmenu].on').count() === 0, 'off again');
     }
 
-    // Tico's line ready: a callout with a caret at the mark, inside the bar; its send-back note fills Notes in full.
+    // Tico's line ready: a callout with a caret at the mark, inside the bar; the chat's box stays empty.
     ready = true;
     await say.waitFor({state: 'visible', timeout: 8000}).catch(() => {});
     check(await say.isVisible(), 'the callout shows once the line is ready');
@@ -245,17 +218,13 @@ const VIEW = {width: 390, height: 844};
       if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-line-open.png')});
       await say.click();
       check(await say.getAttribute('aria-expanded') === 'false' && (await one())[0] <= 24, 'another tap cuts it again');
-      await p.waitForFunction(n => (document.querySelector<HTMLTextAreaElement>('#dc-notes')?.value || '') === n, NOTE, {timeout: 4000}).catch(() => {});
-      check(await notes.inputValue() === NOTE, "Tico's note fills Notes");
-      const full = await notes.evaluate(e => e.scrollHeight <= e.clientHeight + 1);
-      check(full, "Tico's note shows in full");
-      await dialog.locator('.dc-main').evaluate(e => { e.scrollTop = 0; });
+      check(await dialog.locator('.dc-chat .p-text').inputValue() === '', 'Tico never types for the person');
       if (shots) await p.screenshot({path: path.join(shots, 'phone-ok-page-after.png')});
     }
     await p.close();
 
     assert.deepEqual(errors, []);
     assert.deepEqual(fails, [], `\n- ${fails.join('\n- ')}`);
-    console.log("PASS: on a phone a page's OK gives the page the screen, opens clean, keeps versions and changes in one meta line, Notes holds Attach and Tico's line is a callout at the mark.");
+    console.log("PASS: on a phone a page's OK folds to Read the spec, which gives the page the screen; it opens clean, keeps versions and changes in the ask's meta line, and Tico's line is a callout at the mark.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

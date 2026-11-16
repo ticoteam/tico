@@ -1457,40 +1457,39 @@ Tasks header (a pipeline's items on a pipeline, all of Needs you elsewhere) and 
 - **Left, the page itself,** shown in full: the heading "Checkout flow: spec", then "Guests can pay without making an
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
-- **Right:** the sentence "Approve the spec for Checkout flow" as the heading, with "Product Owner" beside it; a
-  "Open task #80 ↗" link; a "Notes" box; buttons "Approve" (main) and "Send back".
+- **Right: the task's chat.** Its own thread, as on the task page (a message here is there too, and the reverse), with
+  the ask as the asker's last message: who asked, when, "needs you" and "#80 ↗", then "Approve the spec for Checkout
+  flow", its one why line and any choices to tap. Under the chat's box only "Approve" (main; "Approve with comments"
+  while the box has words, which go with the approval, as its note or, on an OK bound to exactly what it shows, as a
+  comment after it), the snooze icon and ⋯. The box's arrow sends the words: on an OK that is its send back (the
+  answer "no", the words its note, as before); on a bot's question a reply named for it, which wakes the bot, and the
+  question leaves your Flow until the bot writes on the task again (or a week passes): the bot takes the reply as the
+  answer and withdraws its question, or asks again; a person's or a stage's question takes the words as its answer.
+  On a phone the task folds to its title, with "Read the task" ("Read the spec · v3" on a page) to open it.
 
 **Opening a task opens its ask.** A task waiting on your own answer (any of its waits, not only the first) opens on this screen from anywhere (the board, a
 task list, a `#/task/<id>` link, a link in chat, a bot's page), with ‹ › through the rest of Needs you; any other task
 opens its page. "Open task #N ↗" opens the task's page, which stays open; its Answer comes back here.
 
-**Notes** is 7 lines in a 420 px column (1 line on a phone) and grows with its text before it scrolls. A screenshot
-pasted into it, a file dropped on the right side or one picked with 📎 Attach (up to 10) uploads to the task's Files at
-once and shows under the note with ✕. Send back waits until they are up ("Uploading 1 of 2…"), names a failed one with
-Retry and sends nothing; the note it sends ends with each file's name and id, so the bot's wake lists them. A question's
-"Something else" box works the same way. Approve on an OK of exactly what was shown sends that OK alone, and says so under
-the files. Moving on with ‹ › or Skip leaves the uploaded files on the task's Files, and a toast says so.
+The chat's box is the one every chat has. A file added with 📎 goes up to the task's Files when the arrow sends, and
+the words end with each file's name and id, so the bot's wake lists them; one that fails is named and nothing is sent.
 
 The phone view is in [S17](#s17-on-a-phone). What changed since the version you last saw is highlighted in the page.
 
 **The other kinds:**
 
-- **An email to approve:** heading "Send this email to Dana about her replacement?". The email itself: "To: Dana", "Subject: Your replacement order", "Hi Dana, your replacement ships Monday…". A "Notes" box.
-  Buttons "Approve" (main) and "Send back".
-- **A question from a bot:** heading "Which plan do new signups get?". Under it "Why it matters: …", the bot's reason.
-  A card per choice ("Free", "Pro trial", "Ask at signup"), each with its line on what happens, every card alike, and
-  only the "Recommended" tag on the one the bot recommends. Then a box "Write to Builder" and Send at its right edge: the text is a comment on the task
-  written to the bot that asked, which wakes it, and the question stays open. Then one row: "I don't know, explain",
-  "Give it back" and Skip. "I don't know, explain" answers the question with those words, and the bot explains in a
-  new ask. "Give it back" closes it, and the bot is told "Ana gave it back: decide it yourself, or ask your manager".
-  A question with no choices is the same screen without the cards.
-- **A question from a person:** heading "Which colour?". Buttons for its choices and a box "Something else", whose
-  text is the answer. A question asked as a number has the number box and a Notes box: the words go with the number
-  as its note, or, alone, back to whoever asked.
+- **An email to approve:** heading "Send this email to Dana about her replacement?". The email itself: "To: Dana", "Subject: Your replacement order", "Hi Dana, your replacement ships Monday…".
+  "Approve" (main); a reply in the chat sends it back.
+- **A question from a bot:** in its task's chat, "Which plan do new signups get?", the bot's why line, and a card per
+  choice ("Free", "Pro trial", "Ask at signup"), each with its line on what happens, every card alike, and only the
+  "Recommended" tag on the one the bot recommends. A tap answers; a reply in the chat goes to the bot (above).
+- **A question from a person:** the same, its choices as buttons; a reply in the chat is its answer.
+- **A stage's typed answer** (a number, a choice, text) keeps its own boxes: a number has the number box and a Notes
+  box, whose words go with the number as its note, or, alone, back to whoever asked.
 - **A one-tap fix:** heading "Connect Google for Scout". Line "Its Google login expired Nov 8." Button "Connect" (main).
 - **A stuck task:** heading "Export retries is stuck". Line "Checks fail: lint, unit. Builder and Eng Manager each tried 3
   times." Buttons "Try again" (main), "Reassign", "Move back", "Close".
-- **⋯, last on every item's row:** a question's other answers, and **Close task** when you may close the task (whoever
+- **⋯, last on every item's row:** **Close task** and **Give to…** (on an ask in its chat, all ⋯ holds), when you may close the task (whoever
   may work it: its owner, its requester, their managers, its pipeline's manager or owner, someone who moves tasks). It
   closes the task with what is typed in the item's box as the reason, with no confirm, and moves on; ↶ reopens it. The
   reason goes on the close in the task's history, and a bot that asked for the task (not the one that owns it) hears

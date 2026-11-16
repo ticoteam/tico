@@ -85,7 +85,7 @@ const question = (n: number, bot: string, line: string): Item => {
     // ---- 2. The pinged bot's question comes in and comes on screen by itself.
     needs = [question(2, 'bot:pm', 'Price per seat or per company?')];
     await page.evaluate('v2Refresh()');
-    await dialog.getByText('Price per seat or per company?').first().waitFor();
+    await dialog.locator('.dc-q', {hasText: 'Price per seat or per company?'}).waitFor();
     await dialog.locator('[data-dc-choice="Yes"]').click();
     await dialog.getByText('All done').waitFor();
     await dialog.locator('[data-dc="close"]').first().click();
@@ -95,17 +95,15 @@ const question = (n: number, bot: string, line: string): Item => {
     await page.evaluate('v2Refresh()');
     await page.locator('[data-need="r4"]').waitFor();
     await page.evaluate("decideBotsFlow(document.body, ['bot:pm'], 'PM', {scope: 'bot', id: 'pm'})");
-    await dialog.getByText('Drop the free plan?').first().waitFor();
+    await dialog.locator('.dc-q', {hasText: 'Drop the free plan?'}).waitFor();
     assert.equal(await dialog.getByText('Move the backup to Sunday?').count(), 0, 'another bot’s item stays out');
     assert.ok((await dialog.locator('.dc-head').innerText()).includes('PM'), 'the crumb names the bot');
     await shot('narrowed');
     // ⋯'s Close task shows only to someone who may close the task: here, once PM reports to Ana (not a task mover).
     const more = dialog.locator('[data-dc="ask-more"]'), closeIt = dialog.locator('[role="menuitem"][data-dc="close-task"]');
-    await page.evaluate('S.me.mover = false');
-    await more.click();
-    assert.equal(await closeIt.count(), 0, 'not theirs to close');
-    await more.click();
-    await page.evaluate("S.emps.find(e => e.slug === 'pm').reports_to = 'human:ana'");
+    await page.evaluate('S.me.mover = false; decidePaintSide(DEC)');
+    assert.equal(await more.count(), 0, 'not theirs to close: in the task\'s chat ⋯ holds nothing else');
+    await page.evaluate("S.emps.find(e => e.slug === 'pm').reports_to = 'human:ana'; decidePaintSide(DEC)");
     await more.click();
     await closeIt.waitFor();
     await more.click();
