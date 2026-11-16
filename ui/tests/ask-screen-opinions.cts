@@ -1,8 +1,8 @@
 import type {Route} from 'playwright';
 // Offline browser check of Tico's line in Flow (ui/app/decide.ts decideOpinions), against a fake of
 // POST /api/v2/flow/opinions (backend/flow_opinions.py), on a desktop:
-// - a ready opinion puts its line in the bar and, on an OK, makes its pick the main button (a question's choices stay
-//   as drawn: none looks chosen before a tap); an OK's send back fills an empty Notes;
+// - a ready opinion puts its line in the bar and, on an OK, makes its pick the main button (a send back, a reply in the
+//   chat, leaves none; a question's choices stay as drawn: none looks chosen before a tap);
 // - while an ask is pending the next one still waiting is named before ‹ ›, and the pending ones are asked again (only
 //   they) until they are ready;
 // - in a set of more than 5, the items not yet seen go highest score first and the ones seen keep their place;
@@ -73,7 +73,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(version), next: null});
       if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found'}, 404);   // a stage's OK: no grant
       const read = p.match(/^\/api\/v2\/tasks\/t(\d+)$/);
-      if (read) return json({task: {...brief(Number(read[1])), created_at: '2026-11-09T09:00:00Z', attachments: [], links: [],
+      if (read) return json({task: {...brief(Number(read[1])), created_at: '2026-11-09T09:00:00Z', attachments: [], links: [], conversation_id: 'c' + read[1],
         body: 'Ben is setting the launch plan. The venue and the date go together.'}});
       if (p === '/api/v2/flow/opinions') {
         const ids = (JSON.parse(r.postData() || '{}') as {items: string[]}).items;
@@ -89,7 +89,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
         } catch { /* the page stopped it (closed) */ } finally { out--; }
         return;
       }
-      if (r.method() !== 'GET' && p.startsWith('/api/')) {
+      // The task's read names its thread: the ask is answered in its chat (decide.ts decideChatMount).
+      if (r.method() !== 'GET' && p.startsWith('/api/') && !p.startsWith('/api/v2/threads/')) {
         writes.push(`${r.method()} ${p}`);
         const m = p.match(/^\/api\/v2\/tasks\/(t\d+)\/asks\/(r\d+)\/answer$/);
         if (m) { needs = needs.filter(n => n.id !== m[2]); version++; return json({task: brief(Number(m[1]!.slice(1))), answer_id: 'a-' + m[2], requirement_id: m[2]}); }
@@ -159,14 +160,12 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('[data-dc="prev"]').click();
     await at(4);
     assert.deepEqual((await walk()).slice(0, 3), ['r2', 'r4', 'r5']);
-    // The OK: Send back is the main button, and its note fills the empty Notes.
+    // The OK: Tico would send it back, which is a reply in the chat: no answer is the main button, and the box stays empty.
     await dialog.locator('[data-dc="next"]').click();
     await dialog.locator('[data-dc="next"]').click();
     await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor();
-    assert.equal(await dialog.locator('#dc-notes').inputValue(), 'Add the price.');
-    assert.equal(await main('[data-dc="sendback"]'), true);
     assert.equal(await main('[data-dc="approve"]'), false);
-    assert.equal(await dialog.locator('[data-dc="sendback"]').isEnabled(), true, 'the note is there, so Send back is on');
+    assert.equal(await dialog.locator('.dc-chat .p-text').inputValue(), '', 'Tico never types for the person');
     assert.deepEqual(writes, [], 'an opinion answers nothing');
     await close();
 
@@ -177,11 +176,11 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await at(1);
     await page.waitForFunction(() => !!document.querySelector('.decide .dc-flow .flow-mark.live'));
     assert.equal(await mains(), 0, 'while Tico thinks, no answer is the main one');
-    await dialog.locator('#dc-notes').fill('My own words');
+    await dialog.locator('.dc-chat .p-text').fill('My own words');
     ops['r1'] = {state: 'ready', pick: 'send_back', line: 'Send back. The price is missing.', note: 'Add the price.', score: 80};
     await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor({timeout: 8000});
-    assert.equal(await dialog.locator('#dc-notes').inputValue(), 'My own words', 'never over their typing');
-    assert.equal(await main('[data-dc="sendback"]'), true, 'ready: the pick is the main one');
+    assert.equal(await dialog.locator('.dc-chat .p-text').inputValue(), 'My own words', 'never over their typing');
+    assert.equal(await main('[data-dc="approve"]'), false, 'ready: a send back leaves Approve plain');
     assert.equal(await dialog.locator('.dc-flow .flow-mark.live').count(), 0, 'the mark rests once it is ready');
     assert.equal(await dialog.locator('.dc-up').textContent(), '');
     await dialog.locator('[data-dc="next"]').click();
@@ -236,7 +235,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await at(1);
     stale.release();
     await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor({timeout: 8000});
-    assert.equal(await main('[data-dc="sendback"]'), true);
+    assert.equal(await main('[data-dc="approve"]'), false);
     await close();
 
     // ---- 5. A big walk: one request a round, at most 30 asks, pending ones first, then the next ones not yet asked.

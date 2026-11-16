@@ -190,10 +190,10 @@ async function walkOnAPhone(browser: Browser) {
     line: 'OK the late spec'}]; decideRefresh(DEC, S.v2.needs)`);
   assert.equal(await left(page), 2, 'the new one joins the walk');
   assert.equal(await question(page), before, 'and the item on screen stays');
-  // Send back with a note. The server never had the late OK, so the read after the answer takes it out (answered
-  // elsewhere, it leaves): the stage is done, and the menu walks Review's items.
-  await page.locator('#dc-notes').fill('Name the stage in the top bar.');
-  await page.locator('#need-card [data-dc="sendback"]').click();
+  // A reply in the task's chat sends it back with the words. The server never had the late OK, so the read after the
+  // answer takes it out (answered elsewhere, it leaves): the stage is done, and the menu walks Review's items.
+  await page.locator('#need-card .dc-chat .p-text').fill('Name the stage in the top bar.');
+  await page.locator('#need-card .dc-chat .p-send').click();
   await page.locator('#need-card .dc-done h2').waitFor();
   assert.ok(posts.some(x => x.p === '/api/v2/tasks/t-2/asks/r2/answer' && x.body.value === 'no' && x.body['note'] === 'Name the stage in the top bar.'));
   await walkTo(page, 'review');
@@ -282,8 +282,8 @@ async function phonePolish(browser: Browser) {
     await page.locator('#need-card[open] [data-dc="approve"]:not([disabled])').waitFor();
     r = await smallTargets(page, '#need-card');
     assert.deepEqual(r.small, [], 'the review screen, an OK: 44 px');
-    // With the keyboard up (the visible height cut to 420 px), Approve and Send back stay on screen.
-    await page.locator('#dc-notes').focus();
+    // With the keyboard up (the visible height cut to 420 px), Approve stays on screen.
+    await page.locator('#need-card .dc-chat .p-text').focus();
     await page.evaluate(`document.documentElement.style.setProperty('--chat-viewport-height', '420px')`);
     const acts = await page.locator('#need-card [data-dc="approve"]').boundingBox();
     assert.ok(acts && acts.y + acts.height <= 420, `Approve above the keyboard: ${JSON.stringify(acts)}`);

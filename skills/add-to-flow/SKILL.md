@@ -25,8 +25,8 @@ someone: an open ask of yours on the same thing stays as it is.
 - Only what would change what you do next. If nothing clears that bar, ask nothing and say so in one line; that is a
   good result.
 - At most three, the most valuable first.
-- Each question is one decision, in one plain sentence that reads on its own, plus one line on what you will do with
-  the answer. Leave it free-form: `--choices` only when it is a real pick between named options.
+- Each question is one decision, in one plain sentence that says what is asked and reads on its own (it is the row in
+  their Needs you), plus one line on what you will do with the answer. Leave it free-form: `--choices` only when it is a real pick between named options.
 - If a person has corrected you on the same thing several times, a good question is whether to make it a standing
   rule; on yes, write it at the top of `memory/learnings.md`, and if it should bind the whole stage, say so to whoever
   edits that stage.
@@ -47,6 +47,9 @@ manager is a person. When your manager is a bot, ask it the same sentence on a t
 original with its reply, saying who answered.
 
 ## When the answer comes
+
+It may come as a reply in the task's chat rather than an answer to your ask. If the reply answers it, withdraw the ask
+(`tico task ask <id> --withdraw --why "Answered in the chat: <their words>"`); if it does not, follow up once.
 
 Take it as given, then do both of these:
 

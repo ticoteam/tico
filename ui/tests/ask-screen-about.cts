@@ -5,8 +5,8 @@
 //   otherwise; it closes the view, opens the place, and ▶ picks up at the item it left;
 // - "Reply to PM" posts a comment that @mentions PM; the item stays, the box clears and says Sent; a task Tico filed
 //   itself reads "Note on the task" and names no one;
-// - a long question: itself once, in full, never on the left, its task the background there; Ask back (in ⋯) posts a
-//   comment and keeps the question (ask-screen-question.cts has the rest of a question's screen);
+// - a long question: itself once, in full, never on the left, its task the background there; a reply in its task's chat
+//   posts a comment naming it and answers nothing (ask-screen-question.cts has the rest of a question's screen);
 // - the text shows a skeleton until its one read comes, and the next item's text is read ahead;
 // - at 1040 px Done, the snooze icon and ⋯ sit on one line, as an ask's row does, with Give to… and Skip in ⋯ (it opens
 //   and closes by keyboard); at 390 px the buttons and those menu items are 44 px tall and Skip is reachable.
@@ -152,8 +152,8 @@ function world(over: {title?: string} = {}) {
       } finally { await page.close(); }
     }
 
-    // A long question: itself once, in full, never on the left; the task's text is the background there. Ask back
-    // (in ⋯) writes to the bot that asked, naming the question, and it stays open.
+    // A long question: itself once, in full, never on the left; the task's text is the background there. A reply in its
+    // task's chat writes to the bot that asked, naming the question, which stays open, with the bot.
     for (const title of ['', 'Which latency budget for Perf I31?']) {
       const {tasks, needs} = world({title});
       const {page, errors, posts} = await open(browser, {tasks, needs, viewport: {width: 1040, height: 760}});
@@ -163,16 +163,14 @@ function world(over: {title?: string} = {}) {
         assert.equal(await card(page).locator('.dc-q').innerText(), LONG, 'the question in full, never its short title');
         const left = await card(page).locator('.dc-thing').innerText();
         assert.ok(!left.includes(LONG.slice(0, 40)), 'the question is not on the left');
-        assert.match(await card(page).locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^PM·.+·#\d+ ↗$/);
+        assert.match(await card(page).locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^PM·.+·needs you·#\d+ ↗$/);
         assert.equal(await card(page).locator('.dc-thing .dc-md strong').innerText(), 'load test', 'the task text is the background');
         assert.equal(await card(page).locator('[data-dc="go"]').count(), 0, 'no place named, no Go to');
-        await card(page).locator('#dc-other').fill('What do you mean by validation?');
-        await card(page).locator('[data-dc="ask-more"]').click();
-        await card(page).locator('[data-dc="askback"]').click();
-        await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('#dc-other')?.value);
+        await card(page).locator('.dc-chat .p-text').fill('What do you mean by validation?');
+        await card(page).locator('.dc-chat .p-send').click();
+        await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('.dc-chat .p-text')?.value);
         assert.deepEqual(posts.find(x => x.p === '/api/v2/tasks/t-2/comments')!.body, {text: 'What do you mean by validation?', ask: 'r2'});
-        assert.equal(posts.filter(x => x.p.endsWith('/answer')).length, 0, 'Ask back answers nothing');
-        assert.equal(await card(page).locator('.dc-q').innerText(), LONG, 'the question stays on screen');
+        assert.equal(posts.filter(x => x.p.endsWith('/answer')).length, 0, 'a reply answers nothing');
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
@@ -246,16 +244,16 @@ function world(over: {title?: string} = {}) {
       } finally { await page.close(); }
     }
 
-    // A question nobody named asked (a stage's): no Ask back; ⋯ holds only Close task; Send stays.
+    // A question nobody named asked (a stage's): answered in the chat; ⋯ holds Close task and Give to….
     {
       const {tasks, needs} = world();
       needs.find(n => n.id === 'r2')!.ask!.asked_by = 'stage';
       const {page, errors} = await open(browser, {tasks, needs, viewport: {width: 1040, height: 760}});
       try {
         await page.evaluate(() => { decideOpen('r2'); });
-        await card(page).locator('[data-dc="other"]').waitFor({timeout: 5000});
+        await card(page).locator('.dc-chat .p-text').waitFor({timeout: 5000});
         await card(page).locator('[data-dc="ask-more"]').click();
-        assert.deepEqual(await card(page).locator('[role="menuitem"]').allInnerTexts(), ['Close task']);
+        assert.deepEqual(await card(page).locator('.dc-askw [role="menuitem"]').allInnerTexts(), ['Close task', 'Give to…']);
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }

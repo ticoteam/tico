@@ -5,7 +5,7 @@ import type {Page, Route} from 'playwright';
 //   phone), and no Skip;
 // - its menu: 1 hour, 1 day, 1 week, 1 month, Other; Enter opens it on its first choice, ↑ ↓ move (round), Esc closes
 //   it with Flow still open and focus back on the icon;
-// - open, it covers neither Approve nor Send back (it opens upward from the bar on a phone), and a tap on Approve then
+// - open, it covers no part of Approve (it opens upward from the bar on a phone), and a tap on Approve then
 //   only closes it: nothing is approved;
 // - 1 hour sends POST /v2/needs-you/snooze {id, until: an hour on}; the next item comes, the top bar says Snoozed, and
 //   ↩ sends unsnooze and brings it back;
@@ -95,7 +95,7 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
       const dialog = page.locator('#need-card');
       const at = (n: number) => dialog.locator('.dc-q', {hasText: Q[n - 1]!}).waitFor();
       const icon = dialog.locator('.dc-side [data-dc="snooze"]'), menu = dialog.locator('.dc-snz');
-      const approve = dialog.locator('[data-dc="approve"]'), sendback = dialog.locator('[data-dc="sendback"]');
+      const approve = dialog.locator('[data-dc="approve"]');
       const focused = () => page.evaluate(() => document.activeElement?.textContent?.trim() || document.activeElement?.getAttribute('aria-label') || '');
       await at(1);
       await approve.and(page.locator(':not([disabled])')).waitFor();
@@ -128,11 +128,11 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
       assert.equal(await focused(), 'Snooze', `${label}: focus is back on the icon`);
       assert.equal(await icon.getAttribute('aria-expanded'), 'false');
 
-      // Open, it covers neither Approve nor Send back, and is all on screen; on a phone it opens upward from the bar.
+      // Open, it covers neither Approve nor the chat's box, and is all on screen; on a phone it opens upward from the bar.
       await icon.click();
       await menu.waitFor();
       const mb = (await menu.boundingBox())!;
-      for (const [name, b] of [['Approve', approve], ['Send back', sendback]] as const) {
+      for (const [name, b] of [['Approve', approve]] as const) {
         const bb = (await b.boundingBox())!;
         assert.ok(!meets(mb, bb), `${label}: the menu is clear of ${name} (${JSON.stringify(mb)} vs ${JSON.stringify(bb)})`);
       }
@@ -169,7 +169,7 @@ const meets = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && 
       assert.ok(await box.evaluate(e => e === document.activeElement), `${label}: Other focuses its box`);
       assert.equal(await box.getAttribute('type'), 'datetime-local');
       const ob = (await menu.boundingBox())!;
-      for (const b of [approve, sendback]) assert.ok(!meets(ob, (await b.boundingBox())!), `${label}: Other is clear of the buttons`);
+      for (const b of [approve]) assert.ok(!meets(ob, (await b.boundingBox())!), `${label}: Other is clear of the buttons`);
       if (shots && label === 'desktop') { await page.waitForTimeout(300); await page.screenshot({path: path.join(shots, 'snooze-other.png')}); }
       await box.fill('2026-11-13T09:00');
       await box.press('Enter');

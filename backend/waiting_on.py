@@ -1167,10 +1167,14 @@ class _Everyone:
 
 
 # An ask a person snoozed for themselves (backend/ask_snoozes.py), while its time is to come: who, the ask's visit and
-# requirement, when it was asked as the snooze saw it, and until when.
+# requirement, when it was asked as the snooze saw it, and until when. It ends early once the bot that asked writes on
+# the task's thread after it: Flow snoozes a bot's question when the person replies in the chat, and the bot's answer
+# brings it back.
 _ASK_SNOOZES = (
-    "SELECT person_id, visit_id, requirement_id, asked_at, ask_version, snoozed_until FROM ask_snoozes "
-    "WHERE snoozed_until > ?"
+    "SELECT person_id, visit_id, requirement_id, asked_at, ask_version, snoozed_until FROM ask_snoozes s "
+    "WHERE snoozed_until > ? AND NOT EXISTS (SELECT 1 FROM requirements r JOIN tasks t ON t.id = s.task_id "
+    "JOIN messages m ON m.conversation_id = t.conversation_id AND m.sender_id = r.added_by_id "
+    "WHERE r.id = s.requirement_id AND r.added_by_id LIKE 'bot:%' AND m.created_at > s.updated_at)"
 )
 
 

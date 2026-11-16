@@ -1,19 +1,15 @@
 import type {Page, Route} from 'playwright';
 // Offline browser check of the ask screen on a 390 px phone (task #454, spec "Review on a phone"), against a fake of the
-// new routes:
-// - the screen scrolls as one: the thing asked about, then the question and Notes; nothing else scrolls, and at the end
-//   of the scroll no text is under the button bar, which is pinned to the bottom with a solid background;
-// - Approve, Send back and Snooze stay fully visible, at least 44 px tall and tappable while "Approved · Undo" shows: the
-//   message sits above the bar;
+// new routes. An ask is answered in its task's chat (decide.ts decideChatMount):
+// - the task folds to its title (Read the task opens it); the chat and its row take the rest, the row at the bottom;
+// - Approve and Snooze stay fully visible, at least 44 px tall and tappable while ↶ shows: it sits in the top bar;
 // - ‹ › show on the phone, 8 px clear of ✕: next opens the next item and previous comes back;
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
-// - Send back is on with an empty note: a tap focuses Notes with "Say what to change" and sends nothing; Notes starts one
-//   line tall, its placeholder Notes again once the item is left;
-// - a question opens on itself, right under the header, its task's line under it;
-// - an OK with nothing attached (no grant, no shows: a pitch is the task itself) shows its task's title once and text
-//   above the question, not a blank pane; an OK whose only show is a page shows the page and not the task's text;
-// - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it;
-// - at 1440 px the screen is as before: two columns, ‹ ›, Notes 7 lines, Send back off until there is a note, no tap guard.
+// - a question shows on screen in its chat, above the row;
+// - with the keyboard up (the visible area shrinks, viewport.ts) the row stays inside it;
+// - an OK with nothing attached (a pitch is the task itself) folds to its task's title, which Read the task opens to its
+//   text; an OK whose only show is a page shows the page and not the task's text;
+// - at 1440 px: two columns, the chat column 420 px, ‹ ›, no tap guard.
 // Each check is collected, so a run on the old code lists every one that fails.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -56,11 +52,6 @@ const hit = (page: Page, sel: string) => page.evaluate((s: string) => {
 }, sel);
 const box = async (page: Page, sel: string): Promise<Box | null> => page.locator(sel).first().boundingBox();
 // The elements on the screen that scroll (their content is taller than they are, and they let it scroll).
-const scrollers = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#need-card *')].filter(el => {
-  const o = getComputedStyle(el).overflowY;
-  return (o === 'auto' || o === 'scroll') && el.scrollHeight > el.clientHeight + 1;
-}).map(el => String(el.className)));
-
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
   const errors: string[] = [], fails: string[] = [], writes: string[] = [];
@@ -91,12 +82,14 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       if (okRead) return json({requirement_id: okRead[1], subject: `spec:${okRead[1]}`, content: long(Q[Number(okRead[1]!.slice(1)) - 1]!),
         shown_hash: okRead[1]!.slice(1).repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
       // The question's task has no text of its own: nothing to show.
-      if (p === '/api/v2/tasks/t3') return json({task: {...brief('t3', 'Task 3'), body: ''}});
+      if (p === '/api/v2/tasks/t3') return json({task: {...brief('t3', 'Task 3'), body: '', conversation_id: 'c3'}});
       // The bare OK's task: the pitch is its text.
-      if (p === '/api/v2/tasks/t5') return json({task: {...brief('t5', 'Pitch: a weekly digest'), body: 'Send each person one email on Monday with what changed.'}});
-      if (p === '/api/v2/tasks/t6') return json({task: {...brief('t6', 'Task 6'), body: 'Task six text.'}});
+      if (p === '/api/v2/tasks/t5') return json({task: {...brief('t5', 'Pitch: a weekly digest'), body: 'Send each person one email on Monday with what changed.', conversation_id: 'c5'}});
+      if (p === '/api/v2/tasks/t6') return json({task: {...brief('t6', 'Task 6'), body: 'Task six text.', conversation_id: 'c6'}});
+      const own = r.method() === 'GET' ? p.match(/^\/api\/v2\/tasks\/(t\d)$/) : null;
+      if (own) return json({task: {...brief(own[1]!, 'Task'), conversation_id: 'c' + own[1]!.slice(1)}});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
-      if (r.method() !== 'GET' && p.startsWith('/api/')) {
+      if (r.method() !== 'GET' && p.startsWith('/api/') && !p.startsWith('/api/v2/threads/')) {
         writes.push(`${r.method()} ${p}`);
         const m = p.match(/^\/api\/v2\/tasks\/(t\d)\/asks\/(r\d)\/(?:answer|ok)$/);
         if (m) { needs = needs.filter(n => n.id !== m[2]); return json({task: brief(m[1]!, 'Task'), answer_id: 'a-' + m[2], requirement_id: m[2]}); }
@@ -119,60 +112,19 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await page.locator(`${approve}:not([disabled])`).waitFor();
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-open.png')});
 
-    // One scroll: only the screen's body scrolls; the thing and the question do not scroll on their own.
-    const scrolling = await scrollers(page);
-    check(scrolling.length === 1, `one scroll area, not ${scrolling.length}: ${JSON.stringify(scrolling)}`);
-    const scrolledBy = await page.evaluate(() => ['.dc-thing .dc-doc', '.dc-side .dc-q'].map(s => {
-      for (let el = document.querySelector<HTMLElement>(`#need-card ${s}`)?.parentElement; el; el = el.parentElement)
-        if (/auto|scroll/.test(getComputedStyle(el).overflowY)) return String(el.className);
-      return 'none';
-    }));
-    check(scrolledBy[0] === scrolledBy[1], `the thing and the question scroll together (${JSON.stringify(scrolledBy)})`);
-
-    // The bar: pinned to the bottom, solid, each button at least 44 px and the one a tap at its centre reaches.
+    // The task folds to its title; the chat fills the rest, its row at the bottom; each button 44 px.
+    check(!await page.locator('#need-card .dc-thing').isVisible(), 'the task folds away');
+    check(await page.locator('#need-card .dc-fold [data-dc="fold"]').isVisible(), 'Read the task is there');
+    await page.locator('#need-card .dc-chat .p-text').waitFor();
     const bar = (await box(page, `${approve} >> xpath=..`))!;
-    check(Math.abs(bar.y + bar.height - VIEW.height) <= 1, `the bar ends at the bottom of the screen (${bar.y + bar.height})`);
-    const barBg = await page.locator(`${approve} >> xpath=..`).evaluate(el => getComputedStyle(el).backgroundColor);
-    check(!/rgba\(.*,\s*0\)$|transparent/.test(barBg), `the bar has a solid background (${barBg})`);
-    for (const sel of [approve, sendback, snooze]) {
+    check(VIEW.height - (bar.y + bar.height) <= 24, `the row is at the bottom of the screen (${bar.y + bar.height})`);
+    for (const sel of [approve, snooze]) {
       const b = (await box(page, sel))!;
       check(b.height >= 44, `${sel} is 44 px tall (${b.height})`);
     }
-    // Scrolled to the end, the last of the content (Attach) ends above the bar, and the content scrolled under the bar
-    // is hidden by it.
-    await page.evaluate(() => { for (const el of document.querySelectorAll<HTMLElement>('#need-card *')) el.scrollTop = el.scrollHeight; });
-    const attach = (await box(page, '#need-card .dc-attach'))!, barNow = (await box(page, `${approve} >> xpath=..`))!;
-    check(attach.y + attach.height <= barNow.y + 1, `Attach ends above the bar at the end of the scroll (${attach.y + attach.height} > ${barNow.y})`);
-    await page.evaluate(() => { for (const el of document.querySelectorAll<HTMLElement>('#need-card *')) el.scrollTop = 0; });
-
-    // Notes starts one line tall; Send back is on, and with no note it asks for one and sends nothing.
-    const notes = (await box(page, '#dc-notes'))!;
-    check(notes.height <= 48, `Notes starts one line tall (${notes.height} px)`);
-    check(await page.locator(sendback).isEnabled(), 'Send back is on with an empty note');
-    if (await page.locator(sendback).isEnabled()) {
-      await page.locator(sendback).click();
-      check(await page.evaluate(() => document.activeElement?.id === 'dc-notes'), 'Send back with no note focuses Notes');
-      check(await page.locator('#dc-notes').getAttribute('placeholder') === 'Say what to change', 'Notes says "Say what to change"');
-      // A redraw of the side keeps it: attach a file, then take it off with ✕ (which draws the side again).
-      await page.locator('#need-card input[data-dc-pick]').setInputFiles({name: 'shot.png', mimeType: 'image/png', buffer: Buffer.from('png')});
-      await page.locator('#need-card [data-dc="file-drop"]').click();
-      await page.locator('#need-card [data-dc="file-drop"]').waitFor({state: 'detached'});
-      check(await page.locator('#dc-notes').getAttribute('placeholder') === 'Say what to change', 'Notes still says "Say what to change" after a redraw');
-      check(writes.length === 0, `an empty Send back sends nothing (${JSON.stringify(writes)})`);
-    }
-
-    // The bar's height changes with no redraw (here its padding, as a safe-area inset does): the end of the scroll
-    // follows it.
-    const barH = () => page.evaluate(() => {
-      const row = document.querySelector<HTMLElement>('#need-card [data-dc="approve"]')!.parentElement!;
-      return [row.offsetHeight, parseFloat(getComputedStyle(document.querySelector('#need-card .decide')!).getPropertyValue('--dc-bar-h'))];
-    });
-    await page.locator(`${approve} >> xpath=..`).evaluate(el => { (el as HTMLElement).style.paddingBottom = '60px'; });
-    await page.waitForTimeout(300);
-    const [rowH, room] = await barH();
-    check(rowH === room, `the scroll's room follows the bar's height (bar ${rowH} px, room ${room} px)`);
-    await page.locator(`${approve} >> xpath=..`).evaluate(el => { (el as HTMLElement).style.paddingBottom = ''; });
-    await page.waitForTimeout(300);
+    const chatBox = (await box(page, '#need-card .dc-chat .p-text'))!;
+    check(chatBox.y + chatBox.height <= bar.y + 1, `the chat's box sits above the row (${chatBox.y + chatBox.height} > ${bar.y})`);
+    check(await page.locator(sendback).count() === 0, 'no Send back: a reply in the chat sends it back');
 
     // ‹ › on the phone, 8 px clear of ✕; next and back.
     const next = '#need-card [data-dc="next"]', prev = '#need-card [data-dc="prev"]';
@@ -186,8 +138,6 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       await page.locator(`${approve}:not([disabled])`).waitFor();       // its content is read and held
       await page.locator(prev).click();
       await at(1);
-      // Leaving the item clears the hint: back on it, Notes is plain again.
-      check(await page.locator('#dc-notes').getAttribute('placeholder') === 'Notes', 'the hint is gone after leaving the item');
     } else {
       check(false, '‹ › are needed to walk on a phone');
     }
@@ -220,7 +170,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       return [!!under?.closest('.dc-bar'), others.length];
     });
     check(covers[0] === true && covers[1] === 0, `the undo overlaps no control, the page or the buttons (${JSON.stringify(covers)})`);
-    for (const sel of [approve, sendback, snooze]) {
+    for (const sel of [approve, snooze]) {
       const b = (await box(page, sel))!, reached = await hit(page, sel);
       check(b.height >= 44 && b.y + b.height <= VIEW.height && reached === 'self', `${sel} is visible and tappable while the message shows (${b.height} px, tap reaches ${reached})`);
     }
@@ -252,7 +202,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await dialog.locator('.dc-thing .dc-bg').waitFor({state: 'attached'});   // its task: one line under it (#3786)
     await page.waitForTimeout(100);
     const head = (await box(page, '#need-card .dc-head'))!, q = (await box(page, '#need-card .dc-q'))!;
-    check(q.y - (head.y + head.height) <= 24, `the question opens the screen (${q.y - (head.y + head.height)} px under the header)`);
+    const row3 = (await box(page, `${snooze} >> xpath=..`))!;
+    check(q.y >= head.y + head.height && q.y + q.height <= row3.y, `the question is on screen in the chat, above the row (${q.y}..${q.y + q.height}, row at ${row3.y})`);
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-question.png')});
     await page.close();
 
@@ -265,14 +216,11 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await bare.locator('[data-need="r5"]').click();
     await bare.locator('#need-card .dc-q', {hasText: 'OK to go ahead?'}).waitFor();
     await bare.locator(`${approve}:not([disabled])`).waitFor();
+    check(await bare.locator('#need-card .dc-fold h3').textContent() === 'Pitch: a weekly digest', 'a bare OK folds to its task\'s title');
+    await bare.locator('#need-card [data-dc="fold"]').click();
     const pitch = bare.locator('#need-card .dc-thing .dc-md', {hasText: 'one email on Monday'});
     await pitch.waitFor();
-    const title5 = bare.locator('#need-card .dc-thing .dc-title');
-    check(await title5.textContent() === 'Pitch: a weekly digest', `a bare OK shows its task's title (${await title5.textContent()})`);
-    check(await bare.locator('#need-card .dc-thing').getByText('Pitch: a weekly digest').count() === 1, 'a bare OK shows the title once');
-    const t5 = (await title5.boundingBox())!, p5 = (await pitch.boundingBox())!, q5 = (await box(bare, '#need-card .dc-q'))!;
-    check(t5.y < p5.y && p5.y + p5.height <= q5.y, `the title, then the text, then the question (${t5.y}, ${p5.y}, ${q5.y})`);
-    check(await bare.locator('#need-card .dc-thing').isVisible(), 'a bare OK shows its pane');
+    check(await bare.locator('#need-card .dc-thing').getByText('Pitch: a weekly digest').count() === 1, 'Read the task: its title once, then its text');
     if (shots) await bare.screenshot({path: path.join(shots, 'ask-phone-390-empty-ok.png')});
     if (process.env.FLOW_SHOTS) await bare.locator('#need-card .dc-start').waitFor({state: 'detached'}).then(() => bare.screenshot({path: path.join(process.env.FLOW_SHOTS, 'phone-bare-ok.png')}));
     await bare.close();
@@ -285,6 +233,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await paged.goto('http://tico-ui.test/#/tasks');
     await paged.locator('[data-need="r6"]').click();
     await paged.locator('#need-card .dc-q', {hasText: 'OK the launch plan?'}).waitFor();
+    await paged.locator('#need-card [data-dc="fold"]').click();
     await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().waitFor({state: 'attached'});
     check(await paged.locator('#need-card .dc-thing').isVisible(), 'an OK showing only a page keeps its pane');
     check(await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().isVisible(),
@@ -303,10 +252,9 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await wide.locator('#need-card .dc-q', {hasText: Q[0]!}).waitFor();
     await wide.locator(`${approve}:not([disabled])`).waitFor();
     const side = (await box(wide, '#need-card .dc-side'))!, thing = (await box(wide, '#need-card .dc-thing'))!;
-    check(Math.abs(side.width - 420) <= 1 && side.y === thing.y, `1440: two columns, the answer column 420 px (${side.width})`);
+    check(Math.abs(side.width - 420) <= 1 && side.y === thing.y, `1440: two columns, the chat column 420 px (${side.width})`);
     check(await wide.locator('#need-card [data-dc="next"]').isVisible(), '1440: › shows');
-    check(await wide.locator('#dc-notes').getAttribute('rows') === '7', '1440: Notes starts at 7 lines');
-    check(await wide.locator(sendback).isDisabled(), '1440: Send back is off with an empty note');
+    check(!await wide.locator('#need-card .dc-fold').isVisible(), '1440: the task is the left column, not folded');
     // The 400 ms tap guard is a phone's: a desktop's buttons answer at once after Approve.
     await wide.locator(approve).click();
     await wide.locator('#need-card .dc-q', {hasText: Q[1]!}).waitFor();
@@ -316,6 +264,6 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
 
     assert.deepEqual(errors, []);
     assert.deepEqual(fails, [], `\n- ${fails.join('\n- ')}`);
-    console.log('PASS: on a phone the ask screen scrolls as one, its bar stays tappable under "Approved · Undo", ‹ › step, a second tap is ignored, Send back asks for a note, an empty question opens on itself and a bare OK shows its task.');
+    console.log('PASS: on a phone the task folds to its title above its chat, the row stays tappable under ↶, ‹ › step, a second tap is ignored, a question opens on itself and a bare OK opens to its task.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

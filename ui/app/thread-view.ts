@@ -184,6 +184,12 @@ interface ThvOpts {
   // What goes with each message, as a chip above the box that ✕ removes (pipeline-ask.ts: the board on screen).
   context?: {label: () => string; refs: () => ThvRefs | null};
   autofocus?: boolean;               // the box takes the focus when the composer first draws
+  // Flow's chat on a task (decide.ts): `tail` draws after the messages (the ask, as the asker's last message); `send`
+  // takes the composer's words and files in place of a post to the thread, true once they went (the box clears);
+  // `typed` hears each change of the box's words (Approve becomes "Approve with comments").
+  tail?: () => string;
+  send?: (text: string, files: File[]) => Promise<boolean>;
+  typed?: (text: string) => void;
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -977,8 +983,8 @@ const thvRowsKey = (view: ThvView) => `${thvCanPost(view)}|${!!view.thread?.earl
 // The list is its rows (thvRowsHTML), then the bots' status rows (thvTailHTML), so a status change redraws only those.
 function thvTailHTML(view: ThvView, rows: string) {
   if (['loading', 'gone', 'error'].includes(view.state)) return '';
-  const status = (view.botStatus || []).map(b => thvStatusHTML(view, b)).join('');
-  return status || rows ? status : `<div class="th-empty muted">${esc(view.opts.empty || 'No messages yet')}</div>`;
+  const status = (view.botStatus || []).map(b => thvStatusHTML(view, b)).join(''), tail = view.opts.tail?.() || '';
+  return status || rows || tail ? status + tail : `<div class="th-empty muted">${esc(view.opts.empty || 'No messages yet')}</div>`;
 }
 function thvRowsHTML(view: ThvView) {
   if (view.state === 'loading') return '<div class="th-empty muted">Loading…</div>';
@@ -1281,7 +1287,7 @@ function thvComposerDraw(view: ThvView) {
   thvContextDraw(view);
   if (view.opts.autofocus) box.focus({preventScroll: true});
   const grow = () => pillGrow(box);
-  box.addEventListener('input', () => { grow(); thvMentionFind(view); thvComposerButtons(view); thvDraftTextKeep(view, box.value); });
+  box.addEventListener('input', () => { grow(); thvMentionFind(view); thvComposerButtons(view); thvDraftTextKeep(view, box.value); view.opts.typed?.(box.value); });
   // The Tools chat catches a paste first and keeps it out of the box (tools-key-drop.ts).
   if (view.opts.keyDrop) kdWire(view, view.opts.keyDrop.tools);
   // A pasted screenshot (or file) is a chip; pasted words go in at the cursor (pill.ts pillPasteWire).
@@ -1631,6 +1637,12 @@ async function thvComposerSend(view: ThvView) {
   // Goal mode: the words are the bot's goal for this thread (POST /v2/conversations/<thread>/goal), not a message.
   if (chatGoalThreadMode(C)) { if (await chatGoalSend(C, text)) thvDraftDrop(view); return; }
   if (!text && !C.files.length && !C.lib.length) { box.focus(); return; }
+  // Flow's chat sends the words its own way (an answer, a reply to the ask); the box clears once they went.
+  if (view.opts.send) {
+    if (!text || !(await view.opts.send(text, C.files.slice()))) return;
+    C.files.splice(0); C.lib.splice(0); thvChips(view); thvComposerClear(view); view.opts.typed?.('');
+    return;
+  }
   // A bot's "/" commands, as the old chat ran them: Tico's own here, a harness's to the bot, other words as a message.
   if (C.slug && text) {
     const slash = slashRun(C, text);

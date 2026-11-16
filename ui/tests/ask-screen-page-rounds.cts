@@ -91,13 +91,16 @@ async function open(page: Page, errors: string[]) {
     if (file) fetched.push(`${file[1]}@${url.searchParams.get('v')}`);
     const text = file ? pages[`${file[1]}@${url.searchParams.get('v')}`] : undefined;
     if (text) return route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="page.html"'}, body: text});
+    // The task's read names its thread: the ask is answered in its chat (decide.ts decideChatMount).
+    const read = /^\/api\/v2\/tasks\/(t-[ab])$/.exec(p);
+    if (read && r.method() === 'GET') return json({task: {id: read[1], title: '', conversation_id: 'c-' + read[1]}});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/#/tasks');
   await page.locator('#task-play').click();
   const dialog = page.locator('#need-card');
-  await dialog.locator('.dc-meta').waitFor();
+  await dialog.locator('[data-dc-vmenu]').waitFor();   // the rounds are read: the ask in the chat is drawn in parts
   return dialog;
 }
 
@@ -118,9 +121,10 @@ async function open(page: Page, errors: string[]) {
     assert.doesNotMatch(await side.innerText(), /Version 3, after the send back/, "their note is not quoted back in the heading");
     const asker = await page.evaluate(() => actorLabel('bot:pm'));
     assert.equal((await side.locator('.dc-meta').innerText()).replace(/\s+/g, ' ').trim(), `${asker} · Spec · v3 · Nov 13 · ✓ Meets · #80 ↗`);
-    const order = await side.locator('.dc-q, .dc-meta, .dc-open-task, .dc-part h4, .dc-note-row, [data-dc="approve"]').evaluateAll(
+    // The ask is the asker's last message in the task's chat; the chat's box and Approve under it.
+    const order = await side.locator('.dc-q, .dc-meta, .dc-open-task, .dc-part h4, .p-text, [data-dc="approve"]').evaluateAll(
       els => els.map(e => e.matches('.dc-part h4') ? (e.textContent || '').replace(/\s+\S+ \d+$/, '').trim() : e.className.split(' ')[0] || e.getAttribute('data-dc')));
-    assert.deepEqual(order, ['dc-q', 'dc-meta', 'What changed in v3', 'Your note on v2', 'Your points', 'dc-note-row', 'primary']);
+    assert.deepEqual(order, ['dc-q', 'dc-meta', 'What changed in v3', 'Your note on v2', 'Your points', 'p-text', 'primary']);
 
     // The line is one control; its menu says it in full: who, stage, version and date, then Jev's word and reason.
     const ctl = side.locator('[data-dc-vmenu]');

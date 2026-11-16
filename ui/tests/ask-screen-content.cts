@@ -92,7 +92,10 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
         await specPage.p;
         return route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="spec.html"'}, body: `<h1>Importer spec v${v}</h1>`});
       }
-      if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
+      // The task's read names its thread: the ask is answered in its chat (decide.ts decideChatMount).
+      const read = /^\/api\/v2\/tasks\/(t-r\d)$/.exec(p);
+      if (read && r.method() === 'GET') return json({task: {...brief(read[1]!, 'x'), conversation_id: 'c-' + read[1]}});
+      if (r.method() === 'POST' && p.startsWith('/api/v2/') && !p.startsWith('/api/v2/threads/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
         const m = /^\/api\/v2\/tasks\/(t-r\d)\/asks\/(r\d)\/(ok|answer)$/.exec(p);
         if (m) return json({task: brief(m[1]!, 'x'), answer_id: 'a-' + m[2], requirement_id: m[2]});
@@ -119,13 +122,13 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     await dialog.getByText('Jo Rivera').waitFor();
     assert.equal(await approve.isDisabled(), false);
 
-    // r2: a letter whose proof does not load: Approve stays off, Send back still goes.
+    // r2: a letter whose proof does not load: Approve stays off, a reply in the chat still sends it back.
     await next('Mail the notice');
     await dialog.locator('.dc-doc .err, .dc-doc + .err, .err').first().waitFor();
     assert.equal(await approve.isDisabled(), true, 'no proof, no Approve');
     assert.equal(await dialog.locator('iframe.dc-proof').count(), 0);
-    await dialog.locator('#dc-notes').fill('Fix the proof.');
-    await dialog.locator('[data-dc="sendback"]:not([disabled])').click();
+    await dialog.locator('.dc-chat .p-text').fill('Fix the proof.');
+    await dialog.locator('.dc-chat .p-send').click();
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
     assert.deepEqual(writes.at(-1)?.p, '/api/v2/tasks/t-r2/asks/r2/answer');
     await dialog.locator('.dc-q', {hasText: 'Mail the lease letter'}).or(dialog.locator('.dc-q', {hasText: 'Approve the pricing notes'})).first().waitFor();

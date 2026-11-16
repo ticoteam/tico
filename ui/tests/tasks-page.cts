@@ -188,7 +188,7 @@ function task(id: string, title: string, at_: string, over: Partial<Task> = {}):
     pipeline_id: where?.pipeline.id ?? 'product', pipeline: where ? {id: where.pipeline.id, name: where.pipeline.name} : {id: 'product', name: 'Product'},
     stage_id: where?.stage.id ?? at_, stage: where?.stage ?? (at_ === 'done' ? DONE : CLOSED), owner_id: 'bot:pm', requester_id: 'human:ana',
     assignee_id: null, due_at: null, late: null, snoozed: false, snooze: null, turn: finished ? null : turn('bot', 'bot:pm', 'PM is on it'),
-    labels: [], lane: 'company', links: [], private: false, created_at: at(60 * 30), updated_at: at(30), version: 3, ...over};
+    labels: [], lane: 'company', links: [], private: false, created_at: at(60 * 30), updated_at: at(30), version: 3, conversation_id: 'c-' + id, ...over};
 }
 /** A list row (TaskBrief): what GET /api/v2/tasks?brief=1 sends. */
 function brief(t: Task) {

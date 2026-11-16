@@ -7,7 +7,7 @@ import type {Route} from 'playwright';
 // - after Approve the top bar has ↶ named Undo (no word beside it; POST /api/v2/answers/{id}/undo) and the next item
 //   shows; ↶ fades after a few seconds, and stays while it has the keyboard's focus;
 // - a question answers with its choice; then All done;
-// - ⋯ is last on an OK's row and holds Close task: it closes the task with what is typed in Notes as the reason, moves
+// - ⋯ is last on an OK's row and holds Close task: it closes the task with what is typed in the chat as the reason, moves
 //   on with no confirm, and ↶ reopens it (with a why, which a reopen needs).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -61,9 +61,12 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
       if (p === '/api/v2/oks/r3') return json({requirement_id: 'r3', subject: 'spec:3', content: {title: 'Pricing page: pitch', body: 'A page per plan.'}, shown_hash: 'c'.repeat(64), standing: 'waiting', task_id: 't3'});
       if (p === '/api/v2/oks/r1') return json({requirement_id: 'r1', subject: 'spec:1', content: content(), shown_hash: hash(), standing: 'waiting', task_id: 't1'});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
+      // The task's read names its thread: Flow answers an ask in it (decide.ts decideChatMount).
+      const read = p.match(/^\/api\/v2\/tasks\/(t\d)$/);
+      if (read && r.method() === 'GET') return json({task: {...brief(read[1]!, ''), conversation_id: 'c-' + read[1]}});
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
-        writes.push({p, body});
+        if (!p.startsWith('/api/v2/threads/')) writes.push({p, body});   // a thread's read marks are its own
         if (p === '/api/v2/tasks/t1/asks/r1/ok') {
           if (body['shown_hash'] !== hash()) return json({error: 'task_changed', detail: 'What you saw is not what is asked now. Open it again.'}, 409);
           needs = needs.filter(n => n.id !== 'r1');
@@ -134,7 +137,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('[data-dc="close"]').first().click();
     assert.equal(await dialog.evaluate((d: HTMLDialogElement) => d.open), false);
 
-    // Close task from an OK's ⋯: last on its row; the note is the reason; no confirm; ↶ reopens it.
+    // Close task from an OK's ⋯: last on its row; the words in the chat are the reason; no confirm; ↶ reopens it.
     needs = [{kind: 'ask', id: 'r3', task_id: 't3', requirement_id: 'r3', line: 'Approve the pitch for Pricing page', since: '2026-11-09T12:00:00Z',
       task: brief('t3', 'Pricing page'), ask: ask('r3', 'ok', 'Approve the pitch for Pricing page', null)}];
     await page.evaluate('v2Refresh()');
@@ -143,7 +146,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.getByText('A page per plan.', {exact: true}).waitFor();
     const more = dialog.locator('[data-key] > .dc-acts [data-dc="ask-more"]');
     assert.equal(await dialog.locator('[data-key] > .dc-acts > :last-child').evaluate(e => !!e.querySelector('[data-dc="ask-more"]')), true, '⋯ is last on the row');
-    await dialog.locator('#dc-notes').fill('no not worth the clutter');
+    await dialog.locator('.dc-chat .p-text').fill('no not worth the clutter');
     await more.click();
     if (process.env.FLOW_SHOTS) {
       const shot = require('node:path').join(process.env.FLOW_SHOTS, 'ok-more');
