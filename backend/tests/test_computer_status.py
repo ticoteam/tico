@@ -111,7 +111,7 @@ def test_retirement_preserves_assigned_cloud_recent_and_never_seen_computers(api
     cutoff = H.shift(now, seconds=-computers.UNASSIGNED_OFFLINE_RETIRE_SECONDS)
     boxes = {
         name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest())
-        for name in ("assigned", "cloud", "delivery", "recent", "boundary", "new", "never-seen")
+        for name in ("assigned", "cloud", "recent", "boundary", "new", "never-seen")
     }
     replacements = {name: runner(api, label=name, device_id=sha256(name.encode()).hexdigest()) for name in boxes}
     assign(api, boxes["assigned"], "ops")
@@ -134,7 +134,6 @@ def test_retirement_preserves_assigned_cloud_recent_and_never_seen_computers(api
             "INSERT INTO cloud_machines(bot,runner_id,state,updated_at) VALUES('cpo',?,'stopped',?)",
             (boxes["cloud"]["runner_id"], now),
         )
-        BS.write(c, "cpo", {"app_delivery": {"computer": boxes["delivery"]["runner_id"]}})
     assert computers.sweep(store, now) == [boxes["never-seen"]["runner_id"]]
     with store.read() as c:
         kept = {r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")}

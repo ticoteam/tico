@@ -1387,8 +1387,10 @@ AppState = Literal[
 APP_STATES = AppState.__args__
 
 
+# The retired desktop-app driver's readiness: today's runner never sends it, but a 0.6.x runner may
+# (contracts/runner/releases/0.6.0), so it is accepted and ignored until 0.6.0 leaves the supported window.
 class AppDriverApp(Contract):
-    """One desktop app the computer's app driver can operate for a synced bot (backend/app_delivery.py)."""
+    """One desktop app the computer's app driver could operate for a synced bot."""
 
     installed: StrictBool = False
     version: Annotated[str, _cut(100), Field(max_length=100)] = ""
@@ -1453,7 +1455,7 @@ class StructuredReadiness(Contract):
     browser_launch: ContainerExecReadiness | None = None
     engine: EngineReadiness | None = None
     screen: ScreenReadiness | None = None
-    appdriver: AppDriverReadiness | None = None
+    appdriver: AppDriverReadiness | None = None  # retired: accepted from 0.6.x runners, read by nothing
     browser: BrowserReadiness | None = None
     # The runner's last WARN/ERROR-like log lines, for a support bundle a person chooses to send (backend/diagnostics.py).
     # Long lines are cut, never refused: a refused report would hide the computer (0.3.2 runners sent 301 characters).
@@ -1572,9 +1574,9 @@ class Heartbeat(Contract):
     platform: str = Field(max_length=100)
     device_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     capacity: int = Field(default=4, ge=1, le=256)
-    # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 the retired
-    # Nightly memory tidy pilot's packet path: today's runner no longer sends it, but the 0.6.x runners
-    # (contracts/runner/releases/0.6.0) do, so it is accepted and ignored until 0.6.0 leaves the supported window
+    # The assignment_* values name the retired temporary assignments (#420), and memory_tidy_packets_v1 and
+    # memory_tidy_keep_v1 the retired Nightly memory tidy pilot: today's runner sends neither, but the 0.6.x runners
+    # (contracts/runner/releases/0.6.0) do, so they are accepted and ignored until 0.6.0 leaves the supported window
     # (docs/runner-wire-contract.md).
     capabilities: list[
         Literal[
@@ -2015,49 +2017,6 @@ class BotArchive(Contract):
     on_behalf_of: ID | None = None
 
 
-class AppDelivery(Contract):
-    """Where a synced bot's messages are delivered: through `app` on the computer (runner) `computer`."""
-
-    computer: ID
-    app: Literal["grok"] = "grok"
-
-
-class AppDeliveryMessage(Contract):
-    """One message the app shows in the bot's conversation. `key` is the driver's own stable id for it."""
-
-    key: Annotated[str, Field(min_length=1, max_length=200)]
-    role: Literal["bot", "user"]
-    text: Annotated[str, Field(min_length=1, max_length=40_000)]
-    at: Annotated[str, Field(max_length=50)] | None = None
-    needs_human: StrictBool = False
-
-
-class AppDeliveryError(Contract):
-    code: Literal[
-        "needs_human",
-        "no_permission",
-        "not_signed_in",
-        "needs_foreground",
-        "ui_changed",
-        "not_installed",
-        "not_running",
-        "bot_not_found",
-        "timeout",
-        "send_failed",
-        "busy",
-    ]
-    detail: Annotated[str, _cut(300), Field(max_length=300)] = ""
-    text: Annotated[str, Field(max_length=40_000)] = ""
-
-
-class AppDeliveryReport(Contract):
-    """What a computer read from a bot's conversation in the app, newest last (POST /api/v2/runners/me/app-delivery)."""
-
-    app: Literal["grok"] = "grok"
-    messages: list[AppDeliveryMessage] = Field(default_factory=list, max_length=50)
-    error: AppDeliveryError | None = None
-
-
 class BotDefinitionUpdate(Contract):
     private_tasks_default: StrictBool | None = None
     # A new slug: the label people type (@slug) and read. The bot's id, its history and every reference keep as they are.
@@ -2083,9 +2042,6 @@ class BotDefinitionUpdate(Contract):
     review_model: Literal["check", "own"] | None = None
     # `on`: each run's raw provider stream is kept a week for replay fixtures (backend/stream_capture.py); owner only.
     capture_stream: Literal["on", "off"] | None = None
-    # A Grok Bot answered through the Grok app on one of its person's computers; null turns it off
-    # (backend/app_delivery.py). Unset leaves it as it is.
-    app_delivery: AppDelivery | None = None
     # Subscribe to updates: which feeds it hears about as quiet notes (backend/update_feeds.py); empty is none.
     update_subscriptions: list[Literal["templates", "tico"]] | None = Field(default=None, max_length=2)
     expected_revision: int = Field(ge=1)
@@ -2902,8 +2858,8 @@ class Completion(Contract):
     # When the provider said that limit lifts (its own reset time); work resumes then instead of after a default wait.
     limit_resets_at: str | None = Field(default=None, max_length=40)
     retryable: bool = False  # the runtime could not renew its sign-in; the turn never started
-    # The turn gave a shared one-turn login to a waiting turn at its hold cap (runner-rs/src/login_turns.rs): it stopped
-    # at a safe point and its job goes back in the queue to continue, neither answered nor held for review.
+    # The turn gave its place up for an update (runner-rs/src/drain.rs): its job goes back in the queue to continue,
+    # neither answered nor held for review.
     yielded: bool = False
     # The model was at capacity after the turn acted, and the runner kept its thread: the job continues that thread
     # after the capacity hold instead of being held for review (backend/execution.py capacity_continuation).

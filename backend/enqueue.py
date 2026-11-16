@@ -6,8 +6,7 @@ A message to a bot starts a run through a job (`jobs`, id = the message's id) un
 - it is live meeting history (`refs.live.kind` transcript, decision or tool): a person's spoken turns, spoken decisions
   and what a live tool did. A live ask does queue: that is how the text Tico is reached;
 - its bot is run by an external agent (a Hermes profile and the other EXTERNAL_HARNESSES), which reads its inbox
-  itself, unless a registered computer delivers the bot through its platform's desktop app (backend/app_delivery.py):
-  then that computer's runner takes the message as a job.
+  itself.
 
 The bot's state is not read: a paused bot's job waits, since runners claim only active bots' work (execution.claim).
 A hub database without Store's job queue (no `jobs` table) queues nothing.
@@ -30,9 +29,7 @@ def external_bot_sql(recipient):
     """SQL true when the bot `recipient` (an SQL expression holding `bot:<id>`) is reached only through its inbox."""
     return (
         "EXISTS (SELECT 1 FROM bot_settings WHERE bot_id=substr(" + recipient + ",5) AND "
-        "harness IN (" + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") "
-        "AND NOT EXISTS (SELECT 1 FROM runners r WHERE r.id=json_extract(app_delivery,'$.computer') "
-        "AND r.revoked_at IS NULL))"
+        "harness IN (" + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + "))"
     )
 
 

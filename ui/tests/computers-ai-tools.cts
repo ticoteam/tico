@@ -22,16 +22,14 @@ interface Weekly { used_percent: number; resets_at: string; reported_at: string;
 interface RuntimeState { installed: boolean; authenticated: string; rejected_at?: string; rejected_reason?: string; credential_source?: string; account?: Account | undefined; weekly?: Weekly | undefined }
 interface ToolState { name: string; runtime: string; installed: boolean; version: string; managed: boolean; state: string; wanted: boolean; pinned: boolean; update_available: boolean; detail: string }
 interface BotConnection { bot: string; profile: null; source: string; runtime: string; harness: string; signed_in: boolean; problem: string; warning?: string | undefined }
-interface AppDriverApp { installed: boolean; version: string; running: boolean; signed_in: boolean; background_ok: boolean; ready: boolean; state: string; detail: string }
 interface Machine {
   id: string; label: string; owner_id: string; bots: string[]; platform: string; version: string; turn_summary: string;
   turn_counts: {running: number; starting: number; waiting: number; queued: number; waits: unknown[]};
   last_seen_at: string; needed_runtimes: string[]; bot_runtimes: string[]; harness_choices: Record<string, boolean>;
   update: {state: string; label: string; target: string}; inbox_only: boolean;
   readiness: {runtimes: {claude: RuntimeState; codex: RuntimeState; musecode: RuntimeState; cursor: RuntimeState; grok: RuntimeState};
-    harnesses: Record<string, ToolState>; appdriver?: {trusted: boolean; macos: string; detail: string; apps: Record<string, AppDriverApp>} | undefined};
+    harnesses: Record<string, ToolState>};
   profiles: unknown[]; bot_connections: BotConnection[];
-  shared_logins?: {runtime: string; profile: string; display_name: string; count: number; bots: string[]}[] | undefined;
   may_manage?: boolean | undefined;
 }
 // App globals the page defines; the browser flow reads and drives them through page.evaluate.
@@ -343,28 +341,12 @@ interface PageWin { computerClosed?: Promise<void>; presenceDraft?: HTMLTextArea
     assert.equal(await dialog.locator('[data-add-connection]').getAttribute('title'), 'Computer is offline');
     await page.keyboard.press('Escape');
 
-    // Desktop apps (a Mac's app driver), under Versions and updates: only when the computer reports `appdriver`, one row
-    // per app with its state and the driver's detail; still titled on a phone. Bots sharing one ChatGPT sign-in take
-    // turns (backend/views.py shared_logins): each login a line stands for says so, naming the bots this reader may see.
+    // On a phone the computer's turn counts wrap.
     box.last_seen_at = at(-2000);
     await page.evaluate(() => loadSettings());
     await row('box').locator('.machine-name').click();
     await dialog.locator('[data-connection]').first().waitFor();
-    assert.equal(await dialog.locator('.machine-apps').count(), 0, 'no driver, no Desktop apps');
-    assert.equal(await dialog.locator('[data-shared-login]').count(), 0, 'no shared sign-in, no note');
-    box.readiness.appdriver = {trusted: false, macos: '15.1', detail: '', apps: {grok: {installed: true, version: '1.2.0', running: true,
-      signed_in: true, background_ok: false, ready: false, state: 'no_permission', detail: 'Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility'}}};
-    box.shared_logins = [{runtime: 'codex', profile: '', display_name: '', count: 3, bots: ['helper']}];
-    await page.evaluate(() => loadSettings());
-    const apps = dialog.locator('[data-detail-section=versions] [role=table][aria-label="Desktop apps on Team box"]');
-    await apps.waitFor();
-    assert.deepEqual(await apps.locator('[data-machine-app="grok"] [role=cell]').allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())),
-      ['Grok', '1.2.0', 'Needs Accessibility permission Turn on tico-appdriver in System Settings > Privacy & Security > Accessibility']);
-    assert.equal(await dialog.locator('[data-connection="own:codex"] [data-shared-login="codex:"]').innerText(), '3 bots share this sign-in (Helper and 2 more). They take turns: one Codex run at a time.');
-    assert.equal(await dialog.locator('[data-connection="own:claude"] [data-shared-login]').count(), 0);
     await page.setViewportSize({width: 390, height: 844});
-    assert.ok(await apps.locator('[role=columnheader]', {hasText: 'Desktop apps'}).isVisible(), 'titled on a phone');
-    assert.ok(await apps.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'fits a phone');
     assert.equal(await dialog.locator('[data-turn-counts]').innerText(), box.turn_summary);
     assert.ok(await dialog.locator('[data-turn-counts]').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'turn counts wrap on a phone');
     await page.setViewportSize({width: 1440, height: 900});

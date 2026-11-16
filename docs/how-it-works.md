@@ -541,8 +541,7 @@ For example, a failed fallback that did nothing can retry after the reset; a sto
 one ChatGPT sign-in run turns at the same time, just as Claude bots do. This includes every bot on the
 computer's login and separate task lanes of one bot.
 They share the plan's usage allowance; when it runs out, the usage-limit and fallback rules above apply.
-A busy ChatGPT login does not queue another bot's turn or show a login-wait message. Codex has
-`one_turn_per_login = false` in its harness manifest; the optional login queue is dormant.
+A busy ChatGPT login does not queue another bot's turn.
 Tico keeps using the original login in its own home. It never copies a login into another bot's home:
 copies can rotate apart when the provider refreshes the token.
 

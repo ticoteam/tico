@@ -329,7 +329,7 @@ def test_a_late_update_hand_back_keeps_its_saved_pause_and_does_not_use_a_start_
 
 
 def test_a_late_yield_report_without_a_pause_event_uses_the_pause_fallback(api):
-    from backend.login_waits import PAUSED
+    from backend.run_diagnostics import PAUSED
 
     machine, _, a = setup_attempt(api)
     with api.app.state.store.transaction() as c:

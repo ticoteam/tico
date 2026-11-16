@@ -179,7 +179,7 @@ Transitions:
 | open | the attempt's outcome, or `canceled` | the attempt ends (`execution.py`) | job still on this attempt |
 | `uncertain`, `canceled`, `queued` | `completed` | a late result (`settleable`, `settles_late`) | see the operation-identity table |
 | `queued` | `completed` | a person answers before any bot runs (`bot_status_routes.py`) | `AND state='queued'` |
-| open | `canceled` | stop, task closed, duplicate wake, quota or wake presets (`app_delivery.py`, `delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`) | |
+| open | `canceled` | stop, task closed, duplicate wake, quota or wake presets (`delivery.py`, `demo.py`, `chat_goals.py`, `execution.py`) | |
 
 ### attempts.state
 

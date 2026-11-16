@@ -4,7 +4,6 @@ import json
 from fastapi import Request
 from . import (
     agents,
-    app_delivery,
     lifecycle,
     profiles,
     report_managers,
@@ -162,11 +161,7 @@ def register(app, auth, settings, settings_admin, store):
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None
         row["agent"] = external["agent"] if external else None
-        # Delivered through a desktop app (backend/app_delivery.py): where, and online is that computer's.
-        # `app_delivery_app`: the desktop app the bot could be delivered through, for its settings.
-        row["app_delivery"] = app_delivery.view(c, declared) if config and harness else None
-        row["app_delivery_app"] = app_delivery.HARNESS_APP.get(row.get("harness"))
-        if external and not (row["app_delivery"] or {}).get("active"):
+        if external:
             row["online"] = external["online"]
         return row
 

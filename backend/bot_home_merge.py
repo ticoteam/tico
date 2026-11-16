@@ -361,8 +361,6 @@ def _synced(c, bot):
     config = H._json(row["config"], {}) if row else {}
     if not isinstance(config, dict):
         return False
-    if config.get("app_delivery"):
-        return True
     from .harnesses import EXTERNAL_HARNESSES, resolve_harness
     from .external_sync import HARNESSES
 

@@ -6,8 +6,6 @@
       "write": true
     },
     "agent": null,
-    "app_delivery": null,
-    "app_delivery_app": null,
     "assignment": {
       "bot": "ops",
       "generation": 1,

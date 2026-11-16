@@ -842,7 +842,7 @@ function pendingRunText(x: ChatExecution | null | undefined, slug: string | unde
     return {word: 'Queued', mode: 'wait', tip: s?.state === 'running' && s.focus
       ? `${name} is on another run: ${s.focus}` : 'Starts when its computer picks it up'};
   }
-  // Its ChatGPT login is busy with another turn (backend/login_waits.py): waiting, not failed.
+  // Waiting for memory on its computer (backend/views.py conversation_execution): waiting, not failed.
   if (x.waiting && ['leased', 'running'].includes(x.state)) return {word: x.waiting, tip: x.waiting, mode: 'wait'};
   if (x.state === 'leased') return {word: 'Starting', tip: `${name} is starting`, mode: 'run'};
   if (x.state === 'running') return x.label && x.label !== 'Working'

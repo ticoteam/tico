@@ -855,10 +855,7 @@ pub fn unsupported(entry: &Value) -> Vec<String> {
     let runtime = text_of(&c["runtime"]);
     let mut needs = vec![];
     let harness = text_of(&c["harness"]);
-    if !harness.is_empty()
-        && crate::appdriver::delivery(c).is_none()
-        && !crate::harness_tools::is_harness_of(&runtime, &harness)
-    {
+    if !harness.is_empty() && !crate::harness_tools::is_harness_of(&runtime, &harness) {
         needs.push(format!("the {harness} harness"));
     }
     needs
@@ -918,10 +915,7 @@ pub async fn preflight(
         let expected = &entry["config"];
         let runtime = text_of(&expected["runtime"]);
         let caps = crate::harness_tools::caps_of(expected);
-        // A bot delivered through an app needs no repository, runtime or sign-in here; its app's state is the
-        // readiness `appdriver` field, and a turn that cannot reach it fails saying why.
-        let app = crate::appdriver::delivery(expected).is_some();
-        let known = app || crate::harness_tools::runtimes().contains(&runtime);
+        let known = crate::harness_tools::runtimes().contains(&runtime);
         let path = crate::sessions::local_path(config, &bot, expected);
         let requested = if computer_logins {
             String::new()
@@ -960,11 +954,7 @@ pub async fn preflight(
             .cloned()
             .unwrap_or(json!("unknown"));
         let mut problems: Vec<String> = vec![];
-        let repo_problem = if app {
-            None
-        } else {
-            crate::repo_safety::outside_installation(&path).err()
-        };
+        let repo_problem = crate::repo_safety::outside_installation(&path).err();
         if let Some(problem) = &repo_problem {
             problems.push(problem.clone());
         }
@@ -982,7 +972,7 @@ pub async fn preflight(
             ));
         }
         let repository_present = repo_problem.is_none() && crate::instructions::present(&path);
-        if !repository_present && !app && repo_problem.is_none() {
+        if !repository_present && repo_problem.is_none() {
             problems.push(
                 crate::product_files::problem(&bot)
                     .or_else(|| crate::fetchrepo::problem(&bot))
@@ -1022,9 +1012,7 @@ pub async fn preflight(
                 detail
             }
         };
-        if app {
-            // Its app's state stands for install and sign-in (above).
-        } else if runtime.is_empty() {
+        if runtime.is_empty() {
             problems.push(NO_RUNTIME.into());
         } else if !known {
             problems.push("Unsupported runtime".into());

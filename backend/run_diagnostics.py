@@ -144,6 +144,39 @@ def stop_supersedes(stop_requested_at, outcome):
     return bool(stop_requested_at) and outcome != 'completed'
 
 
+# What a run that gave its place up for an update says when the runner's own line is missing.
+PAUSED = "Paused while its computer updated; continues right after it"
+
+
+def paused(c, aid, state, result_json, stop_requested_at):
+    """Why a run paused for an update (runner-rs/src/drain.rs), including a hand-back reported after lease expiry: the
+    runner's `status` `{"yielded": line}` event, else PAUSED when its completion says it yielded."""
+    from .turns import clip
+
+    if state not in ("interrupted", "expired") or stop_supersedes(stop_requested_at, state):
+        return None
+    try:
+        result = json.loads(result_json or "{}") or {}
+    except (TypeError, ValueError):
+        result = {}
+    # A completion can withdraw the earlier pause when its fallback session cannot resume. Without a completion,
+    # the saved event still explains a lease that expired before the runner could hand the turn back.
+    if isinstance(result, dict) and ("yielded" in result or "outcome" in result) and not result.get("yielded"):
+        return None
+    row = c.execute(
+        "SELECT payload FROM attempt_events WHERE attempt_id=? AND kind='status' "
+        "AND json_extract(payload,'$.yielded') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+        (aid,),
+    ).fetchone()
+    try:
+        line = (json.loads(row[0]) if row else {}).get("yielded")
+    except (TypeError, ValueError, AttributeError):
+        line = None
+    if isinstance(line, str) and line.strip():
+        return clip(line, 200)
+    return PAUSED if isinstance(result, dict) and result.get("yielded") else None
+
+
 def reason(c, row: AttemptRow, outcome, summary=''):
     if stop_supersedes(row['stop_requested_at'], outcome):
         from .quarantine_stops import stopped_by
@@ -160,8 +193,6 @@ def reason(c, row: AttemptRow, outcome, summary=''):
     if result.get('text') == RESTART_TEXT:
         return RESTART_TEXT
     # A saved pause event or late yield report explains even an expired lease. Stop above still takes precedence.
-    from .login_waits import paused
-
     yielded = paused(c, row['id'], row['state'], row['result'], row['stop_requested_at'])
     if yielded:
         return scrub(yielded)[:500]

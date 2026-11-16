@@ -16,8 +16,6 @@ type BotEditRow = Employee & {
   turns_at_once?: number | null;
   manages_reports?: boolean;
   browser_exit?: string | null;
-  app_delivery_app?: string | null;
-  app_delivery?: {computer?: string | null; computer_label?: string} | null;
   reasoning_effort?: string | null;
   effort?: string | null;
   update_subscriptions?: string[];
@@ -27,7 +25,6 @@ type BotEditRow = Employee & {
   shared_from?: string | null;
 };
 // A computer as the editor reads it: the settings roster's row plus the fields its rows draw.
-type AppReport = MachineApp;
 type MachineRow = DeviceMachine;
 // The model a new bot starts on: a catalogue row, or the empty fallback.
 type FallbackModel = Partial<SettingsModel & {default_effort?: string; harnesses?: string[]; runtime?: string}>;
@@ -58,7 +55,7 @@ function settingsBotEditorRows(e: BotEditRow) {
     ${settingsTurnsAtOnceRow(e)}
     ${settingsManagesReportsRow(e)}
     ${budgetRowHTML(e)}
-    ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
+    ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
@@ -116,39 +113,6 @@ function settingsManagesReportsRun(box: HTMLInputElement): BotRun {
   const slug = String(box.dataset.botManagesReports), manages_reports = box.checked;
   return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/manages-reports`,
     {manages_reports, expected_revision: rev}))?.revision ?? rev + 1;
-}
-// A synced bot whose platform has a desktop app a Mac's runner drives (backend/app_delivery.py APPS) can be delivered
-// through that app on one of its person's computers instead of waiting for the daily sync. Only that person chooses a
-// computer, one of their own where the app is ready (the rest are listed, disabled, with why); they or an admin turn it
-// off. Everyone else reads the current value. It saves on its own, like the computer.
-function settingsAppDeliveryRow(e: BotEditRow) {
-  // The server names the app a synced bot can be delivered through; none means the bot has no app.
-  const app = e.agent?.synced && e.app_delivery_app;
-  if (!app) return '';
-  const current = e.app_delivery?.computer || '', name = machineAppName(app);
-  const label = (id: string) => SETTINGS_DATA.machines.find(machine => machine.id === id)?.label || e.app_delivery?.computer_label || 'a computer';
-  const mine = !!S.me?.id && e.owner_id === S.me.id;
-  const off = 'Off (daily sync)';
-  if (!mine && !(current && settingsIsAdmin())) {
-    return `<div class="sb-row"><span>Deliver through the app on</span><span data-app-delivery-value="${esc(e.id)}">${current ? `${esc(label(current))} <span class="muted">· ${esc(name)} app</span>` : `<span class="muted">${off}</span>`}</span><span></span></div>`;
-  }
-  const own: MachineRow[] = mine ? SETTINGS_DATA.machines.filter(machine => !machine.revoked_at && machine.owner_id === S.me?.id) : [];
-  const options = own.map(machine => {
-    const report = machine.readiness?.appdriver?.apps?.[app];
-    const why = report?.ready === true ? '' : report ? [machineAppState(report), report.detail].filter(Boolean).join(': ') : `${name} not reported`;
-    // The chosen computer stays selectable even when its app stops being ready, so the select shows it.
-    return `<option value="${esc(machine.id)}" ${machine.id === current ? 'selected' : why ? 'disabled' : ''}>${esc(machine.label)}${why ? ` · ${esc(why)}` : ''}</option>`;
-  });
-  if (current && !own.some(machine => machine.id === current)) options.push(`<option value="${esc(current)}" selected>${esc(label(current))}</option>`);
-  return `<div class="sb-row"><span>Deliver through the app on</span><select class="settings-inline-select" data-bot-app-delivery="${esc(e.id)}" data-app="${esc(app)}" data-current="${esc(current)}" aria-label="Deliver ${esc(e.display_name)} through the ${esc(name)} app on">
-      <option value="" ${current ? '' : 'selected'}>${off}</option>${options.join('')}
-    </select><span></span></div>`;
-}
-function settingsAppDeliveryRun(select: HTMLSelectElement): BotRun {
-  const slug = String(select.dataset.botAppDelivery), chosen = select.value, app = select.dataset.app;
-  // The server refuses (422, with why) a computer that isn't the person's own or where the app isn't ready.
-  return async rev => (await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {
-    app_delivery: chosen ? {computer: chosen, app} : null, expected_revision: rev}))?.revision ?? rev + 1;
 }
 // The slug the server would pick for this name (clients/catalog.py slug_from_name), shown under Advanced.
 function slugFromName(name: string) {
@@ -347,8 +311,6 @@ function settingsEditBot(slug = '', inline = false) {
       if (managesReports) stage('manages', 'manages its reports', managesReports.checked !== (managesReports.dataset.current === 'true') && settingsManagesReportsRun(managesReports));
       const taskEffort = eventElement(event);
       if (taskEffort instanceof HTMLElement && taskEffort.matches('[data-task-effort]')) taskEffort.dataset.touched = '1';
-      const delivery = eventElement(event)?.closest<HTMLSelectElement>('[data-bot-app-delivery]');
-      if (delivery) stage('delivery', 'app delivery', changed(delivery) && settingsAppDeliveryRun(delivery));
       paintPending();
     });
     // A task model picked here changes the Task effort choices: the efforts of the model that would run tasks.
