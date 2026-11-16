@@ -6,9 +6,16 @@ tool, its tokens sealed like any value. `tool_oauth_states` holds a sign-in on i
 PKCE verifier, sealed, for at most STATE_TTL.
 
 `tools` exists on every file by now (20261105220549_tools_and_keys). Every existing tool stays as it is.
+
+An install may still have 20261111145540_website_tools pending, and pending files run in any order: this adds that
+migration's `kind`, `sites` and `central_only` first, with the same definitions, so the columns end in one order
+whichever runs first (that migration skips a column already there).
 """
 
 COLUMNS = (
+    ("kind", "TEXT NOT NULL DEFAULT 'api'"),
+    ("sites", "TEXT"),
+    ("central_only", "INTEGER NOT NULL DEFAULT 0"),
     ("mcp_url", "TEXT NOT NULL DEFAULT ''"),
     ("mcp_transport", "TEXT NOT NULL DEFAULT ''"),
     ("mcp_tools", "TEXT"),
