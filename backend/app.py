@@ -4133,7 +4133,9 @@ def create_app(settings=None):
             # every route's "always a click" rule (`risky`) asks them.
             if H.is_human(principal.actor):
                 lent = {"for": principal.actor, "cited": cited, "run": run}
-                H.DELEGATION.set(lent if via == "botops" else {**lent, "by": agent})
+                if via != "botops":
+                    lent["by"] = agent  # the Tools Owner names itself on what it does for the person
+                H.DELEGATION.set(lent)  # pyright: ignore[reportArgumentType] - typed by its None default
             return replace(
                 principal,
                 via=via,
