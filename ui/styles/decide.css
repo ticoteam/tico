@@ -354,6 +354,9 @@ button.dc-jev{cursor:pointer}
   /* An ask in the task's chat: the task folds to its title (Read the task opens it), the chat and its row take the rest */
   .dc-main:has(>.dc-side>.dc-chat){display:flex;flex-direction:column;overflow:hidden;padding-bottom:0}
   .decide.dc-chatmode:not(.dc-unfold) .dc-thing{display:none}
+  /* a live browser the ask shows (website tools) is what the person acts on: it stays, above the chat, alone */
+  .decide.dc-chatmode:not(.dc-unfold) .dc-thing:has(>.dc-browser){display:flex;order:0;flex:none;padding:8px 16px}
+  .decide.dc-chatmode:not(.dc-unfold) .dc-thing:has(>.dc-browser)>:not(.dc-browser){display:none}
   .decide.dc-chatmode.dc-unfold .dc-side>.dc-chat{display:none}
   .decide.dc-chatmode .dc-side{order:1;flex:1 1 auto;border-top:0}
   /* Read the task: the fold, the task, then the row, still at the bottom */
