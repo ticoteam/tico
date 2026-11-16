@@ -1,3 +1,4 @@
+# pyright: strict
 """Remote MCP servers as Tools (docs/credential-vault.md#mcp-servers): Tools › Add › MCP server.
 
 An MCP tool is an API tool (backend/api_tools.py) with `mcp_url`: the server's address. Its key is reached two ways:
@@ -35,7 +36,8 @@ import re
 import secrets
 import threading
 import time
-from urllib.parse import quote, urlencode, urlsplit
+from typing import Any, cast
+from urllib.parse import SplitResult, quote, urlencode, urlsplit
 
 import httpx
 from fastapi import Request
@@ -43,9 +45,29 @@ from fastapi.responses import RedirectResponse
 from pydantic import Field, SecretStr
 
 from . import egress, mcp_client, outbound_tls
-from . import tool_services as TS
+from . import store as _store
+from . import tool_services as _tool_services
 from .models import Contract
-from .store import H, Problem, encode
+from .store import Problem, encode
+
+Json = dict[str, Any]
+# Untyped helpers, held as Any so this strict module's own types stay checked.
+H: Any = _store.H
+TS: Any = _tool_services
+_egress: Any = egress  # its check and address_for, untyped
+
+
+def _api() -> Any:
+    from . import api_tools
+
+    return api_tools
+
+
+def _auth() -> Any:
+    from . import auth
+
+    return auth
+
 
 log = logging.getLogger(__name__)
 
@@ -66,28 +88,35 @@ TRANSPORT = None
 class Failed(Exception):
     """No usable answer: `reason` is fixed words, never the provider's text or a key."""
 
-    def __init__(self, reason):
+    def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
 
 
 class SignInNeeded(Failed):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(SIGN_IN_AGAIN)
 
 
 # ---- sending
 
 
-def send(method, url, *, headers=None, json_body=None, data=None):
+def send(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    json_body: Json | None = None,
+    data: dict[str, str] | None = None,
+) -> httpx.Response:
     """One request to an MCP or OAuth server: only to a public https address, pinned to the address it resolved to, no
     redirect followed, no proxy from the environment, the answer read whole up to MAX_ANSWER. egress.Blocked for an
     address Tico does not send to; Failed when there is no answer."""
-    parts = egress.check(url)
-    address = egress.address_for(parts, budget=TIMEOUT)
+    parts: SplitResult = _egress.check(url)
+    address: str = _egress.address_for(parts, budget=TIMEOUT)
     pinned = httpx.URL(url).copy_with(host=address)
-    host = parts.hostname + (f":{parts.port}" if parts.port else "")
-    sent = {"User-Agent": "Tico", **(headers or {}), "Host": host}
+    host = str(parts.hostname) + (f":{parts.port}" if parts.port else "")
+    sent: dict[str, str] = {"User-Agent": "Tico", **(headers or {}), "Host": host}
     try:
         with httpx.Client(
             transport=TRANSPORT,
@@ -116,15 +145,25 @@ def send(method, url, *, headers=None, json_body=None, data=None):
         raise Failed("no answer") from None
 
 
-def _json(response):
+def _obj(value: object) -> Json:
+    """`value` when it is a JSON object, else {}."""
+    return cast(Json, value) if isinstance(value, dict) else {}
+
+
+def _strs(value: object) -> list[str]:
+    """The strings of `value` when it is a JSON list, else []."""
+    return [v for v in cast(list[object], value) if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _json(response: httpx.Response) -> Json | None:
     try:
-        value = response.json()
+        value: object = response.json()
     except ValueError:
         return None
-    return value if isinstance(value, dict) else None
+    return cast(Json, value) if isinstance(value, dict) else None
 
 
-def _get_json(url):
+def _get_json(url: str) -> Json | None:
     try:
         response = send("GET", url, headers={"Accept": "application/json"})
     except (egress.Blocked, Failed):
@@ -135,11 +174,11 @@ def _get_json(url):
 # ---- addresses and discovery
 
 
-def clean_url(url):
+def clean_url(url: str) -> str:
     """The server's address as Tools keeps it: https to a public name, no sign-in, query or fragment. 422 otherwise."""
     url = str(url or "").strip()
     try:
-        parts = egress.check(url)
+        parts: SplitResult = _egress.check(url)
     except egress.Blocked as exc:
         raise Problem("url", f"Address: {exc.reason}", 422) from None
     if parts.scheme != "https":
@@ -156,32 +195,32 @@ def clean_url(url):
     return url
 
 
-def origin(url):
+def origin(url: str) -> str:
     parts = urlsplit(url)
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def _well_known(url, name):
+def _well_known(url: str, name: str) -> list[str]:
     """RFC 8414 / 9728 places for `name` under `url`: with the path inserted after the well-known part, then at the root."""
     path = urlsplit(url).path.rstrip("/")
     root = origin(url) + "/.well-known/" + name
     return [root + path, root] if path else [root]
 
 
-def _https(value):
+def _https(value: object) -> bool:
     if not isinstance(value, str) or len(value) > 1000:
         return False
     try:
-        return egress.check(value).scheme == "https"
+        return _egress.check(value).scheme == "https"
     except egress.Blocked:
         return False
 
 
-def discover(url, www_authenticate=""):
+def discover(url: str, www_authenticate: str = "") -> Json | None:
     """The server's OAuth setup, or None when it offers none: {issuer, authorization_endpoint, token_endpoint,
     registration_endpoint, scope, resource, auth_methods}."""
     told = mcp_client.challenge(www_authenticate)
-    resource = None
+    resource: Json | None = None
     for candidate in ([told["resource_metadata"]] if _https(told.get("resource_metadata")) else []) + _well_known(
         url, "oauth-protected-resource"
     ):
@@ -189,7 +228,7 @@ def discover(url, www_authenticate=""):
         if found and isinstance(found.get("authorization_servers"), list) and found["authorization_servers"]:
             resource = found
             break
-    issuers = [s for s in resource["authorization_servers"] if _https(s)][:3] if resource else [origin(url)]
+    issuers = [s for s in _strs(resource["authorization_servers"]) if _https(s)][:3] if resource else [origin(url)]
     for issuer in issuers:
         places = _well_known(issuer, "oauth-authorization-server") + _well_known(issuer, "openid-configuration")
         places.append(issuer.rstrip("/") + "/.well-known/openid-configuration")
@@ -197,13 +236,11 @@ def discover(url, www_authenticate=""):
             meta = _get_json(place)
             if not meta or not _https(meta.get("authorization_endpoint")) or not _https(meta.get("token_endpoint")):
                 continue
-            methods = meta.get("code_challenge_methods_supported")
-            if isinstance(methods, list) and methods and "S256" not in methods:
+            methods = _strs(meta.get("code_challenge_methods_supported"))
+            if methods and "S256" not in methods:
                 continue  # PKCE with S256 is required
-            scopes = told.get("scope") or " ".join(
-                s for s in ((resource or {}).get("scopes_supported") or []) if isinstance(s, str)
-            )
-            auth_methods = meta.get("token_endpoint_auth_methods_supported")
+            scopes = told.get("scope") or " ".join(_strs((resource or {}).get("scopes_supported")))
+            auth_methods = _strs(meta.get("token_endpoint_auth_methods_supported"))
             return {
                 "issuer": meta.get("issuer") if isinstance(meta.get("issuer"), str) else issuer,
                 "authorization_endpoint": meta["authorization_endpoint"],
@@ -213,14 +250,12 @@ def discover(url, www_authenticate=""):
                 else "",
                 "scope": scopes[:500],
                 "resource": (resource or {}).get("resource") if _https((resource or {}).get("resource")) else url,
-                "auth_methods": [m for m in auth_methods if isinstance(m, str)][:10]
-                if isinstance(auth_methods, list)
-                else [],
+                "auth_methods": auth_methods[:10],
             }
     return None
 
 
-def probe(url):
+def probe(url: str) -> tuple[Json, Json | None]:
     """(what a person is offered, the OAuth setup or None) for a server address: {url, transport, server, open, token,
     oauth, dcr}. Network: call it outside a transaction."""
     url = clean_url(url)
@@ -233,16 +268,24 @@ def probe(url):
         raise Problem(
             "mcp_unreachable", f"No answer from that address ({exc.reason}). Check it and try again", 422
         ) from None
-    found = {"url": url, "transport": "http", "server": "", "open": False, "token": True, "oauth": False, "dcr": False}
+    found: Json = {
+        "url": url,
+        "transport": "http",
+        "server": "",
+        "open": False,
+        "token": True,
+        "oauth": False,
+        "dcr": False,
+    }
     if 200 <= first.status_code < 300:
         try:
             answer = mcp_client.message(first.text, first.headers.get("content-type", ""), hello["id"])
         except mcp_client.AnswerError:
             answer = None
-        info = ((answer or {}).get("result") or {}).get("serverInfo") if isinstance(answer, dict) else None
-        if not isinstance(answer, dict) or "result" not in answer:
+        if answer is None or "result" not in answer:
             raise Problem("mcp_answer", "That address answered, but not as an MCP server", 422)
-        found.update(open=True, server=str((info or {}).get("name") or "")[:80])
+        info = _obj(_obj(answer["result"]).get("serverInfo"))
+        found.update(open=True, server=str(info.get("name") or "")[:80])
         return found, None
     if first.status_code not in (401, 403):
         raise Problem("mcp_answer", f"That address answered {first.status_code}, not as an MCP server", 422)
@@ -255,37 +298,37 @@ def probe(url):
 # ---- the tool's sign-in and its tokens
 
 
-def env_for(tool_id):
+def env_for(tool_id: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", tool_id.upper()).strip("_") + "_MCP_TOKEN"
 
 
-def callback_url(settings):
+def callback_url(settings: Any) -> str:
     return settings.public_url.rstrip("/") + CALLBACK_PATH
 
 
-def _secret_context(tool_id):
+def _secret_context(tool_id: str) -> str:
     return "tools.mcp_client_secret:" + tool_id
 
 
-def _meta(tool):
+def _meta(tool: Any) -> Json | None:
     try:
-        value = json.loads(tool["mcp_oauth"] or "null")
+        value: object = json.loads(tool["mcp_oauth"] or "null")
     except (TypeError, ValueError):
         return None
-    return value if isinstance(value, dict) else None
+    return cast(Json, value) if isinstance(value, dict) else None
 
 
-def _client_secret(c, vault, tool):
+def _client_secret(c: Any, vault: Any, tool: Any) -> str:
     sealed = tool["mcp_client_secret"]
     return vault.cipher.unseal(c, _secret_context(tool["id"]), sealed) if sealed else ""
 
 
-def _token_request(meta, secret, data):
+def _token_request(meta: Json, secret: str, data: dict[str, str]) -> httpx.Response:
     """POST to the token endpoint with the client's own authentication: none (PKCE alone), else the client secret as
     HTTP Basic, or in the body when the server takes only that."""
     data = dict(data)
     headers = {"Accept": "application/json"}
-    methods = meta.get("auth_methods") or []
+    methods = _strs(meta.get("auth_methods"))
     if secret and not ("client_secret_post" in methods and "client_secret_basic" not in methods):
         pair = quote(meta["client_id"], safe="") + ":" + quote(secret, safe="")
         headers["Authorization"] = "Basic " + base64.b64encode(pair.encode()).decode()
@@ -298,7 +341,7 @@ def _token_request(meta, secret, data):
     return send("POST", meta["token_endpoint"], headers=headers, data=data)
 
 
-def _record_failure(store, tool_id, credential_id, code, detail):
+def _record_failure(store: Any, tool_id: str, credential_id: str | None, code: int | None, detail: str) -> None:
     with store.transaction() as c:
         c.execute(
             "INSERT INTO tool_checks(id,tool_id,credential_id,ok,status_code,detail,checked_at) VALUES(?,?,?,?,?,?,?)",
@@ -306,16 +349,16 @@ def _record_failure(store, tool_id, credential_id, code, detail):
         )
 
 
-_locks = {}
+_locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
 
-def _lock(credential_id):
+def _lock(credential_id: str) -> threading.Lock:
     with _locks_guard:
         return _locks.setdefault(credential_id, threading.Lock())
 
 
-def access_token(store, vault, credential_id, force=False):
+def access_token(store: Any, vault: Any, credential_id: str, force: bool = False) -> str:
     """The sign-in's current access token, refreshed first when it ends within REFRESH_EARLY seconds (or `force`).
     One refresh at a time per sign-in. SignInNeeded when the server will not refresh it (and a failed check says
     Sign in again); Failed when it did not answer. Blocking: call it off the event loop."""
@@ -355,7 +398,7 @@ def access_token(store, vault, credential_id, force=False):
         return new["access_token"]
 
 
-def store_sign_in(c, vault, tool, actor, tokens):
+def store_sign_in(c: Any, vault: Any, tool: Any, actor: str, tokens: Json) -> str:
     """Keep a finished sign-in as the tool's Read and write key (kind `oauth`), replacing the tokens of an earlier one so
     its grants stay. The credential id."""
     existing = c.execute("SELECT * FROM credentials WHERE tool_id=? AND kind=?", (tool["id"], OAUTH)).fetchone()
@@ -402,7 +445,9 @@ def store_sign_in(c, vault, tool, actor, tokens):
 # ---- checks
 
 
-def _rpc(tool, token, session, method, params=None, notification=False):
+def _rpc(
+    tool: Any, token: str, session: dict[str, str], method: str, params: Json | None = None, notification: bool = False
+) -> tuple[httpx.Response, Json | None]:
     body = mcp_client.rpc(method, params, notification)
     scheme = tool["auth_scheme"] or "bearer"
     response = send("POST", tool["mcp_url"], headers=mcp_client.headers(token, session, scheme), json_body=body)
@@ -417,9 +462,9 @@ def _rpc(tool, token, session, method, params=None, notification=False):
     return response, answer
 
 
-def list_tools(tool, token):
+def list_tools(tool: Any, token: str) -> tuple[tuple[bool, int | None, str], list[Json] | None]:
     """((ok, status_code, detail), [{name, read_only}] or None) for one key: initialize, then every page of tools/list."""
-    session = {}
+    session: dict[str, str] = {}
     try:
         response, answer = _rpc(tool, token, session, "initialize", mcp_client.initialize("tico-check")["params"])
         code = response.status_code
@@ -427,25 +472,30 @@ def list_tools(tool, token):
             return (False, code, "Key rejected"), None
         if code >= 300:
             return (False, code, f"Check failed: {code}"), None
-        if not isinstance(answer, dict) or not isinstance(answer.get("result"), dict):
+        if answer is None or not isinstance(answer.get("result"), dict):
             return (False, code, "Check failed: not an MCP answer"), None
-        version = answer["result"].get("protocolVersion")
+        version = _obj(answer["result"]).get("protocolVersion")
         if isinstance(version, str) and len(version) < 40:
             session["version"] = version
         _rpc(tool, token, session, "notifications/initialized", notification=True)
-        names, cursor = [], None
+        names: list[Json] = []
+        cursor = ""
         for _ in range(LIST_PAGES):
             response, answer = _rpc(tool, token, session, "tools/list", {"cursor": cursor} if cursor else {})
-            result = (answer or {}).get("result") if isinstance(answer, dict) else None
+            result: object = (answer or {}).get("result")
             if response.status_code >= 300 or not isinstance(result, dict):
                 return (False, response.status_code, "Check failed: tools/list"), None
-            for item in result.get("tools") or []:
-                if isinstance(item, dict) and isinstance(item.get("name"), str) and len(names) < NAMES_MAX:
-                    hint = (item.get("annotations") or {}).get("readOnlyHint") if isinstance(item, dict) else None
-                    names.append({"name": item["name"][:200], "read_only": hint is True})
-            cursor = result.get("nextCursor")
-            if not isinstance(cursor, str) or not cursor:
+            page = cast(Json, result)
+            for item in cast(list[object], page.get("tools") or []):
+                entry = _obj(item)
+                name = entry.get("name")
+                if isinstance(name, str) and len(names) < NAMES_MAX:
+                    hint = _obj(entry.get("annotations")).get("readOnlyHint")
+                    names.append({"name": name[:200], "read_only": hint is True})
+            following = page.get("nextCursor")
+            if not isinstance(following, str) or not following:
                 break
+            cursor = following
         return (True, 200, "Working"), names
     except egress.Blocked:
         return (False, None, "Check failed: address refused"), None
@@ -453,7 +503,7 @@ def list_tools(tool, token):
         return (False, None, "Check failed: " + exc.reason), None
 
 
-def check(store, vault, tool_id):
+def check(store: Any, vault: Any, tool_id: str) -> list[Json]:
     """api_tools.check_tool for an MCP tool: initialize and tools/list with each stored key (a sign-in's access token,
     refreshed when needed); a tool_checks row each, worst first, and the tools it found on the tool."""
     with store.transaction() as c:
@@ -470,7 +520,8 @@ def check(store, vault, tool_id):
             + f" in Tools > {tool['name']}",
             409,
         )
-    results, listed = [], None
+    results: list[tuple[Any, bool, int | None, str]] = []
+    listed: list[Json] | None = None
     for key, secret in stored:
         if secret is None:
             try:
@@ -483,10 +534,10 @@ def check(store, vault, tool_id):
             listed = names
         results.append((key, ok, code, text))
     stored = secret = None  # the values leave scope before anything is written
-    rows = []
+    rows: list[Json] = []
     with store.transaction() as c:
         for key, ok, code, text in results:
-            row = {
+            row: Json = {
                 "id": H.new_id(),
                 "tool_id": tool_id,
                 "credential_id": key["id"],
@@ -512,10 +563,10 @@ def check(store, vault, tool_id):
     return rows
 
 
-def check_soon(store, vault, tool_id):
+def check_soon(store: Any, vault: Any, tool_id: str) -> threading.Thread:
     """A check on a thread of its own (after a sign-in): the person's page is not held for it."""
 
-    def run():
+    def run() -> None:
         try:
             check(store, vault, tool_id)
         except Exception as exc:  # noqa: BLE001 - a failed first check shows as the tool's status, never an error page
@@ -529,25 +580,25 @@ def check_soon(store, vault, tool_id):
 # ---- what pages and runs see
 
 
-def view(c, tool, keys):
+def view(c: Any, tool: Any, keys: list[Any]) -> Json | None:
     """The MCP part of a tool's page, or None for an API tool: its address, how it signs in, who signed in, and the
     tools its last check found (names, and how many are read-only). Never a token."""
     if not tool["mcp_url"]:
         return None
     try:
-        listed = json.loads(tool["mcp_tools"] or "null") or {}
+        listed = _obj(json.loads(tool["mcp_tools"] or "null"))
     except ValueError:
         listed = {}
     meta = _meta(tool)
     sign_in = next((k for k in keys if k["kind"] == OAUTH), None)
-    names = listed.get("names") or []
+    names = _strs(listed.get("names"))
     return {
         "url": tool["mcp_url"],
         "transport": tool["mcp_transport"] or "http",
         "auth": "oauth" if meta else "token",
         "header": tool["auth_scheme"][7:] if (tool["auth_scheme"] or "").startswith("header:") else "Authorization",
         "tools": len(names) if listed else None,
-        "read_only": len(listed.get("read_only") or []),
+        "read_only": len(_strs(listed.get("read_only"))),
         "names": names[:200],
         "listed_at": listed.get("listed_at"),
         "signed_in_by": sign_in["updated_by"] if sign_in else None,
@@ -556,11 +607,11 @@ def view(c, tool, keys):
     }
 
 
-def runtime_servers(c, values):
+def runtime_servers(c: Any, values: list[Json]) -> list[Json]:
     """The MCP servers a run gets for its held keys (`values`, credential-runtime's items): one per key whose tool has an
     MCP address. A proxied key's server is under the tool's proxy address; a computer key's is the server's own, and a
     sign-in never goes to a computer."""
-    out = []
+    out: list[Json] = []
     for item in values:
         if not item.get("env"):
             continue
@@ -571,9 +622,9 @@ def runtime_servers(c, values):
         ).fetchone()
         if row is None:
             continue
-        path = urlsplit(row["mcp_url"]).path or "/"
+        path = urlsplit(str(row["mcp_url"])).path or "/"
         if item.get("proxy_url"):
-            url, proxied = item["proxy_url"].rstrip("/") + path, True
+            url, proxied = str(item["proxy_url"]).rstrip("/") + path, True
         elif row["key_kind"] == OAUTH:
             continue
         else:
@@ -617,19 +668,18 @@ class McpCreate(Contract):
     client_secret: SecretStr | None = Field(default=None, min_length=1, max_length=2000)
 
 
-def create(c, who, vault, body, found, meta):
+def create(c: Any, who: Any, vault: Any, body: McpCreate, found: Json, meta: Json | None) -> Json:
     """The tool, on the proxy, with its key when it is a token. An OAuth tool's sign-in comes after (`start`)."""
-    from . import api_tools
-
+    api_tools = _api()
     api_tools.require_admin(c, who, vault.admins)
     name = body.name.strip()
     tid = api_tools._unique_id(c, TS.slug(name))
     service = TS.match(name=name) or ""
     header = body.header.strip()
     scheme = "bearer" if not header or header.lower() == "authorization" else "header:" + header
-    oauth = None
+    oauth: Json | None = None
     if body.auth == "oauth":
-        oauth = dict(meta) | (
+        oauth = dict(meta or {}) | (
             {"client_id": body.client_id.strip(), "registered": False} if body.client_id.strip() else {}
         )
     now = H.now()
@@ -665,7 +715,7 @@ def create(c, who, vault, body, found, meta):
     return api_tools._tool_view(api_tools.tool_row(c, tid)) | {"mcp": view(c, api_tools.tool_row(c, tid), [])}
 
 
-def register(store, vault, settings, tool):
+def register(store: Any, vault: Any, settings: Any, tool: Any) -> Json:
     """The client Tico signs in to this tool's server as, registered (RFC 7591) on first use and kept on the tool. A
     server with no registration endpoint needs the client id a person gave."""
     meta = _meta(tool) or {}
@@ -705,10 +755,11 @@ def register(store, vault, settings, tool):
     return meta
 
 
-def start(store, vault, settings, who, tool_id):
+def start(store: Any, vault: Any, settings: Any, who: Any, tool_id: str) -> dict[str, str]:
     """{authorize_url}: where the person signs in. The state and PKCE verifier wait here, sealed, for STATE_TTL."""
-    from . import api_tools
-    from .auth import validate_identity
+    validate_identity: Any = _auth().validate_identity
+
+    api_tools = _api()
 
     with store.read() as c:
         validate_identity(c, who)
@@ -741,7 +792,7 @@ def start(store, vault, settings, who, tool_id):
     return {"authorize_url": endpoint + ("&" if "?" in endpoint else "?") + urlencode(query)}
 
 
-def finish(store, vault, settings, code, state, error=""):
+def finish(store: Any, vault: Any, settings: Any, code: str, state: str, error: str = "") -> str | None:
     """The sign-in server's return: the state taken (once), the code exchanged for tokens with its verifier, the tokens
     kept on the tool. The tool's id, or None when the state is unknown or too old."""
     sid = hashlib.sha256(str(state or "").encode()).hexdigest()
@@ -787,12 +838,14 @@ def finish(store, vault, settings, code, state, error=""):
     return tool["id"]
 
 
-def install(app, store):
-    vault = lambda: app.state.vault  # a test swaps its cipher after start
+def install(app: Any, store: Any) -> None:
+    def vault() -> Any:  # read at each call: a test swaps its cipher after start
+        return app.state.vault
 
-    def admin(request):
-        from . import api_tools
-        from .auth import validate_identity
+    def admin(request: Request) -> Any:
+        validate_identity: Any = _auth().validate_identity
+
+        api_tools = _api()
 
         who = request.state.identity
         with store.read() as c:
@@ -801,7 +854,7 @@ def install(app, store):
         return who
 
     @app.post("/api/v2/mcp-tools/probe")
-    def probe_mcp_tool(request: Request, body: McpProbe):
+    def probe_mcp_tool(request: Request, body: McpProbe) -> Json:
         """What a remote MCP server offers: a token, an OAuth sign-in (with or without dynamic registration), or nothing
         to sign in with. Credential administrators only; the server is asked from here, never from the browser."""
         admin(request)
@@ -809,9 +862,9 @@ def install(app, store):
         return found
 
     @app.post("/api/v2/mcp-tools")
-    def create_mcp_tool(request: Request, body: McpCreate):
+    def create_mcp_tool(request: Request, body: McpCreate) -> Json:
         """Add a remote MCP server as a tool: with a token (checked at once), or ready for its OAuth sign-in."""
-        from .api_tools import _Receipt
+        receipt: Any = _api()._Receipt
 
         who = admin(request)
         found, meta = probe(body.url)
@@ -826,13 +879,20 @@ def install(app, store):
                 f"address {callback_url(store.settings)}",
                 422,
             )
+
+        def nothing(c: Any, w: Any) -> None:  # create() checks the caller itself
+            return None
+
+        def made_by(c: Any) -> Json:
+            return create(c, who, vault(), body, found, meta)
+
         made = vault().change(
             who,
             request.url.path,
             request.headers.get("idempotency-key"),
-            _Receipt(body),
-            lambda c, w: None,
-            lambda c: create(c, who, vault(), body, found, meta),
+            receipt(body),
+            nothing,
+            made_by,
         )
         if body.auth == "token":
             try:
@@ -842,12 +902,12 @@ def install(app, store):
         return made
 
     @app.post("/api/v2/api-tools/{tool_id}/sign-in")
-    def start_mcp_sign_in(request: Request, tool_id: str):
+    def start_mcp_sign_in(request: Request, tool_id: str) -> dict[str, str]:
         """Start (or redo) an MCP tool's OAuth sign-in: {authorize_url}, where the person signs in."""
         return start(store, vault(), store.settings, request.state.identity, tool_id)
 
     @app.get(CALLBACK_PATH, include_in_schema=False)
-    def finish_mcp_sign_in(code: str = "", state: str = "", error: str = ""):
+    def finish_mcp_sign_in(code: str = "", state: str = "", error: str = "") -> RedirectResponse:
         """The sign-in server sends the browser back here. The state, made for one sign-in, is the only right to it."""
         tool_id = finish(store, vault(), store.settings, code[:4000], state[:200], error[:200])
         if tool_id is None:
