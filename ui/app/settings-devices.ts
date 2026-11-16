@@ -2,21 +2,14 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// What this file reads on a bot row beyond Employee: its external agent and the desktop app it is delivered through.
+// What this file reads on a bot row beyond Employee: its external agent.
 interface DeviceAgent extends BotAgent {
   harness?: string;
   profile?: string;
   detail?: string;
 }
-interface DeviceAppDelivery {
-  computer?: string | null;
-  computer_label?: string;
-  app_label?: string;
-  app?: string;
-}
 interface DeviceBot extends Employee {
   agent?: DeviceAgent | null;
-  app_delivery?: DeviceAppDelivery | null;
 }
 // POST /v2/bots/<bot>/agent-credential: the token, shown once, and how the profile installs it.
 interface AgentSetup {
@@ -70,13 +63,6 @@ interface MachineKey {
   name?: string;
   source: string;
 }
-interface MachineApp {
-  ready?: boolean;
-  state?: string;
-  installed?: boolean;
-  version?: string;
-  detail?: string;
-}
 interface MachineUpdate {
   release?: string;
   kind?: string;
@@ -88,7 +74,6 @@ interface MachineUpdate {
 // The readiness fields this file reads (settings.ts SettingsMachine.readiness carries them).
 interface DeviceReadiness {
   runtimes?: Record<string, {account?: MachineAccount | null}>;
-  appdriver?: {apps?: Record<string, MachineApp>} | null;
   bots?: Record<string, {ready?: boolean}>;
 }
 // One computer: what this file and the pop-up (computer-detail.ts DetailMachine) read from it.
@@ -102,7 +87,6 @@ interface DeviceMachine extends SettingsMachine {
   key_cleared?: string[];
   keys?: Record<string, {preview?: string}>;
   shared_keys?: Record<string, {preview?: string}>;
-  shared_logins?: {runtime: string; profile?: string; bots?: string[]; count: number}[];
   turn_counts?: Record<string, number>;
   turn_limit?: number | null | undefined;
   bots?: string[];
@@ -127,17 +111,11 @@ function settingsAgentCell(e: DeviceBot) {
   const name = agentKind(a);
   const manage = settingsCanManageBot(e);
   if (a.synced) return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
-    <span class="settings-cell-note">${esc(a.last_seen_at ? `synced ${agoSaid(a.last_seen_at)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span>${settingsAppDeliveryNote(e)}</div>`;
+    <span class="settings-cell-note">${esc(a.last_seen_at ? `synced ${agoSaid(a.last_seen_at)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span></div>`;
   const seen = a.last_seen_at ? `last seen ${agoSaid(a.last_seen_at)}` : a.credential ? 'credential issued · no heartbeat yet' : 'no credential yet';
   return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
     <span class="settings-cell-note">${esc(seen)}</span>
     ${manage ? `<span class="settings-agent-actions">${agentPairButton(e)}<button class="ghost" type="button" data-agent-credential="${esc(e.id)}">${a.credential ? 'Rotate credential' : 'Create credential'}</button>${a.credential ? `<button class="ghost" type="button" data-agent-revoke="${esc(e.id)}">Revoke</button>` : ''}</span>` : ''}</div>`;
-}
-// Where a synced bot's messages go when it is delivered through its desktop app (settings-bot-editor.js).
-function settingsAppDeliveryNote(e: DeviceBot) {
-  const d = e.app_delivery; if (!d?.computer) return '';
-  const where = SETTINGS_DATA.machines.find(machine => machine.id === d.computer)?.label || d.computer_label || 'a computer';
-  return `<span class="settings-cell-note" data-app-delivery-note>through the ${esc(d.app_label || machineAppName(d.app))} app on ${esc(where)}</span>`;
 }
 // Pair: the code a Hermes profile printed, typed here; approving hands the profile its credential (backend/agents.py).
 const agentPairButton = (e: DeviceBot) => ['hermes', 'openclaw'].includes(String(e.agent?.harness)) ? `<button class="ghost" type="button" data-agent-pair="${esc(e.id)}">Pair</button>` : '';
@@ -461,36 +439,6 @@ const machineKeyActions = (machine: DeviceMachine, online: boolean, runtime: str
   runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '')
   + (signedIn && key ? window.TicoModelLogin?.toSubscriptionHTML({runnerId: machine.id, runtime, machine: machine.label, online,
     platform: machine.platform || ''}) || '' : '');
-// A sign-in several of the computer's bots run on (`shared_logins`, backend/views.py shared_logins), for a harness whose
-// login serves one run at a time (`one_turn_per_login`): those bots take turns, so it says so beside that login.
-function machineSharedLoginHTML(machine: DeviceMachine | null | undefined, runtime: string, profile = '') {
-  const row = (machine?.shared_logins || []).find(r => r.runtime === runtime && (r.profile || '') === profile);
-  if (!row) return '';
-  const names = (row.bots || []).map(settingsBotName), more = row.count - names.length;
-  const who = names.length ? ` (${names.join(', ')}${more > 0 ? ` and ${more} more` : ''})` : '';
-  return `<span class="muted machine-shared-login" data-shared-login="${esc(runtime)}:${esc(profile)}">${row.count} bots share this sign-in${esc(who)}. They take turns: one ${esc(harnessWords(runtime))} run at a time.</span>`;
-}
-// Desktop apps the computer's app driver operates for synced bots (readiness `appdriver`, a Mac's native runner):
-// one row per app with its state and the driver's own detail, such as which System Settings entry to turn on. A
-// computer without a driver reports no `appdriver`, so it shows nothing here.
-const MACHINE_APP_STATES: Record<string, string> = {no_permission: 'Needs Accessibility permission', not_signed_in: 'Not signed in',
-  not_installed: 'Not installed', needs_foreground: 'Can\'t work in the background', ui_changed: 'Layout changed',
-  no_driver: 'Driver not installed', error: 'Problem'};
-const machineAppName = (id: unknown) => String(id).replace(/^./, c => c.toUpperCase());
-// `ready` is what the server checks before it delivers through the app; a state it does not know reads Problem.
-const machineAppState = (app: MachineApp | null | undefined) => app?.ready === true ? 'Ready' : MACHINE_APP_STATES[String(app?.state)] || 'Problem';
-function machineAppsHtml(machine: DeviceMachine) {
-  const driver = machine.readiness?.appdriver;
-  if (!driver || typeof driver !== 'object') return '';
-  const apps = Object.entries(driver.apps || {});
-  const rows = apps.map(([id, app]) => `<div class="machine-tool" role="row" data-machine-app="${esc(id)}">
-      <span role="cell" class="machine-tool-name">${esc(machineAppName(id))}</span>
-      <span role="cell" class="machine-tool-version"${app.version ? ` title="${esc(app.version)}"` : ''}>${app.installed ? esc(app.version || 'Installed') : '<span class="muted">Not installed</span>'}</span>
-      <span role="cell" class="machine-tool-signin"><span class="pill ${app.ready === true ? 'ok' : 'fail'}" data-app-state="${esc(app.ready === true ? 'ready' : app.state || 'error')}">${esc(machineAppState(app))}</span>${app.detail ? `<span class="muted machine-app-detail">${esc(app.detail)}</span>` : ''}</span></div>`).join('');
-  if (!rows) return '';
-  return `<div class="machine-tools machine-apps" role="table" aria-label="Desktop apps on ${esc(machine.label)}"><div class="machine-tool machine-tool-head" role="row">
-    <span role="columnheader">Desktop apps</span><span role="columnheader">Installed</span><span role="columnheader">State</span></div>${rows}</div>`;
-}
 // The row's sign that the screen is on: a link to it for whoever may open it.
 function machineScreenHTML(machine: DeviceMachine) {
   if (!machine.screen || machine.screen === 'off' || machine.revoked_at) return '';

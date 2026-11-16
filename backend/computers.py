@@ -6,16 +6,13 @@ UNASSIGNED_OFFLINE_RETIRE_SECONDS = 24 * 60 * 60
 
 
 def revoke(c, actor, runner_id, *, reason=None, at=None):
-    """Keep the audit record and remove the registration and its delivery settings."""
-    from . import app_delivery
-
+    """Keep the audit record and remove the registration."""
     c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (at or H.now(), runner_id))
     c.execute(
         "DELETE FROM registry_metadata WHERE key IN (?,?)",
         ("computer-repositories:" + runner_id, "computer-enrolled-as:" + runner_id),
     )
     c.execute("DELETE FROM registry_metadata WHERE key='browser-host' AND value=?", (runner_id,))
-    app_delivery.runner_revoked(c, actor, runner_id)
     H.event(c, actor, "runner.revoked", runner_id, {"reason": reason} if reason else None)
 
 
@@ -83,7 +80,6 @@ def sweep(store, at):
                 "WHERE j.key IN ('signed_in','authenticated','sign_in') AND (j.type='true' OR j.value='ready')) "
                 "AND NOT EXISTS (SELECT 1 FROM json_tree(r.capabilities) j "
                 "WHERE j.key IN ('signed_in','authenticated','sign_in') AND (j.type='true' OR j.value='ready')) "
-                "AND NOT EXISTS (SELECT 1 FROM bot_settings b WHERE json_extract(b.app_delivery,'$.computer')=r.id)"
                 + _service_holds(c),
                 (cutoff,),
             )

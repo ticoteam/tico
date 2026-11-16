@@ -23,7 +23,6 @@
 
 mod accounts;
 mod afterwatch;
-mod appdriver;
 mod backlog;
 mod browser;
 mod browser_exit;
@@ -69,12 +68,10 @@ mod lanes;
 mod lease;
 mod lock;
 mod login;
-mod login_turns;
 mod mail_key;
 mod manifest;
 mod mcp;
 mod memory_history;
-mod memory_tidy_keep;
 mod model_subscriptions;
 mod op;
 mod panics;

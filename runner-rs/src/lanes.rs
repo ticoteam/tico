@@ -1,5 +1,5 @@
 //! Task lanes (task_lanes_v2): a task-keyed turn runs in its own lane beside the bot's other work, one turn at
-//! a time per (bot, lane) on this computer (sessions::Lanes; runner_support/worktrees.py lane_lock). The claim names
+//! a time per (bot, lane) on this computer (sessions::Lanes). The claim names
 //! the lanes busy here (`busy_lanes`); the heartbeat advertises the capabilities, each dropped for ten minutes
 //! by a server that refuses it.
 
@@ -37,7 +37,6 @@ pub const CAPABILITIES: &[&str] = &[
     "browser_exit_v1",
     // Chats of a bot keep their own provider threads: a public thread never resumes a direct message's (execute.rs session_key).
     "threads_v1",
-    "memory_tidy_keep_v1",
     // Report the process allocation boundary so the hub can recheck memory on unused grants.
     "harness_allocation_v1",
     // Make page uses a fresh provider session in disposable scratch, apart from the private Assistant's session.

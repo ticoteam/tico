@@ -32,7 +32,6 @@ backend/account_routes.py
 backend/agents.py
 backend/api_tools.py
 backend/app.py
-backend/app_delivery.py
 backend/archive.py
 backend/ask_ingest.py
 backend/assistant.py
@@ -249,7 +248,6 @@ backend/live_blocks.py
 backend/live_meetings.py
 backend/live_privacy.py
 backend/login_holds.py
-backend/login_waits.py
 backend/mail.py
 backend/mail_settings.py
 backend/mailbox_access.py

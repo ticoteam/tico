@@ -22,9 +22,8 @@ from . import models as M
 from . import changelog as CL
 from . import releases
 from . import visuals
-from . import app_delivery, login_holds, needs_lane, providers, runner_versions, runs
+from . import login_holds, needs_lane, providers, runner_versions, runs
 from .runs import LIVE as LIVE_RUN_STATES
-from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import bot_rows, bot_stops, run_triggers
 
@@ -220,7 +219,6 @@ def computer_details(c, row, who, auth):
     readiness = readiness_document(value.get("readiness"))
     access = auth.bot_accesses(c, who)
     assigned = assignments_by_runner(c)[1].get(row["id"]) or set()
-    shared = shared_logins(c, row["id"], readiness, assigned, access)
     readiness["bots"] = {
         bot: {k: v for k, v in report.items() if k != "tools"}
         for bot, report in readiness.get("bots", {}).items()
@@ -244,23 +242,7 @@ def computer_details(c, row, who, auth):
         "fix": "Open Settings > Computers to retry the update" if update.get("error") else "Open Settings > Computers",
         "services": [],
         "services_scope": "team",
-        "shared_logins": shared,
     }
-
-
-def subscription_login(runtime, detail):
-    """Whether a sign-in detail names a subscription login, as the runner bills it (runner-rs/src/execute.rs
-    billing_for): "Signed in ..." naming the harness's `subscription_marker` and no API key."""
-    from .harnesses import harness_caps
-
-    marker = str(harness_caps(runtime).get("subscription_marker") or "").lower()
-    detail = str(detail or "")
-    return (
-        bool(marker)
-        and detail.lower().startswith("signed in")
-        and marker in detail.lower()
-        and not re.search(r"(?i)api[ _-]?key", detail)
-    )
 
 
 def assignments_by_runner(c):
@@ -284,54 +266,6 @@ def assignments_by_runner(c):
     if values is not None:
         values["views.assignments_by_runner"] = (ordered, active)
     return ordered, active
-
-
-def shared_logins(c, runner_id, readiness, assigned, access, names=None):
-    """The sign-ins on this computer that several bots run on, for a harness whose subscription login serves one turn
-    at a time (`one_turn_per_login`): those bots take turns (runner-rs/src/login_turns.rs). Codex opts out and is
-    omitted: its bots run concurrently on one ChatGPT login. One row per login: its
-    runtime, its subscription (`profile`, '' for the computer's own sign-in) and `display_name`, how many bots share
-    it and the ones this reader may see. A key login runs its bots side by side and is left out.
-
-    `names` is `{connection_id: display_name}` from `subscription_identity.display_names` when the caller already
-    loaded every rename (Operations listing).
-    """
-    from .harnesses import harness_caps
-    from .subscription_identity import connection_id, identity
-
-    runtimes = readiness.get("runtimes") or {}
-    logins = {}
-    for bot, report in (readiness.get("bots") or {}).items():
-        if bot not in assigned or not isinstance(report, dict):
-            continue
-        runtime, profile = str(report.get("runtime") or ""), str(report.get("profile") or "")
-        if not harness_caps(runtime).get("one_turn_per_login"):
-            continue
-        row = runtimes.get(runtime) or {}
-        login = ((row.get("profiles") or {}).get(profile) if profile and row.get("profiles") else row) or {}
-        if not subscription_login(runtime, login.get("detail")):
-            continue
-        logins.setdefault((runtime, profile), []).append(bot)
-    rows = []
-    for (runtime, profile), bots in sorted(logins.items()):
-        if len(bots) <= 1:
-            continue
-        if not profile:
-            label = ""
-        elif names is not None:
-            label = names.get(connection_id(runner_id, profile)) or profile
-        else:
-            label = identity(c, runner_id, profile)["display_name"]
-        rows.append(
-            {
-                "runtime": runtime,
-                "profile": profile,
-                "display_name": label,
-                "count": len(bots),
-                "bots": sorted(b for b in bots if (access.get(b) or {}).get("read")),
-            }
-        )
-    return rows
 
 
 SERVICE_NAMES = {"connector:calendar": "Calendar Tool", "connector:mail": "Mail Tool"}
@@ -1527,8 +1461,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     """The newest run in this conversation as the chat shows it while it works: its state, a label and its reply so
     far, or None. `bot` keeps to that bot's runs (a task's page follows its owner's session); `people` also takes the
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
-    A run waiting for memory or its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
-    name the bot holding it."""
+    A run waiting for memory says so in `waiting` and its label."""
     person = H.in_person_name_sql()
     which = (
         f"AND (j.bot_id=? OR {person}) "
@@ -1588,10 +1521,6 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             label = "Reply failed — your message is saved"
         waiting = None
         if state in ("leased", "running") and job["attempt_id"]:
-            # Before it starts, or after: a fallback hop takes its own login once the turn has started.
-            from .login_waits import waiting as login_wait
-
-            waiting = login_wait(c, job["attempt_id"], job["bot_id"], who, auth)
             if state == "leased" and (job["start_wait_reason"] or "").startswith(start_places.MEMORY_HOLD):
                 waiting = "Waiting: " + job["start_wait_reason"]
             label = waiting or label
@@ -2783,9 +2712,6 @@ def install_views(app, store, auth, mutate, task_view):
                         lifecycle.stage(config.get("onboarding_state")) == lifecycle.ONBOARDING
                         and lifecycle.may_complete(auth, c, who, slug)
                     ),
-                    # Labelled as on the bot list, so its computer is named to one who cannot see it.
-                    "app_delivery": app_delivery.view(c, config),
-                    "app_delivery_app": app_delivery.HARNESS_APP.get(resolve_harness(config, config.get("runtime"))),
                     "cloud_machine": None
                     if cloud_rows is None or location.get("agent")
                     else cloud_machines.shown(
@@ -3022,10 +2948,6 @@ def install_views(app, store, auth, mutate, task_view):
 
             # One pass for every computer's own keys (not one SELECT per runner).
             keys_by_runner = listing_by_runner(c)
-            from .subscription_identity import display_names
-
-            # One pass for every renamed subscription (not one registry_metadata lookup per shared login).
-            login_names = display_names(c)
             from . import cloud_machines
 
             # {runner: {bot, shared, size, state}} for computers that are a cloud machine: a bot's own (`bot`), or the
@@ -3172,11 +3094,6 @@ def install_views(app, store, auth, mutate, task_view):
                         "keys": keys,
                         "shared_keys": shared,
                         "shared_with": shared_with,
-                        # The sign-ins several of its bots share, which they take turns on (counting only
-                        # the bots this reader may see).
-                        "shared_logins": shared_logins(
-                            c, row["id"], value["readiness"], assigned_here - hidden, access, names=login_names
-                        ),
                         "bot_runtimes": sorted(run_on.get(row["id"], ())),
                         "update": runner_versions.view(fleet.get(row["id"])),
                         "harness_actions": harness_recent.get(row["id"]) or [],

@@ -271,10 +271,10 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         return verdict(True)
     # A company subscription given to this computer for the runtime signs its CLI turns in, whatever the computer's own
     # login says (backend/model_subscriptions.py). An older runner is never given one (in_effect), so nothing changes
-    # there; nor for a bot delivered through a desktop app, which signs in its own way.
+    # there.
     from . import model_subscriptions
 
-    if not config.get("app_delivery") and model_subscriptions.in_effect(c, row["id"], runtime):
+    if model_subscriptions.in_effect(c, row["id"], runtime):
         return verdict(True)
     # Every bot runs each tool on its computer's one login for it: a bot has no sign-in of its own.
     shared = computer_login(readiness, runtime)

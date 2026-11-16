@@ -204,10 +204,8 @@ pub fn build(
     context: &str,
 ) -> Built {
     let message = &attempt["message"];
-    if crate::util::truthy(message["refs"].get("command"))
-        || crate::appdriver::delivery(&attempt["config"]).is_some()
-    {
-        // A command, or a bot in an app with its own instructions: it gets exactly what the person wrote.
+    if crate::util::truthy(message["refs"].get("command")) {
+        // A command gets exactly what the person wrote.
         let text = s(&message["body"]);
         return Built {
             full: text.clone(),

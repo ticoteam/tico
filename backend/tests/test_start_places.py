@@ -181,26 +181,19 @@ def test_stop_on_waiter_is_final_even_after_capacity_returns(api):
         assert c.execute("SELECT state FROM jobs WHERE attempt_id='attempt-0'").fetchone()[0] == 'canceled'
 
 
-def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, monkeypatch):
-    from backend import login_waits, start_places
+def test_upgrade_gives_unstarted_runs_a_place_without_a_deadline(api):
+    from backend import start_places
 
-    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: {'one_turn_per_login': True})
     computer = waiters(api, n=2, running=1)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM start_places")
         old = H.shift(H.now(), seconds=-7200)
         c.execute("UPDATE attempts SET created_at=?", (old,))
-        # One legacy worker cleared its wait and really is preparing; the other still waits.
-        c.execute(
-            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES('attempt-1',2,'status',?,?)",
-            ('{"waiting":""}', H.now()),
-        )
         start_places.restore_waits(c)
         assert start_places.overdue(c) == []  # An older worker never agreed to a hard preparation deadline.
         assert sum(start_places.held(c, computer['runner_id']).values()) == 3
         counts = start_places.summary(c, computer['runner_id'], api.app.state.store.settings)
-        assert counts['running'] == 1 and counts['waiting'] == 1
-        assert counts['waits'][0]['oldest'] == old
+        assert counts['running'] == 1 and counts['waiting'] == 0
 
 
 def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypatch):
@@ -345,53 +338,7 @@ def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api
         assert secret not in str(row['turn_counts']) + row['turn_summary']
 
 
-def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, monkeypatch):
-    from backend import login_waits, start_places
-    from backend.tests.helpers.task_lanes import task_bot, new_task
-
-    caps = {'one_turn_per_login': True}
-    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: caps)
-    computer = task_bot(api, lanes=True)
-    task = new_task(api, 'Work finished during legacy preparation')
-    attempt = post(api, 'jobs/claim', {}, computer['token'])['attempt']
-    aid = attempt['id']
-
-    def status(seq, waiting):
-        post(
-            api,
-            f'attempts/{aid}/events',
-            {'events': [{'seq': seq, 'kind': 'status', 'payload': {'waiting': waiting, 'login': 'ChatGPT'}}]},
-            computer['token'],
-        )
-
-    status(1, 'shared login')
-    with api.app.state.store.read() as c:
-        assert start_places.is_waiting(c, aid)
-    status(2, '')
-    with api.app.state.store.transaction() as c:
-        assert not start_places.is_waiting(c, aid)
-        assert c.execute('SELECT waiting_since FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] is None
-        task_engine.move(c, task['id'], task_engine.DONE, 'human:ana', 'Finished by hand')
-    assert not post(api, f'attempts/{aid}/renew', {}, computer['token']).get('stop')
-    # An obsolete login-queue report cannot reintroduce a wait after this capability opts out.
-    caps['one_turn_per_login'] = False
-    status(3, 'obsolete shared login')
-    with api.app.state.store.transaction() as c:
-        assert not start_places.is_waiting(c, aid)
-        counts = start_places.summary(c, computer['runner_id'], api.app.state.store.settings)
-        assert counts['starting'] == 1 and counts['waiting'] == 0
-        c.execute('DELETE FROM start_places WHERE attempt_id=?', (aid,))
-        start_places.restore_waits(c)
-        assert not start_places.is_waiting(c, aid)
-    # The task finished before the run started: the engine no longer wants it (execution.held_before_start).
-    refused = post(api, f'attempts/{aid}/started', {'thread_id': 'legacy-preparation'}, computer['token'], expected=409)
-    assert refused['error']['code'] == 'start_wait'
-
-
-def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api, monkeypatch):
-    from backend import login_waits
-
-    monkeypatch.setattr(login_waits, 'harness_caps', lambda _: {'one_turn_per_login': True})
+def test_delayed_managed_status_events_cannot_release_a_new_start_grant(api):
     computer = waiters(api, n=1, running=0)
     aid = 'attempt-0'
     grant = post(api, f'attempts/{aid}/start-place', {}, computer['token'])

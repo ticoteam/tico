@@ -3,50 +3,28 @@
 import os
 import shutil
 import stat
-import tempfile
 from unittest import mock
 
 import pytest
 
-from runner_support import credential_socket as C, isolation, mail_key
+from runner_support import isolation, mail_key
 from runner_support.connectors import mail_secret_path
+from runner_support.tests.helpers.supervisor import Supervisor
 
 
 @pytest.fixture
 def channel():
-    directory = tempfile.mkdtemp(dir="/tmp")
-    minted = []
+    """The supervisor's socket (runner-rs/src/gitcred.rs) for an inbox bot's attempt that may open ana@acme.example."""
 
-    def mail(service, mailbox):
-        minted.append((service, mailbox))
-        return {"token": f"ya29.{mailbox}", "expiry": "2026-01-01T00:00:00"}
+    def answer(asked):
+        mail = asked.get("mail") or {}
+        if asked.get("token") != "attempt-inbox" or mail.get("mailbox") != "ana@acme.example":
+            return {"error": "not this bot's mailbox", "mailboxes": ["ana@acme.example"]}
+        return {"token": f"ya29.{mail['mailbox']}", "expiry": "2026-01-01T00:00:00"}
 
-    server = C.Server(os.path.join(directory, "cred.sock"), lambda bot: "ghs", mail).start()
-    server.minted = minted
+    server = Supervisor(answer)
     yield server
-    server.stop()
-    shutil.rmtree(directory, ignore_errors=True)
-
-
-def test_only_the_inbox_bots_turn_gets_mail_and_only_for_its_mailboxes(channel):
-    channel.register("attempt-inbox", "ana-inbox", ["ana@acme.example", "ben@acme.example"])
-    channel.register("attempt-other", "helper")  # a bot the hub named no mailbox for
-    assert (
-        C.request_mail(channel.path, "attempt-inbox", "gmail", "Ana@Acme.example")["token"] == "ya29.ana@acme.example"
-    )
-    for attempt, mailbox in (
-        ("attempt-other", "ana@acme.example"),
-        ("attempt-inbox", "cara@acme.example"),
-        ("guess", "ana@acme.example"),
-    ):
-        with pytest.raises(ValueError):
-            C.request_mail(channel.path, attempt, "gmail", mailbox)
-    with pytest.raises(ValueError):
-        C.request_mail(channel.path, "attempt-inbox", "drive", "ana@acme.example")  # no other service
-    assert channel.minted == [("gmail", "ana@acme.example")]
-    channel.unregister("attempt-inbox")
-    with pytest.raises(ValueError):
-        C.request_mail(channel.path, "attempt-inbox", "gmail", "ana@acme.example")
+    server.close()
 
 
 def test_the_key_moves_out_of_the_bots_reach_when_isolated(tmp_path, monkeypatch):
@@ -84,7 +62,6 @@ def test_without_isolation_the_key_stays_and_is_reported_readable(tmp_path, monk
 def test_the_mail_cli_asks_the_supervisor_only_inside_an_isolated_turn(channel, monkeypatch):
     from connectors.mail import auth
 
-    channel.register("attempt-inbox", "ana-inbox", ["ana@acme.example"])
     monkeypatch.delenv(auth.SOCKET_ENV, raising=False)
     assert auth.supervisor_token("ana@acme.example", [auth.GMAIL_SCOPE]) is None  # Mac: the key file is used
     monkeypatch.setenv(auth.SOCKET_ENV, channel.path)
@@ -243,23 +220,6 @@ def test_connected_account_grants_alone_give_mail_access_and_stay_out_of_the_bot
     from runner_support.connectors import mail_credential_present, mail_grants_path
 
     assert mail_grants_path(config) == moved and mail_credential_present(config)
-
-
-def test_a_connected_accounts_scopes_reach_the_turn_with_its_token():
-    def mail(service, mailbox):
-        return {"token": "ya29.t", "expiry": "", "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]}
-
-    directory = tempfile.mkdtemp(dir="/tmp")  # short: a Unix socket path has a length limit
-    server = C.Server(os.path.join(directory, "cred.sock"), lambda bot: "ghs", mail).start()
-    try:
-        server.register("attempt", "inbox", ["ben@acme.example"])
-        reply = C.request_mail(server.path, "attempt", "gmail", "ben@acme.example")
-        assert reply["scopes"] == ["https://www.googleapis.com/auth/gmail.readonly"]
-        with pytest.raises(ValueError):  # the grant is bound to its own mailbox only
-            C.request_mail(server.path, "attempt", "gmail", "ana@acme.example")
-    finally:
-        server.stop()
-        shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_a_second_grant_moved_from_the_workspace_keeps_the_first(tmp_path, monkeypatch):

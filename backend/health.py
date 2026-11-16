@@ -940,10 +940,6 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
             holding[runner_id] = holding_turns(c, turns.get(runner_id, []))
         return holding[runner_id]
 
-    # A turn waiting for its shared login is busy, not stuck, unless what holds the login is no run Tico knows.
-    from .login_waits import unknown_holder
-
-    orphaned = {r["bot_id"] for rows in turns.values() for r in rows if unknown_holder(c, r["id"])}
     waiting, slow, stuck = [], [], []
     # The whole queue, not the next three jobs: queued_reasons reads every queued message.
     aged_bots = [slug for slug in queued if slug in assigned]
@@ -985,9 +981,6 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         if bot["state"] != "active":
             if count:
                 stuck.append({**row, "reason": bot["state"], "runner_id": where[0] if where else "", "runtime": ""})
-            continue
-        if slug in orphaned and where and where[0] in online_ids:
-            stuck.append({**row, "reason": "login_holder_unknown", "runner_id": where[0], "runtime": ""})
             continue
         report = report_for(slug, where) if count else {}
         cloud = on_cloud.get(slug)
@@ -1277,12 +1270,6 @@ HELD = {
     "task_quarantine": ("Held after repeated refusals; resumes after cooldown or quarantine clear", RUNS),
     # A person limited the bot's claims to one task (execution.scoped_sql): the rest waits for the scope's release.
     "scoped": ("Limited to one task: its other work starts when the limit is lifted", BOT_SETTINGS),
-    # The runner says the turn holding the shared login is a run Tico has no live record of (backend/login_waits.py).
-    "login_holder_unknown": (
-        "Its turn waits for {computer}'s ChatGPT login, held by a run that is not running in "
-        "Tico: restart the runner on {computer} to free it",
-        COMPUTERS,
-    ),
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
@@ -3413,10 +3400,6 @@ def view(c, who, settings, auth, github, config):
         checks.append(unreviewed)
     if kind != "bot" and (plate := _plate_check(c, who, auth, full)):
         checks.append(plate)
-    from .app_delivery import health_problems
-
-    for key, summary in health_problems(c, who, auth, online_ids):
-        checks.append(_check(key, "Desktop apps", "warn", summary, [_fix("Open Computers", "#/settings", "devices")]))
     fixes = [_fix("Add a computer", "#/settings", "devices")] if full else []
     if not computers:
         checks.append(_check("computers", "Computers", "bad", "No computer is set up. Bots need one to run.", fixes))

@@ -21,7 +21,7 @@ from starlette.requests import ClientDisconnect
 
 
 from . import built_on
-from . import agents, app_delivery, app_view, mcp_oauth, oidc, views
+from . import agents, app_view, mcp_oauth, oidc, views
 from . import outcome_stats
 from . import pipeline_judges
 from . import recorder_installs
@@ -5365,7 +5365,6 @@ def create_app(settings=None):
     app.state.task_view = task_view  # for the events' read in tests (backend/tests/test_payload_budgets.py)
     # And one for each computer, in place of its polls (runner-rs/src/events.rs).
     install_runner_events(app, store, execution)
-    app_delivery.install(app, store, execution, mutate)
 
     from .views import install_views
     from .roadmaps import install_internal
@@ -5411,8 +5410,8 @@ def create_app(settings=None):
 
     @app.get("/api/v2/runners/me/memory-tidy-keeps")
     def retired_memory_tidy_keeps(request: Request):
-        """The retired Nightly memory tidy pilot's Keep queue: always empty. runner-rs (memory_tidy_keep.rs) still asks
-        every 15 seconds; remove this once no runner does."""
+        """The retired Nightly memory tidy pilot's Keep queue: always empty. Today's runner never asks, but 0.6.x
+        runners ask every 15 seconds; remove this once 0.6.0 leaves the supported window."""
         if request.state.identity.role != "runner":
             raise Problem("identity", "A registered computer is required", 403)
         return {"keeps": []}

@@ -195,15 +195,13 @@ function machineConnectionHTML(machine: DetailMachine, conn: DetailConnection, o
     ? `<span class="err machine-rejected" data-rejected="${esc(conn.runtime)}">${value.rejected_at ? esc(agoSaid(value.rejected_at)) + '. ' : ''}${value.rejected_reason ? esc(value.rejected_reason) + '. ' : ''}${hlCredentialFix(value.credential_source)}. It takes no work that needs ${esc(conn.runtime)} until then.</span>` : '';
   const usage = conn.state.signed_in === false ? '' : machineUsageHTML(conn.runtime, conn.state, `${conn.tool} ${conn.name}`, 'this computer');
   const bots = conn.bots.length ? `Bots: ${conn.bots.map(settingsBotName).join(', ')}` : 'No bots run on it';
-  // Bots that take turns on one sign-in say so.
-  const shared = machineSharedLoginHTML(machine, conn.runtime);
   return `<div class="computer-conn${conn.attention ? ' attention' : ''}" data-connection="${esc(conn.key)}" data-machine-tool="${esc(conn.runtime)}">
     <div class="computer-conn-head">${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<strong>${esc(conn.tool)}</strong>${kind ? `<span>${esc(kind)}</span>` : ''}${tags}</div>
     <div class="computer-conn-signin">${signIn}${action}${rejected}</div>
     ${usage ? `<div class="computer-conn-usage">${usage}</div>` : ''}
     ${conn.warning ? `<p class="computer-conn-warning" role="note" data-login-warning="${esc(conn.runtime)}">${esc(conn.warning)}</p>` : ''}
     ${conn.shared ? `<div class="computer-conn-shared-with muted" data-shared-with>${esc(machineSharedWords(conn.shared))}</div>` : ''}
-    <div class="computer-conn-bots muted">${esc(bots)}</div>${shared}
+    <div class="computer-conn-bots muted">${esc(bots)}</div>
   </div>`;
 }
 // A tool with no sign-in in the browser: the command to run in a terminal on the computer (Tico need not reach it), or
@@ -389,7 +387,7 @@ function machineVersionsHTML(machine: DetailMachine, online: boolean) {
   const facts = [`Tico ${release || 'version not reported'}`, machine.platform || '',
     engine?.name ? `<span title="${esc(engine.note || engine.build || '')}">${engine.name === 'rust' ? 'Rust' : 'Python'} runner</span>` : ''].filter(Boolean);
   return `<p class="computer-detail-facts">${facts.map((fact, i) => i === 2 ? fact : esc(fact)).join(' · ')}</p>${window.runnerUpdateHtml?.(machine.update, release) || ''}
-    ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
+    ${table}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
 }
 function machineScreenSectionHTML(machine: DetailMachine, online: boolean) {
   return screenControlHTML(machine, online);

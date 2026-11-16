@@ -13,7 +13,7 @@ from datetime import timezone
 from fastapi import Request
 
 from .store import H, Problem
-from . import login_holds, login_waits, run_diagnostics, runs, start_places, task_privacy as privacy
+from . import login_holds, run_diagnostics, runs, start_places, task_privacy as privacy
 from .turns import TOOL_START, TOOL_BACKGROUNDED, clip, seconds
 
 ATTEMPT_LIMIT, NODE_LIMIT, SUMMARY_CHARS = 20, 50, 120
@@ -241,6 +241,26 @@ def next_step(attempt, tries, job, decisions, retries):
     return None
 
 
+def moved(c, aid):
+    """Where the attempt went instead of its own harness and why, from its newest fallback note: the runner's own line
+    for a usage limit or an unavailable harness (which names only harnesses). None when it never moved."""
+    row = c.execute(
+        "SELECT payload FROM attempt_events WHERE attempt_id=? AND kind='diagnostic' "
+        "AND json_extract(payload,'$.fallback') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+        (aid,),
+    ).fetchone()
+    try:
+        payload = json.loads(row[0]) if row else {}
+    except (TypeError, ValueError):
+        payload = {}
+    payload = payload if isinstance(payload, dict) else {}
+    fallback = payload.get("fallback")
+    if not isinstance(fallback, str) or not fallback.strip():
+        return None
+    text = payload.get("text")
+    return clip(text, 280) if isinstance(text, str) and text.strip() else f"Ran this turn on {clip(fallback, 80)}"
+
+
 def run_view(c, auth, who, tid):
     actor = privacy.actor(who)
     # A task party who cannot read the bot sees none of its runs, as on the bot's steps and failed attempts.
@@ -347,17 +367,15 @@ def run_view(c, auth, who, tid):
                 "lease_until": r["lease_until"] if live else None,
                 "lease": lease.get(r["id"], []),
                 "reason": failure_reason(r["state"], r["result"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
-                # Memory and login waits, or where it ran instead of its own harness and why (backend/login_waits.py).
+                # A memory wait, or where it ran instead of its own harness and why.
                 "waiting": (
                     "Waiting: " + r["wait_reason"]
                     if r["state"] == "leased" and (r["wait_reason"] or "").startswith(start_places.MEMORY_HOLD)
-                    else login_waits.waiting(c, r["id"], r["bot"], who, auth)
-                    if live
                     else None
                 ),
-                "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
-                # Stopped to let another turn have the shared login; its job continues next.
-                "paused": login_waits.paused(c, r["id"], r["state"], r["result"], r["stop_requested_at"]),
+                "moved": moved(c, r["id"]),
+                # Stopped for an update; its job continues next.
+                "paused": run_diagnostics.paused(c, r["id"], r["state"], r["result"], r["stop_requested_at"]),
                 "next": next_step(
                     r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions, retries.get(r["job_id"], [])
                 ),

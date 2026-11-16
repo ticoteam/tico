@@ -155,8 +155,6 @@ pub struct Capabilities {
     pub persistent_session: bool,
     pub goal_runs_across_turns: bool,
     pub serial_cold_start: bool,
-    /// A subscription login serves one turn at a time on this computer (crate::login_turns); a key login does not.
-    pub one_turn_per_login: bool,
     /// The CLI keeps no owner-only state shared across turns (a 0600 sign-in file in the bot's home), so a turn can
     /// run as a leased per-turn OS user (crate::turn_users) and still sign in. Without it the turn runs as `bot`.
     pub isolated_user: bool,
@@ -200,7 +198,6 @@ impl Default for Capabilities {
             persistent_session: false,
             goal_runs_across_turns: false,
             serial_cold_start: false,
-            one_turn_per_login: false,
             isolated_user: false,
             compaction: false,
             own_compaction: false,
@@ -803,7 +800,10 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "persistent_session" => c.persistent_session = flag(k, v)?,
             "goal_runs_across_turns" => c.goal_runs_across_turns = flag(k, v)?,
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
-            "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
+            // Retired with the one-turn-per-login queue; a manifest from an older checkout may still name it.
+            "one_turn_per_login" => {
+                flag(k, v)?;
+            }
             "isolated_user" => c.isolated_user = flag(k, v)?,
             "compaction" => c.compaction = flag(k, v)?,
             "own_compaction" => c.own_compaction = flag(k, v)?,

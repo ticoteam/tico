@@ -33,7 +33,6 @@ pub const OPTIONAL: &[&str] = &[
     "disk",
     "disk_cleanup",
     "screen",
-    "appdriver",
     "isolated",
 ];
 

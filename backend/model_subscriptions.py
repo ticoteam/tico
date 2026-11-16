@@ -445,13 +445,11 @@ def passed_over(c, runner_id, runtime, loads=None):
 
 def turn_runtimes(config, record=None):
     """Subscription runtimes this turn may use, including the company's automatic fallbacks when `record` is given.
-    Gateway models and desktop delivery never use these credentials."""
+    Gateway models never use these credentials."""
     from .gateway_connection import is_tico
     from .harnesses import runtime_of
 
     config = config if isinstance(config, dict) else {}
-    if config.get("app_delivery"):
-        return []
     out = [] if is_tico(config.get("model")) else [str(config.get("runtime") or "")]
     fallback = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
     if fallback.get("harness") and not fallback.get("off") and not is_tico(fallback.get("model")):

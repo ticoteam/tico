@@ -1871,11 +1871,6 @@ def runner_bell(store):
 
 # ---------------------------------------------------------------- what a viewer is sent
 
-LIVE_SQL = (
-    "SELECT id,created_at FROM attempts WHERE bot_id=? AND state IN ('leased','running') "
-    "ORDER BY created_at DESC,rowid DESC LIMIT 1"
-)
-
 
 def prime_bot_rows(c, slugs):
     """Each of these bots' own row in the five tables a claim check reads (status, bot, back-off, budget, exit),
@@ -1911,14 +1906,6 @@ def prime_status_lines(c, slugs):
     prime_bot_rows(c, slugs)
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
         marks = ",".join("?" * len(part))
-        live = {}
-        for row in c.execute(
-            f"SELECT bot_id,id,created_at FROM attempts WHERE state IN ('leased','running') AND bot_id IN ({marks}) "
-            "ORDER BY created_at,rowid",
-            part,
-        ):
-            live[row["bot_id"]] = row  # the newest run, as LIMIT 1 picks it
-        prime(c, LIVE_SQL, {(s,): live.get(s) for s in part})
         keys = [LAST_STOP + s for s in part]
         found = {
             row["key"]: row
@@ -1963,44 +1950,20 @@ def _rows_by_id(c, statement, ids):
 
 
 def status_line(c, who, slug, default=None, inputs=None, auth=None):
-    """A bot's status as `GET /api/v2/status` lists it to `who`; a first login wait needs no stored row.
+    """A bot's status as `GET /api/v2/status` lists it to `who`, or None before it has one.
     With `auth`, a person who manages a quarantined bot is also sent what was refused (`review`)."""
     from . import task_privacy as privacy
     from . import usage_limits
 
     row = H.status(c, slug)
-    from .login_waits import waiting
-    from .read_cache import one
-
-    live = one(c, LIVE_SQL, (slug,))
-    line = waiting(c, live["id"], slug, who, auth) if live else None
     if not row:
-        if not line:
-            return None
-        # Before /started, a newly created bot has never written a status. Project only its current
-        # wait, without manufacturing status history or copying private task content into a stored row.
-        row = {
-            "bot": slug,
-            "state": "waiting_bot",
-            "focus": "",
-            "task_id": None,
-            "changed_at": live["created_at"],
-            "last_turn_at": None,
-            "last_result": None,
-            "next_due_at": None,
-            "open_tasks": 0,
-            "needs_human": 0,
-            "updated_at": live["created_at"],
-        }
+        return None
     row = privacy.status(c, who, row, **(inputs or {}))
     row["bot_state"] = (H.bot(c, row["bot"]) or {}).get("state")
     # Why its last run ended without finishing, said plainly for its page header: never a bare "Crashed".
     from .execution import last_stop
 
     row["last_stop"] = last_stop(c, row["bot"], row)
-    # A turn waiting for its shared ChatGPT login is waiting, not stuck: the line says on whom and its place.
-    if line:
-        row["waiting"] = row["focus"] = line
     if row["bot_state"] == "quarantined":
         # A refusal-count quarantine lifts itself after the cooldown; any other needs a person.
         row["quarantine"] = H.quarantine_resumes(c, row["bot"])
