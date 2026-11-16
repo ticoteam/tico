@@ -328,6 +328,49 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environ
         assert c.execute("SELECT count(*) FROM ok_grants WHERE subject LIKE 'support:%'").fetchone()[0] == 0
 
 
+def queued_for_helper(api, runner, last_seen_minutes_ago):
+    """A computer last heard from that many minutes ago, with one request queued for its bot `helper`."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        H.sync_registry(c, {"helper": {"name": "helper", "status": "active"}}, None)
+        c.execute(
+            "INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
+            (runner["runner_id"], H.now()),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO messages(id,sender_id,recipient_id,kind,body,created_at) "
+            "VALUES('m-helper','human:ana','bot:helper','chat','hi',?)",
+            (H.now(),),
+        )
+        enqueue_stored(c, "m-helper")
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=-last_seen_minutes_ago), runner["runner_id"]),
+        )
+
+
+def test_a_silent_computer_with_queued_work_is_one_botops_task(environment):
+    # Health's "Bots waiting" and "Computers" checks say the same outage as computer_silent. Each filed its own task.
+    api, runner = built(environment)
+    queued_for_helper(api, runner, 15)
+    run(api)
+    run(api)  # a noisy check files on its second run
+    titles = [t["title"] for t in botops_tasks(api)]
+    assert [t for t in titles if "not checked in" in t] == [f"Health: {CANARY} has not checked in for 15 minutes"]
+    assert "Health: Bots waiting" not in titles and "Health: Computers" not in titles
+
+
+def test_an_offline_computer_that_is_not_silent_yet_still_files_bots_waiting(environment):
+    # Only a silent computer hands its outage to its own task; one offline for less than the silence limit does not.
+    api, runner = built(environment)
+    queued_for_helper(api, runner, 5)
+    run(api)
+    run(api)
+    titles = [t["title"] for t in botops_tasks(api)]
+    assert "Health: Bots waiting" in titles
+    assert not [t for t in titles if "not checked in" in t]
+
+
 def test_the_idle_load_is_taken_from_a_computer_only(environment):
     api, _ = built(environment)
     r = api.post("/api/v2/runners/idle-load", json={"sampled_at": H.now(), "busy": []}, headers=signed_in())

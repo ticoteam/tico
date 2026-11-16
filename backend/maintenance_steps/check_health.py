@@ -255,6 +255,11 @@ def _invariant_findings(c, now, at, notes):
     return read, out
 
 
+# The Health page's checks that say a computer is offline. While a computer is silent with work queued, its own finding
+# (computer_silent) is the one BotOps task for that outage: these checks still show on the page, but file nothing.
+OFFLINE_PAGE_CHECKS = {"computers", "waiting"}
+
+
 def _page_findings(c, ctx, notes):
     """The Health page's warn and bad checks, read as the owner (a read). Their id and summary are the finding."""
     auth = ctx.get("auth")
@@ -275,10 +280,16 @@ def _page_findings(c, ctx, notes):
         _unread(notes, "page")
         return 0, []
     out = []
+    silent = None  # read once, and only if an offline check needs it
     for check in page.get("checks", []):
         base = str(check.get("id", "")).split(":", 1)[0]
         if check.get("status") not in ("warn", "bad") or base in PAGE_LEFT_OUT:
             continue
+        if base in OFFLINE_PAGE_CHECKS:
+            if silent is None:
+                silent = bool(health.silent_computers(c))
+            if silent:
+                continue  # the silent computer's own finding names this outage
         summary = str(check.get("summary", ""))
         if base == "models" and not providers.configured(providers.load(c, ctx["settings"])):
             continue  # no AI provider chosen: setup asks the owner, and BotOps itself cannot run until there is one
