@@ -244,7 +244,7 @@ async function memoryBody(body: Blob | FormData, digests: Map<Blob, string> | nu
       ? new File([bytes], file.name, {type: file.type, lastModified: file.lastModified})
       : new File([bytes], '', {type: file.type});
     // One read serves both the copy and the retry signature's digest.
-    if (digests) digests.set(made, hexDigest(await crypto.subtle.digest('SHA-256', bytes)));
+    if (digests) digests.set(made, hexDigest(await sha256Bytes(bytes)));
     return made;
   };
   if (body instanceof Blob) return copy(body);
@@ -265,7 +265,7 @@ const formRequestOnce = async (url: string, body: Blob | FormData, opts: ApiWrit
   const fields: unknown[][] = [];
   for (const [name, value] of body instanceof Blob ? [['file', body]] : body.entries()) {
     if (value instanceof Blob) {
-      const digest = digests.get(value) ?? hexDigest(await crypto.subtle.digest('SHA-256', await value.arrayBuffer()));
+      const digest = digests.get(value) ?? hexDigest(await sha256Bytes(await value.arrayBuffer()));
       fields.push([name, (value instanceof File && value.name) || '', value.type, value.size, digest]);
     } else fields.push([name, value]);
   }
