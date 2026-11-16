@@ -124,3 +124,13 @@ def test_removal_cancels_a_queued_turn_and_takes_old_runs_off_their_task(c):
     ).fetchone()
     assert tuple(row) == (None, None, None, "keep warm", "ok")  # history, on no task
     assert task_wakes.runs_since(c, E.task(c, task_id)) == before - 1
+
+
+def test_old_stage_settings_are_emptied_so_their_stage_can_still_be_deleted(c):
+    """A stage's own keep-warm hours named it (REFERENCES stages(id), no cascade) and were deleted with it; nothing
+    does that any more, so the migration empties the table, and the stage deletes as any other."""
+    stage = c.execute("SELECT id FROM stages ORDER BY rowid LIMIT 1").fetchone()[0]
+    c.execute("INSERT INTO stage_keep_warm (stage_id, hours) VALUES (?, 4)", (stage,))
+    importlib.import_module(MIGRATION).up(c)
+    assert c.execute("SELECT count(*) FROM stage_keep_warm").fetchone()[0] == 0
+    assert c.execute("PRAGMA foreign_key_check(stage_keep_warm)").fetchall() == []

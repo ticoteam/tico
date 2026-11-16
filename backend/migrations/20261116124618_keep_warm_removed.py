@@ -19,7 +19,7 @@ a message nobody could see, one every 46 minutes or so, burying the bot's real q
    run on a task, the checks a run already saw, a result's run) now count every run linked to it. After step 1, which
    finds the replies through job_id.
 
-`stage_keep_warm` and `pipelines.keep_warm_hours` stay, and nothing reads or writes them. Dropping them would not give
+`stage_keep_warm` (emptied) and `pipelines.keep_warm_hours` stay, and nothing reads or writes them. Dropping them would not give
 the same schema in every order: on an install where 20261113235427_keep_warm_hours is also pending it may run after
 this file and make them again, and a file that has run is never edited (docs/releasing.md, Migrations).
 
@@ -82,6 +82,11 @@ def _hide_replies(conn):
 
 
 def up(conn):
+    # Its rows go first, before any early return: each names a stage (REFERENCES stages(id), no cascade), and nothing
+    # deletes them with their stage any more, so one left behind would stop that stage from being deleted. Where the
+    # table is made after this file, it starts empty.
+    if _table(conn, "stage_keep_warm"):
+        conn.execute("DELETE FROM stage_keep_warm")
     # A new file has no runs, and its attempts table's triggers name tables the module code makes after the migrations.
     needed = ("attempts", "jobs", "messages", "conversations", "message_mentions")
     if not all(_table(conn, name) for name in needed):
