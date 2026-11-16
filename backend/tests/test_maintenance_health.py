@@ -1472,7 +1472,8 @@ def _part_readers_write_nothing(api, runner, monkeypatch, hq=None, comments=None
             _, found, notes = check_health.gather(r, ctx)
         finally:
             r.execute("PRAGMA query_only=0")
-    assert notes == {}, notes
+    # No reader failed. The page's offline record is a success, not a failure note.
+    assert {key: value for key, value in notes.items() if key != "offline"} == {}, notes
     assert any(row["key"].startswith("event_stream:") for row in found)
 
 
