@@ -901,7 +901,7 @@ class SettingsAdmin:
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
         # The assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Design Owner, the Updates
-        # Owner and the Automations Owner are built in: nobody archives them, the owner included.
+        # Owner, the Automations Owner and the Tools Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,
             "botops",
@@ -912,6 +912,7 @@ class SettingsAdmin:
             H.DESIGN_OWNER,
             "updates-owner",
             "automations-owner",
+            H.TOOLS_OWNER,
         ):
             raise Problem(
                 "system_bot",
@@ -932,6 +933,8 @@ class SettingsAdmin:
                     if bot == "updates-owner"
                     else "The Automations Owner"
                     if bot == "automations-owner"
+                    else "The Tools Owner"
+                    if bot == H.TOOLS_OWNER
                     else "The " + strategy_bot.name(c)
                 )
                 + " is built in to every team and cannot be archived or deleted; you can pause or rename it",

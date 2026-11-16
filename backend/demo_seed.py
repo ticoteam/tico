@@ -315,7 +315,7 @@ class Builder:
                     "configuration_valid": True,
                     "problems": [],
                 }
-                for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "strategy-owner"]
+                for slug in [*(slug for slug, _, _ in D.BOTS), *D.READY_BUILT_INS]
             }
             readiness = {
                 "schema_version": 1,

@@ -75,7 +75,15 @@ def test_every_bot_has_one_manager_and_the_built_ins_are_the_general_managers_te
     first = lines(api)
     owner = first["general-manager"]
     assert owner.startswith("human:") and first["assistant"] == owner
-    for slug in ("botops", "librarian", "strategy-owner", "rules-owner", "design-owner", "automations-owner"):
+    for slug in (
+        "botops",
+        "librarian",
+        "strategy-owner",
+        "rules-owner",
+        "design-owner",
+        "automations-owner",
+        "tools-owner",
+    ):
         assert first[slug] == "general-manager", slug
     assert [slug for slug, line in first.items() if not line] == []
     groups = {g["id"]: g for g in api.get("/api/v2/groups", headers=signed_in()).json()}
@@ -115,6 +123,7 @@ def test_a_new_company_puts_botops_under_the_general_manager_whatever_line_the_s
         "design-owner",
         "automations-owner",
         "updates-owner",
+        "tools-owner",
     )
     assert {slug: first[slug] for slug in team} == dict.fromkeys(team, "general-manager")
     assert [slug for slug, line in first.items() if not line] == []

@@ -16,6 +16,7 @@ Read this when a person asks why something is on their queue, or how to make it 
   pile up. The fix is the automation, not the tasks.
 - **Health Monitor**: findings about bots and computers, including test pings. Repeated test pings are a source to stop.
 - **BotOps**: support and health tasks, and questions about bot setup.
+- **Tools Owner**: a task for each tool whose key is rejected, expiring or stored twice, and cards to type or grant a key.
 - **PR Reviewer**: a review task per pull request.
 - **General Manager**: tasks it created while routing work.
 - **Routines and automations**: any task filed on a schedule or a trigger.

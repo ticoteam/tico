@@ -4063,6 +4063,22 @@
    "default": false
   },
   {
+   "slug": "tools-owner",
+   "template": "tools-owner",
+   "name": "Tools Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Owns the Tools page and the keys bots use. It connects a service the way that fits (an API tool through the Tico proxy, a website login, the vendor's MCP server), has each key typed into a card or dropped in its Tools chat so it never sees a value, proposes which bots get Read or Read and write, keeps one shared key per value instead of a copy per bot, and follows up a key that is rejected, expiring or never used. A person grants every key; it holds none.",
+   "when": "Built in: owns Tools. It adds tools (APIs, website logins, MCP servers), has keys typed into a card or dropped in its chat rather than pasted, proposes who gets which level, and fixes keys that stop working. A person grants every key.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
    "slug": "updates-owner",
    "template": "updates-owner",
    "name": "Updates Owner",

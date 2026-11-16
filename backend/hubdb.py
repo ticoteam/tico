@@ -3785,6 +3785,8 @@ PRIVATE_BY_TEMPLATE = ("general-counsel", "rules-owner")
 RULES_OWNER = "rules-owner"
 # The built-in Design Owner's slug (docs/onboarding.md): it owns design and keeps the brand book.
 DESIGN_OWNER = "design-owner"
+# The built-in Tools Owner's slug: it owns the Tools page, its chat and its key cards (backend/page_owners.py).
+TOOLS_OWNER = "tools-owner"
 # Bots the product names in code and refers to by slug (the built-in helpers and the assistant). Their id is their
 # slug, so that the actor string the code builds from the constant, `bot:<slug>`, is still the bot's actor. A bot a
 # person creates gets a UUIDv7 id (new_bot_id).
@@ -3806,6 +3808,7 @@ PRODUCT_BOT_SLUGS = frozenset(
         "cpo",
         "updates-owner",
         "automations-owner",
+        TOOLS_OWNER,
     }
 )
 

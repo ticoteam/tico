@@ -1,7 +1,8 @@
 """Credentials asked for in chat, and set for a bot (docs/credential-vault.md).
 
 A bot that needs a secret opens a card in the conversation where it asked (`POST /api/v2/credential-requests`): what it is
-for, the format it takes and where to get one. The person types the value into the card. It goes from their browser to
+for, the format it takes and where to get one. BotOps and the Tools page's owner (the Tools Owner) may open one for
+another bot (`for_bot`); the Tools owner never for itself. The person types the value into the card. It goes from their browser to
 `POST /api/v2/credential-requests/{id}/save`, is checked here, stored in the vault under the variable's name and
 granted to that one bot. The bot is told it is saved; the value never enters a message, an event, a log or the model.
 
@@ -311,6 +312,13 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             "credential_id": row["credential_id"],
         }
 
+    def tools_page_owner(c):
+        """The Tools page's own owner (never the General Manager standing in): it asks for any bot's credential, as BotOps
+        does, and holds none itself. The person still types the value, and saving it checks they manage that bot."""
+        from . import page_owners
+
+        return page_owners.owner(c, "tools", fallback=False)
+
     def turn_of(c, who):
         row = (
             c.execute(
@@ -407,8 +415,15 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             person, msg, task = requester(c, who, body.on_behalf_of or "turn")
             asker = botops if who.via == "botops" and who.role in ("owner", "human") else H.actor_id(who.actor)
             target = (H.resolve_bot(c, body.for_bot) or {}).get("id", body.for_bot) if body.for_bot else asker
-            if target != asker and asker != botops:
-                raise Problem("forbidden", "A bot asks for its own credential", 403)
+            tools_owner = asker != botops and tools_page_owner(c) == "bot:" + asker
+            if target != asker and asker != botops and not tools_owner:
+                raise Problem(
+                    "forbidden", "A bot asks for its own credential; BotOps and the Tools owner ask for any bot", 403
+                )
+            if tools_owner and target == asker:
+                raise Problem(
+                    "forbidden", "The Tools owner holds none of the keys it connects: name the bot that needs it", 403
+                )
             if not H.bot(c, target):
                 raise Problem("not_found", "Bot not found", 404)
             manager(c, person, target)

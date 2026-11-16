@@ -537,7 +537,7 @@ def _runners(b):
     b.at(days=5.9)
     tools = CONTENT["tools"]
     bots = {}
-    for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "strategy-owner"]:
+    for slug in [*(slug for slug, _, _ in D.BOTS), *D.READY_BUILT_INS]:
         entry = {
             "ready": True,
             "runtime": "claude",

@@ -152,7 +152,7 @@ def _saved_plan_or_key(c):
 
 def built_in(settings):
     """The bots every install starts with: the four a person talks to, the General Manager (docs/general-manager.md), the
-    Finance Owner (docs/bookkeeper.md), the Design Owner, the Updates and Automations Owners, and the Rules Owner, which
+    Finance Owner (docs/bookkeeper.md), the Design Owner, the Updates, Automations and Tools Owners, and the Rules Owner, which
     onboarding.ensure_counsel adds once a computer enrolls. The Rules Owner is built in, so it is not one of the company's own
     bots (own_bots)."""
     return {
@@ -166,6 +166,7 @@ def built_in(settings):
         H.RULES_OWNER,
         "updates-owner",
         "automations-owner",
+        H.TOOLS_OWNER,
     }
 
 

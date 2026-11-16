@@ -2,7 +2,8 @@
 
 A bot owns its tools and its skills. To give one a service such as Jira or Linear, prefer the vendor's own
 MCP server to anything we write: the vendor keeps it current, and Tico passes it to the bot's harness. Ask
-BotOps ("connect Linear to Atlas") and it does the steps below; this page says what they are.
+the Tools Owner in the Tools page's chat ("connect Linear to Atlas") and it does the steps below, with a card for the key and
+a person's click for each grant; BotOps writes the bot's `bot.yaml`. This page says what the steps are.
 
 **Tico does not currently manage OAuth renewal for bots.** Prefer a vendor-supported API credential or a connection with
 supported automatic refresh. Some providers require renewed human consent; check their documentation. When Tico cannot
@@ -87,7 +88,7 @@ consent screen:
 - Not verified here: the exact tool list, and whether a site needs the admin setting before a token is accepted. If the server answers
   `auth failed` on the Tools tab, ask the admin.
 
-Ask BotOps: "Connect Jira to `<bot>` with a service account key." / "Give `<bot>` read access to Confluence."
+Ask the Tools Owner: "Connect Jira to `<bot>` with a service account key." / "Give `<bot>` read access to Confluence."
 
 ## Linear
 
@@ -114,7 +115,7 @@ If you want writes, choose the write endpoint and declare that intent separately
   env: LINEAR_API_KEY
 ```
 
-Ask BotOps: "Connect Linear to `<bot>`; it may only read."
+Ask the Tools Owner: "Connect Linear to `<bot>`; it may only read."
 
 ## PostHog
 
@@ -279,7 +280,8 @@ The Listening row shows its worst source's state. Bots named are only those you 
 
 `GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
 who_total, needs_you, href}], counts, next}`, at most 500 rows and 192 KB a page; follow `next` with `cursor`. CLI:
-`tico tool index`; MCP: `tico_tool_index` (BotOps reads it with the rights of the person who asked).
+`tico tool index`; MCP: `tico_tool_index` (BotOps reads it with the rights of the person who asked; the Tools page's owner
+bot reads every tool the company sees, with who holds which level, never a key).
 
 ### API tools
 

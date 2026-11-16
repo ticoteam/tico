@@ -1204,8 +1204,8 @@ class Onboarding:
 
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
-        Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, and the Finance Owner once Finance is set
-        up), the Assistant's routines it never had, General's manager once the General Manager exists
+        Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, the Tools Owner, and the Finance Owner
+        once Finance is set up), the Assistant's routines it never had, General's manager once the General Manager exists
         (pipeline_settings.ensure_presets), BotOps' daily "Sweep stuck tasks" once BotOps is active, and the models of
         the bots that follow the company's plans (plan_models.follow). Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import, the sample
@@ -1223,6 +1223,7 @@ class Onboarding:
             ("general_manager", self.ensure_general_manager),
             ("counsel", self.ensure_counsel),
             ("brand_owner", self.ensure_brand_owner),
+            ("tools_owner", self.ensure_tools_owner),
             ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),
             ("general_team", self.ensure_general_team),
             ("builtin_routines", self.ensure_builtin_routines),
@@ -1278,6 +1279,11 @@ class Onboarding:
         under its slug (a Brand Manager) keeps that bot as it is and gets no second one (`_ensure_builtin`). Its monthly
         audit starts off and goes on when its setup is done (`onboarded`)."""
         return self._ensure_builtin(c, H.DESIGN_OWNER, "Design Owner", "brand_owner.turned_on")
+
+    def ensure_tools_owner(self, c):
+        """The same for the Tools Owner: a company from before it was built in gets it once it can run it, and
+        `ensure_general_team` then puts it under the General Manager. It owns the Tools page (backend/page_owners.py)."""
+        return self._ensure_builtin(c, H.TOOLS_OWNER, "Tools Owner", "tools_owner.turned_on")
 
     def ensure_general_team(self, c, laid=()):
         """Every built-in has one manager: the General Manager's team (Groups.GENERAL_TEAM) reports to it, and it, the
