@@ -45,7 +45,8 @@ def _draft_revision(api, args):
     if not draft:
         raise APIError(
             "forbidden",
-            "Only the owner writes the strategy; a bot proposes a change with tico_proposal_create, kind strategy_draft",
+            "Only the owner (or the Strategy Owner, on their words) writes the strategy; a bot proposes a change with "
+            "tico_proposal_create, kind strategy_draft",
             403,
         )
     return draft["revision"]
@@ -77,13 +78,14 @@ BET_PROPS = {
     "cites": {"type": "array", "items": {"type": "string"}, "description": "Market entity or page ids it rests on"},
     "status": {"type": "string", "enum": ["proposed", "active", "retired"], "description": "Proposed by default"},
     "rank": {"type": "integer", "description": "Its place in the list"},
+    "task": _s("The Strategy Owner's: its task the owner wrote these words on"),
 }
 
 
 def _bet_body(args):
     body = {
         k: args.get(k)
-        for k in ("statement", "why", "rules_out", "cites", "status", "rank", "revision")
+        for k in ("statement", "why", "rules_out", "cites", "status", "rank", "revision", "task")
         if args.get(k) is not None
     }
     wrong = _wrong_if(args)
@@ -127,9 +129,11 @@ def strategy_summary(api, args):
 
 @tool(
     "tico_strategy_draft",
-    "Owner only: change the strategy draft, only the fields sent (\"\" clears one). A bot "
-    "proposes instead: tico_proposal_create, kind strategy_draft.",
+    "The owner: change the strategy draft, only the fields sent (\"\" clears one). The Strategy Owner writes it "
+    "too, only what the owner told it, naming the task they said it on (task). Any other bot proposes instead: "
+    "tico_proposal_create, kind strategy_draft.",
     {
+        "task": _s("The Strategy Owner's: its task the owner wrote these words on"),
         "summary": _s("At most 400 characters: what every bot reads"),
         "vision": _s("One or two sentences"),
         "sections": {
@@ -157,7 +161,7 @@ def strategy_draft(api, args):
                 {"title": key.strip().replace("-", " ").capitalize(), "body": text} if text else ""
             )
     body = {"revision": _draft_revision(api, args)}
-    for k in ("summary", "vision"):
+    for k in ("summary", "vision", "task"):
         if args.get(k) is not None:
             body[k] = args[k]
     if sections:
@@ -182,17 +186,25 @@ def strategy_vision(api, args):
 
 @tool(
     "tico_strategy_publish",
-    "Owner only: the draft becomes the next numbered version. Needs an active bet with "
-    "rules_out and wrong_if, and \"What we won't do\".",
+    "The owner: the draft becomes the next numbered version. Needs an active bet with "
+    "rules_out and wrong_if, and \"What we won't do\". The Strategy Owner publishes too, only when the owner told it "
+    "to, naming that task (task); the note says whose words.",
     {
         "note": _s("What this version is for, in a line", default=""),
+        "task": _s("The Strategy Owner's: its task the owner told it to publish on"),
         "revision": {"type": "integer", "description": "The draft's revision you read; default the current one"},
     },
     writes=True,
 )
 def strategy_publish(api, args):
     return _as_person(api).post(
-        "strategy/publish", {"note": args.get("note") or "", "revision": _draft_revision(api, args)}, key=_key(args)
+        "strategy/publish",
+        {
+            "note": args.get("note") or "",
+            "revision": _draft_revision(api, args),
+            **({"task": args["task"]} if args.get("task") else {}),
+        },
+        key=_key(args),
     )
 
 
@@ -220,8 +232,8 @@ def strategy_diff(api, args):
 
 @tool(
     "tico_strategy_bet_add",
-    "Owner only: a new bet, proposed unless status says otherwise. A bot proposes one with "
-    "tico_proposal_create, kind strategy_draft.",
+    "Owner only: a new bet, proposed unless status says otherwise. The Strategy Owner adds one on the owner's words "
+    "with `task`; any other bot proposes one with tico_proposal_create, kind strategy_draft.",
     {"statement": _s("One sentence that could turn out wrong"), **BET_PROPS},
     required=("statement",),
     writes=True,
@@ -232,7 +244,7 @@ def strategy_bet_add(api, args):
 
 @tool(
     "tico_strategy_bet_update",
-    "Owner only: change a bet, only the fields sent.",
+    "Owner only, or the Strategy Owner on the owner's words (`task`): change a bet, only the fields sent.",
     {"id": _s("Bet id"), "statement": _s("One sentence that could turn out wrong"), **BET_PROPS},
     required=("id",),
     writes=True,

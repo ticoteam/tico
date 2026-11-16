@@ -1233,12 +1233,39 @@ STABLE = [
         "NeedsYou",
     ),
     (
+        "/api/v2/needs-you/snooze",
+        "post",
+        "Needs you",
+        "snoozeNeedsYouAsk",
+        "Snooze one ask for yourself (`id`: its Needs-you id, `until`: a date-time to come, at most a year on): it "
+        "leaves your Needs you, its count and Flow until then, or until it is asked again, and stays in everyone else's. "
+        "The task and its bot are not changed or told. Only a person the ask waits on, or their own Assistant",
+        None,
+    ),
+    (
+        "/api/v2/needs-you/unsnooze",
+        "post",
+        "Needs you",
+        "unsnoozeNeedsYouAsk",
+        "Bring an ask you snoozed (`id`) back into your Needs you now",
+        None,
+    ),
+    (
+        "/api/v2/needs-you/snoozed",
+        "get",
+        "Needs you",
+        "getNeedsYouSnoozed",
+        "The asks you snoozed for yourself that are still snoozed, as Needs you lists them, each with `snoozed_until`, "
+        "and `next`, when the first comes back",
+        None,
+    ),
+    (
         "/api/v2/flow/opinions",
         "post",
         "Needs you",
         "getFlowOpinions",
         "Tico's opinion on each ask in Flow's set (`items`: the Needs-you ids of asks, at most 30), one entry per id in "
-        "order: `ready` with `pick` (an OK: approve, send_back or snooze; a question: one of its choices, or empty), "
+        "order: `ready` with `pick` (an OK: approve or send_back, never a snooze; a question: one of its choices, or empty), "
         "`line` (80 characters at most), `note` (for a send back) and `score` (0-100, to sort by, never shown); "
         "`pending` while it is worked out: ask again for those; `none` when there is none, including any id that is "
         "not an ask on the caller's own Needs you. Answers at once, never waits on a model and changes no task. One "
@@ -1293,6 +1320,18 @@ STABLE = [
         "off the request, with one metered call, and is `pending` until then; it keeps its text when that fails or no "
         "model is to be had. 409 while it is already being rewritten or is not open",
         "FlowSuggestion",
+    ),
+    (
+        "/api/v2/flow/ping",
+        "post",
+        "Needs you",
+        "pingFlowBots",
+        "Ask bots for the questions they have for you (people only): `scope` `reports` (default: the bots you manage), "
+        "`bot` (`id`: one bot) or `group` (`id`: a team's bots, the teams under it included). Only bots you may read; "
+        "never BotOps or the Assistant. Each gets one message from you pointing at the get-aligned skill; its questions "
+        "come back as tasks of its own, each with one ask to you, in your Needs you. A bot you pinged in the last 10 "
+        "minutes is listed in `recent` and not messaged again. Calls no model",
+        "FlowPinged",
     ),
     (
         "/api/v2/meetings",
@@ -2476,6 +2515,10 @@ NEEDS_ITEM = obj(
     conversation_id={"type": "string", "description": "The thread a mention was written in"},
     root_id={"type": "string", "description": "A mention's root thread: the rail row it moves"},
     href={"type": "string", "description": "A paused cause a person fixes in the app: where (Connect GitHub)"},
+    snoozed_until={
+        "type": "string",
+        "description": "In GET /api/v2/needs-you/snoozed: when this snoozed ask comes back",
+    },
 )
 
 # Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.
@@ -2908,6 +2951,21 @@ SCHEMAS = {
             "shows": items({"type": "string"}),
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
+            # A stage's OK that names nothing to show: the page that counted last on an earlier visit of the task (the
+            # QA page at OK release), to a reader who may open it; to anyone else {removed, label} or absent.
+            "earlier": obj(
+                {
+                    "file_id": "s",
+                    "version": "i",
+                    "ref": "s",
+                    "stage_id": "s",
+                    "stage": "s",
+                    "source": items({"type": "string"}),
+                    "removed": "b",
+                    "label": "s",
+                },
+                required=[],
+            ),
             "answer": {"oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]},
             # A stage's answer: how it is named and what it takes. Absent on every other requirement.
             "typed": obj(
@@ -3800,6 +3858,11 @@ SCHEMAS = {
                     "type": "boolean",
                     "description": "The cursor was from an older version: this page is the first",
                 },
+                snoozed_until={
+                    "type": ["string", "null"],
+                    "description": "When the first ask the caller snoozed for themselves comes back: read the list again "
+                    "then (POST /api/v2/needs-you/snooze)",
+                },
             ),
             obj({"actor": "s", "count": "i"}),
         ]
@@ -3827,6 +3890,12 @@ SCHEMAS = {
         }
     ),
     "FlowSuggestion": obj({"suggestion": ref("FlowSuggestionRow")}),
+    "FlowPinged": obj(
+        {
+            "pinged": items(obj({"id": "s", "name": "s"})),
+            "recent": items(obj({"id": "s", "name": "s"})),
+        }
+    ),
     "FlowSuggestionRow": obj(
         {
             "id": "s",
@@ -7737,7 +7806,8 @@ STABLE.extend(
             'put',
             'Strategy',
             'updateStrategyDraft',
-            'Owner only: change the draft, only the fields sent; a stale revision answers 409',
+            'The owner, or the Strategy Owner naming `task`, a task of its own the owner wrote on (their words; the '
+            'history keeps whose): change the draft, only the fields sent; a stale revision answers 409',
             None,
         ),
         (
@@ -7753,7 +7823,8 @@ STABLE.extend(
             'post',
             'Strategy',
             'publishStrategy',
-            'Owner only: the draft becomes the next numbered version',
+            'The owner, or the Strategy Owner naming `task` as for the draft: the draft becomes the next numbered '
+            'version, and its note says whose words it was',
             None,
         ),
         (
@@ -7773,13 +7844,20 @@ STABLE.extend(
             'What changed between two published versions',
             None,
         ),
-        ('/api/v2/strategy/bets', 'post', 'Strategy', 'addStrategyBet', 'Owner only: a new bet', None),
+        (
+            '/api/v2/strategy/bets',
+            'post',
+            'Strategy',
+            'addStrategyBet',
+            "Owner only, or the Strategy Owner on the owner's words (`task`: its task they wrote them on): a new bet",
+            None,
+        ),
         (
             '/api/v2/strategy/bets/{bet_id}',
             'post',
             'Strategy',
             'updateStrategyBet',
-            'Owner only: change a bet, only the fields sent',
+            "Owner only, or the Strategy Owner on the owner's words (`task`): change a bet, only the fields sent",
             None,
         ),
         (

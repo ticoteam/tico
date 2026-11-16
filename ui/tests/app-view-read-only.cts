@@ -4,7 +4,7 @@
 // allowlist: New task, Follow, the page +, answer buttons and the message box do not show, and the box is a grey
 // "Read-only view" line. The task window shows no greyed write either (👍 👎, the + and × on Sessions, Edit), and no
 // heading with nothing under it. Tasks reads the bot's name and its open tasks by stage, with a line that Needs you is a
-// person's list; Company › Mine is one card of the bot's tasks. A Company place that fails to load says "This page
+// person's list, and the phone bar has no Flow (Threads keeps its slot); Company › Mine is one card of the bot's tasks. A Company place that fails to load says "This page
 // couldn't load." with Try again, never the server's text. A person sees New task and the message box as before.
 // The bot's list keeps up through the refresh (an edit, a new task, one closed or given away) and pages with More, and C
 // opens no New task dialog in a view.
@@ -255,6 +255,16 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await go(page, `#/bot/${BOT}`);
     await page.locator('#main .view-only-line').waitFor({timeout: t(15000)});
     assert.deepEqual(await writesShown(page), [], 'a thread offers nothing that writes');
+    // A write drawn later (a goal that loads after the page) is greyed out in the turn it is drawn, not a frame later.
+    assert.equal(await page.evaluate(async () => {
+      const b = document.createElement('button');
+      b.textContent = 'Set goal';
+      document.querySelector('#main')!.append(b);
+      await Promise.resolve();
+      const off = b.disabled;
+      b.remove();
+      return off;
+    }), true, 'a write drawn late is off at once');
     // The bot's ⋯ opens in a view (its details are reads) and offers nothing that writes.
     await page.locator('#bot-more-btn').click();
     await page.locator('#bot-more-menu [data-bot-mtab="info"]').waitFor({state: 'visible', timeout: t(15000)});
@@ -271,9 +281,13 @@ const ready = (page: Page) => page.waitForFunction(() => {
     assert.deepEqual(await writesShown(page), [], 'the bot\'s ⋯ on a phone offers nothing that writes');
     await incognito.click();
     await page.waitForFunction(() => location.hash.endsWith('/dm'), null, {timeout: t(15000)});
-    // The bottom bar moves between places (Team, Assistant, More), so none of it is greyed out.
+    // The bottom bar moves between places (Team, Assistant, More), so none of it is greyed out. A bot has no Flow: its
+    // bar keeps Threads in that slot.
     await go(page, '#/tasks');
     await page.locator('#task-body .tk-row').first().waitFor({timeout: t(15000)});
+    await page.locator('#mobile-threads').waitFor({timeout: t(15000)});
+    assert.equal(await page.locator('#mobile-flow').isVisible(), false, 'no Flow in a bot\'s view');
+    assert.equal(await page.locator('#mobile-more [data-threads-badge]').isVisible(), false, 'the Threads tab carries its own count');
     assert.deepEqual(await page.locator('#mobile-nav button:visible').evaluateAll(bs => bs.filter(b => (b as HTMLButtonElement).disabled).map(b => b.id)), [], 'the phone bar is all reads');
     assert.deepEqual(await writesShown(page), [], 'Tasks on a phone offers nothing that writes');
     assert.deepEqual(writes, [], 'the view sent no write');

@@ -744,6 +744,33 @@ def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row
     return {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
 
 
+def earlier_page(conn: "sqlite3.Connection", task_id: str, visit_id: str, requirement: Row) -> Row | None:
+    """What a stage's OK that names nothing to show shows instead (#3784): the page that counted last on an earlier
+    visit of its task (the QA page at OK release), {file_id, version, ref, stage_id, stage, source}, or None. Only for
+    a stage's own OK with no `shows` and nothing bound to it; a bot's ask says what it shows. `source` is the page:
+    files.readable_page_refs takes this alone out of the entry for a reader who may not open it, never the ask."""
+    from . import task_asks
+    from . import task_engine as E
+    from . import task_pages
+
+    if requirement.get("kind") != "ok" or requirement.get("visit_id") or requirement.get("shows"):
+        return None
+    found = task_pages.earlier(conn, task_id, visit_id)
+    if not found or task_asks.grant(conn, str(requirement["id"])):
+        return None
+    ref = f"page:{found['file_id']}@{int(found['version'])}"
+    stage_id = str(found["stage_id"])
+    stage = str((E.stage(conn, stage_id) or {}).get("name") or stage_id)
+    return {
+        "file_id": found["file_id"],
+        "version": int(found["version"]),
+        "ref": ref,
+        "stage_id": stage_id,
+        "stage": stage,
+        "source": [ref],
+    }
+
+
 # The viewer of what is kept on record (the audit of a refusal, a stored response): anyone may come to read it, so a
 # private task it names is hidden as from someone who may not read that task.
 ON_RECORD = "*"
@@ -976,6 +1003,27 @@ def _title_of(requirement: Row) -> str | None:
     return title if isinstance(title, str) and title else None
 
 
+def ask_shown(conn: "sqlite3.Connection", row: Row, requirement: Row) -> Row:
+    """What a requirement of the task's open visit asks, as a party to it reads it: its sentence, choices, typed
+    question, brief, title and what it shows (a page requirement: the page attached now, at its pinned version). The
+    same for every party; `_leave_entry` hides a bound OK's from anyone else, and a snooze of the ask holds while this
+    is what was asked (waiting_on.ask_version)."""
+    from . import task_requirements as R
+
+    page = _page_of(conn, row["visit"]["id"], requirement) if requirement["kind"] == "page" else None
+    typed, brief, title = _typed_view(requirement), _brief_of(requirement), _title_of(requirement)
+    return {
+        "kind": requirement["kind"],
+        "line": R.name_of(requirement),
+        "choices": requirement.get("choices"),
+        **({"typed": typed} if typed else {}),
+        **({"brief": brief} if brief else {}),
+        **({"title": title} if title else {}),
+        "shows": [page["ref"]] if page else list(requirement.get("shows") or []),
+        **({"page": page} if page else {}),
+    }
+
+
 def _leave_entry(
     conn: "sqlite3.Connection",
     row: Row,
@@ -989,7 +1037,6 @@ def _leave_entry(
     """One entry of a task's `to_leave` (task_view): a requirement of its open visit, where it stands, and what `viewer`
     may do about it. `hidden` is what `hidden_filed` keeps from them; `holder` and `works` are the task's."""
     from . import task_asks
-    from . import task_requirements as R
 
     task_id = row["id"]
     requirement: Row = standing.requirement
@@ -997,27 +1044,29 @@ def _leave_entry(
     # A bound OK's line, what it shows and a send back's note are its parties' (task_asks.party): anyone else who
     # reads the task learns only that it waits on a person.
     private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
-    # A page requirement shows the page attached now, at its pinned version: what an OK of it is for.
-    page = _page_of(conn, row["visit"]["id"], requirement) if requirement["kind"] == "page" else None
-    shows = [page["ref"]] if page else [] if private else requirement.get("shows") or []
-    typed = _typed_view(requirement)
+    asked = ask_shown(conn, row, requirement)
+    page: Row | None = asked.get("page")
+    shows: list[Any] = [page["ref"]] if page else [] if private else asked["shows"]
+    # An OK that names nothing to show: the task's page from an earlier stage, for its parties alone.
+    earlier = None if private else earlier_page(conn, task_id, row["visit"]["id"], requirement)
     return {
         "requirement_id": requirement["id"],
         "kind": requirement["kind"],
-        "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
+        "line": task_asks.PRIVATE_LINE if private else asked["line"],
         "met": standing.met,
         "standing": task_asks.PRIVATE_LINE if private and not standing.met else standing_line(standing, hidden),
         "who": None if standing.met or standing.on in hidden else standing.on,
         "asked_by": None if private else requirement.get("added_by_id") if requirement.get("visit_id") else None,
-        "choices": None if private else requirement.get("choices"),
-        **({"typed": typed} if typed else {}),
-        **({"brief": _brief_of(requirement)} if _brief_of(requirement) and not private else {}),
-        **({"title": _title_of(requirement)} if _title_of(requirement) and not private else {}),
+        "choices": None if private else asked["choices"],
+        **({"typed": asked["typed"]} if asked.get("typed") else {}),
+        **({"brief": asked["brief"]} if asked.get("brief") and not private else {}),
+        **({"title": asked["title"]} if asked.get("title") and not private else {}),
         "shows": shows,
         # What it shows is where its words come from: a reader who may not open one of those pages reads
         # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
         **({"source": shows} if shows else {}),
         **({"page": page} if page else {}),
+        **({"earlier": earlier} if earlier else {}),
         "answer": _answer_view(conn, task_id, answer, private) if answer else None,
         "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
     }

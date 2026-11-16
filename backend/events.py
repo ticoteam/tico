@@ -617,6 +617,16 @@ TRIGGERS = [
         _ANY_COLUMN,
         _row("tasks", "snooze", "NEW.task_id") + _needs("task", *_task_parties("NEW.task_id")),
     ),
+    # A person's snooze of one ask (backend/ask_snoozes.py) moves their own Needs you, and nobody else's.
+    ("changes_ask_snoozes_insert", "INSERT", "ask_snoozes", None, _needs("snooze", "NEW.person_id")),
+    (
+        "changes_ask_snoozes_update",
+        "UPDATE",
+        "ask_snoozes",
+        _ANY_COLUMN,
+        _needs("snooze", "OLD.person_id", "NEW.person_id"),
+    ),
+    ("changes_ask_snoozes_delete", "DELETE", "ask_snoozes", None, _needs("snooze", "OLD.person_id")),
     (
         "changes_links_insert",
         "INSERT",

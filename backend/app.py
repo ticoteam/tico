@@ -1703,8 +1703,11 @@ def create_app(settings=None):
         ).fetchone()
         value["parts"] = {"total": counts[0] or 0, "done": counts[1] or 0}
         if who is not None:
-            from .files import readable_page_refs
+            from .files import readable_earlier, readable_page_refs
 
+            # An OK's page from an earlier stage may live on another task: the file's own read check decides it.
+            for entry in value.get("to_leave") or []:
+                readable_earlier(c, auth, who, entry)
             value = readable_page_refs(c, auth, who, value)
             value = teammate_access.Known(c, who, auth).task(value)  # people the reader may not see
         return value
@@ -5560,6 +5563,12 @@ def create_app(settings=None):
     from . import flow_suggestions
 
     flow_suggestions.install(app, store, auth, mutate)  # Flow's suggested rules, drawn from send-back notes
+    from . import flow_ping
+
+    flow_ping.install(app, store, auth, mutate)  # Flow's "Ping your bots": bots ask the person their questions
+    from . import ask_snoozes
+
+    ask_snoozes.install(app, store, auth, mutate)  # a person's snooze of one ask in their own Needs you
     from . import maintenance, system_routines
 
     system_routines.install(app, store, auth, mutate)

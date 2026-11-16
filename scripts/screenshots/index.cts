@@ -107,11 +107,11 @@ const DEMO_NOW = process.env.TICO_DEMO_NOW || '2026-11-06T18:00:00Z';
 
 // The files the Tasks page draws: the Needs you page shows the same list (its route is #/tasks).
 const TASKS_UI = [
-  'ui/app/stage-rules.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
+  'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css',  // each stage header's Rules button and panel
   'ui/app/tasks.ts', 'ui/app/tasks-page.ts', 'ui/app/task-*.ts', 'ui/app/pull-refresh.ts', 'ui/app/hub-v2.ts',
   'ui/app/issues.ts', 'ui/styles/tasks.css', 'ui/styles/task-*.css', 'ui/styles/board.css', 'ui/styles/hub-v2.css',
   'ui/app/pipeline-*.ts', 'ui/styles/pipeline.css',
-  'ui/app/give-to.ts', 'ui/styles/give-to.css',  // Give to…: a task's Owner, New task, Ask someone, Subtask (and Needs you)
+  'ui/app/give-to.ts', 'ui/app/give-to-field.ts', 'ui/styles/give-to.css',  // Give to…: a task's Owner, New task, Ask someone, Subtask (and Needs you)
 ];
 const BOT_CHAT_UI = [
   'ui/app/bot-*.js', 'ui/app/bot-*.ts', 'ui/bot-files.ts', 'ui/bot-tools.ts', 'ui/app/chat*.ts', 'ui/app/feedback.ts',
@@ -140,7 +140,7 @@ const PAGES: PageSpec[] = [
     ui: [...TASKS_UI, 'ui/app/needs-you.ts', 'ui/app/decide.ts', 'ui/app/decide-content.ts', 'ui/app/decide-about.ts', 'ui/styles/needs-you.css', 'ui/styles/decide.css']},
   {name: 'org-chart', route: '#/goals', ready: 'Ship 6,000 units and 40 business installs this season',
     ui: ['ui/app/goals.ts', 'ui/app/goals-kpi-views.ts', 'ui/goals-kpis.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts',
-      'ui/app/drag-pan.ts', 'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
+      'ui/app/drag-pan.ts', 'ui/app/org-chart-shape.ts', 'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
       'ui/styles/org-factories.css']},
   // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
   {name: 'bot-chat', route: '#/bot/support-owner', ready: 'No messages yet', ui: BOT_CHAT_UI},
@@ -213,7 +213,7 @@ const PAGES: PageSpec[] = [
   {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
   {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/drag-pan.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css',
     // The stage rules panel opens from Rules › Pipelines and stages and from each stage header on the board.
-    'ui/app/stage-rules.ts', 'ui/styles/stage-rules.css']},
+    'ui/app/stage-rules.ts', 'ui/app/stage-rules-mark.ts', 'ui/styles/stage-rules.css']},
   {name: 'contacts', route: '#/library/contacts', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},
   {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/app/automations*.ts', 'ui/styles/automations.css']},
   {name: 'listening', route: '#/listening', ready: 'Listening', ui: ['ui/app/listening.ts', 'ui/styles/listening.css', 'ui/app/page-chat.ts', 'ui/styles/page-chat.css', 'ui/app/empty-art.ts']},

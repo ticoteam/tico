@@ -44,9 +44,10 @@ goal's automatic colour is worked out at once. A colour a person set by hand sta
 
 **Changes** at the bottom lists each change with who made it, when, and the level before and after.
 
-Only the owner changes the level, the regular checks, the Strategy Owner's name and publishes a
-[strategy version](strategy.md#who-may-do-what), and only by their own click. An admin cannot. A bot cannot, the
-Strategy Owner included, and neither can your Assistant acting for the owner. Choosing the level you are already on changes
+Only the owner changes the level, the regular checks and the Strategy Owner's name, and only by their own click. An
+admin cannot. A bot cannot, the Strategy Owner included, and neither can your Assistant acting for the owner. A
+[strategy version](strategy.md#who-may-do-what) is published by the owner, or by the Strategy Owner on the owner's own
+words (on a task it names). Choosing the level you are already on changes
 nothing and logs nothing.
 
 To rename the Strategy Owner, the owner changes its **Name** in **Settings > Bots**. Without a name of your own it is called
@@ -59,7 +60,10 @@ Over the API, `GET /api/v2/strategy-bot` shows `name`, `regular_checks`, `level`
 ## Strategy
 
 The [Strategy](strategy.md) page is the Strategy Owner's first job. At every level it **proposes**; you write the draft and
-the bets, and you publish:
+the bets, and you publish. The one exception is your own words: when you tell it what the strategy should say (answering
+its question or commenting on its task; a task's body never counts, since a bot can write it), it updates the sections and bets your words are about and publishes, with the
+history and the version's note saying they were your words. It notes your answer in its memory too, but the strategy is
+where it lands.
 
 - **Drafting.** A task "Draft the strategy", or you asking in your DM, runs its `draft-the-strategy` playbook. It reads
   the market pages, the setup answers, the goals and KPIs, and puts **claims** to you to keep, edit or strike ("Your

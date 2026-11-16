@@ -444,7 +444,7 @@ function tasksReviewCount(state: TasksPageState): number {
 // says so.
 async function tasksReview(state: TasksPageState): Promise<void> {
   const p = tasksPipeline(state);
-  if (!p) { if (!decideGoThrough()) toast('Nothing waits on you'); return; }
+  if (!p) { if (!await decideGoThrough()) toast('Nothing waits on you'); return; }
   if (!await decideStageOpen('', p.id)) toast(`Nothing waits on you in ${p.name}`);
 }
 function tasksHeadPaint(state: TasksPageState) {

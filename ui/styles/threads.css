@@ -3,8 +3,10 @@
 
 /* a thread's mark where it has no avatar (a Home or a DM shows a face) */
 .th-mark{width:18px;height:18px;font-size:17px}
-/* The bottom bar's Threads tab is shown only when the server has threads; the bar's flex rule would undo `hidden`. */
+/* The bottom bar's Threads tab (a bot's; a person's Threads is in More) is shown only when the server has threads; the
+   bar's flex rule would undo `hidden`. While it is there, More leaves its count to it. */
 .mobile-nav-item[hidden]{display:none}
+#mobile-nav:has(#mobile-threads:not([hidden])) [data-threads-badge]{display:none}
 
 /* one thread: a column with the timeline scrolling and the composer under it */
 #main.thread-layout{max-width:none}

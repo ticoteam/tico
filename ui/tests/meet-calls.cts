@@ -385,6 +385,8 @@ let browser: import('playwright').Browser | null = null;
     await start.click();
     tab = await opened;
     await tab.waitForEvent('close');
+    // Joined here: the in-call code is a page part (ui/parts.json), so the join goes out once it has loaded.
+    await page.waitForFunction(() => window.__order.some(e => e.endsWith('/join')));
     assert.deepEqual((await order()).slice(0, 2), ['open ', 'POST /api/v2/threads/t-plan/calls']);
     // A Google Meet: the blank tab goes to it.
     mode.start = 'google_meet';

@@ -3,15 +3,15 @@ import type {Page, Route} from 'playwright';
 // new routes:
 // - the screen scrolls as one: the thing asked about, then the question and Notes; nothing else scrolls, and at the end
 //   of the scroll no text is under the button bar, which is pinned to the bottom with a solid background;
-// - Approve, Send back and Skip stay fully visible, at least 44 px tall and tappable while "Approved · Undo" shows: the
+// - Approve, Send back and Snooze stay fully visible, at least 44 px tall and tappable while "Approved · Undo" shows: the
 //   message sits above the bar;
 // - ‹ › show on the phone, 8 px clear of ✕: next opens the next item and previous comes back;
 // - a second tap on the same spot within 400 ms of the next item coming in approves nothing;
 // - Send back is on with an empty note: a tap focuses Notes with "Say what to change" and sends nothing; Notes starts one
-//   line tall;
-// - an ask with nothing to show opens on its question, right under the header: a question whose task has no text, and an
-//   OK with nothing attached (no grant, no shows: an empty .dc-doc, task #472); an OK whose only show is a page keeps
-//   its pane, page and all;
+//   line tall, its placeholder Notes again once the item is left;
+// - a question opens on itself, right under the header, its task's line under it;
+// - an OK with nothing attached (no grant, no shows: a pitch is the task itself) shows its task's title once and text
+//   above the question, not a blank pane; an OK whose only show is a page shows the page and not the task's text;
 // - with the keyboard up (the visible area shrinks, viewport.ts) the bar stays inside it;
 // - at 1440 px the screen is as before: two columns, ‹ ›, Notes 7 lines, Send back off until there is a note, no tap guard.
 // Each check is collected, so a run on the old code lists every one that fails.
@@ -72,6 +72,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
       if (url.origin !== 'http://tico-ui.test') return route.abort();
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      // The icon font, so the shots show icons, not their names.
+      if (p.startsWith('/vendor/fonts/')) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
       if (p === '/api/me') return json({...me, config});
@@ -90,6 +92,9 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
         shown_hash: okRead[1]!.slice(1).repeat(64), standing: 'waiting', task_id: okRead[1]!.replace('r', 't')});
       // The question's task has no text of its own: nothing to show.
       if (p === '/api/v2/tasks/t3') return json({task: {...brief('t3', 'Task 3'), body: ''}});
+      // The bare OK's task: the pitch is its text.
+      if (p === '/api/v2/tasks/t5') return json({task: {...brief('t5', 'Pitch: a weekly digest'), body: 'Send each person one email on Monday with what changed.'}});
+      if (p === '/api/v2/tasks/t6') return json({task: {...brief('t6', 'Task 6'), body: 'Task six text.'}});
       if (p === '/api/v2/flow/opinions') return json({opinions: []});   // Tico has none: Flow as without it
       if (r.method() !== 'GET' && p.startsWith('/api/')) {
         writes.push(`${r.method()} ${p}`);
@@ -109,7 +114,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await page.locator('[data-need="r1"]').click();
     const dialog = page.locator('#need-card');
     const at = async (q: number) => { await dialog.locator('.dc-q', {hasText: Q[q - 1]!}).waitFor(); };
-    const approve = '#need-card [data-dc="approve"]', sendback = '#need-card [data-dc="sendback"]', skip = '#need-card [data-dc="skip"]';
+    const approve = '#need-card [data-dc="approve"]', sendback = '#need-card [data-dc="sendback"]', snooze = '#need-card [data-dc="snooze"]';
     await at(1);
     await page.locator(`${approve}:not([disabled])`).waitFor();
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-open.png')});
@@ -129,7 +134,7 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(Math.abs(bar.y + bar.height - VIEW.height) <= 1, `the bar ends at the bottom of the screen (${bar.y + bar.height})`);
     const barBg = await page.locator(`${approve} >> xpath=..`).evaluate(el => getComputedStyle(el).backgroundColor);
     check(!/rgba\(.*,\s*0\)$|transparent/.test(barBg), `the bar has a solid background (${barBg})`);
-    for (const sel of [approve, sendback, skip]) {
+    for (const sel of [approve, sendback, snooze]) {
       const b = (await box(page, sel))!;
       check(b.height >= 44, `${sel} is 44 px tall (${b.height})`);
     }
@@ -182,17 +187,14 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
       await page.locator(prev).click();
       await at(1);
       // Leaving the item clears the hint: back on it, Notes is plain again.
-      check(await page.locator('#dc-notes').getAttribute('placeholder') === null, 'the hint is gone after leaving the item');
+      check(await page.locator('#dc-notes').getAttribute('placeholder') === 'Notes', 'the hint is gone after leaving the item');
     } else {
-      // The old way to read items 2 and 4 first, so each is ready the moment it comes back: Skip through them, round
-      // the question and on to item 1.
-      for (const n of [2, 4]) { await page.locator(skip).click(); await at(n); await page.locator(`${approve}:not([disabled])`).waitFor(); }
-      await page.locator(skip).click(); await at(3);
-      await page.locator(skip).click(); await at(1);
+      check(false, '‹ › are needed to walk on a phone');
     }
     await page.locator(`${approve}:not([disabled])`).waitFor();
 
-    // Approve: "Approved · Undo" above the bar; all three buttons visible, 44 px, and reached by a tap.
+    // Approve: ↩ in the top bar, left of ‹ ›, over nothing: not the page, not the buttons; all three buttons visible,
+    // 44 px, and reached by a tap.
     const spot = (await box(page, approve))!;
     await page.mouse.click(spot.x + spot.width / 2, spot.y + spot.height / 2);
     await at(2);
@@ -201,8 +203,24 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(await dialog.locator('.dc-bar:not([hidden])').count() === 1, 'the message still shows');
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-approved.png')});
     const toast = (await box(page, '#need-card .dc-bar'))!, row = (await box(page, `${approve} >> xpath=..`))!;
-    check(toast.y + toast.height <= row.y, `"Approved · Undo" is above the bar (${toast.y + toast.height} > ${row.y})`);
-    for (const sel of [approve, sendback, skip]) {
+    const dcHead = (await box(page, '#need-card .dc-head'))!, nav = (await box(page, '#need-card .dc-nav'))!;
+    check(toast.y >= dcHead.y && toast.y + toast.height <= dcHead.y + dcHead.height && toast.x + toast.width <= nav.x + 1, `the undo sits in the top bar, left of ‹ › (${JSON.stringify(toast)})`);
+    check(toast.y + toast.height <= row.y, `the undo is clear of the buttons (${toast.y + toast.height} > ${row.y})`);
+    const undoBtn = (await box(page, '#need-card .dc-bar [data-dc="undo"]'))!;
+    check(undoBtn.width >= 44 && undoBtn.height >= 44, `the undo is a 44 px target (${undoBtn.width}x${undoBtn.height})`);
+    check(await page.locator('#need-card .dc-bar [data-dc="undo"]').getAttribute('aria-label') === 'Undo: Approved', 'its name says what it takes back');
+    check(!await page.locator('#need-card .dc-bar .dc-bar-w').evaluate(e => e.getBoundingClientRect().width > 2), 'icon only on a phone');
+    // Nothing of the bar's own moves for it, and it covers nothing: what is under its middle is the undo itself.
+    const covers = await page.evaluate(() => {
+      const r = document.querySelector('#need-card .dc-bar')!.getBoundingClientRect();
+      const under = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const others = [...document.querySelectorAll<HTMLElement>('#need-card .dc-head > :not(.dc-nav), #need-card .dc-nav > button')]
+        .filter(e => e.offsetParent).map(e => e.getBoundingClientRect())
+        .filter(o => o.width && o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top);
+      return [!!under?.closest('.dc-bar'), others.length];
+    });
+    check(covers[0] === true && covers[1] === 0, `the undo overlaps no control, the page or the buttons (${JSON.stringify(covers)})`);
+    for (const sel of [approve, sendback, snooze]) {
       const b = (await box(page, sel))!, reached = await hit(page, sel);
       check(b.height >= 44 && b.y + b.height <= VIEW.height && reached === 'self', `${sel} is visible and tappable while the message shows (${b.height} px, tap reaches ${reached})`);
     }
@@ -228,17 +246,17 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(JSON.stringify(writes) === JSON.stringify(['POST /api/v2/tasks/t1/asks/r1/ok', 'POST /api/v2/tasks/t2/asks/r2/ok']),
       `a second tap within 400 ms approves nothing (${JSON.stringify(writes)})`);
 
-    // An ask with nothing to show opens on its question, right under the header (Skip from the last wraps to it).
-    if (!await dialog.locator('.dc-q', {hasText: Q[2]!}).count()) await page.locator(skip).click();
+    // An ask with nothing to show opens on its question, right under the header (‹ or › to it).
+    if (!await dialog.locator('.dc-q', {hasText: Q[2]!}).count()) await page.locator(await page.locator(prev).isEnabled() ? prev : next).click();
     await at(3);
-    await dialog.locator('.dc-thing .dc-doc').waitFor({state: 'attached'});
+    await dialog.locator('.dc-thing .dc-bg').waitFor({state: 'attached'});   // its task: one line under it (#3786)
     await page.waitForTimeout(100);
     const head = (await box(page, '#need-card .dc-head'))!, q = (await box(page, '#need-card .dc-q'))!;
     check(q.y - (head.y + head.height) <= 24, `the question opens the screen (${q.y - (head.y + head.height)} px under the header)`);
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-question.png')});
     await page.close();
 
-    // An OK with nothing attached (no grant, no shows) opens on its question too: no blank pane, no hairline (task #472).
+    // An OK with nothing attached (no grant, no shows): its task's title and text above the question, the title once.
     needs = [ok(5, 'OK to go ahead?')];
     const bare = await browser.newPage({viewport: VIEW, serviceWorkers: 'block', hasTouch: true});
     bare.on('pageerror', (error: Error) => errors.push(error.message));
@@ -247,14 +265,16 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     await bare.locator('[data-need="r5"]').click();
     await bare.locator('#need-card .dc-q', {hasText: 'OK to go ahead?'}).waitFor();
     await bare.locator(`${approve}:not([disabled])`).waitFor();
-    await bare.locator('#need-card .dc-thing .dc-doc').waitFor({state: 'attached'});
-    await bare.waitForTimeout(100);
-    const head5 = (await box(bare, '#need-card .dc-head'))!, q5 = (await box(bare, '#need-card .dc-q'))!;
-    check(q5.y - (head5.y + head5.height) <= 24, `an empty OK opens on its question (${q5.y - (head5.y + head5.height)} px under the header)`);
-    check(!await bare.locator('#need-card .dc-thing').isVisible(), 'an empty OK shows no blank pane');
-    const rule = await bare.locator('#need-card .dc-side').evaluate(el => getComputedStyle(el).borderTopWidth);
-    check(rule === '0px', `an empty OK has no hairline above its question (${rule})`);
+    const pitch = bare.locator('#need-card .dc-thing .dc-md', {hasText: 'one email on Monday'});
+    await pitch.waitFor();
+    const title5 = bare.locator('#need-card .dc-thing .dc-title');
+    check(await title5.textContent() === 'Pitch: a weekly digest', `a bare OK shows its task's title (${await title5.textContent()})`);
+    check(await bare.locator('#need-card .dc-thing').getByText('Pitch: a weekly digest').count() === 1, 'a bare OK shows the title once');
+    const t5 = (await title5.boundingBox())!, p5 = (await pitch.boundingBox())!, q5 = (await box(bare, '#need-card .dc-q'))!;
+    check(t5.y < p5.y && p5.y + p5.height <= q5.y, `the title, then the text, then the question (${t5.y}, ${p5.y}, ${q5.y})`);
+    check(await bare.locator('#need-card .dc-thing').isVisible(), 'a bare OK shows its pane');
     if (shots) await bare.screenshot({path: path.join(shots, 'ask-phone-390-empty-ok.png')});
+    if (process.env.FLOW_SHOTS) await bare.locator('#need-card .dc-start').waitFor({state: 'detached'}).then(() => bare.screenshot({path: path.join(process.env.FLOW_SHOTS, 'phone-bare-ok.png')}));
     await bare.close();
 
     // An OK whose only show is a page has no text, yet its pane shows the page: it is not bare.
@@ -269,6 +289,8 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
     check(await paged.locator('#need-card .dc-thing').isVisible(), 'an OK showing only a page keeps its pane');
     check(await paged.locator('#need-card .dc-thing').getByText('Launch plan', {exact: false}).first().isVisible(),
       'an OK showing only a page shows the page');
+    await paged.waitForTimeout(200);
+    check(!await paged.locator('#need-card .dc-thing').getByText('Task six text.').count(), 'an OK showing a page shows only the page');
     await paged.close();
 
     // 1440 px: as before.
@@ -294,6 +316,6 @@ const scrollers = (page: Page) => page.evaluate(() => [...document.querySelector
 
     assert.deepEqual(errors, []);
     assert.deepEqual(fails, [], `\n- ${fails.join('\n- ')}`);
-    console.log('PASS: on a phone the ask screen scrolls as one, its bar stays tappable under "Approved · Undo", ‹ › step, a second tap is ignored, Send back asks for a note and an empty ask opens on its question.');
+    console.log('PASS: on a phone the ask screen scrolls as one, its bar stays tappable under "Approved · Undo", ‹ › step, a second tap is ignored, Send back asks for a note, an empty question opens on itself and a bare OK shows its task.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

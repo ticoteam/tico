@@ -24,10 +24,11 @@ class Model:
     """A writer that answers in turn from `answers` (the last one again once they run out) and keeps each prompt."""
 
     def __init__(self, *answers):
-        self.answers, self.prompts, self.model = list(answers), [], "acme-opinion-model"
+        self.answers, self.prompts, self.systems, self.model = list(answers), [], [], "acme-opinion-model"
 
     def __call__(self, system, user):
         self.prompts.append(user)
+        self.systems.append(system)
         answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
         if isinstance(answer, Exception):
             raise answer
@@ -62,14 +63,14 @@ def ask_ben(api, line="OK the launch note?", **more):
     return task, next(i["id"] for i in items if i.get("requirement_id") == asked["requirement_id"])
 
 
-def page_ask(api, text, people=None, private_home=False, versioned=True):
+def page_ask(api, text, people=None, private_home=False, versioned=True, title="Write the price page"):
     """Ana asks Ben, on a task of hers, to OK a page (a Tico file) at its first version: a page of that task, or with
     `private_home` of another task of hers that is private. `people`, when given, are the only ones who may open it;
     `versioned` False shows it as `page:<id>`, at whatever its version is. (task, Needs-you id, file id)."""
     store = api.app.state.store
     with store.transaction() as c:
         X.bot(c, "writer")
-        task = H.task_create(c, ANA, "Write the price page", "Due Friday. It must match PO 1182.", ANA, lint=False)
+        task = H.task_create(c, ANA, title, "Due Friday. It must match PO 1182.", ANA, lint=False)
         home = task
         if private_home:
             home = H.task_create(c, ANA, "Salary review", "Private.", ANA, private=True, lint=False)
@@ -281,7 +282,8 @@ def test_an_ok_picks_a_button_and_a_question_one_of_its_choices_or_nothing(api, 
     opinions(api, [item])
     got = opinions(api, [item])[item]
     assert (got["pick"], got["note"], got["score"]) == ("Next month", "", 40)
-    model(monkeypatch, {"pick": "Never", "line": "Can't tell. Nothing says who hosts it.", "note": "Who hosts?"})
+    assert got["line"] == "Pick Next month: The venue is booked until the 20th.", "a bare choice reads as done"
+    model(monkeypatch, {"pick": "Never", "line": "Nothing says who hosts it; the venue would know.", "note": "Who?"})
     _, item = ask_ben(api, line="Which venue?", choices=["The hall", "The park"])
     opinions(api, [item])
     got = opinions(api, [item])[item]
@@ -290,6 +292,70 @@ def test_an_ok_picks_a_button_and_a_question_one_of_its_choices_or_nothing(api, 
     _, item = ask_ben(api, line="OK the third note?", kind="ok")
     opinions(api, [item])
     assert opinions(api, [item])[item]["state"] == "none"
+
+
+CHANNELS = "Which channels do you sell on, and where do your spend and customer numbers live?"
+
+
+def test_a_question_is_asked_as_a_question_for_the_person_and_never_judged_as_a_page(api, monkeypatch):
+    """Tico Team, Nov 15 (#3786): a bot's "which channels" got "Can't answer yet. Page names no channels or systems"."""
+    wants = {"pick": "", "line": "Wants a list: your channels, and where spend and customer numbers live", "score": 60}
+    found = model(monkeypatch, wants)
+    _, item = ask_ben(api, line=CHANNELS)
+    opinions(api, [item])
+    assert opinions(api, [item])[item] == {"id": item, "state": "ready", "note": "", **wants}
+    system, prompt = found.systems[0], found.prompts[0]
+    assert system == F.QUESTION_SYSTEM != F.SYSTEM
+    assert "send_back" not in system and "Unanswerable as written" in system and "empty" in system
+    assert "Kind: a question for the person to answer, in their own words" in prompt
+    assert "What the ask shows" not in prompt, "a question shows no page, so none is named to it"
+    assert CHANNELS in prompt and "PO 1182" in prompt, "the task's own text, where the answer may be"
+    found = model(monkeypatch, {"pick": "OK", "line": "Approve. It looks right."})
+    _, item = ask_ben(api, line="OK the pitch?", kind="ok")
+    opinions(api, [item])
+    assert found.systems == [F.SYSTEM], "an OK keeps its own instructions"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Can't answer yet. Page names no channels or systems.",
+        "Send back. The ask is too vague.",
+        "Approve. It looks fine.",
+        "Cannot answer: the task holds no list.",
+        "Can't tell. Page doesn't say which channels.",
+        "Not sure yet.",
+        "No pick yet.",
+        "No pick. Plan rows aren't shown here",
+    ],
+)
+def test_a_question_line_that_judges_it_as_an_ok_is_no_line(api, monkeypatch, line):
+    model(monkeypatch, {"pick": "send_back", "line": line, "note": "Name the channels.", "score": 70})
+    _, item = ask_ben(api, line=CHANNELS)
+    opinions(api, [item])
+    assert opinions(api, [item])[item] == {"id": item, **NONE}
+
+
+def test_a_question_line_saved_before_its_own_instructions_is_worked_out_again(api, monkeypatch):
+    writer = model(monkeypatch, {"pick": "", "line": "Wants a list: your channels, and where the numbers live"})
+    _, item = ask_ben(api, line=CHANNELS)
+    opinions(api, [item])
+    with api.app.state.store.transaction() as c:  # what Tico Team saved under the OK's instructions
+        c.execute("UPDATE ask_opinions SET line=?", ("Can't answer yet. Page names no channels or systems.",))
+    assert opinions(api, [item])[item]["state"] == "pending"
+    assert opinions(api, [item])[item]["line"] == "Wants a list: your channels, and where the numbers live"
+    assert len(writer.prompts) == 2
+    assert opinions(api, [item])[item]["state"] == "ready" and len(writer.prompts) == 2, "then saved, as any other"
+
+
+def test_an_ok_has_no_snooze_so_the_model_is_not_offered_it_and_a_snooze_pick_saves_nothing(api, monkeypatch):
+    found = model(monkeypatch, {"pick": "snooze", "line": "Snooze. It is not due until Friday.", "score": 20})
+    _, item = ask_ben(api, line="OK the pitch?", kind="ok")
+    opinions(api, [item])
+    assert opinions(api, [item])[item] == {"id": item, **NONE}
+    assert [(r["state"], r["pick"], r["line"], r["error"]) for r in rows(api)] == [("none", "", "", "shape")]
+    assert "snooze" not in (F.SYSTEM + found.prompts[0]).casefold()
+    assert "Kind: an OK (approve or send_back)" in found.prompts[0]
 
 
 def test_a_failure_or_no_model_is_none_and_nothing_waits(api, monkeypatch):
@@ -333,3 +399,90 @@ def test_one_call_takes_at_most_30_ids_and_works_out_at_most_the_pool_at_once(ap
     assert [got[i]["state"] for i in items] == ["pending"] * 3
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM ask_opinions").fetchone()[0] == 2, "the third waits for a slot"
+
+
+LONG = "".join(
+    f"<p>AC-{n}: the import keeps row {n} as it was given, with its date and amount.</p>" for n in range(400)
+)
+
+
+def test_a_long_page_is_read_to_30000_characters_and_marked_where_tico_cut_it(api, monkeypatch):
+    """Tico Team, rc.48: a spec cut at 6,000 got "The page cuts off mid-AC-20; AC-21 to AC-24 are missing. Send back"."""
+    found = model(monkeypatch, GOOD)
+    _, item, _ = page_ask(api, LONG[: len(LONG) // 2])  # about 15,000 characters: read whole, no mark
+    opinions(api, [item])
+    assert "AC-199:" in found.prompts[0] and F.CUT not in found.prompts[0]
+    _, item, _ = page_ask(
+        api, LONG, title="Write the import spec"
+    )  # about 30,000 and more: cut, and the cut says it is Tico's
+    opinions(api, [item])
+    prompt = found.prompts[1]
+    assert "AC-399:" not in prompt and prompt.rstrip().endswith(F.CUT)
+    assert len(prompt.partition("What the ask shows:\n")[2]) <= F.SHOWN_MAX + len(F.CUT) + 1
+    assert f'stops at "{F.CUT}"' in found.systems[1] and "never fault or send back a page for being cut" in F.SYSTEM
+
+
+def test_an_ok_that_shows_no_page_is_judged_on_the_task_text_as_the_pitch(api, monkeypatch):
+    """Tico Team, rc.48: "OK the pitch" got "The pitch lists no appetite, owner or due date. Send back"."""
+    found = model(monkeypatch, GOOD)
+    _, item = ask_ben(api, line="OK the pitch?", kind="ok")
+    opinions(api, [item])
+    prompt = found.prompts[0]
+    assert "What the ask shows: no page. The task's own text above is what is being OK'd." in prompt
+    assert "Due Friday. It must match PO 1182." in prompt
+    assert "never send it back for lacking a due date, an owner, an appetite, scope detail or a design" in F.SYSTEM
+
+
+def saved_under_old_instructions(api, line):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE ask_opinions SET prompt_version=0, line=?", (line,))
+
+
+def test_rows_written_under_old_instructions_are_worked_out_again_only_where_the_new_ones_differ(api, monkeypatch):
+    writer = model(monkeypatch, GOOD)
+    _, short, _ = page_ask(api, "<p>Version one says 40 dollars.</p>")
+    _, long, _ = page_ask(
+        api, LONG[:8000], title="Write the import spec"
+    )  # over the old 6,000 cut, so its line was read from part of it
+    _, pitch = ask_ben(api, line="OK the pitch?", kind="ok")
+    opinions(api, [short, long, pitch])
+    assert [r["prompt_version"] for r in rows(api)] == [F.PROMPT_VERSION] * 3 and len(writer.prompts) == 3
+    saved_under_old_instructions(api, "Send back. The page cuts off mid-AC-20.")
+    got = opinions(api, [short, long, pitch])
+    assert (got[short]["state"], got[long]["state"], got[pitch]["state"]) == ("ready", "pending", "pending")
+    assert len(writer.prompts) == 5
+    got = opinions(api, [short, long, pitch])
+    assert {o["line"] for o in got.values()} == {GOOD["line"], "Send back. The page cuts off mid-AC-20."}
+    assert got[short]["line"] == "Send back. The page cuts off mid-AC-20.", "a short page read whole keeps its line"
+    assert [r["prompt_version"] for r in rows(api)] == [F.PROMPT_VERSION] * 3, "and is marked current, read once"
+    assert len(writer.prompts) == 5
+
+
+def test_a_question_written_under_old_instructions_is_redone_and_its_snooze_fingerprint_stays(api, monkeypatch):
+    """Tico Team, rc.48: "Removed it. Seen 4 times..." and "Not sure yet." outlived QUESTION_SYSTEM by up to a day."""
+    writer = model(monkeypatch, {"pick": "Yes", "line": "Yes. The task says it was seen 4 times.", "score": 30})
+    _, item = ask_ben(api, line="Did the bot remove it?", choices=["Yes", "No"])
+    opinions(api, [item])
+    before = rows(api)[0]["ask_version"]
+    saved_under_old_instructions(api, "Removed it. Seen 4 times.")
+    assert opinions(api, [item])[item]["state"] == "pending"
+    assert opinions(api, [item])[item]["line"] == "Pick Yes: The task says it was seen 4 times."
+    assert len(writer.prompts) == 2 and rows(api)[0]["ask_version"] == before, "the ask is the same ask"
+    post(api, "needs-you/snooze", {"id": item, "until": H.shift(H.now(), days=1)}, token="ben-test")
+    with api.app.state.store.read() as c:
+        snoozed = c.execute("SELECT ask_version FROM ask_snoozes").fetchone()[0]
+    assert snoozed == before, "a person's snooze holds the same fingerprint, so redoing a line ends no snooze"
+    assert item not in {i["id"] for i in get(api, "needs-you", token="ben-test")["items"]}
+
+
+def test_an_old_row_whose_page_cannot_be_read_now_is_worked_out_again(api, monkeypatch):
+    model(monkeypatch, GOOD)
+    _, item, _ = page_ask(api, "<p>Version one says 40 dollars.</p>")
+    opinions(api, [item])
+    saved_under_old_instructions(api, GOOD["line"])
+
+    def unreadable(c, job):
+        raise OSError("blob store away")
+
+    monkeypatch.setattr(F, "whole", unreadable)
+    assert opinions(api, [item])[item]["state"] == "pending", "claimed again, never served as if it were current"

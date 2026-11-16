@@ -921,14 +921,14 @@ let browser: import('playwright').Browser | null = null;
     await page.close();
   }
 
-  // ---- Ana at phone width: the Threads tab in the bottom bar, the list, one thread.
+  // ---- Ana at phone width: Threads in More, which carries its count; the list, one thread.
   {
     const {page, seen} = await open(browser, 'ana', {phone: true});
     await page.goto('https://tico-ui.test/#/tasks');
-    await page.locator('#mobile-threads:not([hidden])').waitFor();
-    assert.equal(await page.locator('#mobile-threads .nav-badge').textContent(), '3', 'the tab carries what Catch up has left');
-    assert.equal((await page.locator('#mobile-threads .mobile-nav-label').textContent())!.trim(), 'Threads');
-    // Threads takes Search's place in the bar, so search over everything is in the drawer.
+    await page.locator('#mobile-more [data-threads-badge]:not([hidden])').waitFor();
+    assert.equal(await page.locator('#mobile-more [data-threads-badge]').textContent(), '3', 'More carries what Catch up has left');
+    // Flow holds the bar's slot (flow-tab.cts), so Threads and search over everything are in the drawer.
+    assert.equal(await page.locator('#mobile-threads').isVisible(), false);
     assert.equal(await page.locator('#mobile-search').isVisible(), false);
     await page.locator('#mobile-more').click();
     await page.locator('#search-open').waitFor();
@@ -940,8 +940,10 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.evaluate(() => document.body.classList.contains('drawer')), false, 'the drawer closes behind it');
     await page.keyboard.press('Escape');
     await page.locator('#search-modal[open]').waitFor({state: 'detached'});
-    // The tab opens the rail on its own; a thread takes the screen, and Back returns to the rail.
-    await page.locator('#mobile-threads').click();
+    // Threads in the drawer opens the rail on its own; a thread takes the screen, and Back returns to the rail.
+    await page.locator('#mobile-more').click();
+    await page.waitForFunction(() => document.body.classList.contains('drawer'));
+    await page.locator('#nav-threads').click();
     await page.waitForFunction(() => location.hash === '#/threads');
     await page.locator('#thread-rail .tr-row[data-thread="t-plan"]').waitFor();
     assert.equal(await page.locator('#thread-pane').isVisible(), false);
@@ -1142,7 +1144,7 @@ let browser: import('playwright').Browser | null = null;
     await rail.locator('.tr-row[data-thread="t0"]').waitFor();
     await page.waitForFunction(() => typeof LIVE !== 'undefined' && LIVE_TOPICS.includes('threads'));
     const rails = seen.rails;
-    const badges = () => page.evaluate(() => ['#nav-threads .nav-badge', '#mobile-threads .nav-badge', '#thread-rail [data-tr-catch] .tr-badge']
+    const badges = () => page.evaluate(() => ['#nav-threads .nav-badge', '#mobile-more [data-threads-badge]', '#thread-rail [data-tr-catch] .tr-badge']
       .map(q => { const b = document.querySelector<HTMLElement>(q); return b && !b.hidden ? b.textContent : ''; }));
     const row = (id: string) => page.evaluate(id => {
       const a = document.querySelector<HTMLElement>(`#thread-rail .tr-row[data-thread="${id}"]`);
@@ -1162,7 +1164,7 @@ let browser: import('playwright').Browser | null = null;
     // Three messages in one batch come as one event with `unread_count`: Thread 4 counts all three.
     sse.queue.push({kind: 'activity', thread_id: 't4', root_id: 't4', message_id: 'm-live-4', unread: true, unread_count: 3, actor: 'human:bea', counters: {last_seq: 12, last_unread_seq: 12}});
     await until(() => row('t4'), {list: 'threads', bold: true, n: '4'});
-    assert.deepEqual(await badges(), ['4', '4', '4'], 'the same count in the sidebar, on the phone tab and on Catch up');
+    assert.deepEqual(await badges(), ['4', '4', '4'], 'the same count in the sidebar, on More and on Catch up');
     await until(() => row('t1'), {list: 'threads', bold: true, n: ''});
     // A message in the open thread is read there: no count on its row.
     sse.queue.push({kind: 'activity', thread_id: 't-plan', root_id: 't-plan', message_id: 'm-live-3', unread: true, actor: 'human:bea', counters: {last_seq: 41, last_unread_seq: 41}});
@@ -1237,16 +1239,17 @@ let browser: import('playwright').Browser | null = null;
     await page.close();
     railOff = false;
   }
-  // ---- Threads is in the sidebar and the phone bar from the first paint, before its read lands; only a server without
-  // threads (its reads answer 404) takes it away.
+  // ---- Threads is in the sidebar (on a phone, the drawer) from the first paint, before its read lands; only a server
+  // without threads (its reads answer 404) takes it away. The phone bar's slot is Flow either way, and Search is in More.
   {
     for (const phone of [false, true]) {
       threadsGate = [];
       const {page} = await open(browser, 'ana', {phone});
       await page.goto('https://tico-ui.test/#/tasks');
-      await page.locator(phone ? '#mobile-threads' : '#nav-threads').waitFor();
+      await page.locator('#nav-threads').waitFor({state: 'attached'});
+      assert.equal(await page.locator('#nav-threads').getAttribute('hidden'), null, 'there before the first threads read lands');
       assert.equal(await page.evaluate(() => THREADS.on), null, 'there before the first threads read lands');
-      if (phone) assert.equal(await page.locator('#mobile-search').isVisible(), false, 'Threads holds the bar\'s place, not Search');
+      if (phone) assert.equal(await page.locator('#mobile-flow').isVisible(), true, 'Flow holds the bar\'s place');
       const gate = threadsGate; threadsGate = null; gate.forEach(go => go());
       await page.waitForFunction(() => THREADS.on === true);
       await page.close();
@@ -1257,8 +1260,11 @@ let browser: import('playwright').Browser | null = null;
       const {page} = await open(browser, 'ana', {phone});
       await page.goto('https://tico-ui.test/#/tasks');
       await page.waitForFunction(() => THREADS.on === false);
-      assert.equal(await page.locator(phone ? '#mobile-threads' : '#nav-threads').isVisible(), false, 'a server without threads has no link');
-      if (phone) await page.locator('#mobile-search').waitFor();
+      assert.equal(await page.locator('#nav-threads').getAttribute('hidden'), '', 'a server without threads has no link');
+      if (phone) {
+        assert.equal(await page.locator('#mobile-flow').isVisible(), true, 'Flow keeps the bar\'s place');
+        assert.equal(await page.locator('#mobile-search').isVisible(), false, 'Search is in More');
+      }
       await page.close();
     }
     threadsOff = false;

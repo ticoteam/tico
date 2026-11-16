@@ -5,19 +5,22 @@
 //   otherwise; it closes the view, opens the place, and ▶ picks up at the item it left;
 // - "Reply to PM" posts a comment that @mentions PM; the item stays, the box clears and says Sent; a task Tico filed
 //   itself reads "Note on the task" and names no one;
-// - a long question: a short heading cut under 60 characters with "…", the full question once under it and never on
-//   the left; an ask's own short title is the heading when it has one; Ask back posts a comment and keeps the question;
+// - a long question: itself once, in full, never on the left, its task the background there; Ask back (in ⋯) posts a
+//   comment and keeps the question (ask-screen-question.cts has the rest of a question's screen);
 // - the text shows a skeleton until its one read comes, and the next item's text is read ahead;
-// - at 1040 px Done · Snooze · Give to… and Skip sit on one line in light and dark; at 390 px the buttons are 44 px tall
-//   and Skip is reachable.
-// Fixtures only (tasks-page.cts).
+// - at 1040 px Done, the snooze icon and ⋯ sit on one line, as an ask's row does, with Give to… and Skip in ⋯ (it opens
+//   and closes by keyboard); at 390 px the buttons and those menu items are 44 px tall and Skip is reachable.
+// Fixtures only (tasks-page.cts). FLOW_SHOTS_DIR=build/flow-shots writes own-task-phone.png and own-task-phone-open.png.
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
+const path: typeof import('node:path') = require('node:path');
+const fs: typeof import('node:fs') = require('node:fs');
 const {open, fixtures, task, brief, needsOf} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
 declare function decideOpen(id?: string): boolean;
 
 const card = (page: Page) => page.locator('#need-card[open]');
+const SHOTS = process.env.FLOW_SHOTS_DIR ? path.resolve(process.env.FLOW_SHOTS_DIR) : '';
 const LONG = 'Can you confirm the p95 latency budget for the checkout API is still 300 ms after the cache change, or should the validation use the new 450 ms figure from the load test?';
 const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
@@ -79,15 +82,28 @@ function world(over: {title?: string} = {}) {
         // The next item that shows a task's text (t-8) is read ahead.
         assert.ok(reads.some(r => r.endsWith('/t-8')), `the next item is read ahead: ${reads.join(', ')}`);
 
-        // The action row: one line, 36 px, Skip after the buttons.
+        // The action row: an ask's pattern on one line, Done (36 px) then the snooze icon and ⋯ at the right.
         const row = card(page).locator('.dc-acts-row');
-        const boxes = await row.locator('button').evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return {t: e.textContent, y: r.top + r.height / 2, h: r.height}; }));
-        assert.deepEqual(boxes.map(b => b.t), ['Done', 'Snooze', 'Give to…', 'Skip']);
+        const boxes = await row.locator('button').evaluateAll(els => els.map(e => { const r = e.getBoundingClientRect(); return {t: (e as HTMLElement).dataset.dc, y: r.top + r.height / 2, h: r.height}; }));
+        assert.deepEqual(boxes.map(b => b.t), ['done', 'snooze', 'ask-more']);
         assert.ok(boxes.every(b => Math.abs(b.y - boxes[0]!.y) < 2), `one line: ${JSON.stringify(boxes)}`);
-        assert.ok(boxes.slice(0, 3).every(b => Math.abs(b.h - 36) < 1), `36 px buttons: ${JSON.stringify(boxes)}`);
+        assert.ok(Math.abs(boxes[0]!.h - 36) < 1, `a 36 px Done: ${JSON.stringify(boxes)}`);
+        assert.equal(await row.locator('[data-dc="snooze"]').getAttribute('aria-label'), 'Snooze', 'the icon an ask has');
+        assert.equal(await card(page).locator('[data-dc="give"], [data-dc="skip"]').count(), 0, 'Give to… and Skip wait in ⋯');
         assert.ok(await row.evaluate(el => el.scrollWidth <= el.clientWidth), 'the row does not overflow');
-        const side = (await card(page).locator('.dc-side').boundingBox())!, skipAt = (await row.locator('[data-dc="skip"]').boundingBox())!;
-        assert.ok(skipAt.x + skipAt.width <= side.x + side.width, 'Skip ends inside the side pane');
+        const side = (await card(page).locator('.dc-side').boundingBox())!, moreAt = (await row.locator('[data-dc="ask-more"]').boundingBox())!;
+        assert.ok(moreAt.x + moreAt.width <= side.x + side.width, '⋯ ends inside the side pane');
+        // ⋯ by keyboard: Enter opens it on Give to…, ↓ moves to Skip, Esc closes it with focus back on ⋯.
+        await row.locator('[data-dc="ask-more"]').focus();
+        await page.keyboard.press('Enter');
+        assert.deepEqual(await row.locator('[role="menuitem"]').allInnerTexts(), ['Give to…', 'Skip']);
+        assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Give to…');
+        await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement?.textContent), 'Skip');
+        await page.keyboard.press('Escape');
+        assert.equal(await row.locator('[role="menuitem"]').count(), 0, 'Esc closes ⋯');
+        assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.dc), 'ask-more');
+        assert.ok(await card(page).isVisible(), 'and only ⋯: the view stays open');
 
         // Reply to PM: a comment that names PM; the item stays; the box clears and says Sent.
         assert.equal(await card(page).locator('.dc-reply .dc-notes span').innerText(), 'Reply to PM');
@@ -136,41 +152,27 @@ function world(over: {title?: string} = {}) {
       } finally { await page.close(); }
     }
 
-    // A long question: a short heading, the full question once under it, never on the left. A bot's question has
-    // Write to <bot> (ask-screen-bot-ask.cts): the text names the question and it stays open.
-    {
-      const {tasks, needs} = world();
+    // A long question: itself once, in full, never on the left; the task's text is the background there. Ask back
+    // (in ⋯) writes to the bot that asked, naming the question, and it stays open.
+    for (const title of ['', 'Which latency budget for Perf I31?']) {
+      const {tasks, needs} = world({title});
       const {page, errors, posts} = await open(browser, {tasks, needs, viewport: {width: 1040, height: 760}});
       try {
         await page.evaluate(() => { decideOpen('r2'); });
         await card(page).locator('.dc-md').waitFor({timeout: 5000});
-        const head = await card(page).locator('.dc-q').innerText();
-        assert.ok(head.endsWith('…') && head.length <= 61, `a short heading: ${head}`);
-        assert.ok(LONG.startsWith(head.slice(0, -1)), `cut from the question: ${head}`);
-        assert.equal(await card(page).locator('.dc-full').innerText(), LONG, 'the full question under it');
+        assert.equal(await card(page).locator('.dc-q').innerText(), LONG, 'the question in full, never its short title');
         const left = await card(page).locator('.dc-thing').innerText();
         assert.ok(!left.includes(LONG.slice(0, 40)), 'the question is not on the left');
-        assert.match(await card(page).locator('.dc-who').innerText(), /^Asked by PM · .* · on Signup plans$/);
+        assert.match(await card(page).locator('.dc-ask-meta').evaluate(el => el.textContent || ''), /^PM·.+·#\d+ ↗$/);
         assert.equal(await card(page).locator('.dc-thing .dc-md strong').innerText(), 'load test', 'the task text is the background');
         assert.equal(await card(page).locator('[data-dc="go"]').count(), 0, 'no place named, no Go to');
         await card(page).locator('#dc-other').fill('What do you mean by validation?');
-        await card(page).locator('[data-dc="write"]').click();
+        await card(page).locator('[data-dc="ask-more"]').click();
+        await card(page).locator('[data-dc="askback"]').click();
         await page.waitForFunction(() => !document.querySelector<HTMLTextAreaElement>('#dc-other')?.value);
         assert.deepEqual(posts.find(x => x.p === '/api/v2/tasks/t-2/comments')!.body, {text: 'What do you mean by validation?', ask: 'r2'});
-        assert.equal(posts.filter(x => x.p.endsWith('/answer')).length, 0, 'Write to the bot answers nothing');
-        assert.equal(await card(page).locator('.dc-full').innerText(), LONG, 'the question stays on screen');
-        assert.deepEqual(errors, []);
-      } finally { await page.close(); }
-    }
-
-    // An ask's own short title is the heading.
-    {
-      const {tasks, needs} = world({title: 'Which latency budget for Perf I31?'});
-      const {page, errors} = await open(browser, {tasks, needs, viewport: {width: 1040, height: 760}});
-      try {
-        await page.evaluate(() => { decideOpen('r2'); });
-        await card(page).locator('.dc-q', {hasText: 'Which latency budget for Perf I31?'}).waitFor({timeout: 5000});
-        assert.equal(await card(page).locator('.dc-full').innerText(), LONG);
+        assert.equal(posts.filter(x => x.p.endsWith('/answer')).length, 0, 'Ask back answers nothing');
+        assert.equal(await card(page).locator('.dc-q').innerText(), LONG, 'the question stays on screen');
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
@@ -244,7 +246,7 @@ function world(over: {title?: string} = {}) {
       } finally { await page.close(); }
     }
 
-    // A question nobody named asked (a stage's): no Ask back, Send answer stays.
+    // A question nobody named asked (a stage's): no Ask back, so no ⋯; Send stays.
     {
       const {tasks, needs} = world();
       needs.find(n => n.id === 'r2')!.ask!.asked_by = 'stage';
@@ -252,7 +254,7 @@ function world(over: {title?: string} = {}) {
       try {
         await page.evaluate(() => { decideOpen('r2'); });
         await card(page).locator('[data-dc="other"]').waitFor({timeout: 5000});
-        assert.equal(await card(page).locator('[data-dc="askback"]').count(), 0);
+        assert.equal(await card(page).locator('[data-dc="askback"], [data-dc="ask-more"]').count(), 0);
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
@@ -264,7 +266,17 @@ function world(over: {title?: string} = {}) {
       try {
         await page.evaluate(() => { decideOpen('task:t-3'); });
         await card(page).locator('.dc-md').waitFor({timeout: 5000});
-        for (const sel of ['[data-dc="done"]', '[data-dc="snooze"]', '[data-dc="give"]', '[data-dc="skip"]', '[data-dc="reply"]', '[data-dc="go"]']) {
+        for (const sel of ['[data-dc="done"]', '[data-dc="snooze"]', '[data-dc="ask-more"]', '[data-dc="reply"]', '[data-dc="go"]']) {
+          const box = (await card(page).locator(sel).boundingBox())!;
+          assert.ok(box.height >= 44, `${sel} is ${box.height} px tall on a phone`);
+        }
+        if (SHOTS) {
+          await page.locator('.dc-start').waitFor({state: 'detached', timeout: 5000});  // the start cover, gone
+          fs.mkdirSync(SHOTS, {recursive: true}); await page.screenshot({path: path.join(SHOTS, 'own-task-phone.png')});
+        }
+        await card(page).locator('[data-dc="ask-more"]').click();
+        if (SHOTS) await page.screenshot({path: path.join(SHOTS, 'own-task-phone-open.png')});
+        for (const sel of ['[data-dc="give"]', '[data-dc="skip"]']) {
           const box = (await card(page).locator(sel).boundingBox())!;
           assert.ok(box.height >= 44, `${sel} is ${box.height} px tall on a phone`);
         }
@@ -274,6 +286,6 @@ function world(over: {title?: string} = {}) {
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
-    console.log('PASS: the task text, Go to, the reply and Ask back, short headings, read ahead and a one-line action row.');
+    console.log('PASS: the task text, Go to, the reply and Ask back, a question in full, read ahead and a one-line action row.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

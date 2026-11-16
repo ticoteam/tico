@@ -679,6 +679,9 @@ def decide(
             return _refused(ctx, "reach_line", sender, receiver, eff["mode"], line, unseen=unseen)
     if line is not None:
         why = "line"
+    elif receiver == _managers(ctx).get(sender):
+        # A bot may always take a question or a hand-off to its own manager, in any mode: its refusals send it there.
+        why = "manager"
     elif eff["mode"] != "open":
         near = nearby(ctx, sender) if eff["mode"] == "nearby" else {}
         if receiver not in near:
@@ -946,9 +949,32 @@ def person_asked(c, sender, receiver, task_id=None, conversation_id=None, in_rep
     """What lets a bot write to a person who is not adjacent to it, and only this: a direct reply to the person's own
     message, a write in a conversation where the person wrote to the bot in the last SOLICITED_DAYS, or a write on a
     task the person handed this bot. Being on the task in any other way (reader, former owner, thread member, an
-    ancestor's party) or having given the bot some other task does not count."""
-    return solicited(c, sender, receiver, conversation_id, in_reply_to, before, person=True) or handed(
-        c, sender, receiver, task_id, before
+    ancestor's party) or having given the bot some other task does not count. A person who pinged the bot for
+    questions in the last day (backend/flow_ping.py) asked to be asked: its question tasks for them are answers."""
+    return (
+        solicited(c, sender, receiver, conversation_id, in_reply_to, before, person=True)
+        or handed(c, sender, receiver, task_id, before)
+        or pinged(c, sender, receiver, before)
+    )
+
+
+PINGED_HOURS = 24  # how long a person's ping lets the bot ask them questions
+
+
+def pinged(c, sender, receiver, before=None):
+    """`receiver`, a person, pinged `sender` for questions (refs.get_aligned) in the last PINGED_HOURS."""
+    until = before or H.now()
+    at = H.parse_ts(until)
+    if at is None:
+        return False
+    since = (at - timedelta(hours=PINGED_HOURS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return (
+        c.execute(
+            "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? AND created_at>=? AND created_at<? "
+            "AND json_extract(refs, '$.get_aligned') IS NOT NULL LIMIT 1",
+            (receiver, sender, since, until),
+        ).fetchone()
+        is not None
     )
 
 

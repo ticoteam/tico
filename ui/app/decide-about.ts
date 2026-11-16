@@ -4,8 +4,8 @@
    screen (GET /v2/tasks/{id}, as Open task reads it), and the next item's is read ahead; Needs you itself carries
    nothing new. "Go to … ↗" opens the place the text names: an app link (#/strategy, or a link to this team's app), else
    a "Page → Tab" phrase that matches a sidebar page and one of its tabs (Finance → Access). No model is asked.
-   The heading on the right is short: a person's own task is its title; a question its short title, else itself when it
-   is short, else its first clause cut under 60 characters, with the whole question once under it.
+   The heading on the right is short: a person's own task is its title. A question is itself, once, in full; its task's
+   title and text are the background under it (decideBgHTML), one line until it is opened (#3786).
    Reply (a person's own task) and Ask back (a question) post a comment on the task that @mentions whoever asked, which
    wakes that bot or notifies that person; the item stays in Needs you. A task Tico filed itself has no one to reply to:
    the box is a note on the task, which reaches the bots following it.
@@ -39,7 +39,8 @@ const DEC_HELD = new Map<string, DecHeld>();
 /** The items whose reply is on its way: a second Send waits for the first (the walk may move on meanwhile). */
 const DEC_SENDING = new Set<string>();
 let DEC_RESUME = '';                             // the item Go to left from: ▶ picks up there
-const DEC_HEAD_LONG = 90, DEC_HEAD_MAX = 60;
+/** A question shorter than this opens with its task's background shown on a phone: it may need the context. */
+const DEC_BG_OPEN_UNDER = 40;
 
 // ---- reading
 /** The task behind an item, read once while the screen is open; on arrival the item on screen draws again. */
@@ -56,16 +57,21 @@ function decideAboutLoad(taskId: string) {
     if (DEC_ABOUT.get(taskId) !== v) return;
     const st = DEC, it = st ? decideCurrent(st) : null;
     if (!st || !it || decideTaskId(it) !== taskId) return;
-    // An OK shows its own content, not the task's text.
-    if (decideKind(it) === 'ok') return;
+    // An OK shows its own content; one with nothing attached shows the task's text (decidePaintBody), and its side stays.
     decidePaintBody(st);
-    decidePaintSideKeepGive(st, it);
+    if (decideKind(it) !== 'ok') decidePaintSideKeepGive(st, it);
   })();
 }
-/** The item on screen, and ahead of it the next item that shows a task's text (an OK shows its own content). */
+/** The item on screen, and ahead of it the next item that shows a task's text. An OK shows its own content; one that
+    shows nothing (decideOkBare), or whose ask names nothing to show and is not read yet, shows its task's text. */
 function decideAboutAhead(st: DecState) {
   const live = decideLive(st), i = live.indexOf(st.at || '');
-  const shows = (k: string | undefined) => { const it = k ? st.items.get(k) : undefined; return it && decideKind(it) !== 'ok' && decideTaskId(it) ? it : null; };
+  const text = (it: NeedsEntry) => {
+    if (decideKind(it) !== 'ok') return true;
+    const v = st.ok.get(decideOkKey(it));
+    return v ? decideOkBare(v) : !decideShowRefs(it).length && !it.ask?.page;
+  };
+  const shows = (k: string | undefined) => { const it = k ? st.items.get(k) : undefined; return it && decideTaskId(it) && text(it) ? it : null; };
   const now = shows(live[i]), next = live.slice(i + 1).map(shows).find(Boolean);
   for (const it of [now, next]) if (it) decideAboutLoad(decideTaskId(it));
 }
@@ -92,14 +98,11 @@ function decideHandle(actor: string): string {
   const p = (S.people || []).find(x => x.id === actorPerson(actor));
   return personHandle(p?.email || actorPerson(actor));
 }
-/** "From Strategy Owner · 2h ago" (a task) or "Asked by Performance Owner · 5m ago · on Perf I31" (a question). */
+/** "From Strategy Owner · 2h ago" (a task, a mention). A question says who asked on its own meta line. */
 function decideAboutWho(it: NeedsEntry, kind: AskKind, t: DecAboutTask | null): string {
   const title = t?.title || it.task?.title || '';
-  const on = kind !== 'yours' && title ? ` · on <b>${esc(title)}</b>` : '';
-  if (kind === 'question') {
-    const by = it.ask?.asked_by || '';
-    return `<p class="dc-who">Asked by ${esc(by ? actorLabel(by) : 'Tico')}${it.since ? ` · ${esc(ago(it.since))}` : ''}${on}</p>`;
-  }
+  // A person's own task and a bare OK carry the title as their heading already.
+  const on = kind !== 'yours' && kind !== 'ok' && title ? ` · on <b>${esc(title)}</b>` : '';
   const from = kind === 'mention' ? it.from_id || '' : t?.requester_id || it.task?.requester_id || '';
   const name = !from || from === 'keeper' || !/^(bot|human):/.test(from) ? 'Tico' : from === myActor() ? 'you' : actorLabel(from);
   const when = kind === 'mention' ? it.since : t?.created_at;
@@ -107,18 +110,34 @@ function decideAboutWho(it: NeedsEntry, kind: AskKind, t: DecAboutTask | null): 
 }
 
 // ---- the left side
-/** The left side of an item on a task: who asked and when, then the task's text, its links, files and pages. */
-function decideAboutHTML(it: NeedsEntry, kind: AskKind): string {
+/** The left side of an item on a task: who asked and when, then the task's text, its links, files and pages. `head`:
+    a heading over it (a bare OK's task title), and then no "No details." when the task has no text. */
+function decideAboutHTML(it: NeedsEntry, kind: AskKind, head = ''): string {
   const v = decideAboutOf(it), t = v?.task || null;
   const quote = kind === 'mention' && it.line ? `<blockquote class="dc-quote">${esc(it.line)}</blockquote>` : '';
-  if (!v || v.state === 'loading') return `<div class="dc-doc">${decideAboutWho(it, kind, null)}${quote}${skelRows(4)}</div>`;
-  if (v.state === 'failed') return `<div class="dc-doc">${decideAboutWho(it, kind, null)}${quote}<p class="muted">${esc(v.error)}</p></div>`;
+  if (!v || v.state === 'loading') return `<div class="dc-doc">${head}${decideAboutWho(it, kind, null)}${quote}${skelRows(4)}</div>`;
+  if (v.state === 'failed') return `<div class="dc-doc">${head}${decideAboutWho(it, kind, null)}${quote}<p class="muted">${esc(v.error)}</p></div>`;
   const text = decideAboutText(t);
-  const body = text ? `<div class="md dc-md">${md(text)}</div>` : '<p class="muted">No details.</p>';
-  // Nothing to show (no text, links or files): marked, so a phone opens on the question instead (decide.css).
-  const chips = decideAboutChips(t!, text), bare = !text && !chips && !quote ? ' dc-bare' : '';
-  return `<div class="dc-doc${bare}">${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
+  const body = text ? `<div class="md dc-md">${md(text)}</div>` : head ? '' : '<p class="muted">No details.</p>';
+  // Nothing to show (no heading, text, links or files): marked, so a phone opens on the question instead (decide.css).
+  const chips = decideAboutChips(t!, text), bare = !head && !text && !chips && !quote ? ' dc-bare' : '';
+  return `<div class="dc-doc${bare}">${head}${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
 }
+/** A question's background: its task's title, cut to one line, which opens to the task's text, links and files.
+    `open` as it was drawn last for this item, else open on a wide screen (the left pane is there for it) and on a
+    phone only under a short question. A task with no text or chips is its title alone, nothing to open. */
+function decideBgHTML(it: NeedsEntry, open: boolean | undefined): string {
+  const v = decideAboutOf(it), t = v?.task || null, title = t?.title || it.task?.title || '';
+  const text = decideAboutText(t), chips = t ? decideAboutChips(t, text) : '';
+  const summary = `<span class="dc-bg-t">${esc(title)}</span>`;
+  const inner = !v || v.state === 'loading' ? skelRows(3) : v.state === 'failed' ? `<p class="muted">${esc(v.error)}</p>`
+    : (text ? `<div class="md dc-md">${md(text)}</div>` : '') + chips;
+  if (!inner) return `<div class="dc-bg dc-bg-only">${summary}</div>`;
+  const shown = open ?? (!decidePhone() || decideQuestionOf(it).length < DEC_BG_OPEN_UNDER);
+  return `<details class="dc-bg"${shown ? ' open' : ''}><summary>${summary}</summary><div class="dc-bg-body">${inner}</div></details>`;
+}
+/** A question as its asker wrote it: a stage's typed question, else the ask's own sentence. */
+const decideQuestionOf = (it: NeedsEntry): string => String(it.ask?.typed?.question || it.ask?.line || it.line || '').trim();
 /** The task's links, files and the pages its text names (`page:<id>@<n>`), as chips: a file opens in the viewer, a page
     at its version. */
 function decideAboutChips(t: DecAboutTask, text: string): string {
@@ -191,22 +210,10 @@ function decideGoThere(st: DecState, href: string) {
 }
 
 // ---- the heading
-/** A long question's short heading: its first clause, cut at a word under 60 characters, with "…". */
-function decideShortHead(q: string): string {
-  const clause = (/^(.+?)(?:[.?!;:](?:\s|$)|\s[—–-]\s|,\s)/.exec(q)?.[1] || q).trim();
-  if (clause.length < DEC_HEAD_MAX) return clause.replace(/[\s,;:.—–-]+$/, '') + '…';
-  const cut = clause.slice(0, DEC_HEAD_MAX - 1), at = cut.lastIndexOf(' ');
-  return (at > 20 ? cut.slice(0, at) : cut).replace(/[\s,;:.—–-]+$/, '') + '…';
-}
-/** The heading on the right and the full question under it ('' when the heading is all of it), or null for an item
-    whose heading decide.ts draws (an OK, a stuck task, a mention). */
-function decideHeadOf(it: NeedsEntry, kind: AskKind): {head: string; full: string} | null {
-  if (kind === 'yours') return {head: it.task?.title || decideAboutOf(it)?.task?.title || it.line, full: ''};
-  if (kind !== 'question') return null;
-  const q = (it.ask?.typed?.question || it.line || '').trim();
-  const short = String((it.ask as {title?: string | null} | undefined)?.title || '').trim();
-  if (short) return {head: short, full: short === q ? '' : q};
-  return q.length > DEC_HEAD_LONG ? {head: decideShortHead(q), full: q} : {head: q, full: ''};
+/** A person's own task's heading: its title. Null for an item whose heading decide.ts draws (an OK, a question, a
+    stuck task, a mention). */
+function decideHeadOf(it: NeedsEntry, kind: AskKind): {head: string} | null {
+  return kind === 'yours' ? {head: it.task?.title || decideAboutOf(it)?.task?.title || it.line} : null;
 }
 
 // ---- the reply
@@ -218,9 +225,8 @@ function decideReplyHTML(st: DecState, it: NeedsEntry): string {
     ${decideFilesHTML(st)}<div class="dc-reply-row">${decideBtn('reply', 'Send', false, ` data-dc-needs="#dc-reply" disabled${off}`)}`
     + `${DEC_SENT === it.id ? '<span class="dc-sent" role="status">Sent</span>' : ''}</div>${decideHeldHTML(it, '#dc-reply')}</div>`;
 }
-/** Reply, Ask back and Write to <bot>: the words (and the files added with 📎) as a comment on the task that
-    @mentions whoever asked, or, given `ask` (a bot's question), that names the question, which the server writes to the
-    bot that asked. The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words
+/** Reply and Ask back: the words (and the files added with 📎) as a comment on the task that @mentions whoever asked,
+    or, given `ask` (a bot's question), that names the question, which the server writes to the bot that asked. The item stays; the box clears and says Sent. A comment an org rule holds writes nothing: the words
     stay. */
 async function decideReplySend(st: DecState, it: NeedsEntry, box: '#dc-reply' | '#dc-other', ask = '') {
   const words = decideNote(box), taskId = decideTaskId(it);

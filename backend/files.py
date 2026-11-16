@@ -584,6 +584,41 @@ def version_refusal(c, auth, who, row, number, v):
     return None
 
 
+def page_refs_readable(c, auth, who, refs):
+    """Whether `who` may read every file `refs` name, each at the version named (else its current one), through the
+    read check the file's own route makes (version_refusal): a page's audience, the task, chat or bot it lives on, its
+    blob and the run that made it. A page ref that names no stored version is refused. page_ref_denials is the cheap
+    check for a page that reads as the task naming it does; this one is for a page a task shows that may live
+    elsewhere (an OK's page from an earlier stage, what Flow's opinion reads)."""
+    if page_ref_denials(c, auth, who, refs):
+        return False
+    at = {}
+    for ref in refs:
+        if isinstance(ref, str) and ref.startswith("page:"):
+            file_id, _, version = ref[len("page:") :].partition("@")
+            at[file_id] = int(version) if version.isdigit() else None
+    for file_id in page_references(refs, c) - set(at):
+        at[file_id] = None
+    for file_id, version in at.items():
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
+        if row is None:
+            return False
+        number = row["current_version"] if version is None else version
+        if version_refusal(c, auth, who, row, number, stored_version(c, file_id, number)):
+            return False
+    return True
+
+
+def readable_earlier(c, auth, who, entry):
+    """A `to_leave` entry with the page it shows from an earlier stage (task_calls.earlier_page) taken out unless
+    `who` may read it in full (page_refs_readable): a reader who may not open it gets no reference to it, and the OK
+    shows the task's text. The entry is changed in place and returned."""
+    earlier = (entry or {}).get("earlier") if isinstance(entry, dict) else None
+    if earlier and not page_refs_readable(c, auth, who, earlier["source"]):
+        del entry["earlier"]
+    return entry
+
+
 def page_event_readable(c, auth, who, target, detail):
     data = H._json(detail, {}) if isinstance(detail, str) else detail
     if page_ref_denials(c, auth, who, [target, data]):

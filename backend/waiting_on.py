@@ -1129,7 +1129,7 @@ def _private_ladder_tasks(conn: "sqlite3.Connection", person: str, stage_asks: l
     return {str(row["id"]) for row in rows if _falls(conn, row, asks, visit_asks)}
 
 
-def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
+def needs(conn: "sqlite3.Connection", person: str, snoozed: str = "hide") -> list[Row]:
     """Needs you, for one person, oldest first. A task whose work is theirs is listed once (`kind` "task"), however many
     requirements are missing. Each OK or answer that names them is its own entry (`kind` "ask"). A bot that cannot run
     is one entry per cause (`kind` "paused") for the person who can fix it, with the tasks it holds up, not one per
@@ -1143,10 +1143,13 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     a plain task someone owns is not in Needs you, so its owner reads "Blocks" on the task itself.
 
     Read from the tasks that can put something in this person's list (`candidates`), each worked out as
-    `needs_by_person` works out every task, so the list is the one it gives this person, item for item."""
+    `needs_by_person` works out every task, so the list is the one it gives this person, item for item.
+
+    An ask the person snoozed for themselves (`ask_snoozes`) is left out until its time, or until it is asked again;
+    `snoozed` "keep" lists it too, with its `snoozed_until`, and "only" lists only those."""
     if not is_human(person):
         return []
-    return _lists(conn, candidates(conn, person), person).get(person, [])
+    return _lists(conn, candidates(conn, person), person, snoozed=snoozed).get(person, [])
 
 
 def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
@@ -1163,10 +1166,79 @@ class _Everyone:
         return True
 
 
-def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -> dict[str, list[Row]]:
+# An ask a person snoozed for themselves (backend/ask_snoozes.py), while its time is to come: who, the ask's visit and
+# requirement, when it was asked as the snooze saw it, and until when.
+_ASK_SNOOZES = (
+    "SELECT person_id, visit_id, requirement_id, asked_at, ask_version, snoozed_until FROM ask_snoozes "
+    "WHERE snoozed_until > ?"
+)
+
+
+def ask_snoozes(conn: "sqlite3.Connection", *people: str) -> dict[tuple[str, str], tuple[str, str, str]]:
+    """The asks people snoozed for themselves that are still snoozed, {(person, ask id): (asked_at, ask_version,
+    snoozed_until)}, of
+    `people` (everyone's with none). A snooze whose time has come is not read: the ask is back with nothing to clear."""
+    from . import hubdb
+
+    sql, args = _ASK_SNOOZES, [hubdb.now()]
+    if people:
+        sql += " AND person_id IN (%s)" % ",".join("?" * len(people))
+        args += list(people)
+    rows = conn.execute(sql, args).fetchall()
+    return {(str(r[0]), f"{r[1]}:{r[2]}"): (str(r[3]), str(r[4]), str(r[5])) for r in rows}
+
+
+def ask_version(conn: "sqlite3.Connection", row: Row, wait: "Wait", requirement: Row | None = None) -> str:
+    """What `wait`'s ask asks now, as Flow's opinion names it (flow_opinions.ask_version, the one definition of "the
+    ask changed"): its sentence, the requirement's line, choices, typed question, brief and title, and what it shows,
+    each page at its current version. The same for everyone it asks. `requirement` is the ask's, when the caller has
+    it; "" when the task's open visit has no such requirement."""
+    from . import flow_opinions, task_calls
+
+    if requirement is None:
+        requirement = next(
+            (s.requirement for s in R.standings(conn, row) if str(s.requirement["id"]) == str(wait.requirement_id)),
+            None,
+        )
+    visit_id = _visit_id(row)
+    if requirement is None or not visit_id:
+        return ""
+    asked = task_calls.ask_shown(conn, row, requirement)
+    item: Row = {"id": f"{visit_id}:{requirement['id']}", "task_id": row["id"], "requirement_id": requirement["id"]}
+    item.update(ask=asked, line=wait.line)
+    refs = flow_opinions.ask_refs(conn, item)
+    return flow_opinions.ask_version(item, list(asked["shows"]) if refs is None else refs)
+
+
+def snoozed_until(
+    conn: "sqlite3.Connection",
+    snoozes: Mapping[tuple[str, str], tuple[str, str, str]],
+    person: str,
+    row: Row,
+    wait: "Wait",
+    requirement: Row | None = None,
+) -> str | None:
+    """When the person's snooze of this ask ends, or None when it is not snoozed for them: a snooze holds only while
+    the ask is the one they snoozed, asked at the same moment and asking the same (`ask_version`: its words, its
+    choices, each page it shows at the same version), so a new question or a new page version is never hidden."""
+    visit_id = _visit_id(row)
+    if not wait.ask or not visit_id:
+        return None
+    found = snoozes.get((person, f"{visit_id}:{wait.requirement_id}"))
+    if not found or found[0] != str(wait.since or ""):
+        return None
+    return found[2] if found[1] == ask_version(conn, row, wait, requirement) else None
+
+
+def _lists(
+    conn: "sqlite3.Connection", task_ids: list[str], *only_people: str, snoozed: str = "hide"
+) -> dict[str, list[Row]]:
     """Needs you from these open tasks (in id order), for every person, or only for `only_people`: each task's waits
-    are worked out whoever they are for, and only the chosen people's entries are kept."""
+    are worked out whoever they are for, and only the chosen people's entries are kept. An ask a person snoozed for
+    themselves is left out of their list (`snoozed` "hide"), listed with its `snoozed_until` ("keep"), or the only kind
+    listed ("only")."""
     only: Any = set(only_people) if only_people else _Everyone()
+    snoozes = ask_snoozes(conn, *only_people)
     out: dict[str, list[Row]] = {}
     paused: dict[str, dict[str, Row]] = {}
     seen = _seen(conn)
@@ -1181,6 +1253,7 @@ def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -
         waits = listed(of(conn, row, seen, standings), row)
         held = next((s for s in standings if pr_conflicts.held(s)), None)
         kinds = {str(s.requirement["id"]): str(s.requirement.get("kind")) for s in standings}
+        asks: dict[str, Row] = {str(s.requirement["id"]): s.requirement for s in standings}
         people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who and wait.who in only})
         for person in people:
             mine = [wait for wait in waits if wait.state == PERSON and wait.who == person]
@@ -1189,6 +1262,10 @@ def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -
                 mine = [unnamed(wait, shown) for wait in mine]
             work = [wait for wait in mine if not wait.ask]
             for wait in [wait for wait in mine if wait.ask] + work[:1]:
+                asked = asks.get(str(wait.requirement_id))
+                until = snoozed_until(conn, snoozes, person, row, wait, asked) if snoozes else None
+                if (snoozed == "hide" and until) or (snoozed == "only" and not until):
+                    continue
                 line = wait.line
                 if held and wait.ask:
                     line = R.sentences(line, pr_conflicts.ask_line(conn, held, kinds.get(str(wait.requirement_id), "")))
@@ -1205,8 +1282,11 @@ def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -
                         "line": line,
                         "missing": [each.line for each in (work if not wait.ask else [wait])],
                         "since": min((each.since or "" for each in work), default="") if not wait.ask else wait.since,
+                        **({"snoozed_until": until} if until else {}),
                     }
                 )
+        if snoozed == "only":
+            continue  # only the asks a person snoozed: no task's blocks, no Paused cause
         owner = str(row.get("owner_id") or "")
         if holding.get(str(task_id)) and owner in only and is_human(owner) and _holds_up(conn, row):
             _blocks(conn, out.setdefault(owner, []), row, owner, holding[str(task_id)])

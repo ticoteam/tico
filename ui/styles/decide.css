@@ -6,7 +6,8 @@
 .dc-dialog::backdrop{background:rgba(0,0,0,.5)}
 .dc-dialog[open]{display:flex}
 .decide{flex:1 1 auto;min-height:0;width:100%;display:flex;flex-direction:column;position:relative}
-.dc-head{display:flex;align-items:center;gap:10px;min-height:56px;padding:0 8px 0 12px;border-bottom:1px solid var(--line)}
+/* flex:none: a column flex item with a min-height of its own could be squeezed to it, leaving Tico's line below the rule */
+.dc-head{flex:none;display:flex;align-items:center;gap:10px;min-height:56px;padding:0 8px 0 12px;border-bottom:1px solid var(--line)}
 /* where you are: All mine / Pipeline / Stage, a menu of the places where something waits on you */
 .dc-where{position:relative;flex:none;min-width:0}
 .dc-crumb{display:inline-flex;align-items:center;gap:6px;max-width:100%;height:32px;padding:0 8px;border:0;border-radius:8px;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);font-weight:600;white-space:nowrap;cursor:pointer}
@@ -33,8 +34,13 @@
 .dc-wave i:nth-child(4){animation-delay:-.15s;animation-duration:.8s}
 .dc-wave i:nth-child(5){animation-delay:-.75s;animation-duration:1.2s}
 @keyframes dc-wv{0%,100%{transform:scaleY(.22)}20%{transform:scaleY(.95)}45%{transform:scaleY(.4)}70%{transform:scaleY(.75)}}
-/* Tico's line: one line, cut at the end */
-.dc-say{flex:1;min-width:0;margin:0;font-size:var(--t-base);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Tico's line: one line, cut at the end; its wrapper is the callout on a phone */
+.dc-sayw{display:contents}
+.dc-say{flex:1;display:flex;align-items:center;gap:6px;min-width:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
+.dc-say:empty{cursor:default}
+.dc-say-i{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
+.dc-say-t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dc-say[aria-expanded=true] .dc-say-t{white-space:normal;overflow-wrap:anywhere}
 /* The next ask Tico is still thinking about, faint, before ‹ ›; none on a phone. */
 .dc-up{flex:0 1 auto;max-width:28%;min-width:0;color:var(--muted);opacity:.7;font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dc-up:empty{display:none}
@@ -81,6 +87,12 @@
 .dc-side textarea{resize:vertical;min-height:64px}
 /* the note starts at 7 lines (4 on a phone, rows in decide.ts) and grows with its text before it scrolls (decideGrow) */
 .dc-side textarea[data-dc-grow]{resize:none;overflow-y:auto}
+/* Notes and Attach in one row: the clip inside the box at its bottom right */
+.dc-note-row{position:relative;display:flex}
+.dc-note-row textarea{flex:1;padding-right:48px}
+.dc-attach.dc-attach-in{position:absolute;right:1px;bottom:1px;display:grid;place-items:center;width:44px;height:44px;padding:0;border-radius:8px}
+.dc-attach-in:hover:not(.disabled){background:var(--surface2)}
+.dc-vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .dc-open-task{align-self:flex-start;margin:-4px 0 0;padding:0;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--t-sm);text-decoration:underline;cursor:pointer}
 /* screenshots and files with the note: each with its state and ✕, then 📎 Attach */
 .dc-files{display:flex;flex-direction:column;gap:6px;border-radius:8px}
@@ -105,8 +117,29 @@
 .dc-refs{display:flex;flex-wrap:wrap;gap:6px}
 .dc-ref-chip{display:inline-flex;align-items:center;max-width:100%;min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:999px;color:var(--ink);font-size:var(--t-sm);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dc-ref-chip:hover{background:var(--surface2)}
-.dc-q.dc-q-short{font-size:var(--t-lg)}
-.dc-full{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
+/* a question (#3786): itself once, in full, its meta line under it; then its choices, the box and one row:
+   Send · Snooze · ⋯. Its task is the background: one line that opens (decideBgHTML), on the left on a wide screen. */
+.dc-ask{display:flex;flex-direction:column;gap:4px}
+.dc-q.dc-q-short,.dc-q.dc-q-ask{font-size:var(--t-lg)}
+.dc-q.dc-q-ask{white-space:pre-wrap}
+.dc-ask-meta{min-height:28px}
+.dc-ask-meta .dc-meta-who{flex:0 1 auto;min-width:24px;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.dc-ask-meta .dc-task-link{min-height:28px;padding:0 4px;margin:0 -4px}
+.dc-ask-acts{flex-wrap:nowrap;align-items:center}
+.dc-ask-acts>button{white-space:nowrap}
+.dc-acts .dc-more-b{font-size:var(--t-lg);line-height:1}
+.dc-askw{flex:none}
+.dc-acts .dc-snzw+.dc-askw{margin-left:0}
+.dc-bg{min-width:0}
+.dc-bg>summary{display:flex;align-items:center;gap:8px;min-height:44px;color:var(--muted);cursor:pointer;list-style:none}
+.dc-bg>summary::-webkit-details-marker{display:none}
+.dc-bg>summary::after{content:"";flex:none;width:6px;height:6px;margin:0 4px;border:solid currentColor;border-width:0 1.5px 1.5px 0;transform:rotate(45deg) translateY(-2px);transition:transform .15s}
+.dc-bg[open]>summary::after{transform:rotate(-135deg) translateY(-1px)}
+.dc-bg>summary:hover{color:var(--ink)}
+.dc-bg-t{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.dc-bg[open] .dc-bg-t{white-space:normal;color:var(--ink)}
+.dc-bg-only{display:flex;align-items:center;min-height:44px;color:var(--muted)}
+.dc-bg-body{display:flex;flex-direction:column;gap:12px;padding-top:4px}
 .dc-links{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
 .dc-links .dc-open-task{margin:0}
 .dc-go{min-height:36px;padding:0 12px;border-radius:10px;font-weight:600}
@@ -124,8 +157,7 @@
   .dc-acts-row button{min-height:36px;padding:0 14px;border-radius:10px;white-space:nowrap}
 }
 .dc-more{padding-top:4px}
-/* a bot's question (decideBotAskHTML): why it matters, a card per choice with its line, the recommended one outlined;
-   Send under the box at its right edge; then a hairline and one row: I don't know, Give it back, and Skip at the end */
+/* a bot's question: why it matters, a card per choice with its line, the recommended one outlined */
 .dc-why{margin:0;overflow-wrap:anywhere}
 .dc-choice-list{display:flex;flex-direction:column;gap:8px}
 .dc-choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
@@ -136,17 +168,67 @@
 .dc-choice-name{font-weight:600;overflow-wrap:anywhere}
 .dc-rec-tag{padding:2px 8px;border-radius:999px;background:var(--line);font-size:var(--t-sm);font-weight:600}
 .dc-choice-line{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
-.dc-send{display:flex;align-items:center;justify-content:flex-end;gap:10px}
-.dc-send button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
-.dc-acts.dc-fixed{flex-wrap:nowrap;align-items:center;padding-top:12px;border-top:1px solid var(--line)}
-.dc-acts.dc-fixed button{white-space:nowrap}
-.dc-acts.dc-fixed [data-dc="skip"]{margin-left:auto}
-.dc-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:14px;max-width:calc(100% - 32px);padding:10px 14px;border-radius:12px;background:var(--ink);color:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.25)}
+/* Snooze (#3769): on an ask, a quiet clock at the far end of the answer row, clear of Approve and Send back; its menu
+   (1 hour … 1 month, Other) opens from it, upward (down from a row near the top: .dc-snz-down), at the row's end, over
+   the page above and never over the row's own buttons. The open menu's row sits over the pinned meta line on a phone. */
+.dc-snzw{position:relative;display:inline-flex;align-items:center}
+.dc-snzw:has(>.dc-snz-b){margin-left:auto}
+.dc-acts .dc-snz-b{width:40px;min-width:40px;height:40px;min-height:40px;padding:0;border-radius:8px;color:var(--muted)}
+.dc-acts .dc-snz-b:hover:not(:disabled),.dc-acts .dc-snz-b[aria-expanded="true"]{color:var(--ink)}
+.dc-snz{position:absolute;right:0;bottom:calc(100% + 6px);z-index:6;display:flex;flex-direction:column;min-width:180px;padding:6px;border:1px solid var(--line);border-radius:10px;background:var(--surface2);box-shadow:0 12px 30px rgba(0,0,0,.35)}
+.dc-snz.dc-snz-down{top:calc(100% + 6px);bottom:auto}
+.dc-snz .dc-mi{min-height:36px;padding:0 10px;border-radius:6px;font-weight:500;white-space:nowrap}
+.dc-snz .dc-mi:focus-visible{background:var(--g3,var(--line))}
+.dc-snz-at{display:flex;align-items:center;gap:4px;padding:2px 0 0}
+.dc-snz-at input{flex:1;min-width:0;min-height:36px;font:inherit}
+.dc-acts .dc-snz-at .dc-icon{width:36px;min-width:36px;height:36px;min-height:36px;padding:0;border-radius:8px}
+.dc-acts:has(.dc-snz){z-index:3}
+/* the end screen's snoozed asks: each by its task, ↩ brings it back */
+.dc-snzd{color:var(--muted)}
+.dc-snzl{display:flex;flex-direction:column;gap:2px;width:min(360px,100%);margin:0;padding:0;list-style:none;text-align:left}
+.dc-snzl li{display:flex;align-items:center;gap:8px;min-height:40px;border-bottom:1px solid var(--line)}
+.dc-snzl-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc-snzl .dc-icon{flex:none;color:var(--muted)}
+/* What was just done, with ↩ to take it back: in the top bar left of ‹ ›, laid over the bar's own end (the faint
+   next-up line) so nothing moves, never over the page or the buttons (decide.ts decideBar). */
+.dc-nav{position:relative}
+.dc-bar{position:absolute;right:100%;top:50%;transform:translateY(-50%);z-index:2;display:flex;align-items:center;margin-right:4px;padding-left:8px;background:var(--bg);color:var(--muted);font-size:var(--t-sm);white-space:nowrap;transition:opacity .4s}
 .dc-bar[hidden]{display:none}
-.dc-bar button{padding:0;border:0;background:none;color:inherit;font:600 var(--t-base) var(--sans);text-decoration:underline;cursor:pointer}
-.dc-bar button[hidden]{display:none}
-/* a page that comes back (decideRoundsHTML): Version N · date with Jev's chip, the review history, then its parts */
-.dc-ver{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.dc-bar.dc-bar-out{opacity:0}
+.dc-bar button{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 8px;border:0;border-radius:8px;background:none;color:inherit;font:inherit;cursor:pointer}
+.dc-bar button:hover{color:var(--ink);background:var(--surface2)}
+.dc-bar-i{flex:none}
+.dc-bar-err{color:var(--fail)}
+.dc-bar-err .dc-bar-w{max-width:40vw;overflow:hidden;text-overflow:ellipsis}
+/* a page that comes back (decideRoundsHTML): one meta line (stage · version · date · Jev · #N ↗), the version a menu of
+   each version and Changes since vK, then its parts */
+.dc-meta{display:flex;align-items:center;gap:0 6px;min-width:0;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.dc-meta>*{flex:none}
+.dc-meta .dc-dot{color:var(--g5,var(--muted))}
+/* the line is one control: who asked gives way first */
+.dc-meta>.dc-vwrap{flex:0 1 auto;min-width:0}
+.dc-meta>.dc-meta-who{flex:0 1 auto;min-width:24px;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.dc-vwrap{position:relative;display:inline-flex}
+.dc-vbtn{display:inline-flex;align-items:center;gap:0 6px;min-width:0;max-width:100%;min-height:28px;margin:0 -6px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;white-space:nowrap;cursor:pointer}
+.dc-vbtn>*{flex:none}
+.dc-vbtn>.dc-meta-who{flex:0 1 auto;min-width:24px;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
+.dc-vbtn .dc-jev,.dc-vbtn .dc-jev[data-v]{min-height:0;padding:0;border:0;background:none}
+.dc-m-narrow{display:none}
+.dc-vbtn svg{color:var(--muted)}
+.dc-vbtn:hover,.dc-vbtn[aria-expanded="true"]{background:var(--surface2)}
+/* Changes since vK on: a small amber dot on the control, the colour of the marks */
+.dc-vbtn.on::after{content:"";width:6px;height:6px;border-radius:50%;background:#d97706}
+.dc-vmenu{top:calc(100% + 4px);min-width:200px;max-width:min(360px,calc(100vw - 32px));font-size:var(--t-sm)}
+.dc-vinfo{margin:0;padding:6px 10px;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+.dc-vinfo:first-child{color:var(--ink);font-weight:600}
+.dc-vrow{gap:4px;font-weight:400;white-space:nowrap}
+.dc-vrow b{font-weight:600}
+.dc-vrow[aria-current="true"]{box-shadow:inset 2px 0 0 var(--ink)}
+.dc-vrow:disabled{color:var(--muted);cursor:default}
+.dc-vjev[data-v="met"]{color:var(--ok)}
+.dc-vjev[data-v="unsure"],.dc-vjev[data-v="failed"]{color:var(--wait-ink,var(--ink))}
+.dc-vjev[data-v="not_met"]{color:var(--fail)}
+.dc-task-link{padding:0;border:0;background:none;color:var(--ink);font:inherit;text-decoration:underline;white-space:nowrap;cursor:pointer}
 .dc-jev{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
 button.dc-jev{cursor:pointer}
 .dc-jev[data-v="met"]{border-color:color-mix(in srgb,var(--ok) 40%,var(--line));background:var(--ok-bg);color:var(--ok)}
@@ -154,15 +236,7 @@ button.dc-jev{cursor:pointer}
 .dc-jev[data-v="not_met"]{border-color:color-mix(in srgb,var(--fail) 40%,var(--line));background:var(--fail-bg);color:var(--fail)}
 .dc-jev-wait{border-style:dashed;color:var(--muted);font-weight:400}
 .dc-notice{margin:0;padding:6px 10px;border-left:3px solid var(--wait,var(--line));border-radius:4px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-size:var(--t-sm);overflow-wrap:anywhere}
-.dc-jev-why{margin:-4px 0 0;color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
-.dc-hist{margin:0 -4px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin}
-.dc-hist ol{display:flex;gap:6px;margin:0;padding:2px 4px 6px;list-style:none}
-.dc-hist li{flex:0 0 calc((100% - 24px) / 5);min-width:72px}
-.dc-step{display:flex;flex-direction:column;align-items:flex-start;gap:3px;width:100%;height:100%;padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
-.dc-step:hover{background:var(--surface2)}
-.dc-step.now{border-color:var(--ink)}
-.dc-step .dc-jev{min-height:20px;min-width:20px;justify-content:center;padding:0 6px;font-size:var(--t-xs,var(--t-sm))}
-.dc-step-date,.dc-step-ans{color:var(--muted);white-space:nowrap}
+.dc-step-ans{color:var(--muted);white-space:nowrap}
 .dc-step-ans[data-a="Sent back"]{color:var(--fail)}
 .dc-step-ans[data-a="OK'd"]{color:var(--ok)}
 .dc-part{display:flex;flex-direction:column;gap:4px}
@@ -178,12 +252,7 @@ button.dc-jev{cursor:pointer}
 .dc-clamp.open{display:block;-webkit-line-clamp:unset;line-clamp:none}
 .dc-more-btn{align-self:flex-start;padding:0;border:0;background:none;color:var(--accent,var(--ink));font:inherit;font-size:var(--t-sm);text-decoration:underline;cursor:pointer}
 .dc-more-btn[hidden]{display:none}
-/* Changes since vK, over the page */
-.dc-since{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:0 0 10px;font-size:var(--t-sm)}
-.dc-switch{display:inline-flex;align-items:center;gap:8px;min-height:32px;font-weight:600;cursor:pointer}
-.dc-switch input{width:18px;height:18px;margin:0;accent-color:var(--wait,var(--ink))}
 .dc-since-none{color:var(--muted)}
-.dc-diff .tf-diff-lines{max-height:none}
 .decide.dc-empty .dc-main{grid-template-columns:1fr}
 .decide.dc-empty .dc-thing{display:none}
 .decide.dc-empty .dc-side{border:0}
@@ -230,9 +299,13 @@ button.dc-jev{cursor:pointer}
   /* One row: where you are, the mark, the mic, ‹ › ✕; the crumb gives way (its first parts first), never the buttons.
      Tico's line goes under that row, when there is one. */
   .dc-head{flex-wrap:wrap;gap:0 6px;padding-left:8px}
-  /* Tico's line under the bar: up to two lines, not cut in half. */
-  .dc-say{order:9;flex-basis:100%;padding:0 8px;margin-bottom:10px;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
-  .dc-say:empty{display:none}
+  /* Tico's line under the bar: a quiet callout from the mark (its caret at --dc-caret-x, set by decidePaintHead), up
+     to two lines, not cut in half; none while Tico is still working. */
+  .dc-sayw{display:block;order:9;flex-basis:100%;min-width:0;position:relative;margin:4px 0 10px}
+  .dc-sayw:has(>.dc-say:empty){display:none}
+  .dc-sayw::before{content:"";position:absolute;top:-6px;left:calc(var(--dc-caret-x,24px) - 6px);border:6px solid transparent;border-top:0;border-bottom-color:var(--surface2)}
+  /* one line, cut; a tap shows it whole */
+  .dc-say{width:100%;min-height:44px;box-sizing:border-box;padding:6px 12px;border-radius:10px;background:var(--surface2);font-size:var(--t-sm);line-height:1.4}
   .dc-up{display:none}
   .dc-where{flex:0 1 auto;max-width:calc(100% - 236px)}
   .dc-crumb{min-height:44px;overflow:hidden}
@@ -242,26 +315,56 @@ button.dc-jev{cursor:pointer}
   .dc-mi{min-height:44px}
   .dc-more select,.dc-side select{min-height:44px}
   /* The answer row: out of the scroll, pinned to the bottom of the screen (.decide), solid, over the safe area. The
-     scroll keeps its height clear at the end (--dc-bar-h, measured by decideBarRoom), and the Undo bar sits above it. */
+     scroll keeps its height clear at the end (--dc-bar-h, measured by decideBarRoom). */
   .dc-side>div:not(.dc-done)>.dc-acts:last-child{position:absolute;left:0;right:0;bottom:0;z-index:1;margin:0;padding:8px 16px calc(8px + env(safe-area-inset-bottom));border-top:1px solid var(--line);background:var(--bg)}
-  .dc-bar{bottom:calc(var(--dc-bar-h,0px) + 8px)}
+  /* the undo: ↩ alone, its word for screen readers; a failed undo keeps its words */
+  .dc-bar:not(.dc-bar-err) .dc-bar-w{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  .dc-bar button{min-width:44px;justify-content:center;padding:0}
+  /* A page's meta line (who asked, check, version, mark, task): pinned on the answer row, always on the card; Notes
+     and the parts stay under the page in the scroll. */
+  .dc-side>div:not(.dc-done)>.dc-meta:has(~.dc-acts:last-child){position:absolute;left:0;right:0;bottom:var(--dc-acts-h,0px);z-index:2;box-sizing:border-box;min-height:44px;margin:0;padding:0 16px;border-top:1px solid var(--line);background:var(--bg)}
+  .dc-side>div:not(.dc-done):has(>.dc-meta)>.dc-acts:last-child{border-top:0;padding-top:0}
   .dc-main{display:block;overflow-y:auto;overscroll-behavior:contain;padding-bottom:var(--dc-bar-h,0px);scroll-padding-bottom:calc(var(--dc-bar-h,0px) + 8px)}
   .dc-thing{overflow:visible;padding:16px}
   .dc-thing>.dc-doc{flex:none}
+  /* A page gets the screen: the pane is as tall as the scroll's view above the buttons and the page fills it, scrolling
+     inside itself; the rest of the item is under it. (A page's frame cannot be sized to its content: it runs sandboxed,
+     with no script and no access from here, and its fallback height left a short box with the page cut off.) */
+  .dc-thing:has(>.dc-doc>.dc-page){height:100%;box-sizing:border-box;padding:8px}
+  .dc-thing:has(>.dc-doc>.dc-page)>.dc-doc{flex:1 0 0;min-height:0}
+  .dc-thing .dc-page{min-height:0}
   /* an ask with nothing to show opens on its question */
   .dc-thing:empty,.dc-thing:has(>.dc-bare:only-child){display:none}
   .dc-side{overflow:visible;border-left:0;border-top:1px solid var(--line);padding:12px 16px}
   .dc-thing:empty+.dc-side,.dc-thing:has(>.dc-bare:only-child)+.dc-side{border-top:0}
+  /* a question: the question and its answer first, its task's one line under them */
+  .dc-main.dc-qmain{display:flex;flex-direction:column}
+  .dc-qmain>.dc-side{order:1;flex:none;border-top:0}
+  .dc-qmain>.dc-thing{order:2;flex:none;padding:0 16px 16px}
+  .dc-qmain>.dc-thing>.dc-bg{border-top:1px solid var(--line)}
+  .dc-qmain>.dc-thing>.dc-bg>summary,.dc-qmain>.dc-thing>.dc-bg-only{min-height:48px}
   /* Notes starts one line tall (rows in decide.ts) and grows with its text */
   .dc-side textarea[data-dc-grow]{min-height:44px}
   .dc-q{font-size:var(--t-lg)}
+  /* a page's OK: the page names the thing; the task's title is left to the wide screen */
+  .dc-q-page{display:none}
+  .dc-meta{min-height:44px}
+  .dc-vbtn,.dc-task-link{min-height:44px}
+  /* the ask's meta line draws its task link 28 px tall: on a phone it is a 44 px target either way */
+  .dc-ask-meta .dc-task-link{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
+  /* dense: the date and Jev's word wait in the menu; the mark stays */
+  .dc-meta .dc-m-wide{display:none}
+  .dc-meta .dc-m-narrow{display:inline}
+  /* the meta line is under the page: its menu opens upward */
+  .dc-vmenu{top:auto;bottom:calc(100% + 4px)}
+  /* Notes starts one row, the clip inside it, and opens up when it is focused */
+  .dc-note-row textarea:focus{min-height:88px}
   .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-reply-row button,.dc-acts .dc-skip{min-height:44px}
-  /* one row at 390 px: I don't know, explain · Give it back · Skip */
-  .dc-acts.dc-fixed{gap:6px}
-  .dc-acts.dc-fixed button{padding:0 12px}
+  .dc-acts .dc-snz-b{width:44px;min-width:44px;height:44px;min-height:44px}
+  .dc-snz .dc-mi,.dc-snz-at input{min-height:44px}
+  .dc-acts .dc-snz-at .dc-icon{width:44px;min-width:44px;height:44px;min-height:44px}
+  .dc-snzl li{min-height:44px}
   .dc-jev,.dc-more-btn{min-height:44px}
-  .dc-step .dc-jev{min-height:20px}
-  .dc-switch{min-height:44px}
   .dc-open-task{margin:-12px 0 -8px;display:inline-flex;align-items:center}
   .dc-file-x{width:44px}
   .dc-attach{display:inline-flex;align-items:center}

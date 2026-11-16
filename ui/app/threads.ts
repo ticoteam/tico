@@ -167,7 +167,7 @@ const THREADS: ThreadsState = {on: null, rail: null, pinned: [], threads: [], ne
                  loading: null, again: false, wired: false, needsSeen: null, needsFirst: false, readAt: 0, gen: 0};
 // A stream connect within this long of the rail's last read leaves it be (the `needs` handler in threadsSync).
 const THREADS_CONNECT_FRESH_MS = 300e3;
-// The Catch up count: the sidebar link, the phone tab and the rail's Catch up button all show this.
+// The Catch up count: the sidebar link, More on a phone (a bot's Threads tab) and the rail's Catch up button all show this.
 const threadsCatchUp = () => THREADS.cu ? THREADS.cu.size : THREADS.catchUp;
 const THREADS_PAGE = 100;
 
@@ -321,14 +321,14 @@ function threadsSideRender() {
   // Shown from the first paint, before the first read lands: only a server without threads (THREADS.on false) hides it.
   const on = THREADS.on !== false;
   const link = $('#nav-threads'); if (link) link.hidden = !on;
-  // On a phone Threads takes Search's place in the bottom bar; global search is then in More (the drawer's footer).
-  const tab = $('#mobile-threads'), search = $('#mobile-search');
-  if (tab) tab.hidden = !on;
-  if (search) search.hidden = on;
-  if (THREADS.on !== true) return;
-  // The link and the phone tab carry the same count: what Catch up has left.
+  // On a phone the bar's slot is Flow, and Threads is in More (a bot keeps the Threads tab: tasks.ts flowTabPaint).
+  flowTabPaint();
+  const more = $('#mobile-more [data-threads-badge]');
+  if (THREADS.on !== true) { if (more) more.hidden = true; return; }
+  // The link, More and a bot's phone tab carry the same count: what Catch up has left. More shows it only while the
+  // tab is not in the bar (threads.css).
   const n = threadsCatchUp();
-  for (const badge of [$('#nav-threads .nav-badge'), $('#mobile-threads .nav-badge')]) {
+  for (const badge of [$('#nav-threads .nav-badge'), more, $('#mobile-threads .nav-badge')]) {
     if (badge) { badge.hidden = !n; badge.textContent = threadsCountText(n); badge.setAttribute('aria-label', `${n} to catch up`); }
   }
   if (typeof railRender === 'function') railRender();

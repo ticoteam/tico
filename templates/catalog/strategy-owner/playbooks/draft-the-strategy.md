@@ -23,7 +23,8 @@ cites it, or when the owner said it. Otherwise the section says "unknown" and th
 Open question for the Librarian. No round figures, no "typically", no "roughly" from your own memory.
 
 **You propose at every level.** The draft, the bets and every version are the owner's: `tico strategy draft`,
-`tico strategy bet` and `tico strategy publish` refuse you, and asking another way is not a workaround. This is the
+`tico strategy bet` and `tico strategy publish` refuse you unless you name a task with the owner's words on it
+(`playbooks/owner-chat.md`, step 4); asking another way is not a workaround. A drafting run from your own reading is the
 same at Passive, Suggests actions and Acts on its own: the result is always one proposal.
 
 ---
@@ -33,7 +34,7 @@ same at Passive, Suggests actions and Acts on its own: the result is always one 
 Start from the record, not from memory.
 
 - `tico strategy show`: the published version, if there is one, with its bets, `goals_by_bet` and `health_by_bet`.
-  You do not see the owner's draft; only they do. If a version is published, this run is a revision: read
+  The draft is in it too (the owner's and yours to read). If a version is published, this run is a revision: read
   `tico strategy versions` and propose only what should change, saying why in the proposal's reason.
 - The questions to turn into claims are the default guide's, in the style of the YC application
   and a16z's go-to-market writing: what you make and who needs it; how bad the problem is and what they use instead;

@@ -113,35 +113,6 @@ function orgGroupHead(gid: string | undefined, lead = ''): string {
 // Head.
 const orgGroupParent = (g: OrgGroup, keys: Set<string>): string => g.parent && keys.has('g:' + g.parent) ? 'g:' + g.parent
   : g.org_parent === 'b:strategy-owner' && keys.has('b:strategy-owner') ? 'b:strategy-owner' : '';
-// The org chart's shape over a tree of nodes by parent key (`by`, changed in place): the top person (orgChartTop) at the
-// root, their own group dissolved into them, and every top-level group under the one it answers to (orgGroupHead), so
-// a department sits under the person who runs it. Org (redesign-org.js rdoTree) and Goals (goals-kpis.js) both draw it.
-function orgChartShape<T extends {kind: string; id: string}>(by: Record<string, T[]>, keyOf: (n: T) => string, leadOf: (id: string) => string): Record<string, T[]> {
-  const nodes = new Map<string, T>(), parentOf = new Map<string, string>();
-  for (const [k, kids] of Object.entries(by)) for (const n of kids) { nodes.set(keyOf(n), n); parentOf.set(keyOf(n), k); }
-  const take = (key: string) => { const p = parentOf.get(key)!; by[p] = (by[p] || []).filter(n => keyOf(n) !== key); parentOf.delete(key); };
-  const put = (parent: string, n: T) => { (by[parent] ||= []).push(n); parentOf.set(keyOf(n), parent); };
-  const person = orgChartTop(), topKey = person && nodes.has('p:' + person.id) ? 'p:' + person.id : '';
-  const home = topKey ? parentOf.get(topKey) : '';
-  if (topKey && home) {
-    take(topKey); put('', nodes.get(topKey)!);
-    if (home.startsWith('g:') && parentOf.get(home) === '') {
-      for (const n of by[home] || []) put(topKey, n);
-      delete by[home]; take(home); nodes.delete(home);
-    }
-  }
-  // Under its head unless the head sits inside it (a loop); else it stays at the top, under the top person.
-  const reaches = (from: string, to: string) => {
-    const seen = new Set<string>(), walk = (k: string): boolean => (by[k] || []).some(n => { const key = keyOf(n); if (key === to) return true; if (seen.has(key) || seen.size > 4000) return false; seen.add(key); return walk(key); });
-    return walk(from);
-  };
-  for (const g of (by[''] || []).filter(n => n.kind === 'group')) {
-    const head = orgGroupHead(g.id, leadOf(g.id)), key = 'g:' + g.id;
-    if (!head || head === topKey || !nodes.has(head) || reaches(key, head)) continue;
-    take(key); put(head, g);
-  }
-  return by;
-}
 // The owner when nobody is above them, else the one person nobody is above; with neither, the first person at the top.
 function orgChartTop(): OrgPerson | null | undefined {
   const tops = (S.people || []).filter(p => !p.hidden && !orgBossKey({kind: 'person', person: p}));
@@ -1017,10 +988,11 @@ function renderTree() {
     renderTree();
   };
   document.querySelectorAll<HTMLElement>('[data-nav]').forEach(a => {
-    // More is current only for pages the bottom bar does not have its own button for (Updates is in More).
+    // More is current only for pages the bottom bar does not have its own button for (Updates is in More, and so is
+    // Threads but for a bot, whose bar keeps its tab: tasks.ts flowTabPaint).
     const inOverview = S.route === HOME || rdUnder(S.route, OVERVIEW) || rdUnder(S.route, CP_ROUTE);   // Company's tabs, Graph included
     const mobilePrimary = inOverview || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
-      || S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE);
+      || ((S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE)) && document.querySelector<HTMLElement>('#mobile-threads')?.hidden === false);
     const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||
       (a.dataset.nav === 'meetings' && (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?'))) ||
       (a.dataset.nav === 'mail' && (S.route === MAIL || S.route.startsWith(MAIL + '?') || S.route.startsWith(MESSAGING))) ||
