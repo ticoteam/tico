@@ -101,7 +101,7 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
 
 
 @pytest.mark.parametrize("delivery", [False, True])
-def test_update_requests_keep_their_readers_through_thread_migration(api, delivery):
+def test_update_requests_are_read_only_by_their_parties(api, delivery):
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
         recipient = bot_id(c, "ops")
@@ -118,7 +118,7 @@ def test_update_requests_keep_their_readers_through_thread_migration(api, delive
         expected = {owner.actor, H.bot_actor(recipient)}
 
         # A request can carry Learn's sources and task facts. Read access to another bot's activity must not
-        # turn its request into a company conversation, either before or after the migration.
+        # turn its request into a company conversation.
         before = set()
         for who in people + bots:
             try:
@@ -127,10 +127,6 @@ def test_update_requests_keep_their_readers_through_thread_migration(api, delive
             except Problem:
                 pass
         assert before == expected
-        c.execute(
-            "DELETE FROM registry_metadata WHERE key IN (?,?)", (threads.MIGRATION_KEY, threads.MIGRATION_PROGRESS_KEY)
-        )
-        assert threads.migrate(c)
         for target in (message["conversation_id"], H.message(c, message["id"])):
             after = {who.actor for who in people + bots if threads.readable(c, threads.viewer(auth, who), target)}
             assert after == expected

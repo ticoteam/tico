@@ -29,8 +29,9 @@ The columns, tables, triggers and indexes below are migration `backend/migration
 also makes the search index and the tables of the thread helpers, the Slack bridge and Tico Meet calls, and tables
 that migration 0058 drops. It runs once; a change to any of that SQL is a new migration. `threads_primary_delivery` is made again by
 `backend/migrations/0048_tasks_conversation.sql` with hubdb's `delivery_counts_sql` (the task-thread mention rule). The
-five message indexes are built by `threads.migrate` after its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs
-in chunks that each commit with their progress.
+five message indexes are migration `backend/migrations/20261116172132_threads_legacy_out.py`. The one-time data migration
+(§7) ran up to v0.6.0-rc.1, recorded under `registry_metadata` key `threads-migration`; its code is gone, and what it
+left is still read.
 
 ### 1.1 `conversations` (a thread)
 
@@ -599,15 +600,18 @@ stays. Each batch writes one `thread.purged` event and one audit row.
 - `message_revisions` holds every `(origin_id, revision)` seen, durable for the life of the message.
 - Local holds and screening change only local delivery state, never the canonical message.
 
-## 7. Migration (same release, `threads.migrate(c)`, once)
+## 7. Migration (ran up to v0.6.0-rc.1; what it left is still read)
+Every database this release opens ran the steps below (`threads.migrate`) and the move of chats into Homes
+(`bot_home_merge.run_once`) at a start up to rc.1. Both writers are gone (the move is kept as a test fixture,
+`backend/tests/helpers/bot_home_merge.py`, to build a database as rc.1 left it); every rule below that reads their
+results stays.
+
 Existing conversations (and conversations any legacy writer inserts later) keep `audience` NULL. **Who reads a root
 with no stored audience is decided by the pre-threads rules, exactly** (`threads._legacy_denial`, and the legacy term
 of `threads.readable_sql`): a task room by the task; a person by `scope` (personal: its owner, the Strategy room
 owner-only; shared: `rooms.shared_member_ids` plus Read on the bot, live; otherwise the owner or a participant), a
 bound meeting room by the meeting; an agent bot by participation or `rooms.room_bot`; a run by its attempt's grant.
-The only narrowing: a person who left, or whose sign-in is off, reads nothing. The e2e test
-(`backend/tests/test_threads_migration_e2e.py`) reads the pre-threads reader sets live in the same run and checks
-`threads.readable` against them after `threads.migrate`. The audience *label* is still derived live from
+The only narrowing: a person who left, or whose sign-in is off, reads nothing. The audience *label* is still derived live from
 `room_key`, `scope`, `kind` and `task_id` (`threads.audience_of`) for sessions, wakes and posting rules,
 because legacy writers set those columns after the insert. A sub-thread of such a root reads as its root. Likewise `owner_actor` stays as written.
 Threads made by `threads.create`/`home`/`sub_thread` store an audience, and so does each bot's open shared room: the
@@ -632,8 +636,6 @@ live shared-room rule as before.
   `legacy_audience` on that Home's messages, from the Home's menu or its Earlier messages row. A notice once told each
   manager, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake); none is sent now, and an old one
   still shows its Open button.
-- The reader-set equality fixture asserts, per message, the same readers before and after, and again after a
-  roster change.
 - Later, once (`bot_home_merge.run_once`, registry_metadata `bot-chats-to-home`, Nov 3 decision): each person's open
   personal room with a bot (`room_key` the bot) moves into that bot's Home and is read by the Home's readers. Messages
   keep ids, seqs and `legacy_audience`; the room closes with `room_key='<key>:home:<home id>'` and a `home_merges`

@@ -1,4 +1,4 @@
-"""Native threads: who reads a thread, how a message is written and delivered, read state, edits, the migration.
+"""Native threads: who reads a thread, how a message is written and delivered, read state, edits.
 
 The contract every track builds on is docs/dev/threads-contract.md; this module is its implementation. A thread is a
 `conversations` row (the table keeps its name), and its id is the conversation id.
@@ -46,7 +46,6 @@ Every message gets an `origin_id` ('<uuid v7>@<install id>') and a `revision`; `
 (origin_id, revision) seen, so a replicated edit or delete is applied once and an older one never wins.
 """
 
-import contextlib
 import contextvars
 import json
 import os
@@ -145,21 +144,8 @@ def _now():
 
 
 # ----------------------------------------------------------------------------- schema
-# The tables, columns, triggers and other indexes are migration backend/migrations/0047_native_threads_schema.py. The
-# message indexes are built here, by migrate, after its one-time backfill (building them over unstamped rows first is
-# slow, and it stalls); 0047 makes them only on a file whose backfill already ran.
-_MESSAGE_INDEXES = (
-    # Not unique: an insert copying another row's seq or origin must not fail before the stamp trigger replaces them.
-    # The sequence makes seqs unique; message_revisions makes (origin_id, revision) unique.
-    "CREATE INDEX IF NOT EXISTS messages_seq ON messages(seq) WHERE seq IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS messages_origin ON messages(origin_id) WHERE origin_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS messages_thread_seq ON messages(conversation_id, seq)",
-    # The people's messages of a thread: the sidebar's unread rank skips a long run of bot posts past someone's mark.
-    "CREATE INDEX IF NOT EXISTS messages_thread_human ON messages(conversation_id, seq) WHERE sender_id LIKE 'human:%'",
-    # Migrated shared-room history: which Homes still hold messages read by their old readers.
-    "CREATE INDEX IF NOT EXISTS messages_legacy_audience ON messages(conversation_id, legacy_audience) "
-    "WHERE legacy_audience IS NOT NULL",
-)
+# The tables, columns, triggers and indexes are migrations: backend/migrations/0047_native_threads_schema.py, and the
+# message indexes backend/migrations/20261116172132_threads_legacy_out.py.
 
 # The room a shared conversation belongs to, as SQL over a row named {r}: rooms.room_bot for a shared room.
 _ROOM_BOT = "substr({r}.room_key,1,instr({r}.room_key||':',':')-1)"
@@ -203,12 +189,6 @@ def _backfill_sql(r):
         f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL "
         f"OR json_extract({refs},'$.moved_home') IS NOT NULL)"
     )
-
-
-def ensure(c):
-    """Every start (hubdb.migrate): the one data step a file migrated before it existed still needs. The schema is
-    migration 0047."""
-    _neutral_titles_once(c)
 
 
 # ----------------------------------------------------------------------------- small helpers
@@ -3327,30 +3307,6 @@ def _shown_title(c, v, row):
     return title or sub_thread_title(parent.get("body"))
 
 
-def _neutral_titles(c):
-    """Clears every stored sub-thread title that is its parent's first line (now or in an earlier revision): such titles
-    are derived on read now, so none is stored where a parent can later become private. Idempotent."""
-    rows = c.execute(
-        "SELECT id, subject, parent_message_id FROM conversations WHERE parent_message_id IS NOT NULL "
-        "AND COALESCE(subject,'')<>''"
-    ).fetchall()
-    for thread_id, title, parent_id in rows:
-        if _derived_title(c, parent_id, title):
-            c.execute("UPDATE conversations SET subject='' WHERE id=?", (thread_id,))
-
-
-NEUTRAL_TITLES_KEY = "threads-neutral-titles"
-
-
-def _neutral_titles_once(c):
-    """Once, after the migration's backfill (which sets the flags the rule reads): a new title follows the rule when it
-    is made (stored empty, `sub_thread`), so nothing needs this on a later start."""
-    if not migrated(c) or c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (NEUTRAL_TITLES_KEY,)).fetchone():
-        return
-    _neutral_titles(c)
-    c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?)", (NEUTRAL_TITLES_KEY, json.dumps({"at": _now()})))
-
-
 def sub_thread(c, principal, parent_message_id):
     """The message's sub-thread, made if it has none. Two starts at once make one: the loser reads the winner's row
     (the parent_message_id index is unique)."""
@@ -5669,222 +5625,7 @@ def settle_delivery(c, delivery_id, state, error=None):
     return {"id": delivery_id, "state": state}
 
 
-# ----------------------------------------------------------------------------- §4 migration
-MIGRATION_PROGRESS_KEY = "threads-migration-progress"
-MIGRATION_CHUNK = 20_000  # messages per transaction: the write lock is held for a chunk, never the whole backfill
-MIGRATION_STEPS = ("seq", "origin", "restricted", "legacy", "deliveries")  # the per-message backfill, in order
-
-
-def migrated(c):
-    return c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (MIGRATION_KEY,)).fetchone() is not None
-
-
-def migrate(c):
-    """Once per install: every conversation gets its audience, root and path; every message its seq, origin and
-    restricted flag; shared rooms become their bot's Home with their history keeping its readers. Recorded under
-    registry_metadata `threads-migration`.
-
-    Resumable. The per-message backfill runs in chunks of MIGRATION_CHUNK rows, each a transaction of its own that
-    also records how far it got (`threads-migration-progress`), so a crash or a restart resumes there and the write
-    lock is held for one chunk at a time. Each step is idempotent per row, so a chunk that ran before a crash runs
-    again harmlessly. The message indexes are built after the backfill (migration 0047 skips them until then).
-    Inside a caller's transaction the chunks join it, and the whole migration is one transaction, as before."""
-    if migrated(c):
-        return False
-    _migrate(c)
-    return True
-
-
-@contextlib.contextmanager
-def _chunk(c):
-    """One piece of the migration as a savepoint: it commits when it is the outermost transaction (a server start),
-    and joins the caller's transaction when there is one."""
-    c.execute("SAVEPOINT threads_migration")
-    try:
-        yield
-    except Exception:
-        c.execute("ROLLBACK TO threads_migration")
-        c.execute("RELEASE threads_migration")
-        raise
-    c.execute("RELEASE threads_migration")
-
-
-def _progress(c):
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (MIGRATION_PROGRESS_KEY,)).fetchone()
-    return json.loads(row[0]) if row else {}
-
-
-def _set_progress(c, step, rowid):
-    c.execute(
-        "INSERT OR REPLACE INTO registry_metadata(key,value) VALUES(?,?)",
-        (MIGRATION_PROGRESS_KEY, json.dumps({"step": step, "rowid": rowid})),
-    )
-
-
-def rename_rule_reviews(c):
-    """Rule-review threads made before the plain title (org_rule_check.REVIEW_TITLE) took the task's "Held: ..." or
-    "Appeal: ..." title as their subject. Only the threads of tasks labelled as rule reviews change; any other held
-    thread (a screening hold, say) keeps its title. Returns how many changed."""
-    from .org_rule_check import REVIEW_LABEL, REVIEW_TITLE
-
-    return c.execute(
-        "UPDATE conversations SET subject=?, updated_at=? WHERE task_id IN (SELECT tt.task_id FROM task_tags tt "
-        "JOIN tags g ON g.id=tt.tag_id WHERE g.key=?) AND (subject LIKE 'Held: %' OR subject LIKE 'Appeal: %')",
-        (REVIEW_TITLE, _now(), REVIEW_LABEL),
-    ).rowcount
-
-
-def _migrate(c):
-    now = _now()
-    # Two open shared rooms for one bot (never written, but a Home is one per owner): the newest is the Home, the
-    # others stay readable as they were, archived.
-    with _chunk(c):
-        c.execute(
-            "UPDATE conversations SET archived_at=? WHERE scope='shared' AND closed_at IS NULL AND archived_at IS NULL "
-            "AND COALESCE(room_key,'')<>'' AND id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY "
-            f"{_ROOM_BOT.format(r='conversations')} ORDER BY COALESCE(last_message_at,created_at) DESC, id DESC) AS n "
-            "FROM conversations WHERE scope='shared' AND closed_at IS NULL AND archived_at IS NULL) WHERE n=1)",
-            (now,),
-        )
-        # Audience and owner stay unset on other existing conversations: derived live from their columns. The open shared
-        # room is its bot's Home, stored: everything new follows Home Read, its history keeps its readers (below).
-        c.execute(
-            "UPDATE conversations SET root_id=COALESCE(root_id,id), path=COALESCE(path,'/'||id||'/'), "
-            "updated_at=COALESCE(updated_at,last_message_at,created_at)"
-        )
-        _store_shared_homes(c)
-        rename_rule_reviews(c)
-    install = install_id(c)
-    _backfill_messages(c, install, now)
-    # Conversation counters read the stamped seqs; a temporary table of each conversation's last seq (one pass, no index
-    # on messages needed), then one pass over the conversations.
-    with _chunk(c):
-        c.execute(
-            "INSERT INTO sequences(name,value) SELECT 'messages', COALESCE(MAX(seq),0) FROM messages WHERE true "
-            "ON CONFLICT(name) DO UPDATE SET value=MAX(value,excluded.value)"
-        )
-    c.execute("DROP TABLE IF EXISTS temp.threads_migration_last")
-    c.execute("CREATE TEMP TABLE threads_migration_last(conversation_id TEXT PRIMARY KEY, seq INTEGER NOT NULL)")
-    c.execute(
-        "INSERT INTO threads_migration_last SELECT conversation_id, MAX(seq) FROM messages "
-        "WHERE conversation_id IS NOT NULL GROUP BY conversation_id"
-    )
-    with _chunk(c):
-        c.execute(
-            "UPDATE conversations SET last_seq=COALESCE((SELECT seq FROM temp.threads_migration_last l "
-            "WHERE l.conversation_id=conversations.id),0)"
-        )
-        c.execute("UPDATE conversations SET last_unread_seq=last_seq")
-    c.execute("DROP TABLE temp.threads_migration_last")
-    # The message indexes come last: built once over the backfilled rows instead of kept up through every update.
-    for statement in _MESSAGE_INDEXES:
-        with _chunk(c):
-            c.execute(statement)
-    with _chunk(c):
-        c.execute("DELETE FROM registry_metadata WHERE key=?", (MIGRATION_PROGRESS_KEY,))
-        c.execute(
-            "INSERT INTO registry_metadata(key,value) VALUES(?,?)",
-            (
-                MIGRATION_KEY,
-                json.dumps(
-                    {"at": now, "seq": c.execute("SELECT value FROM sequences WHERE name='messages'").fetchone()[0]}
-                ),
-            ),
-        )
-    with _chunk(c):
-        _neutral_titles_once(c)  # the backfill sets the flags that decide a sub-thread's title
-
-
-def _backfill_messages(c, install, now):
-    """The per-message steps, each over rowid chunks, resuming from the recorded progress."""
-    top = c.execute("SELECT COALESCE(MAX(rowid),0) FROM messages").fetchone()[0]
-    progress = _progress(c)
-    step, low = progress.get("step", MIGRATION_STEPS[0]), progress.get("rowid", 0)
-    if step not in MIGRATION_STEPS:  # every step ran; only the finishing steps were left
-        return
-    for name in MIGRATION_STEPS[MIGRATION_STEPS.index(step) :]:
-        start = low if name == step else 0
-        while start < top:
-            end = min(top, start + MIGRATION_CHUNK)
-            with _chunk(c):
-                c.execute(_STEP_SQL[name], _step_params(name, install, now, start, end))
-                _set_progress(c, name, end)
-            start = end
-        with _chunk(c):
-            following = MIGRATION_STEPS[MIGRATION_STEPS.index(name) + 1 :][:1]
-            _set_progress(c, following[0] if following else "done", 0)
-
-
-def _step_params(name, install, now, low, high):
-    if name == "origin":
-        return (install, low, high)
-    if name == "deliveries":
-        return (now, low, high)
-    return (low, high)
-
-
-# The migration's rendering of _ref_strings/restricted_for: structure outside NESTED_REF_KEYS, or any string that
-# names a task (a task: prefix, a task link or any task's id), restricts the message.
-_NESTED_REFS_SQL = (
-    "EXISTS (SELECT 1 FROM json_tree(refs) t WHERE t.fullkey<>'$' AND ("
-    "(t.type IN ('object','array') AND NOT (t.fullkey IN ('$.origin','$.mentions','$.warnings') OR "
-    "(t.path='$.warnings' AND t.type='object'))) OR "
-    "(t.type='text' AND (t.atom LIKE 'task:%' OR t.atom LIKE '%#/task/%' OR t.atom LIKE '%/tasks/%' OR "
-    "t.atom IN (SELECT id FROM tasks)))))"
-)
-
-
-_ORIGIN_SQL = (
-    "UPDATE messages SET origin_id=lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||"
-    "substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(2)))||'-'||lower(hex(randomblob(6)))||'@'||? "
-    "WHERE rowid>? AND rowid<=? AND origin_id IS NULL"
-)
-_RESTRICTED_SQL = (
-    "UPDATE messages SET restricted=CASE WHEN COALESCE(in_reply_to,'')<>'' THEN 1 "
-    f"WHEN conversation_id IN (SELECT id FROM conversations v WHERE {_derived_audience('v')} IN ('task','meeting') "
-    "OR task_id IS NOT NULL) THEN 1 "
-    "WHEN COALESCE(refs,'')<>'' AND (NOT json_valid(refs) OR json_type(refs)<>'object' OR "
-    f"EXISTS (SELECT 1 FROM json_each(refs) WHERE key NOT IN {_qlist(sorted(SAFE_REF_KEYS))}) OR {_NESTED_REFS_SQL}) "
-    "THEN 1 ELSE 0 END WHERE rowid>? AND rowid<=?"
-)
-_LEGACY_SQL = (
-    f"UPDATE messages SET legacy_audience='shared:'||(SELECT {_ROOM_BOT.format(r='v')} FROM conversations v "
-    "WHERE v.id=messages.conversation_id), restricted=1 WHERE rowid>? AND rowid<=? AND conversation_id IN "
-    "(SELECT id FROM conversations WHERE scope='shared' AND COALESCE(room_key,'')<>'')"
-)
-_DELIVERIES_SQL = (
-    "INSERT OR IGNORE INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
-    "state,revision,delivered_at,read_at,created_at,updated_at) SELECT lower(hex(randomblob(16))),m.id,"
-    "m.recipient_id,m.conversation_id,m.conversation_id,"
-    "CASE WHEN COALESCE(json_extract(CASE WHEN json_valid(m.refs) THEN m.refs END,'$.quiet'),0) "
-    "THEN 'defer' ELSE 'queue' END, 'addressed',"
-    "CASE WHEN m.sender_id LIKE 'bot:%' THEN 'bot' WHEN m.sender_id LIKE 'human:%' THEN 'human' "
-    "ELSE 'keeper' END, CASE WHEN m.delivered_at IS NOT NULL THEN 'delivered' ELSE 'pending' END,0,"
-    "m.delivered_at,m.read_at,m.created_at,? FROM messages m WHERE m.rowid>? AND m.rowid<=? "
-    "AND COALESCE(m.recipient_id,'')<>'' AND (m.delivered_at IS NULL OR m.read_at IS NULL) AND m.deleted_at IS NULL"
-)
-_STEP_SQL = {
-    "seq": "UPDATE messages SET seq=rowid WHERE rowid>? AND rowid<=? AND seq IS NULL",
-    "origin": _ORIGIN_SQL,
-    "restricted": _RESTRICTED_SQL,
-    "legacy": _LEGACY_SQL,
-    "deliveries": _DELIVERIES_SQL,
-}
-
-
-def _store_shared_homes(c, slug=None):
-    """Each bot's open shared room becomes its Home: audience 'home', owned by the bot (unless it already has one)."""
-    one = f" AND {_ROOM_BOT.format(r='s')}=?" if slug else ""
-    c.execute(
-        f"UPDATE conversations SET audience='home', owner_id='bot:'||{_ROOM_BOT.format(r='conversations')} "
-        f"WHERE id IN (SELECT s.id FROM conversations s WHERE s.scope='shared' AND COALESCE(s.room_key,'')<>'' "
-        f"AND s.closed_at IS NULL AND s.archived_at IS NULL AND s.audience IS NULL{one} AND NOT EXISTS (SELECT 1 "
-        f"FROM conversations h WHERE h.audience='home' AND h.closed_at IS NULL AND "
-        f"h.owner_id='bot:'||{_ROOM_BOT.format(r='s')}))",
-        (slug,) if slug else (),
-    )
-
-
+# ----------------------------------------------------------------------------- a migrated Home's earlier messages
 def _earlier(c, v, row):
     """`{"earlier": {"count": n}}` for a manager of a bot on its Home's root while shared-room history is still closed:
     what the control to open it needs, whether or not this manager already reads that history. Nobody else gets a count."""

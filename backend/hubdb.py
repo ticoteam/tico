@@ -1691,14 +1691,7 @@ def migrate(conn, adopt_legacy=False):
     )
     # Which messages could be about a task, so a task's page does not read its whole room (backend/message_links.py).
     from . import message_links
-    from . import threads
 
-    threads.ensure(conn)
-    threads.migrate(conn)
-    # Once: everyone's old personal chat with a bot moves into that bot's Home (backend/bot_home_merge.py).
-    from . import bot_home_merge
-
-    bot_home_merge.run_once(conn)
     message_links.ensure(conn)
     # The pipelines every company has (General), made when missing on every start, and given their manager once that
     # bot exists (backend/pipeline_settings.py). Here, so a hub opened without the cloud store has them too.
