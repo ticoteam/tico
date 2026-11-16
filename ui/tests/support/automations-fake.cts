@@ -493,6 +493,9 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
     if (p === '/api/v2/groups') return json({groups: fx.groups});
     const body = (method === 'GET' ? null : req.postDataJSON?.() ?? null) as Json | null;
     const b: Json = body ?? {};
+    // The browser's own speed readings (ui/observability.ts) are not the page's writes: they come whenever the browser
+    // sends them, so a count of writes would depend on timing.
+    if (p === '/api/v2/web-timings') return json({kept: 0, dropped: 0}, 202);
     if (method !== 'GET') writes.push({method, path: p, body});
 
     // System jobs beside Maintenance (ui/app/settings-recurring.ts draws them): two of Tico's own jobs.
