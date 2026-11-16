@@ -13,8 +13,10 @@ import pytest
 from backend import execution, org_turns
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401
+from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 
-OLD, NEW = "0.4.15", "0.4.16"
+# Real releases at or above the runner floor (0.6.0-rc.1): a computer below it is paused, which is not what these cover.
+OLD, NEW = "0.6.0-rc.1", "0.6.0-rc.2"
 CAPPED = "Paused at the computer's drain time limit; work and session saved, queued to continue"
 WAITING = "Handed back before starting because the computer is updating or restarting; queued to continue"
 
@@ -27,6 +29,7 @@ def beat(api, machine, bots, release, update):
             "version": "test",
             "platform": "test",
             "release": release,
+            "capabilities": RUNNER_CAPABILITIES,
             "readiness": {b: True for b in bots},
             "update": update,
         },

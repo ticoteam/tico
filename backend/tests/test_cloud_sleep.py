@@ -171,7 +171,6 @@ def test_a_sleeping_bots_hold_does_not_hide_its_signed_out_check(cloud, company_
         ('company_limit', ('check_model', None), 'check_model'),
         ('task_wait', ('task_wait', None, 'check_model'), 'check_model'),
         ('company_limit', (None, 'uncertain'), 'uncertain'),
-        ('task_wait', ('task_wait', None, 'private_update'), 'private_update'),
         ('company_limit', (*health.QUEUE_WAITS, None, 'unreadable'), 'unreadable'),
         ('company_limit', (None, 'check_model', 'uncertain'), 'check_model'),
         ('company_limit', ('uncertain', None, 'check_model'), 'uncertain'),

@@ -212,7 +212,8 @@ def test_a_notice_a_person_caused_on_a_finished_task_is_canceled_once_and_idle_c
 
 @pytest.mark.parametrize("cause", ["stop", "done", "closed"])
 def test_expiry_judges_folded_inputs_by_their_own_task(api, cause):
-    machine, task, attempt = task_attempt(api)
+    # The shared lane (`session: bot`): another task's message in this room is steered into this turn.
+    machine, task, attempt = task_attempt(api, session="bot")
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "folded"}, machine["token"])
     with api.app.state.store.transaction() as c:
         other = H.task_create(c, "human:ana", "Read the weekly numbers", "Read them.", "bot:ops", lint=False)
