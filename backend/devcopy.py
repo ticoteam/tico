@@ -105,7 +105,6 @@ EMPTY = (
     "mail_items",
     "mail_intake",
     "mail_reads",
-    "mail_private_backfill",
     "watcher_runs",
     "watcher_items",
     "watcher_refs",
@@ -415,7 +414,6 @@ KEEP = (
             "strategy_merges",
             "changes",
             "chat_goals",
-            "cloud_migrations",
             "schema_migrations",
             "company_profile",
             "connector_snapshots",
@@ -606,7 +604,6 @@ KEEP = (
             "flow_suggestion_runs",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
             "run_starts",
-            "turns",
             "update_archive_overrides",
             "update_reads",
             "update_settings",
@@ -618,20 +615,6 @@ KEEP = (
             "ci_run_extensions",  # a ticket's one extension of its CI minutes (backend/ci_runs.py)
             "reach_settings",
             "reach_lines",
-            # The five change logs before migration 0064 moved them into history_events. A copy of a database from before that
-            # migration still holds them: kept, so the copy's first start moves their rows (it is pruned before it is migrated).
-            # 0064 drops them, so they are named here only until then.
-            "task_events",
-            "goal_events",
-            "market_events",
-            "company_events",
-            "strategy_events",
-            # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
-            # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
-            # A copy from before migration 0072 still holds turns (the run records, now attempts rows): kept until 0072 moves them.
-            "turn_usage_segments",
-            "usage_limits",
-            "usage_pools",
             "feedbacks",  # 👍/👎 on bot work (backend/feedback.py)
             # Shared records (backend/records): locations, items and projects
             "items",
@@ -812,26 +795,18 @@ def revoke_automation_secrets(c):
     present = tables(c)
     if "triggers" in present:
         c.execute("UPDATE triggers SET secret_hash='devcopy-revoked:'||id")
-        if "signing_secret" in {r[1] for r in c.execute("PRAGMA table_info(triggers)")}:
-            c.execute("UPDATE triggers SET signing_secret=NULL")
+        c.execute("UPDATE triggers SET signing_secret=NULL")
     if "listening_sources" in present:
         c.execute("UPDATE listening_sources SET token_hash=NULL")  # a push address of the live install opens nothing
     if "webhooks" in present:
-        columns = {r[1] for r in c.execute("PRAGMA table_info(webhooks)")}
-        c.execute(
-            "UPDATE webhooks SET secret='', secret_prev='', secret_prev_until=NULL"
-            + (", headers='[]'" if "headers" in columns else "")
-        )
+        c.execute("UPDATE webhooks SET secret='', secret_prev='', secret_prev_until=NULL, headers='[]'")
 
 
 def open_attempts(c):
     """(WHERE clause, args) for the attempts a copy removes as still open. A run with no job has no lease, so it is open
-    until settled_at; a job-backed attempt is open until finished_at, or while its state is open. A file from before
-    migration 0072 has no settled_at and no run without a job."""
+    until settled_at; a job-backed attempt is open until finished_at, or while its state is open."""
     open_state = "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS))
-    if "settled_at" in {row[1] for row in c.execute('PRAGMA table_info("attempts")')}:
-        return "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_state, OPEN_ATTEMPTS
-    return open_state, OPEN_ATTEMPTS
+    return "(job_id IS NULL AND settled_at IS NULL) OR (job_id IS NOT NULL AND (%s))" % open_state, OPEN_ATTEMPTS
 
 
 def prune(c, days, keep_automations=False):
@@ -890,10 +865,6 @@ def prune(c, days, keep_automations=False):
                 for child, col, key in refs
             )
             delete(table, where, (cutoff,))
-    # A copy from before migration 0072 keeps its turns whole (KEEP). A run the cut removed must not come back through
-    # its turns row as a lease-less run, so the record goes with its attempts row.
-    if "attempts" in present and "turns" in present:
-        delete("turns", "id NOT IN (SELECT id FROM attempts)")
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
     if "agents" in present:
         c.execute(

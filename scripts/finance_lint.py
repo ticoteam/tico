@@ -30,17 +30,15 @@ WRITE = re.compile(
 READ = re.compile(r"\b(?:FROM|JOIN)\s+[\"`]?(fin_\w+)", re.IGNORECASE)
 # A Finance table named in quotes outside Finance is a list that a delete loop could run (devcopy once had one).
 NAMED = re.compile(r"[\"'`](fin_\w+)[\"'`]")
-# The schema's own lists name every table by design: the status lists the CHECKs come from, the rename tooling, and the
-# rename test's list of the indexes migrations dropped.
+# The schema's own lists name every table by design: the status lists the CHECKs come from and the rename tooling.
 NAMED_OK = (
     "backend/status_values.py",
     "scripts/cleanup/",
-    "backend/tests/test_schema_renames.py",
 )
 INNER = re.compile(
     r"(?:from|import)\s+(?:backend\.|\.+)?finance\.(core|store|handlers|budgeting|posting|context|setup)\b"
 )
-# The migration step creates the tables through the schema module; nothing else reaches past the two doors.
+# The store's start makes Finance's org-chart triggers (finance/store/tico.py); nothing else reaches past the two doors.
 INNER_OK = {("backend/store.py", "store")}
 
 

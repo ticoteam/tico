@@ -12,33 +12,11 @@ from pathlib import Path
 
 from backend import hubdb as H
 from backend import bot_settings as BS
-from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE, with_legacy_run_tables
+from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE
 
 
 SEO = H.bot_actor("seo")
 COO = H.bot_actor("assistant")
-
-
-# ----------------------------------------------------------------------------- schema, connect
-class Schema(HubCase):
-    def test_published_schema_upgrade_adds_run_rotation(self):
-        # Main has already applied the purpose migration; rotation must be appended after it.
-        published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
-        with_legacy_run_tables(self.conn)
-        self.conn.execute(
-            "INSERT INTO turns(id,bot,started_at,purpose) VALUES('before-rotation','cmo',?,'review PR')", (H.now(),)
-        )
-        self.conn.execute(f"PRAGMA user_version={published_version}")
-        self.conn.commit()
-        H.migrate(self.conn)
-        self.assertNotIn(
-            "turns", {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        )
-        self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")})
-        self.assertEqual(
-            self.conn.execute("SELECT purpose FROM attempts WHERE id='before-rotation'").fetchone()[0], "review PR"
-        )
-        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
 
 class RegistrySync(HubCase):

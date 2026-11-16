@@ -4,7 +4,6 @@ reads meetings): any bot, restricted or not, and a member with no email get it a
 tree, counts, links and batch actions leave it out. Fixtures are made-up strings only."""
 
 import json
-import sqlite3
 
 from backend import updates
 from backend.auth import Identity
@@ -117,33 +116,6 @@ def test_a_bot_managers_request_names_a_flagged_report_without_its_text(api, mon
     assert "Synthetic plain report" in text and "Synthetic flagged report" not in text
     assert ben + ": posted an update" in text, "the report is named as having posted"
     assert [i["author"] for i in posted["inputs"]] == ["human:cara"], "a bot's own view links no flagged input"
-
-
-def test_the_migration_flags_every_existing_assistant_drafted_person_update(tmp_path):
-    c = sqlite3.connect(tmp_path / "old.db", isolation_level=None)
-    c.executescript(updates.SCHEMA)
-    for column in ("slides", "drafted_by", "edited_by", "inputs"):
-        c.execute(f"ALTER TABLE updates ADD COLUMN {column} TEXT")
-    rows = [
-        ("d", "human:ben", "assistant", None),
-        ("e", "human:cara", "assistant", "human:cara"),
-        ("o", "human:ana", None, None),
-        ("b", "ops", None, None),
-    ]
-    for uid, bot, drafted, edited in rows:
-        c.execute(
-            "INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,edited_by) "
-            "VALUES(?,?,'daily',?,'h','- b','t','t',?,?)",
-            (uid, bot, uid, drafted, edited),
-        )
-    updates.ensure_schema(c)
-    assert dict(c.execute("SELECT id, meetings FROM updates")) == {"d": 1, "e": 1, "o": 0, "b": 0}
-    c.execute(
-        "INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,meetings) "
-        "VALUES('n','human:dan','daily','n','h','- b','t','t','assistant',0)"
-    )
-    updates.ensure_schema(c)
-    assert c.execute("SELECT meetings FROM updates WHERE id='n'").fetchone()[0] == 0, "it runs once, not on every start"
 
 
 def test_a_member_with_no_email_posts_over_a_flagged_draft_in_their_own_words(api, monkeypatch):

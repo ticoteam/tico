@@ -29,13 +29,6 @@ from .harnesses import EXTERNAL_HARNESSES, resolve_harness
 from .store import H, Problem, encode, readiness_document, repo_url
 from . import bot_settings as BS
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bot_tool_requests(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,
- service TEXT NOT NULL, identity TEXT NOT NULL DEFAULT '', entry TEXT NOT NULL,
- task_id TEXT, requested_by TEXT NOT NULL, created_at TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending');
-CREATE INDEX IF NOT EXISTS bot_tool_requests_bot ON bot_tool_requests(bot, state, kind);
-"""
 CREDENTIALS_NOTE = (
     "Store a needed Credential through Credentials or its chat card, and grant it to this bot. "
     "Never put a value in a task or repository. This entry names only the variable."

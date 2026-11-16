@@ -43,17 +43,15 @@ def ui_map_key(name):
 
 
 CONFORMANCE = "runner_support/tests/test_conformance.py"
-# A new or changed file under MIGRATIONS runs the tests that upgrade a legacy or fixture database through every
+# A new or changed file under MIGRATIONS runs the tests that upgrade the floor's database or a fixture through every
 # migration, in a light plan too: they reach a migration only through the app's start, past a light plan's depth, and
-# a migration that assumes a column a later legacy migration adds (#3469: an index on tasks.private) breaks only there.
+# a migration that assumes a column another migration adds breaks only there.
 MIGRATIONS = "backend/migrations/"
 UPGRADE_TESTS = (
-    "backend/tests/test_migrations.py",  # the migration authority: converge, rerun, roll back, refuse
-    "backend/tests/test_schema_every_table.py",  # schema_old_main.sql, every table, one boot
-    "backend/tests/test_schema_renames.py",  # schema_pre_cleanup.sql: the startup renames
-    "backend/tests/test_task_privacy.py",  # the legacy cloud and native hub (user_version 23) upgrades
-    "backend/tests/test_upgrade.py",  # a database an older release made boots twice
-    "backend/tests/test_upgrade_boot.py",  # schema_pre_cleanup.sql through create_app and backend.boot
+    "backend/tests/test_migrations.py",  # the migration authority: baseline, converge, rerun, roll back, refuse
+    "backend/tests/test_schema_baseline.py",  # schema_floor.sql upgraded equals a new database, every table
+    "backend/tests/test_upgrade.py",  # a foreign or empty file, and the journey's seeded rows
+    "backend/tests/test_upgrade_boot.py",  # schema_floor.sql through create_app and backend.boot
 )
 # Guard tests check a repository-wide invariant through a path the map cannot follow, so a change that can break one
 # names it directly, and it runs in a light plan too (level 0, like UPGRADE_TESTS). On Nov 13 main went red

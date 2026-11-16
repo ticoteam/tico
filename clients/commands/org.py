@@ -110,7 +110,7 @@ def _next_step(row):
         return {"why": "quarantined", "fix": f"tico bot quarantine-clear {slug}"}
     if state == "paused":
         return {"why": "paused", "fix": f"tico bot resume {slug}"}
-    if setup in ("needs_setup", "needs_onboarding"):
+    if setup == "needs_setup":
         return {
             "why": "onboarding: takes no tasks until a person above it marks setup done",
             "fix": f"tico bot setup-done {slug}",
@@ -202,9 +202,7 @@ def bot_go_live_all(api, args):
     bots = who.get("bots")
     planned = [b["slug"] for b in bots if b.get("state") == "planned"]
     onboarding = [
-        b["slug"]
-        for b in bots
-        if b.get("state") != "archived" and (b.get("onboarding_state") or "") in ("needs_setup", "needs_onboarding")
+        b["slug"] for b in bots if b.get("state") != "archived" and b.get("onboarding_state") == "needs_setup"
     ]
     setup_done = bool(args.get("setup_done"))
     if args.get("dry_run"):
@@ -231,10 +229,7 @@ def bot_go_live_all(api, args):
         # Read again: going live may have changed a bot's setup state.
         now = {b["slug"]: b for b in who.get("bots")}
         for slug, row in now.items():
-            if row.get("state") == "archived" or (row.get("onboarding_state") or "") not in (
-                "needs_setup",
-                "needs_onboarding",
-            ):
+            if row.get("state") == "archived" or row.get("onboarding_state") != "needs_setup":
                 continue
             try:
                 who.post(f"bots/{quote(slug, safe='')}/onboarded", {}, key=_key(args, ":done:" + slug))
@@ -388,7 +383,7 @@ def _chart(people, bots, reports):
             bits.append(r["role"])
         if r["id"].startswith("bot:"):
             bits.append(r.get("state") or "")
-            if r.get("setup") in ("needs_setup", "needs_onboarding"):
+            if r.get("setup") == "needs_setup":
                 bits.append("onboarding")
         text = f"{r.get('name')} ({', '.join(b for b in bits if b)})"
         if r.get("manages_pipelines"):

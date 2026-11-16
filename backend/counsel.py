@@ -67,12 +67,6 @@ STOP_WORDS = frozenset(
 # Quote characters and dashes that differ in a copy of a document but say the same thing.
 _STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"', "–": "-", "—": "-", " ": " "})
 
-# Each read the Rules Owner was asked for, one row per read task: the file version (the only versions it may cite,
-# backend/files.py asked_to_read) and the From it was asked for. Two people reading one version are two rows.
-RULE_READS = """CREATE TABLE IF NOT EXISTS rule_reads(
- task_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, version INTEGER NOT NULL, requested_by TEXT NOT NULL,
- created_at TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, source_id TEXT)"""
-RULE_READS_INDEX = "CREATE INDEX IF NOT EXISTS rule_reads_version ON rule_reads(file_id, version)"
 # A quote shorter than this from a private read could be a word that is in any document: too little to tie the
 # suggestion to the version it cites.
 PRIVATE_QUOTE_MIN = 20
@@ -88,24 +82,6 @@ class RuleRead(Contract):
 
 class RuleAsk(Contract):
     question: str = Field(min_length=3, max_length=QUESTION_MAX)
-
-
-def ensure(c):
-    """The table of the document versions the Rules Owner was asked to read. Unversioned, as the org-rules tables are."""
-    columns = {r[1]: r[5] for r in c.execute("PRAGMA table_info(rule_reads)")}
-    if columns and columns.get("task_id") != 1:
-        # A development table keyed by (file, version): a second reader replaced the first read's row. One row per task.
-        c.execute("ALTER TABLE rule_reads RENAME TO rule_reads_by_version")
-        c.execute(RULE_READS)
-        source = "source_id" if "source_id" in columns else "NULL"
-        c.execute(
-            "INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created_at, truncated, "
-            f"source_id) SELECT task_id, file_id, version, requested_by, created_at, truncated, {source} "
-            "FROM rule_reads_by_version WHERE task_id IS NOT NULL"
-        )
-        c.execute("DROP TABLE rule_reads_by_version")
-    c.execute(RULE_READS)
-    c.execute(RULE_READS_INDEX)
 
 
 def available(c):

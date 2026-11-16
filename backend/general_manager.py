@@ -34,14 +34,6 @@ ACTOR = "bot:" + SLUG
 EVENT = "task_manager_report"  # the routine's key and the wake's `refs.wake`
 COMPANY = "company"  # the group of a task whose owner is in no department
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS task_manager_seen(
- key TEXT PRIMARY KEY, department TEXT NOT NULL, stamp TEXT NOT NULL DEFAULT '', seen_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS task_manager_reports(
- department TEXT PRIMARY KEY, name TEXT NOT NULL, items INTEGER NOT NULL DEFAULT 0, task_id TEXT, checked_at TEXT NOT NULL,
- changed_at TEXT NOT NULL DEFAULT '');
-"""
-
 PER_DEPARTMENT = 30  # items in one report; the rest are counted
 BODY_BYTES = 12000  # the report's text is cut here
 REPEAT_HOURS = 24  # an item already reported is left out for this long, unless it changed

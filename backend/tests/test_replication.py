@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from backend import replication
+from backend import migrations, replication
 from backend.hubdb import leave_wal_for_litestream
 from backend.tests.helpers.replication import entrypoint, prepare
 
@@ -928,7 +928,7 @@ def test_a_restore_points_the_config_at_the_generation_environment_json_names(tm
     with sqlite3.connect(
         tmp_path / "source.sqlite"
     ) as restored:  # the database a restore brings back, with its id table
-        restored.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        migrations.apply(restored)  # a Tico database: the baseline schema
     config = tmp_path / "litestream.yml"
     result, _ = prepare(tmp_path, STUB_DB=str(tmp_path / "source.sqlite"), TICO_LITESTREAM_CONFIG=str(config))
     assert result.returncode == 0, result.stderr
@@ -947,7 +947,7 @@ def test_a_start_with_a_cached_generation_uses_it_even_when_the_bucket_is_unreac
     data = tmp_path / "data"
     data.mkdir()
     with sqlite3.connect(data / "hub.sqlite") as db:
-        db.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        migrations.apply(db)  # a Tico database: the baseline schema
     replication.write_generation_cache(data, GENERATION)
     config = tmp_path / "litestream.yml"
     result, _ = prepare(
@@ -1003,7 +1003,7 @@ def test_an_unreadable_generation_file_stops_the_start_before_the_config_is_writ
     data = tmp_path / "data"
     data.mkdir()
     with sqlite3.connect(data / "hub.sqlite") as db:
-        db.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        migrations.apply(db)  # a Tico database: the baseline schema
     (data / replication.GENERATION_CACHE).write_text("not a generation\n")
     config = tmp_path / "litestream.yml"
     result, _ = prepare(tmp_path, TICO_LITESTREAM_CONFIG=str(config))
@@ -1115,7 +1115,7 @@ def test_a_seed_moves_a_wal_left_without_its_database_aside_before_it_restores(t
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "hub.sqlite-wal").write_bytes(b"orphan commits")
     with sqlite3.connect(tmp_path / "source.sqlite") as source:
-        source.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT)")
+        migrations.apply(source)  # a Tico database: the baseline schema
     result, data = prepare(tmp_path, STUB_DB=str(tmp_path / "source.sqlite"))
     assert result.returncode == 0, result.stderr
     assert not (data / "hub.sqlite-wal").exists()

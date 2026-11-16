@@ -170,10 +170,10 @@ def create_app(settings=None):
 
     recorder = flight.Recorder() if settings.flight_recorder else None
     store = Store(settings, recorder)
-    # An upgraded database gets its pending migrations (the cleanup's column renames) before any install below opens a
-    # transaction: install-time code and every commit's hooks use the new names. Startup's store.initialize does the rest.
-    if settings.db_path.exists():
-        store.migrate()
+    # The schema comes first, before any install below opens a transaction: a new file takes the baseline and an
+    # upgraded one its pending migrations, so install-time code and every commit's hooks find the tables they name, and
+    # a database below the floor is refused before anything writes to it. Startup's store.initialize does the rest.
+    store.migrate()
     census = Census(store, settings)
     releases.CHECKER.bind(census)
     auth = Auth(store)
@@ -230,11 +230,6 @@ def create_app(settings=None):
             telemetry.capture("finance_setup", exc)
         # The Assistant's routines it never had, the Finance Owner once Finance is set up and the rest of what completes a
         # company run with the start jobs, below (Onboarding.complete_company).
-        # Physical mail filed before bills and tax letters were private: those tasks go private, once.
-        try:
-            app.state.postal_mail.backfill_private()
-        except Exception as exc:
-            telemetry.capture("postal_mail_backfill", exc)
         # A strategy research run the last process was doing has no thread now: it stops, and setup shows the form.
         try:
             from . import strategy_setup
@@ -447,11 +442,6 @@ def create_app(settings=None):
 
         copy_stop = threading.Event()
         copy_task = asyncio.create_task(asyncio.to_thread(app.state.blobs.storage_loop, store, copy_stop))
-        # Answers an older server stored get their quoted-message index, beside the server (backend/idempotency_messages.py).
-        from . import idempotency_messages
-
-        index_stop = threading.Event()
-        index_task = asyncio.create_task(asyncio.to_thread(idempotency_messages.backfill_store, store, index_stop))
         media_task = asyncio.create_task(asyncio.to_thread(app.state.file_metadata.loop))
         # History rows' read dependencies, settled beside the server (backend/read_deps.py); a read of a row not
         # settled yet walks its provenance as before.
@@ -514,14 +504,12 @@ def create_app(settings=None):
                 screen_sessions.http.close()
             app.state.doc_sources.stop.set()
             copy_stop.set()
-            index_stop.set()
             reads_stop.set()
             library_stop.set()
             app.state.file_metadata.stop.set()
             app.state.file_metadata.wake.set()
             # The storage probe observes copy_stop even while its bounded SDK call is in flight.
             await copy_task
-            await index_task
             if reads_task:
                 await reads_task
             if library_task:
@@ -2042,7 +2030,7 @@ def create_app(settings=None):
 
     def health_check():
         with store.read() as c:
-            c.execute("SELECT 1 FROM cloud_migrations").fetchone()
+            c.execute("SELECT 1 FROM schema_migrations").fetchone()
 
     @app.get("/healthz")
     async def health():

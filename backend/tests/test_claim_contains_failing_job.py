@@ -544,20 +544,6 @@ def test_a_wake_preset_release_and_replan_leave_a_claim_hold_to_its_own_wait(api
     assert hold_of(api, job["id"]) == before
 
 
-def test_a_database_from_before_the_hold_count_keeps_its_held_runs_and_counts_their_tries_from_zero(api, monkeypatch):
-    machine, task_id = held_refresh(api, monkeypatch)
-    [job] = task_jobs(api, task_id)
-    store = api.app.state.store
-    with store.transaction() as c:  # a database from before the column
-        c.execute("ALTER TABLE jobs DROP COLUMN hold_streak")
-    store.initialize()
-    held = hold_of(api, job["id"])
-    assert (held["held"], held["hold_reason"], held["hold_streak"]) == (1, claim_holds.REASON, 0)
-    wait_ends(api, monkeypatch, job["id"])
-    assert claim(api, machine) is None
-    assert hold_of(api, job["id"])["hold_streak"] == 1
-
-
 @pytest.mark.parametrize("obsolete_ahead", [execution.CLAIM_PICKS - 2, execution.CLAIM_PICKS - 1])
 def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypatch, obsolete_ahead):
     """A claim cancels a page of obsolete notices, then drops the candidates it still reaches under its lock: at most

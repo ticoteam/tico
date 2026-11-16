@@ -38,23 +38,6 @@ MAX_PENDING = 20
 MAX_BACKGROUND_PER_DAY = 5  # cards the Assistant's own background run may put in one person's chat a day
 MORNING_KEY = "morning"  # the message's refs key: the company day it was sent for (one a day per person)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS assistant_actions (
-  id TEXT PRIMARY KEY, owner TEXT NOT NULL, conversation_id TEXT, summary TEXT NOT NULL,
-  method TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL, proposed_via TEXT, created_at TEXT NOT NULL, decided_at TEXT, result TEXT);
-CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, status);
-"""
-
-
-def ensure_schema(c):
-    c.executescript(SCHEMA)
-    have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask"):
-        if column not in have:
-            c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
-
-
 # ------------------------------------------------------------------ what the assistant may write directly
 # What an assistant turn may write on its own is what stays inside the team: creating a task (for its person, a bot or
 # another person), updating its person's own tasks but not settling them, comments on tasks no other person is on,

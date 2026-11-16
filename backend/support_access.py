@@ -40,17 +40,6 @@ from .store import H, Problem, digest
 
 log = logging.getLogger("tico.support_access")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS support_access(
- id TEXT PRIMARY KEY, ticket_id TEXT NOT NULL, tier TEXT NOT NULL, computer_id TEXT, started_by TEXT NOT NULL,
- started_at TEXT NOT NULL, expires_at TEXT NOT NULL, ended_at TEXT, ended_by TEXT, end_reason TEXT, token_hash TEXT,
- hq_session TEXT);
-CREATE INDEX IF NOT EXISTS support_access_live ON support_access(ended_at, expires_at);
-CREATE TABLE IF NOT EXISTS support_access_log(
- id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, created_at TEXT NOT NULL, by TEXT NOT NULL, method TEXT, path TEXT,
- status INTEGER);
-CREATE INDEX IF NOT EXISTS support_access_log_session ON support_access_log(session_id, id);
-"""
 TIERS = ("app", "full")
 TOKEN_PREFIX = "tico_sa_"
 LABEL = "Tico support"

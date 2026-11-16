@@ -19,9 +19,6 @@ from .store import H, Problem
 from . import bot_settings as BS
 
 DEFAULT_TEXT = "Run this scheduled routine."
-# Every active bot looks at its own open tasks once a day, staggered across
-# 08:00-09:59 America/Los_Angeles by slug so the fleet does not wake at once.
-OPEN_TASKS_KEY = "open-tasks-daily"  # retired; the key finds the old rows
 SWEEP_KEY = "task-sweep"
 SWEEP_TEXT = (
     "Look over the fleet once a day (follow playbooks/task-sweep.md if you have it). "
@@ -459,18 +456,6 @@ def token_mailboxes(c, bot, roster=None):
 def inbox_of(c, bot):
     """The mailboxes a bot works on, as {"mailboxes": [address]}: the ones it holds a level on."""
     return {"mailboxes": token_mailboxes(c, bot)}
-
-
-def retire_open_tasks_checks(c, at=None):
-    """Delete every bot's daily open-tasks routine (fewer random daily runs; one
-    BotOps sweep finds the stuck work instead). Returns the bots whose routine went."""
-    gone = []
-    for r in c.execute(
-        "SELECT id, bot FROM schedules WHERE routine_key=? AND deleted_at IS NULL", (OPEN_TASKS_KEY,)
-    ).fetchall():
-        remove(c, H.KEEPER, r["id"], at=at)
-        gone.append(r["bot"])
-    return gone
 
 
 def ensure_task_sweep(c, at=None):

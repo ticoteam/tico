@@ -1,6 +1,5 @@
 """Copied labels, archive provenance and digest reuse follow the page's current visibility."""
 
-import importlib
 import json
 
 import pytest
@@ -69,22 +68,6 @@ def test_identical_recreation_can_be_opened_and_reviewed(api, ordinary):
         assert task_asks.grant(c, made["requirement_id"])["subject"] == f"file:{new}@1"
         assert not files.page_ref_denials(c, api.app.state.auth, viewer, {"file": new})
         assert files.page_ref_denials(c, api.app.state.auth, viewer, fid) == {fid: "A deleted page"}
-
-
-def test_migration_links_both_old_and_new_history_values(api):
-    tid, _, fid = public_page(api)
-    migration = importlib.import_module("backend.migrations.20261105071056_page_history_sources")
-    with api.app.state.store.transaction() as c:
-        ids = [
-            H.history_event(c, "task", tid, "bot:ops", "file", **values)
-            for values in ({"old": "weekly.html"}, {"new": "weekly.html"}, {"old": "weekly.html", "new": "Renamed"})
-        ]
-        migration.up(c)
-        migration.up(c)
-        for event_id in ids:
-            assert json.loads(c.execute("SELECT data FROM history_events WHERE id=?", (event_id,)).fetchone()[0])[
-                "page_files"
-            ] == [fid]
 
 
 @pytest.mark.parametrize("pinned", [False, True])

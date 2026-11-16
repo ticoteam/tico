@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import secrets
-import sqlite3
 import threading
 import time
 from pathlib import PurePosixPath
@@ -28,49 +27,6 @@ LEASE = 120
 TRUST = 'untrusted_external'
 EXTENSIONS = {'.md', '.markdown', '.mdx', '.rst', '.txt'}
 EXCLUDED = {'.git', 'node_modules', 'vendor', 'dist', 'build', 'coverage', '__pycache__', '.cache'}
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS doc_sources(
- source_id TEXT PRIMARY KEY REFERENCES linked_docs(id), url TEXT NOT NULL,
- generation INTEGER NOT NULL DEFAULT 1, reference_override TEXT NOT NULL DEFAULT '',
- repo TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '', reference TEXT NOT NULL DEFAULT '',
- path TEXT NOT NULL DEFAULT '', active_snapshot TEXT, status TEXT NOT NULL DEFAULT 'link_only',
- last_checked_at TEXT, next_check_at REAL NOT NULL DEFAULT 0, skipped INTEGER NOT NULL DEFAULT 0,
- error_code TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS external_snapshots(
- id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES doc_sources(source_id), commit_sha TEXT NOT NULL,
- generation INTEGER NOT NULL, created_at REAL NOT NULL);
-CREATE TABLE IF NOT EXISTS external_documents(
- id TEXT PRIMARY KEY, source_id TEXT NOT NULL REFERENCES doc_sources(source_id), path TEXT NOT NULL,
- UNIQUE(source_id,path));
-CREATE TABLE IF NOT EXISTS external_versions(
- id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES external_documents(id),
- blob_sha TEXT NOT NULL, title TEXT NOT NULL, ready INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS external_snapshot_docs(
- snapshot_id TEXT NOT NULL REFERENCES external_snapshots(id),
- document_id TEXT NOT NULL REFERENCES external_documents(id),
- version_id TEXT NOT NULL REFERENCES external_versions(id), PRIMARY KEY(snapshot_id,document_id));
-CREATE INDEX IF NOT EXISTS external_membership_version ON external_snapshot_docs(version_id,snapshot_id);
-CREATE TABLE IF NOT EXISTS external_sections(
- id INTEGER PRIMARY KEY, version_id TEXT NOT NULL REFERENCES external_versions(id), position INTEGER NOT NULL,
- title TEXT NOT NULL, path TEXT NOT NULL, heading TEXT NOT NULL, body TEXT NOT NULL,
- start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, UNIQUE(version_id,position));
-CREATE TABLE IF NOT EXISTS doc_source_jobs(
- source_id TEXT PRIMARY KEY REFERENCES doc_sources(source_id), generation INTEGER NOT NULL,
- lease TEXT NOT NULL DEFAULT '', lease_until REAL NOT NULL DEFAULT 0, next_try_at REAL NOT NULL DEFAULT 0,
- snapshot_id TEXT, commit_sha TEXT NOT NULL DEFAULT '', inventory TEXT, skipped INTEGER NOT NULL DEFAULT 0,
- checked_at TEXT, resolved_at REAL NOT NULL DEFAULT 0);
-"""
-FTS = """
-CREATE VIRTUAL TABLE IF NOT EXISTS external_sections_fts USING fts5(
- title,path,heading,body,content='external_sections',content_rowid='id',tokenize='porter unicode61');
-CREATE TRIGGER IF NOT EXISTS external_sections_insert AFTER INSERT ON external_sections BEGIN
- INSERT INTO external_sections_fts(rowid,title,path,heading,body) VALUES(new.id,new.title,new.path,new.heading,new.body);
-END;
-CREATE TRIGGER IF NOT EXISTS external_sections_delete AFTER DELETE ON external_sections BEGIN
- INSERT INTO external_sections_fts(external_sections_fts,rowid,title,path,heading,body)
- VALUES('delete',old.id,old.title,old.path,old.heading,old.body);
-END;
-"""
 
 
 def has_index(c):
@@ -128,15 +84,7 @@ def queue(c, source_id):
 
 
 def ensure_schema(c):
-    c.executescript(SCHEMA)
-    existed = has_index(c)
-    try:
-        c.executescript(FTS)
-        c.execute("INSERT INTO external_sections_fts(external_sections_fts,rank) VALUES('rank','bm25(8,4,5,1)')")
-        if not existed:
-            c.execute("INSERT INTO external_sections_fts(external_sections_fts) VALUES('rebuild')")
-    except sqlite3.OperationalError:
-        pass
+    """Every start: each linked doc's sections brought in line with its source."""
     from .flight import begin
 
     done = begin(c)

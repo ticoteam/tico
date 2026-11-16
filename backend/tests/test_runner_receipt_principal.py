@@ -1,7 +1,5 @@
 """Runner receipts keep the initiating person's rights after a lost response and a finished lease."""
 
-import importlib
-
 import pytest
 
 from backend import bot_settings as BS, store as S, task_engine
@@ -143,18 +141,3 @@ def test_runner_file_receipts_without_an_attempt_in_the_response_check_the_reque
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE assignments SET generation=generation+1 WHERE bot='ops'")
     post(api, path, body, machine["token"], key, expected=403)
-
-
-def test_acting_person_migration_adds_the_column_without_rewriting_rows(api):
-    t = task(api, private=True)
-    machine, attempt, _ = start(api, t["id"])
-    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
-    migration = importlib.import_module("backend.migrations.20261105215933_attempt_acting_person")
-    with api.app.state.store.transaction() as c:
-        c.execute("ALTER TABLE attempts DROP COLUMN acting_person")
-        migration.up(c)
-        assert tuple(c.execute("SELECT state,acting_person FROM attempts WHERE id=?", (attempt["id"],)).fetchone()) == (
-            "completed",
-            None,
-        )
-        migration.up(c)  # running it again is a no-op

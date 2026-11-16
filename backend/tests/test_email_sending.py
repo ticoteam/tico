@@ -1,6 +1,5 @@
 """Policy, approval, revocation and idempotency boundaries shared by all email send paths."""
 
-import importlib.util
 import json
 import sqlite3
 from pathlib import Path
@@ -422,57 +421,6 @@ def test_assistant_acting_for_a_person_queues_as_that_person_and_cannot_change_p
     assert response.status_code == 403
 
 
-def test_migration_snapshots_existing_authorizations_without_granting_new_ones():
-    path = next((Path(__file__).parents[1] / "migrations").glob("*_email_sending_queue.py"))
-    spec = importlib.util.spec_from_file_location("email_policy_migration", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    c.execute("CREATE TABLE bot_mail_settings(bot,outbound_send,updated_at)")
-    c.execute("INSERT INTO bot_mail_settings VALUES('counsel',0,'2026-01-01')")
-    c.execute("INSERT INTO bot_mail_settings VALUES('support',1,'2026-01-01')")
-    c.execute("CREATE TABLE automations(id,owner_id,version,deleted_at)")
-    c.execute("INSERT INTO automations VALUES('existing','person:ana',2,NULL)")
-    module.up(c)
-    assert S.saved(c, "bot:counsel")["mode"] == "ask_first"
-    assert S.saved(c, "bot:support")["mode"] == "on_their_own"
-    assert S.saved(c, "bot:new") == {}
-    assert c.execute("SELECT automation_id FROM email_legacy_automations").fetchone()[0] == "existing"
-    assert S.effective(c)["mode"] == "ask_first"
-    c.execute(
-        "UPDATE email_sending_policies SET settings=? WHERE scope='bot:support'", (json.dumps({"mode": "never"}),)
-    )
-    c.execute("INSERT INTO automations VALUES('new','person:ana',1,NULL)")
-    module.up(c)
-    assert S.saved(c, "bot:support")["mode"] == "never"
-    assert not c.execute("SELECT 1 FROM email_legacy_automations WHERE automation_id='new'").fetchone()
-
-
-@pytest.mark.parametrize("existing", [False, True])
-def test_reply_history_migration_initializes_fresh_tables_and_preserves_existing_mail(existing):
-    path = next((Path(__file__).parents[1] / "migrations").glob("*_initialize_mail_reply_history.py"))
-    spec = importlib.util.spec_from_file_location("reply_history_migration", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    with sqlite3.connect(":memory:") as c:
-        if existing:
-            c.execute(module.TABLE)
-            c.execute(
-                "INSERT INTO mail_messages(mailbox,msg_id,epoch,date,from_addr,to_addresses,cc,subject,snippet,"
-                "labels,body,attachments,updated_at) VALUES(?,'kept',1,'now',?,'[]','[]','Update','Hello',"
-                "'[]','Hello','[]','now')",
-                (BOX, CONTACT),
-            )
-        module.up(c)
-        assert "send_facts" in {row[1] for row in c.execute("PRAGMA table_info(mail_messages)")}
-        assert c.execute("SELECT name FROM sqlite_master WHERE name='mail_messages_rfc_id'").fetchone()
-        if existing:
-            assert c.execute("SELECT msg_id,body,send_facts FROM mail_messages").fetchall() == [("kept", "Hello", "{}")]
-        module.up(c)
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == int(existing)
-
-
 def test_a_bot_at_ask_first_cannot_send_without_approval(inbox):
     policy(inbox, undo_seconds=0, pacing_seconds=0)
     queued = queue(inbox, actor="bot:ops")
@@ -643,80 +591,6 @@ def test_a_read_only_personal_grant_fails_its_due_email_without_asking_google(in
     with store.read() as c:
         row = c.execute("SELECT state,detail FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
     assert row["state"] == "failed" and "read only" in row["detail"]
-
-
-def one_send_policy():
-    path = next((Path(__file__).parents[1] / "migrations").glob("*_one_send_policy.py"))
-    spec = importlib.util.spec_from_file_location("one_send_policy_migration", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_the_one_policy_migration_never_widens_what_a_bot_may_send():
-    module = one_send_policy()
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    c.execute(
-        "CREATE TABLE email_sending_policies(scope TEXT PRIMARY KEY, settings TEXT NOT NULL, "
-        "updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)"
-    )
-    c.execute(
-        "CREATE TABLE bot_mail_settings(bot TEXT PRIMARY KEY, outbound_send INTEGER NOT NULL DEFAULT 0, "
-        "forward_to TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)"
-    )
-    c.execute("CREATE TABLE org_rule_misses(author TEXT NOT NULL, id TEXT NOT NULL, created_at TEXT NOT NULL)")
-    layers = {
-        "company": {"mode": "on_their_own"},
-        "bot:turned-off": {
-            "mode": "on_their_own",
-            "legacy": True,
-            "daily_cap": 20,
-            "legacy_allowances": {BOX: [CONTACT]},
-        },
-        "bot:on": {"mode": "on_their_own", "legacy": True, "daily_cap": 20},
-        "bot:never": {"mode": "never"},
-        "bot:asks": {"mode": "ask_first"},
-    }
-    for scope, settings in layers.items():
-        c.execute(
-            "INSERT INTO email_sending_policies VALUES(?,?,'2026-01-01','migration')", (scope, json.dumps(settings))
-        )
-    switches = {"turned-off": 0, "on": 1, "never": 0, "asks": 1, "quiet": 0, "loud": 1}
-    for bot, on in switches.items():
-        c.execute(
-            "INSERT INTO bot_mail_settings VALUES(?,?,?,'2026-01-01','human:ana')",
-            (bot, on, json.dumps(["me@personal.example"])),
-        )
-    rank = {"never": 0, "ask_first": 1, "on_their_own": 2}
-
-    def before(bot):
-        # Before: the bot sent on its own only with its switch on and an On their own policy.
-        mode = S.effective(c, bot=bot)["mode"]
-        return mode if switches[bot] or mode == "never" else "ask_first"
-
-    was = {bot: before(bot) for bot in switches}
-    module.up(c)
-    now = {bot: S.effective(c, bot=bot)["mode"] for bot in switches}
-    assert all(rank[now[bot]] <= rank[was[bot]] for bot in switches), (was, now)
-    assert now == {
-        "turned-off": "ask_first",
-        "on": "on_their_own",
-        "never": "never",
-        "asks": "ask_first",
-        "quiet": "ask_first",
-        "loud": "on_their_own",
-    }
-    saved = {r["scope"]: json.loads(r["settings"]) for r in c.execute("SELECT * FROM email_sending_policies")}
-    assert saved["bot:turned-off"] == {"mode": "ask_first", "daily_cap": 20}
-    assert saved["bot:on"] == {"mode": "on_their_own", "daily_cap": 20} and "bot:loud" not in saved
-    assert saved["bot:quiet"] == {"mode": "ask_first"} and saved["company"] == {"mode": "on_their_own"}
-    tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert "bot_mail_settings" not in tables and "org_rule_misses" not in tables
-    module.up(c)  # again, as on a restart: nothing changes
-    assert {bot: S.effective(c, bot=bot)["mode"] for bot in switches} == now
-    fresh = sqlite3.connect(":memory:")
-    module.up(fresh)  # a new install has neither table
 
 
 def test_a_retired_registry_mail_policy_carries_its_safeguards_over_once(inbox):

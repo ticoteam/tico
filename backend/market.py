@@ -235,18 +235,6 @@ def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""
     return eid
 
 
-TURN_SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS market_turn_sources (event_id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL, "
-    "subject_id TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS market_turn_sources_of ON market_turn_sources(subject_kind, subject_id, created_at)",
-)
-
-
-def ensure_turn_sources(c):
-    for statement in TURN_SCHEMA:
-        c.execute(statement)
-
-
 def _from_turn(conn, eid, kind, subject):
     """A change made in an automation's bot turn names the turn and what started it (backend/automations.py)."""
     from . import automations

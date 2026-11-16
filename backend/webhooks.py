@@ -29,7 +29,6 @@ from . import models as M
 from . import webhook_delivery as D
 from .models import Contract
 from .store import Problem
-from .webhooks_schema import SCHEMA  # noqa: F401  (hubdb.MIGRATIONS applies it)
 
 log = logging.getLogger(__name__)
 

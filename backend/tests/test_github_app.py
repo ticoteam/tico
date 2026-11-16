@@ -1707,28 +1707,6 @@ def test_links_follow_the_kind_of_account_everywhere_they_are_built():
     )
 
 
-def test_an_app_connected_before_account_types_is_an_organization():
-    """The migration adds the column with the organization default, to both tables, once; a fresh database gets none
-    of its own tables from it (the module code makes them after the migrations)."""
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(G.__file__).parent / "migrations" / "20261107145006_github_account_type.py"
-    spec = importlib.util.spec_from_file_location("github_account_type", path)
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    with sqlite3.connect(":memory:") as c:
-        migration.up(c)
-        assert c.execute("SELECT count(*) FROM sqlite_master").fetchone()[0] == 0
-        c.execute("CREATE TABLE github_app(id TEXT PRIMARY KEY, org TEXT NOT NULL)")
-        c.execute("CREATE TABLE github_app_states(nonce TEXT PRIMARY KEY, org TEXT NOT NULL)")
-        c.execute("INSERT INTO github_app VALUES('app','Acme')")
-        migration.up(c)
-        migration.up(c)
-        assert c.execute("SELECT org,account_type FROM github_app").fetchone() == ("Acme", "Organization")
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_app_states)")} == {"nonce", "org", "account_type"}
-
-
 CALLBACK = "/api/v2/github/app/callback"
 FINISH = "/api/v2/github/app/finish"
 

@@ -30,16 +30,6 @@ DEFAULTS = {"turns_per_hour": 300, "turns_per_day": 2500}
 WINDOWS = (("hour", "turns_per_hour", 3600, "hour"), ("day", "turns_per_day", 86400, "day"))
 TEAM_KEY = "turn-budget-defaults"
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS bot_budget(bot TEXT PRIMARY KEY, held_at TEXT, window TEXT, runs INTEGER, budget INTEGER, "
-    "task_id TEXT, released_at TEXT, released_by TEXT)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-
 
 class BotBudget(Contract):
     """Fields left out stay as they are; null clears the bot's own value so it follows the team; 0 is no limit."""

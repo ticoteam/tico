@@ -24,19 +24,6 @@ from . import rooms, run_triggers, screening, support_triage
 from .models import Contract, Slug
 from .store import H, Problem
 
-SCHEMA = (
-    """
-CREATE TABLE IF NOT EXISTS watcher_items(
- bot TEXT NOT NULL, key TEXT NOT NULL, task_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(bot, key));
-CREATE TABLE IF NOT EXISTS watcher_refs(
- bot TEXT NOT NULL, key TEXT NOT NULL, ref TEXT NOT NULL, PRIMARY KEY(bot, key, ref));
-CREATE TABLE IF NOT EXISTS watcher_runs(
- bot TEXT NOT NULL, name TEXT NOT NULL, runner_id TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
- exit_code INTEGER NOT NULL, timed_out INTEGER NOT NULL DEFAULT 0, every INTEGER NOT NULL, output TEXT NOT NULL DEFAULT '',
- events INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(bot, name));
-"""
-    + support_triage.SCHEMA
-)
 STALE_AFTER = 3  # runs missed before Health says a watcher has stopped
 # A path into a secrets folder or another bot's repository is refused in a task or a message (hubdb rule 8), so text
 # from outside is written with the slash set apart rather than losing the whole event. `emp-<anything>/` always counts;

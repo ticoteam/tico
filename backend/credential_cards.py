@@ -38,19 +38,6 @@ MAX_VALUE = 4096
 REMEMBER_S = 3600
 KINDS = ("api_key", "password", "token", "connection")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS credential_requests(
- id TEXT PRIMARY KEY, requester TEXT NOT NULL, conversation_id TEXT NOT NULL, bot TEXT NOT NULL, asker TEXT NOT NULL,
- env TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT '', help_url TEXT NOT NULL DEFAULT '',
- kind TEXT NOT NULL DEFAULT 'api_key', status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL, credential_id TEXT, message_id TEXT);
-CREATE INDEX IF NOT EXISTS credential_requests_pending ON credential_requests(requester, status);
-CREATE TABLE IF NOT EXISTS credential_imports(
- id TEXT PRIMARY KEY, requester TEXT NOT NULL, bot TEXT NOT NULL, env TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
- kind TEXT NOT NULL DEFAULT 'api_key', state TEXT NOT NULL DEFAULT 'requested', message TEXT NOT NULL DEFAULT '',
- credential_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS credential_imports_state ON credential_imports(state, bot);
-"""
 # A variable the run never takes from the vault, or takes from the computer itself (runner-rs/src/env.rs).
 # The one reserved list (clients/access_entry.py), plus two an import never moves: the computer's OpenRouter sign-in
 # and its 1Password token, which a bot's secrets file may echo but which belong to the computer.

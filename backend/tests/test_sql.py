@@ -291,10 +291,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "company-turn-incident",
         "credential-file-migration-v1",
         "credential-file-migration-v2-hub",
-        "credential-use-backfill",
         "depends-release-running",
         "docs_migrated",
-        "idempotency_messages.ready",
         "inbox-only-runners",
         "inbox_prompt_repair",
         "librarian_wording35",
@@ -306,9 +304,6 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "redesign_cutover",
         "release-history",
         "release-snoozes-seen",
-        "repositories-access-migrated",
-        "roadmaps_copies_cleared_by_field",
-        "roadmaps_explicit_public_text",
         "rules.asks_to_a_person",
         "stage_rules_snooze_sweep",
         "strategy-bot",
@@ -846,22 +841,6 @@ def test_direct_refs_cannot_override_denied_conversation_task(api, world, unknow
             assert not recursive.message(*args)
 
 
-def test_attempt_time_index_upgrades_existing_history_without_changing_rows(api, world):
-    store = api.app.state.store
-    with store.transaction() as c:
-        before = [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')]
-        c.execute('DROP INDEX attempts_created')
-        c.execute('DELETE FROM cloud_migrations WHERE version=62')
-    store.initialize()
-    store.initialize()  # Existing installs and repeated starts take the same additive path.
-    with store.read() as c:
-        assert [dict(row) for row in c.execute('SELECT * FROM attempts ORDER BY id')] == before
-        assert [row[2] for row in c.execute('PRAGMA index_info(attempts_created)')] == ['created_at']
-        assert c.execute('SELECT count(*) FROM cloud_migrations WHERE version=62').fetchone()[0] == 1
-        plan = c.execute("EXPLAIN QUERY PLAN SELECT count(*) FROM attempts WHERE created_at>=?", (H.now(),))
-        assert any('attempts_created (created_at>?)' in row[3] for row in plan)
-
-
 def test_attempt_provenance_uses_keyed_inputs_and_retained_run_events(api, world, monkeypatch):
     from backend import sql as S, task_privacy
     from backend.auth import Identity
@@ -1273,12 +1252,10 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
 
 
 def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):
-    from backend import assistant
     from backend.tests.helpers.api import setup_attempt
     from backend.tests.helpers.mcp import call, rpc
 
     with api.app.state.store.transaction() as c:
-        assistant.ensure_schema(c)
         for n, (status, proposer) in enumerate(
             [("done", "assistant"), ("canceled", "assistant"), ("done", "bot:botops")]
         ):
@@ -1395,7 +1372,7 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
 
 def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner_reads(api):
     import sqlite3
-    from backend import assistant, sql as S
+    from backend import sql as S
     from backend.tests.helpers.assistant import assistant_turn
 
     # Mint a real personal token, so authentication sets via_token rather than a test identity shortcut.
@@ -1407,7 +1384,6 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
     assert api.get("/api/v2/outcome-stats/readers", headers=headers(personal)).status_code == 403
     assert api.get("/api/v2/outcome-stats/readers", headers=headers()).json() == {"readers": []}
     with api.app.state.store.transaction() as c:
-        assistant.ensure_schema(c)
         assert not c.execute("SELECT 1 FROM registry_metadata WHERE key='outcome-stats-readers'").fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE action='outcome_stats.granted'").fetchone()
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers()).json() == {

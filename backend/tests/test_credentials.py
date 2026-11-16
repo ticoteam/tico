@@ -137,14 +137,6 @@ def test_a_company_credential_is_never_its_adders_and_a_members_own_ends_when_ro
             == 1
         )
 
-    # A server that ran the old backfill: no row already there stays anyone's, even one a member stored.
-    with store.transaction() as c:
-        c.execute('ALTER TABLE credentials DROP COLUMN member_stored')
-    store.initialize()
-    with store.read() as c:
-        assert c.execute('SELECT count(*) FROM credentials WHERE member_stored=1').fetchone()[0] == 0
-    post(api, f'credentials/{again["id"]}/grants', {'subject': 'bot:finance'}, 'cara-test', expected=403)
-
     # Her own credential stops being hers once someone else saves a new value for it.
     mine = member_stores(api, 'finance', 'POSTHOG_API_KEY', 'phx-member-own-value-987')['id']
     post(api, f'credentials/{mine}/grants', {'subject': 'bot:cpo'}, 'cara-test')
@@ -496,40 +488,6 @@ def test_a_person_reveal_and_a_reveal_with_no_attempt_always_write_a_row(api, mo
         # Person reveals are not uses; the bot's two are, and with no attempt both still write a row.
         assert [r[0] for r in c.execute('SELECT actor FROM credential_uses WHERE credential_id=?', (cid,))] == [
             'bot:finance'
-        ]
-
-
-def test_the_backfill_copies_each_actor_and_bots_newest_use_once(api):
-    from backend import hubdb as H
-
-    setup(api)
-    cid = create(api)['id']
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("DELETE FROM credential_uses WHERE credential_id=?", (cid,))
-        c.execute("DELETE FROM registry_metadata WHERE key='credential-use-backfill'")
-        for ts, actor, action, detail in [
-            ('2026-10-20T10:00:00Z', 'bot:finance', 'credential.revealed', '{"attempt": "a"}'),
-            ('2026-10-20T11:00:00Z', 'bot:finance', 'credential.revealed', '{"attempt": "b"}'),
-            ('2026-10-21T10:00:00Z', 'runner:r1', 'credential.sent_to_computer', '{"bot": "ops", "use": "watcher"}'),
-            ('2026-10-22T10:00:00Z', 'runner:r1', 'credential.sent_to_computer', '{"bot": "ops", "use": "watcher"}'),
-            ('2026-10-23T10:00:00Z', 'human:ana', 'credential.revealed', '{"attempt": null}'),
-        ]:
-            c.execute(
-                'INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)',
-                (H.new_id(), ts, actor, action, cid, detail),
-            )
-        H.backfill_credential_uses(c)
-    with store.read() as c:
-        rows = [
-            tuple(r)
-            for r in c.execute(
-                'SELECT actor,bot,used_at FROM credential_uses WHERE credential_id=? ORDER BY actor,bot', (cid,)
-            )
-        ]
-        assert rows == [
-            ('bot:finance', 'finance', '2026-10-20T11:00:00Z'),
-            ('runner:r1', 'ops', '2026-10-22T10:00:00Z'),
         ]
 
 

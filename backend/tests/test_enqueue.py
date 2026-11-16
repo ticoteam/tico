@@ -7,7 +7,7 @@ and whether a job was queued for it. The expected rows were recorded while the `
 queueing; `backend/enqueue.py` must queue exactly the same jobs.
 """
 
-import importlib
+import functools
 import json
 
 import pytest
@@ -16,8 +16,17 @@ from backend import bot_settings as BS
 from backend.store import H
 from backend.tests.helpers.api import post, setup_attempt  # noqa: F401
 
-# The table's DDL: migration 0070 owns it (bot_settings.py has none).
-_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
+
+@functools.cache
+def _bot_settings_table():
+    """The table's DDL, as a new database has it (backend/migrations/baseline.sql)."""
+    import sqlite3
+
+    from backend import migrations
+
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    migrations.apply(conn)
+    return conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='bot_settings'").fetchone()[0]
 
 
 def _mark(c):
@@ -251,7 +260,7 @@ def _bare(trigger):
         conn.execute(_LEGACY_TRIGGER)
     else:
         conn.execute("CREATE TABLE bot_config(bot TEXT PRIMARY KEY)")
-        conn.execute(_BOT_SETTINGS_TABLE)
+        conn.execute(_bot_settings_table())
         for bot, config in _DECLARED:
             BS.write(conn, bot, config)
     return conn

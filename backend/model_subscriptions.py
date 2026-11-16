@@ -132,27 +132,6 @@ RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
 RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex"}
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS model_subscriptions(
- id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT NOT NULL,
- preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'new',
- status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,
- updated_at TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '', credential_at TEXT);
-CREATE TABLE IF NOT EXISTS computer_subscriptions(
- runner_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, set_by TEXT NOT NULL,
- updated_at TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', PRIMARY KEY(runner_id, runtime));
-CREATE INDEX IF NOT EXISTS computer_subscriptions_sub ON computer_subscriptions(subscription_id);
-CREATE TABLE IF NOT EXISTS attempt_subscriptions(
- attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, revision INTEGER NOT NULL,
- PRIMARY KEY(attempt_id, runtime));
-CREATE INDEX IF NOT EXISTS attempt_subscriptions_sub ON attempt_subscriptions(subscription_id);
-CREATE TABLE IF NOT EXISTS pending_subscription_fallbacks(
- attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, PRIMARY KEY(attempt_id, runtime));
-CREATE TABLE IF NOT EXISTS subscription_connects(
- login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', subscription_id TEXT NOT NULL DEFAULT '',
- owner_id TEXT NOT NULL DEFAULT '');
-"""
-
 
 class SubscriptionWrite(Contract):
     """A new subscription, or a saved one's reconnect (a new `secret`), rename or new owner (`owner_id`, a person; a new

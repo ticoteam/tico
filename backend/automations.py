@@ -66,50 +66,6 @@ from . import sources as SRC
 
 log = logging.getLogger(__name__)
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS automations(id TEXT PRIMARY KEY, name TEXT NOT NULL, owner_id TEXT NOT NULL, "
-    "group_id TEXT, trigger_type TEXT NOT NULL, enabled INTEGER NOT NULL, builtin INTEGER NOT NULL DEFAULT 0, "
-    "flow TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, "
-    "updated_at TEXT NOT NULL, deleted_at TEXT, next_due_at TEXT, found_since TEXT)",
-    "CREATE INDEX IF NOT EXISTS automations_trigger ON automations(trigger_type, enabled) WHERE deleted_at IS NULL",
-    "CREATE TABLE IF NOT EXISTS automation_versions(automation_id TEXT NOT NULL, n INTEGER NOT NULL, actor TEXT NOT NULL, "
-    "created_at TEXT NOT NULL, flow TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', summary TEXT, "
-    "PRIMARY KEY(automation_id, n))",
-    "CREATE TABLE IF NOT EXISTS automation_runs(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, version INTEGER NOT NULL, "
-    "trigger_ref TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL, "
-    "cost REAL NOT NULL DEFAULT 0, saved_state TEXT, claimed_at TEXT, wake_at TEXT, chain TEXT NOT NULL DEFAULT '[]', "
-    "claim_token TEXT)",
-    "CREATE INDEX IF NOT EXISTS automation_runs_of ON automation_runs(automation_id, started_at)",
-    "CREATE INDEX IF NOT EXISTS automation_runs_queue ON automation_runs(status, started_at)",
-    # The overview reads every visible automation's runs over a time range (backend/automation_overview.py).
-    "CREATE INDEX IF NOT EXISTS automation_runs_started ON automation_runs(started_at)",
-    "CREATE TABLE IF NOT EXISTS automation_daily(automation_id TEXT NOT NULL, day TEXT NOT NULL, "
-    "runs INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(automation_id, day))",
-    "CREATE TABLE IF NOT EXISTS automation_mail_actions(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT, "
-    "mailbox TEXT NOT NULL, msg_id TEXT NOT NULL, action TEXT NOT NULL, args TEXT NOT NULL, state TEXT NOT NULL, "
-    "created_at TEXT NOT NULL, claimed_at TEXT, claimed_by TEXT, result TEXT, attempts INTEGER NOT NULL DEFAULT 0, "
-    "step TEXT, \"after\" TEXT)",
-    "CREATE INDEX IF NOT EXISTS automation_mail_queue ON automation_mail_actions(mailbox, state, created_at)",
-    # An inbox's send switch (on unless a row says off): off, send_reply saves a draft instead.
-    "CREATE TABLE IF NOT EXISTS automation_inboxes(inbox TEXT PRIMARY KEY, send INTEGER NOT NULL, updated_at TEXT NOT NULL, "
-    "updated_by TEXT NOT NULL)",
-    # Each effect a run made, by `<run id>:<step record>`: doing it again answers this instead.
-    "CREATE TABLE IF NOT EXISTS automation_effects(key TEXT PRIMARY KEY, run_id TEXT NOT NULL, created_at TEXT NOT NULL, "
-    "result TEXT NOT NULL)",
-    # A turn that ended while its run was being worked: picked up when the run is saved.
-    "CREATE TABLE IF NOT EXISTS automation_turn_answers(run_id TEXT NOT NULL, ref TEXT NOT NULL, text TEXT NOT NULL, "
-    "cost REAL NOT NULL, ok INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id, ref))",
-    # What a started turn is expected to cost until it is priced, against the spend cap.
-    "CREATE TABLE IF NOT EXISTS automation_holds(ref TEXT PRIMARY KEY, automation_id TEXT NOT NULL, run_id TEXT NOT NULL, "
-    "amount REAL NOT NULL, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS automation_holds_of ON automation_holds(automation_id, created_at)",
-    # The run guard's hold on an automation, live while `cleared` is null; one row each, the last hold kept so the
-    # guard counts only runs since it was cleared. `arrivals`: runs triggered since it started (the one that tripped it
-    # included), at most RUN_GUARD_BURST held; `dropped`: triggers past that.
-    "CREATE TABLE IF NOT EXISTS automation_guard_holds(automation_id TEXT PRIMARY KEY, rule TEXT NOT NULL, "
-    "held_at TEXT NOT NULL, arrivals INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, task_id TEXT, "
-    "cleared_at TEXT)",
-)
 KEEP_DAYS = 30  # step detail; the daily counts and the run rows stay
 TURN_WAIT_DAYS = 1
 STALE_MINUTES = 15  # a claimed run not saved by then was cut off: queued again, to go on from its last save
@@ -140,11 +96,6 @@ BOTOPS = "bot:botops"  # builds automations for whoever asks it, with that asker
 VERSIONED = ("trigger", "steps", "batch", "destinations")  # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def _via(who):

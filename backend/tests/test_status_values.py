@@ -1,12 +1,11 @@
-"""The status and state lists (backend/status_values.py): refused outside the list, one spelling per meaning, and an
-upgrade that names what it cannot map rather than guessing."""
+"""The status and state lists (backend/status_values.py): refused outside the list, one spelling per meaning, and a
+start that names a stored value it cannot enforce rather than guessing."""
 
-import importlib
 import sqlite3
 
 import pytest
 
-from backend import google_connect, hubdb, migrations, status_values as SV
+from backend import status_values as SV
 from backend.config import Settings
 from backend.store import Store
 
@@ -97,7 +96,7 @@ def test_the_cancelled_spelling_is_refused_on_a_fresh_file(db):
             )
 
 
-# The upgrade, on small hand-made tables (what an existing file held before migration 0002).
+# A start on small hand-made tables, holding values a list does not have.
 
 
 def _old_file(path):
@@ -111,48 +110,14 @@ def _old_file(path):
     return conn
 
 
-def _upgrade_as_migrate_runs_it(conn):
-    conn.execute("PRAGMA foreign_keys=OFF")
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        SV.upgrade(conn)
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-    finally:
-        conn.execute("PRAGMA foreign_keys=ON")
-
-
-def test_the_upgrade_keeps_values_it_cannot_map_logs_them_and_still_guards_new_writes(tmp_path, caplog):
-    conn = _old_file(tmp_path / "old.db")
-    conn.executemany(
-        "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
-        [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "stalled", "t"), ("j3", "m", "b", "cancelled", "t")],
-    )
-    with caplog.at_level("WARNING", logger="backend.status_values"):
-        _upgrade_as_migrate_runs_it(conn)
-    assert "jobs.state = 'stalled' (1 rows)" in caplog.text
-    assert conn.execute("SELECT state FROM jobs ORDER BY id").fetchall() == [("queued",), ("stalled",), ("canceled",)]
-    with pytest.raises(sqlite3.IntegrityError, match="jobs.state: invalid value"):
-        conn.execute("UPDATE jobs SET state='stalled' WHERE id='j1'")
-
-
-def test_an_old_done_job_maps_to_completed(tmp_path):
-    # Tico Team's v0.5.54 upgrade stopped on one Oct 2 job stored as 'done'.
-    conn = _old_file(tmp_path / "old.db")
-    conn.execute("INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES('j1','m','b','done','t')")
-    _upgrade_as_migrate_runs_it(conn)
-    assert conn.execute("SELECT state FROM jobs").fetchall() == [("completed",)]
-
-
 def test_a_check_column_with_an_unknown_value_keeps_its_rows_and_gets_no_check(tmp_path):
     conn = _old_file(tmp_path / "old.db")
     conn.executescript("""
         CREATE TABLE bots(slug TEXT PRIMARY KEY, state TEXT);
         INSERT INTO bots VALUES('a','active'),('b','hibernating');
     """)
-    _upgrade_as_migrate_runs_it(conn)
+    conn.execute("PRAGMA foreign_keys=OFF")
+    SV.enforce(conn)
     assert conn.execute("SELECT slug,state FROM bots ORDER BY slug").fetchall() == [
         ("a", "active"),
         ("b", "hibernating"),
@@ -199,102 +164,3 @@ def test_the_value_table_in_the_docs_follows_the_lists():
         [sys.executable, str(root / "scripts/build_status_docs.py"), "--check"], capture_output=True, text=True
     )
     assert done.returncode == 0, done.stderr
-
-
-def test_the_upgrade_rewrites_cancelled_and_refuses_it_afterwards(tmp_path):
-    conn = _old_file(tmp_path / "old.db")
-    conn.executemany(
-        "INSERT INTO jobs(id,message_id,bot_id,state,created_at) VALUES(?,?,?,?,?)",
-        [("j1", "m", "b", "queued", "t"), ("j2", "m", "b", "cancelled", "t")],
-    )
-    _upgrade_as_migrate_runs_it(conn)
-    assert conn.execute("SELECT state FROM jobs ORDER BY id").fetchall() == [("queued",), ("canceled",)]
-    with pytest.raises(sqlite3.IntegrityError, match="jobs.state: invalid value"):
-        conn.execute("UPDATE jobs SET state='cancelled' WHERE id='j1'")
-
-
-def test_google_connects_state_is_renamed_to_oauth_state(tmp_path):
-    conn = sqlite3.connect(tmp_path / "old.db", isolation_level=None)
-    conn.executescript("""
-        CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL,
-          state TEXT, verifier TEXT, code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE UNIQUE INDEX google_connects_state ON google_connects(state) WHERE state IS NOT NULL;
-        INSERT INTO google_connects(person_id,mailbox,status,state,created_at,updated_at)
-          VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t');
-    """)
-    rename = migrations.Migration(migrations.DIRECTORY / "0003_google_connects_oauth_state.py")
-    migrations._module(rename).up(conn)
-    google_connect.ensure_schema(conn)
-    columns = [r[1] for r in conn.execute("PRAGMA table_info(google_connects)")]
-    assert "oauth_state" in columns and "state" not in columns
-    assert conn.execute("SELECT oauth_state FROM google_connects").fetchone()[0] == "nonce-1"
-    indexes = {r[1] for r in conn.execute("PRAGMA index_list(google_connects)")}
-    assert "google_connects_oauth_state" in indexes and "google_connects_state" not in indexes
-    migrations._module(rename).up(conn)
-    google_connect.ensure_schema(conn)
-
-
-def test_a_stale_needs_onboarding_row_maps_to_needs_setup_and_bot_status_keeps_its_states(tmp_path):
-    conn = sqlite3.connect(tmp_path / "old.db", isolation_level=None)
-    conn.executescript("""
-        CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config TEXT, onboarding_state TEXT);
-        CREATE TABLE bot_status(bot TEXT PRIMARY KEY, state TEXT, focus TEXT);
-        INSERT INTO bot_config VALUES('starter','{}','needs_onboarding'), ('ready','{}','onboarded');
-        INSERT INTO bot_status VALUES('starter','idle',''), ('stuck','limited','');
-    """)
-    _upgrade_as_migrate_runs_it(conn)
-    assert conn.execute("SELECT bot,onboarding_state FROM bot_config ORDER BY bot").fetchall() == [
-        ("ready", "onboarded"),
-        ("starter", "needs_setup"),
-    ]
-    assert conn.execute("SELECT bot,state FROM bot_status ORDER BY bot").fetchall() == [
-        ("starter", "idle"),
-        ("stuck", "limited"),
-    ]
-    with pytest.raises(sqlite3.IntegrityError, match="status_values_state"):
-        conn.execute("UPDATE bot_status SET state='active' WHERE bot='stuck'")
-
-
-def test_migration_0032_moves_every_stored_cancelled_and_skips_what_this_file_lacks(tmp_path):
-    from backend.migrations import renames_data
-
-    canceled = importlib.import_module("backend.migrations.0032_one_spelling_canceled")
-    conn = sqlite3.connect(tmp_path / "old.db")
-    tables = {(table, column) for table, column in canceled.COLUMNS if table != "bot_transitions"}  # one table absent
-    for table in {table for table, _column in tables}:
-        columns = [column for t, column in tables if t == table]
-        conn.execute(f"CREATE TABLE {table}(id TEXT, {', '.join(columns)})")
-        for column in columns:
-            conn.executemany(
-                f"INSERT INTO {table}(id,{column}) VALUES(?,?)", [("old", "cancelled"), ("kept", "failed")]
-            )
-    conn.execute("INSERT INTO seats(id,request_state) VALUES('going','cancelling')")
-    conn.execute("CREATE TABLE fin_feed_txns(id TEXT, provider_status TEXT)")  # Mercury's word stays as sent
-    conn.execute("INSERT INTO fin_feed_txns VALUES('t','cancelled')")
-    conn.execute("CREATE TABLE notes(id TEXT, cancelled_at TEXT, cancelled_by TEXT)")
-    conn.execute("INSERT INTO notes VALUES('n','2026-01-01T00:00:00Z','human:ana')")
-    conn.execute("CREATE TABLE events(action TEXT)")
-    conn.executemany("INSERT INTO events VALUES(?)", [(old,) for old in canceled.EVENTS] + [("task.create",)])
-    conn.execute("DROP TABLE fin_cards")
-    conn.execute(
-        "CREATE TABLE fin_cards(id TEXT, provider_status TEXT, status TEXT NOT NULL DEFAULT 'active' "
-        "CHECK (status IN ('active','frozen','cancelled')))"
-    )
-    conn.execute("INSERT INTO fin_cards VALUES('c','cancelled','cancelled')")
-
-    canceled.up(conn)
-    canceled.up(conn)  # a repeat changes nothing
-
-    for table, column in tables:
-        values = {row[0] for row in conn.execute(f"SELECT {column} FROM {table}")}
-        assert "cancelled" not in values, (table, column)
-        assert "canceled" in values, (table, column)
-    assert conn.execute("SELECT request_state FROM seats WHERE id='going'").fetchone() == ("canceling",)
-    assert conn.execute("SELECT provider_status FROM fin_feed_txns").fetchone() == ("cancelled",)
-    assert conn.execute("SELECT canceled_at,canceled_by FROM notes").fetchone() == ("2026-01-01T00:00:00Z", "human:ana")
-    assert ("notes", "cancelled_at", "canceled_at", "4") in renames_data.COLUMNS
-    assert {row[0] for row in conn.execute("SELECT action FROM events")} == {*canceled.EVENTS.values(), "task.create"}
-    assert conn.execute("SELECT status,provider_status FROM fin_cards").fetchone() == ("canceled", "canceled")
-    with pytest.raises(sqlite3.IntegrityError):
-        conn.execute("UPDATE fin_cards SET status='cancelled'")
-    conn.close()

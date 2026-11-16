@@ -12,7 +12,6 @@ import hashlib
 import json
 import re
 import secrets
-import sqlite3
 import threading
 from email.parser import BytesParser
 from email.policy import HTTP
@@ -29,28 +28,6 @@ from . import manual
 from . import models as M
 from .names import lookup
 from .store import H, Problem, encode
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS docs(
- id TEXT PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
- locked INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
- created_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_by_id TEXT NOT NULL, updated_at TEXT NOT NULL,
- archived INTEGER NOT NULL DEFAULT 0);
-CREATE UNIQUE INDEX IF NOT EXISTS docs_path_live ON docs(path COLLATE NOCASE) WHERE archived=0;
-CREATE INDEX IF NOT EXISTS docs_updated ON docs(updated_at);
-CREATE TABLE IF NOT EXISTS doc_versions(
- doc_id TEXT NOT NULL REFERENCES docs(id), version INTEGER NOT NULL, title TEXT NOT NULL, path TEXT NOT NULL,
- body TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
- PRIMARY KEY(doc_id, version));
-CREATE TABLE IF NOT EXISTS linked_docs(
- id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL,
- description TEXT NOT NULL DEFAULT '', added_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- archived INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS linked_docs_live ON linked_docs(archived, created_at);
-"""
-# Full-text index over title, path and body. It is created apart so a SQLite built without FTS5
-# still starts: search then falls back to LIKE.
-FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(title, path, body, tokenize='porter unicode61')"
 
 KINDS = ("website", "google_drive", "google_doc", "notion", "github", "other")
 MAX_BODY = 1_000_000
@@ -239,13 +216,8 @@ def unindex(c, rowid):
 
 
 def ensure_schema(c, settings=None):
-    """Tables, the full-text index (rebuilt when it is behind the rows) and the one-time move of
-    the old linked sources and approved repositories into linked docs. Safe to run at every start."""
-    c.executescript(SCHEMA)
-    try:
-        c.execute(FTS)
-    except sqlite3.OperationalError:
-        pass
+    """The full-text index (rebuilt when it is behind the rows) and the one-time move of the old linked sources and
+    approved repositories into linked docs. Safe to run at every start."""
     from .flight import begin
 
     done = begin(c)

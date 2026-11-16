@@ -42,11 +42,6 @@ HOSTED = ("own", "invited")
 FAILURES_PER_WINDOW = 10
 FAILURE_WINDOW_SECONDS = 15 * 60
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS owner_links(
- token_hash TEXT PRIMARY KEY, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, revoked_at TEXT);
-"""
-
 
 def break_glass(settings):
     """A hosted install on the built-in OIDC sign-in that the installer gave an owner link: the link works beside it."""

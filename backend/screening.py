@@ -72,17 +72,6 @@ KEEP_DAYS = 30  # model verdicts kept per key
 RECENT = 50  # holds and warnings Settings lists
 HOLD_AT, WARN_AT = 0.85, 0.5  # used only when the set cannot be read
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS screening_verdicts(
- source TEXT NOT NULL, key TEXT NOT NULL, score REAL NOT NULL, kind TEXT NOT NULL DEFAULT '', label TEXT NOT NULL,
- created_at TEXT NOT NULL, PRIMARY KEY(source, key));
-CREATE TABLE IF NOT EXISTS screening_pending(
- source TEXT NOT NULL, bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
- text TEXT NOT NULL, cache_key TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL DEFAULT '', person TEXT NOT NULL DEFAULT '',
- incident INTEGER NOT NULL DEFAULT 0, later TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL,
- PRIMARY KEY(source, bot, key));
-"""
-
 # Set by `install`: the app (its decision model) and the store a webhook rule's write belongs to.
 _state = {"app": None, "store": None, "auth": None}
 

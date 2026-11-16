@@ -19,55 +19,7 @@ from . import bot_settings as BS
 # Anonymous suggestions waiting at Suggested, across every visitor: the per-address limit alone lets many
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
 SUGGESTIONS_WAITING_MAX = 20
-VISIBILITY = "TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private'))"
 NOT_YET = 'The public roadmap is not available yet.'
-
-
-def migrate(c):
-    ran_before = 'public_title' in {r[1] for r in c.execute('PRAGMA table_info(tasks)')}
-    H.add_column(c, 'tasks', 'visibility', VISIBILITY)
-    H.add_column(c, 'tasks', 'public_title', "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, 'tasks', 'public_summary', "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, 'tasks', 'size', 'REAL')
-    H.add_column(c, 'messages', 'public', 'INTEGER NOT NULL DEFAULT 0')
-    H.add_column(c, 'messages', 'hidden_at', 'TEXT')
-    c.execute(
-        "CREATE INDEX IF NOT EXISTS messages_public_task ON messages(conversation_id,json_extract(refs,'$.task'),created_at,id) "
-        "WHERE public=1 AND hidden_at IS NULL AND deleted_at IS NULL AND json_extract(refs,'$.comment')=1"
-    )
-    # Once per database: an install that ran the first version of roadmaps had its Product roadmap type public by
-    # default and every task's internal title and body copied into its public text. The type becomes private, and
-    # those copies go from tasks that are not public, so publishing one later needs public text written for it.
-    c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
-    if c.execute(
-        "INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_explicit_public_text','true')"
-    ).rowcount:
-        c.execute(
-            "UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
-            "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)"
-        )
-    # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
-    # is new with the per-field decision: 'roadmaps_copies_cleared' marked databases that ran the per-task one.
-    if (
-        c.execute(
-            "INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_copies_cleared_by_field','true')"
-        ).rowcount
-        and ran_before
-        and H._has_table(c, 'history_events')
-    ):
-        clear_copies(c)
-    c.execute(
-        'CREATE TABLE IF NOT EXISTS task_requesters('
-        'id TEXT PRIMARY KEY,task_id TEXT NOT NULL REFERENCES tasks(id),actor TEXT,'
-        "name TEXT NOT NULL DEFAULT '',email TEXT NOT NULL DEFAULT '',phone TEXT NOT NULL DEFAULT '',"
-        "other TEXT NOT NULL DEFAULT '',organization TEXT NOT NULL DEFAULT '',note TEXT NOT NULL DEFAULT '',"
-        "source TEXT NOT NULL,important INTEGER NOT NULL DEFAULT 0,token_hash TEXT NOT NULL UNIQUE,created_at TEXT NOT NULL)"
-    )
-    c.execute('CREATE INDEX IF NOT EXISTS task_requesters_task ON task_requesters(task_id)')
-    c.execute(
-        'CREATE UNIQUE INDEX IF NOT EXISTS task_requesters_actor ON task_requesters(task_id,actor) '
-        'WHERE actor IS NOT NULL'
-    )
 
 
 # Public text someone wrote leaves a task event for its field (publication(), task_create); the first version's copies
@@ -77,53 +29,6 @@ def written(field):
         f"EXISTS(SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=tasks.id "
         f"AND e.kind='{field}')"
     )
-
-
-def clear_copies(c):
-    """Once, on a database that ran roadmaps before: the first version copied internal titles and bodies into public
-    text at creation and never updated them, so the check above misses a task edited since, and a Product roadmap
-    task it published at creation stayed public. Each field is decided on its own, since an owner may have rewritten
-    only the public title. Public text nobody wrote goes from a private task; from a public task only an exact copy
-    of the internal text goes, and one losing its public title is unpublished, with events saying why so its owner
-    can publish it again with public text. Text written at creation before creation left an event is cleared too,
-    so each clearing leaves one."""
-    rows = c.execute(
-        f"SELECT id,visibility,substr(coalesce(title,''),1,300),substr(coalesce(body,''),1,8000),"
-        f"public_title,public_summary,{written('public_title')},{written('public_summary')} FROM tasks "
-        "WHERE public_title!='' OR public_summary!=''"
-    ).fetchall()
-    for tid, visibility, title, body, public_title, public_summary, title_written, summary_written in rows:
-        fields = (
-            ('public_title', public_title, title, title_written),
-            ('public_summary', public_summary, body, summary_written),
-        )
-        cleared = [
-            (field, value)
-            for field, value, internal, was_written in fields
-            if value and not was_written and (visibility == 'private' or value == internal)
-        ]
-        for field, value in cleared:
-            c.execute(f"UPDATE tasks SET {field}='' WHERE id=?", (tid,))
-            H._task_event(
-                c,
-                tid,
-                H.KEEPER,
-                field,
-                value,
-                '',
-                'Cleared: public text with no record of being written, likely a copy of the internal text.',
-            )
-        if visibility == 'public' and any(field == 'public_title' for field, _ in cleared):
-            c.execute("UPDATE tasks SET visibility='private' WHERE id=?", (tid,))
-            H._task_event(
-                c,
-                tid,
-                H.KEEPER,
-                'visibility',
-                'public',
-                'private',
-                'Unpublished: its public title was a copy of the internal title. Write public text to publish it again.',
-            )
 
 
 def settings(c):

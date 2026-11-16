@@ -3,9 +3,7 @@ With checks On, the budget tightens as the person's plate fills; SENT_BACK or FY
 and the error says why and how to fix it, naming the bot's manager. A person's own write is never gated, and any
 failure lets the item through as before."""
 
-import importlib
 import json
-import sqlite3
 import threading
 
 import pytest
@@ -192,28 +190,6 @@ def test_a_stored_rehearsal_reads_and_acts_as_on(gate):
     assert "work you can do yourself" in assert_refused(api, r, before)
     [item] = items(api)
     assert (item["mode"], item["outcome"], item["would"]) == ("on", A.SENT_BACK, A.SENT_BACK)
-
-
-def test_migration_0066_moves_a_stored_rehearsal_to_on_and_leaves_the_rest():
-    """backend/migrations/0066_ask_filter_no_rehearsal.py: a person's or the team default's 'rehearsal' becomes 'on'; the
-    other modes stay. A database without the table (a new one) is left alone."""
-    migration = importlib.import_module("backend.migrations.0066_ask_filter_no_rehearsal")
-    conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE ask_ingest_settings(person TEXT PRIMARY KEY, mode TEXT NOT NULL)")
-    conn.executemany(
-        "INSERT INTO ask_ingest_settings VALUES(?,?)",
-        [("*", "rehearsal"), ("human:ben", "rehearsal"), ("human:ana", "off"), ("human:cara", "on")],
-    )
-    migration.up(conn)
-    assert dict(conn.execute("SELECT person, mode FROM ask_ingest_settings").fetchall()) == {
-        "*": "on",
-        "human:ben": "on",
-        "human:ana": "off",
-        "human:cara": "on",
-    }
-    fresh = sqlite3.connect(":memory:")
-    migration.up(fresh)
-    assert fresh.execute("SELECT name FROM sqlite_master").fetchall() == []
 
 
 @pytest.mark.parametrize("how", ["error", "timeout", "cap", "busy"])

@@ -37,14 +37,6 @@ LAYER_MAX = 100  # entries in one layer: every turn in the chat is handed all of
 PRIORITIES_MAX = 10  # live company goals in the company layer, in their order on Goals
 LAYERS = ("personal", "company")
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS learned_entries (
-  id TEXT PRIMARY KEY, layer TEXT NOT NULL CHECK (layer IN ('personal','company')),
-  person TEXT NOT NULL DEFAULT '', text TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
-  via TEXT, updated_at TEXT, updated_by TEXT);
-CREATE INDEX IF NOT EXISTS learned_entries_layer ON learned_entries(layer, person, created_at);
-"""
-
 
 def _person(who, settings):
     """The person whose layers these are: a person, on their own or through a turn of their own Assistant (backend/auth.py

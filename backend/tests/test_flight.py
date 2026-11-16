@@ -159,23 +159,6 @@ def test_a_full_buffer_counts_what_it_drops(monkeypatch):
     assert rec.take(MINUTE)["process"][-1] == 2 and rec.take(MINUTE)["process"][-1] == 0
 
 
-def test_slow_request_upgrade_keeps_history_and_adds_nullable_attribution(tmp_path):
-    path = tmp_path / 'synthetic.sqlite'
-    with sqlite3.connect(path) as c:
-        c.execute(
-            'CREATE TABLE flight_slow(id INTEGER PRIMARY KEY,created_at INTEGER,route TEXT,caller TEXT,actor TEXT,ms REAL,bytes INTEGER,status INTEGER)'
-        )
-        c.execute(
-            "INSERT INTO flight_slow(created_at,route,ms) VALUES(?,?,?)", (MINUTE, 'GET /api/v2/tasks/{tid}', 1500)
-        )
-    store = Store(Settings(db_path=path, registry_dir=tmp_path), flight.Recorder())
-    store.initialize(seed_market=False)
-    store.initialize(seed_market=False)
-    with store.read() as c:
-        row = dict(c.execute('SELECT * FROM flight_slow').fetchone())
-    assert row['ms'] == 1500 and row['sql_ms'] is None and row['wait_ms'] is None and row['queries'] is None
-
-
 def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatch):
     with store.transaction() as c:
         c.execute("CREATE TABLE size_fixture(created_at INTEGER, payload BLOB)")
