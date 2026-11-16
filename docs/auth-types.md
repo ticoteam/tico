@@ -15,7 +15,8 @@ Two ways a value reaches a bot ([credential-vault.md](credential-vault.md#proxie
   Key** (types API key, password, token, file). The value is in the run's environment under its variable (a file
   credential is an owner-only file whose path is in the variable), for that run only, and masked in everything the run
   posts. Only the value travels: a key's **Username** field does not reach a bot on computers, so a second field goes
-  in as its own key with its own variable.
+  in as its own key with its own variable. A bot at **Read** on a computer tool that has an address and only a Read and
+  write key gets a proxy token instead, so it is held to reads.
 
 A key stored with **Tools > Add > Key** whose name or variable names a known service (`STRIPE_API_KEY`, "Close API
 key") joins that service's tool, on the proxy when Tico knows its address (backend/tool_services.py). A webhook or
@@ -144,9 +145,11 @@ Tico server's address; a call on computers from that computer's. Allowlist the o
 no `env` ([connect-tools.md](connect-tools.md#how-a-tool-is-connected)). Candidate: DeepWiki. Test:
 `test_mcp_server_with_no_auth_deepwiki`.
 
-**Pasted token** (an MCP server taking a PAT or API key in a header). Hand it over: the key with no address (on
-computers) and the entry's header as `Authorization: "Bearer ${VAR}"`. A proxied key does not work for MCP yet (the
-header carries the `tpx1.` token; the stub suite's strict xfail). No account-free server takes a token.
+**Pasted token** (an MCP server taking a PAT or API key in a header). Hand it over: an API tool whose address the
+server's URL sits under, its key, and the `bot.yaml` entry's header as `Authorization: "Bearer ${VAR}"`. With the key
+on the proxy the runner sends the server's calls through the proxy with the run's token in that header and Tico puts the
+key in its place; a bot at Read gets only the server's reads ([credential-vault.md](credential-vault.md#proxied-tools)).
+A key on computers goes in the header as itself. Covered by the stub suite; no account-free server takes a token.
 
 **MCP OAuth** (`oauth_mcp`, `oauth_dcr`, `oauth_client_allowlist`). Sign-in with dynamic client registration and
 PKCE. Not supported yet for bots' MCP servers. Candidates for when it is: the MCP conformance suite's auth scenarios,

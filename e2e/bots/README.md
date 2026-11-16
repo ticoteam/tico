@@ -43,8 +43,9 @@ also checks the raw value is in no transcript, turn event, runner log or table; 
 - **File credential**: the turn gets a 0600 file, the vendor accepts its bytes, and the file is gone after the turn.
 - **Remote MCP server in bot.yaml** with `Bearer ${VAR}`, key on computers (Claude and Codex): initialize, tools/list
   and a tools/call succeed, and the value is never on Claude Code's command line.
-- **The same MCP server with its key on the proxy**: expected to fail (strict xfail) until a proxied key works for
-  MCP. Today the header carries the run's `tpx1.` token and the vendor refuses it.
+- **The same MCP server with its key Tico holds** (a proxied tool, and a computer tool at Read with only a Read and
+  write key): the run holds a proxy token, the server is reached through the proxy and the vendor gets the real key;
+  at Read only the set-up, the listing and the read-only tool go through.
 - **Website login with password and 2FA**: `tico browser open`, `tico login fill` (username, password, code) and a
   submit click sign in to a stub form that checks an RFC 6238 code; the password and the 2FA key are in no turn
   environment, command output or record. The company browser host is the test standing in for Chrome (pytest launches
