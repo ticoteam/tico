@@ -315,6 +315,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "task_session_default",
         "threads-migration",
         "threads-neutral-titles",
+        "tool_settings.moved",
         "usage-count",
         "validate-proof-sweep",
     ]
