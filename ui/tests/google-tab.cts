@@ -26,7 +26,6 @@ const SHELL: Record<string, unknown> = {
   '/api/v2/config': config,
   '/api/employees': [],
   '/api/humans': {people: [{id: 'ana', name: 'Ana'}], teams: {}},
-  '/api/humans': {people: [], teams: {}},
   '/api/status': {cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []},
   '/api/v2/status': {bots: []},
   '/api/v2/needs-you': {items: []},
