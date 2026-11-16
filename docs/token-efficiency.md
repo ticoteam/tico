@@ -97,7 +97,7 @@ hard-coded; delete our own machinery before adding more; when unsure, run the mo
 | 6 | **Haiku subagents line** in code bots' AGENTS.md: Haiku 5.5 extra-high for simple work, Opus for complex or UI work. | #3731 |
 | 7 | **Bot model and task model:** heavy roles run their own turns on Haiku 5.5 xhigh and their tasks on Opus 5.5 medium (with ChatGPT only: terra medium and sol high). The Assistant stays on Opus, because Haiku halves its eval score. Hand-set bots keep their settings. | #3730 |
 | 8 | **Reviews start from the diff**, the spec and failing checks. Review 2 always runs and effort is unchanged. | #3731 |
-| 9 | **Keep warm:** a pipeline setting (per-stage override, default 8 h, 0 is off). An idle task session whose bot still owns a current or later stage gets a hidden one-line ping every 45–55 min, which holds its cache. The ping is skipped when no session is saved or the model or plan changed. | #3736 |
+| 9 | **Keep warm:** a pipeline setting (per-stage override, off by default). An idle task session whose bot still owns a current or later stage gets a hidden one-line ping every 45–55 min, which holds its cache. The ping is skipped when no session is saved or the model or plan changed. | #3736 |
 
 **Considered and not done:**
 

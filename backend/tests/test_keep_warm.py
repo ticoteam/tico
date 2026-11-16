@@ -33,7 +33,13 @@ def c(company, time_machine):
             {"name": "Fixes 1", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
         )
         X.pipeline(conn, pid="eng", name="Engineering", stages=stages, manager="bot:manager")
+        _on(conn, "eng")
         yield conn
+
+
+def _on(conn, pipeline_id, hours=8):
+    """Keep warm turned on for the pipeline: it is off unless a company turns it on."""
+    conn.execute("UPDATE pipelines SET keep_warm_hours=? WHERE id=?", (hours, pipeline_id))
 
 
 def _ran(c, task_id, bot="builder", at=None, purpose=None, result=None, tokens=50_000):
@@ -281,6 +287,7 @@ def test_a_computer_claims_the_turn_in_the_tasks_own_session_marked_keep_warm(ap
             {"name": "Fixes 1", "owner": "bot:cpo", "requirements": [{"kind": "owner_done"}]},
         )
         X.pipeline(c, pid="warm", name="Warm", stages=stages)
+        _on(c, "warm")
         task_id = X.new_task(c, "bot:cpo", "Add the export button", pipeline_id="warm")["id"]
         X.say_done(c, E.task(c, task_id), by="bot:cpo")
         E.advance(c, task_id)
@@ -292,3 +299,146 @@ def test_a_computer_claims_the_turn_in_the_tasks_own_session_marked_keep_warm(ap
     with api.app.state.store.read() as c:
         row = c.execute("SELECT trigger_kind, purpose, task_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
     assert tuple(row) == ("keep_warm", "keep warm", task_id)
+
+
+def test_it_is_off_unless_a_company_turns_it_on(c):
+    """On an install from before, a stored 8 cannot be told from the old default: migration
+    20261116124803_keep_warm_off turns every pipeline off and takes back each stage's own hours. (A new pipeline is off:
+    test_pipeline_settings.)"""
+    from pathlib import Path
+
+    task_id = _in_review(c)
+    c.execute("INSERT INTO stage_keep_warm (stage_id, hours) VALUES (?, 3)", (E.task(c, task_id)["stage"]["id"],))
+    version = PS.read(c, "eng")["settings_version"]
+    assert K.hours(c, E.task(c, task_id)) == 3
+    sql = (Path(K.__file__).parent / "migrations" / "20261116124803_keep_warm_off.sql").read_text()
+    for statement in filter(str.strip, sql.split(";")):
+        c.execute(statement)
+    assert K.hours(c, E.task(c, task_id)) == 0 and _sweep(c, 46) == 0
+    assert PS.read(c, "eng")["keep_warm_hours"] == 0 and PS.read(c, "eng")["settings_version"] == version + 1
+
+
+def _warm_room(api):
+    """A runner with cpo on it, and cpo's task from Ana's chat (its replies reach her in the task's room), waiting in
+    Review 1 with cpo's last run 46 minutes ago: due a keep-warm turn."""
+    from backend.tests.helpers.wake_rules import setup
+
+    r = setup(api)
+    with api.app.state.store.transaction() as c:
+        stages = (
+            {"name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+            {"name": "Review 1", "owner": "bot:ops", "requirements": [{"kind": "owner_done"}]},
+            {"name": "Fixes 1", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+        )
+        X.pipeline(c, pid="warm", name="Warm", stages=stages)
+        _on(c, "warm")
+        task_id = X.new_task(c, X.ANA, "Add the export button", pipeline_id="warm", assignee="bot:cpo")["id"]
+        H.event(c, H.KEEPER, "task.room", task_id, {})
+        X.say_done(c, E.task(c, task_id), by="bot:cpo")
+        E.advance(c, task_id)
+        c.execute("DELETE FROM jobs")
+        _ran(c, task_id, bot="cpo", at=H.shift(H.now(), minutes=-46))
+    return r, task_id
+
+
+def _run(api, r, attempt, text):
+    from backend.tests.helpers.api import post
+
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, token=r["token"])
+    post(
+        api,
+        f"attempts/{attempt['id']}/complete",
+        {"outcome": "completed", "text": text, "last_seq": 0},
+        token=r["token"],
+    )
+
+
+def _shown(api, task_id):
+    """cpo's messages in the task's thread as Ana reads it (the read the chat, task page and Flow share)."""
+    from backend import threads
+
+    with api.app.state.store.read() as c:
+        room = E.task(c, task_id)["conversation_id"]
+        rows = threads.timeline(c, threads.actor_viewer(c, X.ANA), room, flat=True)["messages"]
+    return [m.get("body") for m in rows if m.get("sender_id") == "bot:cpo"]
+
+
+def _keep_warm_turn(api, r, said):
+    """One keep-warm turn of cpo's on the task, answered with `said`. Returns its attempt."""
+    from backend.tests.helpers.wake_rules import claim
+
+    with api.app.state.store.transaction() as c:
+        assert K.sweep(c, every_minute=False) == 1
+    attempt = claim(api, r, "cpo")
+    assert attempt["message"]["body"] == K.PING
+    _run(api, r, attempt, said)
+    return attempt
+
+
+def _answered(api, r, task_id, text):
+    """Ana asks cpo in the task's room and cpo's ordinary run answers `text`."""
+    from backend.tests.helpers.wake_rules import claim
+
+    with api.app.state.store.transaction() as c:
+        H.say(c, X.ANA, "bot:cpo", "Is the button done?", conversation_id=E.task(c, task_id)["conversation_id"])
+    _run(api, r, claim(api, r, "cpo"), text)
+
+
+@pytest.mark.parametrize("said", ["ok", "The export button needs a second look."])
+def test_a_keep_warm_turns_reply_is_never_posted_but_an_ordinary_runs_is(api, said, caplog):
+    """A keep-warm turn's reply ("ok") went into the task's room as a visible answer to a hidden notice, fifteen of them
+    a day burying the bot's questions. It stays on the run; anything more than "ok" is logged, with ids only."""
+    r, task_id = _warm_room(api)
+    with caplog.at_level(logging.INFO, logger="tico.execution"):
+        attempt = _keep_warm_turn(api, r, said)
+    assert _shown(api, task_id) == []
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT final_text, writes, outcome FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert tuple(row) == (said, 0, None)  # kept on the run; no write, so still no work and no "did nothing"
+        assert not c.execute("SELECT 1 FROM messages WHERE body=? AND sender_id='bot:cpo'", (said,)).fetchone()
+    logged = [m.getMessage() for m in caplog.records if m.getMessage().startswith("keep warm: reply not posted")]
+    assert len(logged) == (0 if said == "ok" else 1)
+    assert all(attempt["id"] in line and said not in line for line in logged)
+    _answered(api, r, task_id, "Fixed the button's label.")
+    assert _shown(api, task_id) == ["Fixed the button's label."]
+
+
+def test_keep_warm_replies_already_posted_leave_the_thread_and_its_unread_mark(api, monkeypatch):
+    """Before the fix the "ok" was posted. Migration 20261116124618_keep_warm_replies_hidden clears its seq, as the
+    notice's: the thread read leaves it out, its delivery is moot, and the room's counters point at what is left. An
+    ordinary run's reply stays."""
+    import importlib
+
+    from backend import execution
+
+    r, task_id = _warm_room(api)
+    _answered(api, r, task_id, "Fixed the button's label.")
+    monkeypatch.setattr(execution.run_triggers, "KEEP_WARM", "not keep warm")  # as complete() was: it posts the "ok"
+    attempt = _keep_warm_turn(api, r, "ok")
+    monkeypatch.undo()
+    assert _shown(api, task_id) == ["Fixed the button's label.", "ok"]
+    with api.app.state.store.transaction() as c:
+        room = E.task(c, task_id)["conversation_id"]
+        ok = c.execute(
+            "SELECT id, seq FROM messages WHERE json_extract(refs, '$.run.attempt_id') = ?", (attempt["id"],)
+        ).fetchone()
+        real = c.execute(
+            "SELECT max(seq) FROM messages WHERE conversation_id=? AND seq IS NOT NULL AND id<>?", (room, ok[0])
+        ).fetchone()[0]
+        assert tuple(
+            c.execute("SELECT last_seq, last_unread_seq FROM conversations WHERE id=?", (room,)).fetchone()
+        ) == (
+            ok[1],
+            ok[1],
+        )
+        migration = importlib.import_module("backend.migrations.20261116124618_keep_warm_replies_hidden")
+        migration.up(c)
+        migration.up(c)  # again: nothing more
+        counters = tuple(
+            c.execute("SELECT last_seq, last_unread_seq FROM conversations WHERE id=?", (room,)).fetchone()
+        )
+        assert counters == (real, real)
+        states = {s for (s,) in c.execute("SELECT state FROM message_deliveries WHERE message_id=?", (ok[0],))}
+        assert states <= {"moot", "read"}
+        assert c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0] == "ok"
+    assert _shown(api, task_id) == ["Fixed the button's label."]

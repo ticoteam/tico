@@ -37,7 +37,7 @@ All in `backend/migrations/20261110010000_pipelines_v3.py`. Times are `H.now()` 
 
 ```
 pipelines     id, name, goal, prefix, manager_id, owner_id, private (0|1), factory_id, preset,
-              settings_version, created_at, updated_at, retired_at, keep_warm_hours (0-24, default 8)
+              settings_version, created_at, updated_at, retired_at, keep_warm_hours (0-24; every insert writes 0)
               unique name and unique prefix among rows not retired
 stages        id, pipeline_id, position, kind (work|done|closed), name, purpose, owner, by_hand (0|1),
               requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes, expected_bots_only (0|1),

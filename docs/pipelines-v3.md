@@ -216,11 +216,12 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
 - **On enter:** nothing, "file a linked task into pipeline X", or "queue the PRs to merge". There are no other actions. A
   stage that files a task always has Linked work done among its requirements.
 - **Expected time** and **limit** (how many tasks fit). The first stage of a pipeline has no limit.
-- **Keep warm for up to N hours:** a setting on the pipeline (`keep_warm_hours`, default 8, 0 is off) that a stage may
+- **Keep warm for up to N hours:** a setting on the pipeline (`keep_warm_hours`, 0 is off and the default) that a stage may
   set for itself (empty: the pipeline's). While a task is in a work stage that does not leave by hand, each bot's
   session on it that has been idle 45 to 55 minutes gets one short "nothing to do" turn, which reads the session's
   cache and keeps it warm for the next real run. It stops when the task leaves the active stages, N hours after the
-  bot's last real run on it, or when that session ran on a fallback model (backend/keep_warm.py).
+  bot's last real run on it, or when that session ran on a fallback model (backend/keep_warm.py). The turn's reply
+  ("ok") is never posted: it stays on the run.
 
 That gives three kinds of stage, and no others:
 
@@ -860,7 +861,7 @@ software?" (a blank answer is yes); an untouched one is retired when it answers 
 
 ### Product
 
-From a pitch to something checked in production, in one task. Manager: the Product Manager bot. Keep warm: 8 hours.
+From a pitch to something checked in production, in one task. Manager: the Product Manager bot. Keep warm: off.
 Preset `features`, id `product` (`pipeline_settings.PRODUCT`).
 
 Stages: Pitch → Spec → Related input → OK spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release →

@@ -150,7 +150,7 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
         return _general(c, manager)
     now = H.now()
     c.execute(
-        "INSERT INTO pipelines (id, name, manager_id, created_at, updated_at) VALUES (?,?,?,?,?)",
+        "INSERT INTO pipelines (id, name, manager_id, keep_warm_hours, created_at, updated_at) VALUES (?,?,?,0,?,?)",
         (pid, name, manager, now, now),
     )
     out = {"id": pid, "stages": {}, "requirements": {}}

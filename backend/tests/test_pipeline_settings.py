@@ -179,25 +179,25 @@ def test_a_saved_pipeline_reads_back_as_it_was_saved_with_done_and_closed_after_
 
 
 def test_keep_warm_is_set_on_the_pipeline_and_a_stage_and_a_save_that_leaves_it_out_keeps_it(c):
-    """ "Keep warm for up to N hours" (backend/keep_warm.py): 8 on a new pipeline, 0 off; a stage's own, or None for the
+    """ "Keep warm for up to N hours" (backend/keep_warm.py): off (0) on a new pipeline; a stage's own, or None for the
     pipeline's. A caller that never names it (an older editor) changes neither."""
     record = _ops()
     del record["keep_warm_hours"]
     for stage in record["stages"]:
         del stage["keep_warm_hours"]
     saved = PS.save(c, ANA, record)
-    assert saved["keep_warm_hours"] == PS.KEEP_WARM_DEFAULT
+    assert saved["keep_warm_hours"] == PS.KEEP_WARM_DEFAULT == 0
     assert [s["keep_warm_hours"] for s in saved["stages"]] == [None, None]
-    saved["keep_warm_hours"] = 0
+    saved["keep_warm_hours"] = 5
     saved["stages"][1]["keep_warm_hours"] = 3
     saved = PS.save(c, ANA, saved)
-    assert saved["keep_warm_hours"] == 0 and [s["keep_warm_hours"] for s in saved["stages"]] == [None, 3]
+    assert saved["keep_warm_hours"] == 5 and [s["keep_warm_hours"] for s in saved["stages"]] == [None, 3]
     left_out = copy.deepcopy(saved)
     del left_out["keep_warm_hours"]
     del left_out["stages"][1]["keep_warm_hours"]
     left_out["goal"] = "Keep the office running well"
     saved = PS.save(c, ANA, left_out)
-    assert saved["keep_warm_hours"] == 0 and saved["stages"][1]["keep_warm_hours"] == 3
+    assert saved["keep_warm_hours"] == 5 and saved["stages"][1]["keep_warm_hours"] == 3
     saved["stages"][1]["keep_warm_hours"] = None  # back to the pipeline's
     assert PS.save(c, ANA, saved)["stages"][1]["keep_warm_hours"] is None
     for bad in (-1, 25, 1.5, True, "8"):

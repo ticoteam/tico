@@ -598,7 +598,7 @@ function peBodyHTML(state: PeState): string {
     // An empty prefix shows the pipeline's first letter as the example.
     + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" placeholder="${esc(d.name.trim().charAt(0).toUpperCase())}" autocomplete="off">`, 'short')
     // Hours an active task's session is kept warm after its last work (backend/keep_warm.py); 0 is off.
-    + peF('Keep bot sessions ready (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-pf="keep_warm_hours" value="${d.keep_warm_hours ?? 8}">`, 'short'));
+    + peF('Keep bot sessions ready (h)', `<input type="number" min="0" max="24" step="1" inputmode="numeric" data-pe-pf="keep_warm_hours" value="${d.keep_warm_hours ?? 0}">`, 'short'));
   // One stage's editor (opened from its header): that stage alone, with no pipeline fields, + Stage or moves.
   const one = state.only ? d.stages.findIndex(s => s.id === state.only) : -1;
   const stages = one >= 0 ? peStageHTML(state, d.stages[one]!, one, d.stages.length)

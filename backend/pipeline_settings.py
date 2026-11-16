@@ -87,8 +87,9 @@ REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 BUILT_IN = ("done", "closed")
 PREFIX = re.compile(r"^[A-Za-z]{1,2}$")
 ASSIGNEE = "assignee"
-# "Keep warm for up to N hours" (backend/keep_warm.py): the pipeline's N, and a stage's own (None: the pipeline's).
-KEEP_WARM_DEFAULT = 8
+# "Keep warm for up to N hours" (backend/keep_warm.py): the pipeline's N, and a stage's own (None: the pipeline's). Off
+# unless a company turns it on. The column's own DEFAULT is still 8 (migration 20261113235427), so every insert names it.
+KEEP_WARM_DEFAULT = 0
 KEEP_WARM_MAX = 24
 
 PRESETS: dict[str, Row] = {

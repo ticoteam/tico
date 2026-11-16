@@ -6994,8 +6994,19 @@ class Execution:
         # A turn a carrier started answers the message it carries (reply_source): its sender, in its thread.
         source = reply_source(c, msg)
         carried = source is not None and source["id"] != msg["id"]
+        # A keep-warm turn (backend/keep_warm.py) only reads its session's cache. Its notice is in no timeline, and its
+        # reply ("ok") is posted nowhere either: it stays on the run. Anything more it said is logged, with ids only.
+        kept_warm = row["purpose"] == run_triggers.KEEP_WARM
+        if kept_warm and body.text and body.text.strip().strip(".!").lower() != "ok":
+            logging.getLogger("tico.execution").info(
+                "keep warm: reply not posted, kept on the run (attempt %s, bot %s, %d chars)",
+                aid,
+                row["bot_id"],
+                len(body.text),
+            )
         if (
             body.text
+            and not kept_warm
             and body.outcome == "completed"
             and msg["deleted_at"] is None
             and source is not None

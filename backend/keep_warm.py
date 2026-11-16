@@ -8,7 +8,7 @@ for WARM_AFTER to WARM_BEFORE (backend/wake_presets.py, the warm window inside t
 starts its hour again. A 180k session costs about 18k input-equivalent an hour this way, against about 360k to write it
 cold, so it pays when the session is used again within about 20 hours.
 
-- The setting: `pipelines.keep_warm_hours` (default 8, 0 = off) and `stage_keep_warm.hours` for a stage of its own
+- The setting: `pipelines.keep_warm_hours` (default 0, off) and `stage_keep_warm.hours` for a stage of its own
   (backend/pipeline_settings.py). A stage that is not a work stage, or leaves by hand, is never active.
 - It stops when the task leaves the active stages (closed, done, snoozed with no end, a stage with 0 hours), when N
   hours have passed since the bot's last real run on the task, when that run or the newest one ran on a fallback model
@@ -18,9 +18,10 @@ cold, so it pays when the session is used again within about 20 hours.
   through a review, not a reviewer whose stage is behind the task.
 - Never for a bot that keeps one thread for everything (`session: bot`) or keeps nothing (stateless), a task worked as a
   goal (the harness would go on with it), or a task whose conversation is not its own.
-- Its notice is written as a thread's carrier is (no seq): no timeline, unread count or room history shows it. The
-  runner sends it as its one line, with `--max-turns 1` on Claude Code, and keeps its records of the session as they
-  were (runner-rs prompt::keep_warm), so the next real turn is sent what it would have been.
+- Its notice is written as a thread's carrier is (no seq): no timeline, unread count or room history shows it, and its
+  reply ("ok") is never posted (execution.complete): it stays on the run. The runner sends it as its one line, with
+  `--max-turns 1` on Claude Code, and keeps its records of the session as they were (runner-rs prompt::keep_warm), so
+  the next real turn is sent what it would have been.
 - A keep-warm turn is marked: trigger `keep_warm`, purpose `keep warm` (run_triggers.KEEP_WARM). It is not a run on its
   task for the never-stuck ladder or the run cap (task_wakes), is never counted as acting or as doing nothing
   (run_triggers.SETTLE_SQL), and its claim checks again that it is still wanted (`may_start`).
