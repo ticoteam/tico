@@ -59,7 +59,8 @@ RUNTIMES = {"antigravity": "gemini"}
 def rust_binary(tmp_path_factory):
     """The release binary, built once per test run: xdist workers share the base temp directory's lock, and the
     first to take it builds and copies the binary. A copy, so no worker ever runs a file cargo is relinking. A
-    release binary already built from these sources (the release gate's, which ships) is used as it is."""
+    release binary already built from these sources (the release gate's, which ships) is used as it is. The copy's
+    folder outlives the run, so a copy older than the release binary (a pull since) is replaced."""
     import fcntl
 
     built = ROOT / "runner-rs" / "target" / "release" / "tico-runner"
@@ -70,9 +71,9 @@ def rust_binary(tmp_path_factory):
     binary = ROOT / "runner-rs" / "target" / "conformance" / shared.name / "tico-runner"
     with open(shared / "tico-runner.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if not binary.exists():
-            if engine.current(built, ROOT):
-                subprocess.run(["cargo", "build", "--release", "-q"], cwd=ROOT / "runner-rs", check=True, timeout=900)
+        if engine.current(built, ROOT):
+            subprocess.run(["cargo", "build", "--release", "-q"], cwd=ROOT / "runner-rs", check=True, timeout=900)
+        if not binary.exists() or binary.stat().st_mtime != built.stat().st_mtime:
             shutil.rmtree(binary.parent.parent, ignore_errors=True)  # earlier runs' copies
             binary.parent.mkdir(parents=True)
             staged = binary.parent / "tico-runner.part"
