@@ -136,6 +136,8 @@ if (!view) throw new Error('the view sets its hook on the page');
   const html = view.html(five, at('c', 'e'), opts({layout: 'list'}));
   assert.deepEqual(folds(html), ['Pitch, Spec', 'Review', 'QA, Merge, Validate']);
   assert.deepEqual(heads(html), ['Build', 'Fixes'], 'only stages with tasks keep a header');
+  assert.deepEqual(folds(view.html(five, at('b', 'f'), opts({layout: 'list'}))), ['Pitch', 'Build, Review, Fixes', 'Merge, Validate'],
+    'a run of several between two stages with tasks is one line');
   assert.ok(html.indexOf('Empty stages: Pitch') < html.indexOf('>Build<') && html.indexOf('>Build<') < html.indexOf('Empty stages: Review')
     && html.indexOf('Empty stages: Review') < html.indexOf('>Fixes<') && html.indexOf('>Fixes<') < html.indexOf('Empty stages: QA'), 'each run sits in its place');
   assert.match(html, /<button type="button" class="pv-chip" data-pv-settings="a" title="Edit Pitch">Pitch<\/button>/, 'a chip opens its stage, names only');
