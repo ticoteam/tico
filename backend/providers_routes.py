@@ -351,7 +351,10 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
             return Response(
                 data,
                 media_type="video/mp4",
-                headers={"X-Content-SHA256": hashlib.sha256(data).hexdigest(), "Cache-Control": "no-store"},
+                headers={
+                    "X-Content-SHA256": hashlib.sha256(data).hexdigest(),
+                    "Cache-Control": "no-store, no-transform",
+                },
             )
         if status == 404:
             raise Problem("gateway_video_not_found", "No such video", 404)
