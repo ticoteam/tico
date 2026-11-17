@@ -25,7 +25,8 @@ path needs a scope it lacks), a 401 whose reply says the key lacks a permission 
 (limited) too, only any other 401 Key rejected, anything else (a timeout, a refused address, a 500) Check failed.
 An id stored as a key (`tool_settings.known_name`) is never sent as one, and a status never comes from a check that
 would not run today (`_checked_today`). A proxied tool's real calls (`call_health`, over CALLS_WINDOW) outrank its
-check: a 2xx makes it Working whatever the check said, and only REJECTED_AFTER 401s in a row, none 2xx since, make it
+check: a 2xx makes it Working whatever the check said, and only REJECTED_AFTER 401s in a row, none 2xx since and none
+whose reply says a permission is missing (`said_missing_scope`, stored as `MISSING_SCOPE` on the call), make it
 Key rejected. The scheduler checks every API tool with a check path every CHECK_EVERY on a background thread, its keys
 on the proxy or on computers alike (the server holds every value); "Check now" runs one at once. A check sends
 the key only to the tool's own https address, pinned to the public IP it resolved to (backend/egress.py), and nothing
@@ -101,7 +102,7 @@ RESULTS = ("sent", "refused", "failed", "use")
 CALLS_WINDOW = timedelta(hours=24)  # real calls this recent say whether a proxied tool works (`call_health`)
 REJECTED_AFTER = 3  # 401s in a row on real calls, none 2xx since, before a tool reads Key rejected
 LIMITED = "Works (limited)"  # a check that got 403: the vendor knows the key, this path needs a scope it lacks
-SCOPE_READ = 2048  # bytes of a 401's reply read to tell a restricted key from a bad one (`_missing_scope`)
+SCOPE_READ = 2048  # bytes of a 401's reply read to tell a restricted key from a bad one (`said_missing_scope`)
 # What a 401's reply (lowercased) says when the key is known and lacks a permission for the path: ElevenLabs'
 # restricted keys answer missing_permissions, and RFC 6750 bearer challenges answer insufficient_scope.
 SCOPE_SAYS = (
@@ -114,6 +115,8 @@ SCOPE_SAYS = (
     "missing_scope",
     "missing scope",
 )
+# A tool_calls row's detail for a real call the vendor answered 401 with a missing scope (never the reply's text).
+MISSING_SCOPE = "missing_scope"
 CHECK_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,299}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # connections.py's statuses, as the tones and words Tools shows them in.
@@ -306,24 +309,26 @@ def _checked_today(tool, key):
 
 def call_health(c, tool_id, now=None):
     """What the tool's real calls through the proxy say, over the last CALLS_WINDOW: `working` when one got a 2xx,
-    `rejected` when REJECTED_AFTER calls in a row got 401 and none got a 2xx since; else None (nothing to say)."""
+    `rejected` when REJECTED_AFTER calls in a row got a 401 and none got a 2xx since; else None (nothing to say).
+    A 401 whose reply says a permission is missing is the vendor knowing the key, so it is no rejection, and it ends
+    the scan as a 2xx does: an older run of 401s from before the key was right says nothing about it now."""
     since = H.shift(now or H.now(), seconds=-int(CALLS_WINDOW.total_seconds()))
-    codes = [
-        r[0]
+    calls = [
+        (r[0], r[1] == MISSING_SCOPE)
         for r in c.execute(
-            "SELECT status_code FROM tool_calls WHERE tool_id=? AND result='sent' AND status_code IS NOT NULL "
+            "SELECT status_code, detail FROM tool_calls WHERE tool_id=? AND result='sent' AND status_code IS NOT NULL "
             "AND created_at>=? ORDER BY created_at DESC, id DESC LIMIT 200",
             (tool_id, since),
         )
     ]
     run = 0
-    for code in codes:  # newest first, up to the newest 2xx
-        if 200 <= code < 300:
+    for code, scoped in calls:  # newest first, up to the newest 2xx or scoped 401
+        if 200 <= code < 300 or scoped:
             break
         run = run + 1 if code == 401 else 0
         if run >= REJECTED_AFTER:
             return "rejected"
-    return "working" if any(200 <= code < 300 for code in codes) else None
+    return "working" if any(200 <= code < 300 for code, _ in calls) else None
 
 
 def state_of(c, tool, keys=None, now=None):
@@ -912,14 +917,19 @@ class Reply(NamedTuple):
     missing_scope: bool = False
 
 
-def _missing_scope(response):
+def said_missing_scope(challenge, body):
     """Whether a 401 says the key is known but lacks a permission or scope for this path (SCOPE_SAYS: a restricted key,
-    not a bad one). Only the WWW-Authenticate challenge and the first SCOPE_READ bytes of the reply are read, and
-    nothing of them is kept."""
-    said = response.headers.get("www-authenticate", "") + " "
-    said += next(response.iter_bytes(chunk_size=SCOPE_READ), b"").decode("utf-8", "replace")
-    said = said.lower()
+    not a bad one), from its WWW-Authenticate `challenge` and the first bytes of its reply `body`: only SCOPE_READ of
+    them are read, and nothing of them is kept. The tool proxy (backend/tool_proxy.py) and the checks share it."""
+    said = (challenge + " " + body[:SCOPE_READ].decode("utf-8", "replace")).lower()
     return any(phrase in said for phrase in SCOPE_SAYS)
+
+
+def _missing_scope(response):
+    """`said_missing_scope` for a check's reply: its first chunk is read, at most SCOPE_READ bytes of it."""
+    return said_missing_scope(
+        response.headers.get("www-authenticate", ""), next(response.iter_bytes(chunk_size=SCOPE_READ), b"")
+    )
 
 
 def send_check(url, headers, params):
