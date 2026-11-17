@@ -263,6 +263,8 @@ EMPTY = (
     # A listening's sources are part of its automation (kept with it); the posts they saved never.
     "listening_sources",
     "listening_items",
+    # The run guard's holds before migration 20261117112358_holds_automation_guard moves them into `holds` (after it,
+    # prune deletes the automations' holds there): the copy's runs are gone, so nothing is held.
     "automation_guard_holds",
     "automation_turn_answers",
     # Task cap counts are today's sends; the caps themselves are kept.
@@ -860,6 +862,8 @@ def prune(c, days, keep_automations=False):
         for table, count in finance.scrub_dev_copy(c, now()).items():
             if count:
                 removed[table] = removed.get(table, 0) + count
+    if "holds" in present:
+        delete("holds", "holdable_type='automation'")  # the run guard's: the runs it held are emptied above
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:

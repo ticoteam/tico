@@ -23,7 +23,7 @@ priced (`automation_holds`).
 
 The run guard stops spending, never work. An automation whose runs keep coming over time (RUN_GUARD_SUSTAINED runs in
 RUN_GUARD_SPAN minutes spread over at least RUN_GUARD_SPREAD of those minutes) or flood in (RUN_GUARD_BURST runs in
-RUN_GUARD_MINUTES) is put on hold (`automation_guard_holds`): its queued runs and every new one are kept as `held`, which
+RUN_GUARD_MINUTES) is put on hold (a `runaway` hold on the automation, backend/holds.py): its queued runs and every new one are kept as `held`, which
 the drain never claims, up to RUN_GUARD_BURST of them (past that each is counted as dropped, on the hold too). No rate
 tells a slow catch-up from a loop, so a person decides: release the held runs to the queue, or drop them (skipped).
 Turning the automation off or deleting it skips them too. A burst of distinct events inside a minute or two is a
@@ -61,7 +61,7 @@ from . import task_models
 from . import task_run_models
 from .migrations import renames
 from .models import Contract
-from . import audit_log, cloud_access, listening, outbox
+from . import audit_log, cloud_access, holds, listening, outbox
 from .store import H, Problem
 from . import sources as SRC
 from .api_contract import api_v2
@@ -288,7 +288,9 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
     if audit:
         audit_log.write(c, actor, "automation:" + aid, before, flow, via)
     if before and before.get("enabled") and not flow["enabled"]:
-        _unhold(c, aid, actor, "drop", via)  # turned off, by whoever: what it held is skipped, as a delete skips it
+        _unhold(
+            c, aid, actor, "drop", via, moot=True
+        )  # turned off, by whoever: what it held is skipped, as a delete does
     source = flow.get("source")
     if (
         before
@@ -306,7 +308,7 @@ def remove(c, actor, row, via=None):
     """Delete an automation: what it holds is dropped, its unfinished runs are skipped (one mid-step finishes that step
     and stops there, `HubServices.on_hold`), and the delete is on record. The row stays, marked deleted."""
     aid = row["id"]
-    _unhold(c, aid, actor, "drop", via)
+    _unhold(c, aid, actor, "drop", via, moot=True)
     c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
     listening.sync_sources(c, aid, None)  # a deleted listening reads nothing: what it had not sent expires
     dropped = c.execute(
@@ -1223,8 +1225,7 @@ def _guard(c, row):
     bot's own writes are stopped by the chain. Manual runs are not counted. Only runs since its last hold was cleared
     count, so runs a person released do not put it straight back on hold."""
     now = H.now()
-    last = c.execute("SELECT cleared_at FROM automation_guard_holds WHERE automation_id=?", (row["id"],)).fetchone()
-    floor = (last and last["cleared_at"]) or ""
+    floor = c.execute(LAST_RELEASE_SQL, (row["id"],)).fetchone()[0] or ""
     flood_since = max(H.shift(now, minutes=-RUN_GUARD_MINUTES), floor)
     span_since = max(H.shift(now, minutes=-RUN_GUARD_SPAN), floor)
     flood = c.execute(
@@ -1246,17 +1247,49 @@ def _guard(c, row):
     return (rule, {"runs": span, "minutes": minutes, "flood": flood}) if rule else None
 
 
+# The run guard's hold is a `runaway` hold on the automation (backend/holds.py): its rule is the reason, what arrived and
+# what was dropped while it held are in its details, and its owner's Needs-you task is its upkeep task. Its last release
+# is where the guard starts counting again (holds_released).
+LAST_RELEASE_SQL = (
+    "SELECT max(released_at) FROM holds INDEXED BY holds_released WHERE holdable_type='automation' "
+    "AND holdable_id=? AND kind='runaway' AND released_at IS NOT NULL"
+)
+# Its open hold, one seek of holds_open: what a held count or its Needs-you task changes.
+OPEN_HOLD = (
+    "kind='runaway' AND holdable_type='automation' AND holdable_id=? AND coalesce(bot_id,'')='' AND released_at IS NULL"
+)
+
+
 def _hold_row(c, aid):
-    return c.execute(
-        "SELECT * FROM automation_guard_holds WHERE automation_id=? AND cleared_at IS NULL", (aid,)
-    ).fetchone()
+    """The automation's open hold as the guard reads it ({rule, held_at, arrivals, dropped, task_id}), or None."""
+    hold = holds.get(c, holds.RUNAWAY, "automation", aid)
+    if not hold:
+        return None
+    details = json.loads(hold["details"] or "{}")
+    return {
+        "rule": hold["reason"],
+        "held_at": hold["created_at"],
+        "arrivals": int(details.get("arrivals") or 0),
+        "dropped": int(details.get("dropped") or 0),
+        "task_id": hold["upkeep_task_id"],
+    }
+
+
+def _counted(c, aid, field):
+    """One more run arrived (`arrivals`) or was dropped (`dropped`) while the automation is on hold."""
+    c.execute(
+        f"UPDATE holds INDEXED BY holds_open SET details=json_set(details,'$.{field}',"
+        f"coalesce(json_extract(details,'$.{field}'),0)+1),updated_at=? WHERE {OPEN_HOLD}",
+        (H.now(), aid),
+    )
 
 
 # Where a run goes when it can run again (a wake comes, a turn answers, a step is ready, a cut-off run resumes):
 # `queued`, or `held` while its automation is on hold, its state kept so a release resumes it where it was.
 RUNNABLE = (
-    "CASE WHEN EXISTS(SELECT 1 FROM automation_guard_holds g WHERE g.automation_id=automation_runs.automation_id "
-    "AND g.cleared_at IS NULL) THEN 'held' ELSE 'queued' END"
+    "CASE WHEN EXISTS(SELECT 1 FROM holds g INDEXED BY holds_open WHERE g.kind='runaway' "
+    "AND g.holdable_type='automation' AND g.holdable_id=automation_runs.automation_id AND coalesce(g.bot_id,'')='' "
+    "AND g.released_at IS NULL) THEN 'held' ELSE 'queued' END"
 )
 
 
@@ -1283,11 +1316,8 @@ def hold_of(c, aid):
 
 def _hold(c, row, rule):
     """Put the automation on hold: what it has queued is held now, so a loop stops spending at once."""
-    c.execute(
-        "INSERT INTO automation_guard_holds(automation_id,rule,held_at) VALUES(?,?,?) ON CONFLICT(automation_id) "
-        "DO UPDATE SET rule=excluded.rule, held_at=excluded.held_at, arrivals=0, dropped=0, task_id=NULL, "
-        "cleared_at=NULL",
-        (row["id"], rule, H.now()),
+    holds.put(
+        c, holds.RUNAWAY, "automation", row["id"], actor=H.KEEPER, reason=rule, details={"arrivals": 0, "dropped": 0}
     )
     c.execute("UPDATE automation_runs SET status='held' WHERE automation_id=? AND status='queued'", (row["id"],))
 
@@ -1322,15 +1352,21 @@ def _hold_told(c, row, rule, counted, held):
             deduplicate=False,
             wake_refs=refs,
         )
-        c.execute("UPDATE automation_guard_holds SET task_id=? WHERE automation_id=?", (task["id"], row["id"]))
+        c.execute(
+            f"UPDATE holds INDEXED BY holds_open SET upkeep_task_id=?,updated_at=? WHERE {OPEN_HOLD}",
+            (task["id"], H.now(), row["id"]),
+        )
 
 
-def _unhold(c, aid, actor, how, via=None):
-    """End the hold: its held runs go back to the queue (`release`) or are skipped (`drop`, and a turn off or delete),
-    its Needs-you task is closed, and the change is on record. Returns how many runs it moved, or None with no hold."""
+def _unhold(c, aid, actor, how, via=None, moot=False):
+    """End the hold: its held runs go back to the queue (`release`) or are skipped (`drop`, and a turn off or delete,
+    `moot`), its Needs-you task is closed, and the change is on record. Returns how many runs it moved, or None with no
+    hold."""
     hold = _hold_row(c, aid)
     if not hold:
         return None
+    ended = "moot" if moot else "botops" if str(actor).startswith("bot:") else "person"
+    holds.release(c, holds.RUNAWAY, "automation", aid, actor=actor, how=ended)
     now = H.now()
     if how == "release":
         n = c.execute(
@@ -1348,7 +1384,6 @@ def _unhold(c, aid, actor, how, via=None):
             "AND status IN ('held','running')",
             (now, aid),
         ).rowcount
-    c.execute("UPDATE automation_guard_holds SET cleared_at=? WHERE automation_id=?", (now, aid))
     task = H.task(c, hold["task_id"]) if hold["task_id"] else None
     if task and task["status"] == "open":
         H.attempt(c, H.task_close, H.KEEPER, task["id"], "Released." if how == "release" else "Dropped.")
@@ -1493,7 +1528,7 @@ def _queue(c, row, payload, ref="", *, manual=False, chain=()):
     rid = None
     if on_hold and arrivals >= RUN_GUARD_BURST:
         _count(c, row["id"], "dropped")
-        c.execute("UPDATE automation_guard_holds SET dropped=dropped+1 WHERE automation_id=?", (row["id"],))
+        _counted(c, row["id"], "dropped")
     else:
         rid = "run_" + H.new_id()
         state = E.start(payload, manual=manual)
@@ -1513,7 +1548,7 @@ def _queue(c, row, payload, ref="", *, manual=False, chain=()):
         )
         _count(c, row["id"], "runs")
         if on_hold:
-            c.execute("UPDATE automation_guard_holds SET arrivals=arrivals+1 WHERE automation_id=?", (row["id"],))
+            _counted(c, row["id"], "arrivals")
         else:
             _ring(c)
     if tripped:

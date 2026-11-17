@@ -87,6 +87,7 @@ STATE_SQL = "SELECT state FROM bots WHERE id=?"
 # ---------------------------------------------------------------------------------------------- the holds table
 # A kind the `holds` table stores (its CHECK allows every kind; each moves into it in its own change).
 RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the pages and the claim
+# RUNAWAY on an automation is the run guard's hold (automations._guard): it holds the automation's runs, never a bot.
 QUARANTINE = "quarantine"  # rule 8 (hubdb.quarantine, task_quarantine): QUARANTINED and TASK_QUARANTINE to the pages
 FAILING = "failing"  # a bot whose runs fail at once (run_failures): BACKOFF while it waits, RUN_HOLD once held
 LOGIN_LIMIT = "usage_limit"  # a login over its provider's usage limit (login_holds): USAGE_LIMIT to the pages
