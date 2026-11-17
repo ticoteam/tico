@@ -129,8 +129,6 @@ def test_a_bots_mail_and_review_count_are_read_from_gmail_with_rule_hits_from_ru
     assert [(m["msg_id"], m["subject"], m["rule_hits"]) for m in page["mail"]] == [
         ("mail1", "Customer asks for help", ["Triage"])
     ]
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_a_hidden_backlog_never_says_more_is_waiting():

@@ -491,7 +491,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     # hides its reply columns): its tool steps stay readable.
     unsettled = unsettled_watched(c, inner)
     mine = f"actor={me}" if bot else "1"
-    person = H.actor_id(who.actor)
     # Meetings are the company's; typed notes are their owner's (backend/media.py). A private
     # meeting narrows to the people its invite or its importer names, spelled either way.
     # A meeting saved "Participants only" is read only by the people it names, owner too.

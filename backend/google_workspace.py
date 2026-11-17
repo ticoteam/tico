@@ -167,7 +167,7 @@ def authorized(row):
 def minting_scopes(service, may, row):
     """What a token for `service` is minted with on `row`: What Tico may do narrows it only to scopes the key was
     authorized for, since Google refuses any other (unauthorized_client). A key authorized for the write scope only
-    keeps minting it; the mail connector holds What Tico may do then (connectors/mail/oauth.py company_allows)."""
+    keeps minting it; the server then holds What Tico may do itself (backend/mailbox_access.py caps each action)."""
     wanted, held = workspace_scopes(service, may), set(authorized(row))
     if set(wanted) <= held or not set(WORKSPACE_SCOPES[service]) <= held:
         return wanted

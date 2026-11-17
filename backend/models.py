@@ -1446,7 +1446,8 @@ class StructuredReadiness(Contract):
     runtimes: dict[str, RuntimeReadiness] = Field(default_factory=dict)
     bots: dict[str, BotReadiness] = Field(default_factory=dict)
     harnesses: dict[str, HarnessReadiness] = Field(default_factory=dict, max_length=50)
-    mail_key: Literal["exposed"] | None = None  # the mail key is where bots can read it (runner_support/mail_key.py)
+    # A 0.6 computer's Google key is where its bots can read it; a newer one deletes the key (runner-rs/src/mail_retire.rs)
+    mail_key: Literal["exposed"] | None = None
     shared_env: Literal[True] | None = None  # secrets/_shared.env holds keys every bot there receives
     container_exec: ContainerExecReadiness | None = None
     # A bot's GitHub App token asked GitHub who it is, and Playwright's Chromium started (runner-rs/src/readiness_extra.rs).

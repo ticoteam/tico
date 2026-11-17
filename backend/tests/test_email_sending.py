@@ -9,7 +9,7 @@ import pytest
 from backend import email_sending as S
 from backend import task_asks
 from backend.store import H
-from backend.tests.helpers.api import headers, post as api_post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 from backend.tests.helpers.email_sending import (
     BOX,
@@ -20,7 +20,6 @@ from backend.tests.helpers.email_sending import (
     incoming,
     mime,
     policy,
-    post,
     queue,
 )
 
@@ -113,7 +112,6 @@ def test_reply_and_address_checks_ask_gmail_and_wait_while_it_does_not_answer(in
     assert waited.value.retryable
     with inbox.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == before
-        assert c.execute("SELECT count(*) FROM mail_messages").fetchone()[0] == 0
 
 
 def test_a_gmail_refusal_is_not_remembered_as_a_fact_and_the_send_waits(inbox, fake_gmail, monkeypatch):
@@ -413,7 +411,7 @@ def test_a_bot_managers_message_approves_nothing(inbox):
     policy(inbox, undo_seconds=0, pacing_seconds=0, ask_lint=False, second_review=False)
     queued = queue(inbox, actor="bot:ops")
     assert inbox.get("/api/v2/email/sends/" + queued["id"], headers=headers()).json()["preview_complete"]
-    note = api_post(inbox, "chat/ops", {"text": "Send it " + queued["id"]})
+    note = post(inbox, "chat/ops", {"text": "Send it " + queued["id"]})
     with inbox.app.state.store.transaction() as c:
         c.execute("UPDATE email_sends SET approval_id=? WHERE id=?", (note["id"], queued["id"]))
         row = c.execute("SELECT * FROM email_sends WHERE id=?", (queued["id"],)).fetchone()
@@ -463,8 +461,8 @@ def test_the_server_sends_a_workspace_inboxs_mail_itself_once(inbox, monkeypatch
     calls = workspace(monkeypatch, answer)
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     machine = runner(inbox)
-    # No computer leases a Workspace inbox's mail (the computer that syncs it gets None, any other is refused).
-    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=403)
+    # No computer leases mail: a 0.6 computer that still asks finds no route (405 from the static mount).
+    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=405)
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == int(state == "sent")
     [call] = calls
@@ -539,7 +537,7 @@ def test_the_server_sends_a_personal_grant_s_mail_from_its_own_grant(inbox, monk
     google, calls = own_grant(inbox, monkeypatch, GC.READ_SCOPES + [GC.G + "gmail.modify"])
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     machine = runner(inbox)
-    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=403)
+    post(inbox, "connectors/email/sends/claim", {"mailbox": BOX}, token=machine["token"], expected=405)
     store, auth = inbox.app.state.store, inbox.app.state.auth
     assert S.drain(store, auth) == 1
     assert [call["token"] for call in calls] == ["ya29.own"]

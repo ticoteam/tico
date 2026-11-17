@@ -271,9 +271,6 @@ class Workspace(unittest.TestCase):
         # bot-<HUB_BOT> is not its folder, HUB_BOT_FOLDER is. Another bot named by slug is still found by its slug.
         import browser
 
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from connectors import mail
-
         bot = "01a19806-0460-77a7-860b-b797cea3f270"
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root)
@@ -287,9 +284,7 @@ class Workspace(unittest.TestCase):
                 with mock.patch.dict(os.environ, env):
                     self.assertEqual(slack.manifest_of(bot)[0], workspace / "bot-sales-helper" / "bot.yaml")
                     self.assertEqual(browser.load_manifest(bot), {"tools": ["own"]})
-                    self.assertEqual(mail.repo_dir(workspace, bot), workspace / "bot-sales-helper")
                     self.assertEqual(slack.manifest_of("ops")[0], workspace / "bot-ops" / "bot.yaml")
-                    self.assertEqual(mail.repo_dir(workspace, "ops"), workspace / "bot-ops")
                 with mock.patch.dict(os.environ, {**env, "HUB_BOT_FOLDER": "../outside"}):
                     self.assertEqual(slack.manifest_of(bot)[0], workspace / f"bot-{bot}" / "bot.yaml")
             finally:

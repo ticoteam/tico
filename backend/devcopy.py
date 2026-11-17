@@ -208,12 +208,11 @@ EMPTY = (
     "slack_posts",
     "slack_events",
     "slack_threads",
-    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed), and the health each
-    # computer reported. A copy holds none of them (google_connects.client_id goes with its table).
+    # Tools > Settings > Email: the Workspace key (sealed), setup codes and the OAuth client secret (sealed). A copy holds
+    # none of them (google_connects.client_id goes with its table).
     "google_workspaces",
     "google_setup_codes",
     "google_oauth_clients",
-    "connector_reports",
     "github_app",
     "github_app_states",
     # The owner's GitHub user token (sealed, for a personal account) and its single-use states: a copy holds neither.

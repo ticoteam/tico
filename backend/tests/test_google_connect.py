@@ -31,8 +31,6 @@ from backend.tests.helpers.google_connect import (
     signed_in,
     start,
 )
-from connectors.mail import oauth
-from runner_support.connectors import ConnectorPublisher, failure_reason
 
 G = google_connect.G
 BOX = "cara@acme.example"
@@ -435,7 +433,7 @@ def test_the_computer_no_longer_finishes_sign_ins(app):
     for path in ("claim", "token", "gc_x/exchange", "gc_x/result"):
         r = app.post("/api/v2/connectors/mail/google/" + path, json={}, headers=headers(machine["token"]))
         assert r.status_code in (404, 405), (path, r.status_code)
-    assert get(app, "runners/connectors", machine["token"])["connectors"] in ([], ["mail", "calendar"])
+    get(app, "runners/connectors", machine["token"], expected=404)  # no computer runs mail or calendar
 
 
 def test_the_migration_ends_computer_held_grants_with_one_reconnect_and_drops_the_handoff():
@@ -518,61 +516,6 @@ def test_a_connection_the_migration_ended_asks_once_to_connect_again(app):
     assert get(app, "mail/google", "cara-test")["message"] is None
 
 
-def test_admin_policy_at_refresh_reaches_health_as_the_admin_s():
-    assert (
-        failure_reason(
-            RuntimeError(
-                "Local mail lookup failed: error: the Google Workspace for acme.example has a policy that blocks Tico"
-            )
-        )
-        == "admin_policy"
-    )
-    assert failure_reason(RuntimeError("error: invalid_grant")) == "signin"
-
-
-def test_health_names_a_policy_block_as_the_workspace_admin_s(app):
-    machine = runner(app)
-    post(
-        app,
-        "connectors/health",
-        {"service": "mail", "failing": [{"account": "cara@acme.example", "reason": "admin_policy"}]},
-        machine["token"],
-    )
-    with app.app.state.store.read() as c:
-        found = c.execute("SELECT last_error FROM service_health WHERE service='connector:mail'").fetchone()
-    assert "Google Workspace for acme.example has a policy that blocks Tico" in found["last_error"]
-
-
-def mail_script(tmp_path, body):
-    script = tmp_path / "hub/scripts/mail.sh"
-    script.parent.mkdir(parents=True)
-    script.write_text("#!/bin/sh\n" + body)
-    script.chmod(0o755)
-    return script
-
-
-def test_a_calendar_write_refused_before_google_is_posted_failed_not_unknown(tmp_path):
-    mail_script(tmp_path, 'cat > /dev/null\necho "refused: connected to Tico read-only at Google" >&2\nexit 2\n')
-
-    class Calendar:
-        def __init__(self):
-            self.queue, self.results = [{"id": "act-1", "calendar": "cara@acme.example"}], []
-
-        def post(self, path, body):
-            if path == "connectors/calendar/actions/claim":
-                return {"action": self.queue.pop(0) if self.queue else None}
-            self.results.append((path, body))
-            return {"ok": True}
-
-    hub = Calendar()
-    publisher = ConnectorPublisher({"url": "http://localhost:8765", "token": "test", "owner_handle": "ana"}, client=hub)
-    publisher.script = tmp_path / "hub/scripts/mail.sh"
-    assert publisher.calendar_action_tick() == 1
-    path, body = hub.results[0]
-    assert path == "connectors/calendar/actions/act-1/result" and body["status"] == "failed"
-    assert "refused" in body["error"]
-
-
 def test_an_id_token_that_is_missing_malformed_or_unverified_names_nobody():
     from backend.tests.helpers.google_connect import id_token
 
@@ -600,7 +543,3 @@ def test_a_grant_without_calendar_access_is_refused_a_calendar_read_before_googl
         door(app, service="calendar")
     assert refused.value.code == "scope" and "no Google Calendar access" in refused.value.detail
     assert len(google.calls) == asked
-
-
-def test_the_mail_cli_scopes_match_the_server_s():
-    assert google_connect.READ_SCOPES == oauth.IDENTITY_SCOPES + oauth.READ_SCOPES
