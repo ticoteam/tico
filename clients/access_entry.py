@@ -118,6 +118,9 @@ HEADER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
 NOT_SETTABLE = {"host", "content-length", "transfer-encoding", "connection"}
 TOKEN_PARTS = re.compile(r"[\s,;()\"'<>]+")
 TOKEN_CHARS = re.compile(r"^[A-Za-z0-9_+/=-]+$")
+# Public identifiers with a random-looking body, never a secret: a Twilio SID (two capitals, 32 hex digits: an Account
+# SID is the Basic username its auth token goes with).
+ID_SHAPES = re.compile(r"^[A-Z]{2}[0-9a-f]{32}$")
 
 
 class EntryError(ValueError):
@@ -143,6 +146,7 @@ def secret_in(text):
     for token in TOKEN_PARTS.split(text):
         if (
             len(token) >= 24
+            and not ID_SHAPES.match(token)
             and TOKEN_CHARS.match(token)
             and re.search(r"[a-z]", token)
             and re.search(r"[A-Z]", token)

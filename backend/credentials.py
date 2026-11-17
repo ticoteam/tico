@@ -667,7 +667,7 @@ class Vault:
             key_grants.drop_owner(
                 c, who, cid
             )  # the Tools owner never holds a key dropped in its chat, Replace included
-        api_tools.ensure_tool(c, who, cid)  # a tool's key shows on Tools however it was stored
+        api_tools.ensure_tool(c, who, cid, value=secret)  # a tool's key shows on Tools however it was stored
         return self.brief(self.row(c, cid))
 
     def manages_bot(self, c, who, subject):
@@ -961,10 +961,14 @@ def same_value(c, cipher, env, value):
     return None
 
 
-def held_at_read(c, proxied, row, subject):
+def held_at_read(c, proxied, row, subject, cipher=None):
     """(tool row or None, way) for a held key: the tool when the run gets a proxy token for it, either because the
     tool is proxied or because `subject` holds this Read and write key at Read only and the proxy can hold it to
-    reads (backend/api_tools.py `computer_way`). way `skip`: a read key of the same tool goes instead."""
+    reads (backend/api_tools.py `computer_way`). way `skip`: a read key of the same tool goes instead. An id stored
+    as a key (`tool_settings.is_setting`: its name and its value both say id, POSTHOG_PROJECT_ID, TWILIO_ACCOUNT_SID)
+    goes as its value, never as a proxy token: a bot sends it as it is, in a path or as a username."""
+    if cipher is not None and _is_id(c, cipher, row):
+        return None, 'key'
     tool = proxied.get(row['tool_id'])
     if tool is not None:
         return tool, 'proxy'
@@ -974,6 +978,17 @@ def held_at_read(c, proxied, row, subject):
     if way == 'proxy':
         return c.execute('SELECT * FROM tools WHERE id=?', (row['tool_id'],)).fetchone(), way
     return None, way
+
+
+def _is_id(c, cipher, row):
+    from . import tool_settings
+
+    if not row['tool_id'] or not tool_settings.known_name(row['env']):
+        return False
+    try:
+        return tool_settings.is_setting(row['env'], cipher.decrypt(c, row))
+    except Problem:
+        return False
 
 
 def install_credentials(app, store, delegate=None, propose=None):
@@ -1072,7 +1087,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                         shared,
                         {'env': item.env, 'bot': bot, 'grant': gid, 'shared': True},
                     )
-                    api_tools.ensure_tool(c, who, shared, from_computer=True)
+                    api_tools.ensure_tool(c, who, shared, from_computer=True, value=value)
                     return
                 cid = H.new_id()
                 ciphertext, nonce = vault.cipher.encrypt(c, cid, value)
@@ -1099,7 +1114,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                     (gid, cid, subject, who.actor, now),
                 )
                 H.event(c, who.actor, 'credential.migrated', cid, {'env': item.env, 'bot': bot, 'grant': gid})
-                api_tools.ensure_tool(c, who, cid, from_computer=True)  # already in use from the computer
+                api_tools.ensure_tool(c, who, cid, from_computer=True, value=value)  # already in use from the computer
 
             later = []
             for item in body.credentials:
@@ -1376,7 +1391,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             # A website account never reaches a run: its browser commands type it (backend/website_tools.py).
             for row in c.execute(RUN_ROWS):
                 if row['ciphertext'] is not None and row['id'] in held:
-                    tool, way = held_at_read(c, proxied, row, who.actor)
+                    tool, way = held_at_read(c, proxied, row, who.actor, vault.cipher)
                     if way == 'skip':
                         continue
                     if tool is not None:
@@ -1490,7 +1505,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             proxied = tool_proxy.proxied_tools(c)
             for row in c.execute(RUN_ROWS):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
-                    tool, way = held_at_read(c, proxied, row, 'bot:' + bot)
+                    tool, way = held_at_read(c, proxied, row, 'bot:' + bot, vault.cipher)
                     if way == 'skip':
                         continue
                     if tool is not None:
