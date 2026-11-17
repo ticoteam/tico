@@ -1,16 +1,5 @@
 {
   "permissions": {
-    "allow": [
-      "Read",
-      "Edit",
-      "Write",
-      "Bash(git *)",
-      "Bash(gh issue list *)",
-      "Bash(gh issue view *)",
-      "Bash(gh search issues *)",
-      "Bash(gh repo clone *)",
-      "Bash(gh release list *)"
-    ],
     "deny": [
       "Bash(gh api *)",
       "Bash(gh issue comment *)",

@@ -240,7 +240,7 @@ hold next month too.
 
 A template produces this layout already; `templates/employee-repo/` is the generic version
 of it. A bot made from a template keeps following it: after an update it takes the template's newer `AGENTS.md`,
-`playbooks/`, `skills/`, `.claude/settings.json` and `knowledge/` pages, except a file it or a person changed since,
+`playbooks/`, `skills/`, `.claude/skills/`, `.claude/settings.json` and `knowledge/` pages, except a file it or a person changed since,
 which is kept and named in the refresh's event ([Bots follow their template](updates.md#bots-follow-their-template)). Copy it to `<workspace>/bot-<slug>` and fill it in. Tico picks the slug from the bot's
 name (lowercase, hyphenated, with -2, -3 when it is taken); nobody is asked for one. Slugs are stable: the slug appears in the repository name, in `bot.yaml` and in the bot's
 own paths, so renaming later is real work.
