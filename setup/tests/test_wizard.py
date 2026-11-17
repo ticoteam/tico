@@ -382,13 +382,15 @@ def test_passive_runner_and_visual_secret_survive_real_fake_tunnel_rerun_without
             'https://tico.example.com',
             '--hq-url',
             'https://hq.acme.example',
+            '--visual-same-origin',
+            '0',
             *ACCESS,
         ]
     )
     assert code == 0, out
     parsed = envfile.parse(env)
     assert parsed['TICO_DOMAIN_ALIASES'] == 'old.example.com' and parsed['TICO_HQ_URL'] == 'https://hq.acme.example'
-    assert parsed['TICO_PUBLIC_URL'] == 'https://tico.example.com'
+    assert parsed['TICO_PUBLIC_URL'] == 'https://tico.example.com' and parsed['TICO_VISUAL_SAME_ORIGIN'] == '0'
     assert parsed['TICO_CORS_ORIGINS'] == 'https://old.example.com' and 'TICO_CADDY_VISUALS' not in parsed
     assert [r.get('hostname') for r in ingress] == ['tico.example.com', 'old.example.com', 'files.acme.example', None]
     assert cnames == ['tico.example.com']
