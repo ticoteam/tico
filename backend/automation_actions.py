@@ -700,12 +700,15 @@ def start_turn(
     # A scheduled run waits as the routine's settings say (backend/wake_presets.py); its wake names the routine, which
     # the repeat guard reads.
     release = release_of(c, auto, run_id)
+    # The step's prompt is the bot's working instructions: they stay the routine's and reach the bot through its run,
+    # never the task's chat (a task is a title and a chat, spec change 8).
     task = H.task_create(
         c,
         actor,
         title,
-        prompt,
+        "",
         H.bot_actor(bot),
+        instructions=prompt,
         due=due,
         lint=False,
         deduplicate=False,

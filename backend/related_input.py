@@ -54,8 +54,8 @@ PICKED, NONE, FAILED = "picked", "none", "failed"
 # The engine a test sets: (state, questions, label) -> {"answers": {...}, ...}. None asks the server's Jev.
 ENGINE: "Callable[[Row, Row, str], Row] | None" = None
 ASK = (
-    'Related input: Jev picked you for "{title}" ({score}): it touches your area. Read the task and its spec page, '
-    "then comment on the task once from your area: what it changes for you, risks, and anything to add or change. "
+    'Related input: Jev picked you for "{title}" ({score}): it touches your area. Read the task\'s chat and its '
+    "documents, then comment on the task once from your area: what it changes for you, risks, and anything to add or change. "
     'tico task comment {task} "<your comment>". One round only: don\'t move, take or edit the task.'
 )
 
@@ -302,7 +302,7 @@ def questions_for(qset: Row, bots: list[Row]) -> Row:
 def _state(task: Row, spec: str, cut: bool, bots: list[Row]) -> Row:
     work: Row = {
         "title": " ".join(str(task.get("title") or "").split()),
-        "pitch": str(task.get("body") or "")[:PITCH_CHARS],
+        "pitch": str(task.get("request") or "")[:PITCH_CHARS],
         "spec": spec,
     }
     if cut:
@@ -415,6 +415,7 @@ def run(store: Any, now: str | None = None) -> int:
             if standing(c, task, requirement).met:
                 continue  # its time ran out before Jev answered: closed below, and nobody is asked late
             spec, cut = _spec_text(c, task)
+            task["request"] = _h().task_request_text(c, str(task_id))  # its pitch: the task's first message
             jobs.append(
                 ({"visit_id": visit_id, "requirement_id": requirement_id}, task, candidates(c, task), spec, cut)
             )

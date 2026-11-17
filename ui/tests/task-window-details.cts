@@ -23,7 +23,7 @@ const RID = 'spec-ok-ana';
       const t = task('t-1', 'Chat first in the task window', 'spec', {owner_id: 'bot:writer', labels: ['ui', 'chat']});
       const runs = {'t-1': [{run: 'a1', bot: 'bot:writer', started_at: at(15), finished_at: at(29), outcome: 'ok', ran_on: null}]};
       const {page, errors} = await open(browser, {viewport: {width: 1280, height: 800}, hash: '#/task/t-1', tasks: [t], needs: [],
-        comments: {'t-1': [say(1, 'First line'), say(5, 'Last line')]}, runs});
+        comments: {'t-1': [{...say(0, 'Draft the chat-first window.'), refs: {task: 't-1', request: true}}, say(1, 'First line'), say(5, 'Last line')]}, runs});
       const win = page.locator('#task-modal[open]');
       await win.locator('.task-comments').getByText('Last line').waitFor();
       // The run is one line, between the messages it fell between.
@@ -31,16 +31,18 @@ const RID = 'spec-ok-ana';
       assert.equal(await marks.count(), 1);
       assert.match((await marks.innerText()).replace(/\s+/g, ' '), /^Writer worked 14 min/);
       const order = await win.locator('.task-comments [data-message], .task-comments [data-run-line]').evaluateAll(els => els.map(e => e.getAttribute('data-message') || 'run'));
-      // The request is the chat's first message (its asker, when it was asked, its words); then the story in order.
-      assert.deepEqual(order, ['request:t-1', 'm1', 'run', 'm5']);
-      const request = win.locator('.task-comments .th-request');
-      assert.ok((await request.locator('.th-body').innerText()).trim().length > 0, 'the request\'s words');
+      // A task is a title and a chat: what it asks is the chat's first message, a message like any other; then the
+      // story in order.
+      assert.deepEqual(order, ['m0', 'm1', 'run', 'm5']);
+      const request = win.locator('.task-comments [data-message="m0"]');
+      assert.match(await request.locator('.th-body').innerText(), /Draft the chat-first window/);
       assert.equal(await request.locator('.th-head time').count(), 1, 'when it was asked');
       // The facts are under the Details icon, one line each; no fold.
       assert.equal(await win.locator('details.task-details').count(), 0, 'no Details fold');
       assert.equal(await win.locator('[data-prop-row="owner"]').isVisible(), false, 'a tab away');
       await win.getByRole('button', {name: /^Details/}).click();
       await win.locator('[data-prop-row="owner"]').waitFor({state: 'visible'});
+      assert.equal(await win.locator('#task-pane-details').getByText(/Draft the chat-first window|No details/).count(), 0, 'no description in Details');
       const rows = await win.locator('[data-task-props] [data-prop-row]:not([hidden])').evaluateAll(els => els.map(e => e.getAttribute('data-prop-row')));
       assert.deepEqual(rows, ['stage', 'owner', 'asker', 'visible', 'followers', 'tags'].filter(r => rows.includes(r)), `in order: ${rows}`);
       for (const r of ['stage', 'owner', 'asker', 'visible', 'tags']) assert.ok(rows.includes(r), `${r} row`);

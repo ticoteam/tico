@@ -293,7 +293,8 @@ async function needsYou(): Promise<NeedsEntry[]> {
 }
 
 // ---- writes on a task
-interface TaskNew { title: string; body: string; owner: string; pipeline?: string; parent?: string; labels?: string[]; private?: boolean; }
+/** `message`: the task's first chat message, from whoever creates it (a task has no description). */
+interface TaskNew { title: string; message?: string; owner: string; pipeline?: string; parent?: string; labels?: string[]; private?: boolean; }
 const taskCreate = (b: TaskNew): Promise<TaskV3> => post('/v2/tasks', b, newRequestId()).then((r: {task: TaskV3}) => r.task);
 const taskEdit = (id: string, version: number | null, fields: Record<string, unknown>): Promise<TaskV3> =>
   post(taskPath(id), withVersion(version, fields)).then((r: {task?: TaskV3} & TaskV3) => r.task || r);

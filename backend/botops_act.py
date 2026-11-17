@@ -12,8 +12,9 @@ import json
 import re
 
 
-def request_task(c, auth, who, title, body):
-    """A server-generated BotOps job carries the rights of the human who requested it.
+def request_task(c, auth, who, title, body="", instructions=None):
+    """A server-generated BotOps job carries the rights of the human who requested it. `body` is the person's request,
+    its first chat message; `instructions` are the job's working instructions, which reach BotOps through its run.
 
     The origin is written here, never taken from task text or caller-supplied references.
     """
@@ -30,6 +31,7 @@ def request_task(c, auth, who, title, body):
         title,
         body,
         botops,
+        instructions=instructions,
         allow_planned=True,
         conversation_id=None if planned else rooms.task_conversation_id(c, auth, botops, who.actor),
     )

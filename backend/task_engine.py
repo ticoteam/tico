@@ -614,21 +614,26 @@ def _wake_turn(
     own lead says nothing; `refs`, `trigger` and `source` are a new task's own (`enter`)."""
     from . import waiting_on as W
 
+    refs, instructions = task_wakes.split_instructions(refs)
     if row["stage"]["kind"] != "work":
+        task_wakes.keep_instructions(conn, row, instructions)
         return None
     target, turn_lead = _turn_of(conn, row)
     if not target:
+        task_wakes.keep_instructions(conn, row, instructions)
         return None
     out = task_wakes.add(
         conn,
         row,
         target,
         row["visit"],
-        task_wakes.body(conn, row, turn_lead or lead, to=target),
-        refs=refs,
+        task_wakes.with_instructions(task_wakes.body(conn, row, turn_lead or lead, to=target), instructions),
+        refs={**refs, task_wakes.INSTRUCTIONS: True} if instructions else refs,
         trigger=trigger,
         source=source,
     )
+    if instructions and not out:
+        task_wakes.keep_instructions(conn, row, instructions)
     for wait in W.of(conn, row):
         if wait.state in (W.BOT, W.PAUSED) and wait.ask and wait.requirement_id and wait.who != target:
             task_wakes.ask(conn, row, R.get(conn, wait.requirement_id), wait.who)

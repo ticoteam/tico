@@ -762,7 +762,7 @@ function tasksFilterMenu(state: TasksPageState, k: keyof TaskFilters, anchor: HT
   state.menuField = k;
 }
 
-// ---- New task (S6): a title, the details, and one row: who it is for, the pipeline, Create. No due date here; it is
+// ---- New task (S6): a title, its first message, and one row: who it is for, the pipeline, Create. No due date here; it is
 // added on the task. A new task starts in its pipeline's first stage. `parent` files it from that task.
 function taskCreateModal() {
   let d = $('#task-create');
@@ -781,7 +781,7 @@ interface TaskCreateOptions {
 }
 // What was typed into New task and not yet created: closing the modal (the ✕, a tap outside, the phone's Back) keeps
 // it for the next open; a created task clears it.
-let TASK_CREATE_DRAFT = {title: '', body: ''};
+let TASK_CREATE_DRAFT = {title: '', message: ''};
 function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   const d = taskCreateModal();
   const parent = opts.parent || null;
@@ -791,7 +791,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
     <div class="tmodal-body">
       <form class="task tc-form" id="task-create-form">
         <input type="text" name="title" required aria-label="Title" placeholder="Title" maxlength="300">
-        <textarea name="body" required aria-label="Details" placeholder="Details" rows="6"></textarea>
+        <textarea name="message" aria-label="Message" placeholder="Message" rows="6"></textarea>
         <div class="tc-row">
           <div class="tc-pick"><span aria-hidden="true">For:</span>${giveToFieldHTML({name: 'owner', label: 'For', placeholder: 'Who is this for?', selected: forWho, task: parent})}</div>
           <label class="tc-pick"><select name="pipeline" aria-label="Pipeline"><option value="">General</option></select></label>
@@ -805,8 +805,8 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   const form: HTMLFormElement = $('#task-create-form', d);
   const field = <T extends Element>(name: string) => form.elements.namedItem(name) as T;
   field<HTMLInputElement>('title').value = TASK_CREATE_DRAFT.title;
-  field<HTMLTextAreaElement>('body').value = TASK_CREATE_DRAFT.body;
-  form.oninput = () => { TASK_CREATE_DRAFT = {title: field<HTMLInputElement>('title').value, body: field<HTMLTextAreaElement>('body').value}; };
+  field<HTMLTextAreaElement>('message').value = TASK_CREATE_DRAFT.message;
+  form.oninput = () => { TASK_CREATE_DRAFT = {title: field<HTMLInputElement>('title').value, message: field<HTMLTextAreaElement>('message').value}; };
   const pick = field<HTMLSelectElement>('pipeline');
   const fill = (list: PipelineRec[]) => {
     const want = opts.pipeline || '';
@@ -818,17 +818,17 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   form.onsubmit = async (ev: SubmitEvent) => {
     ev.preventDefault();
     const btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg', d);
-    const title = field<HTMLInputElement>('title').value.trim(), body = field<HTMLTextAreaElement>('body').value.trim();
+    const title = field<HTMLInputElement>('title').value.trim(), message = field<HTMLTextAreaElement>('message').value.trim();
     const who = field<HTMLInputElement>('owner').value;
-    if (title && body && !who) { giveToFieldOpen(form.querySelector<HTMLButtonElement>('button[data-give-to]')!); return; }   // the hidden field is never "required"
-    if (!title || !who || !body || !btn) return;
+    if (title && !who) { giveToFieldOpen(form.querySelector<HTMLButtonElement>('button[data-give-to]')!); return; }   // the hidden field is never "required"
+    if (!title || !who || !btn) return;
     btn.disabled = true; msg.hidden = true;
     const labels = (opts.labels || []).map(String).filter(Boolean);
     try {
-      const made = await taskCreate({title, body, owner: who.includes(':') ? who : 'bot:' + who,
+      const made = await taskCreate({title, ...(message ? {message} : {}), owner: who.includes(':') ? who : 'bot:' + who,
         ...(pick.value ? {pipeline: pick.value} : {}), ...(parent ? {parent: parent.id} : {}),
         ...(labels.length ? {labels} : {}), ...(parent?.private ? {private: true} : {})});
-      TASK_CREATE_DRAFT = {title: '', body: ''};
+      TASK_CREATE_DRAFT = {title: '', message: ''};
       d.close();
       if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       await v2Refresh();

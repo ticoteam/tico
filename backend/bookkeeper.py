@@ -411,15 +411,18 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
     title = f"{name} ({count})"
     open_task = _open_check(c, name)
     if open_task:
-        if open_task["body"] == body:
+        from . import task_wakes
+
+        if task_wakes.instructions(c, open_task["id"]) == body.strip():
             return open_task["id"], "unchanged"
-        H.task_update(c, H.KEEPER, open_task["id"], title=title, body=body)
+        H.task_update(c, H.KEEPER, open_task["id"], title=title)
+        # The new report replaces the old as the bot's instructions, in its run: a task has no description to rewrite.
         H._wake(
             c,
             H.task(c, open_task["id"]),
             ACTOR,
-            f"The books changed: {title}",
-            {"wake": event},
+            task_wakes.with_instructions(f"The books changed: {title}", body.strip()),
+            {"wake": event, **task_wakes.replace_refs(body)},
             trigger="schedule",
             source=event,
         )

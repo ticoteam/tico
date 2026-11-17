@@ -454,7 +454,7 @@ def run(args, who=None):
             fields = {
                 "owner": args.owner,
                 "title": args.title,
-                "body": Path(args.body_file).read_text() if args.body_file else args.body,
+                "message": Path(args.message_file).read_text() if args.message_file else args.message,
                 "due": args.due,
                 "goal_id": getattr(args, "goal", None) or None,
                 "labels": [x.strip() for one in args.label or [] for x in one.split(",") if x.strip()] or None,

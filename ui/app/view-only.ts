@@ -20,7 +20,7 @@ const VIEW_HIDDEN = [
   // description and the roadmap's "I want this"; a section left with only its heading goes with them.
   '#task-modal [data-task-reopen]', '#task-modal [data-tp-drop]', '#task-modal .prop-add', '#task-modal .prop-x',
   '#task-modal [data-drop-link]', '#task-modal [data-drop-rel]', '#task-modal [data-req-withdraw]', '#task-modal [data-tp-unlink]',
-  '#task-modal [data-depends-add]', '#task-modal [data-task-body-edit]', '#task-modal [data-requester-self]',
+  '#task-modal [data-depends-add]', '#task-modal [data-requester-self]',
   // A bot's ⋯: the private chat's Archive (and its line) is a write.
   '#bot-dm-arch-host',
 ];

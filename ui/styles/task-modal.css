@@ -114,6 +114,4 @@
 .tmodal-title[data-task-field="title"] { cursor: text; min-height: 1.25em; overflow-wrap: anywhere; }
 .tmodal-title[data-task-field="title"]:is(:focus,[contenteditable="plaintext-only"]) { white-space: pre-wrap; }
 [data-task-edit-body] { position: relative; }
-[data-task-body-edit] { font-size: var(--t-sm); }
-@media (max-width:760px){button.linkish[data-task-body-edit]{min-width:44px;min-height:44px}}
 textarea[data-task-field="body"] { width: 100%; min-height: 140px; resize: vertical; font: inherit; }

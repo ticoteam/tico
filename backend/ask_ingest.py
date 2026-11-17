@@ -852,11 +852,11 @@ def replay_items(c, person, start, end, assistant_bot=None):
             "ref": r["id"],
             "asker": r["asker"],
             "title": r["title"] or "",
-            "text": r["body"] or "",
+            "text": H.task_request_text(c, r["id"]),  # what it asked: its first message
             "created_at": r["at"],
         }
         for r in c.execute(
-            "SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at "
+            "SELECT t.id,t.title,t.requester_id AS asker,t.created_at AS at "
             "FROM tasks t "
             # Theirs then, or the asking bot's own task with its question to them (backend/person_asks.py).
             f"WHERE ({_OWNER_THEN}=? OR t.id IN (SELECT v.task_id FROM visits v JOIN requirements r ON "
@@ -864,10 +864,10 @@ def replay_items(c, person, start, end, assistant_bot=None):
             "AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id AND i.person=? AND i.kind='task' "
             f"AND julianday(i.created_at)<=COALESCE({_FIRST_OWNER_CHANGE}, 1e9)) "
-            "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at FROM ask_ingest_items i "
+            "UNION ALL SELECT t.id,t.title,i.asker,i.created_at FROM ask_ingest_items i "
             "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
             "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>? "
-            "UNION ALL SELECT t.id,t.title,t.body,h.actor_id,h.created_at FROM history_events h "
+            "UNION ALL SELECT t.id,t.title,h.actor_id,h.created_at FROM history_events h "
             "JOIN tasks t ON t.id=h.subject_id WHERE h.subject_type='task' AND h.kind='reassign' "
             "AND h.new=? AND h.actor_id LIKE 'bot:%' AND h.actor_id<>? "
             "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "

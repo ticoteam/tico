@@ -452,7 +452,7 @@ def _reword(conn, task, item):
     longer starts with them."""
     if not str(task["title"]).startswith(OLD_WORDS):
         return
-    title, body = _ask(conn, item, strategy_bot.name(conn))
+    title, _ = _ask(conn, item, strategy_bot.name(conn))
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
     with isolated(conn, "goal_ask_reword", task["id"], private=True):
@@ -461,7 +461,6 @@ def _reword(conn, task, item):
             G.AUTO_ACTOR,
             task["id"],
             title=_free_title(conn, task["owner_id"], title),
-            body=body,
             private=True if item.get("private") else None,
             quiet=True,
             seen_version=task.get("version"),
@@ -473,8 +472,11 @@ def _relist(conn, task, item):
     them too (a measure's name, or how many), so it follows the list."""
     title, body = _ask(conn, item, strategy_bot.name(conn))
     changes = {}
-    if task["body"] != body:
-        changes["body"] = body
+    # The list, as the Strategy Owner said it last on the task's chat: a new one is said there (no description).
+    said = [m["body"] for m in H.task_comments(conn, task["id"]) if m.get("sender_id") == G.AUTO_ACTOR]
+    if (said[-1] if said else "") != body:
+        with isolated(conn, "goal_ask_relist_said", task["id"], private=True):
+            H.task_comment(conn, G.AUTO_ACTOR, task["id"], body, wake=False)
     # The title the Strategy Owner wrote follows the list; a title a person wrote stays.
     ours = str(task["title"]).startswith(BUNDLED_TITLES)
     if ours and task["title"] != title and not (H.TITLE_LINT == "refuse" and H.lint_title(title)):

@@ -356,19 +356,22 @@ def view(c, who, settings, auth, github=None):
 
 
 # ------------------------------------------------------------------ actions
-def _task(c, auth, who, owner, title, body):
+def _task(c, auth, who, owner, title, instructions):
+    """A set-up task Tico files for the person who asked: its title says what is wanted, and `instructions`, the steps,
+    reach the bot through its run, never the task's chat (a task is a title and a chat)."""
     from . import rooms
 
     if owner == BOTOPS:
         from .botops_act import request_task
 
-        return request_task(c, auth, who, title, body)
+        return request_task(c, auth, who, title, instructions=instructions)
     return H.task_create(
         c,
         who.actor,
         title,
-        body,
+        "",
         "bot:" + owner,
+        instructions=instructions,
         allow_planned=True,
         conversation_id=rooms.task_conversation_id(c, auth, "bot:" + owner, who.actor),
     )

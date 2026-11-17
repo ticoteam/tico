@@ -314,7 +314,7 @@ def goal_strategy_bot_level3_offer(api, args):
                     "task_id": _s("The bot task to reorder, reassign or close"),
                     "owner": _s("The bot for a new or reassigned task"),
                     "title": _s("A new task's title"),
-                    "body": _s("A new task's body"),
+                    "body": _s("A new task's first message"),
                     "note": _s("Why a task closes"),
                 },
                 "required": ["do"],

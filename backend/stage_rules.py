@@ -504,7 +504,7 @@ def _state(task_row: Any, why: str, until: str | None) -> dict[str, Any]:
     return {
         "task": {
             "title": str(task_row.get("title") or "")[:300],
-            "body": "" if task_row.get("private") else str(task_row.get("body") or "")[:4000],
+            "body": "" if task_row.get("private") else str(task_row.get("request") or "")[:4000],
             "stage": stage.get("name") or task_row.get("stage_id") or "",
         },
         "event": {"kind": "a bot snoozes the task", "why": str(why or "")[:2000], "until": until or ""},
@@ -560,6 +560,9 @@ def snooze_rules(conn: Any, task_row: Any, by: str, why: str, until: str | None)
         if not rule["jev"]:
             return (rule, _line(rule, said)), []
         asked.append(rule)
+    if asked and task_row.get("id"):
+        # What the task asks, for the Jev question (`_state`): its first message, read here while a connection is held.
+        task_row["request"] = _h().task_request_text(conn, task_row["id"])
     return None, asked
 
 

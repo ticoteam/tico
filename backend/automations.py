@@ -1659,7 +1659,7 @@ def on_event(c, type_, subject, data, actor, access=None):
         task = H.task(c, subject)
         if task and not H.task_private(c, task) and hub_checks(c, task):
             # The owner is the event's: the one the task was given to by the change that published it.
-            task = _received_task(task, facts["owner_id"])
+            task = _received_task(c, task, facts["owner_id"])
             owner = F.owner_ref(facts["owner_id"])
             fire(
                 c,
@@ -1670,11 +1670,16 @@ def on_event(c, type_, subject, data, actor, access=None):
             )
 
 
-def _received_task(task, owner):
+def _received_task(c, task, owner):
     """The task as a `task_received` automation hears it, keyed by the names its flow reads. The row's columns are read
-    under this code's names, so a column renamed since the row was read still fills its field."""
-    fields = ("id", "title", "body", "status", "requester", "pipeline_id", "stage_id")
-    return {**{k: task.get(renames.current_column("tasks", k)) for k in fields}, "owner": owner}
+    under this code's names, so a column renamed since the row was read still fills its field. `body` is what it was
+    asked with, its first message (a task has no description)."""
+    fields = ("id", "title", "status", "requester", "pipeline_id", "stage_id")
+    return {
+        **{k: task.get(renames.current_column("tasks", k)) for k in fields},
+        "body": H.task_request_text(c, task["id"]),
+        "owner": owner,
+    }
 
 
 # The Gmail category labels a message can carry, as the words a rule reads. A message in no category has none.
@@ -2428,7 +2433,7 @@ class HubServices:
                 said = (
                     "Assigned: a private task"
                     if hide_private and H.task_private(c, task)
-                    else f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip()
+                    else f"Assigned: {task['title']}"
                 )
                 text = "\n\n".join(filter(None, (text, said)))
         return text, _rule_key(do, args)

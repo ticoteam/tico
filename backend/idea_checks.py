@@ -195,6 +195,9 @@ def run(store: Any, now: str | None = None) -> int:
     with store.read() as c:
         owed = [str(found[0]) for found in c.execute(_OWED, (BATCH,)).fetchall()]
         rows = [E.task(c, task_id) for task_id in owed]
+        for row in rows:  # an idea's text is its first message: a task has no description
+            if row:
+                row["body"] = H.task_request_text(c, row["id"])
         ideas: list[Row] = [
             row for row in rows if row and row["status"] == "open" and is_ideas(row["stage"]) and not row.get("private")
         ]

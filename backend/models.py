@@ -6,6 +6,7 @@ import re
 
 from pydantic import (
     AfterValidator,
+    AliasChoices,
     BeforeValidator,
     BaseModel,
     ConfigDict,
@@ -184,7 +185,9 @@ class TaskCreate(Contract):
     public_summary: str | None = Field(default=None, max_length=8000)
     private: StrictBool | None = None
     title: str = Field(min_length=1, max_length=300)
-    body: Text
+    # A task has no description: `message` is its first chat message, the request, posted as the caller's own
+    # (hubdb.first_message). `body` is its older name. Left out, the task is its title alone.
+    body: Text | None = Field(default=None, validation_alias=AliasChoices("message", "body"))
     # Who does it. Left out, the pipeline's first stage must pick from several (backend/stage_pick.py): it picks one.
     owner: ID | None = None
     # The person accountable for it, whoever owns it (hubdb.task_human): asks that name nobody go to them first.
@@ -279,7 +282,6 @@ class TaskUpdate(Contract):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     note: str | None = Field(default=None, max_length=200_000)
     due: str | None = None
-    body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)  # "" takes the goal off
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
@@ -292,6 +294,16 @@ class TaskUpdate(Contract):
     # BotOps applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as BotOps.
     on_behalf_of: ID | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def no_description(cls, data: Any) -> Any:
+        # A held update written before descriptions went carries "body": None; any text is refused.
+        if isinstance(data, dict) and "body" in data:
+            if data["body"] is not None:
+                raise ValueError("A task has no description: say it in a message on the task instead")
+            data = {k: v for k, v in data.items() if k != "body"}
+        return data
 
 
 class TaskDone(Contract):

@@ -189,7 +189,7 @@ def state_of(row, cache, context):
         {"id": row.get("requirement_id") or "r", "name": NAME_OF[check]},
         {
             "title": task.get("title") or "",
-            "body": task.get("body") or "",
+            "request": (task.get("request") or {}).get("text") or task.get("body") or "",
             "version": task.get("version") or 0,
             "pipeline": {"goal": ""},
             "pipeline_id": task.get("pipeline_id"),

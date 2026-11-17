@@ -1837,8 +1837,13 @@ class Onboarding:
             title = choice["title_prefix"].strip() + " " + title
         from .botops_act import request_task
 
+        # The setup's steps are BotOps' working instructions: they reach it through its run, not the task's chat.
         task = request_task(
-            c, self.auth, who, title, setup_body((H.bot(c, slug) or {}).get("slug", slug), choice, answers)
+            c,
+            self.auth,
+            who,
+            title,
+            instructions=setup_body((H.bot(c, slug) or {}).get("slug", slug), choice, answers),
         )
         declared["setup_task_id"] = task["id"]
         self._write_config(c, slug, declared)

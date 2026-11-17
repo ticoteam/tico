@@ -101,9 +101,8 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const csv = 'shot,length\n' + Array.from({length: 260}, (_, i) => `s${i + 1},${i % 7 + 1}s`).join('\n');
     const task = {id: 't1', title: 'Cut the launch video', owner_id: 'bot:editor', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1,
       labels: [], links: [], parts: {total: 0, done: 0}, version: 4, created_at: at(400), updated_at: at(5), open_asks: 1,
-      body: 'Reference frame: ![frame](https://img.example.com/ref.png)\n\nMood: https://img.example.com/mood.jpg',
       attachments: [{id: 'f-frame', name: 'frame.png', content_type: 'image/png', size: 2048, url: '/api/v2/files/f-frame'}]};
-    const plain = {...task, id: 't2', title: 'Write the captions', status: 'doing', open_asks: 0, attachments: [], body: 'Captions for the cut.', updated_at: at(60)};
+    const plain = {...task, id: 't2', title: 'Write the captions', status: 'doing', open_asks: 0, attachments: [], updated_at: at(60)};
     // t2 is one Ana may read but not comment on; one of its questions was answered by an older runner: {by, text, at}
     const plainComments = [
       {id: 'p1', kind: 'ask', sender_id: 'bot:editor', body: 'Which tone?', created_at: at(50), answers: [{by: 'human:sam', text: 'Keep it warm and short.', at: at(40)}],
@@ -114,6 +113,8 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     const plainFiles = [{id: 'f-notes', name: 'captions.md', mime: 'text/markdown', current_version: 1, archived: false,
       versions: [version('f-notes', 1, {mime: 'text/markdown', ask: {questions: [{id: 'ok', question: 'Good to go?', options: [{label: 'Yes'}, {label: 'No'}]}], who: null}})]}];
     const comments: CommentRow[] = [
+      // What the task asks is its first message: a task is a title and a chat.
+      {id: 'm0', kind: 'say', sender_id: 'human:ana', body: 'Reference frame: ![frame](https://img.example.com/ref.png)\n\nMood: https://img.example.com/mood.jpg', created_at: at(400), refs: {task: 't1', comment: true}},
       {id: 'm1', kind: 'say', sender_id: 'bot:editor', body: 'Second pass and a frame grab.', created_at: at(140), refs: {task: 't1', comment: true}},
       {id: 'm2', kind: 'ask', sender_id: 'bot:editor', body: 'Which music and thumbnail?', created_at: at(90), answers: [], refs: {task: 't1',
         questions: [{id: 'music', header: 'Music', question: 'Which tracks fit?', options: [{label: 'Upbeat'}, {label: 'Calm'}, {label: 'None'}], multi: true, other: true},
@@ -288,11 +289,11 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await m1.locator('.tc-thumb[data-tf-jump="f-frame"]').waitFor();
     assert.equal((await m1.locator('.tc-file[data-tf-jump="f-cut"]').textContent())!.replace(/\s+/g, ' ').trim(), 'VIDEOcut.mp4 v2');
     assert.equal(await m1.locator('video, .tf-media').count(), 0, 'no big media in a comment');
-    // the linked images in the details show inline, lazily, and open full size
-    await tab('desc');
-    await modal.locator('.tdesc img[src="https://img.example.com/ref.png"].ready').waitFor();
-    assert.equal(await modal.locator('.tdesc > p > img').getAttribute('loading'), 'lazy');
-    await modal.locator('.tdesc .inline-thumb.ready').waitFor();
+    // the linked images in its first message show inline, lazily, and open full size
+    const asked = modal.locator('[data-message="m0"] .th-body');
+    await asked.locator('img[src="https://img.example.com/ref.png"].ready').waitFor();
+    assert.equal(await asked.locator(':scope > p > img').getAttribute('loading'), 'lazy');
+    await asked.locator('.inline-thumb.ready').waitFor();
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`task-files-strip-desktop-${mode}`); }
     await theme('dark');
 

@@ -65,7 +65,7 @@ def said_text(row: Row | None, said: Said, hands_over: bool = False, hide_task: 
         if hide_task:
             parts.append("Assigned: a private task")
         else:
-            parts.append(f"Assigned: {row['title']}\n\n{row.get('body') or ''}".rstrip())
+            parts.append(f"Assigned: {row['title']}")
     return "\n\n".join(parts)
 
 

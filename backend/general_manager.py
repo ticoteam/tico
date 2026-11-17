@@ -381,11 +381,22 @@ def deliver(c, auth, name, body, count):
     title = f"Task check: {name} ({count})"
     open_task = _open_report(c, name)
     if open_task:
-        if open_task["body"] == body:
+        from . import task_wakes
+
+        if task_wakes.instructions(c, open_task["id"]) == body.strip():
             return open_task["id"], "unchanged"
-        H.task_update(c, H.KEEPER, open_task["id"], title=title, body=body)
+        H.task_update(c, H.KEEPER, open_task["id"], title=title)
         after = H.task(c, open_task["id"])
-        H._wake(c, after, ACTOR, f"The report changed: {title}", {"wake": EVENT}, trigger="schedule", source=EVENT)
+        # The new report replaces the old as the bot's instructions, in its run: a task has no description to rewrite.
+        H._wake(
+            c,
+            after,
+            ACTOR,
+            task_wakes.with_instructions(f"The report changed: {title}", body.strip()),
+            {"wake": EVENT, **task_wakes.replace_refs(body)},
+            trigger="schedule",
+            source=EVENT,
+        )
         return open_task["id"], "updated"
     conversation = rooms.task_conversation_id(c, auth, ACTOR, H.KEEPER) if auth is not None else None
     made = H.task_create(

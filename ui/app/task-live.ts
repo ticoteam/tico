@@ -98,7 +98,7 @@ function taskLiveGone(d: TaskDialog, live: TaskLive) {
 }
 const TASK_EDIT_DRAFTS = new Map<string, TaskLiveDraft>();
 const TASK_EDIT_STORAGE = 'tico.task-edit.';
-const TASK_EDIT_FIELDS = ['title', 'body', 'public_title', 'public_summary', 'due', 'size'];
+const TASK_EDIT_FIELDS = ['title', 'public_title', 'public_summary', 'due', 'size'];
 const taskLiveStoragePrefix = (identity: string) => TASK_EDIT_STORAGE + encodeURIComponent(identity) + '.';
 const taskLiveStorageKey = (id: string, field: string, identity: string = sessionIdentity()) => identity ? taskLiveStoragePrefix(identity) + [id, field].map(encodeURIComponent).join('.') : '';
 function taskLiveForget(id: string, identity: string = sessionIdentity()) {
@@ -199,7 +199,7 @@ function taskLivePaint(d: TaskDialog, live: TaskLive) {
   if (d.taskLive !== live) return;
   const draft = live.draft, base = draft.base;
   if (!base) return;
-  const pending = {...draft.inflightPatch, ...draft.patch}, shown = {...base, ...pending};
+  const pending = {...draft.inflightPatch, ...draft.patch};
   for (const field of d.querySelectorAll<TaskField>('[data-task-field], .tmodal-title')) {
     const key = field.dataset.taskField || 'title', value = String(taskLiveDisplay(key in pending ? pending[key] : taskLiveValue(base, key), key, key in pending ? null : base) ?? '');
     if ((field === document.activeElement || field === live.focus?.field) && !draft.current) continue;
@@ -216,16 +216,10 @@ function taskLivePaint(d: TaskDialog, live: TaskLive) {
       if (focused) taskLiveFocusRestore(d);
     }
   }
-  const preview = $('[data-task-body-preview]', d);
-  const body = taskBody(shown), original = body.trim() === String(shown.title || '').trim() ? '' : body;
-  if (preview && preview.taskBody !== original) {
-    preview.taskBody = original;
-    preview.innerHTML = original ? safeMd(original) : '<p class="muted">No details.</p>';
-  }
   const error = $('[data-task-edit-error]', d);
   if (error) { error.hidden = !draft.error; error.title = draft.error || ''; }
   const conflict = $('[data-task-edit-current]', d);
-  if (conflict) { conflict.hidden = !draft.current; conflict.textContent = draft.current ? `Current: ${draft.current.title} · ${draft.current.body || ''}` : ''; }
+  if (conflict) { conflict.hidden = !draft.current; conflict.textContent = draft.current ? `Current: ${draft.current.title}` : ''; }
 }
 async function taskLiveRead(d: TaskDialog, live: TaskLive) {
   if (d.taskLive !== live || !d.open || live.revoked) return;

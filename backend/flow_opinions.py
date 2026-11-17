@@ -304,7 +304,8 @@ def shown(c: Any, job: Row) -> str:
 def prompt(c: Any, job: Row) -> str:
     """The one user message of an opinion: the task and the ask, from the task alone."""
     ask: Row = job["ask"]
-    task = c.execute("SELECT title, body, due_at FROM tasks WHERE id=?", (job["task_id"],)).fetchone()
+    task = c.execute("SELECT title, due_at FROM tasks WHERE id=?", (job["task_id"],)).fetchone()
+    asked = H.task_request_text(c, job["task_id"]) if task else ""
     stage = c.execute("SELECT name FROM stages WHERE id=?", (job["stage_id"],)).fetchone() if job["stage_id"] else None
     asker = ask.get("asked_by")
     brief: Row = ask.get("brief") or {}
@@ -330,7 +331,7 @@ def prompt(c: Any, job: Row) -> str:
         f"Each choice: {json.dumps(brief['details'])}" if brief.get("details") else "",
         f"The asker recommends: {brief['recommend']}" if brief.get("recommend") else "",
         f"It asks for: {typed.get('question') or typed.get('name')} ({typed.get('type')})" if typed else "",
-        f"Task description:\n{cut(task['body'], BODY_MAX)}" if task and task["body"] else "",
+        f"What the task asks (its first message):\n{cut(asked, BODY_MAX)}" if asked else "",
         f"It shows the task's page from an earlier stage, {job['earlier']}" if job.get("earlier") else "",
         f"What the ask shows:\n{what}" if what else "",
         "What the ask shows: no page. The task's own text above is what is being OK'd."
