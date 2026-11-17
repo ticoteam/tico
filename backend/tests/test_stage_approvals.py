@@ -370,7 +370,7 @@ def test_every_spec_version_is_checked_before_the_set_can_be_approved(api):
         {"value": "ok", "page_version": approval["page_version"], "visit_id": approval["visit_id"]},
         expected=409,
     )
-    assert "not waiting" in refused["error"]["detail"]
+    assert refused["error"] == "task_requirement"
     _all_verdicts(api, row["id"])
     assert _standing(api, row["id"]).state == R.WAITING
     assert any(p["file_id"] == second["file_id"] for p in approval["pages"])
