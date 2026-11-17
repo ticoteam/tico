@@ -4,7 +4,7 @@ import type {Page} from 'playwright';
 // (ui/tests/tasks-page.cts); every request is intercepted.
 // - 1280 × 800: a task with messages opens on Chat; the newest line and the message box are in view without scrolling.
 // - 60 lines: the newest show, and scrolling up draws older ones until the first message.
-// - A page attached (a chip with its version), Jev's check and a send-back (its note's first line) are one-line
+// - A page attached (a chip with its version), the Decision model's check and a send-back (its note's first line) are one-line
 //   dividers in order; no line reads "changed <field>".
 // - Two or more other updates in a row are one "N updates" line that opens.
 // - One Visible to row (Team, Public roadmap or Private · names); no Private or Public box, no Size, no Who can see.
@@ -20,7 +20,7 @@ const {open, task} = require('./tasks-page.cts') as Tasks.Api;
 const T0 = Date.parse('2026-11-10T09:00:00Z');
 const at = (min: number) => new Date(T0 + min * 60000).toISOString();
 const say = (n: number) => ({id: `m${n}`, sender_id: n % 2 ? 'human:ana' : 'bot:writer', kind: 'say', body: `Line ${n}`, refs: {}, created_at: at(n * 10)});
-// 60 messages, then the history: a page, Jev's check, a send-back, then three quiet changes in a row, then a last word.
+// 60 messages, then the history: a page, the Decision model's check, a send-back, then three quiet changes in a row, then a last word.
 const comments = [...Array.from({length: 60}, (_, i) => say(i + 1)), {...say(99), body: 'The newest line', created_at: at(700)}];
 const ev = (id: string, min: number, field: string, x: Record<string, string | null> = {}) => ({id, created_at: at(min), field, actor: 'keeper', old: null, new: null, note: null, ...x});
 const events = [
@@ -100,10 +100,10 @@ const pages = async (page: Page) => {
       assert.equal(await thread.locator('[data-message="m1"]').count(), 1, 'scrolling up reaches the first message');
       assert.equal(await thread.locator('[data-task-earlier]').count(), 0, 'nothing earlier is left');
 
-      // 3. Page attached, Jev's check and the send-back are dividers, in order; the send-back shows its note's first line.
+      // 3. Page attached, the Decision model's check and the send-back are dividers, in order; the send-back shows its note's first line.
       const marks = await thread.locator('.tmark').evaluateAll(els => els.map(e => (e.textContent || '').replace(/\s+/g, ' ').trim()));
       const first = (re: RegExp) => marks.findIndex(m => re.test(m));
-      const iPage = first(/attached a page/), iJev = first(/Jev's check: met/), iBack = first(/sent it back — The chat should be higher (?!and)/);
+      const iPage = first(/attached a page/), iJev = first(/Decision model's check: met/), iBack = first(/sent it back — The chat should be higher (?!and)/);
       assert.ok(iPage >= 0 && iJev > iPage && iBack > iJev, `in order: ${JSON.stringify(marks)}`);
       assert.equal(await thread.locator('.tmark .tpage-chip').getAttribute('href'), '#/page/file-spec?v=3', 'the chip opens that version');
       assert.match(await thread.locator('.tmark .tpage-chip').innerText(), /v3/);
