@@ -558,10 +558,16 @@ def _own_ask(api, task_id, requirement=None):
     )
 
 
+# What makes tico_task_ask a stage ask rather than a ❓: any of these.
+_STAGE_ASK = ("kind", "choices", "choice", "recommend", "title", "show", "subject", "why")
+
+
 @tool(
     "tico_task_ask",
-    "Ask a person on this task one sentence: a question or an OK. The task waits in its stage for the answer, which "
-    "wakes you once; asking again replaces your ask. `withdraw` takes it back.",
+    "Ask a person on this task. With only `to` and `line`: post it on the task's chat marked ❓, needing their reply; "
+    "it sits in their Needs you until they reply there, and you are not chased meanwhile. One open ❓ per chat: a new "
+    "one replaces yours. With `kind`, choices, `why` or the like: a stage ask the task waits on in its stage (a "
+    "question or an OK), whose answer wakes you once. `withdraw` takes a stage ask back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
@@ -614,6 +620,9 @@ def task_ask(api, args):
     missing = [name for name in ("to", "line") if not args.get(name)]
     if missing:
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
+    if not any(args.get(field) for field in _STAGE_ASK):
+        # A ❓: the message on the task's chat, needing their reply (backend/question_marks.py).
+        return api.post(f"tasks/{args['id']}/questions", {"to": args["to"], "text": args["line"]}, key=_key(args))
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
     if args.get("subject"):
         if args.get("choices") or args.get("kind") == "answer" or "content" not in args:

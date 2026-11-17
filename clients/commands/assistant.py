@@ -623,7 +623,11 @@ def batch_abandon(api, args):
     "until they fix it; mention: an @ of them by a person), and the items, oldest first, each "
     "with its task. Use it to see the pile before closing or stopping anything.",
     {
-        "kind": {"type": "string", "enum": ["task", "ask", "paused", "mention"], "description": "Only this kind"},
+        "kind": {
+            "type": "string",
+            "enum": ["task", "ask", "paused", "mention", "question"],
+            "description": "Only this kind",
+        },
         "limit": {
             "type": "integer",
             "minimum": 0,

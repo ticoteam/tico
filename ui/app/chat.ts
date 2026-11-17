@@ -34,6 +34,8 @@ interface ChatRefs {
   maintenance?: string | undefined;
   approval?: unknown;
   questions?: unknown;
+  /** A bot's open ❓ on this message (backend/question_marks.py): the mark and the person whose reply it needs. */
+  question?: ChatQuestionMark | null | undefined;
   action_result?: { approval?: string | undefined; decision?: string | undefined } | undefined;
   slack?: { permalink?: string | undefined; channel_name?: string | undefined } | undefined;
   routing?: { recipients?: { bot?: string | undefined; confidence?: unknown }[] | undefined; routed_by?: string | undefined; fallback?: unknown } | undefined;
@@ -643,6 +645,15 @@ function chatTaskRunHTML(run: ChatMessage[]) {
     + `<div class="chat-task-row chat-task-more" data-task-hidden="${run.length - 2}"><span class="ct-state">...${run.length - 2} more...</span></div>`
     + chatTaskRowHTML(run.at(-1));
 }
+// A bot's open ❓ on its message (backend/question_marks.py): it needs one person's reply. Only the mark, at the top
+// right of the message (every chat draws it from refs.question): no outline, colour or label. Hover names whose reply.
+interface ChatQuestionMark { id?: string | undefined; to?: string | undefined }
+function qmarkHTML(refs: object | null | undefined) {
+  const q = (refs as { question?: unknown } | null | undefined)?.question as ChatQuestionMark | null | undefined;
+  if (!q || typeof q !== 'object' || !q.id) return '';
+  const whose = q.to && q.to === myActor() ? 'your' : `${actorLabel(q.to || '') || 'a person'}'s`;
+  return `<span class="qmark" role="img" aria-label="Needs ${esc(whose)} reply" title="Needs ${esc(whose)} reply">❓</span>`;
+}
 // Tico Live was retired; the lines it left in rooms (refs.live) read as plain messages.
 function v2MessageHTML(m: ChatMessage) {
   // A Confirm card a bot left for you (BotOps: adding a person, a role, a shared credential): filled in from the action.
@@ -681,7 +692,7 @@ function v2MessageHTML(m: ChatMessage) {
   const text = m.body || '';
   return `${fresh}<div class="conv-run chat cw-msg${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
     <div class="th-av">${relay ? avatar(assistantBot(), 28) : actorAvatar(m.sender_id, 28)}</div>
-    <div class="th-main"><div class="th-head"><span class="th-who">${who}</span>${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}${chatTimeHTML(m.created_at)}${v2DeliveryHTML(m)}</div>
+    <div class="th-main"><div class="th-head"><span class="th-who">${who}</span>${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}${chatTimeHTML(m.created_at)}${v2DeliveryHTML(m)}${qmarkHTML(m.refs)}</div>
     ${mine ? '' : v2RunHTML(m)}<div class="bubble ${mine ? 'you' : 'bot reply'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${
       mine ? `<div class="md cw-plain">${esc(text)}</div>`
         // The Assistant's read-back of what it will approve is shown exactly as written, never formatted: a requesting

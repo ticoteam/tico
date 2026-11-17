@@ -606,6 +606,13 @@ def parser():
     s.add_argument("action", nargs="?", default="get", choices=["get", "set", "edit", "pause", "resume", "clear"])
     s.add_argument("objective", nargs="?")
     s.set_defaults(fn="chat goal")
+    s = chat.add_parser("ask", help="ask a person in your direct chat, marked ❓: it needs their reply")
+    s.add_argument("message", help="what you ask: a short first line that stands on its own")
+    s.add_argument("--to", required=True, help="the person: their id")
+    s.add_argument(
+        "--conversation", dest="conversation_id", help="a chat you are both in; your chat with them if left out"
+    )
+    s.set_defaults(fn="chat ask")
     cli_spec.add(sub, assistant_commands.ASSISTANT)  # tico assistant: clients/commands/assistant.py
     cli_spec.add(sub, task_work_commands.TAG)  # tico tag: clients/commands/task_work.py
 
@@ -688,7 +695,9 @@ def parser():
     s.set_defaults(fn="task create")
     version_help = "the version you were last shown: tico task show, a list row and every wake print it"
     s = task.add_parser(
-        "ask", help="ask a person on this task, in one line; it waits for their answer, which wakes you once"
+        "ask",
+        help="ask a person on this task: with only --to and the line, it is posted on the task's chat marked ❓ (needs "
+        "their reply); with --kind, choices or --why, a stage ask the task waits on",
     )
     s.add_argument("id")
     s.add_argument(

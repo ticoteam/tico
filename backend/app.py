@@ -22,7 +22,7 @@ from starlette.requests import ClientDisconnect
 
 from . import built_on
 from . import agents, app_view, mcp_oauth, oidc, runner_online, views
-from . import outcome_stats, person_asks
+from . import outcome_stats, person_asks, question_marks
 from . import pipeline_judges
 from . import recorder_installs
 from . import assistant_changes, why_here
@@ -2805,6 +2805,55 @@ def create_app(settings=None):
             ingest,
             lambda: mutate(request, body, lambda c: message_write(c, who, body, rc, ingest), retry_body=legacy_body),
         )
+
+    @app.post(
+        "/api/v2/questions",
+        **api_v2(
+            "Conversations",
+            "askInChat",
+            "A bot's ❓ in a direct chat: send `text` to `to` (in `conversation_id`, or the bot's chat with them) and "
+            "mark it as needing their reply, until they reply there. Bots only",
+        ),
+    )
+    def chat_question(request: Request, body: M.ChatQuestion):
+        """A bot's ❓ in a direct chat (backend/question_marks.py): its message to `to`, marked as needing their reply,
+        in one step. Checked as any message is, and as a question to a person (the org rules' `kind:ask`). No task is
+        filed and nothing is sent for it beyond the message."""
+        who = request.state.identity
+        if who.role != "bot":
+            raise Problem("forbidden", "Only a bot marks a message ❓", 403)
+        sent = M.MessageCreate(to=body.to, text=body.text, conversation_id=body.conversation_id)
+        asking = question_marks.Asking(
+            lambda c, author, recipients: rule_message_place(who, sent)(c, author, recipients)
+        )
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=asking)
+
+        def write(c):
+            message = message_write(c, who, sent, rc, ingest)
+            if not message.get("id"):
+                return message  # held by a rule: nothing is written, and nothing is marked
+            mark = question_marks.mark(c, who.actor, str(message["id"]), body.to)
+            return {**message, "question": question_marks.public(mark)}
+
+        return ask_ingest.judged(store, ingest, lambda: mutate(request, body, write))
+
+    @app.post(
+        "/api/v2/questions/{mid}/give",
+        **api_v2("Needs you", "giveQuestion", "Give to: an open ❓ is for `to` now. Its person or the bot that marked it"),
+    )
+    def question_give(request: Request, mid: str, body: M.QuestionGive):
+        """Give to: an open ❓ is for someone else now. Its person, or the bot that marked it, may move it."""
+        who = request.state.identity
+
+        def write(c):
+            to = auth.target(c, who, body.to)
+            return {
+                "question": question_marks.public(
+                    question_marks.give(c, question_marks.mark_id(mid) or mid, to, who.actor)
+                )
+            }
+
+        return mutate(request, body, write)
 
     def rule_prepare_message(store_, bot, replay):
         return message_ingest(bot, M.MessageCreate.model_validate(replay["body"]))

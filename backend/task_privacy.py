@@ -1669,11 +1669,15 @@ STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s 
 STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,askers"
 # Who has an ask open on the task's current visit that names a person and is not answered yet (hubdb.status_counts):
 # a bot's ask counts toward its needs_human only where the reader may read the task.
+# The bots waiting on a person on each task: an unanswered ask they put to a person, and an open ❓ of theirs on its
+# chat (backend/question_marks.py), one entry each.
 _ASKERS = (
-    "(SELECT json_group_array(r.added_by_id) FROM visits v JOIN requirements r ON r.visit_id = v.id "
+    "(SELECT json_group_array(asker) FROM (SELECT r.added_by_id AS asker FROM visits v "
+    "JOIN requirements r ON r.visit_id = v.id "
     "WHERE v.task_id = tasks.id AND v.left_at IS NULL AND r.withdrawn_at IS NULL AND r.person_id LIKE 'human:%' "
     "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id = r.id AND a.visit_id = v.id "
-    "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again'))) AS askers"
+    "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again')) "
+    "UNION ALL SELECT q.bot_id FROM question_marks q WHERE q.task_id = tasks.id AND q.cleared_at IS NULL)) AS askers"
 )
 STATUS_TASK_SELECT = STATUS_TASK_COLUMNS.replace(",askers", "," + _ASKERS)
 

@@ -415,7 +415,7 @@ def needs_act(it):
     kind = it.get("kind")
     if kind == "ask":
         return "ok" if (it.get("ask") or {}).get("kind") in ("ok", "page") else "answer"
-    if kind == "mention":
+    if kind in ("mention", "question"):  # an @, or a bot's ❓: answered in the chat
         return "reply"
     return "fix"
 

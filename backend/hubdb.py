@@ -2239,6 +2239,12 @@ def _write_message(
         ":restricted, :legacy_audience)",
         row,
     )
+    if is_human(actor):
+        from . import question_marks
+
+        room = conv or {}
+        if question_marks.replied(conn, row, room, row["refs"]):  # their reply clears each ❓ for them in this chat
+            question_marks.after_reply(conn, room.get("task_id") or (refs or {}).get("task"), actor)
     if is_human(actor) and is_bot(target) and row["body"].lstrip().startswith("/"):
         from . import skill_runtime
 
@@ -6236,7 +6242,13 @@ def status_counts(conn, actor):
         "AND a.answer NOT IN ('give', 'again'))",
         (actor,),
     ).fetchone()[0]
-    return open_tasks, waits + asks
+    # And each open ❓ of the bot's on an open task's chat (backend/question_marks.py).
+    marked = conn.execute(
+        "SELECT COUNT(*) FROM question_marks q JOIN tasks t ON t.id = q.task_id AND t.status = 'open' "
+        "WHERE q.bot_id=? AND q.cleared_at IS NULL",
+        (actor,),
+    ).fetchone()[0]
+    return open_tasks, waits + asks + marked
 
 
 def _recount(conn, actor):
