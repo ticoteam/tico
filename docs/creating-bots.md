@@ -240,7 +240,7 @@ hold next month too.
 
 A template produces this layout already; `templates/employee-repo/` is the generic version
 of it. A bot made from a template keeps following it: after an update it takes the template's newer `AGENTS.md`,
-`playbooks/`, `skills/`, `.claude/settings.json` and `knowledge/` pages, except a file it or a person changed since,
+`playbooks/`, `skills/`, `.claude/skills/`, `.claude/settings.json` and `knowledge/` pages, except a file it or a person changed since,
 which is kept and named in the refresh's event ([Bots follow their template](updates.md#bots-follow-their-template)). Copy it to `<workspace>/bot-<slug>` and fill it in. Tico picks the slug from the bot's
 name (lowercase, hyphenated, with -2, -3 when it is taken); nobody is asked for one. Slugs are stable: the slug appears in the repository name, in `bot.yaml` and in the bot's
 own paths, so renaming later is real work.
@@ -511,9 +511,11 @@ wakes up to a message the bot sent. Turn sends on per bot, later, deliberately.
 
 ## 6. Access and credentials
 
-`tools:` in `bot.yaml` declares what the bot may touch. **Not listed means not allowed.** It
-is shown on the bot's page, it is what the shared tools check, and it is what preflight
-resolves against the computer before a bot goes active.
+**A grant is what a bot can use.** A tool, key, MCP server or website account granted to the bot in Tools reaches its
+runs and shows on its page with nothing in `bot.yaml`. `tools:` in `bot.yaml` is optional notes on a tool: who the bot
+acts as, its scope, what was agreed, an MCP server Tools does not hold, a database's limits. An entry and a grant for
+the same service are one row on the bot's page, with the entry's notes. Preflight resolves the entries' variables
+against the computer before a bot goes active.
 
 ```yaml
 tools:
@@ -550,15 +552,15 @@ Existing installs automatically migrate each existing bot's own file, every key 
 Legacy files remain available for administrator import, but runs do not load them as a fallback. Revoking a
 grant removes delivery even when an old file still exists. See [credential-vault.md](credential-vault.md).
 
-Declaring access does not provision anything. A Credential administrator grants the value to the bot;
-preflight then reports whether every declared Credential actually
+Declaring access does not provision anything, and a grant needs no declaration. A Credential administrator grants
+the value to the bot; preflight then reports whether every declared Credential actually
 resolves. Two things need no entry: Tico itself (`hub` and the `tico_*` MCP tools come with
 every run) and the decision model behind `tico_decision_ask` (`skills/decisions/SKILL.md`), whose credential
-Tico holds. A bot that needs a service it has not declared stops and says so on the task; it never
+Tico holds. A bot that needs a service it holds no grant for stops and says so on the task; it never
 borrows another bot's credential. To let it use one, the owner grants it (Tools > Credentials), or asks BotOps in a DM, which moves the value
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
 
-A run's MCP servers are `hub`, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
+A run's MCP servers are `hub`, its granted MCP tools, the `mcp:` tools above and the repository's `.mcp.json`; never the computer operator's own.
 Nor does a run read the operator's own instructions or settings: a Claude Code turn loads only the repository's
 (`--setting-sources project,local`), never `~/.claude/CLAUDE.md`, user settings or hooks, even on the computer's own login.
 Packet-only turns use an empty settings-source list and also disable repository instructions, hooks and built-in tools.
@@ -603,9 +605,11 @@ tab: every tool the bot uses, with its details. It is how a human learns what a 
 The same list is `GET /api/v2/bots/{bot}/tools` ([custom-frontend.md](custom-frontend.md)), for a
 team's own frontend.
 
-**Registering a tool.** The bot itself (its own entries), BotOps, the Tools Owner, a credential admin, or someone who
+**Adding an entry.** A tool granted in Tools needs none: an entry that only names a tool the bot already holds (no
+identity, scope, note or MCP server) is answered with the grant, and no task is opened. For an entry with notes, the bot
+itself (its own entries), BotOps, the Tools Owner, a credential admin, or someone who
 manages the bot (the owner, a bot administrator who owns it, or a human above it on the team chart) can add or remove a
-tool without opening its repository; the Assistant and the Tools Owner do it for a person who asks them:
+tool without opening its repository (one rule decides every Tools change: `backend/tool_access.py`); the Assistant and the Tools Owner do it for a person who asks them:
 `POST /api/v2/bots/{bot}/tools`, `DELETE /api/v2/bots/{bot}/tools/{id}`, or the MCP tools
 `tico_tool_add`, `tico_tool_list`, `tico_tool_update` and `tico_tool_remove` (`tico tool add <bot> posthog --can read
 --identity "PostHog project 340585 (US)" --scope project=340585 --env POSTHOG_KEY`; a remote MCP server adds

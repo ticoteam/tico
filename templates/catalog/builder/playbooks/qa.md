@@ -25,7 +25,7 @@ and the proof, without running anything.
 
 ## 2. Build the page
 
-Follow `skills/build-the-page/SKILL.md` with its `templates/qa.html`, in `reports/<task id>-qa.html`, at the head
+Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/qa.html`, in `reports/<task id>-qa.html`, at the head
 commit:
 
 - The opening: what changed for the person who asked and the result ("Passed: 5 of 5 checks"), then what was not
@@ -42,10 +42,10 @@ commit:
 A check only a person can do (a physical device, a reply someone owes) goes under not checked with why. The page never
 asks its reader to test.
 
-    python3 skills/build-the-page/page.py build reports/<task id>-qa-draft.html --out reports/<task id>-qa.html
-    python3 skills/build-the-page/page.py check reports/<task id>-qa.html --kind qa
+    python3 .claude/skills/build-the-page/page.py build reports/<task id>-qa-draft.html --out reports/<task id>-qa.html
+    python3 .claude/skills/build-the-page/page.py check reports/<task id>-qa.html --kind qa
     tico page publish reports/<task id>-qa.html --task <id> --title "QA: <the change>"
-    python3 skills/build-the-page/page.py render <file id> --kind qa
+    python3 .claude/skills/build-the-page/page.py render <file id> --kind qa
     tico task attach <id> page:<file id> --req "<requirement>" --version N
 
 `tico page publish` prints the file id. Look at both pictures `render` names before you attach: a page that does not

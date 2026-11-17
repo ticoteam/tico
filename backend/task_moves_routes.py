@@ -468,48 +468,22 @@ def register(
             "recommend": ask_shape.recommended(body.choices, body.recommend),
         }
 
-    def ask_shape_refused(request: Request, tid: str, body: M.TaskAsk) -> None:
-        """A bot's question to a person that is not shaped as one (backend/ask_shape.py) is refused before the rule
-        check's call, and nothing is written but the refusal (rule `task_ask_shape`: fixed by rewriting, never counted
-        toward quarantine)."""
+    def ask_shape_refused(request: Request, tid: str, body: M.TaskAsk | M.TaskOkAsk) -> None:
+        """A bot's ask to a person that is not shaped as one (backend/ask_shape.py: its line and why, and a question's
+        why and choices) is refused before the rule check's call, and nothing is written but the refusal (rule
+        `task_ask_shape`: fixed by rewriting, never counted toward quarantine)."""
         caller: Any = request.state.identity
-        if caller.role != "bot" or body.kind != "answer":
+        if caller.role != "bot":
             return
+        why = body.why if isinstance(body, M.TaskAsk) else None
         with store.read() as c:
             target = H.resolve_actor(c, body.to) or ""
             if not H.is_human(target):
                 return
-            name = H.actor_name(c, target) or "They"
-
-            def exists(kind: str, ident: str, version: int | None) -> bool:
-                """A task by its id or number (the number through its unique index). A page or file by its id (pages
-                are files), not archived, not a deleted page, and at the version it pins when it pins one."""
-                if kind == "task":
-                    number = int(ident) if ident.isdigit() and int(ident) < 2**63 else None
-                    return (
-                        c.execute("SELECT 1 FROM tasks WHERE id=? OR number=?", (ident, number)).fetchone() is not None
-                    )
-                found = c.execute(
-                    "SELECT f.current_version FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE f.id=? "
-                    "AND f.archived=0 AND (p.file_id IS NULL OR (p.deleted_at IS NULL AND p.archived=0))",
-                    (ident,),
-                ).fetchone()
-                if found is None:
-                    return False
-                if version is None:
-                    return True
-                sql = "SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?"
-                return c.execute(sql, (ident, version)).fetchone() is not None
-
-            detail = ask_shape.refusal(
-                name,
-                why=body.why,
-                choices=body.choices,
-                details=body.details,
-                recommend=body.recommend,
-                shows=body.show,
-                exists=exists,
-            )
+            said = [ask_shape.line_refusal(body.line, why)]
+            if isinstance(body, M.TaskAsk) and body.kind == "answer":
+                said.append(question_refused(c, target, body))
+            detail = " ".join(filter(None, said))
         if detail:
             work(
                 request,
@@ -517,6 +491,38 @@ def register(
                 body,
                 lambda c, who, task_id: H.refuse(c, who.actor, "task_ask_shape", detail, task=task_id),
             )
+
+    def question_refused(c: Any, target: str, body: M.TaskAsk) -> str | None:
+        """What a bot's question to a person lacks: its why, its choices' shape, what it shows (ask_shape.refusal)."""
+        name = H.actor_name(c, target) or "They"
+
+        def exists(kind: str, ident: str, version: int | None) -> bool:
+            """A task by its id or number (the number through its unique index). A page or file by its id (pages
+            are files), not archived, not a deleted page, and at the version it pins when it pins one."""
+            if kind == "task":
+                number = int(ident) if ident.isdigit() and int(ident) < 2**63 else None
+                return c.execute("SELECT 1 FROM tasks WHERE id=? OR number=?", (ident, number)).fetchone() is not None
+            found = c.execute(
+                "SELECT f.current_version FROM bot_files f LEFT JOIN pages p ON p.file_id=f.id WHERE f.id=? "
+                "AND f.archived=0 AND (p.file_id IS NULL OR (p.deleted_at IS NULL AND p.archived=0))",
+                (ident,),
+            ).fetchone()
+            if found is None:
+                return False
+            if version is None:
+                return True
+            sql = "SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?"
+            return c.execute(sql, (ident, version)).fetchone() is not None
+
+        return ask_shape.refusal(
+            name,
+            why=body.why,
+            choices=body.choices,
+            details=body.details,
+            recommend=body.recommend,
+            shows=body.show,
+            exists=exists,
+        )
 
     def ask_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         from . import lifecycle as _lifecycle
@@ -551,8 +557,9 @@ def register(
     def task_ask(request: Request, tid: str, body: M.TaskAsk):
         """Ask a person on the task, in one sentence: a question (with choices, or a typed answer) or an OK (C19). A
         bot's ask a company rule covers is refused with the rule's words (docs/pipelines-v3.md, "How a rule stops the
-        next one"). A bot's question to a person says why it matters, and its choices (2 to 4) each say what happens
-        and which one it recommends (backend/ask_shape.py): refused before any check otherwise."""
+        next one"). A bot's ask to a person has a short first line that stands on its own, and a question says why it
+        matters, with choices (2 to 4) that each say what happens and the one it recommends (backend/ask_shape.py):
+        refused before any check otherwise."""
         ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ask")
 
@@ -764,6 +771,7 @@ def register(
         ask."""
         if not task_asks.generic(body.subject):
             raise Problem("validation", "This kind of OK is asked where the work is, not here", 422)
+        ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ok_ask")
 
     def ok_use_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:

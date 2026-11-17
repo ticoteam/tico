@@ -89,7 +89,11 @@ CREATE INDEX messages_thread_seq ON messages(conversation_id, seq);
 ```
 
 A **carrier** is a Tico notice that starts a run for a second woken bot (§4.4). It has `refs.carries=<message id>`
-and **no `seq`**: timelines, counters, search and SSE thread views never show it.
+and **no `seq`**: timelines, counters, search and SSE thread views never show it. Every other message from Tico to a
+bot (a task's turn, the never-stuck ladder, a health wake, a stage reminder) is the same: it is that bot's run input,
+with no `seq`, read by the bot in its run and its own reads of the room, never by a person. A run woken only by one
+posts its text only when it is for a person (`execution.told_only`); otherwise the text stays on the run, and the task's
+Runs show the notice it acted on.
 
 ### 1.3 New tables
 

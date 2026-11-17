@@ -1,22 +1,25 @@
 """The Tools row on a bot's page: what the bot uses, at a glance (docs/creating-bots.md, "What people
 see about a bot's tools").
 
-Three sources make the list, none of them a secret. The model and harness the bot runs on come from
-its stored config and the company's provider choice. Its repository comes from the bot's record. The
-rest are the `tools:` entries (older: `access:`) of its bot.yaml (older: employee.yaml), which the runner reads from the bot's checkout
-and reports on every heartbeat with whether each credential is on its computer
-(runner-rs/src/declared_access.rs, `bots.<bot>.tools` in the readiness report). A runner from before that
-report yields the first two only. No value ever passes through here: env is a variable's name.
+Grants are what a bot can use: every tool it holds a key of in Tools (an API or MCP tool, a key on no tool, a website
+account it may use) reaches its runs (credential-runtime) and is listed here, with no bot.yaml entry
+(`_granted_tools`). The other rows, none of them a secret: the model and harness the bot runs on, from its stored config
+and the company's provider choice; its repository, from the bot's record; and the `tools:` entries (older: `access:`)
+of its bot.yaml (older: employee.yaml), optional notes on a tool (identity, scope, note, an MCP server of its own) that
+the runner reads from the bot's checkout and reports on every heartbeat with whether each credential is on its computer
+(runner-rs/src/declared_access.rs, `bots.<bot>.tools` in the readiness report). An entry and a grant for the same
+service are one row, the entry's notes on the grant. No value ever passes through here: env is a variable's name.
 
-Registering, changing or removing a tool (`may_change`) errs on getting the work done, since an entry holds no secret: the
-bot itself (its own entries), BotOps, the Tools page's owner, a credential admin, and anyone who may manage the bot
-(`Auth.bot_manager`), as themselves or through the Assistant or a built-in acting for them. The server holds no bot repository,
-so it cannot edit bot.yaml: it checks the entry against the schema bot.yaml uses
-(clients/access_entry.py, which also refuses anything that looks like a credential), keeps it as a
-pending request, and opens a task for BotOps with the exact YAML. The Tools row shows the request as
-"pending" until the runner's report lists the entry (or, for a removal, stops listing it, and for a change,
-lists it as changed). A change keeps the entry where it is: one task with the whole changed entry, never a
-removal followed by an add.
+Registering, changing or removing an entry (backend/tool_access.py NOTE) errs on getting the work done, since an entry
+holds no secret: the bot itself (its own entries), BotOps, the Tools page's owner, a credential admin, and anyone who
+may manage the bot (`Auth.bot_manager`), as themselves or through the Assistant or a built-in acting for them. An entry
+that only names a tool the bot already holds (no identity, scope, note or MCP server) needs no line in bot.yaml: it is
+answered with the grant, and no task is filed (`covered`). Otherwise the server, which holds no bot repository, checks
+the entry against the schema bot.yaml uses (clients/access_entry.py, which also refuses anything that looks like a
+credential), keeps it as a pending request, and opens a task for BotOps with the exact YAML. The Tools row shows the
+request as "pending" until the runner's report lists the entry (or, for a removal, stops listing it, and for a change,
+lists it as changed). A change keeps the entry where it is: one task with the whole changed entry, never a removal
+followed by an add.
 """
 
 from fastapi import Request
@@ -28,6 +31,7 @@ from . import google_workspace, providers, read_cache, routines, runner_online
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
 from .store import H, Problem, encode, readiness_document, repo_url
 from . import bot_settings as BS
+from . import tool_access as TA
 
 CREDENTIALS_NOTE = (
     "Store a needed Credential through Credentials or its chat card, and grant it to this bot. "
@@ -631,11 +635,12 @@ def _granted_tools(c, bot):
     its highest level), each key on no tool, and each website tool with an account it may use. Names and levels only,
     never a value. A bot holding a working key is never shown as having nothing connected."""
     from . import api_tools, website_tools
-    from .credentials import granted as held_ids
+    from .credentials import explicitly_granted, granted as held_ids
     from .read_cache import one, rows
 
     subject = "bot:" + bot
     held = held_ids(c, subject)
+    by_default = held - explicitly_granted(c, subject)  # read by default (backend/default_read.py)
     levels = {r["credential_id"]: r["access_level"] for r in rows(c, GRANT_LEVELS_SQL, (subject,))}
     found = {}
     for key in rows(c, GRANT_KEYS_SQL):
@@ -643,12 +648,16 @@ def _granted_tools(c, bot):
             if not (key["holder"] == subject or (not key["holder"] and website_tools.can_use(c, subject, key))):
                 continue
             level = "read_write"
+        elif key["id"] in by_default:
+            level = "read"
         elif key["id"] in held:
             level = "read" if key["access_level"] == "read" or levels.get(key["id"]) == "read" else "read_write"
         else:
             continue
         group = key["tool_id"] or "key:" + key["id"]
-        item = found.setdefault(group, {"key": key, "level": level, "stored": False, "envs": []})
+        item = found.setdefault(
+            group, {"key": key, "level": level, "stored": False, "envs": [], "default": key["id"] in by_default}
+        )
         if level == "read_write":
             item["level"] = "read_write"
         item["stored"] = item["stored"] or bool(key["stored"])
@@ -685,8 +694,14 @@ def _granted_tools(c, bot):
             "env": ", ".join(item["envs"]),
             "note": "",
             "status": status,
-            "detail": "Granted in Tools: " + LEVEL_WORDS[level],
-            "granted": {"level": level, "kind": kind, "href": href, **({"tool_id": tool_id} if tool_id else {})},
+            "detail": "Everyone can read" if item["default"] else "Granted in Tools: " + LEVEL_WORDS[level],
+            "granted": {
+                "level": level,
+                "kind": kind,
+                "href": href,
+                **({"tool_id": tool_id} if tool_id else {}),
+                **({"default": True} if item["default"] else {}),
+            },
         }
         if kind == "mcp":
             row["kind"] = "mcp"
@@ -696,9 +711,45 @@ def _granted_tools(c, bot):
     return out
 
 
+def _choices(c, bot, tools):
+    """A row per variable several Everyone-can-read tools would deliver and `bot` holds no grant for
+    (backend/default_read.py `choices`): it gets none of them until a person picks one, so the row says so. Left out
+    when a row already shows that variable (a bot.yaml entry naming it)."""
+    from . import default_read
+    from .credentials import explicitly_granted
+
+    shown = {e.strip() for tool in tools for e in str(tool.get("env") or "").split(",") if e.strip()}
+    out = []
+    for env, tool_ids in sorted(default_read.choices(c, "bot:" + bot, explicitly_granted(c, "bot:" + bot)).items()):
+        if env in shown:
+            continue
+        names = [
+            r["name"]
+            for r in c.execute("SELECT name FROM tools WHERE id IN (%s)" % ",".join("?" * len(tool_ids)), tool_ids)
+        ]
+        out.append(
+            {
+                "id": "choose-" + env.lower(),
+                "service": "",
+                "name": env,
+                "logo_key": None,
+                "identity": "",
+                "can": [],
+                "scope": {},
+                "env": env,
+                "note": "",
+                "status": "unknown",
+                "detail": "Several to choose from: ask (" + ", ".join(sorted(names)) + ")",
+                "choose": sorted(tool_ids),
+            }
+        )
+    return out
+
+
 def _merge_granted(tools, granted):
     """One row per service: a declared entry and a grant for the same service (or the same variable) are one row, the
-    declared one marked granted; the grants with no declared entry follow as their own rows."""
+    declared one (its identity, scope and note) marked granted; the grants with no declared entry follow as their own
+    rows. A grant is what the bot can use, so a working grant makes the row ready whatever variable the entry names."""
     rest = []
     for grant in granted:
         envs = set(filter(None, (e.strip() for e in grant["env"].split(","))))
@@ -719,8 +770,11 @@ def _merge_granted(tools, granted):
             rest.append(grant)
             continue
         match["granted"] = grant["granted"]
-        if grant["status"] == "ready" and match.get("status") == "unknown" and not match.get("pending"):
-            match.update(status="ready", detail=grant["detail"])  # the key reaches each run from the vault
+        missing = str(match.get("problem") or "").startswith("Credential missing on ")
+        if grant["status"] == "ready" and not match.get("pending") and (match.get("status") == "unknown" or missing):
+            # The key reaches each run from the vault: an entry naming another variable for it is a note, not a gap.
+            match.pop("problem", None)
+            match.update(status="ready", detail=grant["detail"])
         elif grant.get("problem") and match.get("status") != "problem":
             match.update(status="problem", problem=grant["problem"])
     return tools + rest
@@ -802,52 +856,45 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
     return G._task(c, auth, who, G.BOTOPS, title, _task_text(verb, slug, name, entry, computer, repo))
 
 
-def may_change(c, auth, settings_admin, who, bot, admins=()):
-    """Raise unless `who` may register, change or remove `bot`'s `tools:` entries. An entry names a service and a variable,
-    never a value (access_entry refuses one), and BotOps writes it into bot.yaml, so this lets in everyone with a reason
-    to: the bot itself (also through BotOps or the Tools Owner carrying its request), BotOps and the Tools page's owner
-    with their own rights, a credential admin, and anyone who may manage the bot (`SettingsAdmin._manager`), directly or
-    through a built-in acting for them. The refusal says who can, and how to get it done."""
-    from . import page_owners
-    from .credentials import administrator
-
-    if who.role == "bot" and who.actor == "bot:" + bot:
-        return  # its own entries, also when BotOps or the Tools Owner carries its request
-    # BotOps and the Tools page's owner with their own rights. Acting for someone, that someone's rights decide below:
-    # a member never changes a bot that is not theirs through either.
-    own = who.role == "bot" and not who.via
-    if own and who.actor == "bot:" + H.FLEET_MAINTAINER:
-        return
-    tools_owner = page_owners.owner(c, "tools")
-    if own and tools_owner and who.actor == tools_owner:
-        return
-    if administrator(c, who, admins):
-        return
-    try:
-        settings_admin._manager(c, who, bot, botops=True)  # Auth.bot_manager, or BotOps' own run
-    except Problem:
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
-        raise Problem(
-            "forbidden",
-            f"Only {name} itself, BotOps, the Tools Owner, a credential admin, or someone who manages {name} changes its "
-            "tools. Ask the Tools Owner in its chat (or BotOps): it makes the change for you",
-            403,
-            extra={"fix": "Ask the Tools Owner to add it: it acts with your rights", "link": "#/tools"},
-        ) from None
+def covered(c, bot, entry):
+    """The bot's grant row (`_granted_tools`) that already gives what `entry` names, by its service or its variable,
+    when the entry adds no note (identity, scope, note or an MCP server): such an entry needs no bot.yaml line, and so no
+    task for BotOps. None otherwise."""
+    if entry.get("identity") or entry.get("note") or entry.get("mcp") or access_entry.scope_of(entry):
+        return None
+    service, env = str(entry.get("service") or "").strip().lower(), str(entry.get("env") or "")
+    for row in _granted_tools(c, bot):
+        envs = {e.strip() for e in row["env"].split(",") if e.strip()}
+        if (service and row["service"] == service) or (env and env in envs):
+            return row
+    return None
 
 
-def register(c, auth, settings_admin, settings, who, bot, body, admins=()):
+def register(c, auth, settings, who, bot, body, admins=()):
     auth.domain(who)
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
-    may_change(c, auth, settings_admin, who, bot, admins)
+    TA.require(
+        c, who, TA.bot(bot), action=TA.NOTE, admins=admins, auth=auth
+    )  # entries are notes: backend/tool_access.py
     try:
         entry = access_entry.clean(body.model_dump())
     except access_entry.EntryError as exc:
         raise Problem(exc.code, str(exc), 422) from None
     if body.dry_run:
         return {"ok": True, "yaml": access_entry.to_yaml(entry), "credentials": CREDENTIALS_NOTE}
+    grant = covered(c, bot, entry)
+    if grant is not None:
+        # Runs are built from grants (credential-runtime): a granted tool reaches the bot and shows on its Tools tab
+        # with no bot.yaml entry, so there is nothing to register and no task to file.
+        return {
+            "tool": grant,
+            "granted": True,
+            "task_id": None,
+            "yaml": access_entry.to_yaml(entry),
+            "credentials": CREDENTIALS_NOTE,
+        }
     state = _state(c, settings, bot)
     if any(_same(entry, declared) for declared in state["raw"]) or any(
         r["kind"] == "add" and _same(entry, r["entry"]) for r in _requests(c, bot)
@@ -884,12 +931,14 @@ def register(c, auth, settings_admin, settings, who, bot, body, admins=()):
     return {"tool": tool, "task_id": task["id"], "yaml": access_entry.to_yaml(entry), "credentials": CREDENTIALS_NOTE}
 
 
-def unregister(c, auth, settings_admin, settings, who, bot, tool_id, admins=()):
+def unregister(c, auth, settings, who, bot, tool_id, admins=()):
     auth.domain(who)
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
-    may_change(c, auth, settings_admin, who, bot, admins)
+    TA.require(
+        c, who, TA.bot(bot), action=TA.NOTE, admins=admins, auth=auth
+    )  # entries are notes: backend/tool_access.py
     requests = _requests(c, bot)
     if tool_id.startswith("pending-"):
         found = next((r for r in requests if "pending-" + r["id"] == tool_id and r["kind"] == "add"), None)
@@ -988,14 +1037,16 @@ def _changed(entry, reported):
     )
 
 
-def update(c, auth, settings_admin, settings, who, bot, tool_id, body, admins=()):
+def update(c, auth, settings, who, bot, tool_id, body, admins=()):
     """Change a declared tool in place: only `can`, `scope`, `note` and an MCP server's `mcp` block. The server holds no bot repository, so this is
     the add path's way: a pending request and one task for BotOps with the whole changed entry. Nothing is removed."""
     auth.domain(who)
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
-    may_change(c, auth, settings_admin, who, bot, admins)
+    TA.require(
+        c, who, TA.bot(bot), action=TA.NOTE, admins=admins, auth=auth
+    )  # entries are notes: backend/tool_access.py
     if tool_id.startswith("pending-"):
         raise Problem(
             "tool", "That tool is not on the bot yet; withdraw the request and add it again with the change", 422
@@ -1132,6 +1183,10 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
                 raise Problem("not_found", "Bot not found", 404)
             result = listing(c, store.settings, bot)
             result["tools"] = _merge_granted(result["tools"], shown_grants(c, who, bot))
+            from .credentials import administrator
+
+            if administrator(c, who, admins()) or who.actor == "bot:" + bot or auth.bot_manager(c, who, bot):
+                result["tools"] += _choices(c, bot, result["tools"])
             from . import task_privacy as privacy
 
             def redact(value):
@@ -1157,7 +1212,7 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         return mutate(
             request,
             body,
-            lambda c: register(c, auth, settings_admin, store.settings, acting(c, who), bot, body, admins()),
+            lambda c: register(c, auth, store.settings, acting(c, who), bot, body, admins()),
         )
 
     def remove(request, bot, tool_id):
@@ -1165,7 +1220,7 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         return mutate(
             request,
             M.Empty(),
-            lambda c: unregister(c, auth, settings_admin, store.settings, acting(c, who), bot, tool_id, admins()),
+            lambda c: unregister(c, auth, store.settings, acting(c, who), bot, tool_id, admins()),
         )
 
     @app.post("/api/v2/bots/{bot}/tools/{tool_id}/update")
@@ -1176,7 +1231,7 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
         return mutate(
             request,
             body,
-            lambda c: update(c, auth, settings_admin, store.settings, acting(c, who), bot, tool_id, body, admins()),
+            lambda c: update(c, auth, store.settings, acting(c, who), bot, tool_id, body, admins()),
         )
 
     @app.delete("/api/v2/bots/{bot}/tools/{tool_id}")

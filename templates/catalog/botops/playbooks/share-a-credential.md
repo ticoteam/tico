@@ -35,8 +35,7 @@ say so kindly, and who can. Do not look for another way in.
 
 ## 4. Check B's connection
 
-Make sure B's `bot.yaml` declares the tool with that variable in `env:` (`tico tool add <B> <service> --can read --env <VARIABLE>`;
-declaring it is the owner's ask, so do it only if they asked B to use the tool). B gets the credential from its next run. Run B's own
+The grant is all B needs: no `bot.yaml` entry, and no task to add one. B gets the credential from its next run. Run B's own
 read-only check (read one Jira project, list one repository) and report in one line what it showed: "Engineering Monitor is connected to
 Jira: project HTM loaded." If it fails, say why in one line; do not try another credential.
 

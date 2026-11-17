@@ -632,8 +632,8 @@ STABLE = [
         "get",
         "Bots",
         "listBotTools",
-        "The tools a bot uses, for the row at the top of its page: its model and harness, its repository and each "
-        "declared `access:` entry, with its status; names and verbs, never a secret",
+        "The tools a bot uses, for the row at the top of its page: its model and harness, its repository, each "
+        "declared `tools:` entry and each tool granted to it in Tools, with its status; names and verbs, never a secret",
         "BotTools",
     ),
     (
@@ -641,8 +641,9 @@ STABLE = [
         "post",
         "Bots",
         "registerBotTool",
-        "Register a tool for a bot you manage: validated, kept as a pending request and handed to BotOps as a task with the "
-        "exact `access:` entry. Never a credential: `env` is a variable's name",
+        "Add a note entry for a bot you manage: validated, kept as a pending request and handed to BotOps as a task with the "
+        "exact `tools:` entry. One that only names a tool the bot already holds through a grant opens no task. Never a "
+        "credential: `env` is a variable's name",
         "BotToolRegistered",
     ),
     (
@@ -964,6 +965,15 @@ STABLE = [
         "listFactories",
         "Company › Factories: each factory's Done count for the period, each pipeline's open count, handoffs and mark",
         "FactoryMap",
+    ),
+    (
+        "/api/v2/company/floor",
+        "get",
+        "Pipelines",
+        "getCompanyFloor",
+        "Company › Floor: each factory you see, its pipelines' tasks in and out over a day and a week, and each work "
+        "stage's open tasks by who holds them (the 12 most loaded, the rest summed) and how many are in your Needs you",
+        "CompanyFloor",
     ),
     (
         "/api/v2/factories",
@@ -3382,17 +3392,31 @@ SCHEMAS = {
         granted={
             "type": "object",
             "description": "The bot can use this tool through a grant in Tools: `level` (read or read_write), `kind` "
-            "(api, mcp, website, or key for a key on no tool), `href` (where it opens in Tools) and `tool_id`. A tool "
-            "both declared in bot.yaml and granted is one row with this set",
+            "(api, mcp, website, or key for a key on no tool), `href` (where it opens in Tools), `tool_id`, and `default` "
+            "true when it reads the tool because Everyone can read, with no grant of its own. A tool both declared in "
+            "bot.yaml and granted is one row with this set",
         },
         kind={"enum": ["mcp"], "description": "`mcp` when the tool is a remote MCP server (see `mcp`)"},
+        choose={
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Several tools anyone can read give this variable (`env`), so the bot gets none of them "
+            "until a person grants one: their ids. Shown to the bot, its managers and credential admins",
+        },
         mcp={
             "type": "object",
             "description": "A remote MCP server: `host` (its URL's host), `transport` (http or sse) and "
             "`status` from the runner's cheap check (reachable, auth_failed, unreachable, unchecked). Never the headers",
         },
     ),
-    "BotToolRegistered": obj({"tool": ref("BotTool"), "task_id": "s", "yaml": "s", "credentials": "s"}),
+    "BotToolRegistered": obj(
+        {"tool": ref("BotTool"), "task_id": "n", "yaml": "s", "credentials": "s"},
+        granted={
+            "type": "boolean",
+            "description": "The bot already holds this tool through a grant in Tools: no entry is needed, so no task "
+            "was opened (`task_id` null) and `tool` is the granted row",
+        },
+    ),
     "BotToolUpdated": obj(
         {"task_id": "s", "yaml": "s", "credentials": "s"},
         required=["task_id"],
@@ -3503,6 +3527,42 @@ SCHEMAS = {
                     }
                 )
             ),
+        }
+    ),
+    "CompanyFloor": obj(
+        {
+            "factories": items(
+                obj(
+                    {
+                        "id": "s",
+                        "name": "s",
+                        "manager_id": "n",
+                        "pipelines": items(
+                            obj(
+                                {
+                                    "id": "s",
+                                    "name": "s",
+                                    "manager_id": "n",
+                                    "in": obj({"day": "i", "week": "i"}),
+                                    "out": obj({"day": "i", "week": "i"}),
+                                    "stages": items(
+                                        obj(
+                                            {
+                                                "id": "s",
+                                                "name": "s",
+                                                "count": "i",
+                                                "needs_you": "i",
+                                                "owners": items(obj({"actor": "s", "count": "i", "needs_you": "i"})),
+                                                "more": obj({"owners": "i", "count": "i"}),
+                                            }
+                                        )
+                                    ),
+                                }
+                            )
+                        ),
+                    }
+                )
+            )
         }
     ),
     "FactoryCreated": obj({"factory": obj({"id": "s", "name": "s", "goal": "s"}, required=["id", "name"])}),
@@ -8241,6 +8301,10 @@ SCHEMAS['ApiToolSettings'] = obj(
         'check_path': 's',
         'delivery': {'enum': ['proxy', 'computer']},
         'private': 'b',
+        'everyone_reads': {
+            'type': 'boolean',
+            'description': 'Everyone can read: every bot reads it with no grant, where Read can be held to reads',
+        },
     }
 )
 SCHEMAS['ApiTool'] = obj(
@@ -8325,6 +8389,11 @@ SCHEMAS['ApiTool'] = obj(
             ],
             'description': 'A remote MCP server (Tools > Add > MCP server): its address, how it signs in, who signed '
             'in, and the tools its last check listed; null for an API tool',
+        },
+        'everyone_reads': obj({'on': 'b', 'enforceable': 'b'})
+        | {
+            'description': 'Every bot reads the tool with no grant while `on` (backend/default_read.py); never where '
+            'Read cannot be held to reads (`enforceable` false), whatever the switch says'
         },
     },
     required=['tool', 'keys', 'access', 'checks', 'recent', 'status', 'can_manage', 'private', 'can_set_audience'],

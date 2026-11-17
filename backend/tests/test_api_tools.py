@@ -11,7 +11,7 @@ import pytest
 from backend import api_tools
 from backend.store import Problem
 from backend.tests.helpers.api import get, headers, post
-from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.credentials import explicit_only, setup
 from backend.tests.helpers.api_tools import key, level, tool
 
 SECRET_RW = "acme-close-synthetic-rw-0011223344"
@@ -30,6 +30,7 @@ def test_a_level_picks_its_key_and_setting_one_takes_the_others_away(api):
     tid = made["id"]
     assert (made["base_url"], made["delivery"]) == ("https://api.close.com", "proxy")
     full = key(api, tid, SECRET_RW)["id"]
+    explicit_only(api)  # what explicit grants alone give
     # One key: Read is that key held at Read (the proxy then allows only reads).
     level(api, tid, "bot:ops", "read")
     assert choose(api, tid, "bot:ops") == (full, "read", "read")

@@ -17,7 +17,7 @@ interface TrAttempt {
   id: string; state: string; outcome?: string | null; reason?: string | null; try: number; tries: number; bot?: string | null;
   waiting?: boolean; paused?: boolean; moved?: boolean; took_s?: number | null; started_at?: string | null; created_at?: string | null;
   ran_on?: TrRanOn | null; decision?: TrDecision | null; next?: TrNext | null; lease?: Array<{ kind: string; at: string }> | null;
-  wake?: TrWake | null; background?: TrShell[] | null; subagents?: TrSubagent[] | null;
+  wake?: TrWake | null; told?: string | null; background?: TrShell[] | null; subagents?: TrSubagent[] | null;
   cache_read_tokens?: number | null; cache_write_tokens?: number | null;
 }
 interface TaskRunsView { runs?: TrAttempt[] | null; checkpoint?: { text: string; by?: string | null; at?: string | null } | null; }
@@ -98,11 +98,13 @@ function runAttemptHTML(a: TrAttempt, open: boolean): string {
   // (backend/wake_presets.py record).
   const woke = a.wake ? `<p class="muted truns-wake">Woke for: ${esc([a.wake.reason, a.wake.profile_label || a.wake.preset_label].filter(Boolean).join(' · '))}${a.wake.held_until
     ? ` · held until ${esc(timeSaid(a.wake.held_until))}` : ''}</p>${runReleaseHTML(a)}` : '';
+  // What Tico told the bot when its notice woke the turn: in no chat, so read here (backend/run_view.py told).
+  const told = a.told ? `<div class="truns-told"><div class="lbl">Tico told it</div><div class="truns-told-text">${esc(a.told)}</div></div>` : '';
   const background = a.background || [];
   const shells = background.length ? `<div class="truns-sub"><div class="lbl">Background</div><ul class="truns-list">${background.map(runShellHTML).join('')}</ul></div>` : '';
   return `<details class="truns-try${a.state === 'running' || a.state === 'leased' ? ' live' : ''}"${open ? ' open' : ''} data-run="${esc(a.id)}">
     <summary><span>${esc(head)}</span><span class="muted tnum" title="${esc(fmt(a.started_at || a.created_at))}">${esc(ago(a.started_at || a.created_at))}</span></summary>
-    ${woke}${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${[a.waiting, a.paused, a.moved, ranOnNote(a.ran_on)].filter(Boolean).map(t =>
+    ${woke}${told}${a.reason ? `<p class="truns-reason">${esc(a.reason)}</p>` : ''}${[a.waiting, a.paused, a.moved, ranOnNote(a.ran_on)].filter(Boolean).map(t =>
       `<p class="muted truns-moved">${esc(t)}</p>`).join('')}${runReportHTML(a)}${lease ? `<ul class="truns-list truns-lease">${lease}</ul>` : ''}${nxt}
     ${runAgentsHTML(a.subagents || [], ranOn(a.ran_on, false))}${shells}
     ${(a.subagents || []).length || shells || nxt || a.reason || a.waiting || a.paused || a.moved || ranOnNote(a.ran_on) ? '' : '<p class="muted truns-empty">No subagents or background work.</p>'}</details>`;

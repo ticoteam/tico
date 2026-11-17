@@ -11,7 +11,7 @@ import pytest
 from backend import egress
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401
-from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.credentials import explicit_only, setup
 
 FULL = "close-synthetic-full-key-4815162342"
 READ = "close-synthetic-read-key-2718281828"
@@ -165,6 +165,7 @@ def test_a_token_works_only_for_its_tool_and_its_live_run(api):
     with api.app.state.store.transaction() as c:
         stolen = tool_proxy.mint(c, api.app.state.vault, "close-crm", "bot:ops", attempt=other["id"])
     assert call(api, "GET", "api/v1/me/", stolen).status_code == 401
+    explicit_only(api)  # what explicit grants alone give
     # Taking the level away stops the next call, naming the setting.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE credential_grants SET revoked_at=? WHERE subject='bot:ops'", (H.now(),))

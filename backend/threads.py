@@ -3167,11 +3167,13 @@ def search(c, v, query, *, limit=20, before=None):
     from . import thread_search
 
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    # A person finds what a timeline shows: Tico's notices to a bot have no seq (H.run_notice).
+    shown = "" if v.is_bot else " AND m.seq IS NOT NULL"
     found = thread_search.search(
         c,
         query,
         thread_sql=readable_sql(c, v, "cv"),
-        message_sql=message_sql(c, v, "m"),
+        message_sql=f"({message_sql(c, v, 'm')}){shown}",
         readable=lambda m: message_readable(c, v, m),
         limit=limit,
         before=before,
@@ -4727,8 +4729,8 @@ def reply_quotes(c, v, items):
     """{message id: its `reply_to`} for these shown timeline messages: the message each answers (`in_reply_to`, a
     carrier read as what it carries), else a sub-thread message's parent. `{"id", "author", "author_name", "excerpt"}`
     when the viewer reads it, `{"id", "hidden": true}` when not, None for no quote. A run's reply in a DM or Home quotes
-    nothing: it answers the message right above it. Two queries for the targets, one for the threads and one readable
-    check of the targets' threads, whatever the page."""
+    nothing: it answers the message right above it; nor does a reply to Tico's notice to a bot (H.run_notice). Two
+    queries for the targets, one for the threads and one readable check of the targets' threads, whatever the page."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     items = [i for i in items if i.get("id") and not i.get("hidden") and not i.get("deleted")]
     if not items:
@@ -4776,7 +4778,9 @@ def reply_quotes(c, v, items):
     names = lookup(c, {known.name(m.get("sender_id") or "", m["conversation_id"]) for m in shown.values()} - {""})
     out = {}
     for item_id, target in wanted.items():
-        if not target:
+        told = found.get(target) or {}
+        if not target or H.run_notice(told.get("sender_id"), told.get("recipient_id")):
+            # Tico's notice to a bot is its run's input, in no timeline: a reply to it answers nothing anyone reads.
             out[item_id] = None
             continue
         m = shown.get(target)

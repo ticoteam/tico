@@ -1475,8 +1475,7 @@ def test_a_person_who_manages_the_bot_stops_its_turn_and_the_next_message_runs(a
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'canceled'
         assert H.status(c, 'ops')['state'] == 'idle'
     assert get(api, 'bots/ops/execution-review')['jobs'] == []
-    notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
-    assert notice['body'].startswith('Stopped by ') and notice['kind'] == 'notice'
+    assert told_stopped(api, message) == ['Stopped by Ana']
     # The stopped job is not retried, and the notice starts no run: the person's next message is what runs.
     follow_up = post(api, 'chat/ops', {'text': 'Do this instead.'})
     assert claim(api, machine)['job_id'] == follow_up['id']
@@ -1753,12 +1752,21 @@ def stopped_notices(api, message, attempt):
         events = c.execute(
             "SELECT count(*) FROM events WHERE action='attempt.stopped' AND target=?", (attempt['id'],)
         ).fetchone()[0]
-    notices = [
-        m['body']
-        for m in get(api, f"conversations/{message['conversation_id']}/messages")
-        if m['kind'] == 'notice' and m['body'].startswith('Stopped by ')
-    ]
-    return events, notices
+    return events, told_stopped(api, message)
+
+
+def told_stopped(api, message):
+    """Tico's "Stopped by" notices to the bot in the room, read as its next run reads the room: no person's chat shows
+    them."""
+    with api.app.state.store.read() as c:
+        return [
+            r[0]
+            for r in c.execute(
+                "SELECT body FROM messages WHERE conversation_id=? AND sender_id='keeper' AND kind='notice' "
+                "AND body LIKE 'Stopped by %' ORDER BY rowid",
+                (message['conversation_id'],),
+            )
+        ]
 
 
 def test_a_stop_pressed_after_the_lease_lapsed_is_recorded_and_the_late_answer_is_filed(api):
