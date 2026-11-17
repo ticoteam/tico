@@ -16,7 +16,9 @@ from the reader never shows, nor does its existence. Each list is paged and byte
 
 import base64
 import json
+import logging
 
+from . import task_privacy
 from . import threads as T
 from .store import H, Problem
 
@@ -30,13 +32,17 @@ CATCH_UP_THREADS = 1000  # threads of one subtree an item reads its new messages
 CATCH_UP_BODY = 4000  # a shown message's text is cut here (`clipped`); the thread has it whole
 CATCH_UP_CLIP = 500  # a message too big for what is left of the page goes without refs, its text cut here
 CATCH_UP_READS = 5  # batches of candidate messages one item reads whole, at most
-CATCH_UP_HIDDEN = 200  # messages that can hide, read whole to count one batch of roots' new messages
+CATCH_UP_HIDDEN = 2000  # messages that can hide, read whole in one walk to prove each root has a new one to show
+CATCH_UP_COUNTED = 2000  # messages that can hide, read whole to count the new messages of the items one load shows
+WALK_ROUNDS = (1, 5, 21)  # a root still unproved has its hidden messages checked up to these places, a round each
+COUNT_ROUNDS = 4  # rounds `_count_exact` shares CATCH_UP_COUNTED over, at most
 CATCH_UP_SCAN = 1000  # roots one Catch up looks at, over all its pages
 CATCH_UP_BATCH = 100  # roots read and checked together
 CATCH_UP_SHOWN = 99  # `count` stops here (the sidebar badge), and the rail's `unread` with it
 ATTENTION_SCAN = 500  # open mentions and asks read for one Catch up
 DONE = 0  # a rail cursor's list that has no more rows
 EVERYONE_REFUSED = ("home", "task", "meeting")
+log = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------------- shared SQL
@@ -368,6 +374,7 @@ def _unread_items(c, v, found, kind, args, marks):
         members = T._member_rows(c, v, [r["id"] for r in dms])
         held -= {r["id"] for r in dms if len(_others(c, v, r, members[r["id"]])) < 2}
     off = [it for it in found if it["row"]["id"] not in held]
+    _count_exact(c, v, off)
     with_dm = T.dm_with(c, v, [it["row"] for it in off])
     out = []
     for it in off:
@@ -385,6 +392,7 @@ def _unread_items(c, v, found, kind, args, marks):
                 "dm_with_count": int(dm.get("dm_with_count") or 0),
                 "home_actor": T.home_owner(r) if audience == "home" else None,
                 "new_count": it["new_count"],
+                "new_count_partial": not it.get("exact", True),
                 "mention": it["mention"],
                 "task_id": r.get("task_id"),
                 "last_message_at": r.get("last_message_at"),
@@ -538,8 +546,17 @@ def _readable_ids(c, v, light):
 
 def _prime(c, rows):
     """Before the per-message check of these stored rows: their lookups, reply chains, refs and runs read together
-    (threads.prime_checks), so a reader with hundreds of bot replies waiting costs a fixed number of statements."""
+    (threads.prime_checks), and each room's conversation and meeting provenance, so a reader with hundreds of bot
+    replies waiting costs a fixed number of statements."""
+    if not rows:
+        return
+    from . import read_cache, task_privacy
+
     T.prime_checks(c, rows)
+    rooms = {r["conversation_id"] for r in rows}
+    H.prime_conversations(c, rooms)
+    if read_cache.cache(c) is not None:  # each room's meeting provenance, kept only while this snapshot's cache lives
+        task_privacy.meeting_sources(c).prime_conversations(rooms)
 
 
 def _readable_rows(c, v, rows):
@@ -650,11 +667,12 @@ def _mentioned(c, v):
     return {r["root"] for r in _readable_rows(c, v, rows)}
 
 
-def _readable_new(c, v, roots):
-    """{root id: how many new messages of its open subtree the reader may read}: subtree_summaries' unread, through the
-    thread check for each sub-thread (at most CATCH_UP_THREADS a root) and the per-message check for each message that
-    can hide (at most CATCH_UP_HIDDEN read whole a call; past that they are not counted)."""
-    mark, subtree, legacy = T._subtree_mark(c, v), T._SUBTREE.format(me="?"), T._legacy_homes(c)
+def _unread_groups(c, v, roots):
+    """({root id: new messages the reader surely may read}, {root id: {thread id: messages that can hide}}) for these
+    roots' open subtrees: subtree_summaries' unread, through the thread check for each sub-thread (at most
+    CATCH_UP_THREADS a root). A plain message counts here in SQL; a restricted one, or any in a migrated Home, can hide
+    and waits for the per-message check (`_hidden_checks`)."""
+    legacy = T._legacy_homes(c)
     groups = []
     for part in H.chunks(list(roots)):
         unread_sql, args = T._subtree_unread_sql(c, v, part)
@@ -669,42 +687,116 @@ def _readable_new(c, v, roots):
             )
         ]
     found, _ = T.read_threads(c, v, [g["thread"] for g in groups if g["thread"] != g["root"]])
-    out, hidden = {}, []
+    sure, hidden = {}, {}
     for g in groups:
         if g["thread"] != g["root"] and not (found.get(g["thread"]) and T.thread_readable(c, v, found[g["thread"]])):
             continue
-        sure = 0 if g["thread"] in legacy else int(g["plain"] or 0)
-        out[g["root"]] = out.get(g["root"], 0) + sure
-        if int(g["n"]) > sure:
-            hidden.append(g)
-    budget, whole = CATCH_UP_HIDDEN, []
-    # Each thread's oldest unread messages that can hide (any of them in a migrated Home's thread), up to what is left
-    # of the budget, in the threads' order: read for a batch of threads in one query, not one query a thread.
-    for start in range(0, len(hidden), CATCH_UP_BATCH):
-        if budget <= 0:
+        plain = 0 if g["thread"] in legacy else int(g["plain"] or 0)
+        sure[g["root"]] = sure.get(g["root"], 0) + plain
+        if int(g["n"]) > plain:
+            hidden.setdefault(g["root"], {})[g["thread"]] = int(g["n"]) - plain
+    return sure, hidden
+
+
+def _hidden_window(c, v, hidden, low, high, most):
+    """The messages that can hide at places low < k <= high (oldest first) of each thread in `hidden` ({root id: {thread
+    id: ...}}), at most `most` in all, the nearest places first so every thread gets its share: [(root id, row)]. One
+    statement a chunk of roots for the places, then the rows read whole in chunks, primed for the per-message check."""
+    if most <= 0 or not hidden:
+        return []
+    legacy = T._legacy_homes(c)
+    places = []
+    for part in H.chunks(list(hidden)):
+        unread_sql, args = T._subtree_unread_sql(c, v, part)
+        wanted = [t for r in part for t in hidden[r]]
+        places += [
+            (r["root"], r["id"])
+            for r in c.execute(
+                f"WITH unread AS ({unread_sql}) SELECT root, id FROM (SELECT root, id, ROW_NUMBER() OVER "
+                "(PARTITION BY thread ORDER BY seq) AS k FROM unread WHERE thread IN (SELECT value FROM "
+                "json_each(:wanted)) AND (NOT plain OR thread IN (SELECT value FROM json_each(:legacy)))) "
+                "WHERE k>:low AND k<=:high ORDER BY k, root, id LIMIT :most",
+                {
+                    **args,
+                    "wanted": json.dumps(wanted),
+                    "legacy": json.dumps(sorted(t for t in wanted if t in legacy)),
+                    "low": low,
+                    "high": high,
+                    "most": most - len(places),
+                },
+            )
+        ]
+        if len(places) >= most:
             break
-        part = hidden[start : start + CATCH_UP_BATCH]
-        ids = [g["thread"] for g in part]
-        found = {tid: [] for tid in ids}
-        for r in c.execute(
-            f"SELECT * FROM (SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.conversation_id ORDER BY m.seq) "
-            f"AS hidden_rank FROM {subtree}JOIN messages m ON m.conversation_id=s.id AND m.seq>{mark} "
-            f"WHERE s.id IN ({','.join('?' * len(ids))}) AND {T.unread_message_sql()} "
-            f"AND (s.id IN (SELECT value FROM json_each(?)) OR NOT {PLAIN})) WHERE hidden_rank<=? ORDER BY seq",
-            (v.actor, *ids, v.actor, v.actor, json.dumps(sorted(set(ids) & set(legacy))), budget),
-        ).fetchall():
-            row = dict(r)
-            row.pop("hidden_rank")
-            found[row["conversation_id"]].append(row)
-        for g in part:
-            taken = found[g["thread"]][: max(budget, 0)]
-            budget -= len(taken)
-            whole += [(g["root"], r) for r in taken]
-    _prime(c, [r for _, r in whole])
-    for root, r in whole:
-        if T.message_readable(c, v, r, thread_checked=True):
-            out[root] += 1
+    root_of = dict((mid, root) for root, mid in places)
+    rows = [
+        dict(r)
+        for part in H.chunks(list(root_of))
+        for r in c.execute(f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(part))})", part)
+    ]
+    _prime(c, rows)
+    return [(root_of[r["id"]], r) for r in rows]
+
+
+def _readable_new(c, v, roots, left):
+    """{root id: (new messages the reader may read, at least; whether that is every one)} for Catch up's walk, which
+    only asks whether a root has one. A root with a plain new message has it; any other is checked a message at a time
+    (oldest first, in rounds of 1, then 4, then 16 a thread, every root getting its turn before any gets more), until one
+    passes. `left` ([checks left]) is the walk's budget, CATCH_UP_HIDDEN over all its batches; a root still unproved when
+    it runs out is left out and logged (`catch_up_unchecked`)."""
+    sure, hidden = _unread_groups(c, v, roots)
+    out = {r: (n, r not in hidden) for r, n in sure.items()}
+    waiting = {r: t for r, t in hidden.items() if not sure.get(r)}
+    found, low = {}, 0
+    for high in WALK_ROUNDS:
+        if not waiting or left[0] <= 0:
+            break
+        rows = _hidden_window(c, v, waiting, low, high, left[0])
+        left[0] -= len(rows)
+        for root, r in rows:
+            if root not in found and T.message_readable(c, v, r, thread_checked=True):
+                found[root] = 1
+        waiting = {r: t for r, t in waiting.items() if r not in found}
+        low = high
+    for root in found:
+        out[root] = (1, sum(hidden[root].values()) == 1)
+    if waiting and left[0] <= 0:
+        log.warning("catch_up_unchecked reader=%s roots=%d", v.actor, len(waiting))
     return out
+
+
+def _count_exact(c, v, items):
+    """Give these Catch up items (the cards on a page, the rail's Unread rows) their whole count: every new message of
+    the subtree the reader may read, each message that can hide read whole for its check, CATCH_UP_COUNTED in all,
+    shared out evenly over the threads. An item whose count stops there keeps what was found and `partial` true."""
+    todo = {it["row"]["id"]: it for it in items if not it.get("exact", True)}
+    if not todo:
+        return
+    sure, hidden = _unread_groups(c, v, list(todo))
+    counts, low, left, rounds = dict(sure), 0, CATCH_UP_COUNTED, 0
+    waiting = {r: dict(t) for r, t in hidden.items()}
+    while waiting and left > 0 and rounds < COUNT_ROUNDS:
+        rounds += 1
+        threads = sum(len(t) for t in waiting.values())
+        high = low + max(1, left // threads)
+        rows = _hidden_window(c, v, waiting, low, high, left)
+        cut, left = len(rows) >= left, left - len(rows)
+        for root, r in rows:
+            if T.message_readable(c, v, r, thread_checked=True):
+                counts[root] = counts.get(root, 0) + 1
+        if cut:
+            break  # the budget ran out inside this round: every thread still waiting stops short
+        # A thread is done once its places up to `high` hold every message that can hide in it.
+        waiting = {
+            r: {t: n for t, n in ts.items() if n > high}
+            for r, ts in waiting.items()
+            if any(n > high for n in ts.values())
+        }
+        low = high
+    for root, it in todo.items():
+        n = counts.get(root, 0)
+        it["unread"], it["exact"] = n, root not in waiting
+        it["new_count"] = n or 1
 
 
 def _walk(c, v, flags, after=None):
@@ -738,6 +830,7 @@ def _walk(c, v, flags, after=None):
         "AND mf.actor=:me AND mf.notify='muted'))",
     ]
     scanned = int(after[3]) if after else 0
+    left = [CATCH_UP_HIDDEN]
     for rank, phase in ((0, is_mention), (1, f"NOT {is_mention}")):
         if after and int(after[0]) > rank:
             continue
@@ -756,12 +849,14 @@ def _walk(c, v, flags, after=None):
                     {**args, **at, "batch": batch},
                 )
             ]
-            T.prime_members(c, v, [r["id"] for r in found], roots=[r["id"] for r in found])
+            ids = [r["id"] for r in found if r]
+            T.prime_members(c, v, ids, roots=ids)
+            task_privacy.prime_rooms(c, ids)  # their meeting provenance too, not one room at a time
             readable = {r["id"] for r in found if T.thread_readable(c, v, r)}
             # A bot's Home counts only `_home_replies`, already checked: counting its messages again would spend the
             # per-message checks (and CATCH_UP_HIDDEN) on a number that is never used.
             bot_homes = {r["id"] for r in found if r and _is_bot_home(r, v)}
-            counts = _readable_new(c, v, [i for i in readable if i not in history and i not in bot_homes])
+            counts = _readable_new(c, v, [i for i in readable if i not in history and i not in bot_homes], left)
             for r in found:
                 scanned += 1
                 position = [int(r["activity"] or 0), r["id"]]
@@ -770,7 +865,7 @@ def _walk(c, v, flags, after=None):
                 mention = r["id"] in mentions
                 # In a bot's Home only its replies and mentions for the reader count (`_home_replies`).
                 rid = str(position[1])
-                unread = homes.get(rid, 0) if _is_bot_home(r, v) else counts.get(rid, 0)
+                unread, exact = (homes.get(rid, 0), True) if _is_bot_home(r, v) else counts.get(rid, (0, True))
                 # An item has a new message the reader may read, or an open attention item they read.
                 if not unread and r["id"] not in held and not mention:
                     continue
@@ -781,6 +876,7 @@ def _walk(c, v, flags, after=None):
                     "mention": mention,
                     "new_count": unread or 1,
                     "unread": unread,
+                    "exact": exact,
                     "attention": mentions.get(r["id"]) or [],
                     "scanned": scanned,
                 }
@@ -833,6 +929,7 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         found = _first(_walk(c, v, flags), max(limit + 1, CATCH_UP_SHOWN))
         count = min(len(found), CATCH_UP_SHOWN)
     page, more = found[:limit], len(found) > limit
+    _count_exact(c, v, page)
     v._members = {}
     try:
         shown = _views(c, v, [it["row"] for it in page])
@@ -840,7 +937,12 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         v._members = None
     items, budget, tail = [], T.MAX_PAGE_BYTES, None
     for it in page:
-        head = {"thread": shown[it["row"]["id"]], "new_count": it["new_count"], "mention": it["mention"]}
+        head = {
+            "thread": shown[it["row"]["id"]],
+            "new_count": it["new_count"],
+            "new_count_partial": not it.get("exact", True),
+            "mention": it["mention"],
+        }
         head_size = len(json.dumps(head, default=str)) + 32
         if items and head_size > budget:
             more = True
