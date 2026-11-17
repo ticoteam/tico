@@ -32,6 +32,7 @@ from . import blobs, gateway_connection, hubdb as H, lifecycle, task_asks
 from .auth import bot_identity, validate_identity
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.letters")
 SUBJECT = "letter:"  # an OK's subject for one letter: SUBJECT + its id
@@ -1264,7 +1265,12 @@ class Letters:
 def install(app, config, store, auth, mutate):
     service = app.state.letters = Letters(app, store, auth, config)
 
-    @app.get("/api/v2/letters/settings")
+    @app.get(
+        "/api/v2/letters/settings",
+        **api_v2(
+            "Letters out", "getLettersSettings", "Company return address, mode, cap and setup state", "LettersSettings"
+        ),
+    )
     def read_settings(request: Request, check: bool = False):
         if check:
             require_admin(auth, request.state.identity)
@@ -1278,7 +1284,12 @@ def install(app, config, store, auth, mutate):
             auth.domain(request.state.identity)
             return settings(c)
 
-    @app.put("/api/v2/letters/settings")
+    @app.put(
+        "/api/v2/letters/settings",
+        **api_v2(
+            "Letters out", "setLettersSettings", "Owner or admin sets company Letters out policy", "LettersSettings"
+        ),
+    )
     def save_settings(request: Request, body: Settings):
         def work(c):
             require_admin(auth, request.state.identity)
@@ -1294,13 +1305,19 @@ def install(app, config, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/letters/access")
+    @app.get(
+        "/api/v2/letters/access",
+        **api_v2("Letters out", "getLettersAccess", "Whether the caller has sending access", "LettersAccess"),
+    )
     def access(request: Request):
         with store.read() as c:
             auth.domain(request.state.identity)
             return {"send": can_send(c, auth, request.state.identity), "outbox_id": "company"}
 
-    @app.get("/api/v2/letters/outboxes/{outbox_id}/grants")
+    @app.get(
+        "/api/v2/letters/outboxes/{outbox_id}/grants",
+        **api_v2("Letters out", "listLettersGrants", "Sending grants on the company outbox", "LettersGrants"),
+    )
     def grants(
         request: Request,
         outbox_id: Literal["company"],
@@ -1325,7 +1342,10 @@ def install(app, config, store, auth, mutate):
                 used += size
             return {"outbox_id": outbox_id, "grants": shown, "next": None}
 
-    @app.put("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}")
+    @app.put(
+        "/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}",
+        **api_v2("Letters out", "grantLettersAccess", "Owner or admin grants send access", "LettersGrant"),
+    )
     def grant(
         request: Request,
         outbox_id: Literal["company"],
@@ -1366,7 +1386,10 @@ def install(app, config, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}")
+    @app.delete(
+        "/api/v2/letters/outboxes/{outbox_id}/grants/{grantee_type}/{grantee_id}",
+        **api_v2("Letters out", "revokeLettersAccess", "Owner or admin revokes send access", "LettersRevoked"),
+    )
     def revoke(
         request: Request, outbox_id: Literal["company"], grantee_type: Literal["bot", "person"], grantee_id: str
     ):
@@ -1389,7 +1412,15 @@ def install(app, config, store, auth, mutate):
 
         return mutate(request, Contract(), work)
 
-    @app.get("/api/v2/letters/bots/{bot_id}/settings")
+    @app.get(
+        "/api/v2/letters/bots/{bot_id}/settings",
+        **api_v2(
+            "Letters out",
+            "getBotLettersSettings",
+            "Bot's sending policy override and optional cap",
+            "LetterBotSettings",
+        ),
+    )
     def bot_settings(request: Request, bot_id: str):
         with store.read() as c:
             if not H.bot(c, bot_id):
@@ -1399,7 +1430,15 @@ def install(app, config, store, auth, mutate):
             row = c.execute("SELECT * FROM letter_bot_settings WHERE bot_id=?", (bot_id,)).fetchone()
             return dict(row) if row else {"bot_id": bot_id, "mode": None, "monthly_cap_micros": None}
 
-    @app.put("/api/v2/letters/bots/{bot_id}/settings")
+    @app.put(
+        "/api/v2/letters/bots/{bot_id}/settings",
+        **api_v2(
+            "Letters out",
+            "setBotLettersSettings",
+            "Bot manager sets a policy that cannot loosen company policy",
+            "LetterBotSettings",
+        ),
+    )
     def save_bot_settings(request: Request, bot_id: str, body: BotSettings):
         def work(c):
             if not H.bot(c, bot_id):
@@ -1425,11 +1464,17 @@ def install(app, config, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/letters/quotes")
+    @app.post(
+        "/api/v2/letters/quotes",
+        **api_v2("Letters out", "quoteLetter", "Quote a PDF or rendered text without sending", "LetterOut"),
+    )
     def quote(request: Request, body: Quote):
         return service.quote(request.state.identity, body)
 
-    @app.get("/api/v2/letters")
+    @app.get(
+        "/api/v2/letters",
+        **api_v2("Letters out", "listLetters", "Letters the caller may read, paged and byte capped", "LetterOutPage"),
+    )
     def listing(request: Request, before: str = "", limit: int = Query(default=25, ge=1, le=50)):
         with store.read() as c:
             auth.domain(request.state.identity)
@@ -1452,7 +1497,10 @@ def install(app, config, store, auth, mutate):
                 used += size
             return {"items": shown, "next_before": cursor if len(rows) == 501 else None}
 
-    @app.get("/api/v2/letters/{letter_id}")
+    @app.get(
+        "/api/v2/letters/{letter_id}",
+        **api_v2("Letters out", "getLetter", "Letter, approved proof and tracking", "LetterOut"),
+    )
     def detail(request: Request, letter_id: str):
         """The letter. For the person it waits on, in their own session, it is the preview their OK is bound to:
         `shown_hash` is what the OK sends back (POST /api/v2/tasks/{task}/asks/{approval_id}/ok)."""
@@ -1470,10 +1518,21 @@ def install(app, config, store, auth, mutate):
                     )
         return out
 
-    @app.post("/api/v2/letters/{letter_id}/send")
+    @app.post(
+        "/api/v2/letters/{letter_id}/send",
+        **api_v2("Letters out", "sendLetter", "Ask first or submit under the sending policy", "LetterOut"),
+    )
     def send(request: Request, letter_id: str):
         return service.send(request.state.identity, letter_id)
 
-    @app.post("/api/v2/letters/{letter_id}/cancel")
+    @app.post(
+        "/api/v2/letters/{letter_id}/cancel",
+        **api_v2(
+            "Letters out",
+            "cancelLetter",
+            "Request cancellation; pass through the provider's honest refusal",
+            "LetterOut",
+        ),
+    )
     def cancel(request: Request, letter_id: str):
         return service.cancel(request.state.identity, letter_id)

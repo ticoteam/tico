@@ -31,6 +31,7 @@ from .maintenance_steps import check_health, clean_up, collect, dream, learn, su
 from .store import H, Problem
 from .updates import START_HOUR, ZONE
 from . import sources as SRC
+from .api_contract import api_v2
 
 LOG = logging.getLogger("tico.maintenance")
 REGISTRY_KEY = "maintenance"  # registry_metadata: the run's schedule, pause and monthly cap
@@ -755,7 +756,14 @@ def install(app, store, auth, mutate):
 
     from . import models as M
 
-    @app.get("/api/v2/maintenance")
+    @app.get(
+        "/api/v2/maintenance",
+        **api_v2(
+            "Health",
+            "getMaintenance",
+            "The Maintenance run: its schedule, pause and monthly judge cap, each step with its switch, how often it runs and its cursor, Learn's seven-day stats, the last run, the live run, the next run, and whether the viewer may change it",
+        ),
+    )
     def maintenance(request: Request):
         """The Maintenance run: its schedule, pause and monthly cap, each step with its switch, "How often" and cursor,
         the last run, the live run, the next run, and `can_change` for this viewer. Any signed-in person reads it."""
@@ -764,7 +772,15 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return listing(c, store.settings, auth, who)
 
-    @app.patch("/api/v2/maintenance")
+    @app.patch(
+        "/api/v2/maintenance",
+        **api_v2(
+            "Health",
+            "saveMaintenance",
+            "The owner or an admin: change the schedule, the pause or the monthly cap, and each step's switch, how often it runs or its number of bots. Only what is sent changes",
+            "MaintenanceUpdate",
+        ),
+    )
     def maintenance_save(request: Request, body: M.MaintenanceUpdate):
         """Change the run's schedule, pause or monthly cap, and each step's switch, "How often" or number of bots. Only
         what is sent changes. An owner or an admin."""
@@ -780,7 +796,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return listing(c, store.settings, auth, who)
 
-    @app.get("/api/v2/maintenance/runs")
+    @app.get(
+        "/api/v2/maintenance/runs",
+        **api_v2(
+            "Health",
+            "listMaintenanceRuns",
+            "Maintenance runs, newest first, a page at a time, each with its step rows. Pass `next` back as `before`",
+        ),
+    )
     def maintenance_runs(request: Request, limit: int = 25, before: str | None = None):
         """Maintenance runs, newest first, a page at a time, each with its step rows. Pass `next` back as `before`."""
         who = request.state.identity
@@ -788,7 +811,15 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return runs(c, limit, before)
 
-    @app.post("/api/v2/maintenance/run")
+    @app.post(
+        "/api/v2/maintenance/run",
+        **api_v2(
+            "Health",
+            "runMaintenance",
+            "The owner or an admin: run now, every step or only `step`, due by the same rules as a scheduled run; a run already live is returned instead of a second one",
+            "MaintenanceRunRequest",
+        ),
+    )
     def maintenance_run(request: Request, body: M.MaintenanceRunRequest):
         """Run now: one run, due by the same rules as a scheduled one. `step` runs only that step, even when it is not due. A run already live is
         returned instead of a second, and a repeat of the same Idempotency-Key returns the run that key made. `started` is false in either case.

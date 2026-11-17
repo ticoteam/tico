@@ -15,6 +15,7 @@ from fastapi import Request
 from . import models as M
 from . import pipeline_settings
 from .store import Problem
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -34,7 +35,7 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
         row = c.execute("SELECT * FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
         return {**found, "may_change": pipeline_settings.may_change(c, who.actor, dict(row))}
 
-    @app.get("/api/v2/pipelines")
+    @app.get("/api/v2/pipelines", **api_v2("Pipelines", "listPipelines", "Every pipeline, each as its settings record"))
     def pipelines(request: Request):
         """Every pipeline, in the order they were made, each as its settings record."""
         who: Any = request.state.identity
@@ -43,14 +44,21 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             ids = [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY created_at, id")]
             return {"pipelines": [record(c, who, pid) for pid in ids]}
 
-    @app.get("/api/v2/pipelines/{pipeline_id}")
+    @app.get("/api/v2/pipelines/{pipeline_id}", **api_v2("Pipelines", "getPipeline", "One pipeline's settings record"))
     def pipeline(request: Request, pipeline_id: str):
         who: Any = request.state.identity
         auth.domain(who)
         with store.read() as c:
             return {"pipeline": record(c, who, pipeline_id)}
 
-    @app.post("/api/v2/pipelines/{pipeline_id}")
+    @app.post(
+        "/api/v2/pipelines/{pipeline_id}",
+        **api_v2(
+            "Pipelines",
+            "savePipeline",
+            "Make or change a pipeline: the whole record, with the settings_version it was read at. Removing a stage that holds open tasks answers 409 stage_has_tasks (stages, and a move_to hint) until the record carries move_tasks_to {pipeline, stage}: its tasks move there first, in any pipeline",
+        ),
+    )
     def pipeline_save(request: Request, pipeline_id: str, body: M.PipelineRecord):
         """Make the pipeline or change it: the whole record, with the `settings_version` it was read at (a bot must
         give it; a person may leave it out). A new pipeline's id is lowercase words joined by dashes, and none of the
@@ -85,7 +93,14 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
 
         return mutate(request, body, write)
 
-    @app.post("/api/v2/pipelines/{pipeline_id}/from-preset")
+    @app.post(
+        "/api/v2/pipelines/{pipeline_id}/from-preset",
+        **api_v2(
+            "Pipelines",
+            "addPipelineFromPreset",
+            "Make a pipeline from a preset the company does not have (Product beside the pair it replaced)",
+        ),
+    )
     def pipeline_from_preset(request: Request, pipeline_id: str, body: M.PipelineFromPreset):
         """Make a pipeline from a preset the company does not have, under this new id: Product (`features`) beside the
         Product and Engineering pair it replaced, whose open tasks finish there. The company's owner and Admins."""
@@ -100,7 +115,14 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
 
         return mutate(request, body, write)
 
-    @app.post("/api/v2/pipelines/{pipeline_id}/retire")
+    @app.post(
+        "/api/v2/pipelines/{pipeline_id}/retire",
+        **api_v2(
+            "Pipelines",
+            "retirePipeline",
+            "Take a pipeline out of use once it holds no open task; move_tasks_to {pipeline, stage} (another pipeline) moves its open tasks there first",
+        ),
+    )
     def pipeline_retire(request: Request, pipeline_id: str, body: M.PipelineRetire):
         """Take a pipeline out of use once it holds no open task."""
         who: Any = request.state.identity

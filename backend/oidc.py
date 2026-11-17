@@ -32,6 +32,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from . import brand_icons
 from .config import PRODUCT_NAME
 from .store import H, Problem, digest
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.oidc")
 
@@ -857,7 +858,12 @@ def register(app, auth):
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
 
-    @app.get(LOGIN_PATH)
+    @app.get(
+        LOGIN_PATH,
+        **api_v2(
+            "Session", "startSignIn", "Start browser sign-in (redirects); a frontend passes next and code_challenge"
+        ),
+    )
     def login(request: Request, next: str = "/", fresh: str = "", code_challenge: str = "", prompt: str = ""):
         oidc = active()
         challenge = ""
@@ -986,7 +992,10 @@ def register(app, auth):
         response.delete_cookie(oidc.login_cookie, path="/", secure=oidc.secure, httponly=True)
         return response
 
-    @app.post(TOKEN_PATH)
+    @app.post(
+        TOKEN_PATH,
+        **api_v2("Session", "exchangeCode", "Exchange the one-time sign-in code for a bearer session", "Token"),
+    )
     async def token(request: Request):
         """Exchange the one-time code a frontend got in its URL for a bearer session."""
         oidc = active()
@@ -1018,7 +1027,7 @@ def register(app, auth):
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
 
-    @app.post(REVOKE_PATH)
+    @app.post(REVOKE_PATH, **api_v2("Session", "revokeSession", "Sign the bearer session out", "Revoked"))
     def revoke(request: Request):
         """Sign a bearer session out (the request is already authenticated by it)."""
         oidc = active()
