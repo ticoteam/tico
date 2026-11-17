@@ -110,8 +110,11 @@ def test_writing_a_document_says_so_in_the_task_history(api):
     assert [(e["new"], e["note"]) for e in events][-2:] == [("Spec", ""), ("Spec", "version 2")]
 
 
-def test_tico_task_attach_doc_sends_the_html_with_its_pictures(monkeypatch, tmp_path):
+def test_tico_task_attach_doc_is_the_page_publish_with_task_and_as(monkeypatch, tmp_path):
+    from urllib.parse import parse_qs, urlsplit
+
     from clients import bot_files as BF, hubcli, hubtools, remotecli
+    from clients.tico import APIError
 
     sent = []
 
@@ -124,24 +127,35 @@ def test_tico_task_attach_doc_sends_the_html_with_its_pictures(monkeypatch, tmp_
 
         def call(self, method, path, body=None, key=None, query=None, delegate=False):
             sent.append((method, path, body))
-            return {"document": "QA report", "version": 1}
+            return {"file_id": "file-1", "version": 1}
 
         def post(self, path, body=None, key=None):
             return self.call("POST", path, body)
+
+        def request(self, method, path, body=None, key=None, raw=None):
+            sent.append((method, path, raw))
+            return {"file_id": "file-1", "version": 1}
 
     (tmp_path / "qa.html").write_text('<h1>QA</h1><img src="shot.png">')
     (tmp_path / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 16)
     monkeypatch.setattr(BF, "checkout_root", lambda cwd=None: tmp_path)
     monkeypatch.setattr(remotecli, "Client", Client)
     monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
-    argv = ["task", "attach", "T-1", "qa.html", "--doc", "qa-report", "--note", "All rows match"]
+    argv = ["task", "attach", "T-1", "qa.html", "--doc", "qa-report"]
     remotecli.run(hubcli.parser().parse_args(argv))
-    method, path, body = sent[-1]
-    assert (method, path, body["document"], body["note"]) == ("POST", "tasks/T-1/files", "qa-report", "All rows match")
-    assert "<h1>QA</h1>" in body["text"] and "data:image/png;base64," in body["text"]
+    method, path, data = sent[-1]
+    url = urlsplit(path)
+    query = parse_qs(url.query)
+    assert (method, url.path) == ("POST", "/api/v2/pages")
+    assert query["task"] == ["T-1"] and query["as"] == ["qa-report"] and query["name"] == ["qa.html"]
+    assert b"<h1>QA</h1>" in data and b"data:image/png;base64," in data
+
+    noted = ["task", "attach", "T-1", "qa.html", "--doc", "QA report", "--note", "x"]
+    with pytest.raises(APIError, match="takes no --note"):
+        remotecli.run(hubcli.parser().parse_args(noted))
 
     hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec", "text": "<p>Spec</p>"})
-    assert sent[-1][2] == {"document": "Spec", "text": "<p>Spec</p>"}
+    assert sent[-1] == ("POST", "pages", {"task": "T-1", "as": "Spec", "name": "spec.html", "text": "<p>Spec</p>"})
     with pytest.raises(ValueError, match="text, or path"):
         hubtools.task_attach(Client(), {"id": "T-1", "document": "Spec"})
     (tmp_path / "notes.md").write_text("# Notes")

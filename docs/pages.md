@@ -2,29 +2,68 @@
 
 A page is an HTML file a bot publishes to show people what it did or found: a weekly engineering review, a market
 scan, a launch plan. It changes only when its bot publishes a new version. Tico's built-in cards hold live numbers;
-a page holds what the bot wrote.
+a page holds what the bot wrote. It changes only when someone who may write it publishes a new version.
 
-A page is a kind of [file](files.md): it has the file's title, versions, maintainer bot and visibility, plus a
-cadence, the date its data is from, and the page that replaced it, if any. **Library › Files** lists pages with every
-other file.
+A page is a kind of [file](files.md): it has the file's title, versions and visibility, plus a cadence, the date its
+data is from, and the page that replaced it, if any. **Library › Files** lists pages with every other file.
+
+## Pages stand alone
+
+A page has its own id (`file-<hex>`), versions and audience. It is linked to what it is about, and each link has a
+role. A page can have many links, and a task can have many pages: one page can be the Spec of two tasks, and a task can
+have a Spec, a QA report and any number of other pages.
+
+- **Targets:** `task:<id>`, `bot:<id>`, `human:<slug>`, `goal:<id>` or `page:<id>`.
+- **Roles:** `writer` (a page's writers), `related` (the default), or a document name on a task: `Spec`, `QA report`,
+  `Release report`, `Invoice`, or any name a bot gives. A task's document is a page linked to that task with the
+  document's name as its role.
+- **Who may write a version:** its owner; anyone linked to it as a writer (a person, or a bot that is not archived);
+  anyone who may comment on a task the page is linked to in another role; and anyone who may manage the page. Writing a
+  version links the writer as a writer.
+- **Who may read:** unchanged. A link never widens who can see a page. A page made on a private task stays private when
+  it is linked elsewhere.
+- **Who may link or unlink:** anyone who may write the page. A task link also needs read access to that task, and a
+  document role needs comment access to it. The last writer cannot be unlinked.
+- **Approvals:** a stage that asks for a document approves it per task, per page and per version. A task's OK covers
+  each page linked to that task with that role, at the version submitted, and never another task's. A newer version
+  after an OK shows the document as changed since the approved one.
 
 ## Publishing
 
     tico page publish reports/weekly-review.html --title "Engineering weekly" --cadence weekly [--as-of 2026-10-27]
-        [--task ID] [--replaces PAGE]
+        [--task ID [--as ROLE]] [--page ID] [--replaces PAGE]
 
-- **The same path again** adds a version of the same page.
+- **The same path again** adds a version of the same page. **`--page ID`** adds a version of that page, whatever its
+  file name, if you may write it.
 - **`--cadence`** says how often the bot means to update it: `none`, `daily`, `weekly` or `monthly`.
 - **`--as-of`** is the date the data is from, when that differs from the publish date.
 - **`--task`** files the page on a task and pins it to the top of that task, for whoever can see the task.
   Without it, the page belongs to the turn's task or conversation, as a file would; `--scope bot` makes it
   bot-wide.
+- **`--as ROLE`** with `--task` links the page to that task with the role instead: `Spec`, `QA report`,
+  `Release report`, `Invoice` or any name. Without `--page`, the task's one page with that role gets the version; if
+  it has none, a page is made; if it has more than one, the publish is refused and names their ids, and you pass one
+  of them with `--page`.
 - **`--replaces`** names an older page of the same bot that this one takes over. The older page then says
   **Replaced by** and links here. An Assistant turn must be able to read and manage the older page as its person,
   and both pages must be filed on the request's task.
 
-A bot writes only its own pages. Over MCP the same tools are `tico_page_publish`, `tico_page_list`, `tico_page_show` and
-`tico_page_archive`.
+Anyone who may write a page publishes its versions: a person, or a bot as itself. Over MCP the same tools are
+`tico_page_publish`, `tico_page_link`, `tico_page_unlink`, `tico_page_list`, `tico_page_show` and `tico_page_archive`.
+
+## Links and task documents
+
+    tico page link file-1 --task T1 --as Spec
+    tico page unlink file-1 --task T1 --as Spec
+
+The target is one of `--task`, `--bot`, `--person SLUG`, `--goal` or `--page`. `--as` is the role, `related` when left
+out. Unlink takes the same target and role that linked the page. `tico page show ID` prints the page's links and writers
+(`--json` gives the whole read). `tico page list` narrows by `--linked TARGET` (any role), `--role ROLE` and
+`--writer ACTOR`; the filters combine.
+
+A task's document is a page. `tico page publish spec.html --task ID --as Spec` writes the task's Spec: a new version of
+the page it has with that role, or a new page. `tico task attach ID spec.html --doc Spec` sends the same request. It
+takes no `--note`: say what changed in a comment on the task.
 
 Task turns receive up to ten pages filed on or pinned to the task and ten linked meetings, newest first, as ids,
 titles, versions and dates. `tico task context ID` (`tico_task_context`, `GET /api/v2/tasks/{id}/context`) reads that
@@ -174,10 +213,12 @@ Stable v2 (`GET /api/v2/openapi.json`, tag **Pages**):
 |---|---|
 | `POST /api/v2/tasks/{tid}/make-page` | Ask your Assistant with `text` (up to 8,000 characters) |
 | `GET /api/v2/tasks/{tid}/make-page` | Your latest request: `making`, `made`, `failed`, `update_required`, or null |
-| `POST /api/v2/pages` | Publish: raw HTML with the fields in the query, or JSON with `name` and `text` or `content_base64` |
-| `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated_at, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src`; `pinned`: where it is pinned |
+| `POST /api/v2/pages` | Publish: raw HTML with the fields in the query, or JSON with `name` and `text` or `content_base64`. `page` writes a version of that page; `task` with `as` links the page to the task with that role. Several pages with that role: 409 `ambiguous` with their ids (pass `page`) |
+| `GET /api/v2/pages/{file_id}` | `page`: `file_id, title, bot, bot_name, version, updated_at, updated_by, cadence, as_of, stale_days, replaced_by, archived, task_id, src, links, writers, may_write`; `links` lists each target the caller may read (`target, role, name, by, at`), `writers` each writer (`actor, name, versions, last_at`); `pinned`: where it is pinned |
+| `POST /api/v2/pages/{file_id}/links` | Body `{"target": "task:<id>", "role": "Spec"}` (`task:`, `bot:`, `human:`, `goal:` or `page:`; `role` defaults to `related`). Returns the page read |
+| `DELETE /api/v2/pages/{file_id}/links?target=...&role=...` | Removes that link. Returns the page read |
 | `GET /api/v2/pages?ids=a,b` | Up to 50 pages in that order, leaving out any the caller may not read |
-| `GET /api/v2/pages?bot=&task=` | Pages newest first, paged with `limit` and `cursor`; `task` includes pages filed on or pinned to that task |
+| `GET /api/v2/pages?bot=&task=&linked=&role=&writer=` | Pages newest first, paged with `limit` and `cursor`, all filters optional. `task` and `bot` include pages linked to them in any role, and pages filed or stored there; `linked` is a target in any role; `role` is a link's role; `writer` is an actor who wrote a version |
 | `PATCH /api/v2/pages/{file_id}` | `cadence`, `as_of`, `replaced_by`, `archived`, `audience` (null clears it) |
 
 `src` is a fresh address to frame the current version, or `null` when this install cannot show pages inline. A page
@@ -187,8 +228,10 @@ totals, so a count never says what a reader cannot see.
 Managers get `audience` on single-page reads and writes, and a small `restricted` flag on summaries and cards.
 Other readers get neither field.
 
-`tico page list --task ID` and MCP's `tico_page_list` include both filed and linked pages with the same paging.
+`tico page list --task ID` and MCP's `tico_page_list` include pages linked to the task in any role, and pages filed there,
+with the same paging.
 
 **Who acts.** A bot publishes during its turn. Your Assistant makes task pages as you, recording its authenticated
-attempt alongside your authorship. People archive and restore. BotOps archives for a person with that
+attempt alongside your authorship. People publish, link and archive pages too; until pages leave their bots, a person's
+page is stored under their Assistant, which nothing shows as the owner. BotOps archives for a person with that
 person's rights, and asks before a hard delete, which only the owner may do.
