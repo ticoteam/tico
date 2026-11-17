@@ -1,7 +1,8 @@
 # pyright: strict
 """Why a bot, one of its queued runs, or its work on one task cannot start right now: the one answer every page reads.
 
-Each hold is still stored where it was written (docs: reports D1, PR 1 of "one holds system"):
+Each hold is stored where it was written (docs: reports D1, "one holds system"); the `holds` table takes them one
+kind at a time, written by `put` and ended by `release`:
 
 | kind              | scope   | stored in                                              | ends                               |
 |-------------------|---------|--------------------------------------------------------|------------------------------------|
@@ -10,7 +11,7 @@ Each hold is still stored where it was written (docs: reports D1, PR 1 of "one h
 | `company_paused`  | company | company_pause.KEY                                      | the owner or an admin resumes      |
 | `cloud_locked`    | company | Tico Cloud access (cloud_access)                       | Tico HQ unlocks the company        |
 | `run_hold`        | bot     | `run_backoff.held_at` (failed runs)                    | a try completes, or a release      |
-| `budget`          | bot     | `bot_budget.held_at` (runaway runs)                    | a release, or a raised budget      |
+| `budget`          | bot     | `holds`, kind `runaway` (runaway runs)                 | a release, or a raised budget      |
 | `cooling_off`     | login   | the login hold (login_holds); the bot's status shows it | the reset, then one probe; Try now |
 | `cant_start`      | task    | `task.cant_start` events with BotOps's open task       | BotOps closes its task             |
 | `task_quarantine` | task    | `quarantine_holds`                                     | the cooldown, or a person          |
@@ -30,7 +31,8 @@ claim's rules (turn_budgets.refusal, run_backoff.job_refusal); `human` speaks on
 lets it through. `words` is the sentence the pages show for a kind.
 """
 
-from collections.abc import Callable, Collection
+import json
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -81,6 +83,95 @@ STOPPED = (RUN_HOLD, BUDGET)
 SAVED = (*STOPPED, CLAIM_HELD, BACKOFF)
 
 STATE_SQL = "SELECT state FROM bots WHERE id=?"
+
+# ---------------------------------------------------------------------------------------------- the holds table
+# A kind the `holds` table stores (its CHECK allows every kind; each moves into it in its own change).
+RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the pages and the claim
+OPEN_SQL = (
+    "SELECT * FROM holds WHERE kind=? AND holdable_type=? AND holdable_id=? AND coalesce(bot_id,'')=? "
+    "AND released_at IS NULL"
+)
+
+
+def get(c: Any, kind: str, holdable_type: str, holdable_id: str, bot_id: str | None = None) -> dict[str, Any] | None:
+    """The open hold of `kind` on the holdable, or None. Read once per snapshot (read_cache; `prime` reads many)."""
+    row = _read(c, OPEN_SQL, (kind, holdable_type, holdable_id, bot_id or ""))
+    return dict(row) if row else None
+
+
+def prime(c: Any, kind: str, holdable_type: str, holdable_ids: Collection[str]) -> None:
+    """Read the open holds of `kind` on each of these holdables (no bot_id) in one statement, misses too, and keep them
+    in the snapshot's read cache for `get`. Nothing outside a snapshot."""
+    from . import read_cache
+
+    RC: Any = read_cache
+    if RC.cache(c) is None or not holdable_ids:
+        return
+    found = {
+        str(row["holdable_id"]): row
+        for row in c.execute(
+            "SELECT * FROM holds WHERE kind=? AND holdable_type=? AND bot_id IS NULL AND released_at IS NULL "
+            "AND holdable_id IN (SELECT value FROM json_each(?))",
+            (kind, holdable_type, json.dumps(sorted(holdable_ids))),
+        )
+    }
+    RC.prime(c, OPEN_SQL, {(kind, holdable_type, h, ""): found.get(h) for h in holdable_ids})
+
+
+def put(
+    c: Any,
+    kind: str,
+    holdable_type: str,
+    holdable_id: str,
+    *,
+    actor: str,
+    bot_id: str | None = None,
+    reason: str = "",
+    details: Mapping[str, Any] | None = None,
+    streak: int = 0,
+    until_at: str | None = None,
+    upkeep_task_id: str | None = None,
+) -> dict[str, Any]:
+    """The one writer: open a hold of `kind` on the holdable, or update the one open already (holds_open). Answers
+    the row."""
+    now = str(H.now())
+    found = c.execute(
+        "INSERT INTO holds(id,kind,holdable_type,holdable_id,bot_id,reason,details,streak,until_at,upkeep_task_id,"
+        "created_by_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(kind,holdable_type,holdable_id,coalesce(bot_id,'')) WHERE released_at IS NULL DO UPDATE SET "
+        "reason=excluded.reason,details=excluded.details,streak=excluded.streak,until_at=excluded.until_at,"
+        "upkeep_task_id=excluded.upkeep_task_id,updated_at=excluded.updated_at RETURNING *",
+        (
+            H.new_id(),
+            kind,
+            holdable_type,
+            holdable_id,
+            bot_id,
+            reason,
+            json.dumps(dict(details or {})),
+            streak,
+            until_at,
+            upkeep_task_id,
+            actor,
+            now,
+            now,
+        ),
+    ).fetchall()
+    return dict(found[0])
+
+
+def release(
+    c: Any, kind: str, holdable_type: str, holdable_id: str, *, actor: str, how: str, bot_id: str | None = None
+) -> dict[str, Any] | None:
+    """End the open hold of `kind` on the holdable, kept as history: `how` is its released_how (person, botops, raised,
+    expired, probe_passed, moot, superseded). Answers the row it ended, or None when none was open."""
+    now = str(H.now())
+    found = c.execute(
+        "UPDATE holds SET released_at=?,released_by_id=?,released_how=?,updated_at=? WHERE kind=? AND holdable_type=? "
+        "AND holdable_id=? AND coalesce(bot_id,'')=? AND released_at IS NULL RETURNING *",
+        (now, actor, how, now, kind, holdable_type, holdable_id, bot_id or ""),
+    ).fetchall()
+    return dict(found[0]) if found else None
 
 
 def _task_sql() -> str:

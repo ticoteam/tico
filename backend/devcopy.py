@@ -388,7 +388,6 @@ KEEP = (
             "blob_media",
             "blobs",
             "bot_agent_instructions",
-            "bot_budget",
             "bot_config",
             "bot_settings",
             "bot_control",
@@ -448,6 +447,7 @@ KEEP = (
             "goals",
             "health_findings",
             "health_reports",
+            "holds",  # why a bot may not start work: the copy holds what the source held (runaway runs, so far)
             "humans",
             "principals",
             "import_refs",
