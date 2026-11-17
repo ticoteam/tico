@@ -1,14 +1,14 @@
 """Standalone pages keep their identity and their original read boundary across writers and links."""
 
 import sqlite3
-from pathlib import Path
+from importlib import import_module
 
 import pytest
 
 from backend import page_links as L
 from backend.store import Problem
 
-MIGRATION = Path(__file__).parents[1] / 'migrations/20261117195614_page_links.sql'
+MIGRATION = import_module('backend.migrations.20261117195614_page_links')
 
 
 def test_backfill_is_idempotent_and_adopts_documents_and_people():
@@ -31,7 +31,7 @@ def test_backfill_is_idempotent_and_adopts_documents_and_people():
         INSERT INTO bot_file_versions VALUES('p','human:ben','2026-01-02'),('doc','human:ana','2026-01-02');
     ''')
     for _ in range(2):
-        c.executescript(MIGRATION.read_text())
+        MIGRATION.up(c)
     assert {tuple(r) for r in c.execute('SELECT page_id,target,role FROM page_links')} == {
         ('p', 'bot:ops', 'writer'),
         ('q', 'bot:finance', 'writer'),
@@ -47,6 +47,11 @@ def test_backfill_is_idempotent_and_adopts_documents_and_people():
     }
     assert c.execute("SELECT id FROM page_links WHERE target='task:public'").fetchone()[0] == "pin:test-pin"
     assert c.execute("SELECT cadence FROM pages WHERE file_id='doc'").fetchone()[0] == 'none'
+    # Applying the older migration afterward must leave the widened index in place.
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS requirement_pages_current "
+        "ON requirement_pages(visit_id, requirement_id) WHERE replaced_at IS NULL"
+    )
     c.execute(
         "INSERT INTO requirement_pages(visit_id,requirement_id,file_id,replaced_at) VALUES('v','r','p',NULL),('v','r','q',NULL)"
     )

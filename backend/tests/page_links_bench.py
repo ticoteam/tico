@@ -5,6 +5,7 @@ import statistics
 import sqlite3
 import tempfile
 import time
+from importlib import import_module
 from pathlib import Path
 
 from backend import files, page_links, task_context, task_documents, task_pages
@@ -312,10 +313,9 @@ def main():
                     args,
                 )
             )
-            migration = (Path(__file__).parents[1] / 'migrations/20261117195614_page_links.sql').read_text()
-            for label, marker in (('document-roles', 'CASE lower(trim(d.name))'), ('pins', "SELECT 'pin:'")):
-                statement = next(part for part in migration.split(';') if marker in part)
-                cases.append(('backfill/' + label, 'SELECT' + statement.partition('SELECT')[2], ()))
+            migration = import_module('backend.migrations.20261117195614_page_links')
+            cases.append(('backfill/document-roles', migration.DOCUMENT_ROLES, ()))
+            cases.append(('backfill/pins', migration.PINS, ()))
             for label, sql, args in cases:
                 plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + sql, args)]
                 took = []

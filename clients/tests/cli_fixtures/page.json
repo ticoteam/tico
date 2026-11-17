@@ -170,7 +170,7 @@
     null
    ]
   ],
-  "stdout": "\n",
+  "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
  },
