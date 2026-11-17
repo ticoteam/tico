@@ -77,7 +77,7 @@ class Column:
 
 # Hot and growing tables use triggers; small tables use a CHECK rebuilt into the table.
 COLUMNS = (
-    # A task is open, done or closed, never without a status (docs/pipelines-v3.md). What it waits on is read, not
+    # A task is open, done or closed, never without a status (docs/dev/pipelines-v3.md). What it waits on is read, not
     # stored (backend/waiting_on.py).
     Column("tasks", "status", TASK_STATUSES),
     Column("jobs", "state", JOB_STATES),

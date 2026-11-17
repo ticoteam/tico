@@ -1,4 +1,4 @@
-"""No Product stage is left without an owner (docs/pipelines-v3.md "Default pipelines", the ladder): a role no bot fills
+"""No Product stage is left without an owner (docs/dev/pipelines-v3.md "Default pipelines", the ladder): a role no bot fills
 goes up to the pipeline's manager, and a manager no bot fills to the General Manager, until the role's bot appears
 (pipeline_settings.preset, _fill). The stages a feature owner holds are the task's assignee's, whoever the company has.
 A company whose file lists none of the roles stands for one set up without them."""

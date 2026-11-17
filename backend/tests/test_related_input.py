@@ -1,4 +1,4 @@
-"""Related input (backend/related_input.py, docs/pipelines-v3.md "Related input"): Jev scores the company's bots against
+"""Related input (backend/related_input.py, docs/dev/pipelines-v3.md "Related input"): Jev scores the company's bots against
 a task's pitch and spec, the top 1 to 2 at the bar are asked once to comment, and the stage is met on their comments,
 when nobody clears the bar, or after its wait. It never blocks.
 

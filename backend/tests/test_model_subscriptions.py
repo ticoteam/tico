@@ -1651,6 +1651,7 @@ def test_a_reading_taken_on_the_computers_own_login_is_not_the_plans_when_its_ho
 def listing_statements(api, monkeypatch):
     """GET /api/v2/model-subscriptions after one warm-up read, and the SQL statements that request ran."""
     import contextlib
+    from backend.tests.helpers.statement_scope import measuring, recorder
 
     store, seen = api.app.state.store, []
     get(api, "model-subscriptions")
@@ -1661,7 +1662,7 @@ def listing_statements(api, monkeypatch):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -1670,7 +1671,8 @@ def listing_statements(api, monkeypatch):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        get(api, "model-subscriptions")
+        with measuring(seen):
+            get(api, "model-subscriptions")
     return seen
 
 

@@ -1,5 +1,5 @@
 # pyright: strict
-"""What entering a stage does, and how leaving it backwards undoes that (docs/pipelines-v3.md, "Entering a stage").
+"""What entering a stage does, and how leaving it backwards undoes that (docs/dev/pipelines-v3.md, "Entering a stage").
 
 A stage's on-enter action is nothing, "file a linked task into pipeline X", or a source's action ("queue the PRs to
 merge"). It happens once
@@ -239,7 +239,7 @@ def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:
 
 def merged_work(conn: "sqlite3.Connection", task_id: str) -> bool:
     """Whether a filed task has a linked PR that merged: its work is in the code, so undoing the filing leaves it open
-    (docs/pipelines-v3.md scenario 24) to reach a release or be closed by its owner."""
+    (docs/dev/pipelines-v3.md scenario 24) to reach a release or be closed by its owner."""
     from .item_sources import github as GS
 
     return any(link["metadata"] and link["metadata"]["state"] == "merged" for link in GS.prs_of(conn, task_id))

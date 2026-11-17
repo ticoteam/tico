@@ -149,7 +149,7 @@ request is deleted, its messages read as ordinary messages again.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.
 - A bot's messages into a thread, including a reply in a sub-thread and the first message of a new thread, pass the
-  org rules check the same way a message to a person does ([Rules](rules-plan.md)). A held message writes nothing: a
+  org rules check the same way a message to a person does ([Rules](dev/rules-plan.md)). A held message writes nothing: a
   held first message makes no thread, sub-thread or DM. Send anyway posts it then, and makes the thread with it. The
   author can withdraw a held message (a person's comes back as Edit and resend), and so can the person a bot reports
   to.

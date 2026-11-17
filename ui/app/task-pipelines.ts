@@ -1,4 +1,4 @@
-/* ui/app/task-pipelines.ts — One pipeline on the Tasks page (docs/pipelines-v3.md S7, S8, S17.3): its open tasks as
+/* ui/app/task-pipelines.ts — One pipeline on the Tasks page (docs/dev/pipelines-v3.md S7, S8, S17.3): its open tasks as
    columns, one per work stage, or as a list grouped by stage in the same order; on a phone, one stage at a time under a
    row of stage tabs. Done and Closed are not columns: they sit behind the page's archive button with Snoozed. A snoozed
    task stays in its stage, after every task that is not, dimmed, with the day it wakes (or Snoozed) and a moon that is

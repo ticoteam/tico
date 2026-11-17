@@ -92,7 +92,7 @@ def _person(actor):
 def questions(detail, bot):
     """What waits on a person on one task: each question or OK of its stage that a person answers (the bot's asks
     and the stage's own OKs), with whether it is still open, in the task's order. Read from the task's `to_leave`
-    (docs/pipelines-v3.md: requirements and asks)."""
+    (docs/dev/pipelines-v3.md: requirements and asks)."""
     task = detail.get("task") or {}
     # An answered ask names who answered it; an open one, who it waits on.
     who = lambda r: r.get("who") or (r.get("answer") or {}).get("by")
@@ -120,7 +120,7 @@ def filed(child_details, bot):
 
 
 def turn_of(detail):
-    """Whose turn the task is (docs/pipelines-v3.md "turn"): the person it waits on, or None."""
+    """Whose turn the task is (docs/dev/pipelines-v3.md "turn"): the person it waits on, or None."""
     turn = (detail.get("task") or {}).get("turn") or {}
     return turn.get("who") if turn.get("state") == "person" else None
 

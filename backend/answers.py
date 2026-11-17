@@ -1,5 +1,5 @@
 # pyright: strict
-"""Answers to what a task needs (docs/pipelines-v3.md, "Asks" and "What your answer does").
+"""Answers to what a task needs (docs/dev/pipelines-v3.md, "Asks" and "What your answer does").
 
 The one writer of `answers` rows, apart from the `pushed_past` rows `task_engine.move` writes. The owner says done, a
 person OKs or sends back, a person answers a question, an ask is given to someone else, or an answer is taken back. The

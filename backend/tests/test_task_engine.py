@@ -1,4 +1,4 @@
-"""The one writer of a task's stage, owner and status (backend/task_engine.py, docs/pipelines-v3.md "How a task moves").
+"""The one writer of a task's stage, owner and status (backend/task_engine.py, docs/dev/pipelines-v3.md "How a task moves").
 
 Synthetic rows only (backend/tests/helpers/engine.py): a General pipeline, a three-stage Build pipeline, the fictional
 company's person and two bots.
@@ -218,7 +218,7 @@ def test_closing_a_task_leaves_open_a_filed_task_whose_pr_merged(c, general):
     H.task_link(c, ANA, merged["id"], "https://github.com/acme/app/pull/1")
     F.save_pr(c, "acme/app", 1, {"state": "merged", "head_sha": "a", "merged_sha": "m"}, 1)
     E.move(c, top["id"], E.CLOSED, ANA, "The flow is off")
-    # Its work is in the code (docs/pipelines-v3.md scenario 24): it stays open to reach a release or be closed.
+    # Its work is in the code (docs/dev/pipelines-v3.md scenario 24): it stays open to reach a release or be closed.
     states = [E.task(c, t["id"])["status"] for t in (top, merged, other)]
     assert states == ["closed", "open", "closed"]
 

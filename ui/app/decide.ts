@@ -1,4 +1,4 @@
-/* ui/app/decide.ts — Flow, the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A
+/* ui/app/decide.ts — Flow, the ask screen (docs/dev/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A
    modal on a wide screen, the whole screen on a phone. The top bar is where you are (All mine / a pipeline / a stage, a
    menu), Flow's mark, the mic, the undo notice (what was just done), the next ask Tico is still thinking about, then ‹ › ✕ (‹ › on a wide screen
    only; Skip, in the answer row, steps on at every width). The thing asked about is on the left, shown in full (the page, the email, what an OK is for); the

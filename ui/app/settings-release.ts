@@ -23,7 +23,7 @@ interface SettingsReleaseSchedule {
 // waiting tasks the caller may read; an open Release task's id (`already_open`) comes only to someone who may read it.
 interface SettingsReleaseNowAnswer { sent?: boolean; tasks?: number; reason?: string | null; task?: string | null; }
 
-// The daily release (docs/pipelines-v3.md D13): on or off, one or two company times, the Release Owner and
+// The daily release (docs/dev/pipelines-v3.md D13): on or off, one or two company times, the Release Owner and
 // Technical Writer ("" finds each by its starter template), the next and last hour, and how many tasks wait for a
 // release. Owners and admins change it (`can_change`); `can_release` may ask for a release now.
 let RELEASE_VIEW: SettingsReleaseSchedule | null = null, RELEASE_AT = 0;

@@ -1249,7 +1249,7 @@ class Onboarding:
         return self._ensure_builtin(c, "finance-owner", "Finance Owner", "bookkeeper.turned_on")
 
     def ensure_counsel(self, c):
-        """The same for the Rules Owner (docs/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
+        """The same for the Rules Owner (docs/dev/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
         was built in gets it once it can run it, and it is outside the org chart."""
         return self._ensure_builtin(c, H.RULES_OWNER, "Rules Owner", "counsel.turned_on")
 

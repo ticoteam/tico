@@ -64,7 +64,7 @@ async function access(browser: import('playwright').Browser) {
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/operations') return json({machines: [], services: [], agents: []});
     if (p === '/api/v2/models') return json({models: []});
-    if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+    if (p === '/api/v2/settings/history') return json({changes: []});
     let m;
     if ((m = p.match(/^\/api\/v2\/bots\/([^/]+)\/access$/) as [string, string] | null)) {
       const slug = m[1];
@@ -291,7 +291,7 @@ async function roles(browser: import('playwright').Browser) {
       agents: [], services: []});
     if (p.match(/^\/api\/v2\/bots\/[^/]+\/definition$/) && method === 'POST') { posts.push(['definition', request.postDataJSON()]); return json({}); }
     if (p === '/api/v2/models') return json({models: []});
-    if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+    if (p === '/api/v2/settings/history') return json({changes: []});
     if (p === '/api/v2/bots/jira-manager/co-owners' && method === 'POST') { posts.push(['co-owners', request.postDataJSON()]); return json({}); }
     if (p === '/api/v2/computers/r1/member-bots' && method === 'POST') {
       posts.push(['member-bots', request.postDataJSON()]); accepts = request.postDataJSON().accepts; return json({});

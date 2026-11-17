@@ -1,4 +1,4 @@
-"""Org rules (docs/rules-plan.md §1, §5, §6): one sentence each, internal (between teammates) or external (what someone outside
+"""Org rules (docs/dev/rules-plan.md §1, §5, §6): one sentence each, internal (between teammates) or external (what someone outside
 requires of us). A rule says who follows it and, for an internal rule, with whom. Due dates live in backend/rule_due.py.
 
 - Records: `org_rules` (its From, `source_entity_id`, is an organization entity: a rule source, see

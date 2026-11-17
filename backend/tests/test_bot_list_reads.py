@@ -332,6 +332,8 @@ def list_statements(api, monkeypatch, token="ana-test"):
     """The bot list as `token` gets it, and the statements it took. Each request starts from cold roster and row caches."""
     import contextlib
 
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     store, seen = api.app.state.store, []
     store.roster_rows = {}
     store.row_cache = type(store.row_cache)()
@@ -342,7 +344,7 @@ def list_statements(api, monkeypatch, token="ana-test"):
                 @contextlib.contextmanager
                 def borrowed():
                     with opened() as c:
-                        c.set_trace_callback(seen.append)
+                        c.set_trace_callback(recorder(seen))
                         try:
                             yield c
                         finally:
@@ -351,7 +353,8 @@ def list_statements(api, monkeypatch, token="ana-test"):
                 return borrowed()
 
             patched.setattr(store, name, traced)
-        response = api.get("/api/v2/bots", headers=T.headers(token))
+        with measuring(seen):
+            response = api.get("/api/v2/bots", headers=T.headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
 

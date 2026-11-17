@@ -1,6 +1,6 @@
 # Pipelines v3: the cut-over
 
-How the old task engine is replaced. Read with [pipelines-v3.md](../pipelines-v3.md) (the spec) and
+How the old task engine is replaced. Read with [pipelines-v3.md](pipelines-v3.md) (the spec) and
 [pipelines-v3-build.md](pipelines-v3-build.md) (the engine). Where this file and the build file disagree about the
 cut-over, this file wins.
 

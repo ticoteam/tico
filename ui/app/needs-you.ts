@@ -46,7 +46,7 @@ function taskOutcomeTaken(task: {id: string | number}) {
 }
 
 // Browser notifications for a new ask, while the page is in the background, when the person turned them on (their
-// Notifications card, person-page.ts). An @ is not notified (docs/pipelines-v3.md: no push). The ids already notified
+// Notifications card, person-page.ts). An @ is not notified (docs/dev/pipelines-v3.md: no push). The ids already notified
 // are kept per person in localStorage, so a reload does not repeat them; the first read after a fresh start records what
 // is listed without notifying. Both reads of the list call this (hub-v2.ts, refresh.ts), one after another.
 const THREAD_NEED_KINDS: Record<string, string> = {ask: 'Needs you'};

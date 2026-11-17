@@ -1,5 +1,5 @@
 # pyright: strict
-"""Source actions: what Tico owes a source for one item, and carries out on the Heartbeat (docs/pipelines-v3.md
+"""Source actions: what Tico owes a source for one item, and carries out on the Heartbeat (docs/dev/pipelines-v3.md
 "Sources and items"). GitHub's one action is `queue` (its Merge stage puts a task's PRs in the merge queue).
 
 - A stage acts on a source when entered: `on_enter` `{"act": "<source>.<action>"}` (`enter`; the source says which

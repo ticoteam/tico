@@ -1,4 +1,4 @@
-// No browser: the Tasks page's Filter (ui/app/tasks-page.ts, docs/pipelines-v3.md S7) offers every field whose values the
+// No browser: the Tasks page's Filter (ui/app/tasks-page.ts, docs/dev/pipelines-v3.md S7) offers every field whose values the
 // listed rows carry, Tag and Pushed past included:
 // - Tag lists the distinct labels on the view's rows (unfiltered and read), as they are, and none when no row has a label;
 // - Pushed past is one choice when any shown row was pushed past, and absent otherwise;
