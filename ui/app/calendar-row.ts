@@ -97,10 +97,10 @@ const calOpenHref = (o: CalOccurrence) => `${CAL_ROUTE}?date=${calDay(calWhen(o.
 // ----------------------------------------------------------------- the row
 // One line: "Calendar", then the viewer's next event as plain text ("Sales call · in 3 min"), its name opening the event on
 // the page. › steps to the event after it and ‹ back; a new page resets it to the very next. Nothing in the next week
-// reads "n/a" (named "Nothing scheduled"). The line is always subdued. Only the viewer's own timed events: no runs, nothing due, nothing declined, no all-day ones.
+// (no calendar connected, or an empty one) leaves the row just "Calendar". The line is always subdued. Only the viewer's own timed events: no runs, nothing due, nothing declined, no all-day ones.
 // At the sidebar's default width a name is cut with "…" (the agreed fit); hovering it shows the whole line.
-interface CalRowState { list: CalOccurrence[]; at: number; off: boolean; failed: boolean; loading: boolean; pick: string | null; live: (() => void) | null; }
-const CAL_ROW: CalRowState = {list: [], at: 0, off: false, failed: false, loading: false, pick: null, live: null};
+interface CalRowState { list: CalOccurrence[]; at: number; off: boolean; loading: boolean; pick: string | null; live: (() => void) | null; }
+const CAL_ROW: CalRowState = {list: [], at: 0, off: false, loading: false, pick: null, live: null};
 const CAL_ROW_EVERY = 3 * 60 * 1000;
 const CAL_ROW_DAYS = 7;
 const calRowEl = () => document.getElementById('nav-calendar');
@@ -115,8 +115,6 @@ async function calRowLoad(): Promise<void> {
     if (!a || !Array.isArray(a.occurrences)) return;     // not a calendar answer: the row stays just "Calendar"
     CAL_ROW.list = a.occurrences.filter(o => o.kind === 'event' && !o.all_day && o.response !== 'declined')
       .sort((x, y) => calWhen(x.start).getTime() - calWhen(y.start).getTime());
-    // A calendar that would not answer is not an empty week: say nothing rather than "n/a".
-    CAL_ROW.failed = !!a.errors?.length;
     CAL_ROW.at = Date.now();
     // Calendar writes arrive live: the topic joins once a read has answered.
     if (!CAL_ROW.live) {
@@ -165,7 +163,7 @@ function calRowDraw(dir = 0): void {
   if (!CAL_ROW.at) { next.innerHTML = ''; row.classList.remove('cal-on'); return; }
   row.classList.add('cal-on');
   const now = new Date(), up = calRowUpcoming(now);
-  if (!up.length) { CAL_ROW.pick = null; next.innerHTML = CAL_ROW.failed ? '' : '<span class="cal-nx cal-none" title="Nothing scheduled"><span aria-hidden="true">n/a</span><span class="sr-only">Nothing scheduled</span></span>'; return; }
+  if (!up.length) { CAL_ROW.pick = null; next.innerHTML = ''; return; }
   let i = CAL_ROW.pick ? up.findIndex(o => o.occurrence_id === CAL_ROW.pick) : 0;
   if (i < 0) { i = 0; CAL_ROW.pick = null; }
   const o = up[i]!, when = calRowWhen(o, now);

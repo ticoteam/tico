@@ -12,7 +12,8 @@ chased while it waits on its own open ❓ (waiting_on.of).
 - One open ❓ per bot per chat (the chat's root conversation, `room_id`): a new one clears the old ("replaced"), and
   the bot is told so (`replaced_warning`), so it puts every question to a person in one ❓.
 - A bot does not finish, move on or close a task while its own ❓ there is open (`refuse_ending`): ending the task would
-  clear it unanswered. It waits for the reply, or takes the question back by deleting its message (`TAKE_BACK`).
+  clear it unanswered. It waits for the reply, or takes the question back by deleting its message (`TAKE_BACK`). A bot
+  closing a task it filed itself is withdrawing it, and its question goes with it.
 
 It clears when the person replies in that chat, in their own hand or by their Assistant on their word (`replied`, from
 hubdb._write_message: `cleared_via` keeps which); when its task ends (done or closed: the migration's trigger; merged:
@@ -128,11 +129,16 @@ def open_of(conn: sqlite3.Connection, bot: str, task_id: object) -> Row | None:
     return next((m for m in (dict(r) for r in found) if answerable(conn, m)), None)
 
 
-def refuse_ending(conn: sqlite3.Connection, by: str, task_id: object) -> None:
+def refuse_ending(conn: sqlite3.Connection, by: str, task_id: object, *, closing: bool = False) -> None:
     """Refuse a bot's done, forward move or close of a task while its own ❓ there is open: the task ending would
-    clear the question before the person saw it. A person's moves, and Tico's own, are never held by a ❓."""
+    clear the question before the person saw it. A person's moves, and Tico's own, are never held by a ❓, nor a bot's
+    close of a task it filed itself: that withdraws the task, and the question is moot with it."""
     if not task_id or not H.is_bot(by) or by == H.KEEPER or _SETTLED.get():
         return
+    if closing:
+        filed = conn.execute("SELECT requester_id FROM tasks WHERE id=?", (str(task_id),)).fetchone()
+        if filed and filed["requester_id"] == by:
+            return
     found = open_of(conn, by, task_id)
     if not found:
         return

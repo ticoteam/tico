@@ -1061,7 +1061,9 @@ function thvListDraw(view: ThvView, list: HTMLElement, box: HTMLElement) {
   if (list.querySelector('[data-ar-host]')) void arMount(view, list);
   (view.el.querySelector('.thv-older') as HTMLElement).hidden = !view.next;
   chatThumbsLoad?.(list);
-  const unread = list.querySelector('.th-new');
+  // Unread floats over the timeline: a view opened on one message (Flow's ❓, a link to a message) shows that message,
+  // and the pill would sit on its text.
+  const unread = view.opts.focus ? null : list.querySelector('.th-new');
   (view.el.querySelector('.thv-unread') as HTMLElement).hidden = !unread || thvVisible(box, unread);
   fbSync();
   if (!THV_TICK && list.querySelector('[data-th-since]')) THV_TICK = setInterval(thvTick, 1000);

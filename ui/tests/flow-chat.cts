@@ -8,7 +8,8 @@ import type {Route} from 'playwright';
 // - on a phone two tabs in one tight row, Chat and Task (the task open, no chevron); a bot's ❓ (its reply path is
 //   question-marks.cts) opens on its chat, and on a task with no documents has no tabs at all; an OK whose task has
 //   documents (ui/app/task-docs.ts) lists Chat, then them, and opens on the one it approves; the ask's byline stays one
-//   line, the name cut first; Flow's chat has the day divider only, no "New" line.
+//   line, the name cut first; Flow's chat has the day divider only, no "New" line; a ❓ under unread messages shows its
+//   question with no Unread pill over it.
 // FLOW_SHOTS=<folder> saves an OK empty and with words, and ⋯ open, desktop and phone.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -24,8 +25,8 @@ const brief = (n: number, title: string, bot: string) => ({id: 't' + n, title, n
   status: 'open', owner_id: bot, requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-15T09:00:00Z', until: null, ask: true, requirement_id: null},
   version: 3});
-// A bot's ❓ on its last message in t1's chat (backend/question_marks.py).
-const mark = (): Item => ({kind: 'question', id: 'qmark:q1', mark_id: 'q1', task_id: 't1', message_id: 'm1', conversation_id: 'c1', root_id: 'c1',
+// A bot's ❓ on its last message in t1's chat (backend/question_marks.py), under thirty Ana has not read.
+const mark = (): Item => ({kind: 'question', id: 'qmark:q1', mark_id: 'q1', task_id: 't1', message_id: 'm50', conversation_id: 'c1', root_id: 'c1',
   from_id: 'bot:asp', requirement_id: null, since: '2026-11-15T09:02:00Z', line: 'Who counts as a user of Search?', task: brief(1, 'Set up: Agent Services', 'bot:asp')});
 const ok = (): Item => ({kind: 'ask', id: 'v2:r2', task_id: 't2', requirement_id: 'r2', since: '2026-11-15T10:00:00Z', line: 'OK the spec?',
   task: brief(2, 'Pipeline boards show where work waits', 'bot:tpo'),
@@ -75,7 +76,8 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
         ? `<h1>Spec</h1><p>Spec v${url.searchParams.get('v')}</p>` : '<h1>QA report</h1><p>Boards show stuck counts ✓</p>'});
       const th = p.match(/^\/api\/v2\/threads\/(c\d)\/timeline$/);
       if (th) return json({thread: {id: th[1], title: th[1] === 'c1' ? 'Set up: Agent Services' : 'Pipeline boards', me: {can_post: true}}, messages: th[1] === 'c1'
-        ? [msg('m1', 'bot:asp', 'Seven things I could not find written down: 1. Who counts as a user of Search? … 7. Which products are hosted?', '2026-11-15T09:02:00Z')]
+        ? [...Array.from({length: 30}, (_, i) => msg('m' + (10 + i), 'bot:asp', `Read part ${i + 1} of the area.`, `2026-11-15T08:${String(10 + i).padStart(2, '0')}:00Z`)),
+          msg('m50', 'bot:asp', 'Seven things I could not find written down: 1. Who counts as a user of Search? … 7. Which products are hosted?', '2026-11-15T09:02:00Z')]
         : [msg('m2', 'human:ana', 'Show stuck counts, keep it to one line.', '2026-11-14T10:00:00Z')], next_cursor: null});
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         const body = (/\/files$/.test(p) ? {} : JSON.parse(r.postData() || '{}')) as Record<string, unknown>;   // an upload is a form
@@ -156,6 +158,15 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     await chat.getByText('Seven things I could not find written down', {exact: false}).waitFor();
     assert.equal(await dialog.locator('[data-dc="tab"][role="tab"]').count(), 0, 'a ❓ on a task with no documents: no tabs, not even Chat');
     assert.equal(await chat.locator('.p-foot, .p-reach').count(), 0, 'no "To <name>" line under the box');
+    // Opened on its question, under thirty unread: the question shows, and no Unread pill sits on it.
+    await page.waitForFunction(() => {
+      const box = document.querySelector('#need-card .dc-chat .thv-scroll'), q = document.querySelector('#need-card .dc-chat [data-mid="m50"]');
+      if (!box || !q) return false;
+      const b = box.getBoundingClientRect(), r = q.getBoundingClientRect();
+      return r.top >= b.top - 1 && r.top < b.bottom;
+    });
+    assert.equal(await chat.locator('.th-new').count() > 0, true, 'the messages above are unread');
+    assert.equal(await chat.locator('.thv-unread').isVisible(), false, 'no Unread pill over the question');
     const [tabsRow, icons, pill] = [await dialog.locator('.dc-tabs').boundingBox(), await dialog.locator('.dc-side [data-key]').boundingBox(), await chat.locator('.p-pill').boundingBox()];
     assert.ok(tabsRow && icons && icons.y >= tabsRow.y - 1 && icons.y + icons.height <= tabsRow.y + tabsRow.height + 1, `Snooze and ⋯ sit in the tabs row (${JSON.stringify([tabsRow, icons])})`);
     assert.ok(pill && pill.width >= 350, `the box is full width (${pill?.width})`);

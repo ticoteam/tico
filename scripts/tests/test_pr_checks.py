@@ -35,6 +35,15 @@ def mapped(monkeypatch, repo_map):
     monkeypatch.setattr(checks, "DependencyMap", lambda root: repo_map if root == ROOT else build(root))
 
 
+def test_diff_facts_change_selects_its_tests(repo_map):
+    changed = ["scripts/diff_facts.py"]
+    test = "scripts/tests/test_diff_facts.py"
+    assert test in repo_map.run_by[changed[0]]
+    picked = checks.selection(changed, graph=repo_map)
+    assert test in picked["python"]
+    assert test in checks.narrow(picked, changed, "pull_request", graph=repo_map)["python"]
+
+
 def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_map(tmp_path, mapped):
     smoke_tests, smoke_scripts = checks.smoke(ROOT)
     for changed in (

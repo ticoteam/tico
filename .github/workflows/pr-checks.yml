@@ -280,7 +280,8 @@ jobs:
     # Every push to a pull request that is not a draft (a queue group runs the same list on its merge commit in its plan
     # job instead, scripts/ci/merge_commit_checks.sh): pinned ruff against its baseline (no new findings or
     # suppressions), basedpyright on the backend against its baseline (strict for new modules), migration names, the UI's generated API types, the
-    # OpenAPI document, the runner wire contract, shell scripts (shellcheck) and workflows (actionlint). Seconds each
+    # OpenAPI document, the runner wire contract, shell scripts (shellcheck), workflows (actionlint), and shared gates
+    # (scripts/gates.sh: gate scripts and ast-grep rules with fixtures). Seconds each
     # once installed; tools are pinned. The UI's strict TypeScript rule (scripts/check_ui_strict.py) runs here too, and
     # its Node counterpart for scripts/ and recorder/ (scripts/check_node_types.py).
     name: static checks
@@ -320,6 +321,8 @@ jobs:
         run: bash scripts/ci_install.sh python && "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check uv==0.13.0
       - name: Python lint
         run: PATH="$RUNNER_TEMP/venv/bin:$PATH" LINT_BASE_REF="$BASE_SHA" bash scripts/lint.sh
+      - name: Verification gates (scripts and ast-grep rules with fixtures)
+        run: PATH="$RUNNER_TEMP/venv/bin:$PATH" bash scripts/gates.sh --base "$BASE_SHA"
       - name: Types (basedpyright baseline, strict new modules)
         env:
           PYRIGHT_BASE_REF: ${{ env.BASE_SHA }}

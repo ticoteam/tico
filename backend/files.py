@@ -130,6 +130,26 @@ def series(bot, relative):
     return "blob-series:" + hashlib.sha256((bot + "\0" + relative).encode()).hexdigest()[:20]
 
 
+def once_per_content(entries):
+    """A task's files as a reader sees them: two that hold the same bytes now are one file. A bot that writes its report
+    into its checkout's reports/ folder (published after its turn, reports/2026-11-17-how-it-works.md) and also attaches
+    it by name (`tico task attach`) has put the same bytes on the task twice. The one attached by name stays, else the
+    newest. `entries` are (row, digest, item) in the order shown, digest None for one that is never folded (archived);
+    the answer is the items kept, in that order."""
+    kept, at = [], {}
+    for row, digest, item in entries:
+        if digest is None:
+            kept.append((row, item))
+        elif digest not in at:
+            at[digest] = len(kept)
+            kept.append((row, item))
+        elif str(row["identity"]).startswith("task-file:") and not str(kept[at[digest]][0]["identity"]).startswith(
+            "task-file:"
+        ):
+            kept[at[digest]] = (row, item)
+    return [item for _, item in kept]
+
+
 EARLIEST_CONTENT_TIME = "2000-01-01T00:00:00.000000Z"
 
 
@@ -1672,15 +1692,18 @@ class Files:
         self.auth.task(c, who, task_id)
         from . import page_links
 
-        out = []
+        listed = []
         rows = c.execute(
-            "SELECT f.* FROM bot_files f WHERE f.locator='tico_blob' AND (f.task_id=?"
+            "SELECT f.*,p.file_id AS page_id,p.archived AS page_archived FROM bot_files f "
+            "LEFT JOIN pages p ON p.file_id=f.id AND p.deleted_at IS NULL "
+            "WHERE f.locator='tico_blob' AND (f.task_id=?"
             + (" OR f.id IN (SELECT page_id FROM page_links WHERE target=?)" if all_pages else "")
             + ") ORDER BY f.last_activity_at DESC",
             (task_id, "task:" + task_id) if all_pages else (task_id,),
         ).fetchall()
         prime_visible(c, rows)
-        page_links.prime(c, rows)
+        if all_pages:
+            page_links.prime(c, [row for row in rows if row["page_id"]])
         for row in rows:
             if not self.visible(c, who, row, {}):
                 continue
@@ -1711,17 +1734,32 @@ class Files:
                     "SELECT name FROM bot_file_versions WHERE file_id=? AND version=?",
                     (row["id"], row["current_version"]),
                 ).fetchone()[0]
-                out.append(
-                    {
-                        "id": row["id"],
-                        **({"links": page_links.links_of(c, self.auth, who, row["id"])} if all_pages else {}),
-                        "name": name,
-                        "mime": row["mime"],
-                        "current_version": row["current_version"],
-                        "archived": bool(row["archived"]),
-                        "versions": versions,
+                current = next((v for v in versions if v["n"] == row["current_version"]), versions[0])
+                is_page = bool(row["page_id"])
+                archived = bool(row["archived"] or row["page_archived"])
+                details = {}
+                if all_pages and is_page:
+                    details = {
+                        "title": row["title"],
+                        "links": page_links.links_of(c, self.auth, who, row["id"]),
+                        "writers": page_links.writers_of(c, row["id"]),
                     }
+                listed.append(
+                    (
+                        row,
+                        None if archived or is_page else current["sha256"],
+                        {
+                            "id": row["id"],
+                            **details,
+                            "name": name,
+                            "mime": row["mime"],
+                            "current_version": row["current_version"],
+                            "archived": archived,
+                            "versions": versions,
+                        },
+                    )
                 )
+        out = once_per_content(listed)
         for b in c.execute(
             "SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id "
             "FROM blobs b JOIN task_assets a ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id WHERE a.task_id=? "
