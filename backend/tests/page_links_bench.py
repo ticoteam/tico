@@ -136,6 +136,10 @@ def main():
                 "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) VALUES(?,1,'bench',?,1,'spec.html','text/html','bot:ops',?)",
                 [(r[0], '0' * 64, now) for r in rows],
             )
+            c.executemany(
+                "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,actor,created_at) VALUES(?,?,'bench',?,1,'spec.html','text/html','bot:ops',?)",
+                [(r[0], v, '0' * 64, now) for r in rows[:200] for v in range(2, 52)],
+            )
             links = []
             for i, r in enumerate(rows):
                 links.extend(
@@ -306,6 +310,10 @@ def main():
                     args,
                 )
             )
+            migration = (Path(__file__).parents[1] / 'migrations/20261117195614_page_links.sql').read_text()
+            for label, marker in (('document-roles', 'CASE lower(trim(d.name))'), ('pins', "SELECT 'pin:'")):
+                statement = next(part for part in migration.split(';') if marker in part)
+                cases.append(('backfill/' + label, 'SELECT' + statement.partition('SELECT')[2], ()))
             for label, sql, args in cases:
                 plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + sql, args)]
                 took = []

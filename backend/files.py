@@ -1226,7 +1226,7 @@ def task_listing_query(task_id, all_pages):
 
     membership, params = "f.task_id=?", (task_id,)
     if all_pages:
-        membership = "f.id IN (SELECT id FROM bot_files WHERE task_id=? UNION " + page_links.TASK_PAGE_IDS + ")"
+        membership = "f.id IN (" + page_links.TASK_FILE_IDS + ")"
         params += ("task:" + task_id,) * 2
     return (
         "SELECT f.*,p.file_id AS page_id,p.archived AS page_archived FROM bot_files f "

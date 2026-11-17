@@ -12,7 +12,8 @@ from . import names, read_cache, task_documents, task_reads
 from .store import H, Problem
 
 LINKS_SQL = "SELECT * FROM page_links WHERE page_id=? ORDER BY created_at,id"
-TASK_PAGE_IDS = (
+TASK_FILE_IDS = (
+    "SELECT id FROM bot_files WHERE task_id=? UNION "
     "SELECT page_id FROM page_links WHERE target=? UNION "
     "SELECT substr(item,6) FROM pins WHERE place=? AND item LIKE 'page:%'"
 )

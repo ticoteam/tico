@@ -473,6 +473,14 @@ def test_stale_approval_requires_answer_authority_and_visibility_of_every_page(a
     unauthorized = _approve(api, row["id"], entry, 999, token="cara-test")
     assert unauthorized.status_code >= 400 and "approval" not in unauthorized.json(), unauthorized.text
     assert all(p["file_id"] not in unauthorized.text for p in (first, second))
-    stale = _approve(api, row["id"], entry, 999, token="ben-test")
+    path = f"/api/v2/tasks/{row['id']}/asks/{rid}/answer"
+    payload = {"value": "ok", "page_version": f"{fid}@999", "visit_id": row["visit"]["id"]}
+    request_headers = headers("ben-test")
+    stale = api.post(path, json=payload, headers=request_headers)
     assert stale.status_code == 409, stale.text
     assert {p["file_id"] for p in stale.json()["approval"]["pages"]} == {first["file_id"], fid}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE requirements SET person_id='human:cara' WHERE id=?", (rid,))
+    replay = api.post(path, json=payload, headers=request_headers)
+    assert replay.status_code >= 400 and "approval" not in replay.json(), replay.text
+    assert all(p["file_id"] not in replay.text for p in (first, second))

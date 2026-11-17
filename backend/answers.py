@@ -276,7 +276,15 @@ def _page_version(
                 else {}
             ),
         }
-        _h().refuse(conn, by, "task_changed", STALE_APPROVAL, task=row["id"], extra={"approval": approval})
+        _h().refuse(
+            conn,
+            by,
+            "task_changed",
+            STALE_APPROVAL,
+            task=row["id"],
+            extra={"approval": approval},
+            stored={"detail": "The approval changed. Read the task again.", "extra": {}},
+        )
     return now
 
 

@@ -304,7 +304,7 @@ class Pages:
         if task:
             with self.store.read() as c:
                 task = self.auth.resolve_task(c, who, task)
-            where.append("f.id IN (SELECT id FROM bot_files WHERE task_id=? UNION " + page_links.TASK_PAGE_IDS + ")")
+            where.append("f.id IN (" + page_links.TASK_FILE_IDS + ")")
             params += [task, "task:" + task, "task:" + task]
         with self.store.read_transaction() as c:
             if task:

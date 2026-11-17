@@ -467,6 +467,8 @@ def test_relationship_filters_cannot_find_hidden_targets(api):
 
 
 def test_task_files_and_context_follow_live_and_backfilled_pins(api):
+    from backend import live_blocks
+
     ops = bot(api, 'ops')
     source, destination = task(api), task(api, title='Pinned pages')
     page = publish_page(api, ops, task=source['id'])
@@ -479,21 +481,32 @@ def test_task_files_and_context_follow_live_and_backfilled_pins(api):
         files = api.get(f'/api/v2/tasks/{tid}/files?all=1', headers=headers()).json()['files']
         context = api.get(f'/api/v2/tasks/{tid}/context', headers=headers()).json()['pages']
         pages = api.get('/api/v2/pages', params={'task': tid}, headers=headers()).json()['pages']
-        return [[r.get('id', r.get('file_id')) for r in group] for group in (files, context, pages)]
+        app = api.app.state
+        with app.store.read_transaction() as c:
+            live = live_blocks.fill(
+                f'<tico-files task="{tid}"></tico-files>',
+                c,
+                app.auth.identity_for_actor(c, 'human:ana'),
+                app.auth,
+                app.files,
+            )
+        return [[r.get('id', r.get('file_id')) for r in group] for group in (files, context, pages)] + [
+            [fid] if f"#/page/{fid}" in live else []
+        ]
 
-    assert membership() == [[], [], []]
+    assert membership() == [[], [], [], []]
     pin = post(api, 'pins', {'place': target, 'item': 'page:' + fid})
-    assert membership() == [[fid], [fid], [fid]]
+    assert membership() == [[fid], [fid], [fid], [fid]]
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO page_links SELECT 'pin:' || id,?,place,'related',made_by,created_at FROM pins WHERE id=?",
             (fid, pin['id']),
         )
-    assert membership() == [[fid], [fid], [fid]]
+    assert membership() == [[fid], [fid], [fid], [fid]]
     assert api.delete('/api/v2/pins/' + pin['id'], headers=headers()).status_code == 200
-    assert membership() == [[], [], []]
+    assert membership() == [[], [], [], []]
 
     assert add_link(api, fid, target).status_code == 200
     pin = post(api, 'pins', {'place': target, 'item': 'page:' + fid})
     assert api.delete('/api/v2/pins/' + pin['id'], headers=headers()).status_code == 200
-    assert membership() == [[fid], [fid], [fid]]
+    assert membership() == [[fid], [fid], [fid], [fid]]

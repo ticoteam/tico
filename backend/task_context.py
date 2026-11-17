@@ -19,10 +19,9 @@ def pages_query(tid):
         "FROM pages p JOIN bot_files f ON f.id=p.file_id LEFT JOIN bot_file_versions v "
         "ON v.file_id=f.id AND v.version=f.current_version WHERE p.archived=0 "
         "AND f.archived=0 AND f.state<>'deleted' AND f.id IN ("
-        "SELECT id FROM bot_files WHERE task_id=? UNION "
-        "SELECT id FROM bot_files WHERE bot_id IN (SELECT id FROM bots) AND scope=? UNION "
-        + page_links.TASK_PAGE_IDS
-        + ") ORDER BY context_updated_at DESC,f.id DESC",
+        + page_links.TASK_FILE_IDS
+        + " UNION SELECT id FROM bot_files WHERE bot_id IN (SELECT id FROM bots) AND scope=?) "
+        "ORDER BY context_updated_at DESC,f.id DESC",
         (tid, place, place, place),
     )
 
