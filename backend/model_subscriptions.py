@@ -1307,6 +1307,22 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     return view(c, row(c, sid))
 
 
+def rekeyed(c, credential_id, preview, runtime):
+    """The vault key `credential_id` keeps took a new value outside `save` (Replace key for every computer a shared key
+    serves): its subscription moves to a new revision and counts again, as a new secret does there, so a refusal of
+    the old value said late leaves the new one alone (`turn_rejected`), and its usage-limit hold ends as Try now does."""
+    from . import login_holds
+
+    now = H.now()
+    for r in c.execute("SELECT id FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchall():
+        c.execute(
+            "UPDATE model_subscriptions SET preview=?,revision=revision+1,status='new',status_detail='',status_at=?,"
+            "updated_at=?,credential_at=? WHERE id=?",
+            (preview, now, now, now, r["id"]),
+        )
+        login_holds.try_now(c, "", login_holds.subscription_login(r["id"]), runtime)
+
+
 def remove(c, settings, who, sid, confirm=False):
     """Delete a subscription and take it off every computer given it (`computers`, as Settings counts them): those
     signing in with it stop their live runs on its runtime and start again (confirmed first), their sessions start
@@ -1321,6 +1337,15 @@ def remove(c, settings, who, sid, confirm=False):
         running = sum(p["running"] for p in plans)
         if running:
             _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": computers})
+    # A key kept in the vault reached its computers as their key too (GET runner-model-credentials): each is cleared as
+    # Clear key does, so a v0.6.0-rc.1 runner logs out the Codex login the key made instead of keeping it.
+    keyed = (
+        c.execute(
+            "SELECT runner_id,runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,)
+        ).fetchall()
+        if sub["credential_id"]
+        else []
+    )
     # A computer given the owner's plans keeps them: its set moves on at the next turn (`settle`).
     c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,))
     c.execute("UPDATE computer_subscriptions SET subscription_id='' WHERE subscription_id=?", (sid,))
@@ -1331,7 +1356,10 @@ def remove(c, settings, who, sid, confirm=False):
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
     if sub["credential_id"]:
         from .computer_keys import drop_credential
+        from .model_login import mark_key_cleared
 
+        for g in keyed:
+            mark_key_cleared(c, who, g["runner_id"], g["runtime"])
         drop_credential(c, sub["credential_id"])
     H.event(
         c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": computers, "stopped": stopped}
@@ -1652,12 +1680,31 @@ def spread(c, settings, sid, actor, signed_on=""):
 
 
 # ------------------------------------------------------------------------------------------------ claim and run
-def for_claim(c, runner, config, loads=None):
+def _bot_key_names(c, bot):
+    """The model key variables `bot`'s own key grants set in its turns (backend/credentials.py `granted`)."""
+    from .credentials import granted
+
+    ids = sorted(granted(c, "bot:" + bot)) if bot else []
+    if not ids:
+        return set()
+    return {
+        r["env"]
+        for part in H.chunks(ids)
+        for r in c.execute(
+            f"SELECT env FROM credentials WHERE id IN ({','.join('?' * len(part))}) AND ciphertext IS NOT NULL", part
+        )
+    }
+
+
+def for_claim(c, runner, config, loads=None, bot=""):
     """The subscriptions a claimed turn may use, with automatic candidates limited to installed runtimes. `loads`: the
-    claim's loaded values (claim_loads), when the caller has them."""
+    claim's loaded values (claim_loads), when the caller has them. A computer's key (one kept in the vault) is not
+    handed to a turn of `bot` when the bot's own key grant names that runtime's key: the grant signs it in, as it
+    always came before the computer's key (v0.6.0-rc.1 runners take out a granted key for a subscription handed)."""
     given = loads.given if loads is not None else _given(c)
     if not runner or not given:
         return []
+    from . import providers
     from .store import readiness_document
 
     own = turn_runtimes(config)
@@ -1665,7 +1712,6 @@ def for_claim(c, runner, config, loads=None):
         row = loads.runner_of(c, runner["id"])
         record = loads.plain_record(c)
     else:
-        from . import providers
         from .read_cache import one
 
         row = one(c, RUNNER_READINESS_SQL, (runner["id"],))
@@ -1676,6 +1722,15 @@ def for_claim(c, runner, config, loads=None):
         if runtime not in own and ((ready.get("runtimes") or {}).get(runtime) or {}).get("installed") is not True:
             continue  # a subscription authenticates a CLI; it cannot install one
         sub = in_effect(c, runner["id"], runtime, loads=loads)
+        if (
+            sub
+            and bot
+            and set(providers.MODEL_KEYS.get(runtime, ())) & _bot_key_names(c, bot)
+            and c.execute(
+                "SELECT 1 FROM model_subscriptions WHERE id=? AND credential_id IS NOT NULL", (sub["id"],)
+            ).fetchone()
+        ):
+            continue
         if sub:
             lazy = runtime not in own
             out.append({"runtime": runtime, "subscription": sub, "activate": lazy})

@@ -11,9 +11,10 @@ decrypted: the vault credential keeps it.
 2. A shared key (a credential granted to every computer, or to computers by name) becomes one subscription under its
    credential's name, given only to the computers that run on it now, by the rule the Computers page used
    (`computer_keys.uses_shared` before this): the key shared with it by name before the "Every computer" one, none on a
-   computer with its own key, a cleared key or a switch to a subscription, none where it reported signing in with a
-   terminal key or another login. So a computer on its own Claude or ChatGPT login stays on it. Its computer grants are
-   revoked: the subscription is the record now.
+   computer with its own key, a cleared key or a switch to a subscription. And only where the computer reported
+   signing in with the shared key: one on a terminal key or a login of its own, or one that has not said (no report,
+   a failed or timed-out check), is not given it, so nobody is billed differently. Its computer grants are revoked: the
+   subscription is the record now.
 3. A Codex key now signs turns in from a home of its own, so the sessions of Codex on each computer given one start
    fresh, as a change of subscription does (model_subscriptions._reset).
 
@@ -101,14 +102,13 @@ def _fence(conn, runner_id, runtime, now):
 
 
 def _reported(readiness, runtime):
-    """(key row, runtime row) the computer last reported for `runtime`."""
+    """The key the computer last reported signing `runtime` in with ({name, source}), or {}."""
     try:
         row = (json.loads(readiness or "{}").get("runtimes") or {}).get(runtime)
     except (ValueError, AttributeError):
-        return {}, {}
-    row = row if isinstance(row, dict) else {}
-    key = row.get("key")
-    return (key if isinstance(key, dict) else {}), row
+        return {}
+    key = row.get("key") if isinstance(row, dict) else None
+    return key if isinstance(key, dict) else {}
 
 
 def _marked(conn, runner_id, runtime):
@@ -133,11 +133,11 @@ def _shared_on(conn, shared, runner_id, readiness, runtime, own):
             break
     if not found or (runner_id, runtime) in own or _marked(conn, runner_id, runtime):
         return None
-    key, row = _reported(readiness, runtime)
-    if key.get("source") not in (None, "", "shared"):
-        return None  # a key set in its terminal, or its own
-    if not key and row.get("authenticated") == "ready":
-        return None  # signed in with its own login, not a key
+    # Only where it reported signing in with the shared key: a computer that has not said (no report yet, a failed or
+    # timed-out check) may be on a login of its own, and giving it the key would change who is billed.
+    key = _reported(readiness, runtime)
+    if key.get("source") != "shared":
+        return None
     return found.get(key.get("name")) or next(found[env] for env in allowed if env in found)
 
 

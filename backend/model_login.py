@@ -471,10 +471,13 @@ def sign_out(c, who, rid, runtime, profile="", auth=None):
     return view(row)
 
 
-def use_shared_key(c, who, rid, runtime, auth=None):
-    """Let the company's shared key sign a signed-out computer login in again: the one it is given, else the shared
-    key for that runtime the most computers run on (backend/computer_keys.py `shared_keys`)."""
+def use_shared_key(c, who, rid, runtime, auth=None, vault=None):
+    """Let the company's shared key sign a signed-out computer login in again: the one it is given (a Clear key keeps a
+    shared key given, held back). With none given, a credential administrator's choice puts the shared key for that
+    runtime the most computers run on there (backend/computer_keys.py `shared_keys`); anyone else only lifts the
+    sign-out, since handing a company key to another computer is an administrator's change (`attach_shared_key`)."""
     from . import computer_keys
+    from .credentials import administrator
 
     _operator(c, who, rid, auth)
     if runtime not in SIGN_OUT_RUNTIMES:
@@ -485,7 +488,8 @@ def use_shared_key(c, who, rid, runtime, auth=None):
     row, _ = _queue(c, who, runner, runtime, "", "use_shared_key", "use the shared key")
     c.execute("DELETE FROM model_login_cleared WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
     c.execute("DELETE FROM model_login_key_off WHERE runner_id=? AND runtime=? AND profile=''", (rid, runtime))
-    if not c.execute("SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (rid, runtime)).fetchone():
+    given = c.execute("SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (rid, runtime)).fetchone()
+    if not given and vault is not None and administrator(c, who, vault.admins):
         for key in computer_keys.shared_keys(c, runtime)[:1]:
             computer_keys.assign(c, rid, runtime, computer_keys.subscription_for(c, key, who.actor), who.actor)
     H.event(c, who.actor, "runner.login.use_shared_key", rid, {"runtime": runtime})
@@ -1163,9 +1167,9 @@ def replace_key(c, who, rid, runtime, key, env="", scope="this", auth=None, vaul
             "WHERE id=?",
             (ciphertext, nonce, preview, H.now(), who.actor, row["id"]),
         )
-        c.execute(
-            "UPDATE model_subscriptions SET preview=?,updated_at=? WHERE credential_id=?", (preview, H.now(), row["id"])
-        )
+        from . import model_subscriptions
+
+        model_subscriptions.rekeyed(c, row["id"], preview, runtime)
         H.event(c, who.actor, "credential.updated", row["id"], {"secret_changed": True, "via": "computers"})
         return {
             "shared": {"id": row["id"], "env": row["env"], "preview": preview},

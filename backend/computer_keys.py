@@ -174,8 +174,9 @@ def store(c, vault, who, runner, runtime, value, login_id, env=""):
 
 def confirm(c, runner_id, login_id, settings=None):
     """The computer checked the key staged for `login_id`: it is now this computer's key. Its own key before takes the
-    new value in place (the old value is deleted); else the key is a new subscription given to it. A computer given a
-    subscription from Settings > Models meanwhile keeps it, and the key is kept but given to no computer."""
+    new value in place (the old value is deleted), unless that key is given to other computers too; else the key is a
+    new subscription given to it. A computer given a subscription from Settings > Models meanwhile keeps it, and the
+    key is kept but given to no computer."""
     from . import model_subscriptions as MS
 
     row = c.execute(
@@ -188,11 +189,17 @@ def confirm(c, runner_id, login_id, settings=None):
     runtime, cid, now = row["runtime"], row["credential_id"], H.now()
     c.execute("DELETE FROM computer_keys WHERE credential_id=?", (cid,))
     current = _given(c, runner_id, runtime)
-    if (
-        current
-        and current["source"] == OWN + runner_id
-        and MS.KEY_KINDS.get(row["env"]) == (MS.row(c, current["subscription_id"]) or {}).get("kind")
-    ):
+    own = current is not None and current["source"] == OWN + runner_id
+    # Its own key given in Settings > Models to other computers too stays theirs as it is: the new value is this
+    # computer's alone, a subscription of its own.
+    alone = (
+        own
+        and not c.execute(
+            "SELECT 1 FROM computer_subscriptions WHERE subscription_id=? AND NOT (runner_id=? AND runtime=? AND person='')",
+            (current["subscription_id"], runner_id, runtime),
+        ).fetchone()
+    )
+    if alone and MS.KEY_KINDS.get(row["env"]) == (MS.row(c, current["subscription_id"]) or {}).get("kind"):
         c.execute(
             "UPDATE model_subscriptions SET credential_id=?,preview=?,revision=revision+1,status='new',"
             "status_detail='',status_at=?,updated_at=?,credential_at=? WHERE id=?",
@@ -205,7 +212,7 @@ def confirm(c, runner_id, login_id, settings=None):
         credential = {"id": cid, "env": row["env"], "preview": row["preview"], "name": ""}
         sid = subscription_for(c, credential, row["created_by"], f"{MS.KINDS[kind]['name']} · {label}")
         if not _models_plan(c, runner_id, runtime):
-            old = current["subscription_id"] if current and current["source"] == OWN + runner_id else None
+            old = current["subscription_id"] if alone else None
             assign(c, runner_id, runtime, sid, row["created_by"], settings)
             if old:
                 _drop(c, old)
@@ -227,7 +234,8 @@ def discard(c, login_id):
 
 def delete(c, runner_id, runtime):
     """Clear key (or a switch to a subscription): the computer's key for `runtime` is taken off it. Its own key is
-    deleted from the vault (staged ones too); a shared key stays for the other computers it serves."""
+    deleted from the vault (staged ones too), or only taken off it while other computers are given it; a shared key
+    stays given to it, held back by the mark the caller sets, so Use the shared key brings back that key and no other."""
     n = 0
     for row in c.execute(
         "SELECT credential_id FROM computer_keys WHERE runner_id=? AND runtime=?", (runner_id, runtime)
@@ -237,19 +245,25 @@ def delete(c, runner_id, runtime):
     current = _given(c, runner_id, runtime)
     if current:
         n += 1
-        if current["source"] == OWN + runner_id:
-            _drop(c, current["subscription_id"])
-        else:
+        if current["source"] != OWN + runner_id:
+            return n
+        if c.execute(
+            "SELECT 1 FROM computer_subscriptions WHERE subscription_id=? AND runner_id<>?",
+            (current["subscription_id"], runner_id),
+        ).fetchone():
             c.execute(
                 "DELETE FROM computer_subscriptions WHERE runner_id=? AND runtime=? AND person=''", (runner_id, runtime)
             )
+        else:
+            _drop(c, current["subscription_id"])
     return n
 
 
 def before_delete(c, who, credential_id):
     """Credentials > Delete on a computer's key. One a computer is still checking is refused, so a check never confirms
-    a key that is gone. A key in use goes like any credential: its subscription goes with it, and a computer that ran on
-    its own key there is cleared as Clear key does (told to delete its copies and log out the login the key made)."""
+    a key that is gone. A key in use goes like any credential: its subscription goes with it, and each computer given
+    it is cleared as Clear key does (told to delete its copies and log out the login the key made: a v0.6.0-rc.1
+    runner keeps a Codex login a key made until told so)."""
     from .model_login import ACTIVE_SQL
 
     row = c.execute(
@@ -282,15 +296,13 @@ def before_delete(c, who, credential_id):
     from .model_login import mark_key_cleared
 
     for g in given:
-        cleared = sub["source"] == OWN + g["runner_id"]
-        if cleared:
-            mark_key_cleared(c, who, g["runner_id"], g["runtime"])
+        mark_key_cleared(c, who, g["runner_id"], g["runtime"])
         H.event(
             c,
             who.actor,
             "computer_key.deleted",
             g["runner_id"],
-            {"runtime": g["runtime"], "credential": credential_id, "cleared": cleared},
+            {"runtime": g["runtime"], "credential": credential_id, "cleared": True},
         )
 
 
@@ -399,20 +411,6 @@ def _live_runners(c):
     return c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL ORDER BY lower(label), id").fetchall()
 
 
-def every(c, credential_id):
-    """Whether the shared key `credential_id` is given to every live computer."""
-    live = {r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")}
-    given = {
-        r["runner_id"]
-        for r in c.execute(
-            "SELECT g.runner_id FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
-            "WHERE s.credential_id=? AND g.person=''",
-            (credential_id,),
-        )
-    }
-    return bool(live) and live <= given
-
-
 def serving(c):
     """{runner id: {runtime: {id, name, env, preview, every, computers: [{id, label}]}}} for every live computer: the
     shared key each runs each runtime on, and every computer that same key serves. Values never leave the vault."""
@@ -431,7 +429,7 @@ def serving(c):
                 "name": row["name"],
                 "env": row["env"],
                 "preview": row["preview"],
-                "every": every(c, row["id"]),
+                "every": False,  # no key covers every computer, later ones too, any more (D11-5 drops the field)
                 "computers": served[row["id"]],
             }
             for runtime, row in found.items()
