@@ -315,6 +315,9 @@ def register(
         )
         return mutate(request, body, lambda c: question_write(c, who, tid, body.text, to, rc))
 
+    # An older client's question on the asks route is asked here (task_moves_routes.task_ask).
+    app.state.task_question = task_question
+
     def question_write(c, who, tid, text, to, rc, ingest=None):
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
         transaction. Held by a rule, nothing is written and nothing is marked."""

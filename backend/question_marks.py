@@ -182,6 +182,71 @@ def _tell_gone(conn: sqlite3.Connection, mark: Row) -> None:
     )
 
 
+GLYPH = "❓"
+# What a line may open with before its ❓ and still lead with it: space and Markdown's emphasis, heading and quote marks.
+_LEAD = " \t\r\n*_#>"
+UNASKED = "question_unasked"  # the wake's refs key (true): its own turn is never woken for this again
+UNASKED_LEAD = (
+    "Your reply began with ❓, but nobody was asked: {where}. A ❓ is a mark that only `tico task ask` puts on a message; "
+    "typed into a reply or a note it asks no one, and nobody's Needs you shows it. "
+    'If you still need an answer, ask now: tico task ask {task} --to <person> "<one short line>", detail on the lines '
+    "after it."
+)
+KEPT = "your reply stayed on your run, where no one reads it"
+POSTED = "it was posted as a plain message"
+
+
+def leads_with_mark(text: object) -> bool:
+    """Whether the words open with a ❓ (after any space or Markdown emphasis): written as a question to a person."""
+    return str(text or "").lstrip(_LEAD).startswith(GLYPH)
+
+
+def unasked_reply(
+    conn: sqlite3.Connection, aid: str, bot: str, task_id: object, text: str, *, posted: bool, woken_by: object
+) -> str | None:
+    """A turn on an open task ended with a reply that leads with ❓ and marked no ❓ (nor had an ask held for a person's
+    review): the bot meant to ask a person and nobody was asked. The bot is woken on the task once, told how to ask and
+    what its words must fix first (ask_shape), so the question becomes a real ❓. A turn this wake started is not woken
+    again for it. Returns the wake's message id, or None when nothing was owed."""
+    if not task_id or not leads_with_mark(text) or not H.is_bot(bot):
+        return None
+    from . import task_engine as _task_engine
+
+    found: Row | None = cast(Any, _task_engine).task(conn, str(task_id))
+    if not found or found.get("status") != "open" or not found.get("visit"):
+        return None
+    refs: Any = H._json(cast(Row, woken_by).get("refs"), {}) if isinstance(woken_by, Mapping) else {}
+    if isinstance(refs, dict) and cast(Row, refs).get(UNASKED):
+        return None
+    started = conn.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
+    since = str(started[0]) if started and started[0] else ""
+    if (
+        conn.execute("SELECT 1 FROM question_marks WHERE bot_id=? AND created_at>=? LIMIT 1", (bot, since)).fetchone()
+        or conn.execute(
+            "SELECT 1 FROM org_rule_holds WHERE author=? AND state='held' AND created_at>=? LIMIT 1", (bot, since)
+        ).fetchone()
+    ):
+        return None
+    from . import task_wakes as _task_wakes
+
+    task_wakes = cast(Any, _task_wakes)
+    row = found
+    lead = UNASKED_LEAD.format(where=POSTED if posted else KEPT, task=row["id"])
+    shape = ask_shape.line_refusal(str(text).lstrip(_LEAD)[len(GLYPH) :])
+    if shape:
+        lead += f" Your words would be refused as they are: {shape}"
+    H.event(conn, H.KEEPER, "question.unasked", aid, {"bot": bot, "task": row["id"], "posted": posted})
+    return task_wakes.add(
+        conn,
+        row,
+        bot,
+        row["visit"],
+        task_wakes.body(conn, row, lead, to=bot),
+        wake_key=f"{row['id']}:{row['visit']['id']}:{UNASKED}:{aid}",
+        refs={UNASKED: True},
+    )
+
+
 def on_task(conn: sqlite3.Connection, task_id: object) -> list[Row]:
     return [m for m in open_rows(conn) if m["task_id"] and m["task_id"] == str(task_id)]
 

@@ -75,6 +75,33 @@ def parse_until(value: object) -> str | None:
     return stamp
 
 
+# An OK approves what it shows: the choices an older client's question carried are not an OK's.
+OK_NO_CHOICES = (
+    'An OK approves what it shows and has no choices. To ask a question, ask it: tico task ask <id> --to <person> "<line>", '
+    "with the options in its words."
+)
+
+
+def question_words(body: M.TaskAsk) -> str:
+    """An older client's question (`answer`) as a ❓'s words: its line first, then why it matters, each choice with
+    what happens on it, and the one it recommends. Its title is the line's heading only, so it is left out."""
+    parts = [body.line.strip()]
+    if body.why and body.why.strip():
+        parts.append(body.why.strip())
+    details = list(body.details or [])
+    picks = [
+        f"- {choice.strip()}: {details[n].strip()}"
+        if n < len(details) and details[n].strip()
+        else f"- {choice.strip()}"
+        for n, choice in enumerate(body.choices or [])
+    ]
+    if body.recommend and body.recommend.strip():
+        picks.append(f"I'd pick {body.recommend.strip()}.")
+    if picks:
+        parts.append("\n".join(picks))
+    return "\n\n".join(parts)
+
+
 def register(
     app: FastAPI,
     auth: Any,
@@ -791,18 +818,14 @@ def register(
         """Ask a person on the task for an OK of what it shows, in one sentence (C19). A bot's ask a company rule covers
         is refused with the rule's words (docs/dev/pipelines-v3.md, "How a rule stops the next one"). A bot's ask to a
         person has a short first line that stands on its own and shows only what the person can open
-        (backend/ask_shape.py): refused before any check otherwise. A question (`answer`) is refused: it is a message
-        marked ❓ (POST /api/v2/tasks/{tid}/questions, backend/question_marks.py)."""
+        (backend/ask_shape.py): refused before any check otherwise. A question (`answer`) is a message marked ❓: it is
+        asked as one (POST /api/v2/tasks/{tid}/questions, backend/question_marks.py), with the parts an older client
+        sends as words in it (`question_words`), so a computer's `tico` from before ❓ marks still asks."""
         if body.kind == "answer":
-            from . import task_engine
-
-            refusal = task_engine.QUESTION_INSTEAD
-            work(
-                request,
-                tid,
-                body,
-                lambda c, who, task_id: H.refuse(c, who.actor, "task_requirement", refusal, task=task_id),
-            )
+            text = question_words(body)
+            return request.app.state.task_question(request, tid, M.Question(to=body.to, text=text))
+        if body.choices or body.details or body.recommend:
+            raise Problem("validation", OK_NO_CHOICES, 422)
         ask_shape_refused(request, tid, body)
         return checked(request, tid, body, "task_ask")
 

@@ -7033,6 +7033,12 @@ class Execution:
                                     **({"task": task["id"]} if task else {}),
                                 },
                             )
+            # A reply that opens with ❓ was meant as a question, but typed words mark nothing: kept on the run or
+            # posted plain, nobody's Needs you shows it. Its bot is woken once to ask with a real ❓.
+            if task and not held:
+                from . import question_marks
+
+                question_marks.unasked_reply(c, aid, actor, task["id"], text, posted=reply is not None, woken_by=msg)
         # A turn on a check subtask ran on the check's model, not the bot's (backend/check_models.py).
         # Decided by what the claim handed out: a check handed to another bot mid-turn still ran on the check's model.
         check_task, check = check_models.handed_out(c, aid)

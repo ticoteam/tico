@@ -20,10 +20,13 @@ from . import hubdb as _hubdb
 
 H: Any = _hubdb  # untyped module, through Any as in question_marks.py
 
-NOTE = 'Questions are messages now: ask again with a ❓, tico task ask <task> --to <person> "<question>".'
+NOTE = 'Questions are messages now: ask again with tico task ask <task> --to <person> "<question>".'
+# The way to ask is the command itself: a ❓ typed into a reply or a note asks nobody (question_marks.unasked_reply).
 WAKE = (
     "Your question on this task was taken back: questions are messages now.\n{question}\n"
-    'If you still need it answered, ask again with a ❓: tico task ask {task} --to <person> "<question>".'
+    'If you still need it answered, ask again by running tico task ask {task} --to <person> "<one short line>", '
+    "with the options and your pick on the lines after it: that posts it marked ❓ in their Needs you. "
+    "Writing ❓ in your reply asks no one."
 )
 # The old question as the wake gives it back: its line and each choice, cut to these lengths.
 LINE_MAX, CHOICE_MAX, CHOICES_MAX = 300, 120, 8
