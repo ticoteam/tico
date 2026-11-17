@@ -197,9 +197,10 @@ async function mountMarketPage(shell: HTMLElement) {
   const briefing = latest?.briefing || null, answers: RdqAnswers = briefing?.answers || {};
   const revenue = rdqRevenue(offering);
   const name = [offering?.name, offering?.definition?.geography].filter(Boolean).join(', ');
-  // The owner sizes an unsized market here; an open sizing task shows its state (GET /v2/market/spend `sizing`).
-  const sized = mktSized(offering) || mktSized(buyer), sizing = !sized && !!offering && mktOwner();
-  const asking = offering?.sizing || null, needs = sizing && (!asking || !!asking.ask);
+  // The owner sizes an unsized market here, and changes the market's sentence sized or not; an open sizing task shows
+  // its state (GET /v2/market/spend `sizing`).
+  const sized = mktSized(offering) || mktSized(buyer), owner = !!offering && mktOwner(), sizing = !sized && owner;
+  const asking = offering?.sizing || null, needs = (sizing && !asking) || !!asking?.ask;
   const players = rdqPlayersHtml(offering, companies, briefing, revenue);
   const reach = mktChainHtml(chain, rdqChainMoney(offering, buyer, revenue));
   const heard = !!stats && ((stats.recent || []).length > 0 || (stats.daily || []).some(d => Object.values(d.sources || {}).some(Boolean)));
@@ -231,7 +232,7 @@ async function mountMarketPage(shell: HTMLElement) {
     if (open) open.onclick = () => { if (money) money.definition(name); else mktDefinitionOpen(def, name); };
   }
   const sizingEl = shell.querySelector<HTMLElement>('#mkt-sizing');
-  const card = sizingEl && (sizing || asking) ? mktSizing(sizingEl, offering, {form: sizing, sized, needs: n => rdqSizingNeeds(shell, n)}) : null;
+  const card = sizingEl && (owner || asking) ? mktSizing(sizingEl, offering, {form: owner, sized, needs: n => rdqSizingNeeds(shell, n)}) : null;
   const chainEl = shell.querySelector<HTMLElement>('.mkt-chain');
   if (chainEl && chain) mktChainBind(chainEl, chain.edges);
   shell.onclick = ev => {

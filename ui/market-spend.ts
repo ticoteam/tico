@@ -236,10 +236,12 @@ const mktGrowthPts = (tree: MktTree): MktGrowthGroup[] => tree.drawn.filter((g):
 // The sizing card: the open Size the market task as the server has it (GET /v2/market/spend `sizing`), so a reload shows
 // the same. Working: a spinner and the task. Waiting on the reader: the Librarian's question, answered here (POST
 // /v2/tasks/{id}/asks/{requirement_id}/answer). With `form` (nothing sized yet, the owner), the sentence that defines the
-// market, sent with POST /v2/market/spend/research: a new sentence changes the market and goes to the open task.
+// market, sent with POST /v2/market/spend/research: a new sentence changes the market and goes to the open task. On a
+// sized market the sentence is a line of text, and its pencil turns it into the form.
 // It follows the task live (liveFollowTask) and Needs you; when the sizes arrive the page is drawn again. `needs` is
-// told whether the card waits on the owner.
+// told whether the card waits on the reader.
 interface MktSizingOpts { form: boolean; sized: boolean; needs?: (needs: boolean) => void; }
+const MKT_PEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>';
 interface MktSizingMounted { stop(): void; }
 const mktTaskLink = (s: MktSizing): string => `<a href="#/task/${esc(s.id)}">View task</a>`;
 function mktSizingHtml(s: MktSizing | null): string {
@@ -258,12 +260,28 @@ function mktSizingHtml(s: MktSizing | null): string {
 }
 function mktSizing(host: HTMLElement, first: MktSpend | null | undefined, opts: MktSizingOpts): MktSizingMounted {
   let sizing: MktSizing | null = first?.sizing || null, dead = false, unfollow = (): void => {}, followed = '';
-  host.innerHTML = '<div data-mkt-sizing></div>' + (opts.form ? `<form class="mkt-card mkt-start" data-mkt-size novalidate>
+  let saved = first?.definition?.description || '';
+  const compact = opts.form && opts.sized;
+  const lineHtml = (): string => saved
+    ? `<span data-mkt-def-text>${esc(saved)}</span> <button type="button" class="mkt-pen tap-mark" data-mkt-edit aria-label="Change the market">${MKT_PEN}</button>`
+    : '<button type="button" class="linkish" data-mkt-edit>Describe the market</button>';
+  host.innerHTML = '<div data-mkt-sizing></div>' + (compact ? `<p class="mkt-def-line" data-mkt-def-line>${lineHtml()}</p>` : '')
+    + (opts.form ? `<form class="mkt-card mkt-start" data-mkt-size novalidate${compact ? ' hidden' : ''}>
       <label class="mkt-lab" for="mkt-describe">Describe the market in a sentence</label>
       <input id="mkt-describe" name="description" type="text" maxlength="400" autocomplete="off" value="${esc(first?.definition?.description || '')}" placeholder="What small offices spend on cleaning services">
       <p class="err" data-mkt-error role="alert" hidden></p>
       <div class="market-start-actions"><button class="primary" type="submit">Size the market</button></div></form>` : '');
   const box = host.querySelector<HTMLElement>('[data-mkt-sizing]'), form = host.querySelector<HTMLFormElement>('[data-mkt-size]');
+  const defLine = host.querySelector<HTMLElement>('[data-mkt-def-line]'), field = form?.querySelector<HTMLInputElement>('[name=description]');
+  // On a sized market: the line or the form, one at a time.
+  const editing = (on: boolean): void => {
+    if (!defLine || !form) return;
+    if (!on) { defLine.innerHTML = lineHtml(); if (field) field.value = saved; form.querySelector<HTMLElement>('[data-mkt-error]')?.toggleAttribute('hidden', true); }
+    defLine.hidden = on; form.hidden = !on;
+    if (on) { field?.focus(); field?.select(); } else defLine.querySelector<HTMLElement>('[data-mkt-edit]')?.focus();
+  };
+  defLine?.addEventListener('click', ev => { if (eventElement(ev)?.closest('[data-mkt-edit]')) editing(true); });
+  if (compact && form) form.onkeydown = ev => { if (ev.key === 'Escape') { ev.preventDefault(); editing(false); } };
   const follow = (): void => {
     if (followed === (sizing?.id || '')) return;
     unfollow(); followed = sizing?.id || '';
@@ -273,8 +291,8 @@ function mktSizing(host: HTMLElement, first: MktSpend | null | undefined, opts: 
     if (dead || !box) return;
     patchHTML(box, mktSizingHtml(sizing));
     const submit = form?.querySelector<HTMLButtonElement>('[type=submit]');
-    if (submit) submit.textContent = sizing ? 'Update' : 'Size the market';
-    opts.needs?.(opts.form && (!sizing || !!sizing.ask));
+    if (submit) submit.textContent = sizing || opts.sized ? 'Update' : 'Size the market';
+    opts.needs?.((opts.form && !opts.sized && !sizing) || !!sizing?.ask);
     follow();
   };
   // A read of the card as the server has it now; the sizes arriving draw the whole page again.
@@ -284,6 +302,8 @@ function mktSizing(host: HTMLElement, first: MktSpend | null | undefined, opts: 
     if (dead) return;
     if (!opts.sized && mktSized(data)) { window.marketReload(); return; }
     sizing = data.sizing || null;
+    // The sentence as saved now, unless the owner is changing it.
+    if (defLine && !defLine.hidden && (data.definition?.description || '') !== saved) { saved = data.definition?.description || ''; defLine.innerHTML = lineHtml(); }
     paint();
   };
   const soon = (): void => { if (!dead) liveSoon('mkt-sizing', () => void refresh(), 400); };
@@ -324,7 +344,9 @@ function mktSizing(host: HTMLElement, first: MktSpend | null | undefined, opts: 
       // The answer carries the task as the server has it now; an older server answers only its id.
       const now: MktSizing | null | undefined = sent?.sizing;
       sizing = now || (sent?.task_id ? {id: String(sent.task_id), turn: 'working'} : sizing);
+      saved = description;
       paint();
+      if (compact) editing(false);
     } catch (error) {
       line.textContent = errorMessage(error, 'That did not go through.'); line.hidden = false;
     }

@@ -271,8 +271,9 @@ reader may not open it): `turn` is `working` or `person`, and `ask` is the quest
 (`{requirement_id, kind, line, choices}`). The Market card shows it as the server has it, so a reload shows the same: a
 spinner and the task while it works, or the question with a reply box when it waits on the reader, answered with
 `POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` and the task's `version`. It follows the task live and reads again when
-it moves; when the sizes arrive the page is drawn again. While the market is unsized the owner's sentence stays editable, and
-its button reads Update once a task is open.
+it moves; when the sizes arrive the page is drawn again. The owner can change the sentence whether or not the market is sized:
+unsized, it is the form (its button reads Update once a task is open); sized, it is a line above the map whose pencil opens
+the form, prefilled, and Escape folds it back.
 
 On Strategy, Where we play adds a segment with an optional summary and parent (the tree goes four deep), and the owner
 renames one in place with `POST /api/v2/market/entities/{id} {name}`.

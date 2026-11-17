@@ -394,6 +394,17 @@ def test_a_new_sentence_changes_the_market_and_tells_the_open_task(api):
     assert "Define and size our market: Software for letting agents" in body
 
 
+def test_the_owner_changes_the_sentence_of_a_sized_market(api):
+    # Sized, with no task open: a new sentence is the definition and files the work again; the sizes stay until then.
+    first, _, _ = defined(api)
+    size(api, first, B, accept=True)
+    _librarian(api)
+    sent = post(api, "market/spend/research", {"description": "Cleaning for offices and schools"})
+    seen = get(api, "market/spend")
+    assert seen["definition"]["description"] == "Cleaning for offices and schools"
+    assert seen["sizing"]["id"] == sent["task_id"] and seen["total"]["spend_usd"] == B
+
+
 def test_the_spend_view_carries_the_open_sizing_task_and_the_question_it_asks_the_reader(api):
     assert get(api, "market/spend")["sizing"] is None
     _librarian(api)

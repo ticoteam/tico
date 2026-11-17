@@ -279,6 +279,40 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
       assert.deepEqual(errors, []);
       await page.close();
     }
+    // A sized market: the owner's sentence is a line with a pencil above the map. The pencil opens it prefilled, Escape
+    // keeps it, a new sentence is sent once and the line shows it, with the task's state; a member sees no line.
+    for (const role of ['owner', 'member']) {
+      const {page, errors, sent} = await open(browser, {role, route: '#/strategy/market/spend'});
+      await page.locator('#mkt-q-money .mkt-map').waitFor();
+      const line = page.locator('#mkt-q-money [data-mkt-def-line]'), form = page.locator('#mkt-q-money [data-mkt-size]');
+      if (role !== 'owner') {
+        assert.equal(await line.count(), 0, 'no line for a member');
+        assert.equal(await form.count(), 0, 'no form for a member');
+      } else {
+        assert.equal((await line.innerText()).trim(), 'What small offices and homes spend on cleaning services');
+        assert.equal(await form.isVisible(), false, 'the form is folded on a sized market');
+        assert.equal(await page.locator('#mkt-qh-money .needs-mark').count(), 0, 'a sized market asks nothing');
+        await line.locator('[data-mkt-edit]').click();
+        assert.equal(await line.isVisible(), false);
+        assert.equal(await form.locator('#mkt-describe').inputValue(), 'What small offices and homes spend on cleaning services');
+        await form.locator('#mkt-describe').fill('Something else');
+        await form.locator('#mkt-describe').press('Escape');
+        await line.locator('[data-mkt-edit]').waitFor();
+        assert.equal((await line.innerText()).trim(), 'What small offices and homes spend on cleaning services', 'Escape keeps the sentence');
+        assert.deepEqual(sent, [], 'Escape sends nothing');
+        await line.locator('[data-mkt-edit]').click();
+        await form.locator('#mkt-describe').fill('What offices and schools spend on cleaning');
+        assert.equal(await form.locator('[type="submit"]').innerText(), 'Update');
+        await form.locator('[type="submit"]').click();
+        await page.locator('#mkt-q-money [data-mkt-researching] a[href="#/task/task-size"]').waitFor();
+        assert.equal((await line.innerText()).trim(), 'What offices and schools spend on cleaning');
+        assert.equal(await form.isVisible(), false);
+        assert.deepEqual(sent, [['POST', '/api/v2/market/spend/research', {description: 'What offices and schools spend on cleaning'}]]);
+        assert.equal(await page.locator('#mkt-q-money .mkt-map').count(), 1, 'the sizes stay');
+      }
+      assert.deepEqual(errors, [], role);
+      await page.close();
+    }
     // A link to a note, a note id route, an old #/market link, the old Players view and Open map open the map, with a
     // way back to the page.
     for (const [route, hash] of ([['#/strategy/market?note=brief', '#/strategy/market?note=brief'], ['#/strategy/market/company/self', '#/strategy/market/company/self'],
