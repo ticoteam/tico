@@ -116,6 +116,8 @@ def gateway_until(notice, hit, reported=None, last=True, floor=1800):
     reported, else an hour on the turn it ended (a refused key may have extended an address block) and a minute when
     another model finished the turn. A reset already past (a runner's clock behind) counts as none reported."""
     at = H.parse_ts(hit) if isinstance(hit, str) else hit
+    if at is None:
+        raise ValueError(f"unreadable limit time: {hit!r}")
     if gateway.cap_reached(notice):
         return _iso(max(at + timedelta(seconds=floor), gateway.month_after(at) + timedelta(seconds=1)))
     said = believable(reported, at) if last else None
