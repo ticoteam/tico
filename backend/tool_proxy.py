@@ -473,8 +473,10 @@ def install(app, store):
             )
             if credential_id and result == 'sent':
                 from .credentials import record_use
+                from . import reconnect_tasks
 
                 record_use(c, subject, 'credential.proxied_call', credential_id, {'tool': tool_id}, windowed=True)
+                reconnect_tasks.called(c, tool_id, status)  # Key rejected opens its Reconnect task, Working ends it
 
     def plan(request, tool_id, rest, method):
         """Everything the call needs, read once: (refusal, None) or (None, plan)."""
