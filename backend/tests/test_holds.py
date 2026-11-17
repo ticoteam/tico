@@ -92,7 +92,7 @@ CASES = [
     Case(holds.QUARANTINED, _bot_state("quarantined"), card="is quarantined", label="bot quarantined"),
     Case(
         holds.COMPANY_PAUSED,
-        lambda api, c, rig: _metadata(c, "company_pause", {"paused_by": "human:ana", "paused_at": NOW}),
+        lambda api, c, rig: holds.put(c, holds.PAUSED, "company", "", actor="human:ana"),
         health="company_paused",
         card=task_wakes.COMPANY_PAUSED,
         label="all bots are paused",

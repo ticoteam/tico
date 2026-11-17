@@ -6,9 +6,9 @@ kind at a time, written by `put` and ended by `release`:
 
 | kind              | scope   | stored in                                              | ends                               |
 |-------------------|---------|--------------------------------------------------------|------------------------------------|
-| `paused`          | bot     | `bots.state='paused'`                                  | a person resumes it                |
+| `paused`          | bot     | `bots.state='paused'`, and its `paused` hold           | a person resumes it                |
 | `quarantined`     | bot     | `bots.state='quarantined'`, and its `quarantine` hold  | the cooldown, or a person          |
-| `company_paused`  | company | company_pause.KEY                                      | the owner or an admin resumes      |
+| `company_paused`  | company | `holds`, kind `paused` on the company (company_pause)  | the owner or an admin resumes      |
 | `cloud_locked`    | company | Tico Cloud access (cloud_access)                       | Tico HQ unlocks the company        |
 | `run_hold`        | bot     | `holds`, kind `failing`, held: no until_at             | a try completes, or a release      |
 | `budget`          | bot     | `holds`, kind `runaway` (runaway runs)                 | a release, or a raised budget      |
@@ -90,9 +90,11 @@ RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the p
 QUARANTINE = "quarantine"  # rule 8 (hubdb.quarantine, task_quarantine): QUARANTINED and TASK_QUARANTINE to the pages
 FAILING = "failing"  # a bot whose runs fail at once (run_failures): BACKOFF while it waits, RUN_HOLD once held
 LOGIN_LIMIT = "usage_limit"  # a login over its provider's usage limit (login_holds): USAGE_LIMIT to the pages
+# PAUSED is a kind too: a bot's own pause (on the bot) and the company's (holdable_id '') (company_pause).
 # A bot-wide hold of these kinds is also bots.state, the switch every reader of a bot checks: its open hold sets it (not
-# on an archived or planned bot), and its release sets the bot active again only while no other such hold is open.
-STATE_KINDS = {QUARANTINE: "quarantined"}
+# on an archived or planned bot, and a pause never over a quarantine). Its release sets the state of the first kind here
+# still open on the bot, so a quarantine wins over a pause, and active only when none is.
+STATE_KINDS = {QUARANTINE: "quarantined", PAUSED: "paused"}
 
 
 def _switch(c: Any, kind: str, holdable_type: str, holdable_id: str, held: bool) -> None:
@@ -102,11 +104,15 @@ def _switch(c: Any, kind: str, holdable_type: str, holdable_id: str, held: bool)
     if held:
         c.execute("UPDATE bots SET state=? WHERE id=? AND state IN ('active','paused')", (state, holdable_id))
         return
-    kinds = ",".join("?" * len(STATE_KINDS))
+    # Only a bot still in the released kind's state: a pause released under a quarantine leaves it quarantined.
+    still = " ".join(
+        "WHEN EXISTS(SELECT 1 FROM holds INDEXED BY holds_open WHERE kind=? AND holdable_type='bot' AND holdable_id=? "
+        "AND released_at IS NULL) THEN ?"
+        for _ in STATE_KINDS
+    )
     c.execute(
-        "UPDATE bots SET state='active' WHERE id=? AND state=? AND NOT EXISTS(SELECT 1 FROM holds "
-        f"WHERE kind IN ({kinds}) AND holdable_type='bot' AND holdable_id=? AND released_at IS NULL)",
-        (holdable_id, state, *STATE_KINDS, holdable_id),
+        f"UPDATE bots SET state=CASE {still} ELSE 'active' END WHERE id=? AND state=?",
+        (*(v for k, st in STATE_KINDS.items() for v in (k, holdable_id, st)), holdable_id, state),
     )
 
 
