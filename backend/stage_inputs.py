@@ -224,7 +224,7 @@ def _missing(conn: "sqlite3.Connection", task: Row, attached: set[str]) -> list[
     from . import task_engine
     from . import task_requirements as R
 
-    work = [s for s in task_engine.stages(conn, task["pipeline_id"]) if s["kind"] == "work"]
+    work = task_engine.main_work(task_engine.stages(conn, task["pipeline_id"]))
     at = next((i for i, s in enumerate(work) if s["id"] == task.get("stage_id")), 0)
     out: list[Row] = []
     for stage in work[:at]:

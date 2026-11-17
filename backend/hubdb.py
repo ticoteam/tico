@@ -4665,11 +4665,7 @@ def task_create(
     severity = classify(f"{title}\n{body}\n{instructions}", to_actor=target, actor=actor, conn=conn)
     path_mentioned(conn, actor, "new task", f"{title}\n{body}".strip())
     lane = _lane_for(conn, lane, target, actor)
-    if (
-        not pipe
-        or pipe.get("retired_at")
-        or not any(s["kind"] == "work" for s in task_engine.stages(conn, pipeline_id))
-    ):
+    if not pipe or pipe.get("retired_at") or not task_engine.main_work(task_engine.stages(conn, pipeline_id)):
         refuse(conn, actor, "task_no_such_stage", "No such pipeline")
     if parent and task_engine.depth(conn, parent["id"]) >= task_engine.MAX_DEPTH:
         refuse(conn, actor, "task_too_deep", f"Sub-tasks nest at most {task_engine.MAX_DEPTH} deep")

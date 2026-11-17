@@ -103,6 +103,7 @@ def _stage(stage, actors):
         "held_by": stage.get("owner"),
         "held_by_name": _holder(stage, actors),
         **_pick_shown(stage, actors),
+        "side": bool(stage.get("side")),
         "by_hand": bool(stage.get("by_hand")),
         "task_limit": stage.get("task_limit"),
         "to_leave": [
@@ -462,6 +463,8 @@ def _stage_fields(api, args, stage):
         if args.get(arg) is not None:
             stage[field] = args[arg]
     _pick_fields(api, args, stage)
+    if args.get("side") is not None:
+        stage["side"] = bool(args["side"])
     if args.get("by_hand") is not None:
         stage["by_hand"] = bool(args["by_hand"])
     if args.get("no_limit"):
@@ -559,6 +562,7 @@ STAGE_FIELDS = {
         "description": "One of several: the pick becomes the task's owner (Build); off, it holds only this stage "
         "(Review)",
     },
+    "side": {"type": "boolean", "description": "A side stage after a main stage. Tasks enter and leave it by hand."},
     "by_hand": {"type": "boolean", "description": "Tasks leave it only when someone moves them"},
     "limit": {
         "type": "integer",
@@ -709,7 +713,7 @@ def stage_add(api, args):
     "tico_stage_update",
     "Change a stage: its name, purpose, who holds it (one holder, or One of several with `pick_from`, `pick`, "
     "`limit_each`, `prefer` and `owns_task`; only a person changes who a stage picks from), whether tasks leave it "
-    "by hand, its task limit, its expected time. Who may change the pipeline. "
+    "by hand, whether it is a side stage, its task limit, its expected time. Who may change the pipeline. "
     "Example: tico stage update engineering-review-1 --pick-from reviewer-1 --pick-from reviewer-2 --prefer new",
     {
         "stage": STAGE,
@@ -1199,7 +1203,7 @@ CLI = (
     Command(
         "stage add",
         "add a stage to a pipeline: last, first, or after a stage" + CHANGERS,
-        args=(_FIRST, _either("by_hand"), _either("owns_task"), Arg("no_limit_each", default=None)),
+        args=(_FIRST, _either("side"), _either("by_hand"), _either("owns_task"), Arg("no_limit_each", default=None)),
         example='tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2',
     ),
     Command(
@@ -1207,6 +1211,7 @@ CLI = (
         "change a stage: name, purpose, holder or the bots it picks from, by hand, task limit, expected time"
         + CHANGERS,
         args=(
+            _either("side"),
             _either("by_hand"),
             Arg("no_limit", default=None),
             _either("owns_task"),

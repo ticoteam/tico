@@ -4,6 +4,7 @@ from .store import H
 from . import models as M
 from .store import Problem
 from fastapi import Request
+from . import ask_known
 from . import ask_shape
 from . import bot_to_bot
 from . import counsel
@@ -294,12 +295,43 @@ def register(
     def task_question(request: Request, tid: str, body: M.Question):
         """A bot's ❓ on the task's chat (backend/question_marks.py): its comment, marked as needing `to`'s reply, in one
         step. The comment is checked as a question to a person (the org rules' `kind:ask`); the person must be able to
-        read the chat. No task is filed and nothing is sent for it."""
+        read the chat. No task is filed and nothing is sent for it. One Tico can answer from what it holds (the task's
+        repository, the bot's access to it, its app view: backend/ask_known.py) asks nobody and the bot gets the answer;
+        a "no" only a person can change still asks, with a "Tico checked:" sentence added; `not_known` skips this."""
         who = request.state.identity
         if who.role != "bot":
             raise Problem("forbidden", "Only a bot marks a message ❓", 403)
+        known, person, number = None, "", ""
         with store.read() as c:
             to = auth.target(c, who, body.to)  # who it asks: checked by the rules for them too, as a recipient
+            if not body.not_known and H.is_human(to) and ask_known.topics(body.text):
+                try:
+                    task_id = auth.resolve_task(c, who, tid)
+                    auth.task(c, who, task_id)
+                except Problem:
+                    task_id = None  # the ❓ itself is refused below as it always was
+                if task_id:
+                    known = ask_known.read_now(c, who, auth, task_id, body.text)
+                    person = H.actor_name(c, to) or "They"
+                    numbered = c.execute("SELECT number FROM tasks WHERE id=?", (task_id,)).fetchone()
+                    number = (numbered["number"] if numbered else None) or task_id
+        if known and known.answered:
+            answer = known.answer(person, number)
+
+            def answered(c):
+                H.history_event(
+                    c,
+                    "task",
+                    auth.resolve_task(c, who, tid),
+                    who.actor,
+                    "ask_known",
+                    new=",".join(known.topics),
+                    data={"to": to},
+                )
+                return {"asked": False, "answered_by_tico": answer, "known": [f.text for f in known.facts]}
+
+            return mutate(request, body, answered)
+        text = f"{body.text}\n\n{known.checked_line()}" if known else body.text
         if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
             mutate(
                 request,
@@ -309,11 +341,19 @@ def register(
         rc = rule_check(
             who,
             "question",
-            body.text,
-            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text, to),
+            text,
+            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), text, to),
             place=question_marks.Asking(task_place(who, tid)),
         )
-        return mutate(request, body, lambda c: question_write(c, who, tid, body.text, to, rc))
+
+        def write(c):
+            done = question_write(c, who, tid, text, to, rc)
+            if body.not_known and (done.get("comment") or {}).get("id"):
+                # Counted: Tico's answer did not cover it (Tasks spec criterion 12).
+                H.history_event(c, "task", auth.resolve_task(c, who, tid), who.actor, "ask_not_known", data={"to": to})
+            return done
+
+        return mutate(request, body, write)
 
     # An older client's question on the asks route is asked here (task_moves_routes.task_ask).
     app.state.task_question = task_question

@@ -217,6 +217,7 @@
       "acceptance_criteria": [],
       "assignee_id": "bot:ops",
       "attachments": [],
+      "came_from": null,
       "checkpoint": null,
       "checkpoint_at": null,
       "checkpoint_blocked": 0,
@@ -305,9 +306,11 @@
         "by_hand": false,
         "id": "general-done",
         "kind": "done",
-        "name": "Done"
+        "name": "Done",
+        "side": false
       },
       "stage_id": "general-done",
+      "stage_since": null,
       "status": "done",
       "tags": [],
       "title": "Draft the launch plan",
