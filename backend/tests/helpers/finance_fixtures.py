@@ -478,6 +478,7 @@ def connect(
     found, why = sync.probe(fake)  # type: ignore[arg-type]
     assert not why, why
     with store.transaction() as c:
+        store_keys(c, "cred-mercury")  # a store not made from the template (the api fixture's) has none yet
         done = act(
             c,
             OWNER,
