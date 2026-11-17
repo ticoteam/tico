@@ -288,11 +288,16 @@ def brief(c, rows, visible_sql="1"):
     return rows
 
 
+# How much of a blocker's title a list row carries: the row shows a few words of it, and its tip the task's whole line.
+DEPENDENCY_TITLE = 80
+
+
 def _dependencies(c, ids, visible_sql):
-    """({task id: [{id, number}]} of the open tasks each one depends on, {task id: [{id, number}]} of the open tasks
-    each one blocks), for a board card's stop mark and "#304", and "Blocks #307" (backend/task_depends.py). Two reads
-    for every row. A task it depends on that the reader may not open is there with neither id nor number, so the card
-    still shows it is blocked; a task it blocks that the reader may not open is left out."""
+    """({task id: [{id, number, label, title}]} of the open tasks each one depends on, {task id: [{id, number, label}]} of
+    the open tasks each one blocks), for a board card's stop mark and "E304" (its label; its title, short, when it has no
+    number), and "Blocks #307" (backend/task_depends.py). Two reads for every row. A task it depends on that the reader
+    may not open is there with no id, number, label or title, so the card still shows it is blocked; a task it blocks
+    that the reader may not open is left out."""
     from . import task_depends as D
 
     on = {tid: [other for other, _since in found] for tid, found in D.blockers_of(c, ids).items()}
@@ -300,19 +305,29 @@ def _dependencies(c, ids, visible_sql):
     others = sorted({other for found in on.values() for other in found} | {d for f in of.values() for d, _n, _s in f})
     if not others:
         return {}, {}
+    # The letters are the task's own (`tasks.prefix`); one made before they were kept reads its pipeline's.
     seen = {
-        r[0]: r[1]
+        r[0]: r[1:]
         for r in c.execute(
-            f"SELECT id, number FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+            f"SELECT id, number, COALESCE(prefix, (SELECT p.prefix FROM pipelines p WHERE p.id = tasks.pipeline_id)), "
+            f"substr(title, 1, {DEPENDENCY_TITLE}) FROM tasks "
+            f"WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
             (json.dumps(others),),
         )
     }
-    blocked_by = {
-        tid: [{"id": o, "number": seen[o]} if o in seen else {"id": None, "number": None} for o in found]
-        for tid, found in on.items()
+
+    def named(o):
+        number, prefix, title = seen[o]
+        label = f"{prefix}{number}" if prefix and number is not None else None
+        return {"id": o, "number": number, "label": label, "title": title}
+
+    hidden = {"id": None, "number": None, "label": None, "title": None}
+    blocked_by = {tid: [named(o) if o in seen else dict(hidden) for o in found] for tid, found in on.items() if found}
+    blocks = {
+        tid: [{"id": d, "number": n, "label": named(d)["label"]} for d, n, _s in found if d in seen]
+        for tid, found in of.items()
         if found
     }
-    blocks = {tid: [{"id": d, "number": n} for d, n, _s in found if d in seen] for tid, found in of.items() if found}
     return blocked_by, blocks
 
 

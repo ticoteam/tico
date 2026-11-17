@@ -56,6 +56,13 @@ def _published(monkeypatch):
     return seen
 
 
+def test_the_number_a_numbered_pipeline_gives_is_ticos_not_the_filers(c, boards):
+    """The task's chat read "You numbered it #561": the history line had the filer as its actor. Tico gives it."""
+    row = X.new_task(c, ANA, "Old Trello idea", "dev", assignee=ANA)
+    event = H._one(c, "SELECT actor_id, new FROM history_events WHERE subject_id=? AND kind='number'", (row["id"],))
+    assert (event["actor_id"], int(event["new"])) == (H.KEEPER, row["number"])
+
+
 def test_a_moved_task_keeps_its_number_label_and_history_and_enters_the_new_stage(c, boards, monkeypatch):
     row = X.new_task(c, ANA, "Old Trello idea", "dev", assignee=ANA)
     number, label = row["number"], H.ticket_refs(c, [row["id"]])[row["id"]]["label"]

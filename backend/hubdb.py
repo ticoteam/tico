@@ -2884,7 +2884,9 @@ def _next_number(conn, actor, task_id, pipeline_id, note=""):
         ).rowcount
     ):
         number = _one(conn, "SELECT number FROM tasks WHERE id=?", (task_id,))["number"]
-        _task_event(conn, task_id, actor, "number", None, number, note)
+        # Tico gives the number, not whoever filed the task: its history line is the system's (a number a mover gives,
+        # `_number_free`, stays theirs).
+        _task_event(conn, task_id, KEEPER, "number", None, number, note)
     elif numbered and _one(conn, "SELECT 1 FROM tasks WHERE id=? AND number IS NULL", (task_id,)):
         refuse(conn, actor, "number", "The team's task numbers have reached 999999999")
 

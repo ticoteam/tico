@@ -59,6 +59,10 @@ body.board-holding .pv-cols{align-items:stretch}
 .tk-card .pv-wake{min-width:0}
 .pv-blocked-by{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
 .pv-stop{display:inline-flex;color:var(--fail)}
+/* The task it waits for: its label or a few words of its title, quiet as the age it stands in for, and it opens that task. */
+.pv-blocked-ref{min-height:0;max-width:18ch;overflow:hidden;padding:0;border:0;background:none;color:inherit;font:inherit;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.pv-blocked-ref:hover{color:var(--ink);text-decoration:underline}
+.pv-blocked-ref:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 
 /* The list: a group per stage. */
 .pv-group{margin:0 0 10px}

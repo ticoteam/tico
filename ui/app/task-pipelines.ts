@@ -172,13 +172,16 @@ const PV_STOP_ICON = '<svg viewBox="0 0 14 14" width="12" height="12" aria-hidde
   + '<path d="M4.7 1.5h4.6l3.2 3.2v4.6l-3.2 3.2H4.7L1.5 9.3V4.7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>'
   + '<path d="M4.6 7h4.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 
-/** Where a blocked task's age goes: the stop mark and the tasks it waits for, "#304" or "#304, #321" ("Blocked" when the
- * reader may open none of them). Its tip is the task's line, "Blocked by #304 Growth synced sources part 1, in Build". */
+/** Where a blocked task's age goes: the stop mark and the tasks it waits for, "E304" or "E304, E321", or a few words of
+ * the title of one with no number; never an id ("Blocked" when the reader may open none of them). Each opens the task it
+ * names (its own data-task: the click is the row's, and the innermost task wins). Its tip is the task's line, "Blocked by
+ * E304 Growth synced sources part 1, in Build". */
 function pvBlockedTailHTML(t: TaskAny): string {
-  const refs = taskBlockedBy(t).map(taskDepRef).filter(Boolean);
-  const label = refs.length ? `Blocked by ${refs.join(', ')}` : 'Blocked';
-  return `<span class="tk-age pv-blocked-by" role="img" aria-label="${esc(label)}" title="${esc(label)}">`
-    + `<span class="pv-stop">${PV_STOP_ICON}</span>${esc(refs.join(', ') || 'Blocked')}</span>`;
+  const deps = taskBlockedBy(t).filter(r => r.id && taskDepName(r)), names = deps.map(taskDepName);
+  const label = names.length ? `Blocked by ${names.join(', ')}` : 'Blocked';
+  const refs = deps.map((r, i) => `<button type="button" class="pv-blocked-ref" data-task="${esc(r.id || '')}" aria-label="Open ${esc(names[i] || '')}">${esc(names[i] || '')}</button>`);
+  return `<span class="tk-age pv-blocked-by" aria-label="${esc(label)}" title="${esc(label)}">`
+    + `<span class="pv-stop">${PV_STOP_ICON}</span>${refs.join(', ') || 'Blocked'}</span>`;
 }
 
 /** A crescent moon: the sleep mark on a snoozed task. */

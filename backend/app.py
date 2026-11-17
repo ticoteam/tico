@@ -3223,6 +3223,10 @@ def create_app(settings=None):
                     "followers": task_followers_seen(c, who, row),
                     # Its documents, newest change first (backend/task_documents.py); none means no tabs.
                     "documents": task_documents.listing(c, app.state.files, who, tid),
+                    # Its label, as hubdb.ticket_refs says it ("O561"), from the row already read.
+                    "label": f"{row['prefix']}{row['number']}"
+                    if row.get("prefix") and row.get("number") is not None
+                    else None,
                 },
                 "events": history,
                 "can_comment": can_comment,
