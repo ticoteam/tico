@@ -240,6 +240,14 @@ def _argument(a, prop, schema_required, suppress):
     return [a.flag or "--" + a.name.replace("_", "-")], keywords
 
 
+def pair(text):
+    """`KEY=VALUE` on a command line, split at the first `=`: a match, a value or an option of `tico contacts`."""
+    key, sep, value = str(text).partition("=")
+    if not sep or not key.strip():
+        raise argparse.ArgumentTypeError(f"{text} is not KEY=VALUE")
+    return key.strip(), value
+
+
 def _word(value):
     return "null" if value is NULL else str(value).lower() if isinstance(value, bool) else str(value)
 

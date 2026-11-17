@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 
@@ -558,6 +559,11 @@ def batch_next(api, args):
     return spoken(api.post("batch/" + args["batch"] + "/next", {}, key=_key(args)))
 
 
+# The decisions the server takes (backend/batch.py DECISIONS; the request model is backend/models.py BatchRespond).
+# backend/tests/test_batch.py asserts that this tuple, the server's list and the model stay equal.
+NEEDS_YOU_DECISIONS = ("ok", "send_back", "done", "close", "answer")
+
+
 @tool(
     "tico_needs_you_respond",
     "Record the person's response to the current item (or another, by number). Nothing is applied until commit.",
@@ -569,8 +575,9 @@ def batch_next(api, args):
         ),
         "text": _s("The person's own words"),
         "decision": _s(
-            "With decide: ok | send_back | done | close | answer",
-            enum=["ok", "send_back", "done", "close", "answer"],
+            "With decide: ok or send_back on an OK, answer on a question, done or close on a task. "
+            "send_back and answer need text.",
+            enum=list(NEEDS_YOU_DECISIONS),
         ),
         "item": {"type": "integer", "description": "Another item's number"},
         "until": _s("With later: an ISO date-time"),
@@ -663,3 +670,41 @@ def assistant_change_list(api, args):
 )
 def assistant_change_restore(api, args):
     return api.post(f"assistant/changes/{args['id']}/restore", {}, key=_key(args))
+
+
+# `tico needs-you ...` (clients/cli_spec.py): the walk through what needs the person, one bot's batch at a time. The
+# respond leaf's --decision choices are the tool's enum, so they are the server's list (NEEDS_YOU_DECISIONS).
+NEEDS_YOU = (
+    Group("needs-you", "a person's walk through what needs them: respond, commit (backend/batch.py)"),
+    Command(
+        "needs-you start",
+        "start the batch of the bot that most needs you, or resume the one in progress",
+        example="tico needs-you start --bot ana",
+    ),
+    Command(
+        "needs-you next",
+        "the next item; at the end, the summary to read back",
+        example="tico needs-you next b1",
+    ),
+    Command(
+        "needs-you respond",
+        "record a response to the current item; nothing applies until commit",
+        args=(Arg("text", default=""),),
+        example="tico needs-you respond b1 decide --decision ok",
+    ),
+    Command(
+        "needs-you commit",
+        "apply every recorded response",
+        example="tico needs-you commit b1",
+    ),
+    Command(
+        "needs-you abandon",
+        "drop the batch without applying anything",
+        example="tico needs-you abandon b1",
+    ),
+    Command(
+        "needs-you show",
+        "what needs you: the count per kind and the items, oldest first",
+        example="tico needs-you show --kind ask --limit 5",
+    ),
+)
