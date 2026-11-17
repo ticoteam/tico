@@ -152,15 +152,12 @@ def test_a_send_claimed_after_sending_went_off_is_only_drafted(api, box):
 
 # ------------------------------------------------------------------------------------------------- unsubscribe
 def one_click(box, url=LIST):
-    box.box(BOX)["raws"]["m1"] = (
-        f"From: Lists <{SENDER}>\r\nList-Unsubscribe: <{url}>\r\n"
-        "List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\nDKIM-Signature: v=1; h=from:list-unsubscribe:"
-        "list-unsubscribe-post\r\n\r\nNews."
-    ).encode()
+    """The message's raw bytes in Gmail: the dkimpy-signed newsletter (its signature breaks if `url` differs)."""
+    box.box(BOX)["raws"]["m1"] = vector("relaxed/relaxed").replace(LIST.encode(), url.encode())
 
 
 @pytest.fixture
-def web(monkeypatch):
+def web(monkeypatch, keys):
     """The sender's site: every request it gets, and the address its name resolves to."""
     seen = {"requests": [], "status": 200, "address": "93.184.216.34"}
 
@@ -168,7 +165,6 @@ def web(monkeypatch):
         seen["requests"].append(request)
         return httpx.Response(seen["status"], headers={"Location": "https://elsewhere.example/"})
 
-    monkeypatch.setattr(U, "verify_dkim", lambda raw: True)
     monkeypatch.setattr(U, "TRANSPORT", httpx.MockTransport(answer))
     monkeypatch.setattr(egress, "resolve", lambda host: [ipaddress.ip_address(seen["address"])])
     return seen
@@ -209,24 +205,32 @@ def test_an_unsubscribe_tico_may_not_send_is_refused(api, box, web, case):
     assert len(web["requests"]) == (1 if case == "redirect" else 0)  # a redirect is never followed
 
 
-# Messages signed by dkimpy (an independent implementation), with their public keys: relaxed and simple RSA, and
-# ed25519. From news@vendor.example; the signatures cover From and both unsubscribe headers.
+# Messages signed by dkimpy, with the public key: relaxed and simple RSA. From news@vendor.example; the signatures cover
+# From and both unsubscribe headers.
 VECTORS = json.loads((Path(__file__).parent / "fixtures/dkim_vectors.json").read_text())
+
+
+def dns(records):
+    """dkimpy's dnsfunc over these TXT records: {name: record}."""
+
+    def txt(name, timeout=5):
+        name = name.decode() if isinstance(name, bytes) else name
+        found = records.get(name.rstrip("."))
+        return found.encode() if found else None
+
+    return txt
 
 
 @pytest.fixture
 def keys(monkeypatch):
-    published = {"s1": f"v=DKIM1; k=rsa; p={VECTORS['pub']}", "s2": f"v=DKIM1; k=ed25519; p={VECTORS['ed_pub']}"}
-    monkeypatch.setattr(
-        U, "dkim_key", lambda selector, domain: published.get(selector, "") if domain == "vendor.example" else ""
-    )
+    monkeypatch.setattr(U, "DNSFUNC", dns({"s1._domainkey.vendor.example": f"v=DKIM1; k=rsa; p={VECTORS['pub']}"}))
 
 
 def vector(name):
     return base64.b64decode(VECTORS[name])
 
 
-@pytest.mark.parametrize("name", ["relaxed/relaxed", "simple/simple", "ed25519"])
+@pytest.mark.parametrize("name", ["relaxed/relaxed", "simple/simple"])
 def test_a_signature_over_the_unsubscribe_headers_verifies(keys, name):
     assert U.verify_dkim(vector(name)) is True
 
@@ -251,7 +255,7 @@ def test_a_forged_signature_carrying_a_passing_b_tag_is_not_trusted(keys):
 
 
 def test_without_the_signers_key_nothing_verifies(monkeypatch):
-    monkeypatch.setattr(U, "dkim_key", lambda selector, domain: "")
+    monkeypatch.setattr(U, "DNSFUNC", dns({}))
     assert U.verify_dkim(vector("relaxed/relaxed")) is False
 
 

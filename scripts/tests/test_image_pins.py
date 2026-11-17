@@ -40,7 +40,8 @@ SQLITE_OPTIONS = (
 # Debian 13 (trixie) renamed these for 64-bit time; the old names install nothing there.
 TRIXIE_RENAMED = ('libasound2', 'libatk-bridge2.0-0', 'libatk1.0-0', 'libatspi2.0-0', 'libcups2', 'libglib2.0-0')
 # Pins with no wheel for the image's Python that the venv stage builds (it has a compiler and their headers).
-BUILT_IN_THE_VENV_STAGE = {'pyyaml': 'libyaml-dev'}
+# Packages with no wheel, built by uv in the venv stage, and the headers each needs there (None: pure Python).
+BUILT_IN_THE_VENV_STAGE = {'pyyaml': 'libyaml-dev', 'dkimpy': None}
 DIGEST = re.compile(r'@sha256:[0-9a-f]{64}$')
 # The images ship for both (Release validation builds each, .github/workflows/ci.yml); a pin needs a wheel for each.
 ARCHES = ('x86_64', 'aarch64')
@@ -118,7 +119,7 @@ def test_every_python_image_checks_its_sqlite_after_its_own_apt_installs():
 def test_packages_built_in_the_venv_stage_get_their_headers_and_runtime_library():
     venv = stage('venv')
     for package, headers in BUILT_IN_THE_VENV_STAGE.items():
-        assert headers in apt_packages(venv), f'{package} needs {headers} in the venv stage'
+        assert headers is None or headers in apt_packages(venv), f'{package} needs {headers} in the venv stage'
     assert 'libyaml-0-2' in apt_packages(stage('python')), "PyYAML's C loader needs libyaml at run time"
     assert 'yaml.CSafeLoader' in stage('source'), 'the build must fail if PyYAML lost its C loader'
 
