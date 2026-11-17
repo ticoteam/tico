@@ -3955,25 +3955,76 @@ def revived_roots(c, v, roots=None):
     """The root ids (of `roots`, else every finished-task thread) that a post the viewer reads brings back. A plain post
     (not restricted, no legacy audience) is counted in SQL by task_open_sql. A restricted or legacy post is read as any
     other message is (message_readable: its thread, task privacy, meetings, legacy readers), so a reader who may not
-    read it is not shown that the thread has moved again."""
+    read it is not shown that the thread has moved again. The posts are read whole and their checks primed together
+    (`prime_checks`), and the answer for every root is kept for the snapshot: the rail and its Catch up walk both ask."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    if roots is None:
+        from . import task_privacy
+
+        # Everything readable_sql and the per-message checks read from the viewer, so a snapshot that ever serves two
+        # viewers never hands one the other's answer.
+        key = ("revived_roots", repr(task_privacy.actor(v.who)), v.role, v.runner_turn)
+        return read_cache.value(c, key, lambda: _revived_roots(c, v, None), shared=True)
+    return _revived_roots(c, v, roots)
+
+
+def _revived_roots(c, v, roots):
+    from . import task_privacy
+
     scope = f" AND r.id IN {_qlist(sorted(roots))}" if roots is not None else ""
-    rows = c.execute(
-        "SELECT m.id, r.id FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
+    rows = []
+    for m in c.execute(
+        "SELECT r.id AS revived_root, m.* FROM tasks t JOIN conversations r ON r.task_id=t.id AND r.parent_id IS NULL "
         "JOIN conversations s ON s.root_id=r.id JOIN messages m ON m.conversation_id=s.id "
         f"WHERE t.status IN ({FINISHED_TASKS}) AND {readable_sql(c, v, 'r')}{scope} "
         "AND m.kind<>'notice' AND m.deleted_at IS NULL "
         "AND (m.restricted IS NULL OR m.restricted<>0 OR m.legacy_audience IS NOT NULL) "
         f"AND m.created_at>{_finish_sql('t')}"
-    ).fetchall()
+    ).fetchall():
+        message = dict(m)
+        rows.append((message.pop("revived_root"), message))
+    prime_checks(c, [message for _, message in rows])
+    # Each post's own thread (a sub-thread may be narrower than its root) in one read, then the per-message check.
+    places, _ = read_threads(c, v, [message["conversation_id"] for _, message in rows])
+    tasks = {p["task_id"] for p in places.values() if p.get("task_id")}
+    H.prime_tasks(c, tasks, with_tags=False)  # the thread checks read each task row; the per-message checks its parties
+    task_privacy._task_rows(c, tasks)
     found = set()
-    for message_id, root_id in rows:
-        if root_id in found:
-            continue
-        message = H.message(c, message_id, include_deleted=False)
-        if message and message_readable(c, v, message):
+    for root_id, message in rows:
+        place = places.get(message["conversation_id"])
+        if (
+            root_id not in found
+            and place is not None
+            and thread_readable(c, v, place)
+            and message_readable(c, v, message, thread_checked=True)
+        ):
             found.add(root_id)
     return frozenset(found)
+
+
+def prime_checks(c, rows):
+    """Before the per-message check of these stored rows: seed the message lookups with them and the messages they reply
+    to, the tasks and pages their refs name, and each run they name (a bot's reply names its run) together, so a reader
+    with hundreds of bot replies to check costs a fixed number of statements, not several per reply."""
+    if not rows:
+        return
+    from . import provenance_clock, task_privacy
+
+    runs, every = set(), [H._json(r.get("refs"), {}) or {} for r in rows]
+    for refs in every:
+        run = refs.get("run") if isinstance(refs, dict) else None
+        aid = (refs.get("turn_id") if isinstance(refs, dict) else None) or (
+            run.get("attempt_id") if isinstance(run, dict) else None
+        )
+        if isinstance(aid, str) and aid:
+            runs.add(aid)
+    H.prime_message_rows(c, rows)
+    task_privacy.prime_references(c, every)  # the tasks and pages their refs could name
+    # A run whose tasks were worked out since the last provenance change needs only its messages; the rest (after any
+    # new message, so most loads) get their whole provenance read together.
+    task_privacy.prime_attempts(c, [aid for aid in runs if not provenance_clock.known(c, ("attempt_tasks", aid))])
+    task_privacy.prime_attempt_messages(c, runs)
+    task_privacy.prime_reply_chains(c, runs)
 
 
 def task_open_sql(c, v, r="r", revived=frozenset()):

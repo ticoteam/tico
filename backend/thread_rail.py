@@ -537,27 +537,9 @@ def _readable_ids(c, v, light):
 
 
 def _prime(c, rows):
-    """Before the per-message check of these stored rows: seed the message lookups with them and the messages they reply
-    to, the tasks and pages their refs name, and each run they name (a bot's reply names its run) together, so a reader
-    with hundreds of bot replies waiting costs a fixed number of statements, not several per reply."""
-    if not rows:
-        return
-    from . import provenance_clock, task_privacy
-
-    runs, every = set(), [H._json(r.get("refs"), {}) or {} for r in rows]
-    for refs in every:
-        run = refs.get("run") if isinstance(refs, dict) else None
-        aid = (refs.get("turn_id") if isinstance(refs, dict) else None) or (
-            run.get("attempt_id") if isinstance(run, dict) else None
-        )
-        if isinstance(aid, str) and aid:
-            runs.add(aid)
-    H.prime_message_rows(c, rows)
-    task_privacy.prime_references(c, every)  # the tasks and pages their refs could name
-    # A run whose tasks were worked out since the last provenance change needs only its messages; the rest (after any
-    # new message, so most loads) get their whole provenance read together.
-    task_privacy.prime_attempts(c, [aid for aid in runs if not provenance_clock.known(c, ("attempt_tasks", aid))])
-    task_privacy.prime_attempt_messages(c, runs)
+    """Before the per-message check of these stored rows: their lookups, reply chains, refs and runs read together
+    (threads.prime_checks), so a reader with hundreds of bot replies waiting costs a fixed number of statements."""
+    T.prime_checks(c, rows)
 
 
 def _readable_rows(c, v, rows):
@@ -696,17 +678,28 @@ def _readable_new(c, v, roots):
         if int(g["n"]) > sure:
             hidden.append(g)
     budget, whole = CATCH_UP_HIDDEN, []
-    for g in hidden:
+    # Each thread's oldest unread messages that can hide (any of them in a migrated Home's thread), up to what is left
+    # of the budget, in the threads' order: read for a batch of threads in one query, not one query a thread.
+    for start in range(0, len(hidden), CATCH_UP_BATCH):
         if budget <= 0:
             break
-        maybe = "" if g["thread"] in legacy else f" AND NOT {PLAIN}"
+        part = hidden[start : start + CATCH_UP_BATCH]
+        ids = [g["thread"] for g in part]
+        found = {tid: [] for tid in ids}
         for r in c.execute(
-            f"SELECT m.* FROM {subtree}JOIN messages m ON m.conversation_id=s.id AND m.seq>{mark} "
-            f"WHERE s.id=? AND {T.unread_message_sql()}{maybe} ORDER BY m.seq LIMIT ?",
-            (v.actor, g["thread"], v.actor, v.actor, budget),
+            f"SELECT * FROM (SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.conversation_id ORDER BY m.seq) "
+            f"AS hidden_rank FROM {subtree}JOIN messages m ON m.conversation_id=s.id AND m.seq>{mark} "
+            f"WHERE s.id IN ({','.join('?' * len(ids))}) AND {T.unread_message_sql()} "
+            f"AND (s.id IN (SELECT value FROM json_each(?)) OR NOT {PLAIN})) WHERE hidden_rank<=? ORDER BY seq",
+            (v.actor, *ids, v.actor, v.actor, json.dumps(sorted(set(ids) & set(legacy))), budget),
         ).fetchall():
-            budget -= 1
-            whole.append((g["root"], dict(r)))
+            row = dict(r)
+            row.pop("hidden_rank")
+            found[row["conversation_id"]].append(row)
+        for g in part:
+            taken = found[g["thread"]][: max(budget, 0)]
+            budget -= len(taken)
+            whole += [(g["root"], r) for r in taken]
     _prime(c, [r for _, r in whole])
     for root, r in whole:
         if T.message_readable(c, v, r, thread_checked=True):
