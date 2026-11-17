@@ -79,9 +79,9 @@ const RID = 'spec-ok-ana';
       assert.match(head, /^PM waiting on you$/, `the asker, then "waiting on you": ${head}`);
       assert.equal(await banner.locator('.th-av').count(), 1, 'the asker\'s face');
       assert.doesNotMatch(await banner.innerText(), /You waiting on you/);
-      // The ask is the chat's last row, and the window opens on the chat; a task with no documents has no tabs, so no dot.
+      // The ask is the chat's last row, and the window opens on the chat; a task with no documents has Chat and Files, no document tab.
       assert.equal(await win.locator('.task-chat').isVisible(), true);
-      assert.equal(await win.getByRole('tab').count(), 0, 'no tabs without documents');
+      assert.deepEqual(await win.locator('.tw-tabs [data-task-tab]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.taskTab)), ['chat', 'files'], 'Chat and Files, no document');
       const last = await page.evaluate(() => { const rows = [...document.querySelectorAll('#task-modal .task-comments > *')]; return rows.at(-1)?.matches('.task-need'); });
       assert.ok(last, 'the ask is the last row of the chat');
       await banner.getByRole('button', {name: 'Answer'}).click();

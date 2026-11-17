@@ -1,26 +1,50 @@
-/* ui/app/task-pages.ts — A task's pages at the top of the task: adopting them and the one to open.
+/* ui/app/task-pages.ts — A task's Files tab: the pages and files linked to the task (its list), the links it takes
+   ("Link a page or file", a search that links a page as related) and "New page", plus Make page (⋯ › Make a page).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    Moved from ui/app/pages.ts, whose other code Home runs, into the task page part (ui/parts.json): only that part
    calls these, so a cold open of Home does not download them (P05b). */
 'use strict';
 
+// The Files tab's host: the task dialog, which keeps the tab's counter and its last read's order.
+interface TftHost extends TaskPagesHost { canComment?: boolean; tftSeq?: number; }
+// A page or file in GET /api/v2/tasks/{id}/files?all=1: the task's files, and every page linked to the task in any role
+// (a page carries its `links`, and usually `writers` and `title`).
+interface TftLink { target: string; role: string; name?: string | null; }
+interface TftWriter { actor: string; name?: string | null; }
+interface TftVersion { n: number; by?: string | null; created_at?: string | null; }
+interface TftItem {
+  id: string; name?: string | null; title?: string | null; current_version?: number | null; version?: number | null;
+  archived?: boolean | null; updated_at?: string | null; links?: TftLink[] | null; writers?: TftWriter[] | null; versions?: TftVersion[] | null;
+}
+// The Files tab's key on the task window's tab row (task-modal.ts), and its state, per task id, kept across the task's
+// redraws; a page's title, for the Spec cards, by page id.
+const TASK_FILES_TAB = 'files';
+const TFT_COUNT = new Map<string, number>();   // the pages and files linked to the task: "Files N"
+const TFT_ROWS = new Map<string, string>();     // the list as it was last drawn, so a redraw draws it at once
+const TFT_TITLES = new Map<string, string>();
+/** The Files tab's label on the tab row: "Files", or "Files N" once the task's count is read. */
+const taskFilesLabel = (n: number | null | undefined): string => n ? `Files ${n}` : 'Files';
+
 // The pages pinned to a task, as cards at its top. The section moves into each redraw of the task (as its files do,
 // tfAdopt), so a loaded frame is not loaded again.
-function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
+function taskPagesAdopt(d: TftHost, task: {id?: unknown}) {
   const slot = $('[data-task-pages]', d);
   if (!slot) return;
   const id = String(task.id);
   if (d.tpEl && d.tpEl.dataset.task === id) { slot.replaceWith(d.tpEl); return; }
   d.tpOff?.();
   d.tpEl = slot; slot.dataset.task = id;
-  // "+" opens the page search: recent pages until something is typed, then what matches; under them, a file dropped
-  // (or picked) uploads to the task (task-files.ts). Make page is ⋯ › Make a page (taskPageMakeOpen); its Describe box
-  // shows once chosen, or while a draft is kept.
-  slot.innerHTML = `<header class="tp-head tw-h"><span class="lbl">Pages</span><button type="button" class="prop-add" data-tp-add aria-expanded="false" aria-label="Add a page" title="Add a page" hidden>${TL_ICON.plus}</button></header>
+  // The section's head: "Link a page or file" opens the page search (recent pages until something is typed, then what
+  // matches), and under it a file dropped (or picked) uploads to the task (task-files.ts). New page is a title and a
+  // text (taskNewPageOpen). Make page is ⋯ › Make a page (taskPageMakeOpen); its Describe box shows once chosen, or
+  // while a draft is kept. The pinned pages list stays in the markup, hidden: a link is what shows a page now.
+  slot.innerHTML = `<header class="tp-head"><button type="button" class="tft-btn" data-tp-add aria-expanded="false" hidden>Link a page or file</button><button type="button" class="tft-btn" data-tft-new hidden>New page</button></header>
     <div class="tp-picker" role="group" aria-label="Link a page" hidden><input type="search" placeholder="Find a page" aria-label="Find a page" autocomplete="off">
       <div class="tp-results" aria-live="polite"></div><button type="button" class="tp-drop" data-tp-drop>or drop a file to upload</button></div>
     <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
-    <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages"></div>`;
+    <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages" hidden></div>`;
+  $('[data-tft-new]', slot).hidden = d.canComment === false;
+  $('[data-tft-new]', slot).onclick = () => taskNewPageOpen(d, id);
   const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
   try { prompt.value = localStorage.getItem(taskMakeDraftKey(id)) || ''; } catch { /* storage may be unavailable */ }
   slot.tpMakeOpen = !!prompt.value;
@@ -53,8 +77,8 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
         const rows = q ? (await get<import('../types/api').FileSearch>('/v2/files/search?' + new URLSearchParams({q, kind: 'page'}), {fresh: true})).results || []
           : (await get<{files?: {id: string; title?: string | null}[]}>('/v2/files?' + new URLSearchParams({kind: 'page', limit: '6'}), {fresh: true})).files || [];
         if (d.tpEl !== slot || seq !== search) return;
-        // A page already on the task is not offered again.
-        const have = new Set([...(slot as HTMLElement).querySelectorAll<HTMLElement>('.tp-row[data-page]')].map(a => a.dataset.page));
+        // A page already on the task (a row of its Files list) is not offered again.
+        const have = new Set([...d.querySelectorAll<HTMLElement>('[data-tft-page]')].map(a => a.dataset.tftPage));
         results.innerHTML = rows.filter(p => !have.has(p.id)).map(row).join('') || `<p class="muted">${q ? 'No pages' : 'No other pages'}</p>`;
       } catch (e) { if (d.tpEl === slot && seq === search) results.innerHTML = `<p class="err">${esc(errorMessage(e, ''))}</p>`; }
     }, wait);
@@ -92,15 +116,17 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
     if (!button) return;
     button.disabled = true;
     try {
-      if (link) await post('/v2/pins', {place: 'task:' + id, item: 'page:' + link.dataset.tpPage});
+      // A page is linked to the task as related (POST /api/v2/pages/{id}/links); a pinned page's unlink is the old pin's.
+      if (link) await post('/v2/pages/' + encodeURIComponent(String(link.dataset.tpPage)) + '/links', {target: 'task:' + id, role: 'related'});
       else await writeRequest('DELETE', '/v2/pins/' + encodeURIComponent(String(unlink?.dataset.tpUnlink)));
       if (d.tpEl !== slot) return;
       if (link) { pick(false); ++search; add.focus(); }
       await taskPagesLoad(d);
+      await taskFilesTabLoad(d, id);
     } catch (e) { toast(errorMessage(e, ''), true); }
     finally { slot.tpBusy = false; button.disabled = false; }
   };
-  const refresh = () => { if (d.open && d.tpEl === slot) void taskPagesLoad(d); };
+  const refresh = () => { if (d.open && d.tpEl === slot) { void taskPagesLoad(d); void taskFilesTabLoad(d, id); } };
   const offs = [liveOn('tasks', (e: TaskPagesLiveEvent) => {
     if (d.open && d.tpEl === slot && (e.kinds || [e.kind]).includes('files') && String(e.id) === id)
       liveSoon('task-pages:' + d.id + ':' + id, refresh, 200);
@@ -111,10 +137,96 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
   d.tpOff = () => { for (const off of offs) off(); slot.tpFollow?.(); };
   void taskPagesLoad(d);
 }
-// ⋯ › Make a page (task-props.ts): the Describe box, focused.
+// ⋯ › Make a page (task-props.ts): the Describe box, focused, on the Files tab where the section is.
 function taskPageMakeOpen(d: TaskPagesHost) {
   const slot = d.tpEl;
   if (!slot) return;
+  taskTabShow(d as ModalDialog, TASK_FILES_TAB);
   slot.tpMakeOpen = true; taskPageMakeShow(slot);
   $('.tp-make input', slot)?.focus();
 }
+
+// ----------------------------------------------------------------- the Files tab
+// The task's Files tab: every page and file linked to the task (GET /api/v2/tasks/{id}/files?all=1). A page row shows
+// its title, the roles it has on this task (chips), v<version> · writers · time, and opens the page; a file row shows
+// today's meta (v<version> · time) and opens in the task's viewer (task-files.ts). Its count is the tab's "Files N".
+async function taskFilesTabLoad(d: TftHost, id: string | number): Promise<void> {
+  const key = String(id), seq = d.tftSeq = (d.tftSeq || 0) + 1;
+  const data = await v2Get<{files?: TftItem[] | null}>(`/v2/tasks/${encodeURIComponent(key)}/files?all=1`, {fresh: true});
+  if (!d.open || String(d.dataset.task) !== key || d.tftSeq !== seq) return;
+  if (!data) return;                       // a failed read keeps what the last one found
+  const items = (data.files || []).filter(f => !f.archived);
+  for (const f of items) TFT_TITLES.set(f.id, f.title || f.name || '');
+  const rows = taskFilesRowsHTML(key, items);
+  TFT_COUNT.set(key, items.length); TFT_ROWS.set(key, rows);
+  const list = d.querySelector<HTMLElement>('[data-tft-list]');
+  if (list) list.innerHTML = rows;
+  const label = taskFilesLabel(items.length), tab = d.querySelector<HTMLElement>(`.tw-tabs [data-task-tab="${TASK_FILES_TAB}"] .doc-tab-t`);
+  if (tab) tab.textContent = label;
+  const btn = d.querySelector<HTMLElement>(`.tw-tabs [data-task-tab="${TASK_FILES_TAB}"]`);
+  if (btn) btn.title = label;
+  // the Spec cards' titles, now that the pages are read
+  for (const card of d.querySelectorAll<HTMLElement>('[data-task-spec]')) {
+    const title = TFT_TITLES.get(card.dataset.taskSpec ?? '');
+    const text = card.querySelector<HTMLElement>('.task-spec-t');
+    if (title && text) { text.textContent = title; card.title = title; }
+  }
+}
+/** The list's rows: a page (a file carrying its `links`) or a file, in the order the task's files read gives them. */
+function taskFilesRowsHTML(id: string, items: TftItem[]): string {
+  if (!items.length) return '<p class="muted tft-none">Nothing linked yet.</p>';
+  return items.map(f => Array.isArray(f.links) ? tftPageRowHTML(id, f) : tftFileRowHTML(f)).join('');
+}
+function tftPageRowHTML(id: string, f: TftItem): string {
+  const chips = (f.links || []).filter(l => l.target === 'task:' + id).map(l => `<span class="tft-chip">${esc(l.role)}</span>`).join('');
+  const writers = f.writers?.length ? f.writers.map(w => w.name || actorLabel(w.actor))
+    : [...new Set((f.versions || []).map(v => v.by ? actorLabel(v.by) : ''))];
+  const v = f.current_version ?? f.version ?? null, when = f.updated_at ?? f.versions?.[0]?.created_at ?? null;
+  const meta = [v != null ? `v${v}` : '', [...new Set(writers.filter(Boolean))].join(', '), when ? ago(when) : ''].filter(Boolean).join(' · ');
+  return `<a class="tft-row" href="${esc(pageHref(f.id))}" data-tft-page="${esc(f.id)}">`
+    + '<span class="nav-icon tft-ic" aria-hidden="true">description</span>'
+    + `<span class="tft-main"><span class="tft-t">${esc(f.title || f.name || 'Untitled')}</span><span class="tft-m muted">${esc(meta)}</span></span>${chips}</a>`;
+}
+function tftFileRowHTML(f: TftItem): string {
+  const v = f.current_version ?? f.version ?? null, when = f.versions?.find(x => x.n === v)?.created_at ?? f.updated_at ?? null;
+  const meta = [v != null ? `v${v}` : '', when ? ago(when) : ''].filter(Boolean).join(' · ');
+  return `<button type="button" class="tft-row" data-tft-file="${esc(f.id)}">`
+    + '<span class="nav-icon tft-ic" aria-hidden="true">draft</span>'
+    + `<span class="tft-main"><span class="tft-t">${esc(f.name || 'file')}</span><span class="tft-m muted">${esc(meta)}</span></span></button>`;
+}
+// A file row opens the file in the task's viewer (task-files.ts), as its tile in Details does.
+document.addEventListener('click', ev => {
+  const row = eventElement(ev)?.closest<HTMLElement>('[data-tft-file]');
+  const d = row?.closest('dialog') as TfDialog | null | undefined;
+  if (row && d) d.tfOpenFile?.(row.dataset.tftFile);
+});
+// New page: a minimal dialog, a title and the page's text, saved (POST /api/v2/pages) as the task's related page.
+function taskNewPageOpen(d: TftHost, id: string) {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'tft-new';
+  dlg.innerHTML = '<form class="tft-new-form">'
+    + '<label class="tft-field"><span>Title</span><input name="title" required maxlength="200" autocomplete="off"></label>'
+    + '<label class="tft-field"><span>Text</span><textarea name="text" required rows="12" spellcheck="false"></textarea></label>'
+    + '<p class="err tft-new-err" role="alert" hidden></p>'
+    + '<div class="tft-new-acts"><button type="button" class="ghost" data-tft-cancel>Cancel</button><button type="submit" class="primary">Save</button></div></form>';
+  document.body.append(dlg);
+  const form = $('form', dlg) as HTMLFormElement, title = $('[name="title"]', dlg) as HTMLInputElement, text = $('[name="text"]', dlg) as HTMLTextAreaElement;
+  const error = $('.tft-new-err', dlg), save = $('button[type="submit"]', dlg) as HTMLButtonElement;
+  dlg.addEventListener('close', () => dlg.remove());
+  $('[data-tft-cancel]', dlg).onclick = () => dlg.close();
+  form.onsubmit = async (ev: Event) => {
+    ev.preventDefault();
+    const name = title.value.trim();
+    save.disabled = true; error.hidden = true;
+    try {
+      await post('/v2/pages', {title: name, text: text.value, task: id, as: 'related', name: taskPageSlug(name) + '.html'});
+      dlg.close();
+      toast('Saved');
+      await taskFilesTabLoad(d, id);
+    } catch (e) { error.textContent = errorMessage(e, ''); error.hidden = false; }
+    finally { save.disabled = false; }
+  };
+  dlg.showModal();
+  title.focus();
+}
+const taskPageSlug = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'page';

@@ -4,9 +4,15 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// A document as GET /v2/tasks/{id} lists it (`task.documents`), newest change first, its versions newest first.
+// A document as GET /v2/tasks/{id} lists it (`task.documents`), newest change first, its versions newest first. A
+// document is a page linked to the task with the document's name as its role (backend/task_documents.py): `links` are
+// the page's links (target, role, the target's display name), `changed_since_ok` says the task was OK'd on an older one.
 interface TaskDocVersion { n: number; by: string; at: string; note?: string | null; }
-interface TaskDoc { name: string; file_id: string; version: number; by: string; at: string; versions: TaskDocVersion[]; }
+interface TaskDocLink { target: string; role: string; name?: string | null; by?: string | null; }
+interface TaskDoc {
+  name: string; file_id: string; page_id?: string | null; title?: string | null; version: number; by: string; at: string;
+  versions: TaskDocVersion[]; links?: TaskDocLink[] | null; changed_since_ok?: boolean | null;
+}
 // One tab: Chat, a document, or (Flow) what an approval shows when it is no document of the task.
 interface DocTab { key: string; label: string; dot?: boolean; }
 
@@ -18,6 +24,29 @@ const docOf = (docs: TaskDoc[] | null | undefined, key: string | null | undefine
 function docTabs(docs: TaskDoc[] | null | undefined, extra: DocTab[] = [], chatDot = false): DocTab[] {
   const rest = [...(docs || []).map(d => ({key: docKey(d.name), label: d.name})), ...extra];
   return rest.length ? [{key: 'chat', label: 'Chat', dot: chatDot}, ...rest] : [];
+}
+/** The Spec cards under a task's title: one card per page the task has as its Spec, each opening the page. A card shows
+    the page's title (`titles`: the Files list's, once read; else the document's own), v<version>, its writers, "also
+    the Spec of D-…" when another task has it as its Spec too, and a small dot when the task was OK'd on an older
+    version. No Spec, no section. */
+function taskSpecsHTML(docs: TaskDoc[] | null | undefined, taskId: string, titles: Map<string, string> = new Map()): string {
+  const specs = (docs || []).filter(d => d.name === 'Spec');
+  if (!specs.length) return '';
+  const cards = specs.map(d => {
+    const id = d.page_id || d.file_id, links = d.links || [];
+    const title = titles.get(id) || d.title || 'Spec';
+    const writers = [...new Set([...links.filter(l => l.role === 'writer').map(l => l.name || actorLabel(l.target)),
+      ...d.versions.map(v => actorLabel(v.by))].filter(Boolean))];
+    const others = [...new Set(links.filter(l => l.role === 'Spec' && l.target.startsWith('task:') && l.target !== 'task:' + taskId)
+      .map(l => /^D-\d+/.exec(l.name || '')?.[0] || l.name || l.target))];
+    const meta = [`v${d.version}`, writers.join(', '), others.length ? `also the Spec of ${others.join(', ')}` : ''].filter(Boolean).join(' · ');
+    return `<a class="task-spec" href="${esc(pageHref(id))}" data-task-spec="${esc(id)}" title="${esc(title)}">`
+      + '<span class="nav-icon task-spec-ic" aria-hidden="true">description</span>'
+      + `<span class="task-spec-main"><span class="task-spec-t">${esc(title)}</span><span class="task-spec-m muted">${esc(meta)}</span></span>`
+      + (d.changed_since_ok ? '<span class="task-spec-dot" role="img" aria-label="Changed since OK" title="Changed since OK"></span>' : '')
+      + '</a>';
+  });
+  return `<section class="task-specs" data-task-specs aria-label="Spec">${cards.join('')}</section>`;
 }
 /** The tab row, a segmented control that scrolls sideways when the tabs do not fit; '' with no tabs. `attrs` gives each
     tab's own attributes (the task window's data-task-tab, Flow's data-dc-tab). */
