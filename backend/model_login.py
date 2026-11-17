@@ -1005,7 +1005,7 @@ def key_info(c, who, rid, runtime, auth=None, vault=None):
         "names": list(computer_keys.names(runtime)),
         "computers": [],
     }
-    if source == "shared":
+    if source == "shared" and shared:
         out["computers"] = [
             {
                 "id": row["id"],

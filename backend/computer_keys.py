@@ -124,7 +124,7 @@ def assign(c, runner_id, runtime, sid, actor, settings=None):
     if current and current["subscription_id"] == sid:
         return
     MS._set(c, runner_id, runtime, sid, actor)
-    kind = (MS.row(c, sid) or {}).get("kind")
+    kind = str((MS.row(c, sid) or {}).get("kind") or "")
     if MS.KINDS.get(kind, {}).get("file"):
         MS._reset(c, settings, runner_id, runtime)
 
@@ -302,7 +302,9 @@ def active(c, runner_id, runtime):
 
 def shared(c, runtime, runner_id=None):
     """The shared key given to computer `runner_id` for `runtime`: {env: credential row}, or {}."""
-    found = _given(c, runner_id, runtime) if runner_id else None
+    if not runner_id:
+        return {}
+    found = _given(c, runner_id, runtime)
     return {found["env"]: found} if found and found["source"] != OWN + runner_id else {}
 
 

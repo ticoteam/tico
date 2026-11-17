@@ -1239,6 +1239,7 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
             raise Problem("name", "Enter a name", 422)
         owner = owner_of(c, body.owner_id, sub["kind"]) if body.owner_id is not None else None
         given = []
+        value = preview = ""
         if body.secret is not None:
             value, preview = checked(sub["kind"], body.secret.get_secret_value())
             given = _signed_in_with(c, sid)
