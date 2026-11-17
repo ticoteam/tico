@@ -22,7 +22,7 @@ dropped either: it becomes a proposal the same way, and the log keeps it."""
 
 import contextvars
 
-from . import strategy_bot
+from . import person_asks, strategy_bot
 from . import hubdb as H
 from . import task_followers as TF
 from . import task_trigger_rules as triggers
@@ -423,16 +423,28 @@ def _apply(c, change, goal_id, reason):
     """Make one change as the Strategy Owner; returns what Undo needs: the task, and its fields before and after."""
     do = change["do"]
     if do == "create":
-        made = H.task_create(
-            c,
-            STRATEGY_BOT,
-            change["title"],
-            (change["body"] + "\n\n" if change["body"] else "")
-            + f"Made by the {strategy_bot.name(c)} on its own: {reason}",
-            change["owner"],
-            goal_id=goal_id or None,
-            lane="company",
-        )
+        body = (
+            change["body"] + "\n\n" if change["body"] else ""
+        ) + f"Made by the {strategy_bot.name(c)} on its own: {reason}"
+        if H.is_human(change["owner"]):
+            # Work for a person is the Strategy Owner's task with its question to them (backend/person_asks.py).
+            made = person_asks.ask(
+                c,
+                STRATEGY_BOT,
+                change["owner"],
+                change["title"],
+                body,
+                change["title"],
+                f"It serves a goal: {reason}" if reason else "It serves one of the team's goals.",
+                bot=STRATEGY_BOT,
+                goal_id=goal_id or None,
+                lane="company",
+                lint=True,
+            )
+        else:
+            made = H.task_create(
+                c, STRATEGY_BOT, change["title"], body, change["owner"], goal_id=goal_id or None, lane="company"
+            )
         return {"task_id": made["id"], "made": True, "before": None, **_changed(c, made["id"])}
     row = H.task(c, change["task_id"])
     if not row:
@@ -574,7 +586,12 @@ def _propose(c, reason, left):
         # person who reads the owner's work may not be allowed to open. The Strategy Owner stays its requester, so the 5 a
         # day and a repeated proposal are still counted (strategy_bot.asked_today).
         with triggers.savepoint(c):
-            made = H.task_create(c, STRATEGY_BOT, title, body, owner, lint=False, private=True)
+            if H.is_human(owner):
+                # Its question to the owner, on the Strategy Owner's task (backend/person_asks.py): in their Needs you.
+                why = f"It wants them because {reason}" if reason else f"The {strategy_bot.name(c)} may not make them."
+                made = person_asks.ask(c, STRATEGY_BOT, owner, title, body, title, why, bot=STRATEGY_BOT, private=True)
+            else:
+                made = H.task_create(c, STRATEGY_BOT, title, body, owner, lint=False, private=True)
     except H.Refused as exc:
         return None, f"Not in Needs you: {exc.detail or exc.rule}; it stays here in the log"
     return made["id"], ""

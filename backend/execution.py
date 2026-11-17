@@ -9203,14 +9203,19 @@ class Execution:
         if again:
             job_line += " The earlier review task was closed while the run remained unresolved."
         try:
-            H.task_create(
+            from . import person_asks
+
+            person_asks.task_for(
                 c,
                 H.KEEPER,
                 title,
                 boundary + job_line + "\n\n" + named + "\n" + by_id,
                 owner,
+                question="Resume or dismiss the held run, once you have checked what it did?",
+                why="It stopped partway, so Tico holds it rather than repeat a possible outside action.",
                 private=True,
                 deduplicate=False,
+                lint=True,
             )
         except H.Refused:
             pass

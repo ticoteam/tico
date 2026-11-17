@@ -437,6 +437,11 @@ def warning_line(v):
     )
 
 
+# A held item is the person's task with Tico's question on it (backend/person_asks.py), so it is in their Needs you.
+HELD_ASK = "Is this held item real work for the bot?"
+HELD_WHY = "Tico's screening held it as a likely prompt injection, and only a person lets it through."
+
+
 def held_title(title):
     return ("Held: " + str(title or "").strip())[:300]
 
@@ -633,8 +638,18 @@ def _open_task(c, auth, row, v, owner, title, body):
         from .watchers import _open
 
         return _open(c, auth, row["bot"], title, body, owner=owner, incident=bool(row["incident"]))
-    return H.task_create(
-        c, row["actor"] or H.KEEPER, title[:300], body, owner or H.bot_actor(row["bot"]), lint=False, deduplicate=False
+    from . import person_asks
+
+    return person_asks.task_for(
+        c,
+        row["actor"] or H.KEEPER,
+        title[:300],
+        body,
+        owner or H.bot_actor(row["bot"]),
+        question=HELD_ASK,
+        why=HELD_WHY,
+        lint=False,
+        deduplicate=False,
     )
 
 

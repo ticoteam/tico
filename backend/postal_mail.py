@@ -850,6 +850,25 @@ class PostalMail:
         """The letter's task for `to`; a bot that cannot take it (paused, gone) hands it to the owner."""
         private = True if private else None
         requester = owner_actor(c, self.auth) if inform_owner else None
+        if H.is_human(to):
+            # A letter for a person is their task with Tico's question on it (backend/person_asks.py), so it is in their
+            # Needs you, not only their Tasks. No bot holds it: a private letter never reaches a bot's turn unasked.
+            from . import person_asks
+
+            when = f", due {due[:10]}" if due else ""
+            return person_asks.ask(
+                c,
+                H.KEEPER,
+                to,
+                title,
+                body,
+                f"Can you handle this letter{when}?",
+                f"{title[:150]}. It came by post, and only a person can act on it.",
+                due=due,
+                deduplicate=False,
+                private=private,
+                requester_actor=requester,
+            )["id"]
         made = H.attempt(
             c,
             H.task_create,

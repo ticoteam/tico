@@ -1306,13 +1306,16 @@ def _hold_told(c, row, rule, counted, held):
     lead = A.acts_as(c, {"flow": flow})
     person = owner_person(c, flow["owner"]) or (lead[6:] if lead.startswith("human:") else "")
     if person:
-        task = H.task_create(
+        from . import person_asks
+
+        task = person_asks.task_for(
             c,
             H.KEEPER,
             f"Automation {flow['name']} on hold"[:300],
             words,
             "human:" + person,
-            lint=False,
+            question=f"Release or drop the runs automation {flow['name']} is holding?"[:200],
+            why=f"It is on hold because {why}, which is most often a loop.",
             deduplicate=False,
             wake_refs=refs,
         )
@@ -2550,13 +2553,16 @@ class HubServices:
                 from . import screening
 
                 name = str(self.flow.get("name") or self.row["id"])
-                task = H.task_create(
+                from . import person_asks
+
+                task = person_asks.task_for(
                     c,
                     A._actor(c, self.auto),
                     screening.held_title(name),
                     screening.held_body(found, bot, screening._name(c, bot), prompt),
                     person,
-                    lint=False,
+                    question=screening.HELD_ASK,
+                    why=screening.HELD_WHY,
                     deduplicate=False,
                 )
                 screening.note(c, found, "webhook", task["id"], bot=bot, to=person)

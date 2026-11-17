@@ -159,6 +159,11 @@ every Paused cause they can fix (one row per cause, not per task) and a private 
 in. A task they own with nothing asked of them is in Tasks, not Needs you, and so is a task the never-stuck ladder could
 take no further. A bot's @ only marks the task unread. No chat, email or push goes to a person about a task.
 
+So whatever needs a person to act asks them. A bot that files a task for a person (`tico task create --owner <person>`)
+files its own task, with the title as its question to them; Tico's own notices to a person (an automation on hold,
+legal mail, a held webhook, a rule that asks for a person, a stopped bot) are the person's task with Tico's question on
+it; the Strategy Owner's asks are its own tasks with its question. The question goes when the task moves on.
+
 `GET /api/v2/needs-you` returns the list; `?count=true` returns its one number (beside Flow in the Tasks header; the sidebar shows Flow's mark while it is above 0, and a phone's Flow tab turns jade).
 
 When Flow (the screen that walks the list one ask at a time) opens, Tico gives its opinion on each ask: the button it

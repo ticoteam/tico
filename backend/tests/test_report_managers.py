@@ -577,10 +577,13 @@ def test_the_weekly_cap_refuses_and_asks_the_person_above_the_manager(api, botop
     assert get(api, "bots/junior3")["state"] != "archived"
     finish(api, botops, attempt)
     with api.app.state.store.read() as c:
+        # The lead's own task, with its question to Cara (backend/person_asks.py): in her Needs you.
         asks = c.execute(
-            "SELECT owner_id,requester_id FROM tasks WHERE title LIKE 'lead is at its weekly limit%'"
+            "SELECT t.owner_id, t.requester_id, r.person_id FROM tasks t JOIN visits v ON v.task_id=t.id "
+            "JOIN requirements r ON r.visit_id=v.id WHERE t.title LIKE 'lead is at its weekly limit%'"
         ).fetchall()
-    assert [(a["owner_id"], a["requester_id"]) for a in asks] == [("human:cara", "bot:" + bot_id(api, "lead"))]
+    lead_bot = "bot:" + bot_id(api, "lead")
+    assert [(a["owner_id"], a["requester_id"], a["person_id"]) for a in asks] == [(lead_bot, lead_bot, "human:cara")]
 
 
 def test_botops_archives_a_report_and_the_change_is_recorded_and_restorable(api, botops):

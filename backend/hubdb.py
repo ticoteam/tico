@@ -1145,8 +1145,23 @@ def _review_exists(conn, title, day):
 
 def _review_task(conn, owner, title, body, origin=None):
     try:
-        # lint=False: a person's review reads as written; the shape rule is for asks bots write.
-        row = task_create(conn, KEEPER, title, body, owner, lint=False)
+        if is_human(owner):
+            # A person's review is Tico's question to them on their task (backend/person_asks.py): in their Needs you.
+            # No bot holds it: the bot it reviews is BotOps itself, with no assistant to review it.
+            from . import person_asks
+
+            row = person_asks.ask(
+                conn,
+                KEEPER,
+                owner,
+                title,
+                body,
+                f"{title}: does its playbook or reach need a change?",
+                body.split(". ")[0].rstrip(".") + ".",
+            )
+        else:
+            # lint=False: a review reads as written; the shape rule is for asks bots write.
+            row = task_create(conn, KEEPER, title, body, owner, lint=False)
         if origin and is_bot(origin):
             event(conn, KEEPER, "task.origin", row["id"], {"bot": origin})
     except Refused:

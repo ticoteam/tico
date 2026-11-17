@@ -453,7 +453,21 @@ def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, priv
     person cannot be given one. `private` (True for a notice that names an amount) keeps it to the person and its
     requester; left None, Tico's default applies."""
     try:
-        made: Any = _H.task_create(c, _H.KEEPER, title[:200], body, person, deduplicate=True, private=private)
+        from ... import person_asks
+
+        # Tico's question to the person on their task (person_asks), so the item is in their Needs you.
+        made: Any = person_asks.task_for(
+            c,
+            _H.KEEPER,
+            title[:200],
+            body,
+            person,
+            question=title[:200],
+            why=person_asks.first_sentence(body) or "Finance needs a person to act on this.",
+            deduplicate=True,
+            private=private,
+            lint=True,
+        )
     except _H.Refused:
         return None
     task: Mapping[str, Any] = cast(Mapping[str, Any], made) if isinstance(made, Mapping) else {}

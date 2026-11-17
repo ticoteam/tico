@@ -22,7 +22,7 @@ from starlette.requests import ClientDisconnect
 
 from . import built_on
 from . import agents, app_view, mcp_oauth, oidc, runner_online, views
-from . import outcome_stats
+from . import outcome_stats, person_asks
 from . import pipeline_judges
 from . import recorder_installs
 from . import assistant_changes, why_here
@@ -3521,12 +3521,16 @@ def create_app(settings=None):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
         if reach_to:
             H.task_reach(c, who.actor, parent, owner)
+        # A bot's task for a person is the bot's own task with its question to them (backend/person_asks.py): Needs you
+        # holds only what is asked of a person, so a plain task handed to them would reach no list they are told of.
+        asks_person = ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
+        holder = who.actor if asks_person else owner
         row = H.task_create(
             c,
             who.actor,
             body.title,
             body.body,
-            owner,
+            holder,
             body.due,
             parent_id,
             requester_actor=requester_actor,
@@ -3536,7 +3540,7 @@ def create_app(settings=None):
             public_summary=body.public_summary,
             public_warning=public_warning,
             private=private,
-            conversation_id=rooms.task_conversation_id(c, auth, owner, who.actor),
+            conversation_id=rooms.task_conversation_id(c, auth, holder, who.actor),
             lane=body.lane,
             labels=body.labels,
             top=body.top,
@@ -3558,6 +3562,9 @@ def create_app(settings=None):
             human_id=body.human,
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
+        if asks_person:
+            person_asks.ask_on(c, who.actor, row, owner, body.title, person_asks.handed_why(c, who.actor))
+            row = {**row, **(H.task(c, row["id"]) or {})}
         if body.for_actor:
             H._task_event(
                 c,
@@ -3995,7 +4002,18 @@ def create_app(settings=None):
             if exc.code == "report_cap" and ask:
                 store.write(
                     request.state.identity,
-                    lambda c: H.task_create(c, ask["actor"], ask["title"], ask["body"], ask["person"]),
+                    # Its question to the person above (person_asks), so the ask is in their Needs you.
+                    lambda c: person_asks.task_for(
+                        c,
+                        ask["actor"],
+                        ask["title"],
+                        ask["body"],
+                        ask["person"],
+                        question=ask["title"][:200],
+                        why="A manager bot's report change is over the week's limit, and the person above it decides.",
+                        bot=ask["actor"],
+                        lint=True,
+                    ),
                 )
             raise
 

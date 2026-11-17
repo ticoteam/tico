@@ -1583,7 +1583,20 @@ def _file_owner_task(conn, actor, owner, body):
     for _ in range(5):
         title = _free_owner_title(conn, actor, owner)
         try:
-            return H.task_create(conn, actor, title, body, owner, deduplicate=False)
+            from . import person_asks
+
+            return person_asks.task_for(
+                conn,
+                actor,
+                title,
+                body,
+                owner,
+                question="Decide these market insights?",
+                why="The curator found claims it cannot settle on its own, and only a person decides them.",
+                bot=actor,
+                deduplicate=False,
+                lint=True,
+            )
         except H.Refused as exc:
             if exc.rule != "duplicate":
                 raise
