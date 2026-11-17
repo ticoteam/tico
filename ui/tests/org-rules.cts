@@ -103,7 +103,7 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     // A teammate named @slug in a rule's text is a mention chip; in a party's rules (all bots' rules, folded until
     // opened) it opens the teammate, not the rule.
     const named = await ok<Rule>(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Ask @engineering-manager before you merge.', who: {all_bots: true}});
-    await go(page, '#/overview');
+    await go(page, '#/home');
     await page.locator('#ru-root').waitFor({state: 'detached', timeout: t(10000)});   // so Rules reads them again
     await go(page, LEAD);
     await page.locator('.rr-panel [data-rr-inh="all_bots"][aria-expanded="true"]').waitFor({timeout: t(15000)});
@@ -242,7 +242,7 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     // an exception it sends or receives is listed; each row's link opens the Rules panel.
     await ok(page, 'PUT', '/v2/reach/settings/' + encodeURIComponent('bot:engineering-manager'), {chats_per_day: 40});
     await ok(page, 'POST', '/v2/reach/lines', {sender: 'bot:engineering-manager', receiver: 'human:priya', per_day: 3});
-    await go(page, '#/overview');
+    await go(page, '#/home');
     await go(page, '#/bot/engineering-manager/rules');
     const reachRow = (text: string) => page.locator('#bot-rules .ru-setting', {has: page.locator('.ru-txt', {hasText: text})});
     await reachRow('Up to 40 chats a day').locator('.ru-txt').waitFor({timeout: t(15000)});
@@ -313,7 +313,7 @@ async function shots(browser: Browser, hub: RealHubSupport.Hub, bot: Page, {rule
         await ready(page);
         await page.evaluate(v => (window as unknown as PageWin).ticoTheme.set(v), theme);
         for (const [name, hash, wait, act] of screens) {
-          await go(page, '#/overview');
+          await go(page, '#/home');
           await go(page, hash);
           if (act) { await page.locator('.rr-panel [data-rr-add-rule]').waitFor({timeout: t(10000)}); await act(page); }
           await page.locator(wait).first().waitFor({timeout: t(15000)});

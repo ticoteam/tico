@@ -35,7 +35,7 @@ let BOOT_DEFAULT_ROUTE = false;
 const ENTRY_JUMP = entryJump();
 const ENTRY_ROUTE = entryRoute();
 if (ENTRY_ROUTE) history.replaceState(null, '', location.pathname + ENTRY_ROUTE);
-else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // My dashboard is home
+else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // Company is home
 // Every team-facing name comes from the server (GET /api/me -> config, also GET /api/v2/config),
 // so a second environment shows its own application, team and assistant names. The defaults show until /api/me
 // answers, and strings built before then read the names lazily.
@@ -45,7 +45,7 @@ const CONFIG_DEFAULTS: AppConfig = {environment_id: '', company_name: '', app_na
 const S: AppState = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, me: null, route: location.hash || HOME,
             config: {...CONFIG_DEFAULTS},
             v2: {on: false, status: {}, needs: []},
-            // What each main page last read (Tasks, Strategy, Automations, a dashboard, the campus's hours card): a
+            // What each main page last read (Tasks, Strategy, Automations, a dashboard): a
             // return visit paints it in the same task as the page's shell, then reads again and patches what changed,
             // so switching pages never flashes a skeleton. Live events keep or drop it (ui/app/refresh.ts).
             lastRead: {} };

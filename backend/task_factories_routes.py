@@ -1,11 +1,11 @@
 # pyright: strict
-"""Company › Factories (S12) and a pipeline manager's Log (S10), read from the pipelines' own tables.
+"""The factories (S12, Strategy › Org) and a pipeline manager's Log (S10), read from the pipelines' own tables.
 
 GET /api/v2/factories?period=1d|7d|30d: each live factory with how many of its tasks reached Done in the period (Closed
 never counts), and each live pipeline with its factory, how many open tasks the reader may read, what it files into,
 and its mark. POST /api/v2/factories makes one (the company's owner and Admins). GET /api/v2/pipelines/{id}/log: each
 push past, each snooze a bot made with no end date, and each save of the pipeline (Tico's included), newest first.
-GET /api/v2/company/floor is Company › Floor (backend/company_floor.py).
+GET /api/v2/company/floor is the Floor, Company's first card (backend/company_floor.py).
 """
 
 from collections.abc import Callable
@@ -191,7 +191,7 @@ def log(c: Any, pipeline_id: str, visible_sql: str) -> list[dict[str, Any]]:
 def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) -> None:
     @app.get("/api/v2/factories")
     def factory_list(request: Request, period: str = "7d"):
-        """Company › Factories: the live factories with their Done count for the period, and every live pipeline with
+        """The factories: the live factories with their Done count for the period, and every live pipeline with
         its open count, what it files into and its mark."""
         who = request.state.identity
         auth.domain(who)
@@ -200,7 +200,7 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
 
     @app.get("/api/v2/company/floor")
     def company_floor(request: Request):
-        """Company › Floor: each factory the reader sees, its pipelines' in and out rates, and each work stage's open
+        """The Floor: each factory the reader sees, its pipelines' in and out rates, and each work stage's open
         tasks by who holds them (backend/company_floor.py)."""
         who = request.state.identity
         auth.domain(who)

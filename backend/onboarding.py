@@ -1054,7 +1054,7 @@ class Onboarding:
         c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (ONBOARDED, slug))
         H.event(c, who.actor, "bot.onboarded", slug, {})
         H.setup_finished(c, slug)
-        # A bot whose setup was never started (Finish with defaults on Overview) gets its routines as Start setup
+        # A bot whose setup was never started (Finish with defaults on Health) gets its routines as Start setup
         # would have given them; once only, so ones already armed or turned off by a person are left alone.
         armed = self.arm_routines(c, who, slug)
         return {
@@ -1181,10 +1181,6 @@ class Onboarding:
             except ValueError:
                 pass
         return True
-
-    def turn_on_goal_manager(self, c, who):
-        """The same for the built-in Strategy Owner (docs/strategy-bot.md)."""
-        return self._turn_on(c, who, STRATEGY_OWNER, STRATEGY_OWNER, strategy_bot.name(c), "goal_manager.turned_on")
 
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the

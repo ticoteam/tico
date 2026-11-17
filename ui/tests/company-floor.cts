@@ -1,8 +1,10 @@
 import type {Page, Route} from 'playwright';
-// Company › Floor (ui/app/company-floor.ts) from fixtures: halls, lines and stacks whose heights are relative and capped,
+// The Floor (ui/app/company-floor.ts), Company's first card (#/home, ui/app/dashboard.ts), from fixtures: halls, lines and
+// stacks whose heights are relative and capped,
 // Flow's mark only over a stage holding something that waits on the reader, the rate flip kept per browser, the card a
 // hover shows and a click pins with its task rows, one factory with a deck per teammate and one mark by a stage's name,
-// a factory the reader may not see never drawn, a phone's stacked halls and sheet. Fixtures only.
+// a factory the reader may not see never drawn, the old Dashboard, Floor, Campus, Graph and Factories links landing on
+// Company, a phone's stacked halls and sheet. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -42,12 +44,19 @@ const TASKS = Array.from({length: 5}, (_, i) => ({id: `t${i}`, number: 200 + i, 
   version: 1, snoozed: false, pushed_past: false, on_person: false, requester_id: null, assignee_id: null, due_at: null, late: null}));
 
 type Hub = {floor: unknown; fail: boolean; reads: URL[]};
+// Company (person:me) as the server answers it: the Floor first and full width, a card under it.
+const COMPANY = {place: 'person:ana', kind: 'person', saved: true, can_edit: true, pins: [
+  {id: 'p1', item: 'card:c1', position: 0, size: 'large', made_by: 'human:ana',
+    card: {id: 'c1', template: 'floor', title: '', settings: {}, name: 'Floor', heading: 'Floor', team_name: '', hidden: false, data: {}}},
+  {id: 'p2', item: 'card:c2', position: 1, size: 'medium', made_by: 'human:ana',
+    card: {id: 'c2', template: 'latest_pages', title: '', settings: {team: '', count: 5}, name: 'Latest pages', heading: 'Latest pages', team_name: '', hidden: false, data: {pages: []}}},
+]};
 const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els => els.map(el => el.querySelectorAll('.cf-box:not(.cf-none)').length));
 
 (async () => {
   const browser = await chromium.launch({channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string, headless: true});
   try {
-    const open = async (width: number, height: number, hub: Hub, hash = '#/overview/floor', touch = false) => {
+    const open = async (width: number, height: number, hub: Hub, hash = '#/home', touch = false) => {
       const context = await browser.newContext({viewport: {width, height}, serviceWorkers: 'block', hasTouch: touch, isMobile: touch});
       const page = await context.newPage();
       const errors: string[] = [];
@@ -62,6 +71,7 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
           if (fs.existsSync(file)) return route.fulfill({body: fs.readFileSync(file), contentType: name.endsWith('.html') ? 'text/html'
             : name.endsWith('.css') ? 'text/css' : /\.(?:js|ts)$/.test(name) ? 'application/javascript' : 'application/octet-stream'});
         }
+        if (p === '/api/v2/places/person%3Ame') return json(COMPANY);
         if (p === '/api/v2/company/floor') { hub.reads.push(url); return hub.fail ? json({error: 'boom'}, 500) : json(hub.floor); }
         if (p === '/api/v2/tasks') { hub.reads.push(url); return json({tasks: TASKS, cursor: 'c1', next_offset: null}); }
         if (p === '/api/employees') return json(BOTS);
@@ -87,6 +97,11 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       const hub = fresh();
       const {page, errors, close} = await open(1440, 900, hub);
       await page.locator('.cf-hall').first().waitFor();
+      // The Floor is Company's first card, full width, with the other cards under it; Company has no tabs.
+      assert.deepEqual(await page.locator('#dash-grid .dash-pin-head h2').allInnerTexts(), ['Floor', 'Latest pages']);
+      assert.equal(await page.locator('#dash-grid .dash-pin').first().locator('.cf-host .cf-hall').count(), 2);
+      assert.equal(await page.locator('#dash-grid .dash-pin').first().getAttribute('data-size'), 'large');
+      assert.equal(await page.locator('#main header.ph .ph-tabs').count(), 0);
       assert.deepEqual(await page.locator('.cf-hall').evaluateAll(els => els.map(el => el.getAttribute('data-cf-factory'))), ['f-product', 'f-eng'],
         'a hall for each factory the server lists, and no other');
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-product"] .cf-line').count(), 1);
@@ -186,7 +201,7 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       await page.locator('.cf-stage').first().waitFor();
       assert.equal(await page.locator('.cf-hall').count(), 1);
       assert.equal(await page.locator('#main header.ph .ph-t').innerText(), 'Product');
-      assert.equal(await page.locator('#main header.ph .ph-back').getAttribute('href'), '#/overview/floor');
+      assert.equal(await page.locator('#main header.ph .ph-back').getAttribute('href'), '#/home', 'back to Company');
       const decks = (id: string) => page.locator(`.cf-stage[data-cf-stage-id="${id}"] .cf-deck`);
       assert.deepEqual(await Promise.all(['pitch', 'spec', 'build', 'validate', 'release'].map(id => decks(id).count())), [2, 5, 1, 0, 1]);
       assert.equal(await page.locator('.cf-stage[data-cf-stage-id="validate"] .cf-box.cf-none').count(), 1, 'an empty stage keeps its spot');
@@ -231,21 +246,36 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
     {
       const hub = fresh();
       const {page, errors, close} = await open(1440, 900, hub, '#/overview/floor/f-hidden');
-      await page.waitForFunction(() => location.hash === '#/overview/floor');
+      await page.waitForFunction(() => location.hash === '#/home');
       await page.locator('.cf-hall').first().waitFor();
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-hidden"]').count(), 0);
       assert.deepEqual(errors, []);
       await close();
     }
+    // Company was tabs: an old link to the Dashboard, Floor, Campus, Graph or Factories, query and all, lands on Company.
+    {
+      const hub = fresh();
+      const {page, errors, close} = await open(1440, 900, hub);
+      await page.locator('.cf-hall').first().waitFor();
+      for (const old of ['#/overview', '#/overview/floor', '#/overview/campus', '#/overview/graph', '#/overview/graph?view=goals', '#/overview/factories']) {
+        await page.evaluate((h: string) => { location.hash = h; }, old);
+        await page.waitForFunction(() => location.hash === '#/home');
+        await page.locator('#dash-grid .cf-host .cf-hall').first().waitFor();
+        assert.equal(await page.locator('#main header.ph h1').innerText(), 'Company', old);
+      }
+      assert.deepEqual(errors, []);
+      await close();
+    }
     // No factories, then a failed read: each says so, and Retry reads again.
     {
-      const hub: Hub = {floor: {factories: []}, fail: false, reads: []};
+      const empty: Hub = {floor: {factories: []}, fail: false, reads: []};
+      const first = await open(1440, 900, empty);
+      await first.page.locator('.cf-empty').waitFor();
+      assert.equal(await first.page.locator('.cf-hall').count(), 0);
+      assert.deepEqual(first.errors, []);
+      await first.close();
+      const hub: Hub = {floor: {factories: []}, fail: true, reads: []};
       const {page, errors, close} = await open(1440, 900, hub);
-      await page.locator('.cf-empty').waitFor();
-      assert.equal(await page.locator('.cf-hall').count(), 0);
-      hub.fail = true;
-      await page.evaluate((h: string) => { location.hash = h; }, '#/overview');
-      await page.evaluate((h: string) => { location.hash = h; }, '#/overview/floor');
       await page.locator('[data-cf-retry]').waitFor();
       hub.fail = false; hub.floor = FLOOR;
       await page.locator('[data-cf-retry]').click();
@@ -257,7 +287,7 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
     // ---- a phone: halls stacked, 44px targets, the card a sheet
     {
       const hub = fresh();
-      const {page, errors, close} = await open(390, 844, hub, '#/overview/floor', true);
+      const {page, errors, close} = await open(390, 844, hub, '#/home', true);
       await page.locator('.cf-hall').first().waitFor();
       const g = await page.evaluate(() => {
         const m = document.querySelector('#main')!;

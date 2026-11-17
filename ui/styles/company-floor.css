@@ -1,8 +1,12 @@
-/* ui/styles/company-floor.css — Company › Floor (ui/app/company-floor.ts): a hall per factory, a line per pipeline, a
-   stack of light boxes per stage; one factory draws a deck per teammate. No state colours: only the Flow mark has a
+/* ui/styles/company-floor.css — the Floor, Company's first card, and one factory's page (ui/app/company-floor.ts): a
+   hall per factory, a line per pipeline, a stack of light boxes per stage; one factory draws a deck per teammate. No state colours: only the Flow mark has a
    colour of its own. Only transform and opacity animate. */
 .cf-page{display:flex;flex-direction:column;min-height:0;position:relative}
 .cf-body{flex:1;min-width:0;overflow:auto;padding:var(--s5) 28px var(--s6)}
+/* Company's Floor card (ui/app/dashboard.ts): the card is the frame, so the floor takes its body as it is. Its card and
+   sheet are fixed to the screen, which a grid that contains its layout would hold them to instead. */
+.cf-host .cf-body{padding:0;overflow:visible}
+.dash-grid:has(.cf-host){contain:none}
 .cf-halls{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,460px),1fr));gap:var(--s5);align-items:start}
 .cf-body-one .cf-halls{grid-template-columns:minmax(0,1fr)}
 .cf-empty{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s2);margin:var(--s4) 0}
@@ -11,7 +15,7 @@
 /* ---- a hall: the factory's name set large and faint, its org chart small and dim at the top right */
 .cf-hall{position:relative;min-width:0;border:1px solid var(--line);border-radius:4px;background:var(--surface);padding:var(--s4) var(--s4) var(--s5)}
 .cf-hall-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s4);min-width:0}
-.cf-hall-name{display:block;min-width:0;font-size:var(--t-2xl);font-weight:600;line-height:var(--lh-display);
+.cf-hall-name{display:block;min-width:0;font-size:var(--t-lg);font-weight:600;line-height:1.3;
   letter-spacing:var(--track-tight);color:var(--g4);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 a.cf-hall-name:hover{color:var(--g5)}
 a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
@@ -120,6 +124,7 @@ a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focu
 
 @media (max-width:760px){
   .cf-body{padding:var(--s3) 12px var(--s5)}
+  .cf-host .cf-body{padding:0}
   .cf-halls{grid-template-columns:minmax(0,1fr);gap:var(--s3)}
   .cf-hall{padding:var(--s3) var(--s3) var(--s4)}
   .cf-hall-head{flex-direction:column;gap:6px}

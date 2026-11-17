@@ -4,7 +4,7 @@ nothing it builds itself (backend/ui_bundle_routes.py).
 
 build/ui/index.html is the page, naming the bundle files in build/ui/bundle/ (`app.bundle.<hash>.js`, each named by its
 content, with its source map and a gzip copy beside it); build/ui/<path>.js is each TypeScript file compiled on its own
-(the overview's modules, the service worker). build/ui/manifest.json holds the build's id (`build`, which the config
+(the service worker, and what the unit tests read). build/ui/manifest.json holds the build's id (`build`, which the config
 carries as `ui_build` so an open page can tell it is out of date), the files a cold open runs (`shell`) and the sha256 of
 every file under ui/ the build read (`inputs`): a build whose inputs differ from ui/ is stale. A server refuses to start
 on a stale build (`prepare` builds it first when this checkout has a Node, `node()`: PATH's, else one in the usual

@@ -123,18 +123,18 @@ def test_vendor_scripts_are_sent_compressed_and_fonts_as_they_are(api):
 
 
 def test_a_typescript_file_outside_the_bundle_is_served_compiled_with_its_map(api):
-    # The overview's modules import each other by their .ts names (ui/overview/bridge.ts).
-    r = api.get("/tico/ui/overview/bridge.ts", headers=AUTH)
+    # Every TypeScript file under ui/ is also compiled on its own at its own path (ui/app/core.ts).
+    r = api.get("/tico/ui/app/core.ts", headers=AUTH)
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/javascript")
-    assert r.content == (ui_build.out_dir(UI) / "overview/bridge.js").read_bytes()
-    assert r.text.rstrip().endswith("//# sourceMappingURL=bridge.js.map")
-    m = api.get("/tico/ui/overview/bridge.js.map", headers=AUTH)
-    assert m.status_code == 200 and m.json()["sources"] == ["bridge.ts"]
-    assert m.json()["sourcesContent"] == [(UI / "overview/bridge.ts").read_text()]
+    assert r.content == (ui_build.out_dir(UI) / "app/core.js").read_bytes()
+    assert r.text.rstrip().endswith("//# sourceMappingURL=core.js.map")
+    m = api.get("/tico/ui/app/core.js.map", headers=AUTH)
+    assert m.status_code == 200 and m.json()["sources"] == ["core.ts"]
+    assert m.json()["sourcesContent"] == [(UI / "app/core.ts").read_text()]
     assert (
-        api.get("/tico/ui/overview/bridge.ts", headers={**AUTH, "If-None-Match": r.headers["etag"]}).status_code == 304
+        api.get("/tico/ui/app/core.ts", headers={**AUTH, "If-None-Match": r.headers["etag"]}).status_code == 304
     )
-    assert api.get("/tico/ui/overview/bridge.ts").status_code == 401
+    assert api.get("/tico/ui/app/core.ts").status_code == 401
     assert api.get("/tico/ui/app/no-such-file.ts", headers=AUTH).status_code == 404
     assert api.get("/tico/ui/app/no-such-file.js.map", headers=AUTH).status_code == 404
 

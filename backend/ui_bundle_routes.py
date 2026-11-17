@@ -89,7 +89,7 @@ def register(app, auth, settings):
     def ui_page(request: Request):
         return file_reply(request, built("index.html"), "text/html; charset=utf-8")
 
-    # A TypeScript file outside the bundle (the overview's modules, which import each other by their .ts names) is
+    # A TypeScript file asked for by its own URL is
     # served as its compiled JavaScript, and its map beside it under the name the output's last line gives.
     @app.api_route("/tico/ui/{name:path}.ts", methods=["GET", "HEAD"], include_in_schema=False)
     @app.api_route("/tico/ui/{name:path}.js.map", methods=["GET", "HEAD"], include_in_schema=False)
@@ -115,39 +115,6 @@ def register(app, auth, settings):
         is_map = request.url.path.endswith(".map")
         path = built("sw.js.map" if is_map else "sw.js")
         return file_reply(request, path, "application/json" if is_map else "text/javascript; charset=utf-8")
-
-    # three.js is ~790 KB of text and StaticFiles sends it as is; the Overview waits on it. Gzipped once in
-    # memory it is ~200 KB.
-    three_dir, three_cache = settings.ui_dir / "vendor" / "three", {}
-
-    @app.api_route("/tico/ui/vendor/three/{name}", methods=["GET", "HEAD"], include_in_schema=False)
-    @app.api_route("/vendor/three/{name}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def ui_three(request: Request, name: str):
-        import gzip, hashlib
-        from .json_response import accepts_gzip
-
-        path = three_dir / name
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+\.js", name) or not path.is_file():
-            raise Problem("not_found", "Not found", 404)
-        stat = path.stat()
-        entry = three_cache.get(name)
-        if not entry or entry[0] != (stat.st_mtime_ns, stat.st_size):
-            raw = path.read_bytes()
-            tag = hashlib.sha1(raw).hexdigest()[:20]
-            entry = three_cache[name] = ((stat.st_mtime_ns, stat.st_size), raw, gzip.compress(raw, 6, mtime=0), tag)
-        _, raw, gz, tag = entry
-        zipped = accepts_gzip(request.headers)
-        etag = f'"{tag}{"-gz" if zipped else ""}"'
-        headers = {"ETag": etag, "Vary": "Accept-Encoding"}
-        if zipped:
-            headers["Content-Encoding"] = "gzip"
-        if etag in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
-            return Response(status_code=304, headers=headers)
-        return Response(
-            (gz if zipped else raw) if request.method == "GET" else None,
-            media_type="text/javascript; charset=utf-8",
-            headers=headers,
-        )
 
     app.mount("/tico/ui", StaticFiles(directory=settings.ui_dir, html=True), name="ui-prefixed")
     app.mount("/", StaticFiles(directory=settings.ui_dir, html=True), name="ui")

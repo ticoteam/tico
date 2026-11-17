@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Builds the web UI into build/ui/, which is all the server serves of it (backend/ui_bundle_routes.py):
 //   app/a.js, ...       each TypeScript file under ui/ compiled on its own at the same path (ui/app/a.ts ->
-//                       build/ui/app/a.js), types stripped, with its source map beside it. The overview's modules and the
-//                       service worker are served from here, and the unit tests read these files.
+//                       build/ui/app/a.js), types stripped, with its source map beside it. The service worker is served from
+//                       here, and the unit tests read these files.
 //   bundle/             the bundle: the files index.html lists between its bundle markers, each minified, in that order,
 //                       cut between files into parts of at most PART_BYTES (WebKit's disk cache keeps nothing larger than
 //                       an eighth of its size); the page parts (ui/parts.json) cut out as parts of their own; theme.ts and
@@ -286,7 +286,7 @@ async function build() {
   return {count: tsFiles.length, parts: every.length};
 }
 
-// Every input under ui/ the build reads: a change to one rebuilds (tests and the overview's own page are not inputs).
+// Every input under ui/ the build reads: a change to one rebuilds (tests are not inputs).
 const watched = name => !name.startsWith('tests/') && !name.split('/').includes('node_modules') && /\.(?:ts|css|js|html|json)$/.test(name);
 
 async function main() {
