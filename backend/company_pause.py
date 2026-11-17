@@ -10,8 +10,8 @@ pause (`pause_bot`), the same kind of hold on one bot.
 - A pause or resume that changes nothing (already paused, or nothing to resume) succeeds and says so, and the first
   pauser stays on record.
 - Separate from a bot's own pause (an open `paused` hold on the bot, `pause_bot`): resuming the company does not lift a
-  bot paused on its own. `read` counts those bots. A bot's pause also keeps bots.state 'paused', the lifecycle gate
-  the rest of Tico reads (placement, routines, deliveries, its key): `pause_bot` and `resume_bot` write both.
+  bot paused on its own. `read` counts those bots. The bot's hold also sets bots.state 'paused', the switch the rest
+  of Tico reads (placement, routines, deliveries, its key): the hold keeps who, why and the history.
 - Separate from the billing pause (`company_billing.paused`): this module never reads or writes it.
 - While it is on record no new turn starts: the claim refuses every bot (`company_paused`, read through
   backend/holds.py), queued work waits with a held line on its task, and task cards say the company is paused.
@@ -75,18 +75,16 @@ def record(c: sqlite3.Connection) -> Record | None:
 
 
 def pause_bot(c: sqlite3.Connection, actor: str, bot: str, reason: str = "") -> None:
-    """A bot's own pause: an open `paused` hold on it (the first pauser stays on record) and bots.state 'paused'."""
+    """A bot's own pause: an open `paused` hold on it, the first pauser kept on record. The hold sets bots.state
+    'paused' (holds.STATE_KINDS)."""
     if not holds.get(c, PAUSED, "bot", bot):
         holds.put(c, PAUSED, "bot", bot, actor=actor, reason=reason)
-    c.execute("UPDATE bots SET state='paused' WHERE id=?", (bot,))
 
 
-def resume_bot(c: sqlite3.Connection, actor: str, bot: str, state: str = "active") -> None:
+def resume_bot(c: sqlite3.Connection, actor: str, bot: str) -> None:
     """End a bot's own pause, kept as history: a person's resume, else BotOps's (or Tico's for it). A bot still
-    'paused' takes `state`."""
-    how = "person" if actor.startswith("human:") else "botops"
-    holds.release(c, PAUSED, "bot", bot, actor=actor, how=how)
-    c.execute("UPDATE bots SET state=? WHERE id=? AND state='paused'", (state, bot))
+    'paused' with no other stopping hold is active again (holds.STATE_KINDS)."""
+    holds.release(c, PAUSED, "bot", bot, actor=actor, how="person" if actor.startswith("human:") else "botops")
 
 
 def bots_paused_on_own(c: sqlite3.Connection) -> int:

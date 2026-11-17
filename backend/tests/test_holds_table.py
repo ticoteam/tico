@@ -223,3 +223,24 @@ def test_every_way_a_bot_is_paused_or_resumed_opens_or_releases_its_hold_and_the
         assert bool(hold()) == (status == "paused")
     with api.app.state.store.read() as c:
         assert H.bot(c, "ops")["state"] == "planned"
+
+
+def test_a_bots_pause_hold_is_its_state_switch_but_never_wakes_an_archived_or_quarantined_bot(api):
+    """holds.STATE_KINDS: the open hold sets bots.state 'paused' on an active bot only, and its release sets it active
+    only while the bot is still 'paused'."""
+    with api.app.state.store.transaction() as c:
+        for bot, state in (("ops", "active"), ("cpo", "archived"), ("finance", "quarantined")):
+            c.execute("UPDATE bots SET state=? WHERE id=?", (state, bot))
+            company_pause.pause_bot(c, "human:ana", bot)
+        states = {bot: H.bot(c, bot)["state"] for bot in ("ops", "cpo", "finance")}
+        assert states == {"ops": "paused", "cpo": "archived", "finance": "quarantined"}
+        for bot in states:
+            company_pause.resume_bot(c, "human:ana", bot)
+            assert not holds.get(c, holds.PAUSED, "bot", bot)
+        assert {bot: H.bot(c, bot)["state"] for bot in states} == {
+            "ops": "active",
+            "cpo": "archived",
+            "finance": "quarantined",
+        }
+        company_pause.resume_bot(c, "human:ana", "ops")  # nothing open: nothing changes
+        assert H.bot(c, "ops")["state"] == "active"

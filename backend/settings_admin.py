@@ -1175,7 +1175,7 @@ class SettingsAdmin:
         if values["status"] == "paused":
             company_pause.pause_bot(c, who.actor, bot)  # its own pause is a hold (backend/holds.py)
         elif before.get("status") == "paused":
-            company_pause.resume_bot(c, who.actor, bot, values["status"])
+            company_pause.resume_bot(c, who.actor, bot)
         if before.get("status") == "paused" and values["status"] == "active":
             # Settings must lift the control API's pause too. An edit to an already-active
             # bot leaves deployment drains intact.

@@ -1913,7 +1913,6 @@ def prime_bot_rows(c, slugs):
             found = {row[column]: row for row in c.execute(f"SELECT * FROM {table} WHERE {column} IN ({marks})", part)}
             prime(c, statement, {(s,): found.get(s) for s in part})
         holds.prime(c, holds.RUNAWAY, "bot", part)
-        holds.prime(c, holds.PAUSED, "bot", part)
 
 
 def prime_status_lines(c, slugs):

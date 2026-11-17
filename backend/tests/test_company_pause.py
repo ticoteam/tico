@@ -26,10 +26,7 @@ def _bot_state(api, bot):
 
 def _set_bot_state(api, bot, state):
     with api.app.state.store.transaction() as c:
-        if state == "paused":
-            company_pause.pause_bot(c, "human:ana", bot)
-        else:
-            company_pause.resume_bot(c, "human:ana", bot, state)
+        c.execute("UPDATE bots SET state=? WHERE id=?", (state, bot))
 
 
 def _status_state(api, bot, token="ana-test"):
