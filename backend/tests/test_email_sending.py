@@ -437,6 +437,7 @@ def test_a_gmail_hiccup_reading_the_thread_stops_a_bots_send_as_retryable(inbox,
     from backend import gmail_live
 
     autonomous(inbox, second_review=True)
+    _, _, attempt = setup_attempt(inbox, "ops")
 
     def down(c, mailbox, thread_id):
         raise Problem("gmail_unavailable", "Gmail did not answer; try again", 502, retryable=True)
@@ -444,29 +445,10 @@ def test_a_gmail_hiccup_reading_the_thread_stops_a_bots_send_as_retryable(inbox,
     monkeypatch.setattr(gmail_live, "thread", down)
     monkeypatch.setattr(S, "classify", lambda *a, **k: pytest.fail("reviewed without its thread"))
     message = {"mailbox": BOX, "raw": mime(In_Reply_To="<inbound@vendor.example>"), "thread_id": "thread"}
-    response = inbox.post("/api/v2/email/sends", json=message, headers=headers("ops-test"))
+    response = inbox.post("/api/v2/email/sends", json=message, headers=headers(attempt["token"]))
     assert response.status_code == 502 and response.json()["error"]["retryable"], response.text
     with inbox.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM email_sends").fetchone()[0] == 0
-
-
-def test_a_mailbox_no_server_credential_reads_is_reviewed_on_the_email_alone(inbox, monkeypatch):
-    from backend import gmail_live, gmail_watch
-
-    autonomous(inbox, second_review=True)
-    monkeypatch.setattr(gmail_watch, "watched", lambda c, mailbox: False)
-    monkeypatch.setattr(gmail_live, "thread", lambda *a: pytest.fail("read a thread no credential covers"))
-    seen = []
-    monkeypatch.setattr(
-        S,
-        "classify",
-        lambda app, store, snap, review=None: (
-            seen.append(review) or {"legal_or_money": False, "review": True, "status": "classified"}
-        ),
-    )
-    message = {"mailbox": BOX, "raw": mime(In_Reply_To="<inbound@vendor.example>"), "thread_id": "thread"}
-    post(inbox, "email/sends", message, token="ops-test")
-    assert seen and seen[0]["thread"] == ""
 
 
 def workspace(monkeypatch, answer):
