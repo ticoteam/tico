@@ -11,7 +11,8 @@
 //! not added (`Runner::turn_key`). A home subscription (`file`: a ChatGPT login or an OpenAI key, Codex's `auth.json`)
 //! gets a home of its own, `<bot state>/subscriptions/<id>/<runtime>`, kept on this computer between turns so the
 //! CLI's threads resume there; that process's CODEX_HOME points at it and its conversation key names it, so no thread
-//! begun on another login is resumed on it. The sign-in file itself is there only while a process of a turn handed
+//! begun on another login is resumed on it. A Claude plan's threads stay in the turn's own home, so every Claude plan
+//! shares one conversation key (`Delivered::binding`) and a move between plans resumes the thread. The sign-in file itself is there only while a process of a turn handed
 //! that subscription runs: written 0600 when that runtime starts (`start`), removed when the last turn holding that
 //! home lets go of it (the turn moves to another runtime, `finish`, the vault's drop for a turn that ends early), and
 //! swept from every home when the runner starts (`sweep`), so taking a subscription off a computer, or deleting it,
@@ -87,11 +88,35 @@ pub struct Delivered {
     pub held: bool,
 }
 
+/// The conversation key's suffix every subscription whose threads live in the turn's own home shares (`binding`).
+pub const SHARED_BINDING: &str = ":subscriptions";
+
 impl Delivered {
-    /// The conversation key's suffix: a thread begun on one sign-in (the computer's own, another subscription) is
-    /// never resumed on this one, and a home subscription's threads live in that home.
+    /// The conversation key's suffix: a thread begun on the computer's own login is never resumed on a subscription,
+    /// nor the other way round. A subscription whose threads live in the turn's own home (an environment one, or a full
+    /// Claude login, whose config home links the turn's `projects`) shares one suffix with every other such: a move
+    /// between plans resumes the same thread, as Claude Code resumes a session begun under another account, of another
+    /// organization too (lanes::PLAN_SWITCH_RESUME). A Codex home's threads live in that home, so its suffix names it.
     pub fn binding(&self) -> Option<String> {
-        Some(format!(":subscription:{}", self.id))
+        Some(if self.shares_threads() {
+            SHARED_BINDING.into()
+        } else {
+            self.own_binding()
+        })
+    }
+
+    /// The suffix a runner before the shared one saved this subscription's threads under: a conversation that has
+    /// nothing under the shared one takes its thread from there, once.
+    pub fn legacy_binding(&self) -> Option<String> {
+        self.shares_threads().then(|| self.own_binding())
+    }
+
+    fn own_binding(&self) -> String {
+        format!(":subscription:{}", self.id)
+    }
+
+    fn shares_threads(&self) -> bool {
+        self.env.is_some() || self.home_env.is_some()
     }
 
     /// A plan login kept in a home of its own (a ChatGPT login): it also signs its CLI in for the commands of a turn
@@ -848,7 +873,9 @@ mod tests {
         );
         assert_eq!(env["ACME_KEY"], "acme");
         assert_eq!(got[0].billing, "subscription");
-        assert_eq!(got[0].binding().as_deref(), Some(":subscription:s1"));
+        // Claude keeps its threads in the turn's own home, so every plan shares one key; the plan's own is the old one.
+        assert_eq!(got[0].binding().as_deref(), Some(SHARED_BINDING));
+        assert_eq!(got[0].legacy_binding().as_deref(), Some(":subscription:s1"));
         // A variable that does not sign the runtime in is never set.
         let mut env2 = Env::new();
         let bad = json!([{"id": "s2", "runtime": "claude", "env": "PATH", "value": "/evil", "revision": 1}]);
@@ -875,6 +902,8 @@ mod tests {
             start(&mut got, "claude", &mut env);
             let home = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
             assert!(is_config_home(&env["CLAUDE_CONFIG_DIR"]));
+            // Its transcripts are the turn's own, so a move to or from another Claude plan resumes the thread.
+            assert_eq!(got[0].binding().as_deref(), Some(SHARED_BINDING));
             assert_eq!(
                 std::fs::read_link(home.join("projects")).unwrap(),
                 own.join("projects")
@@ -948,6 +977,7 @@ mod tests {
         );
         assert_eq!(env["CODEX_HOME"], home.display().to_string());
         assert_eq!(got[0].binding().as_deref(), Some(":subscription:s3"));
+        assert_eq!(got[0].legacy_binding(), None);
         // Codex refreshed it and writes a session; a second turn on the same home joins with the refreshed file.
         std::fs::write(&file, "{\"tokens\":2}").unwrap();
         std::fs::create_dir_all(home.join("sessions")).unwrap();

@@ -15,6 +15,9 @@ use crate::util::text_of;
 pub const FORK_SESSION: &str = "fork_session_v1";
 /// The runner starts a claim marked `fresh_session` on a new thread and keeps the conversation's saved one (execute.rs).
 pub const FRESH_SESSION: &str = "fresh_session_v1";
+/// A Claude thread is keyed by no one plan, so a move between plans resumes it (model_subscriptions::Delivered::binding);
+/// without it the server starts a computer's Claude sessions fresh on each move.
+pub const PLAN_SWITCH_RESUME: &str = "plan_switch_resume_v1";
 
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
@@ -45,6 +48,7 @@ pub const CAPABILITIES: &[&str] = &[
     "make_page",
     FORK_SESSION,
     FRESH_SESSION,
+    PLAN_SWITCH_RESUME,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
@@ -195,6 +199,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in [
+            PLAN_SWITCH_RESUME,
             crate::claude_login::CAPABILITY,
             crate::browser::CAPABILITY,
             FRESH_SESSION,
@@ -413,7 +418,14 @@ mod tests {
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
-            .filter(|c| ![FRESH_SESSION, crate::claude_login::CAPABILITY].contains(c))
+            .filter(|c| {
+                ![
+                    FRESH_SESSION,
+                    crate::claude_login::CAPABILITY,
+                    PLAN_SWITCH_RESUME,
+                ]
+                .contains(c)
+            })
             .collect();
         assert_eq!(
             refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
@@ -437,14 +449,22 @@ mod tests {
     fn the_runner_offers_a_fresh_session_and_an_older_server_drops_only_that() {
         assert!(CAPABILITIES.contains(&FRESH_SESSION));
         let all = json!({"capabilities": CAPABILITIES});
-        // The newest goes first: full Claude logins, then a fresh session.
+        // The newest goes first: resuming across plans, full Claude logins, then a fresh session.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(crate::claude_login::CAPABILITY)
+            Some(PLAN_SWITCH_RESUME)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
+            .filter(|c| *c != PLAN_SWITCH_RESUME)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(crate::claude_login::CAPABILITY)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
             .filter(|c| *c != crate::claude_login::CAPABILITY)
             .collect();
         assert_eq!(

@@ -33,7 +33,8 @@ computers), every 15 minutes with jitter for a plan on a computer, at most every
 15 minutes on failure and honouring Retry-After (24 hours at most). A refused or failed read never asks for a Reconnect.
 The week, the 5-hour window and each model's week are kept as the plan's reading (subscription_refresh.plan_key), which
 the Subscriptions row and a person's plan order read; a plan at 95% or more of a window comes after the others in that
-order until it is back under 90% (`near`). Only a live refusal holds a plan (login_holds).
+order until it is back under 90% or that window has reset (`near`). Only a live refusal holds a plan (login_holds),
+and a plan near a limit is still used when every plan of the set is.
 
 The login itself lasts about 29 days from the sign-in and a refresh does not extend it: Settings shows "Reconnect by"
 a few days before (`login_expires_at`).
@@ -701,6 +702,24 @@ def _window(w: "Window | None", within: timedelta) -> Row | None:
         return None
     resets = _instant(w.resets_at, within)
     return {"used_percent": w.used_percent, "resets_at": resets} if resets else None
+
+
+def near(meta: Row) -> bool:
+    """Whether the plan's reading (`meta`, as `usage_result` keeps it) still puts it near a limit: it was near when
+    read, and a window that has not reset since is still at or over CLEAR. Each window counts only until its own reset,
+    so a plan near its 5-hour limit is not ordered last once that window has reset, read again or not."""
+    if not meta.get("near"):
+        return False
+    now = datetime.now(timezone.utc)
+    windows = [meta.get("reading"), meta.get("five_hour"), *(meta.get("models") or [])]
+    for w in windows:
+        if not isinstance(w, dict):
+            continue
+        percent = cast(Row, w).get("used_percent")
+        resets = H.parse_ts(cast(Row, w).get("resets_at"))
+        if isinstance(percent, (int, float)) and percent >= CLEAR and resets and resets > now:
+            return True
+    return False
 
 
 def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:

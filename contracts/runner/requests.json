@@ -1055,7 +1055,8 @@
        "harness_allocation_v1",
        "make_page",
        "memory_tidy_keep_v1",
-       "browser_v1"
+       "browser_v1",
+       "plan_switch_resume_v1"
       ],
       "type": "string"
      },

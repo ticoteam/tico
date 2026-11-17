@@ -1666,6 +1666,7 @@ class Heartbeat(Contract):
             "make_page",
             "memory_tidy_keep_v1",
             "browser_v1",  # website tools' browser commands (backend/browser_commands.py)
+            "plan_switch_resume_v1",  # a Claude thread resumes on the plan a set moves to (backend/model_subscriptions.py)
         ]
     ] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both

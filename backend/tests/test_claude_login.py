@@ -499,6 +499,19 @@ def test_usage_is_read_on_a_schedule_waits_out_a_429_and_orders_a_plan_near_its_
     assert sub_row(api, sid)["account"].startswith("bo@")
 
 
+def test_a_plan_near_a_limit_comes_last_only_until_that_window_resets():
+    week = {"used_percent": 40, "resets_at": at(days=3)}
+    meta = {"near": True, "reading": week, "five_hour": {"used_percent": 96, "resets_at": at(hours=2)}}
+    assert CL.near(meta)
+    # The 5-hour window has reset since the read: the plan is not ordered last for it, read again or not.
+    assert not CL.near({**meta, "five_hour": {"used_percent": 96, "resets_at": at(hours=-1)}})
+    # Near until back under 90% of a window still running; never near without the read saying so.
+    assert CL.near(
+        {**meta, "five_hour": None, "models": [{"model": "Opus", "used_percent": 92, "resets_at": at(days=3)}]}
+    )
+    assert not CL.near({**meta, "near": False})
+
+
 def test_a_login_near_its_end_says_by_when_to_reconnect(api):
     setup(api)
     company(api)

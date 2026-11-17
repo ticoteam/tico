@@ -1952,6 +1952,9 @@ impl Runner {
         let persistent = crate::harness_tools::caps_of(&config).persistent_session;
         let session_runtime = thread_runtime(&runtime, &text_of(&config["harness"]));
         let mut conv = key.clone();
+        // The key a thread of this turn's subscription was saved under before every Claude plan shared one
+        // (model_subscriptions::Delivered::legacy_binding).
+        let mut legacy_conv: Option<String> = None;
         // A stateless bot (the Rules Owner) keeps nothing from one task to the next: a task resumes only its own session, and a
         // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
         let stateless = crate::continuity::stateless(&config);
@@ -2141,8 +2144,12 @@ impl Runner {
                 // A thread begun on one login is never resumed on another.
                 conv = format!("{conv}:profile:{}:{}", p.name, p.binding());
             }
-            if let Some(b) = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).and_then(|d| d.binding()) {
-                conv.push_str(&b);      // nor across the computer's login and its subscriptions
+            if let Some(d) = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime) {
+                // nor across the computer's login and its subscriptions; one Claude plan's thread resumes on another
+                legacy_conv = d.legacy_binding().map(|old| format!("{conv}{old}"));
+                if let Some(b) = d.binding() {
+                    conv.push_str(&b);
+                }
             }
             let start_attempt = attempt.clone();
             if p.has_checkout() {
@@ -2167,12 +2174,17 @@ impl Runner {
             }
             // Task placement can wait for git, retry its worktree, then wait indefinitely for the checkout.
             // Keep the delivery lease and all lane/checkout locks, but hold no start place during that wait.
-            conv.push_str(self.pre_start_lock(&start_attempt, &flags, async {
+            let placed = self.pre_start_lock(&start_attempt, &flags, async {
                 self.place_turn(p, &mut attempt, &env, &flags.lost).await.map_err(Fail::runtime)
-            }).await?);
+            }).await?;
+            conv.push_str(placed);
+            if let Some(old) = legacy_conv.as_mut() {
+                old.push_str(placed);
+            }
             if source_resume.is_some() {
                 // Save and lookup share the actual login binding and confirmed checkout placement.
                 conv = crate::source_resume::scope(&attempt, selected.as_ref(), p.session_path.is_some());
+                legacy_conv = None;
             }
             mark("placed", &aid);
             execution_path = p.execution_path.clone();
@@ -2208,7 +2220,7 @@ impl Runner {
                 s.profile != selected.as_ref().map_or("", |p| p.name.as_str()) || s.epoch != clear_epoch(&attempt, &key));
             release_run = (fresh_session || !fork_thread.is_empty()) && continuing.is_empty() && !side_run && !fresh_chat;
             if release_run {
-                let adopted = if conv == key { adopted_key(&key) } else { None };
+                let adopted = if conv == key { adopted_key(&key) } else { legacy_conv.clone() };
                 one_off = self.state.session(&bot, &conv, &session_runtime)?.is_some()
                     || match adopted {
                         Some(old) => self.state.session(&bot, &old, &session_runtime)?.is_some(),
@@ -2226,6 +2238,22 @@ impl Runner {
                     previous = self.state.session(&bot, &old, &session_runtime)?;
                     if let Some(thread) = previous.as_ref() {
                         self.state.save_session(&bot, &key, &session_runtime, thread)?;
+                    }
+                }
+            }
+            if previous.is_none() && !(side_run || binding_changed || fresh_chat || release_run) {
+                // A Claude plan's thread an older runner saved under the plan's own key is taken over once, unless a
+                // Clear (or a person's change of sign-in) moved its epoch since.
+                if let Some(old) = legacy_conv.as_deref() {
+                    let moved = match clear_epoch(&attempt, &key) {
+                        Some((conversation_id, epoch)) => self.state.epoch_moved(&bot, &conversation_id, old, epoch)?,
+                        None => false,
+                    };
+                    if !moved {
+                        previous = self.state.session(&bot, old, &session_runtime)?;
+                        if let Some(thread) = previous.as_ref() {
+                            self.state.save_session(&bot, &conv, &session_runtime, thread)?;
+                        }
                     }
                 }
             }
@@ -2306,8 +2334,15 @@ impl Runner {
                 session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
             } else if let Some(prev) = &previous {
                 // Be very reluctant to start a new session: a refusal is retried once, and only a thread this
-                // computer does not have, or a second refusal, gives it up.
-                match self.resume_saved(h, prev, &settings, &attempt, &flags).await {
+                // computer does not have, or a second refusal, gives it up. One whose transcript the provider refused
+                // (continuity::transcript_refused, after a move to another plan) is not tried again.
+                let refused = self.state.repo_rules(&crate::continuity::refused_key(prev), None)?.as_deref() == Some("1");
+                let tried = if refused {
+                    Err((false, crate::continuity::TRANSCRIPT_REFUSED.to_string()))
+                } else {
+                    self.resume_saved(h, prev, &settings, &attempt, &flags).await
+                };
+                match tried {
                     Ok(t) => {
                         thread = Some(t);
                         resumed = true;
@@ -2543,6 +2578,18 @@ impl Runner {
             drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
             turn = Some(drove.turn.clone());
             h.compaction_refresh(&th, None);
+            if resumed && drove.outcome == "failed" && !drove.acted
+                && [goal.failure.as_deref().unwrap_or_default(), drove.reply.as_str()].iter().any(|e| crate::continuity::transcript_refused(e))
+            {
+                // The provider will not take this session's transcript (a plan moved to another account it does not
+                // accept it from): never silently, the next turn starts a new session told what the room said since.
+                for thread in [th.clone(), h.session_id(&th)] {
+                    self.state.repo_rules(&crate::continuity::refused_key(&thread), Some("1"))?;
+                }
+                let line = "The provider refused this session's transcript; the next turn starts a new session, told what was said since.";
+                log(&format!("Tico runner: {bot}: {line}"));
+                self.diagnose(&aid, line);
+            }
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
@@ -5121,6 +5168,31 @@ mod tests {
     }
 
     /// A server that answers `{}` to every request (events: acknowledged) and keeps each one: (method, path, JSON body).
+    /// What `credential-runtime` answers a turn whose run token is the key: its grants and subscriptions.
+    fn grants() -> &'static Mutex<std::collections::HashMap<String, Value>> {
+        static GRANTS: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Value>>> =
+            std::sync::OnceLock::new();
+        GRANTS.get_or_init(Default::default)
+    }
+
+    /// The grants of the turn whose run token a request's head carries.
+    fn granted(head: &str) -> Option<Value> {
+        let grants = grants().lock().unwrap();
+        grants
+            .iter()
+            .find(|(token, _)| head.contains(token.as_str()))
+            .map(|(_, answer)| answer.clone())
+    }
+
+    /// A turn signed in with the Claude plan `id` (a setup-token subscription): its `attempt` fields for the rig.
+    fn on_plan(id: &str) -> Value {
+        let token = format!("run-{id}-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(token.clone(), json!({"subscriptions": [{
+            "id": id, "runtime": "claude", "kind": "claude_token", "env": "CLAUDE_CODE_OAUTH_TOKEN",
+            "value": format!("sk-ant-oat01-synthetic-{id}-0123456789abcdef"), "revision": 1, "billing": "subscription"}]}));
+        json!({"attempt": {"token": token, "credential_vault": true}})
+    }
+
     async fn recording_server() -> (
         String,
         Arc<Mutex<Vec<(String, String, Value)>>>,
@@ -5286,6 +5358,7 @@ mod tests {
                         None if model.is_some() => model.unwrap().1,
                         None if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
                         None if path.ends_with("/start-place") => json!({"reserved": !waiting}),
+                        None if path.contains("/credential-runtime") => granted(&text).unwrap_or_else(|| json!({})),
                         None => json!({}),
                     }
                     .to_string();
@@ -6280,6 +6353,7 @@ mod tests {
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
              for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
              if [ -e '{d}/edits-'$n ]; then mkdir -p memory && echo 'rewritten' > memory/learnings.md && echo 'stray' > stray.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'a pass commit' && echo 'more' >> memory/learnings.md; fi\n\
+             if [ -e '{d}/refuses-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"API Error: 400 invalid_request_error: messages.1.content.0: Invalid signature in thinking block\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 0}}}}'; exit 1; fi\n\
              if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
@@ -6679,6 +6753,114 @@ mod tests {
                 "{p}"
             );
         }
+    }
+
+    /// Each Claude process's arguments, one line per process.
+    fn claude_args(dir: &Path) -> Vec<Vec<String>> {
+        std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .map(|l| l.split_whitespace().map(String::from).collect())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_move_to_another_claude_plan_resumes_the_same_session_there() {
+        // The computer's set moves from Plan A to Plan B and back between turns: Claude Code's transcript is the
+        // bot's own, so each next turn `--resume`s the session the first began, on the plan it moved to.
+        let (threads, prompts, completions, _, _, dir) = claude_rig_kept(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-a")],
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+        )
+        .await;
+        let args = claude_args(&dir);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert!(
+            args[0]
+                .windows(2)
+                .any(|w| w == ["--session-id", threads[0].as_str()]),
+            "{args:?}"
+        );
+        for n in [1, 2] {
+            assert!(
+                args[n]
+                    .windows(2)
+                    .any(|w| w == ["--resume", threads[0].as_str()]),
+                "{args:?}"
+            );
+            assert_eq!(session_of(&completions[n]).0, "resumed");
+        }
+        assert!(!prompts[1].contains("New session:"), "{}", prompts[1]);
+    }
+
+    #[tokio::test]
+    async fn a_session_missing_after_a_move_to_another_plan_starts_fresh_with_the_handoff_note() {
+        let (threads, prompts, completions, _) = claude_rig(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-b")],
+            &[],
+            &[1],
+            &[],
+            json!({}),
+            |_| (),
+        )
+        .await;
+        // Process 1 finds no transcript; Claude begins a new session in its place, told what was said since.
+        assert_eq!(prompts.len(), 4, "{prompts:?}");
+        assert!(
+            prompts[2].contains("New session: your previous session here was not on this computer")
+                && prompts[2].contains("Question 1"),
+            "{}",
+            prompts[2]
+        );
+        assert_eq!(session_of(&completions[1]).1, json!("not_found"));
+        assert_eq!(session_of(&completions[2]).0, "resumed");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+    }
+
+    #[tokio::test]
+    async fn a_session_the_provider_refuses_on_the_new_plan_is_replaced_and_says_so() {
+        // Turn 1 resumes on Plan B and Claude's API refuses the transcript: that turn fails and says so, and the next
+        // starts a new session, told what was said since and why.
+        let (threads, prompts, completions, _, seen, dir) = claude_rig_each_turn(
+            &[on_plan("plan-a"), on_plan("plan-b"), on_plan("plan-b")],
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+            |n, projects| {
+                if n == 1 {
+                    std::fs::write(projects.parent().unwrap().join("refuses-1"), "").unwrap();
+                }
+            },
+        )
+        .await;
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(prompts.len(), 3, "{prompts:?}");
+        assert_eq!(threads[1], threads[0]);
+        assert_eq!(completions[1]["outcome"], "failed");
+        let told = seen.iter().any(|(_, path, body)| {
+            path.ends_with("/attempts/a-claude-1/events")
+                && body
+                    .to_string()
+                    .contains("refused this session's transcript")
+        });
+        assert!(told, "{seen:?}");
+        assert_ne!(threads[2], threads[0], "{threads:?}");
+        assert!(
+            prompts[2].contains("New session: your previous session here could not be resumed")
+                && prompts[2].contains("Question 2"),
+            "{}",
+            prompts[2]
+        );
+        let (kind, why, detail) = session_of(&completions[2]);
+        assert_eq!((kind.as_str(), why), ("new", json!("resume_failed")));
+        assert_eq!(detail, json!(crate::continuity::TRANSCRIPT_REFUSED));
     }
 
     #[tokio::test]

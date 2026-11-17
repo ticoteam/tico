@@ -32,6 +32,15 @@ A bot there that was Rate limited on the
 old sign-in is re-judged against the one it runs on now, so a bot waiting on the old plan's limit resumes on the new
 plan at once (execution.lift_limited_on_computer).
 
+A computer given a person's plans moves to another of them on its own, between turns (`settle`). For Claude that move
+keeps every session: Claude Code keeps a session's transcript in the bot's own `~/.claude/projects` whichever plan
+signs it in (a setup-token from the environment, a full login through a config home that links `projects`), and
+resumes it under another account, of another organization too. A runner that says `plan_switch_resume_v1` keys a
+Claude thread by no one plan, so the next turn on the new plan resumes the same session; should that resume fail (the
+transcript is gone, or Claude refuses it), the turn starts a new session told what the room said since, and says so
+(runner-rs/src/continuity.rs). Codex keeps its threads in each plan's own home, so a move there, or on an older runner,
+still starts that runtime's sessions fresh. Only a person's change asks first (`confirm_restart`) and starts fresh.
+
 Usage limits: a subscription is one login wherever it runs, so a limit met on it holds it on every computer it is given
 to until the reset (login_holds `sub:<id>`). While held it is passed over like one that needs reconnecting: turns there
 run on the computer's own login, else the Gateway under the company's choice, else wait. Saving a new value ends its
@@ -437,6 +446,8 @@ def still_given(c, runner_id, runtime, subscription_id):
 
 RUNNER_READINESS_SQL = "SELECT readiness FROM runners_with_state WHERE id=?"
 RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners_with_state WHERE id=? AND revoked_at IS NULL"
+# A runner that keys a Claude thread by no one plan, so a move between plans resumes it (runner-rs/src/execute.rs).
+RESUME_CAPABILITY = "plan_switch_resume_v1"
 
 
 def _held(c, sid, runtime, loads=None):
@@ -839,7 +850,7 @@ def _plan_usage(c, sub, runtime, ctx):
     The most-used window wins, its freshest report breaking a tie. Otherwise the reason is what the data tells: not on a
     computer, a reconnect due, a computer too old, a plan that sends no percent, readings from before it was added,
     computers offline, or a computer yet to report."""
-    from . import model_login, subscription_refresh as SR
+    from . import claude_login, model_login, subscription_refresh as SR
     from .subscriptions import WINDOWS, computer_logins, weekly_snapshot
 
     runners = ctx["runners"]
@@ -918,7 +929,7 @@ def _plan_usage(c, sub, runtime, ctx):
     ]
     extra = {
         **({"models": models} if models else {}),
-        **({"near": True} if sub["kind"] == "claude_login" and meta.get("near") else {}),
+        **({"near": True} if sub["kind"] == "claude_login" and claude_login.near(meta) else {}),
     }
     if best:
         used, _, label, resets = best
@@ -1267,9 +1278,24 @@ def _signed_in_with(c, sid):
 def _effect_changed(c, settings, sid):
     """The subscription stopped counting (it needs reconnecting): each computer signing in with it now signs that
     runtime in another way, so its sessions there start fresh. Its runs are not stopped: the refused one already ended.
-    (A reconnect restarts them, `save`.)"""
+    (A reconnect restarts them, `save`.) A computer given a person's plans whose next plan keeps its sessions
+    (`keeps_sessions`) is left as it is: its next claim moves the set (`settle`)."""
     for runner_id, runtime in _signed_in_with(c, sid):
-        _reset(c, settings, runner_id, runtime)
+        on_set = c.execute(
+            "SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=? AND person<>''", (runner_id, runtime)
+        ).fetchone()
+        if not (on_set and keeps_sessions(c, runner_id, runtime)):
+            _reset(c, settings, runner_id, runtime)
+
+
+def keeps_sessions(c, runner_id, runtime):
+    """Whether an automatic move between plans for `runtime` on this computer keeps its sessions: Claude, whose
+    transcripts stay in the bot's own home whichever plan signs a turn in, on a runner that resumes a Claude thread on
+    the plan it moved to (`RESUME_CAPABILITY`). Codex keeps its threads in each plan's own home."""
+    if runtime != "claude":
+        return False
+    found = c.execute(RUNNER_CAPABILITIES_SQL, (runner_id,)).fetchone()
+    return bool(found) and RESUME_CAPABILITY in (H._json(found[0], []) or [])
 
 
 def _confirm(plan, extra=None):
@@ -1677,9 +1703,11 @@ def moves_on(c, runner_id, runtime):
 def settle(c, settings, runner_id, chosen):
     """A claim on a computer given a person's plans: when the turn signs in with another plan than the set was on (the
     old one is held, needs reconnecting, is gone or left the set, or a hold has ended after every plan was held), the
-    set moves to it, between turns, never in one: every session of that runtime on the computer starts fresh, as a
-    change of subscription does, and the move is an event (`subscription.set_moved`: computer, tool, person, from, to,
-    why). Runs already going on the old plan are left to finish. Call it before the claim reads its session epochs."""
+    set moves to it, between turns, never in one, and the move is an event (`subscription.set_moved`: computer, tool,
+    person, from, to, why, and how many sessions were reset). Claude's sessions are kept, so the next turn resumes each
+    on the new plan (`keeps_sessions`); otherwise every session of that runtime on the computer starts fresh, as a
+    change of subscription does. Runs already going on the old plan are left to finish. Call it before the claim reads
+    its session epochs."""
     for item in chosen:
         runtime, sub = item["runtime"], item["subscription"]
         entry = _given(c).get((runner_id, runtime))
@@ -1690,7 +1718,8 @@ def settle(c, settings, runner_id, chosen):
             "UPDATE computer_subscriptions SET subscription_id=? WHERE runner_id=? AND runtime=?",
             (sub["id"], runner_id, runtime),
         )
-        reset = _reset(c, settings, runner_id, runtime)
+        kept = keeps_sessions(c, runner_id, runtime)
+        reset = 0 if kept else _reset(c, settings, runner_id, runtime)
         H.event(
             c,
             H.KEEPER,
@@ -1704,6 +1733,7 @@ def settle(c, settings, runner_id, chosen):
                 "to": sub["id"],
                 "why": why,
                 "sessions_reset": reset,
+                "sessions_kept": kept,
             },
         )
 
