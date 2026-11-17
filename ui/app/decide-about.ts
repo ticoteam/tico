@@ -91,31 +91,26 @@ function decideAboutWho(it: NeedsEntry, kind: AskKind, t: DecAboutTask | null): 
     a heading over it (a bare OK's task title), and then no "No details." when the task has no text. */
 function decideAboutHTML(it: NeedsEntry, kind: AskKind, head = ''): string {
   const v = decideAboutOf(it), t = v?.task || null;
-  // A bot's ❓ is the heading on the right already: the left is its task alone.
-  const quote = kind === 'mention' && it.kind !== 'question' && it.line ? `<blockquote class="dc-quote">${esc(it.line)}</blockquote>` : '';
+  // A message in its chat on the right (a bot's ❓, an @ of the person) is there already: the left is its task alone.
+  const quote = kind === 'mention' && !decideChatOf(it) && it.line ? `<blockquote class="dc-quote">${esc(it.line)}</blockquote>` : '';
   if (!v || v.state === 'loading') return `<div class="dc-doc">${head}${decideAboutWho(it, kind, null)}${quote}${skelRows(4)}</div>`;
   if (v.state === 'failed') return `<div class="dc-doc">${head}${decideAboutWho(it, kind, null)}${quote}<p class="muted">${esc(v.error)}</p></div>`;
   const text = decideAboutText(t);
   const body = text ? `<div class="md dc-md">${md(text)}</div>` : head ? '' : '<p class="muted">No details.</p>';
   // Nothing to show (no heading, text, links or files): marked, so a phone opens on the question instead (decide.css).
-  const chips = decideAboutChips(t!, text), bare = !head && !text && !chips && !quote ? ' dc-bare' : '';
+  const chips = decideAboutChips(t!), bare = !head && !text && !chips && !quote ? ' dc-bare' : '';
   return `<div class="dc-doc${bare}">${head}${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
 }
-/** The task's links, files and the pages its text names (`page:<id>@<n>`), as chips: a file opens in the viewer, a page
-    at its version. */
-function decideAboutChips(t: DecAboutTask, text: string): string {
+/** The task's links and files, as chips: a file opens in the viewer. A document its text names (`page:<id>@<n>`) is a
+    chip in the text itself, with its title (markdown.ts docRefs). */
+function decideAboutChips(t: DecAboutTask): string {
   const chips: string[] = [];
   // What a person can open: a task's PR, worktree and session links are the builder's, as on the task page.
   for (const l of t.links || []) if (l.url && !['pr', 'worktree', 'session'].includes(String(l.kind || ''))) chips.push(`<a class="dc-ref-chip" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.title || l.url)}</a>`);
   for (const f of t.attachments || []) if (f.id) chips.push(`<a class="dc-ref-chip" href="${API}/v2/files/${encodeURIComponent(f.id)}">${esc(f.name || 'File')}</a>`);
-  const pages = new Set<string>();
-  for (const m of text.matchAll(/\bpage:([A-Za-z0-9_-]{6,80})(?:@(\d+))?/g)) {
-    if (pages.has(m[0])) continue;
-    pages.add(m[0]);
-    const href = PAGE_ROUTE + encodeURIComponent(m[1]!) + (m[2] ? `?v=${m[2]}` : '');
-    chips.push(`<a class="dc-ref-chip" href="${esc(href)}">Page${m[2] ? ` v${esc(m[2])}` : ''}</a>`);
-  }
-  return chips.length ? `<div class="dc-refs">${chips.join('')}</div>` : '';
+  // The same link or file named twice is one chip.
+  const one = [...new Set(chips)];
+  return one.length ? `<div class="dc-refs">${one.join('')}</div>` : '';
 }
 
 // ---- a place in the app

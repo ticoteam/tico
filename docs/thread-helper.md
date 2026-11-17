@@ -9,8 +9,8 @@ Threads that need the person sit in the same [Needs you](tasks.md#needs-you) lis
 
 | Item | Listed when | Cleared when |
 |---|---|---|
-| **Mention** | A person @mentioned them (a bot's @ only marks the thread unread unless it replies to them, and a bot that needs a person asks through a requirement or a question task) | They post in that thread after it, or it is deleted |
-| **Reply** | A person or a bot replied to a message of theirs | They post in that thread after it |
+| **Mention** | A person @mentioned them (a bot's @ or reply only marks the thread unread: a bot that needs a person marks its message ❓) | They post in that thread after it, or it is deleted |
+| **Reply** | A person replied to a message of theirs | They post in that thread after it |
 | **Direct message** | A DM (a one-to-one or a migrated group DM) has a message past their read point that they may read and that is unread for them: from a person, addressed to them, or a bot's post in a group DM they are in | They read the DM |
 | **Held** | A write held for review (org rules, `org_rule_holds`) that they review, their own held post, or one their bot posted for them (the person its bot reports up to) | The reviewer sends or keeps it; the person withdraws it (keeps it blocked) |
 | **Paused** | A thread's bot replies were held back by the loop guard (`TICO_THREAD_LOOP_GUARD`, 6 an hour by default) | Its held replies resume, when a person posts in the thread or the hour passes |

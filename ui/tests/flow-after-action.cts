@@ -113,8 +113,12 @@ const BOUND = new Set([3, 4, 13, 14]);
     /** The pane after an action: `next` on screen with its buttons, or All done; the top bar whole; the undo notice
         plain text in the top bar, over nothing, and nothing moved for it. */
     const whole = async (what: string, next: string | null) => {
-      if (next) await side.locator(`[data-key="${next}"]`).waitFor();
+      // An item that is its chat (an @, a ❓) may hold its row in the top bar, its own block in the pane then empty.
+      if (next) await side.locator(`[data-key="${next}"]`).waitFor({state: 'attached'});
       else await side.locator('.dc-done h2', {hasText: 'All done'}).waitFor();
+      // A chat's composer mounts a beat after its item.
+      await page.waitForFunction(() => [...document.querySelectorAll('#need-card .dc-side [data-key] button, #need-card .dc-side .dc-done button, #need-card .dc-chat button')]
+        .some(e => e.getClientRects().length > 0), null, {timeout: 3000}).catch(() => {});
       const look = await page.evaluate(() => {
         const q = (s: string) => document.querySelector<HTMLElement>(`#need-card ${s}`);
         const box = (e: HTMLElement | null) => e ? e.getBoundingClientRect() : null;
@@ -267,10 +271,10 @@ const BOUND = new Set([3, 4, 13, 14]);
       await whole(`${at} Snooze`, 'v90:r90');
       await undo(`${at} Snooze`, 'v8:r8', 'v90:r90');
 
-      // Skip: the next item, nothing answered.
+      // Skip: the next item, nothing answered. An @ is its chat, so Skip rides in the top bar on a wide screen.
       await open([mention(9), mention(91)]);
       n = writes.length;
-      await side.locator('[data-dc="skip"]').click();
+      await page.locator('#need-card [data-dc="skip"]').click();
       await whole(`${at} Skip`, 'mn91');
       assert.equal(writes.length, n, 'Skip sends nothing');
 
