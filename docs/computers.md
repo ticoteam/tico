@@ -346,6 +346,13 @@ one older than a day is marked as possibly out of date, and after its reset it r
 fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Details are in
 [Signed-in account and usage windows](#signed-in-account-and-usage-windows).
 
+An admin can read a Claude plan's week now: the **↻** beside its row's **⋯** menu on the Subscriptions page asks one
+computer that has the plan. That computer sends a one-line prompt to Haiku with the plan's token, in a temporary home it
+deletes after, and sends back the week's percent and reset from that reply. A setup-token can only run prompts, so
+Claude Code's `/usage` cannot read it; the prompt uses a few tokens of the plan. The token is used for that one read and
+is not kept there. One read runs at a time, and a plan can be read again a minute after the last. ChatGPT plans have no
+such button.
+
 ## The computers list
 
 One row per computer. On a phone the table scrolls sideways inside its card.
