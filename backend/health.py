@@ -2328,7 +2328,7 @@ def _failed_why(row):
     return (reason.strip().splitlines() or ["Attempt failed before completion"])[0][:300]
 
 
-def _fallbacks(c, loads=None):
+def _fallbacks(c, settings, loads=None):
     """(on fallback, limited, carrying): bots whose latest run in the last day ran on something other than what the bot
     is set to, with that harness, the model that did the work, the runtime it is set to when the claim moved it to the
     Gateway because that runtime is not signed in on its computer (`waiting_for_sign_in`, backend/models_preset.py),
@@ -2370,7 +2370,7 @@ def _fallbacks(c, loads=None):
     limited = [
         {"bot": r["bot"], "changed_at": r["changed_at"]}
         for r in c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited' ORDER BY changed_at,bot")
-        if cooling_off(c, r["bot"], loads)
+        if cooling_off(c, settings, r["bot"], loads)
     ]
     return on, limited, carrying
 
@@ -2939,7 +2939,7 @@ def view(c, who, settings, auth, github, config, filing=False):
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
     blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
-    on_fallback, limited, carrying = _fallbacks(c, loads) if kind != "bot" else ([], [], set())
+    on_fallback, limited, carrying = _fallbacks(c, settings, loads) if kind != "bot" else ([], [], set())
     if not full and (on_fallback or limited):  # the same rule as `stuck`: only bots the caller may read
         readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
         on_fallback = [row for row in on_fallback if readable.get(row["bot"], auth.FULL)["read"]]

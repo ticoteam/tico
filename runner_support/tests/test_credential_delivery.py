@@ -36,6 +36,7 @@ from runner_support.tests.helpers.vendor import HOST, MCP_TOOL, PUBLIC, Vendor
 pytestmark = pytest.mark.slow
 
 SECRET = "acme-synthetic-vendor-key-6194"
+PAIR = "acme-synthetic-vendor-pair-6195"  # a header-pair vendor's second secret
 USERNAME = "acme-api-user"
 ENV = "ACME_VENDOR_KEY"
 TOOL = "acme-vendor"  # the id Tools gives "Acme Vendor"
@@ -56,6 +57,7 @@ def vendor(api, monkeypatch):
     tool's public name to a public address as it would in production, and its call lands on the stub."""
     stub = Vendor(
         SECRET,
+        pair=PAIR,
         username=USERNAME,
         file_body=FILE_BODY.encode(),
         login={"username": PORTAL_USER, "password": PASSWORD, "totp": TOTP_KEY},
@@ -206,6 +208,61 @@ def test_a_proxied_username_and_password_key_reaches_the_vendor_as_basic(api, ve
     assert SECRET not in json.dumps(computer.calls())
     assert proxied_calls(api) == [{"bot": "ops", "path": "/basic", "status_code": 200, "result": "sent"}]
     nowhere(api, computer, conversation, SECRET)
+
+
+# ---- several secrets on one tool: a multi-secret template (backend/tool_templates.py)
+
+
+def template_tool(api, fields, ways, keys, settings=()):
+    """Tools > Add > API with its address, then its template (each field a variable), its keys and settings."""
+    tool = post(api, "api-tools", {"name": "Acme Vendor", "base_url": f"https://{HOST}"})
+    assert tool["id"] == TOOL, tool
+    put(api, f"api-tools/{TOOL}/template", {"template": {"fields": fields, "ways": ways}})
+    for env, value in keys:
+        post(api, f"api-tools/{TOOL}/keys", {"name": env, "value": value, "env": env})
+    for name, value in settings:
+        post(api, f"api-tools/{TOOL}/settings", {"name": name, "value": value})
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_a_twilio_like_account_sid_is_both_a_plain_variable_and_the_basic_username_through_the_proxy(
+    api, vendor, computer
+):
+    """Basic with two fields, as Twilio: the account's id is a setting the run holds as it is (it also goes in paths),
+    and the proxy puts it as the user beside the secret it holds."""
+    fields = [{"id": "sid", "env": "ACME_ACCOUNT_SID", "role": "id"}, {"id": "key", "env": ENV, "role": "secret"}]
+    template_tool(api, fields, [{"basic": ["sid", "key"]}], [(ENV, SECRET)], [("ACME_ACCOUNT_SID", USERNAME)])
+    level(api, "ops", "read_write")
+    computer.start()
+    _, uses, conversation = turn(api, computer, f"CALL basic:${{ACME_ACCOUNT_SID}} {ENV} ${URL_ENV}/basic")
+    call = one(uses, "call")
+    assert call["environ"]["ACME_ACCOUNT_SID"] == USERNAME and call["environ"][ENV].startswith("tpx1.")
+    assert call["status"] == 200
+    [seen] = vendor.calls("/basic")
+    assert (seen["status"], seen["shown"]) == (200, f"{USERNAME}:{SECRET}")
+    assert SECRET not in json.dumps(computer.calls())
+    assert proxied_calls(api) == [{"bot": "ops", "path": "/basic", "status_code": 200, "result": "sent"}]
+    nowhere(api, computer, conversation, SECRET)
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_a_header_pair_reaches_the_vendor_with_both_secrets_while_the_run_holds_two_tokens(api, vendor, computer):
+    fields = [
+        {"id": "key", "env": ENV, "role": "secret"},
+        {"id": "pair", "env": "ACME_VENDOR_SECRET", "role": "secret"},
+    ]
+    ways = [{"headers": {"X-Api-Key": "{key}", "X-Api-Secret": "{pair}"}}]
+    template_tool(api, fields, ways, [(ENV, SECRET), ("ACME_VENDOR_SECRET", PAIR)])
+    level(api, "ops", "read_write")
+    computer.start()
+    _, uses, conversation = turn(api, computer, f"CALL header:X-Api-Key {ENV} ${URL_ENV}/pair")
+    call = one(uses, "call")
+    assert call["environ"][ENV].startswith("tpx1.") and call["environ"]["ACME_VENDOR_SECRET"].startswith("tpx1.")
+    assert call["status"] == 200
+    [seen] = vendor.calls("/pair")
+    assert (seen["status"], seen["shown"]) == (200, f"{SECRET}|{PAIR}")
+    assert SECRET not in json.dumps(computer.calls()) and PAIR not in json.dumps(computer.calls())
+    nowhere(api, computer, conversation, SECRET, PAIR)
 
 
 # ---- a tool's settings
