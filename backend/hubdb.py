@@ -126,10 +126,6 @@ from .hubdb_text import (
     lint_plain,  # noqa: F401
     person_ask_of_body,
     person_ask_refusal,
-    LINT_LISTED_PICKS,  # noqa: F401
-    lint_question,  # noqa: F401
-    QUESTION_EXAMPLE,  # noqa: F401
-    question_refusal,
     lint_approval,  # noqa: F401
     URL_SPECIAL,  # noqa: F401
     url_authority,  # noqa: F401
@@ -380,17 +376,6 @@ def sourced_text(text, sources=(), refs=None):
     if kept:
         refs["body_sources"] = kept
     return text, refs
-
-
-def answer_question(conn, target):
-    """The stored question behind a structured answer target: a comment ask, or a file version's."""
-    if target.get("comment"):
-        return message(conn, target["comment"])
-    row = conn.execute(
-        "SELECT ask_message_id FROM task_file_reviews WHERE file_id=? AND version=?",
-        (target.get("file"), target.get("version")),
-    ).fetchone()
-    return message(conn, row[0]) if row and row[0] else None
 
 
 def answer_text(question, answers, *, text=None, other=None, passed=None, refs=None, file_subject=False):
@@ -863,16 +848,6 @@ def require_person_ask(conn, actor, person, text, where):
     but never counts toward a quarantine (_escalate): it is corrected by rewriting, not a sign the bot reaches
     where it should not."""
     detail = person_ask_refusal(person, text, where)
-    if detail:
-        refuse(conn, actor, "lint", detail)
-
-
-def require_plain_question(conn, actor, person, questions, *, written=False):
-    """Refuse a bot's question to a person that breaks the asking rules (question_refusal). Like require_person_ask,
-    a `lint` refusal is fixed by rewriting and never counts toward a quarantine."""
-    if not is_bot(actor) or not is_human(person):
-        return
-    detail = question_refusal(person, questions, written=written)
     if detail:
         refuse(conn, actor, "lint", detail)
 
@@ -2236,12 +2211,6 @@ def feed(conn, target, body, conv, refs=None):
     """
     resolved = _reach(conn, KEEPER, target)
     return _write_message(conn, KEEPER, resolved, body, conv, "say", {"wake": "feed", **(refs or {})}, None, None)
-
-
-def has_pick_options(msg):
-    """Questions offering only free text keep the ordinary answer protocol."""
-    refs = _json(msg.get("refs"), {}) or {}
-    return any(q.get("options") for q in refs.get("questions", []))
 
 
 def notice(conn, actor, to_actor, body, refs=None, expires_days=NOTICE_DAYS):

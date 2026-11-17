@@ -294,54 +294,8 @@ def _criteria(own):
     return {f"line-{n}": line for n, line in enumerate(own["criteria"], 1)}
 
 
-def _line(value, limit):
-    """One field of a question, whitespace folded and cut to `limit` characters."""
-    return " ".join(str(value or "").split())[:limit]
-
-
-def _question_lines(questions, limit):
-    """The lines a structured question puts on the item: each question's line, its why, each option with what it
-    `then` does, and the recommended option(s). A why and a then are cut to `limit` characters."""
-    lines = []
-    for q in questions or []:
-        if not isinstance(q, dict):
-            continue
-        line = _line(q.get("question"), 300)
-        if not line:
-            continue
-        lines.append(f"Question: {line}")
-        why = _line(q.get("why"), limit)
-        if why:
-            lines.append(f"Why: {why}")
-        options = [o for o in (q.get("options") if isinstance(q.get("options"), list) else []) if isinstance(o, dict)]
-        options = [(_line(o.get("label"), 60), o) for o in options]
-        options = [(label, o) for label, o in options if label]
-        for label, o in options:
-            then = _line(o.get("then"), limit)
-            lines.append(f"Option: {label}" + (f" (then: {then})" if then else ""))
-        recommended = [label for label, o in options if o.get("recommended") is True]
-        if recommended:
-            lines.append("Recommended: " + ", ".join(recommended))
-    return "\n".join(lines)
-
-
-def structured_text(questions, text):
-    """The text the model reads for an item. `questions` is the item's refs.questions as stored, or None. Without
-    them, the text is the item's text cut to MAX_TEXT, as before. With them, the lines come first, in order: each
-    question's line, its why, each option with its then, which option is recommended; then the item's text. The lines
-    are never cut, so a question set larger than MAX_TEXT on its own (the schema's largest is about 4 questions of 6
-    options) reads in full with no body; the item's text fills what is left up to MAX_TEXT."""
-    body = str(text or "")
-    head = _question_lines(questions, 200) if isinstance(questions, list) else ""
-    if not head:
-        return body[:MAX_TEXT]
-    room = MAX_TEXT - len(head) - 2
-    return f"{head}\n\n{body[:room]}" if room > 0 and body else head
-
-
-def _call(qset, own, items, asker, person_name, title, text, asked=None):
-    """(state, questions, criteria) of the one call about one item. `asked` is the item's structured questions as
-    stored (refs.questions), or None."""
+def _call(qset, own, items, asker, person_name, title, text):
+    """(state, questions, criteria) of the one call about one item."""
     criteria = _criteria(own)
     questions = {qid: qset["questions"][qid] for qid in ("clear", "kind", "urgency", "recommends")}
     if criteria:
@@ -349,17 +303,16 @@ def _call(qset, own, items, asker, person_name, title, text, asked=None):
     if items:
         questions["covered"] = J.with_options(qset["questions"]["covered"], {name: t for name, (_, t) in items.items()})
     state = {
-        "item": {"title": str(title or "")[:300], "text": structured_text(asked, text)},
+        "item": {"title": str(title or "")[:300], "text": str(text or "")[:MAX_TEXT]},
         "asker": asker,
         "person": person_name,
     }
     return state, questions, criteria
 
 
-def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False, asked=None):
-    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error).
-    `asked` is the item's structured questions as stored (refs.questions), or None."""
-    state, questions, criteria = _call(qset, own, items, asker, person_name, title, text, asked)
+def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False):
+    """One call on the set for one item, and its judge.call row (never the item's text): (answers, call id, error)."""
+    state, questions, criteria = _call(qset, own, items, asker, person_name, title, text)
     result, error = _ask(calls_for(store), engine, state, questions, qset["label"])
     if error in REFUSED:
         return None, None, error  # no call was made: no judge.call row, and the day's count is kept
@@ -388,11 +341,10 @@ def _judge(store, engine, qset, own, items, asker, person_name, title, text, kin
     return answers, call["id"], error
 
 
-def preflight(store, primary, who, target, title, text, kind="task", asked=None):
+def preflight(store, primary, who, target, title, text, kind="task"):
     """Ask the set about one item for the person `target` names, outside any transaction. Returns the verdict
     `apply` reads: {person, asker, kind, mode, answers (typed values, None where under threshold), items, criteria,
-    call, error}; None when the write is not gated (a person's, not to a person, mode Off). `asked` is the item's
-    structured questions (refs.questions), judged with its text. Never raises."""
+    call, error}; None when the write is not gated (a person's, not to a person, mode Off). Never raises."""
     verdict = None
     try:
         if not target or not gated(who, store.settings.assistant_bot):
@@ -432,9 +384,7 @@ def preflight(store, primary, who, target, title, text, kind="task", asked=None)
             items = open_items(c, person, who.actor)
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
-        answers, call, error = _judge(
-            store, engine, qset, own, items, asker, person_name, title, text, kind, asked=asked
-        )
+        answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind)
         verdict.update(answers=answers, call=call, error=error)
         return {**verdict, "items": {n: i for n, (i, _) in items.items()}, "criteria": _criteria(own)}
     except Exception as exc:  # the gate never stops the write
@@ -898,7 +848,6 @@ def replay_items(c, person, start, end, assistant_bot=None):
             "asker": r["asker"],
             "title": r["title"] or "",
             "text": r["body"] or "",
-            "asked": None,
             "created_at": r["at"],
         }
         for r in c.execute(
@@ -1017,7 +966,7 @@ def _replay_judge(store, engine, qset, own, person_name, prepared):
     calls_pool = calls_for(store)
     label = qset["label"]
     asked = [
-        (it, items, *_call(qset, own, items, asker, person_name, it["title"], it["text"], it["asked"]))
+        (it, items, *_call(qset, own, items, asker, person_name, it["title"], it["text"]))
         for it, _plate, items, asker, _shown in prepared
     ]
     pairs = [(state, questions) for _it, _items, state, questions, _criteria in asked]

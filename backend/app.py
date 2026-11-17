@@ -5334,7 +5334,6 @@ def create_app(settings=None):
             "bulk": task_update,
             "comment": comment,
             "comment_edit": comment_edit,
-            "task_answer": lambda c, bot, replay: rule_task_audience(c, task_row(c, bot, replay), bot.actor),
             "reply": reply_audience,
         }
 
