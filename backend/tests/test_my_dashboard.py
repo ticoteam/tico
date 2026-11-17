@@ -27,7 +27,10 @@ def test_my_dashboard_starts_with_its_defaults_and_is_the_callers_own(api):
     assert place(api, "person:cara", "cara-test")["place"] == "person:cara"
     saved = put(api, "places/person:me", {}, "cara-test")
     assert saved["saved"] is True and all(p["id"] for p in saved["pins"])
-    put(api, "places/person:me", {"audience": {"everyone": False, "groups": []}}, "cara-test", expected=422)
+    refused = put(api, "places/person:me", {"audience": {"everyone": False}}, "cara-test", expected=422)
+    assert "Company is yours alone" in str(refused)
+    refused = put(api, "places/task:" + task(api, "human:ana", "A task's pins"), {}, expected=422)
+    assert "are saved whole" in str(refused)
 
 
 def test_the_floor_goes_on_this_page_once_and_comes_back_like_any_card(api):
