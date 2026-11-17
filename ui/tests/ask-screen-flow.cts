@@ -155,7 +155,8 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     assert.equal(await left(), 1, 'the snoozed ask is out of the walk');
     await dialog.locator('[data-dc-choice="Yes"]').click();
     await dialog.locator('.dc-done').waitFor();
-    assert.match(await dialog.locator('.dc-done').innerText(), /\b1 snoozed\b/);
+    // The end screen reads the snoozed list after it shows: wait for its count, don't read it once.
+    await dialog.locator('.dc-done', {hasText: /\b1 snoozed\b/}).waitFor();
 
     assert.deepEqual(errors, []);
     await page.close();
