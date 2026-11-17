@@ -224,8 +224,9 @@ async function giveAndSettle(page: Page, click: () => Promise<void>): Promise<vo
   await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
 }
 
-// Needs you (decide.ts): Give to… on a task of yours. Suggested is who asked and the bots the title names; the current
-// owner shows ✓ but is not chosen, so Give stays off until a pick; Esc closes only the picker; Give sends the pick.
+// Needs you (decide.ts): Reassign on a stuck task's card opens Give to…. Suggested is who asked and the bots the title
+// names; the current owner shows ✓ but is not chosen, so Give stays off until a pick; Esc closes only the picker; Give
+// sends the pick.
 async function needsYou(browser: Browser): Promise<void> {
   const {page, errors} = await open(browser, {viewport: {width: 1440, height: 900}, at: '#/tasks'});
   await roster(page);
@@ -243,8 +244,7 @@ async function needsYou(browser: Browser): Promise<void> {
   await page.evaluate(() => v2NeedsRead());
   await page.waitForFunction(() => (S.v2.needs || []).some(n => n.id === 't-ny'));
   assert.equal(await page.evaluate(i => decideOpen('t-ny', [i]), item), true);
-  await page.locator('.decide [data-dc="ask-more"]').click();  // Give to… waits in ⋯, as on an ask
-  await page.locator('.decide [data-dc="give"]').click();
+  await page.locator('.decide [data-dc="give"]').click();  // the stuck card's Reassign
   const field = page.locator('.decide button[data-give-to]'), give = page.locator('.decide [data-dc="give-to"]');
   assert.equal(await field.locator('.gv-name').textContent(), 'Give to…');
   assert.equal(await give.isDisabled(), true, 'nothing chosen yet');
@@ -282,8 +282,7 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.equal(await page.evaluate(i => decideOpen('t-body', [i]), bodyItem), true);
   await page.locator('.decide .dc-md').waitFor();
   assert.equal(reads, 1, 'the screen read the task once');
-  await page.locator('.decide [data-dc="ask-more"]').click();  // Give to… waits in ⋯, as on an ask
-  await page.locator('.decide [data-dc="give"]').click();
+  await page.locator('.decide [data-dc="give"]').click();  // the stuck card's Reassign
   await field.click();
   await pop.waitFor();
   assert.deepEqual(await pop.locator('[role=group]').first().locator('.gv-row').evaluateAll(rs => rs.map(r => `${r.querySelector('.gv-name')?.textContent}: ${r.querySelector('.gv-why')?.textContent}`)),

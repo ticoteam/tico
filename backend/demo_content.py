@@ -2829,8 +2829,9 @@ TASK_ASKS = {
 }
 TASK_SNOOZES = {"pr-tests": ("The author is away for three days.", 3)}
 
-# Tasks a bot gives a person: (key, title, owner bot, target person, body, days ago created, status). Each body opens
-# with the question, then the reason in a line or two, so the person can answer from the task.
+# A bot's tasks that ask a person a question: (key, title, owner bot, target person, body, days ago created, status).
+# Each body opens with the question, the ask's line, then the reason in a line or two, so the person can answer from
+# the task.
 ASKS = [
     (
         "home-pro-price",

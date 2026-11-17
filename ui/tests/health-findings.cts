@@ -72,7 +72,7 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
     await open(page);
     // Health · Tasks (S15): the never-stuck check's counts, one line each, not its summary.
     assert.deepEqual(await page.locator('#hl-page [data-hl-check="never_stuck"] .hl-ladder li').allInnerTexts(),
-      ['0 waiting on nothing', '2 on a retry', '1 with a manager', '3 reached a person', "1 can't run", '0 broken']);
+      ['0 waiting on nothing', '2 on a retry', '1 with a manager', "3 at the ladder's end", "1 can't run", '0 broken']);
     assert.equal(await page.locator('#hl-page [data-hl-check="never_stuck"]', {hasText: 'not this text'}).count(), 0);
     // Failed runs: under the count, the newest five failed jobs, each with its bot, when, and why when Health says.
     const failedRows = page.locator('#hl-page [data-hl-check="failed"] [data-hl-failures] li');

@@ -167,11 +167,13 @@ def gated(who, assistant_bot=""):
 
 
 def _needs(c, person):
-    """The person's Needs you as the engine reads it (backend/waiting_on.py `needs`): their tasks, the asks that name
-    them and the Paused causes they can fix, snoozed tasks left out."""
+    """The person's plate as the engine reads it (backend/waiting_on.py `needs` with `own_work`): the asks that name
+    them, the Paused causes they can fix, and the tasks whose work is theirs, snoozed tasks left out. Needs you itself
+    holds no task that is only theirs, but a task a bot hands a person still weighs on them, so the gate counts it,
+    and a repeat of one joins it."""
     from . import waiting_on
 
-    return waiting_on.needs(c, person)
+    return waiting_on.needs(c, person, own_work=True)
 
 
 def _plate_tasks(c, person):
@@ -180,8 +182,8 @@ def _plate_tasks(c, person):
 
 
 def load(c, person):
-    """The open items on the person's Needs you: each task of theirs, each ask that names them and each Paused cause
-    they can fix, snoozed ones left out. Read before the item is written, so it never counts itself."""
+    """The open items on the person's plate (`_needs`): each task of theirs, each ask that names them and each Paused
+    cause they can fix, snoozed ones left out. Read before the item is written, so it never counts itself."""
     return len(_needs(c, person))
 
 

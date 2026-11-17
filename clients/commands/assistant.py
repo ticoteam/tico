@@ -610,7 +610,8 @@ def batch_abandon(api, args):
 
 @tool(
     "tico_needs_you_show",
-    "What is on the person's Needs you: the total, the number per kind (task: a task of theirs; ask: an OK or a "
+    "What is on the person's Needs you: the total, the number per kind (task: a private task they must let someone "
+    "see; ask: an OK or a "
     "question with their name; paused: a bot that cannot run until they fix it; mention: an @ of them by a person), "
     "and the items, oldest first, each with its task. Use it to see the pile before closing or stopping anything.",
     {

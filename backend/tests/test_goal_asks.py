@@ -37,8 +37,8 @@ def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     assert (task["kind"], task["ref"], task["status"]) == ("kpi_stale", GA.KPIS_REF, "open")
     assert task["title"] == "Add a number for Unreported measure"
     assert task["body"].startswith(task["title"]) and "- Unreported measure: has no reading yet" in task["body"]
-    # In Tasks and Decide (the person's Needs you), and on the Goals page with the task named.
-    assert task["id"] in needs_tasks(api, "ana-test")
+    # In Tasks (not Needs you: nothing is asked of her on it) and on the Goals page with the task named.
+    assert task["id"] not in needs_tasks(api, "ana-test")
     [item] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "kpi_stale"]
     assert item["task"]["id"] == task["id"] and [k["kpi_id"] for k in item["kpis"]] == [kpi["id"]]
     assert (item["id"], item["subject"], item["actions"]) == ("kpi_stale:kpis", None, ["open"])
@@ -145,8 +145,8 @@ def test_a_red_kpi_asks_the_goal_owner_and_closes_once_back_on_track(api):
     assert [(a["ref"], a["title"]) for a in red] == [
         (kpi["id"], "Check why Activation is off track on Raise activation")
     ]
-    assert red[0]["id"] in needs_tasks(api, "ben-test")
-    assert red[0]["id"] not in needs_tasks(api, "ana-test")
+    # Ben's task, in his Tasks: Needs you holds only what is asked of a person.
+    assert red[0]["id"] not in needs_tasks(api, "ben-test") | needs_tasks(api, "ana-test")
     log(api, kpi["id"], 75, token="ben-test", period_end=H.now())
     assert not [a for a in asks(api) if a["kind"] == "kpi_red"]
     assert red[0]["id"] in {t["id"] for t in manager_tasks(api, "closed")}

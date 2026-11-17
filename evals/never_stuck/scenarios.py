@@ -410,7 +410,8 @@ LADDER_GAPS = [900, 900, 3000]
 
 
 def _check_ladder(r: Rig, task: str, runs: list[tuple[str, float, str]], owner: str) -> None:
-    """Scenario 1's shape: one start and 3 tries for the owner, 3 for the manager bot, then one person's list."""
+    """Scenario 1's shape: one start and 3 tries for the owner, 3 for the manager bot, then the ladder rests: the task
+    stays with its bot, in no person's list, and nothing more is woken for it."""
     expect(len(runs) == 7, f"{len(runs)} runs, not 7: {runs}")
     expect([b for b, _, _ in runs] == [owner] * 4 + [MANAGER] * 3, f"who ran: {runs}")
     gaps = [g for _, g, _ in runs[1:4]]
@@ -418,13 +419,14 @@ def _check_ladder(r: Rig, task: str, runs: list[tuple[str, float, str]], owner: 
         all(want <= got <= want + 10 for want, got in zip(LADDER_GAPS, gaps, strict=True)),
         f"the owner was woken {gaps} seconds after each stop, not 15 min, 15 min and 50 min",
     )
-    expect(r.visit(task).get("level") == "person", "the ladder did not end at a person")
-    person = r.visit(task).get("person_id")
-    expect(person and ("task", task) in r.needs_tasks(person), f"the task is not in {person}'s Needs you")
+    expect(r.visit(task).get("level") == "person", "the ladder did not rest")
+    expect(r.waits(task) == [("bot", owner)], f"the task does not stay with its bot: {r.waits(task)}")
+    listed = [p for p in Wd.PEOPLE if any(t == task for _, t in r.needs_tasks(p))]
+    expect(not listed, f"the task is in {listed}'s Needs you")
     expect(r.runs(task) == 7, f"{r.runs(task)} runs in all")
     before = r.runs(task)
-    r.later(hours=6)
-    expect(r.queued(task) == 0 and r.runs(task) == before, "a bot was woken after a person had it")
+    r.later(hours=5)
+    expect(r.queued(task) == 0 and r.runs(task) == before, "a bot was woken after the ladder rested")
 
 
 @scenario(1, "A bot stops early with nothing changed")

@@ -1421,6 +1421,19 @@ def _tell_manager(conn: "sqlite3.Connection", row: Row, text: str, what: str) ->
     )
 
 
+TICOS_DONE = "Nothing else holds the task now"
+STUCK_TITLE = "Stuck"  # the heading of a stopped task's question (never_stuck.ask_person), kept in its settings
+
+
+def stuck_ask(requirement: Row) -> bool:
+    """A stopped task's question to a person on this visit (never_stuck.ask_person), by its heading."""
+    if not requirement.get("visit_id"):
+        return False
+    settings: object = requirement.get("settings")
+    found: object = json.loads(settings) if isinstance(settings, str) and settings else settings
+    return isinstance(found, dict) and cast("dict[str, object]", found).get("title") == STUCK_TITLE
+
+
 def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     """Forward, by the engine: move the task to its next stage if everything is met, there is room, and nobody there
     is shut out of a private task (`shut_out`: it waits until it is shared). Returns the moved task, or None when it
@@ -1431,7 +1444,16 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     if task_depends.blocked(conn, task_id):
         return None  # a task it depends on is still open: it goes on when that ends (task_depends.release)
     target = next_stage(conn, row)
-    if not target or R.unmet(conn, row) or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
+    unmet = R.unmet(conn, row)
+    if target and unmet and all(stuck_ask(s.requirement) for s in unmet):
+        # Only a stopped task's question is left (never_stuck.ask_person): what it asked about is over (the bot
+        # finished, the release came), so it is taken back and the task moves on.
+        hub = _h()
+        for standing in unmet:
+            conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (hub.now(), standing.requirement["id"]))
+            _event(conn, task_id, hub.KEEPER, "requirement_withdrawn", standing.requirement["id"], None, TICOS_DONE)
+        unmet = []
+    if not target or unmet or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None
     if idea_checks.holds(conn, row):
         return None  # Jev's duplicate check comes first (idea_checks), for WAIT_S at most
@@ -1674,22 +1696,16 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
 
 def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> None:
     """The task changed: start the never-stuck ladder again. The owner has it, no tries are counted, and the check
-    looks again after the first gap. Call it after the change is written, so the mark it keeps includes the change. A
-    task that Late brought to a person stays with that person until a person acts. Wakes still queued for a bot that
-    has no turn now are canceled (`_drop_stale`)."""
+    looks again after the first gap, also when the ladder had rested on it (Late included: it is in no person's list
+    to keep it in). Call it after the change is written, so the mark it keeps includes the change. Wakes still queued
+    for a bot that has no turn now are canceled (`_drop_stale`)."""
     mark = progress_mark(conn, visit["id"])
     look = _h().shift(ts, seconds=FIRST_TRY_S)
-    if visit.get("level") == "person" and visit.get("late_person_at") and not _h().by_own_hand(by):
-        conn.execute(
-            "UPDATE visits SET progress_mark=?, last_change_at=?, next_try_at=? WHERE id=?",
-            (mark, ts, look, visit["id"]),
-        )
-    else:
-        conn.execute(
-            "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
-            "WHERE id=?",
-            (look, ts, mark, visit["id"]),
-        )
+    conn.execute(
+        "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
+        "WHERE id=?",
+        (look, ts, mark, visit["id"]),
+    )
     _drop_stale(conn, visit["task_id"])
 
 
