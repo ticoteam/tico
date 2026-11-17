@@ -866,7 +866,15 @@ def install_library(app, store, auth, files):
         """Search the files the caller may read by title and text, filtered by kind, best first with an excerpt."""
         return library.search(request.state.identity, q[:500], max(1, min(limit, SEARCH_MAX)), kind=kind)
 
-    @app.delete("/api/v2/files/{fid}")
+    @app.delete(
+        "/api/v2/files/{fid}",
+        **api_v2(
+            "Files",
+            "deleteFile",
+            "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when",
+            "FileDeleted",
+        ),
+    )
     async def delete(request: Request, fid: str):
         """The owner deletes a file for good: every version's bytes leave storage. Its activity keeps that it was
         deleted, by whom and when."""

@@ -37,6 +37,7 @@ from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
 from . import task_wakes
+from .api_contract import api_v2
 from clients import bot_files as BF
 
 LOG = logging.getLogger("tico.files")
@@ -2488,6 +2489,20 @@ def install_files(app, store, auth, blobs, mutate):
     file_reviews.AUTH = auth  # an OK's giver is checked against the file at the OK, its use and its verdict
     files = Files(app, store, auth, blobs, mutate)
     app.state.files = files
+
+    # Before the library's DELETE /api/v2/files/{fid}: the API document lists a path's methods in this order.
+    @app.patch(
+        "/api/v2/files/{fid}",
+        **api_v2(
+            "Files",
+            "editBotFile",
+            "Change a file's title or task, remove it from the list (archive) or promote it bot-wide (owner and bot administrators)",
+            "BotFileResult",
+        ),
+    )
+    def edit(request: Request, fid: str, body: FileEdit):
+        return files.edit(request, fid, body)
+
     # Before media.py's GET /api/v2/files/{bid}, which would otherwise take /api/v2/files/search.
     file_library.install_library(app, store, auth, files)
     from .pages import install_pages
@@ -2515,7 +2530,16 @@ def install_files(app, store, auth, blobs, mutate):
         }
     }
 
-    @app.post("/api/v2/files/uploads", openapi_extra=upload_doc)
+    @app.post(
+        "/api/v2/files/uploads",
+        **api_v2(
+            "Files",
+            "uploadBotFile",
+            "A bot (or its computer) publishes a file: raw bytes with the fields in the query, or JSON text/content_base64",
+            "BotFileResult",
+            openapi_extra=upload_doc,
+        ),
+    )
     async def upload(request: Request):
         """A bot (or the computer running its turn) publishes a file. Raw bytes with the fields in
         the query, or JSON with text or content_base64. Up to 25 MB raw, 2 MB as JSON. Video and audio
@@ -2527,7 +2551,16 @@ def install_files(app, store, auth, blobs, mutate):
         )
         return await asyncio.to_thread(files.publish, request, request.state.identity, fields, data)
 
-    @app.post("/api/v2/files/imports", openapi_extra=upload_doc)
+    @app.post(
+        "/api/v2/files/imports",
+        **api_v2(
+            "Files",
+            "importFile",
+            "Bytes the bot's computer copied from an S3 object; a changed etag is a new version",
+            "BotFileResult",
+            openapi_extra=upload_doc,
+        ),
+    )
     async def imported(request: Request):
         """Bytes the bot's computer copied from an S3 object (`tico file import`), with its `source`
         (s3://bucket/key) and `etag`. A changed etag is a new version. Video and audio stream, as uploads do."""
@@ -2542,7 +2575,15 @@ def install_files(app, store, auth, blobs, mutate):
             raise Problem("validation", "Say the s3:// source", 422)
         return await asyncio.to_thread(files.publish, request, request.state.identity, fields, data, imported=True)
 
-    @app.post("/api/v2/files/links")
+    @app.post(
+        "/api/v2/files/links",
+        **api_v2(
+            "Files",
+            "addFileLink",
+            "Register or touch an https document (Google, Notion, Figma, any site); Tico keeps the address only",
+            "BotFileResult",
+        ),
+    )
     def links(request: Request, body: LinkBody):
         """Register or touch an https document (Google, Notion, Figma, anything). Tico stores the
         address only: it never fetches the document or holds a provider token."""
@@ -2553,7 +2594,15 @@ def install_files(app, store, auth, blobs, mutate):
         """When files the bot's computer already published were written, by digest and without their bytes."""
         return files.dates(request, body)
 
-    @app.get("/api/v2/bots/{bot}/files")
+    @app.get(
+        "/api/v2/bots/{bot}/files",
+        **api_v2(
+            "Files",
+            "listBotFiles",
+            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) narrow the same list",
+            "BotFileList",
+        ),
+    )
     def bot_files(
         request: Request,
         bot: str,
@@ -2564,17 +2613,24 @@ def install_files(app, store, auth, blobs, mutate):
     ):
         return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
 
-    @app.get("/api/v2/bots/{bot}/files/mentions")
+    @app.get(
+        "/api/v2/bots/{bot}/files/mentions",
+        **api_v2(
+            "Files",
+            "resolveBotFileMentions",
+            "The bot's files that the paths and names it wrote name (m, up to 60): each name that is exactly one file the caller may see, keyed by the name as sent; any other name is absent",
+            "BotFileMentions",
+        ),
+    )
     def bot_file_mentions(
         request: Request, bot: str, m: Annotated[list[str] | None, Query(max_length=MENTIONS_MAX)] = None
     ):
         return files.mentions(request.state.identity, bot, m or [])
 
-    @app.patch("/api/v2/files/{fid}")
-    def edit(request: Request, fid: str, body: FileEdit):
-        return files.edit(request, fid, body)
-
-    @app.patch("/api/v2/files/{fid}/versions/{number}")
+    @app.patch(
+        "/api/v2/files/{fid}/versions/{number}",
+        **api_v2("Files", "editFileVersion", "Edit a version's note or question as its author", "VersionReview"),
+    )
     def edit_version(request: Request, fid: str, number: int, body: M.FileVersionEdit):
         who = request.state.identity
 
@@ -2649,20 +2705,37 @@ def install_files(app, store, auth, blobs, mutate):
             ),
         )
 
-    @app.get("/api/v2/files/{fid}/activity")
+    @app.get(
+        "/api/v2/files/{fid}/activity",
+        **api_v2("Files", "listFileActivity", "A file's append-only activity, newest first", "FileActivity"),
+    )
     def activity(request: Request, fid: str):
         return files.activity_log(request.state.identity, fid)
 
-    @app.get("/api/v2/files/{fid}/info")
+    @app.get(
+        "/api/v2/files/{fid}/info",
+        **api_v2(
+            "Files",
+            "getBotFile",
+            "One file as its bot's Files list shows it (404 when the viewer cannot see it)",
+            "BotFileResult",
+        ),
+    )
     def info(request: Request, fid: str):
         return files.info(request.state.identity, fid)
 
-    @app.get("/api/v2/files/{fid}/versions")
+    @app.get(
+        "/api/v2/files/{fid}/versions",
+        **api_v2("Files", "listFileVersions", "A file's versions, newest first", "FileVersions"),
+    )
     def versions(request: Request, fid: str):
         return files.versions(request.state.identity, fid)
 
     @app.head("/api/v2/files/{fid}/versions/{number}", include_in_schema=False)
-    @app.get("/api/v2/files/{fid}/versions/{number}")
+    @app.get(
+        "/api/v2/files/{fid}/versions/{number}",
+        **api_v2("Files", "getFileVersion", "The bytes of one version (a download, never a storage address)"),
+    )
     def version_bytes(request: Request, fid: str, number: int):
         return files.serve(request.state.identity, fid, number, request=request)
 

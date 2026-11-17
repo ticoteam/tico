@@ -61,6 +61,7 @@ from . import runs
 from . import read_cache
 from . import visuals as V
 from .store import H, Problem, encode
+from .api_contract import api_v2
 
 TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters", "calendar")
 AGENT_TOPICS = ("messages", "threads")  # what an external agent's standing token may follow (outside a turn)
@@ -3255,7 +3256,14 @@ def install(app, store, auth, task_views, task_view):
             raise Problem("not_found", "No such run step", 404)
         return {"output": step}
 
-    @app.get("/api/v2/events")
+    @app.get(
+        "/api/v2/events",
+        **api_v2(
+            "Live events",
+            "streamEvents",
+            "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, meeting=<ids> filters meeting_items, place=<places> filters presence (20 each); task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids",
+        ),
+    )
     async def events(
         request: Request,
         topics: str | None = None,

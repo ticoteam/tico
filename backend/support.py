@@ -41,6 +41,7 @@ from .models import Contract
 from .replication import rehearsal_on
 from .credentials import SEALED
 from .store import H, Problem, encode, refusal_problem
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.support")
 
@@ -1103,7 +1104,15 @@ def install(app, store, settings, census):
         require_on(settings)
         return support_asks.answer_feedback(store, support, who, body)
 
-    @app.post("/api/v2/support/reports")
+    @app.post(
+        "/api/v2/support/reports",
+        **api_v2(
+            "Support",
+            "draftSupportReport",
+            "Draft a report to Tico support, optionally on a task: filed at once when the team allows it, otherwise a person OKs its preview first",
+            "SupportReportResult",
+        ),
+    )
     def support_report(request: Request, body: SupportReport):
         """A bot, a person's token or the Assistant drafts a report to Tico support: filed at once under the team rule
         `bot_reports_direct`, otherwise a person OKs it from its preview first (docs/support.md)."""
