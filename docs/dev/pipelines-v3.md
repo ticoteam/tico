@@ -1350,7 +1350,7 @@ These words are used in every screen below.
 - **Mark:** at the left of a row, before the title. One of: a green spinner, an amber circle with "!", a red dot, or an
   empty space the same width (no mark), so titles line up.
 - **Late tag:** a small rounded tag reading "Late", in amber, right after the title.
-- **Avatar:** a small round picture of who has the task, at the right of a row.
+- **Avatar:** a small round picture of the task's owner, at the right of a row (the mark and the line say whose turn it is).
 - **Age:** a short, dimmed time at the far right of a row: how long, such as "58m", "2d", "30h".
 - **Main button:** filled green. Other buttons are outlined. Where a list below names the main button, it says "(main)".
 - **Icons** (no words beside them): search (a magnifier), filter (the shared filter icon), list view, columns view,
@@ -1362,7 +1362,7 @@ These words are used in every screen below.
 Each look is one row, on one line, in this order: mark, title, anything after the title, avatar, age.
 
 1. **A bot is working:** spinner · "Phone view shows one stage" · avatar · "58m".
-2. **Needs a person:** amber "!" · "Checkout flow" · the person's avatar · "2d".
+2. **Needs a person:** amber "!" · "Checkout flow" · the owner's avatar · "2d".
 3. **Can't run:** red dot · "Refund flow" · avatar · "1h".
 4. **Nothing needed:** no mark · "Saved carts" · avatar · "5h".
 5. **Late:** spinner · "Calibration export" · Late tag · avatar · "30h".

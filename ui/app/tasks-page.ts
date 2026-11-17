@@ -217,6 +217,15 @@ function pageTasks(openId = '') {
   });
   if (openId) taskModalOpen(openId);
 }
+/** A task opened by its address (#/task/<id>) has its own pipeline behind it, its archive's Done or Closed when it is
+ * finished, not the view last left. The address stays the task's; closing the window writes the view's
+ * (task-modal.ts). */
+function tasksBehindTask(t: {pipeline_id?: string | null; status?: string | null}) {
+  const state = TASKS_ST, pipeline = t.pipeline_id || '', known = state?.pipelines.length ? state.pipelines : TASK_PIPELINES;
+  if (!state || !pipeline || (known?.length && !known.some(p => p.id === pipeline))) return;
+  const archive: TasksArchive = t.status === 'done' ? 'done' : t.status === 'closed' ? 'closed' : '';
+  if (state.pipeline !== pipeline || state.archive !== archive) tasksShow(state, {pipeline, archive}, false);
+}
 // The page goes: its listeners, its pipeline view and its timers with it.
 function tasksLeave() {
   const state = TASKS_ST;
@@ -227,12 +236,13 @@ function tasksLeave() {
   tasksAskOff();
   TASKS_ST = null;
 }
-/** A change of view: You or a pipeline, list or columns, the archive. Search and filters stay. */
-function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, 'pipeline' | 'layout' | 'archive'>>) {
+/** A change of view: You or a pipeline, list or columns, the archive. Search and filters stay. `write` false leaves the
+ * address as it is (a task's own, while its window is open). */
+function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, 'pipeline' | 'layout' | 'archive'>>, write = true) {
   Object.assign(state, change);
   if ('pipeline' in change) state.filters = {};
   tasksMenuClose();
-  tasksURLWrite(state);
+  if (write) tasksURLWrite(state);
   state.tasks = []; state.base = [];
   state.more = false; state.edge = null; state.after = ''; state.stalled = false;
   state.loading = true;
@@ -334,7 +344,9 @@ async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<vo
     held = taskFeedLanded(state.feed, ticket, rows ? rows.cursor : '');
     if (!held) return;
     state.pipelines = pipelines;
-    if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
+    // A pipeline gone (or one a task's window named before the pipelines landed) falls back to You. The address is the
+    // list's to rewrite, not an open task's (#/task/<id>): closing that window writes the list's.
+    if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; if (!location.hash.startsWith('#/task/')) tasksURLWrite(state); }
     state.stalled = false;
     if (needs) state.needs = needs;
     if (!rows) { state.tasks = []; state.base = []; state.cursor = ''; state.more = false; state.edge = null; state.after = ''; }

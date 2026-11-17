@@ -268,6 +268,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
     const was = document.activeElement as HTMLElement | SVGElement | null;
     const address = '#/task/' + encodeURIComponent(String(task.id));
     d.address = location.hash === address ? address : '';
+    if (d.address) tasksBehindTask(task);
     if (!TASKS_ST) {
       // Outside Tasks, Back dismisses the detail without rebuilding the bot's chat, tab or scroll position.
       d.returnContext = {route: location.hash, task: String(task.id), opener: was};

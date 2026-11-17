@@ -130,6 +130,26 @@ def series(bot, relative):
     return "blob-series:" + hashlib.sha256((bot + "\0" + relative).encode()).hexdigest()[:20]
 
 
+def once_per_content(entries):
+    """A task's files as a reader sees them: two that hold the same bytes now are one file. A bot that writes its report
+    into its checkout's reports/ folder (published after its turn, reports/2026-11-17-how-it-works.md) and also attaches
+    it by name (`tico task attach`) has put the same bytes on the task twice. The one attached by name stays, else the
+    newest. `entries` are (row, digest, item) in the order shown, digest None for one that is never folded (archived);
+    the answer is the items kept, in that order."""
+    kept, at = [], {}
+    for row, digest, item in entries:
+        if digest is None:
+            kept.append((row, item))
+        elif digest not in at:
+            at[digest] = len(kept)
+            kept.append((row, item))
+        elif str(row["identity"]).startswith("task-file:") and not str(kept[at[digest]][0]["identity"]).startswith(
+            "task-file:"
+        ):
+            kept[at[digest]] = (row, item)
+    return [item for _, item in kept]
+
+
 EARLIEST_CONTENT_TIME = "2000-01-01T00:00:00.000000Z"
 
 
@@ -1656,7 +1676,7 @@ class Files:
 
     def task_listing(self, c, who, task_id):
         self.auth.task(c, who, task_id)
-        out = []
+        listed = []
         for row in c.execute(
             "SELECT * FROM bot_files WHERE task_id=? AND locator='tico_blob' ORDER BY last_activity_at DESC", (task_id,)
         ):
@@ -1689,16 +1709,22 @@ class Files:
                     "SELECT name FROM bot_file_versions WHERE file_id=? AND version=?",
                     (row["id"], row["current_version"]),
                 ).fetchone()[0]
-                out.append(
-                    {
-                        "id": row["id"],
-                        "name": name,
-                        "mime": row["mime"],
-                        "current_version": row["current_version"],
-                        "archived": bool(row["archived"]),
-                        "versions": versions,
-                    }
+                current = next((v for v in versions if v["n"] == row["current_version"]), versions[0])
+                listed.append(
+                    (
+                        row,
+                        None if row["archived"] else current["sha256"],
+                        {
+                            "id": row["id"],
+                            "name": name,
+                            "mime": row["mime"],
+                            "current_version": row["current_version"],
+                            "archived": bool(row["archived"]),
+                            "versions": versions,
+                        },
+                    )
                 )
+        out = once_per_content(listed)
         for b in c.execute(
             "SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id "
             "FROM blobs b JOIN task_assets a ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id WHERE a.task_id=? "

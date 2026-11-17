@@ -122,6 +122,10 @@ files:
   publish: [reports/, artifacts/, deliverables/]   # publish: [] turns it off
 ```
 
+A task lists each content once: a report the runner published from `reports/` and the same bytes attached by name
+(`tico task attach`) show as one file, the one attached by name. A task's Markdown files also open as tabs in its
+window, beside its HTML documents.
+
 Documents, images, video, audio, csv, tsv, json, yaml, md, html, pdf and office files can be published.
 Every kind but video and audio is capped at 25 MB. `tico file publish` and `tico file import` take video and audio up to
 the server's upload limit (`TICO_UPLOAD_MAX_BYTES`, 2 GiB by default). They stream from disk with a raw body and a
