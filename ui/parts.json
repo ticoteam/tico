@@ -13,6 +13,53 @@
   ],
   "idle": []
  },
+ "access-requests": {
+  "files": [
+   "app/access-requests.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "arMount"
+  ],
+  "idle": []
+ },
+ "thread-library": {
+  "files": [
+   "app/thread-library.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvLibOpen"
+  ],
+  "idle": []
+ },
+ "thread-pin-archive": {
+  "files": [
+   "app/thread-pin-archive.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvPinToggle",
+   "thvArchive"
+  ],
+  "idle": []
+ },
+ "thread-reactions": {
+  "files": [
+   "app/thread-reactions.ts"
+  ],
+  "deps": [],
+  "pages": [],
+  "calls": [
+   "thvReact",
+   "thvEmojiPick",
+   "thvSheet"
+  ],
+  "idle": []
+ },
  "browser-view": {
   "files": [
    "app/browser-view.ts"
