@@ -61,7 +61,7 @@ def decode(part_body: Json | None, charset: str = "utf-8") -> str:
             return raw.decode(enc)
         except (UnicodeDecodeError, LookupError):
             continue
-    return raw.decode("utf-8", "replace")  # pragma: no cover
+    return raw.decode("utf-8", "replace")  # pragma: no cover - latin-1 decodes every byte, so the loop always returns
 
 
 def strip_html(source: str | None) -> str:
