@@ -408,16 +408,19 @@ class Library:
             pins=self._pins(c, who, r["id"], caches["task"]),
         )
         if page:
-            links = page_links.links_of(c, self.auth, who, r["id"])
-            value.update(
-                links=links[:5],
-                links_more=max(0, len(links) - 5),
-                writers=page_links.writers_of(c, r["id"]),
-                may_write=page_links.may_write(c, self.auth, who, r),
-            )
+            value.update(self.page_info(c, who, r))
         for key in ("poster_blob_id", "thumb_blob_id"):
             value.pop(key, None)
         return value
+
+    def page_info(self, c, who, row):
+        links = page_links.links_of(c, self.auth, who, row["id"])
+        return {
+            "links": links[:5],
+            "links_more": max(0, len(links) - 5),
+            "writers": page_links.writers_of(c, row["id"]),
+            "may_write": page_links.may_write(c, self.auth, who, row),
+        }
 
     def listing(
         self,
@@ -504,12 +507,16 @@ class Library:
                 f["actor_name"] = known.get(f.get("actor") or "", "")
         return {"files": files, "has_more": nxt is not None, "next_cursor": nxt}
 
-    def search(self, who, q, limit=20, *, kind=""):
+    def search(self, who, q, limit=20, *, kind="", linked="", role="", writer=""):
         """Files `who` may read whose title or text matches, best first, each with an excerpt. Archived and deleted
         files are left out, as Docs leaves out archived docs."""
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "People and bots search files", 403)
         kind_sql, kind_args = kind_filter(kind)
+        link_where, link_args = page_links.filters(linked, role, writer)
+        if link_where:
+            kind_sql = "(" + kind_sql + ") AND " + " AND ".join(link_where)
+            kind_args = [*kind_args, *link_args]
         tokens = manual.query_words(q)
         if not tokens:
             raise Problem("query", "Search needs at least one word", 422)
@@ -541,6 +548,7 @@ class Library:
                     break
             out.sort(key=lambda pair: (-pair[0], pair[1]["title"].casefold()))
             out = out[:limit]
+            page_links.prime(c, [r for _, r in out])
             known = names.lookup(c, {"bot:" + r["bot_id"] for _, r in out})
             return {
                 "results": [
@@ -557,6 +565,7 @@ class Library:
                         "page": r["page_cadence"] is not None,
                         "excerpt": excerpt(r["text"] or "", tokens),
                         "score": round(score, 3),
+                        **(self.page_info(c, who, r) if r["page_cadence"] is not None else {}),
                     }
                     for score, r in out
                 ]
@@ -884,9 +893,25 @@ def install_library(app, store, auth, files):
             "FileSearch",
         ),
     )
-    def search(request: Request, q: str = "", limit: int = 20, kind: str = ""):
+    def search(
+        request: Request,
+        q: str = "",
+        limit: int = 20,
+        kind: str = "",
+        linked: str = "",
+        role: str = "",
+        writer: str = "",
+    ):
         """Search the files the caller may read by title and text, filtered by kind, best first with an excerpt."""
-        return library.search(request.state.identity, q[:500], max(1, min(limit, SEARCH_MAX)), kind=kind)
+        return library.search(
+            request.state.identity,
+            q[:500],
+            max(1, min(limit, SEARCH_MAX)),
+            kind=kind,
+            linked=linked,
+            role=role,
+            writer=writer,
+        )
 
     @app.delete(
         "/api/v2/files/{fid}",

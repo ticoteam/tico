@@ -202,6 +202,7 @@ def test_links_never_widen_private_page_or_reveal_private_targets(api):
         '/api/v2/pages?linked=task:' + public['id'],
         '/api/v2/files?linked=task:' + public['id'],
         '/api/v2/files',
+        '/api/v2/files/search?q=One',
         '/api/v2/tasks/' + public['id'] + '/files?all=1',
         '/api/v2/tasks/' + public['id'] + '/context',
     ):
@@ -307,3 +308,49 @@ def test_publish_submits_each_linked_document_requirement(api):
             (current['visit']['id'],),
         ).fetchall()
         assert [(r['file_id'], r['version']) for r in submitted] == [(fid, 2)]
+
+
+def test_search_filters_and_page_relationship_previews(api):
+    ops = bot(api, 'ops')
+    one, two = task(api), task(api)
+    first = publish_page(api, ops, 'orbitalcraft', task=one['id'], **{'as': 'Spec'})
+    assert first.status_code == 200, first.text
+    fid = first.json()['page']['file_id']
+    other = publish_page(api, ops, 'orbitalcraft', task=two['id'])
+    assert other.status_code == 200, other.text
+    assert add_link(api, fid, 'human:ben', 'writer').status_code == 200
+    for name in ('finance', 'cpo', 'assistant', 'doc-updater'):
+        assert add_link(api, fid, 'bot:' + name).status_code == 200
+    for filters in (
+        {'linked': 'task:' + one['id']},
+        {'role': 'Spec'},
+        {'writer': 'human:ben'},
+        {'linked': 'task:' + one['id'], 'role': 'Spec', 'writer': 'human:ben'},
+    ):
+        shown = api.get('/api/v2/files/search', params={'q': 'orbitalcraft', **filters}, headers=headers())
+        assert shown.status_code == 200, shown.text
+        [hit] = shown.json()['results']
+        assert hit['id'] == fid and len(hit['links']) == 5 and hit['links_more'] == 2
+        assert [w['actor'] for w in hit['writers']] == ['bot:ops']
+    assert (
+        api.get(
+            '/api/v2/files/search', params={'q': 'orbitalcraft', 'writer': 'bot:finance'}, headers=headers()
+        ).json()['results']
+        == []
+    )
+
+
+def test_existing_page_writers_do_not_need_an_active_assistant(api):
+    ops = bot(api, 'ops')
+    t = task(api)
+    made = publish_page(api, ops, task=t['id'], **{'as': 'Spec'})
+    assert made.status_code == 200, made.text
+    fid = made.json()['page']['file_id']
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='paused' WHERE id='assistant'")
+    second = publish_page(api, 'cara-test', 'Second', page=fid)
+    assert second.status_code == 200, second.text
+    third = publish_page(api, 'cara-test', 'Third', task=t['id'], **{'as': 'Spec'})
+    assert third.status_code == 200, third.text
+    assert (third.json()['page']['file_id'], third.json()['page']['version']) == (fid, 3)
+    assert publish_page(api, 'cara-test', task=t['id'], name='new.html').status_code == 409

@@ -62,6 +62,14 @@ def main():
                 if i < N // 2:
                     links.append((f'p{i}', r[0], 'human:ben', 'writer', 'bot:ops', now))
             c.executemany('INSERT INTO page_links VALUES(?,?,?,?,?,?)', links)
+            c.executemany(
+                'INSERT INTO file_text_state(doc,file_id,version,indexed_at) VALUES(?,?,1,?)',
+                [(i + 1, r[0], now) for i, r in enumerate(rows)],
+            )
+            c.executemany(
+                'INSERT INTO file_text(rowid,title,text) VALUES(?,?,?)',
+                [(i + 1, r[4], 'Orbitalcraft report') for i, r in enumerate(rows)],
+            )
             c.execute('ANALYZE')
         with store.read_transaction() as c:
             print(
@@ -83,6 +91,21 @@ def main():
                 ('pages/unfiltered', select + order, ()),
                 ('library/unfiltered', library + order, ()),
             ]
+            cases.extend(
+                [
+                    ('pages/bot/old', select + ' AND f.bot_id=?' + order, ('ops',)),
+                    (
+                        'pages/bot/new',
+                        select + ' AND (f.bot_id=? OR f.id IN (SELECT page_id FROM page_links WHERE target=?))' + order,
+                        ('ops', 'bot:ops'),
+                    ),
+                    (
+                        'publish/as',
+                        "SELECT f.* FROM page_links l JOIN pages p ON p.file_id=l.page_id JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
+                        ('task:t42', 'Spec'),
+                    ),
+                ]
+            )
             for label, filters in [
                 ('linked', ('task:t42', '', '')),
                 ('role', ('', 'Spec', '')),
@@ -92,6 +115,52 @@ def main():
                 where, args = page_links.filters(*filters)
                 for kind, base in [('pages', select), ('library', library)]:
                     cases.append((kind + '/' + label, base + ' AND ' + ' AND '.join(where) + order, args))
+            fts = (
+                "SELECT f.*,p.cadence AS page_cadence,file_text.text AS text FROM bot_files f "
+                "LEFT JOIN pages p ON p.file_id=f.id JOIN file_text_state s ON s.file_id=f.id "
+                "JOIN file_text ON file_text.rowid=s.doc WHERE f.state<>'deleted' AND f.archived=0 "
+                "AND COALESCE(p.archived,0)=0 AND ({where}) AND file_text MATCH ? "
+                "ORDER BY bm25(file_text,10.0,1.0) LIMIT 500"
+            )
+            cases.append(('search/old', fts.format(where='1'), ('orbitalcraft',)))
+            for label, filters in [
+                ('linked', ('task:t42', '', '')),
+                ('role', ('', 'Spec', '')),
+                ('writer', ('', '', 'human:ben')),
+            ]:
+                where, args = page_links.filters(*filters)
+                cases.append(('search/' + label, fts.format(where=' AND '.join(where)), (*args, 'orbitalcraft')))
+            context = (
+                "SELECT f.*,p.audience,coalesce(v.created_at,f.last_activity_at) AS context_updated_at "
+                "FROM pages p JOIN bot_files f ON f.id=p.file_id LEFT JOIN bot_file_versions v "
+                "ON v.file_id=f.id AND v.version=f.current_version WHERE p.archived=0 AND f.archived=0 "
+                "AND f.state<>'deleted' AND ({where}) ORDER BY context_updated_at DESC,f.id DESC"
+            )
+            old_context = (
+                "f.task_id=? OR f.scope=? OR EXISTS (SELECT 1 FROM pins WHERE place=? AND item='page:' || f.id)"
+            )
+            cases.extend(
+                [
+                    ('context/old', context.format(where=old_context), ('t42', 'task:t42', 'task:t42')),
+                    (
+                        'context/new',
+                        context.format(
+                            where=old_context + ' OR f.id IN (SELECT page_id FROM page_links WHERE target=?)'
+                        ),
+                        ('t42', 'task:t42', 'task:t42', 'task:t42'),
+                    ),
+                    (
+                        'unlink/last-writer',
+                        "SELECT count(*) FROM page_links WHERE page_id=? AND role='writer'",
+                        (rows[42][0],),
+                    ),
+                    (
+                        'publish/linked-documents',
+                        "SELECT target,role FROM page_links WHERE page_id=? AND target LIKE 'task:%' AND role NOT IN ('writer','related')",
+                        (rows[42][0],),
+                    ),
+                ]
+            )
             old_attach = "SELECT f.* FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version WHERE f.task_id=? AND f.archived=0 AND v.name=? AND NOT EXISTS (SELECT 1 FROM task_documents d WHERE d.file_id=f.id) ORDER BY f.last_activity_at DESC"
             cases.extend(
                 [

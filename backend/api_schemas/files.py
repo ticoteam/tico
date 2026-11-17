@@ -129,6 +129,10 @@ SCHEMAS.update(
                 "page": "b",
                 "excerpt": "s",
                 "score": "f",
+                "links": {**items(ref("PageLinkView")), "maxItems": 5},
+                "links_more": "i",
+                "writers": items(ref("PageWriter")),
+                "may_write": "b",
             }
         ),
         "FileSearch": obj({"results": items(ref("FileSearchHit"))}),

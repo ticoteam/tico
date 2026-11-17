@@ -1791,11 +1791,41 @@ class Files:
             if page_publish and who.role in ("human", "owner") and who.via != "assistant":
                 from . import assistant
 
-                info = assistant.availability(c, self.store.settings, who)
-                if not info["available"]:
-                    raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-                self.auth.require_write(c, who, info["bot"])
-                bot = info["bot"]
+                from . import page_links
+
+                existing = None
+                if fields.get("page"):
+                    existing = c.execute(
+                        "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id "
+                        "WHERE p.file_id=? AND f.state<>'deleted'",
+                        (str(fields["page"]),),
+                    ).fetchone()
+                elif fields.get("as") and fields.get("task"):
+                    tid = self.auth.resolve_task(c, who, str(fields["task"]))
+                    self.auth.task(c, who, tid)
+                    candidates = c.execute(
+                        "SELECT f.* FROM page_links l JOIN pages p ON p.file_id=l.page_id "
+                        "JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
+                        ("task:" + tid, page_links.role_name(str(fields["as"]))),
+                    ).fetchall()
+                    candidates = [r for r in candidates if self.visible(c, who, r, {})]
+                    if len(candidates) == 1:
+                        existing = candidates[0]
+                    elif len(candidates) > 1:
+                        raise Problem(
+                            "ambiguous",
+                            "Choose which page to update",
+                            409,
+                            extra={"pages": sorted(r["id"] for r in candidates)},
+                        )
+                if existing is not None:
+                    bot = existing["bot_id"]
+                else:
+                    info = assistant.availability(c, self.store.settings, who)
+                    if not info["available"]:
+                        raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+                    self.auth.require_write(c, who, info["bot"])
+                    bot = info["bot"]
             else:
                 bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
             if who.via == "assistant":
