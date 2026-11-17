@@ -11,7 +11,7 @@ import time
 from clients import git_repository
 from clients.repo_safety import outside_installation
 
-from . import git_credentials, isolation, safe_git
+from . import credential_socket, git_credentials, isolation, safe_git
 
 CLONE_TIMEOUT = 120  # a base clone made inside a turn, when no computer mirror is there yet
 GB = 1024**3
@@ -98,12 +98,10 @@ def worktree_base(workspace, repo, env):
         if not matches:
             raise ValueError('Base clone remote does not match this repository')
     else:
-        socket_path = source_env.get(git_credentials.credential_socket.SOCKET_ENV)
+        socket_path = source_env.get(credential_socket.SOCKET_ENV)
         if socket_path and not refreshed and not repo.get('machine_git'):
             try:
-                refreshed = git_credentials.credential_socket.request_refresh(
-                    socket_path, source_env.get('HUB_TOKEN', ''), name
-                )
+                refreshed = credential_socket.request_refresh(socket_path, source_env.get('HUB_TOKEN', ''), name)
             except (OSError, ValueError):
                 pass
         direct = [
@@ -194,7 +192,6 @@ def worktree_base(workspace, repo, env):
         mirror_url = ''
     if mirror_url:
         from urllib.parse import urlparse, unquote
-        from . import credential_socket
 
         mirror = Path(unquote(urlparse(mirror_url).path))
         if not refreshed:
