@@ -1205,8 +1205,9 @@ def _sentence(text):
 def sizing(conn, auth, who):
     """The open Size the market task as the Market page shows it, or None when none is open or the reader may not open
     it: its id and `version`, whose turn it is (`turn`: `person` while it waits on a person, else `working`), and `ask`,
-    the question it waits on the reader for (requirement id, kind, line, choices), answered by POST
-    /api/v2/tasks/{id}/asks/{requirement_id}/answer."""
+    the question it waits on the reader for (requirement id, kind, line, choices): a ❓ (kind `question`, its `mark_id`)
+    is answered by a comment on the task, an older question row by POST /api/v2/tasks/{id}/asks/{requirement_id}/answer."""
+    from . import question_marks
     from . import waiting_on as W
 
     task_id = _open_task(conn)
@@ -1224,7 +1225,16 @@ def sizing(conn, auth, who):
         "ask": None,
     }
     mine = next((w for w in waits if w.state == W.PERSON and w.ask and w.who == who.actor and w.requirement_id), None)
-    if mine:
+    if mine and question_marks.mark_id(mine.requirement_id):
+        # A ❓ on the task's chat: the reader's reply there is the answer (POST /api/v2/tasks/{id}/comments).
+        out["ask"] = {
+            "requirement_id": None,
+            "mark_id": question_marks.mark_id(mine.requirement_id),
+            "kind": "question",
+            "line": mine.line or "",
+            "choices": [],
+        }
+    elif mine:
         found = conn.execute(
             "SELECT kind, line, choices FROM requirements WHERE id=?", (mine.requirement_id,)
         ).fetchone()
