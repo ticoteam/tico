@@ -1725,10 +1725,10 @@ def for_claim(c, runner, config, loads=None, bot=""):
         if (
             sub
             and bot
-            and set(providers.MODEL_KEYS.get(runtime, ())) & _bot_key_names(c, bot)
             and c.execute(
                 "SELECT 1 FROM model_subscriptions WHERE id=? AND credential_id IS NOT NULL", (sub["id"],)
             ).fetchone()
+            and set(providers.MODEL_KEYS.get(runtime, ())) & _bot_key_names(c, bot)
         ):
             continue
         if sub:

@@ -16,14 +16,16 @@ from scripts.benchmark_model_keys import NOW, seed
 
 MOVE = importlib.import_module("backend.migrations.20261117061243_computer_keys_to_subscriptions")
 
-# Stats that make a scan look cheap: the key tables tiny, the subjects of grants all alike.
+# Stats from when the install was small (analysed with a few rows): a scan looks as cheap as a seek.
 STALE = [
     ("computer_subscriptions", None, "2"),
-    ("computer_subscriptions", "sqlite_autoindex_computer_subscriptions_1", "2 2 1"),
+    ("computer_subscriptions", "sqlite_autoindex_computer_subscriptions_1", "2 1 1"),
     ("model_subscriptions", None, "2"),
     ("credentials", None, "2"),
-    ("credential_grants", None, "5000000"),
-    ("credential_grants", "credential_grants_subject", "5000000 5000000"),
+    ("credential_grants", None, "3"),
+    ("credential_grants", "credential_grant_active", "3 1 1"),
+    ("credential_grants", "credential_grants_subject", "3 2"),
+    ("bot_config", None, "1"),
 ]
 
 
@@ -79,6 +81,7 @@ def test_a_bots_key_grants_and_a_keys_subscription_are_sought_by_index(tmp_path,
     found = plans(c, lambda: model_subscriptions.for_claim(c, {"id": runners[0]}, {"runtime": "claude"}, bot=bots[1]))
     [grants] = [p for sql, p in found.items() if "FROM credential_grants g" in sql]
     assert any(p.startswith("SEARCH g USING INDEX credential_grants_subject (subject=?)") for p in grants), grants
+    assert not [p for p in grants if p.startswith("SCAN")], grants
     by_key = c.execute("EXPLAIN QUERY PLAN SELECT id FROM model_subscriptions WHERE credential_id=?", ("x",))
     assert [r[3] for r in by_key] == [
         "SEARCH model_subscriptions USING INDEX model_subscriptions_credential (credential_id=?)"

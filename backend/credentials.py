@@ -145,7 +145,8 @@ def explicitly_granted(c, subject):
         for r in c.execute(
             'SELECT g.credential_id FROM credential_grants g '
             'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-            "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+            # By the bot's key, so each grant seeks its bot rather than scanning bot_config.
+            "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
             'WHERE g.subject=? AND g.revoked_at IS NULL '
             "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
             "AND p.subject='human:'||bc.owner_id))",
@@ -173,7 +174,8 @@ def prime_granted(c, subjects):
         for subject, credential in c.execute(
             'SELECT g.subject,g.credential_id FROM credential_grants g '
             'LEFT JOIN credential_grants p ON p.id=g.parent_id '
-            "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+            # By the bot's key, so each grant seeks its bot rather than scanning bot_config.
+            "LEFT JOIN bot_config bc ON substr(g.subject,1,4)='bot:' AND bc.bot=substr(g.subject,5) "
             f"WHERE g.subject IN ({','.join('?' * len(part))}) AND g.revoked_at IS NULL "
             "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
             "AND p.subject='human:'||bc.owner_id))",
