@@ -1394,33 +1394,47 @@ class Files:
         explicit_title=False,
         fid=None,
         modified=None,
+        existing_row=None,
+        version_actor=None,
+        version_time=None,
     ):
         """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
-        file's id (for a caller that writes the file's id somewhere before the file exists). `modified` is when the
+        file's id (for a caller that writes the file's id somewhere before the file exists). `existing_row` continues
+        a page by its authorized id, independently of its storage bot and filename. `modified` is when the
         content last changed at its source (content_time): the file's activity time when it is new or changed, so a
         repository published for the first time lists by when each file was written, not by when it was copied. An
         unchanged publish is no activity: it leaves the time alone, except that it may move a time that only says when
         Tico copied the current version back to when that content was written."""
         now = H.now()
-        when = content_time(modified, now) or now
-        row, created = self.open_row(
-            c,
-            bot=bot,
-            scope=scope,
-            identity=identity,
-            title=title or name,
-            kind=BF.kind_of(name),
-            mime=mime,
-            locator="tico_blob",
-            task=task,
-            conversation=conversation,
-            now=when,
-            fid=fid,
+        when = version_time or content_time(modified, now) or now
+        row, created = (
+            (existing_row, False)
+            if existing_row is not None
+            else self.open_row(
+                c,
+                bot=bot,
+                scope=scope,
+                identity=identity,
+                title=title or name,
+                kind=BF.kind_of(name),
+                mime=mime,
+                locator="tico_blob",
+                task=task,
+                conversation=conversation,
+                now=when,
+                fid=fid,
+            )
         )
         last = c.execute(
             "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
         ).fetchone()
-        changed = created or last is None or (source_digest or digest) != (last["source_digest"] or last["digest"])
+        changed = (
+            created
+            or last is None
+            or (source_digest or digest) != (last["source_digest"] or last["digest"])
+            or bool(version_actor and version_actor != last["actor"])
+            or bool(version_time and version_time != last["created_at"])
+        )
         version = row["current_version"]
         if changed:
             version += 1
@@ -1438,8 +1452,8 @@ class Files:
                     commit or None,
                     repo_path or None,
                     attempt or None,
-                    actor,
-                    now,
+                    version_actor or actor,
+                    version_time or now,
                 ),
             )
         action = "created" if created else "modified" if changed else "published"
@@ -1556,7 +1570,7 @@ class Files:
                 "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
                 "ON v.file_id=f.id AND v.version=f.current_version "
                 "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
-                "AND NOT EXISTS (SELECT 1 FROM task_documents d WHERE d.file_id=f.id) "
+                "AND NOT EXISTS (SELECT 1 FROM page_links pl WHERE pl.page_id=f.id AND pl.role NOT IN ('writer','related')) "
                 "ORDER BY f.last_activity_at DESC",
                 (task_id, item["name"]),
             ).fetchall()
@@ -1654,12 +1668,20 @@ class Files:
                     (*[media[key] for key in FIELDS], fid, number),
                 )
 
-    def task_listing(self, c, who, task_id):
+    def task_listing(self, c, who, task_id, *, all_pages=False):
         self.auth.task(c, who, task_id)
+        from . import page_links
+
         out = []
-        for row in c.execute(
-            "SELECT * FROM bot_files WHERE task_id=? AND locator='tico_blob' ORDER BY last_activity_at DESC", (task_id,)
-        ):
+        rows = c.execute(
+            "SELECT f.* FROM bot_files f WHERE f.locator='tico_blob' AND (f.task_id=?"
+            + (" OR f.id IN (SELECT page_id FROM page_links WHERE target=?)" if all_pages else "")
+            + ") ORDER BY f.last_activity_at DESC",
+            (task_id, "task:" + task_id) if all_pages else (task_id,),
+        ).fetchall()
+        prime_visible(c, rows)
+        page_links.prime(c, rows)
+        for row in rows:
             if not self.visible(c, who, row, {}):
                 continue
             versions = []
@@ -1692,6 +1714,7 @@ class Files:
                 out.append(
                     {
                         "id": row["id"],
+                        **({"links": page_links.links_of(c, self.auth, who, row["id"])} if all_pages else {}),
                         "name": name,
                         "mime": row["mime"],
                         "current_version": row["current_version"],
@@ -1756,7 +1779,7 @@ class Files:
             return fields, data
         return dict(query), raw
 
-    def publish(self, request, who, fields, data, *, imported=False, extra=None, extra_body=None):
+    def publish(self, request, who, fields, data, *, imported=False, extra=None, extra_body=None, page_publish=False):
         """Bytes into the blob store, then one idempotent transaction that lists them. `extra(c, row, changed)` adds
         to the same write (a page's row, backend/pages.py) and its answer; `extra_body` is what it adds to the
         request a retry must repeat."""
@@ -1765,7 +1788,46 @@ class Files:
         staged = isinstance(data, Staged)
         size = data.size if staged else len(data)
         with self.store.read() as c:
-            bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
+            if page_publish and who.role in ("human", "owner") and who.via != "assistant":
+                from . import assistant
+
+                from . import page_links
+
+                existing = None
+                if fields.get("page"):
+                    existing = c.execute(
+                        "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id "
+                        "WHERE p.file_id=? AND f.state<>'deleted'",
+                        (str(fields["page"]),),
+                    ).fetchone()
+                elif fields.get("as") and fields.get("task"):
+                    tid = self.auth.resolve_task(c, who, str(fields["task"]))
+                    self.auth.task(c, who, tid)
+                    candidates = c.execute(
+                        "SELECT f.* FROM page_links l JOIN pages p ON p.file_id=l.page_id "
+                        "JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
+                        ("task:" + tid, page_links.role_name(str(fields["as"]))),
+                    ).fetchall()
+                    candidates = [r for r in candidates if self.visible(c, who, r, {})]
+                    if len(candidates) == 1:
+                        existing = candidates[0]
+                    elif len(candidates) > 1:
+                        raise Problem(
+                            "ambiguous",
+                            "Choose which page to update",
+                            409,
+                            extra={"pages": sorted(r["id"] for r in candidates)},
+                        )
+                if existing is not None:
+                    bot = existing["bot_id"]
+                else:
+                    info = assistant.availability(c, self.store.settings, who)
+                    if not info["available"]:
+                        raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
+                    self.auth.require_write(c, who, info["bot"])
+                    bot = info["bot"]
+            else:
+                bot = self.writer_bot(c, who, str(fields.get("bot") or ""))
             if who.via == "assistant":
                 self.target(c, who, bot, fields)
                 if extra is None:
@@ -1782,7 +1844,7 @@ class Files:
             else:
                 name = str(fields.get("name") or relative.rsplit("/", 1)[-1])
                 identity = series(bot, relative or name)
-                if who.via == "assistant":
+                if who.via == "assistant" or page_publish and who.role in ("human", "owner"):
                     # A filename must not overwrite another person’s page from the shared Assistant.
                     identity += ":person:" + who.actor
             name, mime = BF.check_name(name)
@@ -1809,16 +1871,82 @@ class Files:
         }
 
         def work(c):
-            scope, task, conversation, attempt = self.target(c, who, bot, fields)
-            existing = self.find(c, bot, scope, identity)
+            existing_page = None
+            page_who = who
+            if page_publish and who.role == "runner":
+                run = str(fields.get("attempt") or "")
+                if not run:
+                    raise Problem("forbidden", "A computer publishes a page for one of its turns", 403)
+                self.turn_context(c, who, bot, run)
+                page_who = Identity("bot:" + bot, "bot", runner_id=who.runner_id, attempt_id=run)
+            if page_publish:
+                from . import page_links
+
+                task_id = str(fields.get("task") or "")
+                if task_id:
+                    task_id = self.auth.resolve_task(c, page_who, task_id)
+                    self.auth.task(c, page_who, task_id)
+                    fields["task"] = task_id
+                role = page_links.role_name(str(fields.get("as") or "")) if fields.get("as") else ""
+                if role and not task_id:
+                    raise Problem("validation", "as requires a task", 422)
+                if role:
+                    from .task_reads import comment_rights
+
+                    comment_rights(c, self.auth, page_who, task_id)
+                fid = str(fields.get("page") or "")
+                if not fid and role:
+                    candidates = c.execute(
+                        "SELECT f.* FROM page_links l JOIN pages p ON p.file_id=l.page_id "
+                        "JOIN bot_files f ON f.id=p.file_id WHERE l.target=? AND l.role=? AND f.state<>'deleted'",
+                        ("task:" + task_id, role),
+                    ).fetchall()
+                    candidates = [r for r in candidates if self.visible(c, page_who, r, {})]
+                    if len(candidates) > 1:
+                        raise Problem(
+                            "ambiguous",
+                            "Choose which page to update",
+                            409,
+                            extra={"pages": sorted(r["id"] for r in candidates)},
+                        )
+                    if candidates:
+                        fid = candidates[0]["id"]
+                if fid:
+                    existing_page = c.execute(
+                        "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=?", (fid,)
+                    ).fetchone()
+                    if (
+                        not existing_page
+                        or existing_page["state"] == "deleted"
+                        or not self.visible(c, page_who, existing_page, {})
+                    ):
+                        raise Problem("not_found", "Page not found", 404)
+                    if not page_links.may_write(c, self.auth, page_who, existing_page):
+                        raise Problem("forbidden", "Only page writers may write a version", 403)
+            if existing_page is not None:
+                # Preserve the original file's privacy scope even when this version is written through another task.
+                attempt = who.attempt_id or str(fields.get("attempt") or "")
+                if who.role == "runner":
+                    self.turn_context(c, who, bot, attempt)
+                scope, task, conversation = (
+                    existing_page["scope"],
+                    existing_page["task_id"],
+                    existing_page["conversation_id"],
+                )
+            elif page_publish and who.role in ("human", "owner") and who.via != "assistant":
+                task = str(fields.get("task") or "") or None
+                scope, conversation, attempt = ("task:" + task if task else "bot"), None, ""
+            else:
+                scope, task, conversation, attempt = self.target(c, who, bot, fields)
+            existing = existing_page if existing_page is not None else self.find(c, bot, scope, identity)
             if existing and who.via == "assistant" and not self.visible(c, who, existing, {}):
                 raise Problem("not_found", "Page not found", 404)
             stored_task = existing["task_id"] if existing else None
             H._writer(c, self.actor_of(who, bot), task_id=stored_task, attempt_id=attempt)
             with H.refusal_task(task or stored_task):
-                return write_file(c, scope, task, conversation, attempt)
+                return write_file(c, scope, task, conversation, attempt, existing_page)
 
-        def write_file(c, scope, task, conversation, attempt):
+        def write_file(c, scope, task, conversation, attempt, existing_page):
             actor = self.actor_of(who, bot)
             if failed:
                 row, created = self.open_row(
@@ -1859,6 +1987,9 @@ class Files:
                 repo_path=relative,
                 explicit_title=bool(fields.get("title")),
                 modified=fields.get("modified"),
+                existing_row=existing_page,
+                version_actor=str(fields.get("written_by") or "") if page_publish else None,
+                version_time=str(fields.get("written_at") or "") if page_publish else None,
             )
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
             if changed:

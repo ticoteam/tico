@@ -78,8 +78,8 @@ def test_publishing_refuses_what_is_not_a_page(api):
     assert page(api, attempt, as_of="last week").status_code == 422
     assert (
         api.post("/api/v2/pages", params={"name": "x.html"}, content=HTML, headers=headers("ben-test")).status_code
-        == 403
-    )  # a person does not publish a bot's page
+        == 200
+    )  # a person publishes under their Assistant storage bot
 
 
 def test_a_page_goes_stale_after_one_and_a_half_cadences():
@@ -97,7 +97,7 @@ def test_a_replaced_page_names_its_replacement_only_to_readers_who_may_see_it(ap
     new = page(api, attempt, name="weekly-2.html", data=HTML + b"<p>v2</p>", replaces=old).json()["page"]
     seen = read(api, old, "ben-test").json()["page"]
     assert (seen["replaced_by_id"], seen["replaced_by_title"]) == (new["file_id"], "weekly-2.html")
-    # Another bot's page cannot be named.
+    # A bot without write rights on the old page cannot replace it.
     _, other = turn(api, bot="finance")
     assert page(api, other, name="f.html", replaces=old).status_code == 404
 

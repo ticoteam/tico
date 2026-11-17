@@ -222,12 +222,16 @@ def _page_version(
     page, _ = R.page_for(conn, row, requirement)
     now = int(page["version"]) if page else None
     document = R.document_of(requirement)
+    from . import task_pages as P
+
+    pages = P.current_pages(conn, row["visit"]["id"], requirement["id"]) if document else ([page] if page else [])
+    if document and not pages and page:
+        pages = P.current_pages(conn, str(page["visit_id"]), requirement["id"])
+    expected = P.version_key(pages)
     if keyed and is_human(by) and document and value == OK and page_version in (None, ""):
         _refuse(conn, by, "task_requirement", f"{APPROVE_SHOWN}: send its page_version", row["id"])
     stale_visit = bool(visit_id) and visit_id != _part(row, "visit").get("id")
-    if stale_visit or (
-        page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}")
-    ):
+    if stale_visit or (page_version not in (None, "") and (not page or str(page_version) != expected)):
         if not document:
             _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
         approval = {
@@ -235,6 +239,11 @@ def _page_version(
             "visit_id": _part(row, "visit").get("id"),
             "file_id": page["file_id"] if page else None,
             "version": now,
+            **(
+                {"pages": [{"file_id": p["file_id"], "version": p["version"]} for p in pages], "page_version": expected}
+                if len(pages) > 1
+                else {}
+            ),
         }
         _h().refuse(conn, by, "task_changed", STALE_APPROVAL, task=row["id"], extra={"approval": approval})
     return now
@@ -261,7 +270,15 @@ def _write(
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
     if page_version is not None:
+        from . import task_pages as P
+
         data["page_version"] = page_version
+        pages = P.current_pages(conn, row["visit"]["id"], requirement_id)
+        if not pages and (requirement := R.get(conn, requirement_id)):
+            page, _ = R.page_for(conn, row, requirement)
+            if page:
+                pages = P.current_pages(conn, str(page["visit_id"]), requirement_id)
+        data["pages"] = [{"file_id": p["file_id"], "version": p["version"]} for p in pages]
     # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
@@ -402,7 +419,22 @@ def answer(
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
     same = (str(by), value, notes, pinned, _heads(conn, row) if pinned is not None else None)
     kept = (newest or {}).get("heads")
-    if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version"), kept) == same:
+    from . import task_pages as P
+
+    pages_same = (
+        not R.document_of(requirement)
+        or (
+            P.answer_pages(conn, task_id, newest)
+            == {str(p["file_id"]): int(p["version"]) for p in P.current_pages(conn, row["visit"]["id"], requirement_id)}
+        )
+        if newest
+        else False
+    )
+    if (
+        newest
+        and pages_same
+        and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version"), kept) == same
+    ):
         out = E.task(conn, task_id) or row
         out["answer_id"] = newest["id"]
         return out

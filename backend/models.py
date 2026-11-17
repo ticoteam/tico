@@ -469,7 +469,10 @@ class TaskAskAnswer(Contract):
     value: Annotated[str, Field(min_length=1, max_length=20_000)]
     note: str | None = Field(default=None, max_length=20_000)
     version: Version | None = None
-    page_version: Annotated[str, Field(pattern=r"^[^@\s]+@[1-9][0-9]{0,8}$", max_length=200)] | None = None
+    page_version: (
+        Annotated[str, Field(pattern=r"^[^@,\s]+@[1-9][0-9]{0,8}(?:,[^@,\s]+@[1-9][0-9]{0,8})*$", max_length=8192)]
+        | None
+    ) = None
     visit_id: ID | None = None
     on_behalf_of: ID | None = None
 

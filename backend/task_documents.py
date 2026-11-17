@@ -1,12 +1,9 @@
 # pyright: strict
-"""A task's documents: Spec, QA report (which holds the proof), Release report and Invoice, the names a stage
-approves (task_requirements.APPROVED), and any other a bot names (Email, Release notes, Research). A task has at most one of each name, and each is a task file (backend/files.py `attach_task`) whose versions are the document's: who wrote each
-one, when, its note (`task_file_reviews`) and its HTML, cleaned as a page is (backend/visuals.py) so a reader opens it
-sandboxed like any page. `task_documents` only names which task file is which document.
+"""Task documents are pages linked to the task with their document name as role.
 
-A bot writes one with `tico task attach <id> spec.html --doc Spec` (the `document` field of POST
-/api/v2/tasks/{id}/files). The task's read lists them newest change first (`listing`); the task window shows a tab per
-document beside Chat, and none at all when there are none (ui/app/task-docs.ts)."""
+A role may name several pages, and a shared page keeps its versions across tasks and writers. The task's read lists
+all readable document links, newest change first, alongside the version that task last approved.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +29,8 @@ def canonical(name: str | None) -> str:
     """The document's name: a fixed name in its own spelling (`qa report` is `QA report`), else `name` tidied, or
     Problem."""
     said = " ".join(str(name or "").split())
+    if said.lower() in ("writer", "related"):
+        raise Problem("validation", "Writer and related are link roles, not document names", 422)
     found = next((n for n in NAMES if n.lower() == _key(said)), None)
     if found:
         return found
@@ -43,7 +42,13 @@ def canonical(name: str | None) -> str:
 def named(c: Any, task_id: str, name: str) -> str:
     """`name` as this task already spells it (`release notes` is its `Release notes`); a new name while the task has
     room for one more document, or Problem."""
-    names: list[str] = [r["name"] for r in c.execute("SELECT name FROM task_documents WHERE task_id=?", (task_id,))]
+    names: list[str] = [
+        r["role"]
+        for r in c.execute(
+            "SELECT DISTINCT role FROM page_links WHERE target=? AND role NOT IN ('writer','related')",
+            ("task:" + task_id,),
+        )
+    ]
     same = next((n for n in names if _key(n) == _key(name)), None)
     if same:
         return same
@@ -71,40 +76,114 @@ def clean(text: str | None) -> bytes:
 
 
 def file_of(c: Any, task_id: str, name: str) -> Any:
-    """The task file that is this task's document `name`, or None before its first version."""
-    row: Any = c.execute(
-        "SELECT f.* FROM task_documents d JOIN bot_files f ON f.id=d.file_id WHERE d.task_id=? AND d.name=?",
-        (task_id, name),
-    ).fetchone()
+    """The page continued by a document write; more than one requires an explicit page id."""
+    rows = c.execute(
+        "SELECT f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id WHERE l.target=? AND l.role=? ORDER BY f.id",
+        ("task:" + task_id, name),
+    ).fetchall()
+    if len(rows) > 1:
+        raise Problem(
+            "ambiguous",
+            "Several pages have this document role; publish with page",
+            409,
+            extra={"pages": [r["id"] for r in rows]},
+        )
+    row = rows[0] if rows else None
     if row and row["archived"]:
-        c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (row["id"],))  # written again, it is back
+        c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (row["id"],))
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (row["id"],)).fetchone()
     return row
 
 
-def record(c: Any, task_id: str, name: str, file_id: str) -> None:
+def record(c: Any, task_id: str, name: str, file_id: str, by: str | None = None) -> None:
+    """Make a task document a page, linking its task and writer without changing any other links."""
+    from . import page_links as L
+
     now = H.now()
     c.execute(
-        "INSERT INTO task_documents(id,task_id,name,file_id,created_at,updated_at) VALUES(?,?,?,?,?,?) "
-        "ON CONFLICT(task_id,name) DO UPDATE SET file_id=excluded.file_id,updated_at=excluded.updated_at",
-        (H.new_id(), task_id, name, file_id, now, now),
+        "INSERT INTO pages(file_id,cadence,created_at,updated_at) VALUES(?,'none',?,?) "
+        "ON CONFLICT(file_id) DO UPDATE SET updated_at=excluded.updated_at,archived=0",
+        (file_id, now, now),
     )
+    if by is None:
+        row = c.execute("SELECT bot_id FROM bot_files WHERE id=?", (file_id,)).fetchone()
+        by = f"bot:{row['bot_id']}"
+    L.link(c, file_id, "task:" + task_id, name, by)
+    version = c.execute(
+        "SELECT actor FROM bot_file_versions WHERE file_id=? ORDER BY version DESC LIMIT 1", (file_id,)
+    ).fetchone()
+    if version and str(version["actor"]).startswith(("bot:", "human:")):
+        L.link(c, file_id, version["actor"], "writer", by)
+
+
+def approved_documents(c: Any, task_id: str) -> dict[tuple[str, str], int]:
+    """The task's last OK for each (page, document role), including earlier visits."""
+    from . import task_pages as P
+
+    out: dict[tuple[str, str], int] = {}
+    answers = c.execute(
+        "SELECT a.*,json_extract(r.settings,'$.document') AS document FROM visits v "
+        "JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id "
+        "WHERE v.task_id=? AND a.answer='ok' AND a.undone_at IS NULL ORDER BY a.created_at DESC,a.rowid DESC",
+        (task_id,),
+    ).fetchall()
+    for answer in answers:
+        if not answer["document"]:
+            continue
+        for file_id, version in P.answer_pages(c, task_id, dict(answer)).items():
+            out.setdefault((file_id, str(answer["document"])), version)
+    return out
+
+
+def approved_versions(c: Any, task_id: str, role: str | None = None) -> dict[str, int]:
+    """The last approved page versions on a task, optionally for one document role."""
+    out: dict[str, int] = {}
+    for (file_id, document), version in approved_documents(c, task_id).items():
+        if role is None or document == role:
+            out.setdefault(file_id, version)
+    return out
+
+
+def approved_tasks(c: Any, page_id: str, role: str | None = None) -> dict[str, int]:
+    """Task id -> approved version for a page's document links. Pass the link's role for its own OK mark.
+
+    The map is neutral data; callers still filter task links through their reader's permissions.
+    """
+    rows = c.execute(
+        "SELECT substr(target,6) AS task_id,role FROM page_links WHERE page_id=? "
+        "AND target LIKE 'task:%' AND role NOT IN ('writer','related')",
+        (page_id,),
+    ).fetchall()
+    out: dict[str, int] = {}
+    for row in rows:
+        document = str(row["role"])
+        if role is not None and document != role:
+            continue
+        task_id = str(row["task_id"])
+        version = approved_versions(c, task_id, document).get(page_id)
+        if version is not None:
+            out[task_id] = max(out.get(task_id, 0), version)
+    return out
 
 
 def listing(c: Any, files: Any, who: Any, task_id: str) -> list[dict[str, Any]]:
     """The task's documents `who` may open, newest change first, each with its versions newest first."""
     from . import task_privacy as privacy
+    from . import page_links as L
     from . import files as file_store
 
     actor_of = cast(Callable[[Any], Any], privacy.actor)
     review = cast(Callable[..., dict[str, Any]], file_store.version_review)
     out: list[dict[str, Any]] = []
     rows: list[Any] = c.execute(
-        "SELECT d.name, f.* FROM task_documents d JOIN bot_files f ON f.id=d.file_id "
-        "WHERE d.task_id=? AND f.archived=0 AND f.current_version>0 ORDER BY d.updated_at DESC, d.name",
-        (task_id,),
+        "SELECT l.role AS name, f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id "
+        "JOIN pages p ON p.file_id=f.id WHERE l.target=? AND l.role NOT IN ('writer','related') "
+        "AND f.archived=0 AND p.archived=0 AND p.deleted_at IS NULL AND f.current_version>0 "
+        "ORDER BY f.last_activity_at DESC, l.role, f.id",
+        ("task:" + task_id,),
     ).fetchall()
     actor = actor_of(who)
+    approved = approved_documents(c, task_id)
     for row in rows:
         if not files.visible(c, who, row, {}):
             continue
@@ -122,10 +201,15 @@ def listing(c: Any, files: Any, who: Any, task_id: str) -> list[dict[str, Any]]:
         ]
         if not versions:
             continue
+        approved_version = approved.get((str(row["id"]), str(row["name"])))
         out.append(
             {
                 "name": row["name"],
                 "file_id": row["id"],
+                "page_id": row["id"],
+                "links": L.links_of(c, files.auth, who, row["id"]),
+                "changed_since_ok": approved_version is not None and approved_version < versions[0]["n"],
+                **({"approved_version": approved_version} if approved_version is not None else {}),
                 "version": versions[0]["n"],
                 "by": versions[0]["by"],
                 "at": versions[0]["at"],
