@@ -81,16 +81,21 @@ function cfManager(f: FloorFactory): string | null {
   for (const p of f.pipelines) if (p.manager_id) tally.set(p.manager_id, (tally.get(p.manager_id) ?? 0) + 1);
   return [...tally].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
-/** The manager's own reports on the org chart, as actors: the bots the reader may see, archived ones and helpers left out. */
+/** The manager's own reports on the org chart, as actors: its people and its bots. A bot reports to a person as
+    'human:<id>' and to a bot by its bare id; a person reports to a person by bare id. Hidden people, and the bots the
+    reader may not see, archived ones and helpers are left out. */
 function cfReports(manager: string | null): string[] {
   if (!manager) return [];
   const boss = manager.startsWith('bot:') ? manager.slice(4) : manager;
-  return (S.emps || [])
+  const bots = (S.emps || [])
     .filter(e => e.reports_to === boss && e.status !== 'archived' && e.state !== 'archived' && orgBranchVisible(e) && !isHelperBot(e))
     .map(e => 'bot:' + e.id);
+  const person = manager.startsWith('human:') ? manager.slice(6) : '';
+  const people = person ? (S.people || []).filter(p => p.reports_to === person && !p.hidden).map(p => 'human:' + p.id) : [];
+  return [...bots, ...people];
 }
-/** Everyone on the factory's pipelines or reporting to its manager: those holding work first, the most loaded leading,
-    then the manager's idle reports by name. The manager is left out. */
+/** Every person and bot on the factory's pipelines or reporting to its manager: those holding work first, the most loaded
+    leading, then the manager's idle reports. The manager is left out. */
 function cfMates(f: FloorFactory, manager: string | null): string[] {
   const load = new Map<string, number>();
   for (const a of cfReports(manager)) load.set(a, 0);
