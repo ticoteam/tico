@@ -1145,3 +1145,96 @@ def test_a_request_loop_failure_logs_its_message_scrubbed(monkeypatch, caplog):
         SR.serve_forever(gateway)
     assert "Slack requests failed: OperationalError: database is locked (key [redacted])" in caplog.text
     assert "sk-testkey" not in caplog.text
+
+
+# ----------------------------------------------------------------------------- loop failures: the class and a scrubbed message
+def locked(*_args, **_kwargs):
+    raise sqlite3.OperationalError("database is locked (key sk-testkey-000000000000)")
+
+
+LOCKED = "OperationalError: database is locked (key [redacted])"
+
+
+class _SocketClient:
+    """Stands in for slack_sdk's SocketModeClient: it keeps the listeners and the acks."""
+
+    def __init__(self, app_token, web_client):
+        self.socket_mode_request_listeners, self.acks = [], []
+
+    def connect(self):
+        pass
+
+    def send_socket_mode_response(self, response):
+        self.acks.append(response.envelope_id)
+
+
+def test_an_event_the_gateway_cannot_store_is_not_acknowledged_so_slack_sends_it_again(monkeypatch, caplog):
+    import slack_sdk.socket_mode
+    from slack_sdk.socket_mode.request import SocketModeRequest
+
+    monkeypatch.setattr(slack_sdk.socket_mode, "SocketModeClient", _SocketClient)
+    socket = G.SlackAPI("xoxb-test-token", "xapp-test-token").connect(locked)
+    socket_request = SocketModeRequest("events_api", "env-1", {"event": {"type": "message"}})
+    with caplog.at_level(logging.ERROR, logger="tico.slack"):
+        socket.socket_mode_request_listeners[0](socket, socket_request)
+    assert f"Event env-1 not persisted: {LOCKED}" in caplog.text
+    assert socket.acks == []
+
+
+def test_a_backfill_that_fails_is_logged_scrubbed_and_the_readers_still_get_what_is_stored(
+    readers, monkeypatch, caplog
+):
+    gw, hub = readers, readers.store
+    assert gw.receive(channel_message("Launch copy is ready for review")) == "stored"
+    gw.clock.advance(3600)
+    monkeypatch.setattr(gw, "backfill", locked)
+    with caplog.at_level(logging.ERROR, logger="tico.slack"):
+        out = gw.maybe_digest()
+    assert f"Backfill failed: {LOCKED}" in caplog.text
+    assert ("cmo", "sent", 1) in [(d["reader"], d["state"], d["count"]) for d in out]
+    assert any("Launch copy is ready for review" in d["body"] for d in digests(hub))
+
+
+def test_an_event_that_fails_is_stored_as_failed_with_its_scrubbed_reason(gateway, hub, monkeypatch, caplog):
+    assert gateway.receive(envelope("Please check the launch")) == "queued"
+    event_id = rows(hub, "SELECT event_id FROM slack_events")[0]["event_id"]
+    monkeypatch.setattr(gateway, "process", locked)
+    with caplog.at_level(logging.ERROR, logger="tico.slack"):
+        out = gateway.tick()["events"]
+    assert f"Event {event_id} failed: {LOCKED}" in caplog.text
+    assert {"event_id": event_id, "state": "failed"} in out
+    assert rows(hub, "SELECT state,reason FROM slack_events WHERE event_id=?", event_id) == [
+        {"state": "failed", "reason": LOCKED}
+    ]
+
+
+def test_a_failed_tick_or_heartbeat_is_logged_scrubbed_and_the_loop_runs_its_next_turn(gateway, monkeypatch, caplog):
+    turns = []
+
+    def tick():
+        turns.append("tick")
+        if len(turns) == 1:
+            locked()
+
+    def heartbeat():
+        if len(turns) == 2:
+            gateway.stop.set()  # the second turn is the last
+        gateway.wake.set()  # the loop does not wait out a tick interval
+        locked()
+
+    monkeypatch.setattr(SR, "serve_forever", lambda _gateway: None)  # the requests loop has its own test
+    monkeypatch.setattr(gateway, "tick", tick)
+    gateway.heartbeat = heartbeat
+    with caplog.at_level(logging.ERROR, logger="tico.slack"):
+        gateway.run()
+    assert turns == ["tick", "tick"]
+    assert f"Gateway tick failed: {LOCKED}" in caplog.text
+    assert f"Gateway heartbeat failed: {LOCKED}" in caplog.text
+
+
+def test_a_failed_thread_link_pass_is_logged_scrubbed_and_reported_as_an_error(gateway, monkeypatch, caplog):
+    monkeypatch.setattr(gateway.bridge, "tick", locked)
+    with caplog.at_level(logging.ERROR, logger="tico.slack"):
+        out = gateway.tick()
+    assert f"Slack thread links failed: {LOCKED}" in caplog.text
+    assert out["threads"] == {"error": "OperationalError"}

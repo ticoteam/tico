@@ -5,6 +5,8 @@ is the real one with the test judge from test_org_rule_check.
 """
 
 import json
+import logging
+import sqlite3
 import time
 from types import SimpleNamespace
 
@@ -1116,3 +1118,61 @@ def test_a_history_story_is_off_opt_in_and_capped(world, monkeypatch, subtests):
                 check(world, monkeypatch)
             else:
                 check(world)
+
+
+# ----------------------------------------------------------------------------- loop failures: the class and a scrubbed message
+def locked(*_args, **_kwargs):
+    raise sqlite3.OperationalError("database is locked (key sk-testkey-000000000000)")
+
+
+LOCKED = "OperationalError: database is locked (key [redacted])"
+
+
+def test_a_message_whose_carry_in_fails_stays_queued_and_the_failure_is_logged_scrubbed(world, monkeypatch, caplog):
+    activate_marketing(world)
+    monkeypatch.setattr(world.bridge, "_process", locked)
+    with caplog.at_level(logging.ERROR, logger="tico.slack.threads"):
+        assert world.bridge.receive(chan_event(ts(1), "Kickoff")) == "queued"
+    assert f"Slack inbound carry failed: {LOCKED}" in caplog.text
+    assert len(all_rows(world, "SELECT seq FROM slack_inbound_events")) == 1
+
+
+def test_a_queue_pass_that_fails_for_a_link_is_logged_scrubbed_and_reports_an_error(world, monkeypatch, caplog):
+    activate_marketing(world)
+    monkeypatch.setattr(world.bridge, "_process", locked)
+    world.bridge.receive(chan_event(ts(1), "Kickoff"))  # queued: its carry-in fails too, logged on arrival
+    with caplog.at_level(logging.ERROR, logger="tico.slack.threads"):
+        assert world.bridge.drain_all() == ["error"]
+    assert f"Slack queue for a link failed: {LOCKED}" in caplog.text
+    assert len(all_rows(world, "SELECT seq FROM slack_inbound_events")) == 1
+
+
+def test_a_delivery_that_fails_is_logged_scrubbed_and_the_next_one_still_goes_out(world, monkeypatch, caplog):
+    activate_marketing(world)
+    send_as_ana(world, "first")
+    send_as_ana(world, "second")
+    real_send_one, tried = world.bridge.send_one, []
+
+    def fail_the_first(link, delivery):
+        tried.append(delivery["id"])
+        if len(tried) == 1:
+            locked()
+        return real_send_one(link, delivery)
+
+    monkeypatch.setattr(world.bridge, "send_one", fail_the_first)
+    with caplog.at_level(logging.ERROR, logger="tico.slack.threads"):
+        out = world.bridge.outbound()
+    assert f"Slack delivery {tried[0]} failed: {LOCKED}" in caplog.text
+    assert {"delivery_id": tried[0], "state": "error"} in out
+    assert [p["text"] for p in world.slack.posts] == ["*Ana Rivera* · via Tico\nsecond"]
+
+
+def test_a_history_import_that_fails_is_logged_scrubbed_and_left_to_be_tried_again(world, monkeypatch, caplog):
+    link_id = request(world, "#marketing", history=True)
+    assert gate(world, link_id) == "active"
+    monkeypatch.setattr(world.bridge, "import_history", locked)
+    world.clock.advance(61)
+    with caplog.at_level(logging.ERROR, logger="tico.slack.threads"):
+        world.bridge.tick()
+    assert f"Slack history import failed: {LOCKED}" in caplog.text
+    assert link_row(world, link_id)["history_state"] == "pending"
