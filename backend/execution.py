@@ -2122,7 +2122,7 @@ def cooling_off(c, settings, bot, loads=None):
     from .shared_bots import follow
 
     place = one(c, "SELECT runner_id FROM assignments WHERE bot=?", (bot,))
-    row = one(c, BS.ONE_SQL, (bot,))
+    row = c.execute(BS.ONE_SQL, (bot,)).fetchone()  # not the read cache: pages prime it with other columns first
     if not place or not place["runner_id"] or not row:
         return False
     runner = loads.runner_of(c, place["runner_id"]) if loads is not None else one(c, RUNNER_SQL, (place["runner_id"],))

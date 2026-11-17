@@ -325,6 +325,12 @@ def _held(c, sid, runtime, loads=None):
     return login_holds.holding(c, "", login_holds.subscription_login(sid), runtime, loads=loads) == "held"
 
 
+def _hold_end(c, sid, runtime, loads=None):
+    from . import login_holds
+
+    return login_holds.get(c, "", login_holds.subscription_login(sid), runtime, loads).get("until") or ""
+
+
 def available(c, sub, runtime, loads=None):
     """Whether a plan can sign a turn in now: not waiting to be reconnected, not held at its usage limit until a reset,
     and of that runtime."""
@@ -401,8 +407,9 @@ def in_effect(c, runner_id, runtime, loads=None):
 
 
 def held_plan(c, runner_id, runtime, loads=None):
-    """The login of the company plan given this computer for `runtime` while its usage limit passes it over and the
-    computer has no sign-in of its own for that runtime to run on instead (no Gateway either: that is the claim's
+    """The login of the company plan (or, for a person's plans, the one whose hold ends first) given this computer for
+    `runtime` while its usage limit passes it over and the computer has no sign-in of its own for that runtime to run on
+    instead (no Gateway either: that is the claim's
     models_preset.plans_out), or None. A turn then waits on that plan's hold (execution.login_key), and its first turn
     after the reset is the hold's probe."""
     from . import login_holds
@@ -410,7 +417,14 @@ def held_plan(c, runner_id, runtime, loads=None):
 
     given = loads.given if loads is not None else _given(c)
     sub = given.get((runner_id, runtime)) if given else None
-    if not sub or sub.get("person") or not sub.get("id") or not _held(c, sub["id"], runtime, loads):
+    if sub and sub.get("person"):
+        # A person's set waits on the plan whose hold ends first, while none of its plans can sign the turn in.
+        if not passed_over(c, runner_id, runtime, loads):
+            return None
+        held = [m for m in sub["members"] if m.get("id") and _held(c, m["id"], runtime, loads)]
+        ends = {m["id"]: _hold_end(c, m["id"], runtime, loads) for m in held}
+        sub = min(held, key=lambda m: (ends[m["id"]], m["id"]), default=None)
+    if not sub or not sub.get("id") or not _held(c, sub["id"], runtime, loads):
         return None
     if computer_falls_back(c, runner_id):
         return None  # its turns run on the Gateway meanwhile

@@ -151,10 +151,11 @@ def test_a_pre_limit_lane_start_or_restore_cannot_release_the_cooldown(api, monk
             c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (two["job_id"],))
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=1))
     post(api, f"attempts/{one['id']}/started", {"thread_id": one["lane"]}, machine["token"])
+    # The bot's own login meets the limit (a limit only its fallback met leaves the bot free to run on its own login).
     post(
         api,
         f"attempts/{one['id']}/complete",
-        {"outcome": "failed", "last_seq": 0, "limited": True, "fallback": "codex"},
+        {"outcome": "failed", "last_seq": 0, "limited": True},
         machine["token"],
     )
     monkeypatch.setattr(H, "now", lambda: H.shift(before, seconds=2))
