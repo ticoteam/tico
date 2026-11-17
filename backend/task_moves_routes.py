@@ -18,7 +18,6 @@ from fastapi import FastAPI, Request
 
 from . import ask_ingest as _ask_ingest
 from . import ask_shape
-from .api_contract import api_v2
 from . import models as M
 from . import org_rule_check as _org_rule_check
 from . import reach as _reach
