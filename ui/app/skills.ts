@@ -397,6 +397,7 @@ async function skillsInstallDialog(skill: SkillInfo, versions: SkillVersionRow[]
   let t: SkillInstallTargets;
   try { t = await get<SkillInstallTargets>('/v2/skills/install-targets', {fresh: true}); } catch (e) { toast(errorMessage(e, ''), true); return; }
   const opts: [string, string][] = [];
+  if (t.admin) opts.push(['everyone', `Everyone (${(t.people || []).length + (t.bots || []).length})`]);
   if (t.me?.type === 'Human') opts.push(['me', 'Me']);
   const bots = (t.bots || []).map((b): [string, string] => [`Bot:${b.id}`, b.name]);
   const people = (t.people || []).filter(p => p.id !== t.me?.id).map((p): [string, string] => [`Human:${p.id}`, p.name]);
@@ -466,7 +467,9 @@ async function pageSkillProposal(id: string) {
       ${admin && ack ? `<label class="sk-ack"><input type="checkbox" data-sk-ack> I've read this</label>` : ''}
       ${mine ? '<button type="button" class="ghost small" data-sk-withdraw>Withdraw</button>' : ''}
       ${admin ? `<button type="button" class="ghost small" data-sk-decline>Decline</button>
-        <button type="button" class="primary small" data-sk-approve${canApprove && !ack ? '' : ' disabled'}>Approve</button>` : ''}</div>` : ''}
+        <button type="button" class="ghost small" data-sk-approve${canApprove && !ack ? '' : ' disabled'}>Approve only</button>
+        <button type="button" class="primary small" data-sk-approve-all${canApprove && !ack ? '' : ' disabled'}>Approve and send to everyone</button>` : ''}</div>
+      ${admin ? '<p class="muted sk-desc" data-sk-all-note>Installs it at Latest for 4 people and 58 bots that do not have it yet. Anyone already pinned to a version stays pinned.</p>' : ''}` : ''}
     <section class="card" id="proposal-changes"><header><h2>${p.base_version ? 'Changes' : 'Files'}</h2></header>
       <div data-sk-changes></div>
       ${d.stale && d.diff_latest != null && p.base_version ? `<h3 class="sk-sub">Against latest</h3>${skillsDiffHTML(d.diff_latest)}` : ''}</section>`;
