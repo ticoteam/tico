@@ -289,7 +289,7 @@ const texts = (page: Page) => page.locator('#task-modal[open] [role="tab"]').eva
       const t1 = page.locator('#task-modal[open][data-task="t-1"]');
       await page.evaluate(() => { location.hash = '#/task/t-1'; });
       await t1.locator('.task-chat textarea').waitFor();
-      assert.equal(await t1.getByRole('tab').count(), 0);
+      assert.deepEqual(await texts(page), ['Chat', 'Files'], 'no document yet: Chat and Files');
       fixture.find(t => t.id === 't-1')!['documents'] = [docs()[0]];
       await page.evaluate(() => liveEmit('tasks', {id: 't-1', kind: 'update', kinds: ['files']}));
       await t1.locator('.tw-tabs').waitFor();

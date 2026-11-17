@@ -125,7 +125,7 @@ const pages = async (page: Page) => {
       assert.match(await group.locator('> summary').innerText(), /^4 updates/);
       assert.equal(await group.evaluate(g => (g as HTMLDetailsElement).open), false);
       await group.locator('> summary').click();
-      await group.getByText(/numbered it #409/i).waitFor();
+      await group.getByText(/numbered #409/).waitFor();
 
       // 5. One Visible to row; no Private or Public box, no Size, no Who can see.
       const props = win.locator('[data-task-props]');
