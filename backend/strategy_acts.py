@@ -588,8 +588,16 @@ def _propose(c, reason, left):
         with triggers.savepoint(c):
             if H.is_human(owner):
                 # Its question to the owner, on the Strategy Owner's task (backend/person_asks.py): in their Needs you.
-                why = f"It wants them because {reason}" if reason else f"The {strategy_bot.name(c)} may not make them."
-                made = person_asks.ask(c, STRATEGY_BOT, owner, title, body, title, why, bot=STRATEGY_BOT, private=True)
+                # The Strategy Owner is acting now: it asks in its own words.
+                ask = (
+                    f"Decide on my proposal: {said[0][0]}"
+                    if len(left) == 1
+                    else f"Decide on {len(left)} changes I proposed?"
+                )
+                why = f"I can't make them on my own: {reason}" if reason else "I can't make them on my own."
+                made = person_asks.ask(
+                    c, STRATEGY_BOT, owner, title, body, ask, why, bot=STRATEGY_BOT, asker=STRATEGY_BOT, private=True
+                )
             else:
                 made = H.task_create(c, STRATEGY_BOT, title, body, owner, lint=False, private=True)
     except H.Refused as exc:

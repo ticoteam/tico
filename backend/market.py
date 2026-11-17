@@ -1592,7 +1592,7 @@ def _file_owner_task(conn, actor, owner, body):
                 body,
                 owner,
                 question="Decide these market insights?",
-                why="The curator found claims it cannot settle on its own, and only a person decides them.",
+                why="Only a person can settle these claims.",
                 bot=actor,
                 deduplicate=False,
                 lint=True,

@@ -455,7 +455,7 @@ def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, priv
     try:
         from ... import person_asks
 
-        # Tico's question to the person on their task (person_asks), so the item is in their Needs you.
+        # BotOps' question to the person on their task (person_asks), so the item is in their Needs you.
         made: Any = person_asks.task_for(
             c,
             _H.KEEPER,

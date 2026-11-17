@@ -437,9 +437,9 @@ def warning_line(v):
     )
 
 
-# A held item is the person's task with Tico's question on it (backend/person_asks.py), so it is in their Needs you.
+# A held item is the person's task with BotOps' question on it (backend/person_asks.py), so it is in their Needs you.
 HELD_ASK = "Is this held item real work for the bot?"
-HELD_WHY = "Tico's screening held it as a likely prompt injection, and only a person lets it through."
+HELD_WHY = "Screening held it as a likely prompt injection, and only a person lets it through."
 
 
 def held_title(title):
@@ -648,6 +648,7 @@ def _open_task(c, auth, row, v, owner, title, body):
         owner or H.bot_actor(row["bot"]),
         question=HELD_ASK,
         why=HELD_WHY,
+        asker=person_asks.botops(),  # never the sender of what was held
         lint=False,
         deduplicate=False,
     )

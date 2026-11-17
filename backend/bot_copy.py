@@ -442,8 +442,8 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 + names["original_slug"]
                 + "'s instructions (BotOps can do it).",
                 "human:" + owner if owner else "bot:" + original,
-                question=f"Take {names['copy']}'s suggestion for {names['original']}'s instructions?",
-                why=f"{names['copy']} works from a copy of {names['original']} and suggests a change to its instructions.",
+                question=f"Apply a suggested change to {names['original']}'s instructions?",
+                why=f"It was made in {names['copy']}, a copy of {names['original']}.",
                 bot=who.actor,
                 allow_planned=True,
                 lint=False,

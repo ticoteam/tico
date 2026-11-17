@@ -3580,7 +3580,7 @@ def create_app(settings=None):
                 row,
                 owner,
                 body.title,
-                person_asks.handed_why(c, who.actor),
+                person_asks.HANDED_WHY,
                 ends_with_task=holder == owner,
             )
             row = {**row, **(H.task(c, row["id"]) or {})}
@@ -4028,9 +4028,10 @@ def create_app(settings=None):
                         ask["title"],
                         ask["body"],
                         ask["person"],
-                        question=ask["title"][:200],
-                        why="A manager bot's report change is over the week's limit, and the person above it decides.",
+                        question=ask["question"],
+                        why="I'm at this week's limit for report changes, so the person above me decides.",
                         bot=ask["actor"],
+                        asker=ask["actor"],  # the manager bot that asked, in its own words
                         lint=True,
                     ),
                 )

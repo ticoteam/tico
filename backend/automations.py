@@ -1314,8 +1314,9 @@ def _hold_told(c, row, rule, counted, held):
             f"Automation {flow['name']} on hold"[:300],
             words,
             "human:" + person,
-            question=f"Release or drop the runs automation {flow['name']} is holding?"[:200],
+            question=f"Release or drop the runs automation {flow['name']} is holding?",
             why=f"It is on hold because {why}, which is most often a loop.",
+            asker=person_asks.botops(),
             deduplicate=False,
             wake_refs=refs,
         )
@@ -2563,6 +2564,7 @@ class HubServices:
                     person,
                     question=screening.HELD_ASK,
                     why=screening.HELD_WHY,
+                    asker=person_asks.botops(),  # never the automation's lead: screening is Tico's own notice
                     deduplicate=False,
                 )
                 screening.note(c, found, "webhook", task["id"], bot=bot, to=person)

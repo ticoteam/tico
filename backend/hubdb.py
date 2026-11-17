@@ -1123,6 +1123,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
             f"The last one broke the {rule} rule: {said}. "
             f"Read its refusals and decide whether its playbook or its reach needs a change.",
             origin=actor,
+            # A person reviews only BotOps (no assistant to do it), and BotOps asks them about itself.
+            why=f"{count} of my writes were turned down today.",
         )
     # Refusals are diagnostics for the bot, not decisions for the human.
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
@@ -1143,11 +1145,11 @@ def _review_exists(conn, title, day):
     )
 
 
-def _review_task(conn, owner, title, body, origin=None):
+def _review_task(conn, owner, title, body, origin=None, why=None):
     try:
         if is_human(owner):
-            # A person's review is Tico's question to them on their task (backend/person_asks.py): in their Needs you.
-            # No bot holds it: the bot it reviews is BotOps itself, with no assistant to review it.
+            # A person's review is BotOps' question to them on their task (backend/person_asks.py): in their Needs
+            # you. No bot holds it: the bot it reviews is BotOps itself, with no assistant to review it.
             from . import person_asks
 
             row = person_asks.ask(
@@ -1156,8 +1158,9 @@ def _review_task(conn, owner, title, body, origin=None):
                 owner,
                 title,
                 body,
-                f"{title}: does its playbook or reach need a change?",
-                body.split(". ")[0].rstrip(".") + ".",
+                "Does my playbook or reach need a change?",
+                why or body.split(". ")[0].rstrip(".") + ".",
+                asker=person_asks.botops(),
             )
         else:
             # lint=False: a review reads as written; the shape rule is for asks bots write.

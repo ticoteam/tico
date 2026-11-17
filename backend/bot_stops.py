@@ -86,8 +86,9 @@ def raise_item(c, settings, bot, title, body):
             title,
             body,
             H.human_actor(person["id"]),
-            question="Can you get this bot running again?",
+            question=f"Can you get {H.actor_name(c, H.bot_actor(bot))} running again?",
             why=person_asks.first_sentence(body),
+            asker=person_asks.botops(),
         )["id"]
     except H.Refused:
         log.warning("Could not file the Needs-you task for the stopped bot %s", bot)

@@ -6,6 +6,7 @@ legal mail (test_postal_mail.py) and a bot's task for a person through the API (
 Synthetic rows only (backend/tests/helpers/engine.py).
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -31,14 +32,16 @@ def c(company):
 
 
 def asked(c, person, task_id, by="bot:botops"):
-    """The asks on `task_id` in `person`'s Needs you, each checked the way a bot's question is (ask_shape), and each
-    written by `by`: a bot, never Tico (only bots write questions)."""
+    """The asks on `task_id` in `person`'s Needs you, each written by `by` (a bot, never Tico: only bots write
+    questions) and each passing the checks a bot's question passes (ask_shape.line_refusal)."""
     found = [n for n in W.needs(c, person) if n["kind"] == "ask" and n["task_id"] == task_id]
     for item in found:
-        author = c.execute("SELECT added_by_id FROM requirements WHERE id=?", (item["requirement_id"],)).fetchone()[0]
+        author, settings = c.execute(
+            "SELECT added_by_id, settings FROM requirements WHERE id=?", (item["requirement_id"],)
+        ).fetchone()
         assert author == by, author
-        line = item["line"]
-        assert line and len(line) <= 200 and "/" not in line, line  # short, says what is asked, no paths
+        why = json.loads(settings or "{}").get("brief", {}).get("why")
+        assert why and ask_shape.line_refusal(item["line"], why) is None, (item["line"], why)
         assert H.task_view(c, task_id, person), "the person reads the task"
     return found
 
@@ -109,7 +112,10 @@ def test_a_bots_task_for_a_person_through_the_api_is_its_own_with_a_question_to_
     task = r.json()["task"]
     assert task["owner_id"] == "bot:ops"
     items = get(api, "needs-you", "ben-test")["items"]
-    assert [i["kind"] for i in items if i.get("task_id") == task["id"]] == ["ask"]
+    [item] = [i for i in items if i.get("task_id") == task["id"]]
+    with api.app.state.store.read() as c:
+        author = c.execute("SELECT added_by_id FROM requirements WHERE id=?", (item["requirement_id"],)).fetchone()[0]
+    assert (item["kind"], author) == ("ask", "bot:ops")  # the bot that filed it asks, in its own words
 
 
 def test_a_question_on_the_persons_own_task_ends_when_they_finish_it(c):
@@ -120,3 +126,35 @@ def test_a_question_on_the_persons_own_task_ends_when_they_finish_it(c):
     X.say_done(c, E.task(c, made["id"]))
     E.advance(c, made["id"])
     assert H.task(c, made["id"])["status"] == "done" and not asked(c, ANA, made["id"])
+
+
+def test_a_bot_that_cannot_run_has_botops_ask_for_it_and_with_no_bot_nobody_asks(c):
+    X.bot(c, "curator", computer=False)  # here, with nowhere to run
+    made = PA.ask(
+        c, "bot:curator", ANA, "Pick a vendor", "x", "Which vendor should we use?", "It is due.", bot="bot:curator"
+    )
+    assert made["owner_id"] == "bot:curator" and len(asked(c, ANA, made["id"])) == 1
+    c.execute("UPDATE bots SET state='archived' WHERE id IN ('botops','builder')")
+    alone = PA.ask(c, H.KEEPER, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.")
+    # Tico never writes the question: with no bot to ask, the task is only in her Tasks.
+    assert alone["owner_id"] == ANA and not asked(c, ANA, alone["id"])
+    assert (
+        c.execute(
+            "SELECT count(*) FROM requirements r JOIN visits v ON v.id=r.visit_id WHERE v.task_id=?", (alone["id"],)
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_a_question_that_would_fail_the_ask_checks_is_asked_in_plain_words(c):
+    made = PA.ask(c, H.KEEPER, ANA, "Fix the webhook", "x", "Can you fix backend/hooks/orders.py?", "It failed.")
+    [item] = asked(c, ANA, made["id"])
+    assert item["line"] == PA.PLAIN_ASK
+
+
+def test_a_held_item_is_asked_by_botops_never_its_sender(c):
+    from backend import screening
+
+    row = {"source": "message", "actor": "bot:builder", "bot": "builder"}
+    made = screening._open_task(c, None, row, None, ANA, "Held: refund request", "x")
+    assert made["owner_id"] == ANA and len(asked(c, ANA, made["id"])) == 1
