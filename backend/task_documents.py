@@ -116,19 +116,53 @@ def record(c: Any, task_id: str, name: str, file_id: str, by: str | None = None)
         L.link(c, file_id, version["actor"], "writer", by)
 
 
-def approved_versions(c: Any, task_id: str) -> dict[str, int]:
-    """The last OK'd version of every page on this task, including approvals from earlier visits."""
+def approved_documents(c: Any, task_id: str) -> dict[tuple[str, str], int]:
+    """The task's last OK for each (page, document role), including earlier visits."""
     from . import task_pages as P
 
-    out: dict[str, int] = {}
+    out: dict[tuple[str, str], int] = {}
     answers = c.execute(
-        "SELECT a.* FROM visits v JOIN answers a ON a.visit_id=v.id "
+        "SELECT a.*,json_extract(r.settings,'$.document') AS document FROM visits v "
+        "JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id "
         "WHERE v.task_id=? AND a.answer='ok' AND a.undone_at IS NULL ORDER BY a.created_at DESC,a.rowid DESC",
         (task_id,),
     ).fetchall()
     for answer in answers:
+        if not answer["document"]:
+            continue
         for file_id, version in P.answer_pages(c, task_id, dict(answer)).items():
+            out.setdefault((file_id, str(answer["document"])), version)
+    return out
+
+
+def approved_versions(c: Any, task_id: str, role: str | None = None) -> dict[str, int]:
+    """The last approved page versions on a task, optionally for one document role."""
+    out: dict[str, int] = {}
+    for (file_id, document), version in approved_documents(c, task_id).items():
+        if role is None or document == role:
             out.setdefault(file_id, version)
+    return out
+
+
+def approved_tasks(c: Any, page_id: str, role: str | None = None) -> dict[str, int]:
+    """Task id -> approved version for a page's document links. Pass the link's role for its own OK mark.
+
+    The map is neutral data; callers still filter task links through their reader's permissions.
+    """
+    rows = c.execute(
+        "SELECT substr(target,6) AS task_id,role FROM page_links WHERE page_id=? "
+        "AND target LIKE 'task:%' AND role NOT IN ('writer','related')",
+        (page_id,),
+    ).fetchall()
+    out: dict[str, int] = {}
+    for row in rows:
+        document = str(row["role"])
+        if role is not None and document != role:
+            continue
+        task_id = str(row["task_id"])
+        version = approved_versions(c, task_id, document).get(page_id)
+        if version is not None:
+            out[task_id] = max(out.get(task_id, 0), version)
     return out
 
 
@@ -149,7 +183,7 @@ def listing(c: Any, files: Any, who: Any, task_id: str) -> list[dict[str, Any]]:
         ("task:" + task_id,),
     ).fetchall()
     actor = actor_of(who)
-    approved = approved_versions(c, task_id)
+    approved = approved_documents(c, task_id)
     for row in rows:
         if not files.visible(c, who, row, {}):
             continue
@@ -167,14 +201,15 @@ def listing(c: Any, files: Any, who: Any, task_id: str) -> list[dict[str, Any]]:
         ]
         if not versions:
             continue
+        approved_version = approved.get((str(row["id"]), str(row["name"])))
         out.append(
             {
                 "name": row["name"],
                 "file_id": row["id"],
                 "page_id": row["id"],
                 "links": L.links_of(c, files.auth, who, row["id"]),
-                "changed_since_ok": row["id"] in approved and approved[row["id"]] < versions[0]["n"],
-                **({"approved_version": approved[row["id"]]} if row["id"] in approved else {}),
+                "changed_since_ok": approved_version is not None and approved_version < versions[0]["n"],
+                **({"approved_version": approved_version} if approved_version is not None else {}),
                 "version": versions[0]["n"],
                 "by": versions[0]["by"],
                 "at": versions[0]["at"],
