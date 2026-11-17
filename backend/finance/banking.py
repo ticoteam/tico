@@ -17,13 +17,12 @@ Posting a feed row:
 - Pending -> posted, or an amount change, updates the row in place; a changed posted row is reversed and posted
   again, never twice. A row a done reconciliation cleared is locked."""
 
-import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import timedelta
 from typing import Any, cast
 
-from . import budgeting, documents, payments, posting, posting_rules, shared
+from . import budgeting, documents, key_use, payments, posting, posting_rules, shared
 from . import receipts as RCP
 from .context import Ctx
 from .core import dates
@@ -47,8 +46,6 @@ OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
 BOOKS_PROVIDERS = ("quickbooks", "xero")
 MATCH_DAYS = 5  # a transfer's two sides post within this many days of each other
 AUTH_DAYS = 30  # an authorization's hold lasts this long without its settlement
-
-log = logging.getLogger(__name__)
 
 
 def event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key: str = "") -> None:
@@ -126,8 +123,8 @@ def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: s
 
 
 # ------------------------------------------------------------------------------------------------ connecting
-KEY_NOT_USABLE_NOW = "the key is not one this connection's creator may use now (a grant revoked, a person gone, a bot paused or archived)"
-KEY_NOT_YOURS = "that credential is not one you may use: pick a key you hold on Tools"
+KEY_NOT_USABLE_NOW = key_use.KEY_NOT_USABLE_NOW
+KEY_NOT_YOURS = key_use.KEY_NOT_YOURS
 
 
 def require_usable_key(ctx: Ctx, who: str, credential_id: str) -> None:
@@ -140,20 +137,15 @@ def require_usable_key(ctx: Ctx, who: str, credential_id: str) -> None:
 
 def unusable_key(store: Any, row: Mapping[str, Any]) -> str:
     """Why a sync must not read this connection's credential, or "" when it may: the person or bot who made the
-    connection may no longer use it (a grant revoked, a person gone, a bot paused or archived). A credential with no value left is the sync's own
-    "missing" case. Logged by category and id, never the value."""
-    ref, creator = str(row["credential_ref"] or ""), str(row["created_by"] or "")
+    connection may no longer use it (`key_use.refused`: a grant revoked, a person gone, a bot paused or archived)."""
     with store.read() as c:
-        if not tico.credential_exists(c, ref) or tico.may_use_credential(c, creator, ref):
-            return ""
-    log.warning(
-        "finance sync refused: category=credential_not_usable id=%s provider=%s credential=%s detail=%s",
-        row["id"],
-        row["provider"],
-        ref,
-        "the connection's creator may no longer use its credential",
-    )
-    return KEY_NOT_USABLE_NOW
+        return key_use.refused(
+            c,
+            str(row["created_by"] or ""),
+            str(row["credential_ref"] or ""),
+            ident=str(row["id"]),
+            provider=str(row["provider"]),
+        )
 
 
 def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
