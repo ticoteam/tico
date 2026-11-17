@@ -178,6 +178,9 @@ EMPTY = (
     "directory_credentials",
     "company_storage",
     "tico_storage",
+    # Refresh claims on OAuth sign-ins (backend/oauth_refresh.py): transient. A copy starts with none, so a claim the
+    # source holds never blocks the copy's refresh.
+    "oauth_refresh_claims",
     # API tools: emptied with their keys, so a copy never calls a vendor or shows a real vendor's call log
     "tools",
     "tool_checks",

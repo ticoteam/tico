@@ -1,3 +1,4 @@
+# pyright: strict
 """One refresh of an OAuth sign-in at a time, across processes: the server's workers, the scheduler and the proxy.
 
 A vendor that rotates refresh tokens accepts each one once. Two refreshes that send the same token cannot both
@@ -23,7 +24,7 @@ from typing import Any
 
 from . import store as _store
 
-H = _store.H
+H: Any = _store.H  # hubdb's helpers are untyped, so calls through the module are Any (as item_metadata._h does)
 
 CLAIM_SECONDS = 60  # a claim held this long without its holder dropping it lapses: longer than one vendor request
 WAIT_SECONDS = CLAIM_SECONDS + 10  # a caller waits this long for another refresh before it gives up
