@@ -652,9 +652,15 @@ def event_hidden(conn: "sqlite3.Connection", principals: object, target: object)
     return any(not party(conn, viewer, row) for viewer in viewers)
 
 
+BOUND_SQL = "SELECT 1 FROM ok_grants WHERE requirement_id=?"
+
+
 def bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
-    """Whether a requirement is a bound OK (has a grant)."""
-    return conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone() is not None
+    """Whether a requirement is a bound OK (has a grant). Read through the snapshot's cache: a list of waits primes it
+    for every OK it holds (waiting_on.prime)."""
+    from . import read_cache
+
+    return read_cache.one(conn, BOUND_SQL, (requirement_id,)) is not None
 
 
 def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row]) -> list[Row]:
