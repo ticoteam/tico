@@ -121,7 +121,7 @@ def for_turn(env, vault_values=(), names=("TOKEN", "SECRET", "PASSWORD", "API_KE
 # token formats, an Authorization header (GIT_TRACE_CURL, http.extraHeader) and a credential helper's answer.
 _CREDENTIAL_SHAPES = [
     (re.compile(r"([a-z][a-z0-9+.-]*://)[^/\s@'\"]+@", re.I), r"\1" + MASK + "@"),
-    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})"), MASK),
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9._-]{16,}|github_pat_[A-Za-z0-9_]{16,})"), MASK),
     (re.compile(r"\b((?:proxy-)?authorization\s*:\s*)(?:(?:basic|bearer|token)\s+)?\S+", re.I), r"\1" + MASK),
     (re.compile(r"\b(basic|bearer)\s+[A-Za-z0-9+/._~-]{8,}=*", re.I), r"\1 " + MASK),
     (re.compile(r"\b(password|oauth_refresh_token|access_token|token)\s*=\s*\S+", re.I), r"\1=" + MASK),

@@ -484,7 +484,11 @@ A validation run is full or [incremental](#incremental-validation); its jobs and
 Prefer the manual **Release validation** workflow for the full gate so builds and tests do not compete with bots or
 interactive work. Its gate jobs run in parallel on ephemeral RunsOn Linux VMs in Tico's own AWS account (4-vCPU for every
 part), with read-only repository permissions and no production,
-AWS or provider credentials. It cannot tag, publish or deploy.
+AWS or provider credentials. It cannot tag, publish or deploy. The one exception is the live git check's GitHub App
+(repository secrets `TICO_GIT_CHECK_APP_ID`, `TICO_GIT_CHECK_PRIVATE_KEY`, `TICO_GIT_CHECK_REPOSITORY`, optional
+`TICO_GIT_CHECK_INSTALLATION_ID`), installed on one scratch repository only and passed to the Python VMs: it pushes a
+branch there and deletes it, the way a bot's turn pushes ([e2e/bots/README.md](../e2e/bots/README.md#live-git-check)).
+Without the secrets that check skips and names them.
 
 ```sh
 gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA> -f previous_release=v0.3.48 -f version=v0.3.49

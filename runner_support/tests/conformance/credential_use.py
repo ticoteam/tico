@@ -31,6 +31,11 @@ client certificate) and keeps that answer as `refused`. They use the standard li
 - `ECHO <ENV>`: says the value of $ENV in the reply, as a careless bot would, so the transcript's redaction is tested.
 - `STORE <ENV> <file>`: keeps a key the bot already holds in `file` as its own, under $ENV, with the bot-side command
   `tico credential add <ENV> --env <ENV> --from-file <file>` (the value is never an argument).
+- `GIT <https url> <branch>`: what a bot does with its GitHub repository, with plain git and whatever credential helper
+  the runner configured (no token is ever passed by hand): asks for the credential as git does (`git credential fill`),
+  clones `url`, commits one file on `branch`, pushes it, sees it on the remote, deletes it there and sees it gone. Each
+  step's exit code and git's own words; of the credential only its username, length and SHA-256, never the value. With
+  FAKE_GIT_HOST set (the offline check) the helper the runner set up for github.com answers for that host instead.
 
 Each use appends one record to $FAKE_LOG (`{"use": ..., ...}`: status codes, the answer's body, the turn's whole
 environment) and adds one line to the reply. A prompt with no marker changes nothing."""
@@ -45,12 +50,13 @@ import os
 import re
 import ssl
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-MARKER = re.compile(r"^(CALL|FILE|MCPCALL|LOGIN|ECHO|STORE|SIGV4|OAUTH1|HAWK|MTLS|HMAC|IMAP|SESSION) +(.+)$")
+MARKER = re.compile(r"^(CALL|FILE|MCPCALL|LOGIN|ECHO|STORE|SIGV4|OAUTH1|HAWK|MTLS|HMAC|IMAP|SESSION|GIT) +(.+)$")
 AGENT = "acme-bot-fake/1"
 
 
@@ -391,6 +397,61 @@ def store(env, path):
     return {"use": "store", "env": env, "steps": [step]}
 
 
+def git_push(url, branch):
+    env = dict(os.environ)
+    host = env.get("FAKE_GIT_HOST", "")
+    if host:
+        # The offline check's stand-in for github.com is a local HTTPS server: the runner's helper, configured for
+        # github.com, is pointed at it (the git credential configuration and the helper's own host check).
+        for i in range(int(env.get("GIT_CONFIG_COUNT") or 0)):
+            name = f"GIT_CONFIG_KEY_{i}"
+            env[name] = env.get(name, "").replace("https://github.com", "https://" + host)
+        env.update({"TICO_GITHUB_HOST": host, "GIT_SSL_CAINFO": env.get("FAKE_GIT_CAINFO", "")})
+    parsed = urllib.parse.urlsplit(url)
+    asked = f"protocol={parsed.scheme}\nhost={parsed.netloc}\npath={parsed.path.lstrip('/')}\n\n"
+    filled = subprocess.run(
+        ["git", "credential", "fill"], input=asked, env=env, capture_output=True, text=True, timeout=60
+    )
+    answer = dict(line.split("=", 1) for line in filled.stdout.splitlines() if "=" in line)
+    password = answer.get("password", "")
+    credential = {
+        "code": filled.returncode,
+        "username": answer.get("username", ""),
+        "length": len(password),
+        "sha256": hashlib.sha256(password.encode()).hexdigest() if password else "",
+        "stderr": filled.stderr[-500:],
+    }
+    work = tempfile.mkdtemp(prefix="tico-git-check-")
+    repo = os.path.join(work, "repo")
+    who = ["-c", "user.name=Tico git check", "-c", "user.email=git-check@tico.invalid"]
+    ref = "refs/heads/" + branch
+    steps = []
+    for argv in (
+        ["clone", "-q", url, repo],
+        ["-C", repo, "checkout", "-q", "-b", branch],
+        "write",
+        ["-C", repo, "add", "tico-git-check.txt"],
+        ["-C", repo, *who, "commit", "-q", "-m", "Tico git check"],
+        ["-C", repo, "push", "-q", "origin", "HEAD:" + ref],
+        ["-C", repo, "ls-remote", "origin", ref],
+        ["-C", repo, "push", "-q", "origin", "--delete", branch],
+        ["-C", repo, "ls-remote", "origin", ref],
+    ):
+        if argv == "write":
+            with open(os.path.join(repo, "tico-git-check.txt"), "w") as stream:
+                stream.write(f"Tico's end-to-end git check, {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
+            continue
+        try:
+            done = subprocess.run(["git", *argv], env=env, capture_output=True, text=True, timeout=120)
+            step = {"argv": argv, "code": done.returncode, "stdout": done.stdout[-500:], "stderr": done.stderr[-500:]}
+        except subprocess.TimeoutExpired:
+            step = {"argv": argv, "code": -1, "stdout": "", "stderr": "timed out"}
+        steps.append(step)
+        if step["code"] != 0:
+            break
+    return {"use": "git", "url": url, "branch": branch, "credential": credential, "steps": steps}
+
+
 def act(text, servers, record):
     """Every marker in the prompt, once each, in order: the reply's extra lines."""
     lines, done = [], set()
@@ -424,6 +485,8 @@ def act(text, servers, record):
             entry = login(args[0])
         elif verb == "STORE" and len(args) == 2:
             entry = store(*args)
+        elif verb == "GIT" and len(args) == 2:
+            entry = git_push(*args)
         elif verb == "ECHO" and len(args) == 1:
             entry = {"use": "echo", "env": args[0], "present": bool(os.environ.get(args[0]))}
             lines.append(f"The value of {args[0]} is {os.environ.get(args[0], '')}.")
