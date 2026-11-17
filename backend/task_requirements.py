@@ -372,6 +372,15 @@ DOCUMENT_OK_HINT = "Write the new version of the {document}; it is submitted for
 STALE_REVIEW = "New commits since the review"
 
 
+def _previous_page(conn: "sqlite3.Connection", sql: str, visit_id: str, requirement: Row, file_id: str) -> bool:
+    """A document's earlier decision-model round belongs to this page, never another page sharing the role."""
+    args: tuple[Any, ...] = (visit_id, requirement["id"])
+    if document_of(requirement):
+        sql = sql.replace(" LIMIT 1", " AND p.file_id=? LIMIT 1")
+        args = (*args, file_id)
+    return bool(conn.execute(sql, args).fetchone())
+
+
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     """A document approval meets the check only when every submitted page version does."""
     from . import page_links as L
@@ -480,7 +489,7 @@ def _one_page(
     if (
         said == "not_met"
         and gates
-        and not (oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone())
+        and not (oks_anyway and _previous_page(conn, NOT_MET_BEFORE_SQL, visit_id, requirement, page["file_id"]))
     ):
         return Standing(
             requirement,
@@ -546,7 +555,7 @@ def _one_page(
         if routed:
             routed.since = asked if routed.state == WAITING else None
             return routed
-        if conn.execute(ASKED_ONCE_SQL, (visit_id, requirement["id"])).fetchone():
+        if _previous_page(conn, ASKED_ONCE_SQL, visit_id, requirement, page["file_id"]):
             return Standing(requirement, NOT_MET, owner, line)
         return Standing(requirement, WAITING, person, line, since=asked)
     if oks_anyway:
