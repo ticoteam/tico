@@ -1,7 +1,10 @@
 """Helpers that other tests share, moved out of test_computer_keys.py so they import no test file."""
 
+import importlib
 import uuid
-from backend.tests.helpers.computer_signin import vault
+from datetime import datetime, timezone
+
+from backend.tests.helpers.computer_signin import store, vault
 from backend.tests.helpers.onboarding import signed_in
 
 
@@ -9,6 +12,22 @@ CAPABLE = ["model_sign_out_v1", "model_keys_v1"]
 
 
 SHARED = "sk-team-key-0123456789"
+MOVE = importlib.import_module("backend.migrations.20261117061243_computer_keys_to_subscriptions")
+
+
+def shared_before(api, *cids, subject="computers"):
+    """Keys shared with computers in Credentials before keys became subscriptions (vault grants to `subject`; the
+    team OpenAI key SHARED when none are named), moved as an upgrade moves them: given to the computers enrolled now
+    that run on them. The first credential's id."""
+    cids = cids or (store(api, "OPENAI_API_KEY", SHARED),)
+    with api.app.state.store.transaction() as c:
+        for cid in cids:
+            c.execute(
+                "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) VALUES(?,?,?,?,?)",
+                (uuid.uuid4().hex, cid, subject, "human:owner", datetime.now(timezone.utc).isoformat()),
+            )
+        MOVE.up(c)
+    return cids[0]
 
 
 def computer(api, label, operator="morgan", source=None, capabilities=CAPABLE, beat=True, **key):

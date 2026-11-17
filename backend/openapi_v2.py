@@ -9559,13 +9559,13 @@ STABLE.extend(
         ),
     ]
 )
-_SUB_KIND = {"enum": ["claude_token", "codex_login", "anthropic_key", "openai_key"]}
+_SUB_KIND = {"enum": ["claude_token", "codex_login", "anthropic_key", "openai_key", "cursor_key", "meta_key"]}
 SCHEMAS['ModelSubscription'] = obj(
     {
         'id': 's',
         'name': 's',
         'kind': _SUB_KIND,
-        'runtime': {'enum': ['claude', 'codex']},
+        'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
         'label': 's',
         'status': {'enum': ['new', 'working', 'needs_reconnect']},
         'status_detail': 's',
@@ -9630,7 +9630,7 @@ SCHEMAS['ModelSubscriptionList'] = obj(
                 {
                     'kind': _SUB_KIND,
                     'label': 's',
-                    'runtime': {'enum': ['claude', 'codex']},
+                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
                     'secret_label': 's',
                     'help': 's',
                     'connect': 'b',
@@ -9651,7 +9651,7 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
             obj(
                 {
                     'runner_id': 's',
-                    'runtime': {'enum': ['claude', 'codex']},
+                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
                     'subscription_id': 's',
                     'person': 's',
                     'set': {'anyOf': [_PERSON_SET, {'type': 'null'}]},
@@ -9665,7 +9665,7 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
 SCHEMAS['ComputerSubscriptionResult'] = obj(
     {
         'runner_id': 's',
-        'runtime': {'enum': ['claude', 'codex']},
+        'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
         'subscription_id': 'n',
         'person': 's',
         'stopped': 'i',

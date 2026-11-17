@@ -3,7 +3,8 @@ signed out, even when the company gives every computer a model key."""
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
-from backend.tests.helpers.computer_signin import computer_asks, grant, new_computer, store, vault
+from backend.tests.helpers.computer_keys import shared_before
+from backend.tests.helpers.computer_signin import computer_asks, new_computer, store, vault
 from backend.tests.helpers.getting_started import add_bot
 from backend.tests.helpers.onboarding import environment, signed_in  # noqa: F401
 from backend import bot_settings as BS
@@ -94,10 +95,10 @@ def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_s
     """Cleared stays cleared: the company's "Every computer" key does not sign a signed-out login back in."""
     api = environment()
     vault(api)
-    grant(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"), "computers")
     machine = new_computer(api)
     rid, token = machine["runner_id"], machine["token"]
     beat(api, token, auth={"Authorization": "Bearer " + token})
+    shared_before(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"))
     assert computer_asks(api, token).json()["credentials"]
     r = api.post(f"/api/v2/computers/{rid}/logouts", json={"runtime": "codex"}, headers=signed_in())
     assert r.status_code == 200, r.text
@@ -185,11 +186,11 @@ def test_switch_to_subscription_keeps_the_key_until_the_subscription_works_then_
     Use the shared key."""
     api = environment()
     vault(api)
-    grant(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"), "computers")
     machine = new_computer(api)
     rid, token = machine["runner_id"], machine["token"]
     auth = {"Authorization": "Bearer " + token}
     beat(api, token, SWITCHES_TYPE, auth=auth)
+    shared_before(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"))
     start = lambda body, who=None: api.post(f"/api/v2/computers/{rid}/logins", json=body, headers=who or signed_in())
     has_key = lambda: computer_asks(api, token).json()["credentials"][0]["value"] == "sk-team-key-0123456789"
     assert has_key()

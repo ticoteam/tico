@@ -124,9 +124,35 @@ KINDS = {
         "secret_label": "API key",
         "help": "An OpenAI API key (sk-…).",
     },
+    "cursor_key": {
+        "name": "Cursor API",
+        "runtime": "cursor",
+        "label": "Cursor API key",
+        "env": "CURSOR_API_KEY",
+        "billing": "api",
+        "secret_label": "API key",
+        "help": "A Cursor API key.",
+    },
+    "meta_key": {
+        "name": "Meta API",
+        "runtime": "musecode",
+        "label": "Meta API key",
+        "env": "META_API_KEY",
+        "billing": "api",
+        "secret_label": "API key",
+        "help": "A Meta API key.",
+    },
 }
 RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
-RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex"}
+RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "musecode": "Muse Code"}
+# The kind a model key stored under each variable is (a computer's key, backend/computer_keys.py).
+KEY_KINDS = {
+    "CLAUDE_CODE_OAUTH_TOKEN": "claude_token",
+    "ANTHROPIC_API_KEY": "anthropic_key",
+    "OPENAI_API_KEY": "openai_key",
+    "CURSOR_API_KEY": "cursor_key",
+    "META_API_KEY": "meta_key",
+}
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
 
 
@@ -167,7 +193,7 @@ class ComputerSubscription(Contract):
     computer's live runs on that runtime stop and start again."""
 
     runner_id: ID
-    runtime: str = Field(pattern="^(claude|codex)$")
+    runtime: str = Field(pattern="^(claude|codex|cursor|musecode)$")
     subscription: ID | None = None
     person: str | None = Field(default=None, max_length=120)
     confirm: bool = False
@@ -219,7 +245,7 @@ def _codex_login(text):
 def checked(kind, secret):
     """(value to seal, preview) for `kind`, or a Problem naming what is wrong. Whitespace around a token or key goes."""
     if kind not in KINDS:
-        raise Problem("kind", "Choose Claude plan, ChatGPT plan, Anthropic API key or OpenAI API key", 422)
+        raise Problem("kind", "Choose " + ", ".join(spec["label"] for spec in KINDS.values()), 422)
     text = str(secret or "")
     if kind == "codex_login":
         value = _codex_login(text.strip())
@@ -228,7 +254,7 @@ def checked(kind, secret):
     text = text.strip()
     if not text or any(ch.isspace() for ch in text) or len(text) > 4096:
         raise Problem("secret", "Paste the token or key on its own", 422)
-    prefix = {"claude_token": "sk-ant-", "anthropic_key": "sk-ant-", "openai_key": "sk-"}[kind]
+    prefix = {"claude_token": "sk-ant-", "anthropic_key": "sk-ant-", "openai_key": "sk-"}.get(kind, "")
     if not text.startswith(prefix):
         what = {
             "claude_token": "A Claude setup-token (from `claude setup-token`)",
@@ -248,6 +274,17 @@ def delivered(kind, value):
         # The file `codex login --with-api-key` writes.
         return {"file": spec["file"], "value": json.dumps({"OPENAI_API_KEY": value}, separators=(",", ":"))}
     return {"file": spec["file"], "value": value}
+
+
+def value_of(c, cipher, sub):
+    """A subscription's value: sealed in its own row, or, for a key kept in the vault (`credential_id`: a key from
+    Settings > Computers, backend/computer_keys.py), its credential's. None when that credential is gone."""
+    if sub["credential_id"]:
+        found = c.execute(
+            "SELECT * FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (sub["credential_id"],)
+        ).fetchone()
+        return cipher.decrypt(c, found) if found else None
+    return cipher.unseal(c, _context(sub["id"]), sub["sealed"])
 
 
 # ------------------------------------------------------------------------------------------------ reads
@@ -276,7 +313,12 @@ def _given(c):
         for r in c.execute(
             "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
             "s.status FROM computer_subscriptions g LEFT JOIN model_subscriptions s "
-            "ON s.id=g.subscription_id WHERE s.id IS NOT NULL OR g.person<>''"
+            "ON s.id=g.subscription_id WHERE (s.id IS NOT NULL OR g.person<>'') "
+            # A computer's key follows its login: not while a person cleared it, signed it out or switched it to a
+            # subscription there (backend/model_login.py marks), as GET runner-model-credentials does.
+            "AND NOT (s.credential_id IS NOT NULL AND (EXISTS (SELECT 1 FROM model_login_cleared m "
+            "WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile='') OR EXISTS (SELECT 1 FROM "
+            "model_login_key_off m WHERE m.runner_id=g.runner_id AND m.runtime=g.runtime AND m.profile='')))"
         ):
             sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status")}
             if r["person"]:
@@ -1210,10 +1252,25 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
         if body.secret is not None:
             # The credential's own time: readings taken before it are the old account's (`_plan_usage`). Only a replaced or
             # reconnected value moves it; a rename, an owner change or a same-account refresh (`refreshed`) does not.
+            if sub["credential_id"]:
+                # A key kept in the vault takes its new value there, where a computer's key fetch reads it too.
+                ciphertext, nonce = vault.cipher.encrypt(c, sub["credential_id"], value)
+                c.execute(
+                    "UPDATE credentials SET ciphertext=?,nonce=?,preview=?,revision=revision+1,updated_at=?,"
+                    "updated_by=? WHERE id=?",
+                    (ciphertext, nonce, preview, now, who.actor, sub["credential_id"]),
+                )
             c.execute(
                 "UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
                 "status_detail='',status_at=?,updated_at=?,credential_at=? WHERE id=?",
-                (vault.cipher.seal(c, _context(sid), value), preview, now, now, now, sid),
+                (
+                    "" if sub["credential_id"] else vault.cipher.seal(c, _context(sid), value),
+                    preview,
+                    now,
+                    now,
+                    now,
+                    sid,
+                ),
             )
             # A new value may be another account: its own usage-limit hold ends as Try now does, one probe turn tests it
             # (login_holds.try_now), before the bots are re-judged. As for a change, every computer given it stops its
@@ -1271,6 +1328,10 @@ def remove(c, settings, who, sid, confirm=False):
         done = _restart(c, settings, runner_id, runtime)
         stopped, reset = stopped + done["stopped"], reset + done["sessions_reset"]
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
+    if sub["credential_id"]:
+        from .computer_keys import drop_credential
+
+        drop_credential(c, sub["credential_id"])
     H.event(
         c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": computers, "stopped": stopped}
     )
@@ -1700,7 +1761,9 @@ def run_values(c, vault, who, subscription_runtime=None):
                 "UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",
                 (sub["revision"], who.attempt_id, given["runtime"]),
             )
-        value = vault.cipher.unseal(c, _context(sub["id"]), sub["sealed"])
+        value = value_of(c, vault.cipher, sub)
+        if value is None:
+            continue
         spec = KINDS[sub["kind"]]
         out.append(
             {

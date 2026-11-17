@@ -302,7 +302,10 @@ def plan_with_value(c, vault, runner, item):
     )
     if not sub or sub['status'] == 'needs_reconnect' or not given:
         return item
-    spec = MS.delivered(sub['kind'], vault.cipher.unseal(c, MS._context(sid), sub['sealed']))
+    value = MS.value_of(c, vault.cipher, sub)
+    if value is None:
+        return item
+    spec = MS.delivered(sub['kind'], value)
     return {**item, 'env': {spec['env']: spec['value']}}
 
 

@@ -1498,9 +1498,9 @@ def ensure_tool(c, who, credential_id, from_computer=False, value=None):
     if row["member_stored"] and str(row["created_by"] or "").startswith("bot:"):
         return None  # a bot's own key goes on a tool of its own (`own_tool`), never on a tool others use
     on_computers = c.execute(
-        "SELECT 1 FROM computer_keys WHERE credential_id=? UNION SELECT 1 FROM credential_grants WHERE credential_id=?"
-        " AND (subject='computers' OR subject LIKE 'computer:%')",
-        (credential_id, credential_id),
+        "SELECT 1 FROM computer_keys WHERE credential_id=? UNION SELECT 1 FROM model_subscriptions WHERE credential_id=?"
+        " UNION SELECT 1 FROM credential_grants WHERE credential_id=? AND (subject='computers' OR subject LIKE 'computer:%')",
+        (credential_id, credential_id, credential_id),
     ).fetchone()
     if not TS.is_tool_key(
         row["kind"], row["env"], row["name"], row["source"], row["ciphertext"] is not None, bool(on_computers)

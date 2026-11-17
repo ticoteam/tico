@@ -399,9 +399,9 @@ def vendor_name(vendor):
 def is_tool_key(kind, env, name, source, stored, on_computers):
     """Whether a stored credential is a tool's key: an `api_key` or `token` with a value. Not a tool's: a model key (its
     variable, or a name with none set, is a providers.RUNTIME_KEY_NAMES name: a runtime's CLI reads it directly, so it
-    belongs to the model setup and never goes through the proxy), a computer's
-    key or shared model login (`on_computers`: a computer_keys row or a grant to the computers; or a `computers:`
-    source), Finance's bank logins (`finance`), a bot's own `HUB_` key back into Tico, a webhook or signing secret
+    belongs to the model setup and never goes through the proxy), a computer's key or shared model login
+    (`on_computers`: a computer_keys row, a model subscription or a grant to the computers; or a `computers:` source),
+    Finance's bank logins (`finance`), a bot's own `HUB_` key back into Tico, a webhook or signing secret
     (`STRIPE_WEBHOOK_SECRET`, "Slack signing secret": the bot checks signatures with the value itself, it is never sent
     to the vendor, so a proxy token in its place would break it), passwords and files."""
     from backend.providers import RUNTIME_KEY_NAMES
