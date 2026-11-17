@@ -449,11 +449,6 @@ async function thvLoad(view: ThvView): Promise<void> {
     thvDraw(view);
   }
 }
-// A message posted elsewhere (Start onboarding) into a DM on screen: that DM reads itself again, finding the thread
-// if it was not there yet.
-function threadsReloadDM(actor: string) {
-  for (const v of THV_VIEWS) if (v.opts.dm === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
-}
 function threadsReloadHome(actor: string) {
   for (const v of THV_VIEWS) if (v.opts.home === actor && !v.gone) { if (v.id) void thvRefresh(v); else void thvLoad(v); }
 }

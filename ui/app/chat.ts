@@ -650,11 +650,9 @@ function chatTaskRunHTML(run: ChatMessage[]) {
 // colour or label; the person it waits on sees it at full ink. Hover names whose reply.
 interface ChatQuestionMark { id?: string | undefined; to?: string | undefined }
 function qmarkHTML(refs: object | null | undefined) {
-  const q = (refs as { question?: unknown } | null | undefined)?.question as ChatQuestionMark | null | undefined;
-  if (!q || typeof q !== 'object' || !q.id) return '';
-  const mine = !!q.to && q.to === myActor();
-  const whose = mine ? 'your' : `${actorLabel(q.to || '') || 'a person'}'s`;
-  return `<span class="qmark${mine ? ' mine' : ''}" role="img" aria-label="Needs ${esc(whose)} reply" title="Needs ${esc(whose)} reply">?</span>`;
+  const q = (refs as ChatRefs | null | undefined)?.question, mine = !!q?.to && q.to === myActor();
+  // The title is its name too (role img): "Needs your reply", or whose.
+  return q?.id ? `<span class="qmark${mine ? ' mine' : ''}" role="img" title="Needs ${mine ? 'your' : esc(actorLabel(q.to || '') || 'a person') + "'s"} reply">?</span>` : '';
 }
 // Tico Live was retired; the lines it left in rooms (refs.live) read as plain messages.
 function v2MessageHTML(m: ChatMessage) {
@@ -1320,7 +1318,6 @@ function v2ChatStream(state: ChatState, loaded = false) {
   state.liveOff = () => { clearTimeout(down); offs.forEach(off => { off(); }); state.liveOff = null; state.liveCid = null; };
 }
 
-const ICON_CHAT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4c-4.7 0-8.5 3.1-8.5 7 0 2 1 3.8 2.6 5.1L5 20.5l4.3-1.6c.9.2 1.8.4 2.7.4 4.7 0 8.5-3.1 8.5-7S16.7 4 12 4z"/></svg>';
 document.addEventListener('click', async ev => {
   const button = eventElement(ev)?.closest<HTMLElement>('[data-task-conversation]'); if (!button) return;
   ev.preventDefault(); ev.stopPropagation();
