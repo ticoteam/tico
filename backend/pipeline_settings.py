@@ -1089,15 +1089,17 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
         elif stage["name"].lower() in names:
             problems.append(f"Two stages are called {stage['name']}.")
         names.add(stage["name"].lower())
+        found = task_engine.stage(conn, stage["id"]) if stage["id"] else None
         if stage["id"]:
             if stage["id"] in ids:
                 problems.append(f"Stage {stage['id']} is listed twice.")
             ids.add(stage["id"])
-            found = task_engine.stage(conn, stage["id"])
             if found and (found["pipeline_id"] != pid or found["kind"] != "work"):
                 problems.append(f"Stage {stage['id']} is not a work stage of this pipeline.")
         owner = stage["owner"]
-        if owner == stage_pick.PICK:
+        if stage["side"] and (owner == stage_pick.PICK or stage["pick"] is not None):
+            problems.append(f"A side stage cannot pick from a bot pool ({label}).")
+        elif owner == stage_pick.PICK:
             _check_pick(conn, stage, label, problems)
         elif owner and owner != ASSIGNEE and not _actor_exists(conn, owner):
             problems.append(f"The owner of {label} must be a bot, a person or the task's assignee, not {owner}.")
@@ -1106,10 +1108,10 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
         if stage["side"]:
             if position == 0:
                 problems.append(f"The first work stage of a pipeline cannot be a side stage ({label}).")
+            if stage["on_enter"] or (found and _loads(found.get("on_enter"))):
+                problems.append(f"Remove the stage's action before making it a side stage ({label}).")
             if stage["requirements"]:
                 problems.append(f"A side stage cannot have requirements ({label}).")
-            if stage["on_enter"]:
-                problems.append(f"A side stage cannot have an on-enter action ({label}).")
             continue
         if position == 0 and stage["task_limit"]:
             problems.append(f"The first stage of a pipeline has no limit ({label}).")

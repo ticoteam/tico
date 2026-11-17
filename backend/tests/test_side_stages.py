@@ -7,12 +7,14 @@ and a manager bot, and Ana, who files the tasks.
 """
 
 import importlib
+import shutil
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from backend import migrations, rules
 from backend import never_stuck as NS
 from backend import pipeline_settings as PS
 from backend import stage_rules as SR
@@ -21,12 +23,11 @@ from backend import task_engine as E
 from backend import task_requirements as R
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.migrations import fresh, snapshot
 
 ANA = X.ANA
 BUILDER, REVIEWER, MANAGER = "bot:builder", "bot:reviewer", "bot:manager"
 START = datetime(2030, 1, 7, 9, 0, tzinfo=timezone.utc)
-MIGRATION = "backend.migrations.20261117205926_side_stages"
+MIGRATION = "20261117205926_side_stages"
 
 IN_PROGRESS = {"name": "In progress", "owner": BUILDER, "requirements": [{"kind": "owner_done"}]}
 REJECTED = {"name": "Rejected", "side": True, "owner": REVIEWER}
@@ -164,6 +165,19 @@ def test_next_from_a_side_stage_goes_to_the_first_main_stage_after_it(c):
     assert _move(c, row["id"], E.NEXT, ANA)["stage"]["name"] == "Release ready"
 
 
+def test_done_and_advance_leave_a_side_stage_in_place_but_a_rule_can_move_it(c):
+    _pipeline(c)
+    task_id = X.new_task(c, ANA, "Build the importer", "eng")["id"]
+    held = _move(c, task_id, "Rejected", BUILDER)
+
+    assert H.task_done(c, H.KEEPER, task_id) == held
+    assert E.advance(c, task_id) is None
+    assert E.task(c, task_id) == held
+
+    rules.TASK_RUNNERS["move"](c, task_id, {"stage": "next"}, "Rule: send to QA")
+    assert E.task(c, task_id)["stage"]["name"] == "Bot QA"
+
+
 def test_done_from_a_side_stage_needs_nothing(c):
     _pipeline(c)
     row = X.new_task(c, ANA, "Build the importer", "eng")
@@ -262,15 +276,63 @@ def test_a_side_stage_cannot_have_requirements(c):
         PS.save(c, ANA, record)
 
 
-def test_the_side_stages_migration_run_twice_changes_nothing(tmp_path):
-    path = fresh(tmp_path)
-    before = snapshot(path)
-    migration = importlib.import_module(MIGRATION)
-    with closing(sqlite3.connect(path)) as conn:
-        migration.up(conn)
-        migration.up(conn)  # again: nothing more changes
-        conn.commit()
-    assert snapshot(path) == before
+def test_the_side_stages_migration_preserves_existing_visits_and_schema_objects(tmp_path):
+    directory = tmp_path / "migrations"
+    directory.mkdir()
+    for migration in migrations.files():
+        if migration.version < MIGRATION:
+            shutil.copy(migration.path, directory)
+    for name in (migrations.BASELINE, migrations.RETIRED_LIST):
+        shutil.copy(migrations.DIRECTORY / name, directory)
+    path = tmp_path / "hub.sqlite"
+    with closing(sqlite3.connect(path, isolation_level=None)) as conn:
+        migrations.apply(conn, directory)
+        conn.execute("PRAGMA foreign_keys=ON")
+        assert "side" not in [row[1] for row in conn.execute("PRAGMA table_info(stages)")]
+        pipe = X.pipeline(conn, "upgrade", "Upgrade", ({"name": "In progress"}, {"name": "QA"}))
+        conn.execute("INSERT INTO tasks (id, title) VALUES ('t1', 'Send the invoice')")
+        conn.execute(
+            "INSERT INTO visits (rowid, id, task_id, stage_id, entered_at, entered_how, left_at, how) "
+            "VALUES (10, 'v1', 't1', ?, '2026-11-16', 'new', '2026-11-17', 'met'), "
+            "(20, 'v2', 't1', ?, '2026-11-17', 'met', NULL, NULL)",
+            (pipe["stages"]["In progress"], pipe["stages"]["QA"]),
+        )
+        conn.execute(
+            "INSERT INTO requirements (id, visit_id, kind, created_at) VALUES ('r1', 'v1', 'ok', '2026-11-16')"
+        )
+        conn.execute("CREATE VIEW open_visits AS SELECT id FROM visits WHERE left_at IS NULL")
+        visit_sql = "SELECT rowid, * FROM visits ORDER BY rowid"
+        objects_sql = (
+            "SELECT type, name, tbl_name, sql FROM sqlite_master "
+            "WHERE type IN ('trigger', 'view') OR (type='index' AND tbl_name='visits') ORDER BY type, name"
+        )
+        visits = conn.execute(visit_sql).fetchall()
+        objects = conn.execute(objects_sql).fetchall()
+
+        shutil.copy(migrations.DIRECTORY / f"{MIGRATION}.py", directory)
+        migrations.apply(conn, directory)
+        assert conn.execute("PRAGMA foreign_keys").fetchone() == (1,)
+        assert conn.execute("PRAGMA foreign_key_check(requirements)").fetchall() == []
+        assert conn.execute("SELECT DISTINCT side FROM stages").fetchall() == [(0,)]
+        assert conn.execute(visit_sql).fetchall() == visits
+        assert conn.execute(objects_sql).fetchall() == objects
+        assert conn.execute("SELECT id FROM open_visits").fetchall() == [("v2",)]
+
+        conn.execute("UPDATE visits SET left_at='2026-11-18', how='side' WHERE id='v2'")
+        conn.execute(
+            "INSERT INTO visits (id, task_id, stage_id, entered_at, entered_how) VALUES ('v3', 't1', ?, '2026-11-18', 'side')",
+            (pipe["stages"]["In progress"],),
+        )
+        assert conn.execute("SELECT last_change_attempt FROM visits WHERE id='v3'").fetchone() == (0,)
+        assert conn.execute("SELECT id FROM open_visits").fetchall() == [("v3",)]
+
+        visits = conn.execute(visit_sql).fetchall()
+        schema_version = conn.execute("PRAGMA schema_version").fetchone()
+        changes = conn.total_changes
+        importlib.import_module(f"backend.migrations.{MIGRATION}").up(conn)
+        assert conn.execute("PRAGMA schema_version").fetchone() == schema_version
+        assert conn.total_changes == changes
+        assert conn.execute(visit_sql).fetchall() == visits
 
 
 def test_never_stuck_never_picks_up_a_task_sitting_in_a_side_stage(c, later):

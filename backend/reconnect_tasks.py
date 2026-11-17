@@ -20,8 +20,8 @@ Who gets what:
   key in place (`api_tools.update_key`): every grant stays as it was.
 
 One open task a tool: a repeat finds it (event `tool.reconnect_task`, its target the tool) and adds nothing, notifies
-nobody. The task closes itself, its card saying fixed, when the tool reads Working (or Works (limited)) again or its
-key's value is replaced, however (the card, Tools, the API), and closes as not needed when the tool is deleted.
+nobody. When the tool reads Working (or Works (limited)) again or its key's value is replaced, its card says fixed
+and the task closes unless it is in a side stage. When the tool is deleted the task closes as not needed.
 """
 
 import json
@@ -282,15 +282,17 @@ def start(c: Any, tool_id: str, why: str) -> Row:
 
 # ---------------------------------------------------------------------------------------------------- closing
 def close(c: Any, tool_id: str, why: str, done: bool = True) -> Row:
-    """The tool's open Reconnect task ends: its card says fixed (or not needed) and wakes nobody, and the task is done
-    (`done`) or closed. The task, or None when none was open."""
+    """Settle the tool's open Reconnect task's card without a wake. Finish or close the task unless it waits in a side
+    stage for an explicit move after a fix. Return the task if it moved."""
     task = open_task(c, tool_id)
     if not task:
         return None
     RC.settle(c, task["id"], key_of(tool_id), "fixed" if done else "retired")
     try:
         if done:
-            H.task_done(c, H.KEEPER, task["id"], why)
+            after = H.task_done(c, H.KEEPER, task["id"], why)
+            if after["stage"].get("side"):
+                return None
         else:
             H.task_close(c, H.KEEPER, task["id"], why)
     except H.Refused:
