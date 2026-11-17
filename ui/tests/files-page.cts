@@ -1,8 +1,9 @@
 // The Files page (Library › Files, ui/app/pages.js). On a computer it is a table across the page (name, kind, made by,
 // team, updated), about 40px a row with the name on one line; on a phone each row is two lines (the name, then Kind · Bot
-// · time) and the search and the filter button share the top row. The filters sit in a popover (kind, updated, bot,
-// team, pinned, archived) that shows as a count on the button and as chips under the row, and every filter is in the
-// address, so a view can be shared. Also: More paging, search, the empty, error and loading states, and opening a file.
+// · time) and the search and the filter button share the top row. The filters sit in a popover (kind and page role,
+// updated, bot, team, linked to, written by, pinned, archived) that shows as a count on the button and as chips under the
+// row, and every filter is in the address, so a view can be shared. Also: a page's meta line (its links and writers), More
+// paging, search, the empty, error and loading states, and opening a file.
 // Fixtures only, no network.
 import type {Browser, LaunchOptions, Page, Route} from 'playwright';
 import type * as PageSupport from './support/page.cts';
@@ -25,24 +26,33 @@ const BOTS = [['cmo', 'AI CMO', 'marketing'], ['writer', 'Writer', 'marketing'],
   .map(([name, display_name, team]) => ({name, display_name, team, org_parent: '', host: 'keeper', status: 'active',
     can_chat: true, users: [], schedules: []}));
 const teamOf = (bot: string) => BOTS.find(b => b.name === bot)?.team;
+// The tasks the Linked to picker finds by its search (search=) or by the ids a link names (ids=), and the goals it names.
+const TASKS = [{id: 't-18463', title: 'Q4 launch brief'}, {id: 't-19385', title: 'Signup funnel fix'}];
+const GOALS = [{id: 'g-grow', title: 'Grow signups', owner_id: 'cmo', parent_id: null, rank: 1, status: 'active'}];
 
 const now = Date.now(), at = (hours: number) => new Date(now - hours * 36e5).toISOString();
 interface FileOpen {type: string; url: string}
+interface FileLink {target: string; role: string; name: string}
+interface FileWriter {actor: string; name: string}
 interface FileRow {id: string; name: string | null; title: string; bot: string; library_kind: string; locator: string; open: FileOpen | null | undefined;
-  last_activity_at: string; pins: string[]; archived: boolean; task_id: null}
-interface RowSpec {title: string; name?: string | null; bot: string; kind: string; locator?: string; open?: FileOpen | null; h: number; pins?: string[]; archived?: boolean}
+  last_activity_at: string; pins: string[]; archived: boolean; task_id: null; links: FileLink[]; links_more: number; writers: FileWriter[]}
+interface RowSpec {title: string; name?: string | null; bot: string; kind: string; locator?: string; open?: FileOpen | null; h: number; pins?: string[]; archived?: boolean;
+  links?: FileLink[]; links_more?: number; writers?: FileWriter[]}
 interface Viewport {width: number; height: number}
 // What the fixture server was asked for and served: the page's list and search calls, and the file it opened.
 interface FetchState {files: FileRow[]; mode: string; listed: string[]; searched: (string | null)[]; opened: string[]}
 const row = (id: string, o: RowSpec): FileRow => ({id, name: 'name' in o ? o.name ?? null : o.title, title: o.title, bot: o.bot, library_kind: o.kind, locator: o.locator || 'tico_blob',
   open: 'open' in o ? o.open : {type: 'tico', url: '/api/v2/files/' + id}, last_activity_at: at(o.h), pins: o.pins || [],
-  archived: !!o.archived, task_id: null});
+  archived: !!o.archived, task_id: null, links: o.links || [], links_more: o.links_more || 0, writers: o.writers || []});
 // A search hit carries an excerpt of its text; the list does not.
 const EXCERPT: Record<string, string> = {'file-funnel': 'Trial to paid, by week and plan'};
 const FILES: FileRow[] = [
   row('file-q4', {title: 'Q4 launch plan', bot: 'cmo', kind: 'document', locator: 'remote_link', open: {type: 'external', url: GDOC}, h: 0.2, pins: ['Ana']}),
   row('file-funnel', {title: 'Signup funnel', bot: 'engineer', kind: 'data', h: 2, pins: ['Ana', 'Chris']}),
-  row('file-weekly', {title: 'Weekly report', bot: 'cmo', kind: 'page', h: 3, open: null}),
+  // A page with its links (five at most, and a count of the rest) and its writers: its meta line names them.
+  row('file-weekly', {title: 'Weekly report', bot: 'cmo', kind: 'page', h: 3, open: null,
+    links: [{target: 'task:t-18463', role: 'Spec', name: 'D-18463'}, {target: 'task:t-19385', role: 'Spec', name: 'D-19385'}], links_more: 2,
+    writers: [{actor: 'bot:cmo', name: 'AI CMO'}, {actor: 'human:ana', name: 'Ana'}]}),
   row('file-budget', {title: 'Budget 2026', bot: 'finance', kind: 'data', h: 5}),
   // A stored file whose title is its path: the row shows the file's own name, never the folder.
   row('file-guide', {title: 'guides/holiday-setup.md', name: 'holiday-setup.md', bot: 'writer', kind: 'document', h: 5.5}),
@@ -67,8 +77,11 @@ for (let i = 0; i < 46; i++) FILES.push(row(`file-n${String(i).padStart(2, '0')}
 // The server's filters, as GET /api/v2/files applies them: newest activity first.
 function listing(q: URLSearchParams, rows: FileRow[]): FileRow[] {
   const kind = q.get('kind'), bot = q.get('bot'), team = q.get('team'), since = q.get('since');
+  const role = q.get('role'), linked = q.get('linked'), writer = q.get('writer');
   return rows.filter(f => f.archived === (q.get('archived') === 'true') && (!kind || f.library_kind === kind)
     && (!bot || f.bot === bot) && (!team || teamOf(f.bot) === team) && (!since || f.last_activity_at >= since)
+    && (!role || f.links.some(l => l.role === role)) && (!linked || f.links.some(l => l.target === linked))
+    && (!writer || f.writers.some(w => w.actor === writer))
     && (q.get('pinned') !== 'true' || f.pins.length > 0))
     .sort((a, b) => b.last_activity_at.localeCompare(a.last_activity_at));
 }
@@ -92,9 +105,12 @@ async function open(browser: Browser, viewport: Viewport, state: FetchState, the
     if (p === '/api/employees') return json(BOTS);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: [{bot: 'cmo', state: 'idle'}]});
-    if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
+    if (p === '/api/v2/goals') return json({goals: GOALS, chain: [], reports: [], company: []});
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
-    if (p === '/api/v2/tasks') return json({tasks: []});
+    if (p === '/api/v2/tasks') {
+      const word = (q.get('search') || '').toLowerCase(), ids = (q.get('ids') || '').split(',').filter(Boolean);
+      return json({tasks: TASKS.filter(t => ids.includes(t.id) || (word && t.title.toLowerCase().includes(word)))});
+    }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/groups') return json(TEAMS);
     if (p === '/api/v2/files') {
@@ -202,6 +218,7 @@ async function desktop(browser: Browser) {
   assert.equal(await q4.locator('a.lf-open').getAttribute('href'), GDOC, 'desktop: a linked file goes to its provider');
   assert.equal(await q4.locator('a.lf-open').getAttribute('target'), '_blank', 'desktop: and opens in a new tab');
   assert.equal(await page.locator('.lf-row').filter({hasText: 'Weekly report'}).locator('a.lf-open').getAttribute('href'), '#/page/file-weekly', 'desktop: a page opens the page');
+  assert.equal((await page.locator('.lf-row').filter({hasText: 'Weekly report'}).locator('.lf-by-n').innerText()).trim(), 'AI CMO, Ana', 'desktop: a page is made by its writers');
   // A file whose bot has no team shows nothing there, not a dash.
   assert.ok((await page.locator('td.lf-team').allInnerTexts()).every(x => x.trim() !== '—'), 'desktop: no dash for no team');
 
@@ -215,11 +232,11 @@ async function desktop(browser: Browser) {
   await page.locator('.lf-fbtn').click();
   await page.locator('#lf-filter-pop').waitFor({state: 'visible'});
   assert.deepEqual(await page.locator('#lf-filter-pop .lf-sec').evaluateAll(els => els.map((e: Element) => e.getAttribute('aria-label'))),
-    ['Kind', 'Updated', 'Bot', 'Team', 'Show'], 'popover: its sections');
+    ['Kind', 'Updated', 'Bot', 'Team', 'Linked to', 'Written by', 'Show'], 'popover: its sections');
   await page.waitForFunction(() => document.querySelector('.lf-fbtn')!.getAttribute('aria-expanded') === 'true', null, {timeout: 5000});
-  assert.equal(await page.locator('#lf-filter-pop .tl-menu-q').count(), 1, 'popover: a find box for nine bots');
+  assert.equal(await page.locator('#lf-filter-pop .lf-sec[aria-label="Bot"] .tl-menu-q').count(), 1, 'popover: a find box for nine bots');
   assert.equal(await page.locator('#lf-filter-pop').evaluate(el => el.scrollTop), 0, 'popover: opens with Kind at the top');
-  assert(await page.locator('#lf-filter-pop').evaluate(el => el.scrollHeight <= el.clientHeight + 1), 'popover: all of it fits a 900px window');
+  assert(await page.locator('#lf-filter-pop').evaluate(el => el.getBoundingClientRect().bottom <= innerHeight), 'popover: it sits inside a 900px window');
   assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.lfSet), 'kind', 'popover: focus goes to the first pick, not the bot find box');
   await page.locator('[data-lf-set="kind"][data-lf-value="data"]').click();
   await settle(page, ['Signup funnel', 'Budget 2026', 'Traffic export']);
@@ -231,7 +248,7 @@ async function desktop(browser: Browser) {
   assert.equal(await page.locator('[data-lf-set="kind"][data-lf-value=""]').getAttribute('aria-checked'), 'false', 'popover: All is off');
 
   // The find box narrows the bot list, and a bot pick narrows the rows.
-  await page.locator('#lf-filter-pop .tl-menu-q').fill('engineer');
+  await page.locator('#lf-filter-pop .lf-sec[aria-label="Bot"] .tl-menu-q').fill('engineer');
   const bots = await page.locator('#lf-filter-pop .lf-sec[aria-label="Bot"] .tl-mi').evaluateAll(els => els.filter(e => !(e as HTMLElement).hidden).map(e => (e as HTMLElement).dataset.lfValue));
   assert.deepEqual(bots, ['engineer'], 'popover: the find box narrows the bots');
   await page.locator('[data-lf-set="bot"][data-lf-value="engineer"]').click();
@@ -275,6 +292,26 @@ async function desktop(browser: Browser) {
   await page.locator('[data-lf-toggle="archived"]').click();
   await settle(page, ['Old brief']);
   assert.equal(await page.locator('.lf-row .lf-arch').getAttribute('aria-label'), 'Archived', 'archived: marked in the row');
+  await page.locator('.lf-bar [data-lf-clear-all]').click();
+  await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 50);
+
+  // Role, Linked to and Written by send role, linked and writer, and narrow the rows the way the server does. The Linked to
+  // find box lists the tasks its search finds; a page with links and writers is the one that matches all three.
+  await openPopover(page);
+  await page.locator('[data-lf-set="role"][data-lf-value="Spec"]').click();
+  await settle(page, ['Weekly report']);
+  assert.match(state.listed.at(-1)!, /role=Spec/, 'role: the list asks for the role');
+  assert.equal(await page.locator('.lf-bar .tl-chip-main').first().getAttribute('aria-label'), 'Role: Spec. Change', 'role: a chip for it');
+  await page.locator('#lf-filter-pop .lf-sec[aria-label="Linked to"] .lf-find').fill('signup');
+  await page.locator('[data-lf-set="linked"][data-lf-value="task:t-19385"]').click();
+  await settle(page, ['Weekly report']);
+  assert.match(state.listed.at(-1)!, /linked=task%3At-19385/, 'linked: the list asks for the target');
+  assert.equal(await page.locator('.lf-bar .tl-chip-main').nth(1).getAttribute('aria-label'), 'Linked to: Signup funnel fix. Change', 'linked: a chip named by the task');
+  await page.locator('#lf-filter-pop .lf-sec[aria-label="Written by"] .tl-menu-q').fill('writer');
+  await page.locator('[data-lf-set="writer"][data-lf-value="bot:writer"]').click();
+  await page.waitForFunction(() => document.querySelector('.lf-list')!.textContent!.includes('Nothing matches.'));
+  assert.match(state.listed.at(-1)!, /writer=bot%3Awriter/, 'writer: the list asks for the writer');
+  assert.equal(await page.locator('.lf-bar .tl-chip-main').nth(1).getAttribute('aria-label'), 'Written by: Writer. Change', 'writer: a chip for the writer');
   await page.locator('.lf-bar [data-lf-clear-all]').click();
   await page.waitForFunction(() => document.querySelectorAll('.lf-row').length === 50);
 
@@ -329,6 +366,14 @@ async function phone(browser: Browser) {
   assert(Math.abs((qBox.y + qBox.height / 2) - (fBox.y + fBox.height / 2)) < 4, 'phone: the search and the filter share a row');
   assert(qBox.x < fBox.x, 'phone: the filter sits beside the search');
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'phone: no sideways scroll');
+
+  // A page's meta line: its links (each a link to its route, the count of the rest after them), then who wrote it, then when.
+  // A page with no links names its kind and its bot.
+  const weekly = page.locator('.lf-row').filter({hasText: 'Weekly report'});
+  assert.match((await weekly.locator('.lf-meta').innerText()).trim(), /^Spec of D-18463, D-19385 \+2 · AI CMO, Ana · \S/, 'phone: a page names its links and writers');
+  assert.deepEqual(await weekly.locator('.lf-meta a').evaluateAll(els => els.map(e => e.getAttribute('href'))), ['#/task/t-18463', '#/task/t-19385'],
+    'phone: each link goes to its task');
+  assert.match((await page.locator('.lf-row').filter({hasText: 'Note 03'}).locator('.lf-meta').innerText()).trim(), /^Page · Sales Bot · \S/, 'phone: a page with no links names its kind and bot');
 
   // The popover on a phone: a sheet within the screen; a pick works.
   await openPopover(page);
