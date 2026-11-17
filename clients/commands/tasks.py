@@ -384,19 +384,15 @@ def task_done(api, args):
 
 @tool(
     "tico_task_move",
-    "Move a task: `next` (forward; with a why, past what is not met), back to an earlier stage by its name or id, "
-    "`done`, `closed` or `reopen`. Forward with something not met and no why is refused with what is missing and "
-    "the commands you may run. A bot says why for every move but forward; reopen needs a why from everyone. A bot "
-    "does not reopen what a person closed. With `to_pipeline` it moves to another pipeline: `to` is that pipeline's "
-    "stage (its first when left out), and the task keeps its number, label and history; a Done or Closed one stays so. "
-    "With `from_pipeline` and `from_stage` instead of `id`, every open task in that stage moves to `to_pipeline` "
-    "(no version); the answer lists what moved and what was skipped, with why. Never copy and close to move a task.",
+    "Move a task: `next`, back to a stage, `done`, `closed` or `reopen`. A bot gives a why for all but `next`; reopen "
+    "needs one from everyone; a bot never reopens what a person closed. `to_pipeline` moves it to another pipeline, "
+    "number and history kept. `from_pipeline` + `from_stage` instead of `id`: all that stage's open tasks.",
     {
         "id": TASK_ID,
-        "to": _s("next, done, closed, reopen, or a stage's name or id (of `to_pipeline` when given)"),
-        "to_pipeline": _s("Another pipeline's name or id: the task moves there"),
-        "from_pipeline": _s("With from_stage, in place of id: move every open task in that stage"),
-        "from_stage": _s("A stage of from_pipeline, by name or id"),
+        "to": _s("next, done, closed, reopen, or a stage's name or id"),
+        "to_pipeline": _s("Another pipeline's name or id"),
+        "from_pipeline": _s("Its pipeline"),
+        "from_stage": _s("A stage"),
         "why": WHY,
         "version": VERSION,
         "on_behalf_of": ASKED,

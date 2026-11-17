@@ -2,6 +2,7 @@
 MCP tool send the same request to the plan's route, with the version the bot was given; none reads the task to find
 one. A refusal says what is missing and what the bot may run next. The API is a recorder; no server runs."""
 
+import argparse
 import json
 
 import pytest
@@ -665,3 +666,34 @@ def test_task_show_says_it_waits_for_a_free_bot_and_who_each_pick_gave_it_to():
             return {"task": task, "events": events, "actors": {}}
 
     assert "Picked: Build given to Builder 2" in hubtools.BY_NAME["tico_task_show"]["fn"](Shown(), {"id": "T1"})["text"]
+
+
+@pytest.mark.parametrize(
+    "args, why",
+    [
+        ({"id": None, "from_pipeline": "Dev", "from_stage": None, "to_pipeline": "Backlog"}, "needs from_pipeline"),
+        ({"id": "T1", "from_pipeline": "Dev", "from_stage": "Ideas", "to_pipeline": "Backlog"}, "not both"),
+        ({"id": None, "to": "next"}, "Say which task"),
+        ({"id": "T1"}, "Say where it goes"),
+    ],
+)
+def test_a_task_move_that_names_no_task_or_no_place_sends_nothing(args, why):
+    api = Recorder()
+    with pytest.raises(ValueError, match=why):
+        hubtools.BY_NAME["tico_task_move"]["fn"](api, args)
+    assert api.writes() == []
+
+
+@pytest.mark.parametrize(
+    "place, why",
+    [
+        ({"id": None, "to": "next", "to_place": "Backlog/On ice", "from_place": None}, "Give the stage"),
+        ({"id": None, "to": None, "to_place": None, "from_place": "Dev/Ideas"}, "add --to"),
+        ({"id": "T1", "to": None, "to_place": "Backlog", "from_place": "Dev/Ideas"}, "Give a task, or --from"),
+        ({"id": None, "to": None, "to_place": "Backlog", "from_place": "Dev"}, "names a stage"),
+        ({"id": None, "to": None, "to_place": None, "from_place": None}, "Say which task"),
+    ],
+)
+def test_the_cli_refuses_a_move_place_it_cannot_read_before_it_sends(place, why):
+    with pytest.raises(APIError, match=why):
+        remotecli._move_places(argparse.Namespace(**place))

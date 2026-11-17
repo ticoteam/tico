@@ -1305,8 +1305,6 @@ def refile(
     check_version(conn, by, row, seen_version)
     pipe = pipeline_named(conn, by, to_pipeline, task_id)
     target = _refile_target(conn, by, row, pipe, to)
-    if target["id"] == row["stage_id"]:
-        return row
     _need_why(conn, by, why, "move it to another pipeline", task_id)
     running = turn_running(conn, task_id, by) if turn_check else None
     if running:

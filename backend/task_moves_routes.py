@@ -331,17 +331,10 @@ def register(
         def write(c: Any) -> dict[str, Any]:
             who = acting(c, caller, body)
             visible = auth.task_sql(c, who)
-            if body.ids is not None:
-                ids: list[str] = []
-                skipped: list[dict[str, Any]] = []
-                for ident in dict.fromkeys(body.ids):
-                    try:
-                        ids.append(auth.resolve_task(c, who, ident))
-                    except Problem as exc:
-                        skipped.append({"code": exc.code, "reason": exc.detail})  # not named: it may not be theirs
-            else:
+            ids: list[str] = []
+            skipped: list[dict[str, Any]] = []
+            if body.from_ is not None:
                 place = body.from_
-                assert place is not None
                 pipe = task_engine.pipeline_named(c, who.actor, place.pipeline)
                 stage = next(
                     (
@@ -361,7 +354,12 @@ def register(
                         (pipe["id"], stage["id"], MOVE_CAP + 1),
                     )
                 ]
-                skipped = []
+            else:
+                for ident in dict.fromkeys(body.ids or []):
+                    try:
+                        ids.append(auth.resolve_task(c, who, ident))
+                    except Problem as exc:
+                        skipped.append({"code": exc.code, "reason": exc.detail})  # not named: it may not be theirs
             if len(ids) > MOVE_CAP:
                 raise Problem(
                     "too_many", f"A move takes at most {MOVE_CAP} tasks at once", 422, extra={"cap": MOVE_CAP}

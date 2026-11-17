@@ -2,9 +2,12 @@
 `POST /api/v2/tasks/{id}/move` with `to_pipeline`, many through `POST /api/v2/tasks/move`, and a stage removed from a
 pipeline once its tasks have somewhere to go."""
 
+import pytest
+
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.assistant import asked, assistant_turn, turn_message
 
 
 def as_bot(api, slug="ops"):
@@ -48,6 +51,12 @@ def boards(api):
 def idea(api, title, owner="ben", token="ana-test", private=False):
     body = {"title": title, "body": "From the old board.", "owner": owner, "pipeline": "dev", "private": private}
     return post(api, "tasks", body, token=token)
+
+
+def error_code(r):
+    """A refusal's code: a route's own Problem answers {"error": {"code": ...}}, a rule's refusal the code itself."""
+    error = r.json()["error"]
+    return error["code"] if isinstance(error, dict) else error
 
 
 def running(api, task_id, bot="ops"):
@@ -154,6 +163,8 @@ def test_a_stage_that_holds_tasks_is_removed_once_they_have_somewhere_to_go(api)
         headers=headers(),
     )
     assert r.status_code == 409, "not to a stage that goes"
+    r = api.post("/api/v2/pipelines/dev", json={**kept, "move_tasks_to": {"stage": "build"}}, headers=headers())
+    assert r.status_code == 422, "move_tasks_to names a pipeline"
     saved = post(api, "pipelines/dev", {**kept, "move_tasks_to": {"pipeline": "Backlog", "stage": "On ice"}})
     assert [s["id"] for s in saved["pipeline"]["stages"]] == ["build"]
     for t in made:
@@ -204,3 +215,92 @@ def test_a_bot_moves_a_stage_of_tasks_without_versions_and_never_into_a_private_
     )
     out = post(api, "tasks/move", {"ids": [made[0]["id"]], "to_pipeline": "vault", "why": "Secret"}, token=bot)
     assert out["moved"] == [] and out["skipped"][0]["code"] == "task_needs_person"
+
+
+@pytest.mark.parametrize(
+    "body, status, error",
+    [
+        ({}, 422, "bad_request"),  # neither to nor to_pipeline
+        ({"to_pipeline": "backlog", "let_see": ["human:cara"]}, 422, "bad_request"),  # letting see is a next move only
+        ({"to_pipeline": "nope"}, 409, "task_no_such_stage"),
+        ({"to_pipeline": "backlog", "to": "Nope"}, 409, "task_no_such_stage"),
+        ({"to_pipeline": "dev"}, 200, None),  # its own pipeline and first stage: nothing moves
+    ],
+)
+def test_a_move_to_a_place_that_is_missing_or_unnamed_is_refused_and_the_task_stays(api, body, status, error):
+    boards(api)
+    made = idea(api, "Stays put")
+    r = api.post(f"/api/v2/tasks/{made['id']}/move", json={"version": made["version"], **body}, headers=headers())
+    assert r.status_code == status, r.text
+    assert error is None or error_code(r) == error, r.text
+    task = get(api, "tasks/" + made["id"])["task"]
+    assert (task["pipeline"]["id"], task["stage"]["id"]) == ("dev", "ideas")
+
+
+@pytest.mark.parametrize(
+    "body, status, error",
+    [
+        ({"ids": ["nope"], "to_pipeline": "backlog"}, 200, None),  # named by nothing it can read: counted, not named
+        ({"from": {"pipeline": "Dev", "stage": "Nope"}, "to_pipeline": "backlog"}, 409, "task_no_such_stage"),
+        ({"from": {"pipeline": "Nope", "stage": "Ideas"}, "to_pipeline": "backlog"}, 409, "task_no_such_stage"),
+    ],
+)
+def test_a_bulk_move_skips_what_it_cannot_name_and_refuses_a_stage_it_cannot_find(api, body, status, error):
+    boards(api)
+    made = idea(api, "Bulk")
+    r = api.post("/api/v2/tasks/move", json=body, headers=headers())
+    assert r.status_code == status, r.text
+    assert error is None or error_code(r) == error, r.text
+    if status == 200:
+        assert r.json()["moved"] == [] and [s["code"] for s in r.json()["skipped"]] == ["not_found"]
+    assert get(api, "tasks/" + made["id"])["task"]["pipeline"]["id"] == "dev"
+
+
+@pytest.mark.parametrize(
+    "named",
+    [
+        lambda made: {"ids": [t["id"] for t in made]},
+        lambda made: {"from": {"pipeline": "Dev", "stage": "Ideas"}},
+    ],
+    ids=["by-ids", "by-stage"],
+)
+def test_a_bulk_move_takes_at_most_the_cap_and_moves_none(api, monkeypatch, named):
+    boards(api)
+    made = [idea(api, f"Cap {n}") for n in range(2)]
+    monkeypatch.setattr("backend.task_moves_routes.MOVE_CAP", 1)
+    r = api.post("/api/v2/tasks/move", json={**named(made), "to_pipeline": "backlog"}, headers=headers())
+    assert r.status_code == 422 and error_code(r) == "too_many", r.text
+    assert get(api, "tasks/" + made[0]["id"])["task"]["pipeline"]["id"] == "dev"
+
+
+def test_a_person_moves_a_task_into_a_private_pipeline_and_its_manager_reads_it(api):
+    boards(api)
+    post(
+        api,
+        "pipelines/vault",
+        {"name": "Vault", "private": True, "manager_id": "human:ana", "stages": [{"id": "kept", "name": "Kept"}]},
+    )
+    made = idea(api, "Into the vault", owner="ben")
+    moved = post(api, f"tasks/{made['id']}/move", {"to_pipeline": "vault"}, token="ana-test")
+    assert (moved["pipeline"]["id"], moved["stage"]["id"]) == ("vault", "kept")
+
+
+def test_an_assistant_move_to_another_pipeline_is_undone_back_to_its_stage(api):
+    boards(api)
+    made = idea(api, "Parked by the Assistant", owner="ben", token="ben-test")
+    _, attempt = assistant_turn(api, "ben-test", "Park the old idea")
+    asked(
+        api,
+        f"tasks/{made['id']}/move",
+        {"to_pipeline": "backlog", "to": "On ice", "why": "Parked", "version": made["version"]},
+        attempt["token"],
+        turn_message(api, attempt),
+    )
+    [change] = [
+        c for c in get(api, "assistant/changes?days=30", "ben-test")["changes"] if c["object"] == f"task:{made['id']}"
+    ]
+    assert change["undoable"] is True
+    r = api.post(f"/api/v2/assistant/changes/{change['id']}/restore", json={}, headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    task = get(api, "tasks/" + made["id"])["task"]
+    assert (task["pipeline"]["id"], task["stage"]["id"]) == ("dev", "ideas")
