@@ -297,7 +297,7 @@ def test_settings_are_a_persons_own_and_the_team_default_is_an_admins(gate):
     own = get(api, "ask-ingest/settings", token="priya-test")
     assert own["settings"]["mode"] == "on" and own["settings"]["budget"] == 10, "ships as On"
     assert own["modes"] == ["off", "on"]
-    assert len(own["settings"]["criteria"]) == 6 and own["may_edit_team"] is False
+    assert own["settings"]["criteria"] == A.DEFAULTS["criteria"] and own["may_edit_team"] is False
     body = {"mode": "on", "budget": 8, "chores_budget": 3, "criteria": ["Pricing"], "team": True}
     r = api.put("/api/v2/ask-ingest/settings", headers=headers("priya-test"), json=body)
     assert r.status_code == 403
