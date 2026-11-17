@@ -348,7 +348,7 @@ class Settings:
     # What the team's decision calls may cost in a UTC month, in USD, counted from the audit's `cost_usd`; 0 is no
     # cap. At the cap every server-side caller carries on as if Decide were off. backend/judge.py.
     decisions_monthly_usd: float = 50.0
-    # Jev's price in USD per 1M input and output tokens, for the audit's cost when TypeSafe's answer carries none:
+    # Rates in USD per 1M tokens for the optional direct TypeSafe fallback when it omits cost. Gateway decisions use their own rates.
     # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
