@@ -186,7 +186,7 @@ interface ThvOpts {
   autofocus?: boolean;               // the box takes the focus when the composer first draws
   // Flow's chat on a task (decide.ts): `tail` draws after the messages (the ask, as the asker's last message); `send`
   // takes the composer's words and files in place of a post to the thread, true once they went (the box clears);
-  // `typed` hears each change of the box's words, a draft put back included (Approve becomes "Approve with comments");
+  // `typed` hears each change of the box's words, a draft put back included (an OK's row then shows Send back, Close and Approve);
   // a composer with `send` offers uploads only.
   tail?: () => string;
   send?: (text: string, files: File[]) => Promise<boolean>;
