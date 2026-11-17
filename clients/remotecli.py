@@ -514,8 +514,15 @@ def run(args, who=None):
         if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
-            if getattr(args, "doc", None):
-                return via_tool(client, args, document=args.doc, path=args.file)
+            if getattr(args, "doc", None):  # a document is a page: the request `tico page publish --task --as` sends
+                from clients import hubtools
+                from clients.commands._shared import DOCUMENT_NOTE
+
+                if getattr(args, "note", None) is not None:
+                    raise APIError("validation", DOCUMENT_NOTE, 422)
+                fields = {"path": args.file, "task": args.id, "as": args.doc}
+                fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+                return hubtools.pages_publish_path(client, fields)
             if getattr(args, "req", None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)

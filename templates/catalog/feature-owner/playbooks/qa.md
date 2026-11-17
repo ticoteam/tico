@@ -45,13 +45,12 @@ asks its reader to test.
 
     python3 .claude/skills/build-the-page/page.py build reports/<task id>-qa-draft.html --out reports/<task id>-qa.html
     python3 .claude/skills/build-the-page/page.py check reports/<task id>-qa.html --kind qa
-    tico page publish reports/<task id>-qa.html --task <id> --title "QA: <the change>"
+    tico page publish reports/<task id>-qa.html --task <id> --as "QA report" --title "QA: <the change>"
     python3 .claude/skills/build-the-page/page.py render <file id> --kind qa
-    tico task attach <id> reports/<task id>-qa.html --doc "QA report" --note "<what changed>"
 
-`tico page publish` prints the file id. Look at both pictures `render` names before you write it: a page that does not
-draw, or has a broken picture, is fixed and published again, never written. Writing it in QA submits it. Then end the
-turn: the decision model checks it, then the stage asks a person to approve it.
+`tico page publish` prints the file id. Look at both pictures `render` names: a page that does not draw, or has a broken
+picture, is fixed and published again with `--page <file id>` (the next version of the same page). Publishing it as the
+QA report submits it. Then end the turn: the decision model checks it, then the stage asks a person to approve it.
 
 ## 3. When it comes back
 

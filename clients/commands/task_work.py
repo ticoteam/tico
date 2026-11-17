@@ -6,6 +6,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 from urllib.parse import quote
@@ -16,7 +17,17 @@ from clients.cli_spec import Arg, Command, Group
 from clients.bot_files import DOCUMENTS
 from clients.commands._registry import tool
 from clients.commands._schemas import DEFER_FOR, TASK_ID, _delivery, _key, _s
-from clients.commands._shared import ASKED, VERSION, VISUALS, _seen, _uploaded, _visuals, text_file
+from clients.commands._shared import (
+    ASKED,
+    DOCUMENT_NOTE,
+    VERSION,
+    VISUALS,
+    _seen,
+    _uploaded,
+    _visuals,
+    ambiguous_page,
+    text_file,
+)
 from clients.commands._requester import _as_person, _asked
 
 
@@ -594,17 +605,16 @@ def task_follow(api, args):
     "names OKs that version. Attaching again replaces it. With a new version after a send back, say what changed "
     "(changed: up to 5 one-line bullets) and what you did with each of their points (answered: "
     "\"<point>: done|not done, <why>\"); never quote their note back to them. "
-    "With document instead, the HTML in text or the .html file at path is that document's next version: one per name "
-    "per task, shown as a tab beside the task's chat; put what changed in note. Spec, QA report (the proof), Release "
-    "report and Invoice are the names a stage approves; name any other document as you like.",
+    "With document instead, the HTML in text or the .html file at path is that document: a page linked to the task "
+    "with that name as its role, the same as tico page publish --task --as. Say what changed in a comment; a document "
+    "takes no note. Spec, QA report (the proof), Release report and Invoice are the names a stage approves; name any "
+    "other document as you like.",
     {
         "id": _s("Task id"),
         "document": {
             "type": "string",
             "maxLength": 40,
-            "description": "The task's document this HTML is the next version of: "
-            + ", ".join(DOCUMENTS)
-            + " or your own name",
+            "description": "The task's document this HTML is: " + ", ".join(DOCUMENTS) + " or your own name",
         },
         "req": _s("The page requirement's name or id, e.g. Spec page"),
         "page": _s("page:<file id> for its newest version, or page:<file id>@<version>"),
@@ -671,27 +681,30 @@ def task_attach(api, args):
 
 
 def _document(api, args):
-    """A task document's next version: `text`, or the .html file at `path` with the images beside it embedded (as
-    `tico page publish` sends one: the server drops anything that would load from elsewhere)."""
-    body = {"document": args["document"]}
+    """A task document is a page linked to the task with the document's name as its role, the same request as
+    `tico page publish FILE --task ID --as NAME`. The HTML is `text`, or the .html file at `path` with the images beside
+    it embedded (the server drops anything that would load from elsewhere). A document takes no note."""
+    if args.get("note"):
+        raise ValueError(DOCUMENT_NOTE)
+    body = {"task": args["id"], "as": args["document"]}
     if args.get("path"):
         from clients import bot_files as BF, visual_embed
 
         root = BF.checkout_root()
         try:
-            name, _, data, _ = BF.read_local(root, args["path"])
+            name, _, _, _ = BF.read_local(root, args["path"])
             if not visual_embed.is_page(name):
                 raise ValueError("A document is an .html file")
+            body["name"] = name
             body["text"] = visual_embed.embed(root, args["path"])[0].decode("utf-8", errors="replace")
         except BF.Refused as exc:
             raise ValueError(str(exc)) from None
     elif args.get("text") is not None:
+        body["name"] = re.sub(r"[^a-z0-9]+", "-", args["document"].lower()).strip("-") + ".html"
         body["text"] = args["text"]
     else:
         raise ValueError("Send the document's HTML as text, or path to an .html file")
-    if args.get("note"):
-        body["note"] = args["note"]
-    return api.post(f"tasks/{args['id']}/files", body, key=_key(args))
+    return ambiguous_page(lambda: api.post("pages", body, key=_key(args)))
 
 
 @tool(

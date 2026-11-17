@@ -170,7 +170,7 @@
     null
    ]
   ],
-  "stdout": "{\n  \"ok\": true\n}\n",
+  "stdout": "\n",
   "stderr": "",
   "exit": 0
  },
@@ -707,5 +707,21 @@
   "stdout": "",
   "stderr": "Example: tico page card\ntico page card: error: the following arguments are required: --page, --for, --rows",
   "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "specs/1.html",
+   "--task",
+   "1",
+   "--as",
+   "Spec"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"specs/1.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
  }
 ]
