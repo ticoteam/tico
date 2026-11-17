@@ -477,6 +477,7 @@ def add_readers(c, who, key, name, channel_id, bots):
         c.execute(
             "UPDATE slack_thread_links SET state='requested', reason='', updated_at=? WHERE id=?", (H.now(), link["id"])
         )
+    assert link is not None  # found above, or just made
     for bot in bots:
         actor = "bot:" + bot
         viewer = core.actor_viewer(c, actor)
@@ -1032,7 +1033,7 @@ class Bridge:
                     c, link["id"], f"a message came from someone who doesn't map to a roster person ({reason})"
                 )
             return "denied"  # the event stays queued until the link is checked again
-        actor = H.KEEPER if app else H.human_actor(person["id"])
+        actor = H.KEEPER if app or person is None else H.human_actor(person["id"])
         text = self.body_for(event["text"])
         if app:
             text = f"*{event.get('author_name') or event['user_id']}*: {text}"  # who posted it, as the thread shows it
@@ -1109,6 +1110,7 @@ class Bridge:
         """A reply in a read channel goes into its message's sub-thread, and who is told is planned from that
         sub-thread's own followers: the link's readers follow it at digest too, before the reply is written."""
         sub = self.core().sub_thread(c, actor, parent_message_id)
+        assert sub is not None  # sub_thread makes it when missing
         now = H.now()
         for row in c.execute(
             "SELECT actor FROM thread_followers WHERE thread_id=? AND following=1 AND notify='digest' "
