@@ -946,7 +946,7 @@ def shape_text():
         f"{MAX_RULES} rules per filter, {MAX_CONDS} conditions per rule or path, {MAX_PATHS} paths per fork, "
         f"{MAX_DEPTH} levels of forks inside forks, {MAX_STEPS} steps, {MAX_PROMPT} characters per prompt.",
         "",
-        "Decide asks Jev, the one decision model. A `paths` path has `name`, `match` (all or any, default all), "
+        "Decide asks the decision model. A `paths` path has `name`, `match` (all or any, default all), "
         "`when` and `steps`; `otherwise` takes `steps` too. A filter rule has `when`, `match`, `then` (actions), `stop`, "
         "`next` (end, rule or step) and `to` (a destination id). With `to`, or with `stop` true, `next` is end or left out.",
         "",

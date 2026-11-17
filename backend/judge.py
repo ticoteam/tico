@@ -511,7 +511,7 @@ def primary_engine(settings, store=None, vault=None):
 def server_engine(store, c, primary=None):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
     model at all, a demo, or the month's spend at the cap. `primary` is Jev (`primary_engine(settings)`, or the test's
-    fake), and nothing else is asked: when Jev is slow, down or refused, the call raises `J.JudgeError` and the caller
+    fake). If all configured decision providers fail, the call raises `J.JudgeError` and the caller
     treats it as no answer. Each call goes through `metered`, so a batch that reuses one engine (listening, learnings)
     stops at the cap call by call; each result carries `cost_usd`."""
     settings = store.settings
