@@ -32,9 +32,13 @@ LOGIN = 'login'
 # An MCP tool's OAuth sign-in (backend/mcp_connect.py): its tokens are sealed here, never revealed or edited, and reach a
 # run only as a proxy token.
 OAUTH = 'oauth'
-# A secret the server itself uses (the Slack app's tokens, backend/slack_app.py): sealed here, never listed, granted,
-# revealed or handed to a run (`Vault.row` answers 404 for one).
+# A secret the server itself uses: sealed here, never listed, granted, revealed or handed to a run (`Vault.row` answers
+# 404 for one). The Slack app's tokens (backend/slack_app.py), each Settings > Models subscription's value
+# (backend/model_subscriptions.py), the Tico AI Gateway key and install secret (backend/gateway_connection.py) and the
+# Tico company server key (backend/company_server.py).
 SERVICE = 'service'
+# What a record (a `registry_metadata` value) keeps in place of a secret it holds in a service row (`keep_service`).
+KEPT = 'vault:'
 # The credentials a run or a watcher may be handed: never a website account, and a sign-in only through the proxy.
 RUN_ROWS = (
     "SELECT * FROM credentials WHERE kind NOT IN ('login','service') AND (kind!='oauth' OR tool_id IN "
@@ -386,6 +390,66 @@ def open_or_reseal(c, key, legacy_path, nonce, ciphertext, aad, table, where, va
             Path(legacy_path).name,
         )
     return plain
+
+
+SAVES = 'vault-saves:'  # registry_metadata key + service row id: how many times a record has kept that row
+
+
+def keep_service(c, cipher, cid, name, value, actor, source, at=None, reference=True):
+    """`value` sealed in the service row `cid`, made or replaced in place. Returns what a record keeps in its place
+    (None with `reference=False`, for a row a table names by id): KEPT and the row's save count, `vault:<n>`. n is one
+    more each save and is kept apart from the record and the row (registry_metadata SAVES+cid), so it never comes back
+    after a link is forgotten and made again: a caller tells one save from any other (backend/company_server.py
+    `_forget`), whatever the clock says, and a demo company built twice comes out the same. It carries nothing of the
+    value."""
+    at = at or H.now()
+    ciphertext, nonce = cipher.encrypt(c, cid, value)
+    c.execute(
+        "INSERT INTO credentials(id,name,kind,ciphertext,nonce,source,created_at,updated_at,updated_by,created_by) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext,"
+        "nonce=excluded.nonce,revision=credentials.revision+1,updated_at=excluded.updated_at,"
+        "updated_by=excluded.updated_by WHERE credentials.kind='service'",
+        (cid, name, SERVICE, ciphertext, nonce, source, at, at, actor, actor),
+    )
+    if not reference:
+        return None
+    found = c.execute('SELECT value FROM registry_metadata WHERE key=?', (SAVES + cid,)).fetchone()
+    saves = (int(found[0]) if found and str(found[0]).isdigit() else 0) + 1
+    c.execute(
+        'INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        (SAVES + cid, str(saves)),
+    )
+    return KEPT + str(saves)
+
+
+def kept_record(c, key, cids):
+    """The `registry_metadata` record `key` (its stored text, None when absent) and the service rows `cids` it keeps
+    references to ({id: row}), read in ONE statement. A statement is one snapshot even on a connection outside a
+    transaction (`Store.read`), so a save between two reads cannot pair a record (the Gateway's address) with a value
+    saved for another one (a newly typed key): the record and its values always come from the same commit."""
+    # One arm per row, each a seek by its key whatever the statistics say (an IN list over a small table may scan).
+    arms = " UNION ALL SELECT id,NULL,kind,ciphertext,nonce FROM credentials WHERE id=? AND kind='service'" * len(cids)
+    found = c.execute(
+        'SELECT NULL,value,NULL,NULL,NULL FROM registry_metadata WHERE key=?' + arms, (key, *cids)
+    ).fetchall()
+    rows = {r[0]: {'id': r[0], 'kind': r[2], 'ciphertext': r[3], 'nonce': r[4]} for r in found if r[0] is not None}
+    return next((r[1] for r in found if r[0] is None), None), rows
+
+
+def open_kept(c, cipher, cid, context, stored, rows):
+    """The secret a record keeps for service row `cid`, from `rows` read with the record (`kept_record`): the row's
+    value when `stored` is KEPT ('' when the row is gone, as in a dev copy), else, from before D11-11, the value sealed
+    in the record itself (`CredentialCipher.seal` under `context`). '' when `stored` is empty."""
+    if not stored:
+        return ''
+    if not stored.startswith(KEPT):
+        return cipher.unseal(c, context, stored)
+    row = rows.get(cid)
+    return cipher.open_service(c, row) if row else ''
+
+
+def drop_service(c, cid):
+    c.execute('DELETE FROM credentials WHERE id=? AND kind=?', (cid, SERVICE))
 
 
 class CredentialCipher:

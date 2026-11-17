@@ -9,8 +9,10 @@ connect is pending. On a match HQ answers with the company and a server key (`ts
 address (the local install, `http://127.0.0.1:8765`) sends `public_url: null`: HQ skips the proof, links it on the code
 alone and shows it as a local server, with no address.
 
-The server key is sealed with the credential vault's data key (backend/credentials.py `CredentialCipher.seal`) in
-`registry_metadata` KEY, like the gateway key: no read returns it, and no event or log line carries it. With it the
+The server key is a service row of the credential vault (VAULT_ROW, backend/credentials.py `keep_service`), like the
+gateway key; the link's record in `registry_metadata` KEY keeps only a reference to it. No read returns it, and no
+event or log line carries it. A record from before D11-11 that still holds it sealed in itself opens as before until the
+start moves it (backend/migrations/20261117103033_one_encrypted_store.py). With it the
 server reads its company and credit (`GET /v1/portal/server`, at most every FRESH_S when Settings asks), says its
 version once a day, and within the hour after it changes (`POST /v1/portal/server/heartbeat`, the `company_heartbeat`
 system routine, no model turn) and disconnects (`DELETE /v1/portal/server`). HQ refusing the key (401) means the link
@@ -47,11 +49,13 @@ from clients.gateway import user_agent
 from .census import hq_url
 from .replication import rehearsal_on
 from .inbound import connection_json
+from .credentials import drop_service, keep_service, kept_record, open_kept
 from .models import Contract
 from .store import H, Problem
 
 KEY = "company-server"
 CONTEXT = "company-server:key"
+VAULT_ROW = "company-server-key"
 PROOF_PATH = "/api/v2/company-connection/proof"
 HQ_ALLOWED = ("https://api.tico.dev", "https://updates.tico.team")
 PENDING_S = 120  # a proof answers HQ this long after Connect
@@ -102,13 +106,17 @@ def _hold(digest):
         _pending.update(digest=digest, until=time.monotonic() + PENDING_S if digest else 0.0)
 
 
-def _row(c):
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+def _decode(text):
     try:
-        stored = json.loads(row[0]) if row else {}
+        stored = json.loads(text) if text else {}
     except ValueError:
         stored = {}
     return stored if isinstance(stored, dict) else {}
+
+
+def _row(c):
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    return _decode(row[0] if row else None)
 
 
 def _write(c, record):
@@ -125,6 +133,7 @@ def _forget(c, actor, action, sealed):
     if not record.get("key") or record["key"] != sealed:
         return
     c.execute("DELETE FROM registry_metadata WHERE key=?", (KEY,))
+    drop_service(c, VAULT_ROW)
     H.event(c, actor, action, record.get("workspace_id", ""), {"company_id": record.get("company", {}).get("id", "")})
     from . import gateway_connection
 
@@ -343,7 +352,16 @@ def connect(store, vault, settings, who, body, install_id):
         _write(
             c,
             {
-                "key": vault.cipher.seal(c, CONTEXT, result["server_key"]),
+                "key": keep_service(
+                    c,
+                    vault.cipher,
+                    VAULT_ROW,
+                    "Tico company server key",
+                    result["server_key"],
+                    who.actor,
+                    "company",
+                    at,
+                ),
                 "company": company,
                 "workspace_id": workspace,
                 "portal_url": portal,
@@ -366,8 +384,10 @@ def connect(store, vault, settings, who, body, install_id):
 
 def _key(store, vault):
     with store.read() as c:
-        record = _row(c)
-        return (vault.cipher.unseal(c, CONTEXT, record["key"]) if record.get("key") else ""), record
+        # The link and its key in one statement (`kept_record`): a reconnect between two reads cannot pair them.
+        text, rows = kept_record(c, KEY, [VAULT_ROW])
+        record = _decode(text)
+        return open_kept(c, vault.cipher, VAULT_ROW, CONTEXT, record.get("key"), rows), record
 
 
 def status(store, vault, now=None):

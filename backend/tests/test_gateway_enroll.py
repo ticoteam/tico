@@ -61,9 +61,9 @@ def test_an_invited_install_meters_decide_and_bot_runs_under_its_own_key_until_t
         assert tick(api) == "enrolled"
         kept = record(api)
         key = plain_key(api)
-        assert kept["origin"] == "automatic" and kept["key"].startswith("sealed:v1:") and key in fake.keys
+        assert kept["origin"] == "automatic" and kept["key"].startswith("vault:") and key in fake.keys
         assert re.fullmatch(CONTRACT["patterns"]["install"], kept["install"])
-        assert kept["install_secret"].startswith("sealed:v1:")
+        assert kept["install_secret"].startswith("vault:")
         assert fake.posts("/enroll")[0][3]["invite"] == INVITE
         shown = get(api, "providers/gateway")
         assert shown["connected"] and shown["automatic"] and shown["source"] == "settings"
@@ -229,7 +229,7 @@ def test_an_install_hq_enrolled_whose_answer_was_lost_tries_again_as_itself(api,
         with pytest.raises(SystemExit):
             tick(api)
         install = record(api)["install"]
-        assert install in fake.installs and record(api)["install_secret"].startswith("sealed:v1:")
+        assert install in fake.installs and record(api)["install_secret"].startswith("vault:")
         assert plain_key(api) == ""
         monkeypatch.setattr(G, "enroll", lost)
         assert tick(api) == "unreachable" and plain_key(api) == "" and record(api)["install"] == install
