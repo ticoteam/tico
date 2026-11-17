@@ -63,7 +63,7 @@ def test_the_decide_readout_names_each_bots_share_and_the_guard(gate):  # noqa: 
     with api.app.state.store.transaction() as c:
         first = ask(c, 1)
         H.task_thumbs(c, "human:ben", first[0], first[1], False, "Badly written")
-    out = get(api, "judge/readout?days=21")
+    out = get(api, "decisions/readout?days=21")
     [row] = out["asks_to_people"]
     assert (row["asks"], row["badly_written"], row["share"], row["stuck"]) == (1, 1, 1.0, 0)
     assert "badly written (100%)" in out["text"] and "Target: missed by" in out["text"]

@@ -137,14 +137,14 @@ def supervisor_token(mailbox, scopes):
             raise Failure(
                 "this bot has no mailbox: the key is on this computer's runner, which gives a token only to a "
                 "message bot, and the server has not named this bot as anyone's",
-                "An owner or admin sets it: POST /api/v2/access/people/<person> "
+                "An owner or admin sets it: POST /api/v2/access/humans/<person> "
                 '{"inbox_bot": "<this bot>", "mailbox": "<address>"}. docs/mail.md, Who can read the key.',
             )
         if getattr(e, "mailboxes", None):
             raise Failure(
                 f"the runner would not let this turn act as {mailbox}; this bot may use {', '.join(e.mailboxes)}",
                 "The server names those for this bot, not its bot.yaml. If the address is wrong, an owner or admin "
-                'sets it: POST /api/v2/access/people/<person> {"mailbox": "<address>"}. docs/mail.md, Who can read the key.',
+                'sets it: POST /api/v2/access/humans/<person> {"mailbox": "<address>"}. docs/mail.md, Who can read the key.',
             )
         reason = getattr(e, "reason", "") or str(e)
         if reason in ("signin", "admin_policy", "app_config", "app_unavailable"):

@@ -623,7 +623,7 @@ function renderSettingsMachines() {
     if (inbox) {
       inbox.disabled = true;
       try {
-        await post(`/v2/runners/${encodeURIComponent(String(inbox.dataset.inboxOnly))}/inbox-only`, {enabled: inbox.checked});
+        await post(`/v2/computers/${encodeURIComponent(String(inbox.dataset.inboxOnly))}/inbox-only`, {enabled: inbox.checked});
         toast(inbox.checked ? 'Kept for inbox bots' : 'No longer kept for inbox bots');
         await loadSettings();
       } catch (error) { toast(errorMessage(error, ''), true); inbox.checked = !inbox.checked; inbox.disabled = false; }

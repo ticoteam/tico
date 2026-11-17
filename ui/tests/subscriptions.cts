@@ -226,7 +226,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       for (const s of data.subs) s.computers = data.assignments.filter(a => a.subscription_id === s.id).map(a => a.runner_id);
       return json({runner_id: body.runner_id, runtime: body.runtime, subscription_id: body.subscription, stopped: body.confirm ? 2 : 0, sessions_reset: body.confirm ? 5 : 0});
     }
-    const fallback = p.match(/^\/api\/v2\/runners\/([^/]+)\/gateway-fallback$/);
+    const fallback = p.match(/^\/api\/v2\/computers\/([^/]+)\/gateway-fallback$/);
     if (fallback && method === 'POST') {
       const body = req.postDataJSON() as Body & {on?: boolean}; writes.push({p, method, body});
       data.machines.find(m => m.id === fallback[1])!.gateway_fallback = Boolean(body.on);
@@ -855,7 +855,7 @@ async function plansRunOut(browser: Browser) {
   assert.equal(await box.isChecked(), false);
   await box.check();
   await page.waitForFunction(() => document.querySelector('[data-computer-row=r2] [data-subs-set-line]')?.textContent?.endsWith('on the Gateway'));
-  assert.deepEqual(writes.at(-1), {p: '/api/v2/runners/r2/gateway-fallback', method: 'POST', body: {on: true}});
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/computers/r2/gateway-fallback', method: 'POST', body: {on: true}});
   assert.equal(await detail.locator('[data-gateway-fallback=r2]').isChecked(), true);
   assert.deepEqual(errors, []);
   await page.close();

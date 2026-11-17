@@ -549,7 +549,7 @@ def refusing(fn):
 
 def publish(api, slug):
     """Give the new repository a home on GitHub when the team has connected it; else it stays on this computer. Its first placement
-    is this computer (backend/built_on.py), whose runner then publishes the history (runner_support/git_credentials.py publish_history)."""
+    is this computer (backend/built_on.py), whose runner then publishes the history (runner-rs/src/execute.rs publish_history)."""
     from clients.tico import APIError
 
     try:

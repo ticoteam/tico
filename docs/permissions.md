@@ -636,7 +636,7 @@ narrower run.
 **What still waits for the person's tap.** The rights BotOps borrows are never a confirmation: only the person's own click
 on a Confirm card in their BotOps chat is, and it runs the stored request as them. So BotOps answers these with
 `needs_confirm` and a card, and nothing changes until the tap:
-- a role, sign-in, email, team or mailbox change for someone (`POST /api/v2/access/people/{id}`);
+- a role, sign-in, email, team or mailbox change for someone (`POST /api/v2/access/humans/{id}`);
 - a credential granted to a person or to every computer (a grant to a bot, and taking a grant back, stay direct);
 - placing a member's bot on a computer that does not take members' bots;
 - the routes in `botops_act.CONFIRM`: removing people, the bot limit and who may sign in, a computer's member-bots

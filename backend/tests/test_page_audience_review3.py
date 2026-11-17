@@ -163,7 +163,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
 
     org(api)
     counsel_on(api)
-    reader = post(api, "access/people", {"name": "Reader", "email": "reader@acme.example"})
+    reader = post(api, "access/humans", {"name": "Reader", "email": "reader@acme.example"})
     assert reader["person"] == "reader"
     api.app.state.store.settings.test_identities["reader-test"] = Identity(
         "human:reader", "human", "reader@acme.example"

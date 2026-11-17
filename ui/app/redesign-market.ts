@@ -90,9 +90,15 @@ function rdqTilesHtml(data: MktSpend | null | undefined, revenue: RdqMoney): str
   return out.length ? `<div class="mkt-tiles">${out.join('')}</div>` : '';
 }
 
-function rdqSection(key: string, title: string, answer: string | undefined, more: string, body: string): string {
+// `needs`: the section waits on the person (its Flow mark beside the heading).
+function rdqSection(key: string, title: string, answer: string | undefined, more: string, body: string, needs = false): string {
   return `<section class="mkt-q" id="mkt-q-${key}" aria-labelledby="mkt-qh-${key}">
-    <div class="mkt-qh"><h3 id="mkt-qh-${key}">${title}</h3>${answer ? `<p class="mkt-ans">${esc(answer)}</p>` : ''}${more ? `<span class="mkt-more">${more}</span>` : ''}</div>${body}</section>`;
+    <div class="mkt-qh"><h3 id="mkt-qh-${key}">${title}${needs ? needsMarkHTML(14) : ''}</h3>${answer ? `<p class="mkt-ans">${esc(answer)}</p>` : ''}${more ? `<span class="mkt-more">${more}</span>` : ''}</div>${body}</section>`;
+}
+// The sizing form is answered: the notice takes its place, so the section and Market's tab stop asking.
+function rdqSizingStarted(shell: HTMLElement): void {
+  shell.querySelector('#mkt-qh-money .needs-mark')?.remove();
+  strategyTabNeeds('market', false);
 }
 
 // The briefing's items, each with its kind and the bets it touches; with none, its headline.
@@ -197,7 +203,7 @@ async function mountMarketPage(shell: HTMLElement) {
   const sections = [
     briefing && rdqSection('changed', 'What changed?', answers.changed,
       `${esc(rdbDate(briefing))} · <button class="linkish" type="button" data-rdb-read>Read</button>`, rdqChangedHtml(briefing)),
-    (sized || sizing) && rdqSection('money', 'Where is the money going?', answers.money, '', '<div id="mkt-money"></div>'),
+    (sized || sizing) && rdqSection('money', 'Where is the money going?', answers.money, '', '<div id="mkt-money"></div>', sizing),
     players && rdqSection('players', 'Who are we up against?', answers.players, tracked ? `${tracked} tracked` : '', players),
     reach && rdqSection('reach', 'How does it reach buyers?', answers.reach, '', reach),
     saying && rdqSection('saying', 'What are buyers saying?', answers.saying,
@@ -206,6 +212,7 @@ async function mountMarketPage(shell: HTMLElement) {
   const tiles = rdqTilesHtml(offering, revenue);
   // One title: the Strategy header's. Open map and the market's Definition (which names the market) are in its ⋯.
   shell.innerHTML = `<div class="mkt-pg">${tiles}${sections.join('') || (tiles ? '' : '<p class="market-none">Nothing here yet.</p>')}</div>`;
+  strategyTabNeeds('market', sizing);
   const moneyEl = shell.querySelector<HTMLElement>('#mkt-money');
   const money = sized && moneyEl ? mktSpend(moneyEl, {offering, buyer}) : null;
   // The header beside this shell, only while it is still in the page: a slow read that lands after the person left
@@ -218,7 +225,7 @@ async function mountMarketPage(shell: HTMLElement) {
     const open = head.querySelector<HTMLElement>('.ph-menu [data-mkt-def]');
     if (open) open.onclick = () => { if (money) money.definition(name); else mktDefinitionOpen(def, name); };
   }
-  if (sizing && moneyEl) mktSizeForm(moneyEl, offering?.definition?.description);
+  if (sizing && moneyEl) mktSizeForm(moneyEl, offering?.definition?.description, () => rdqSizingStarted(shell));
   const chainEl = shell.querySelector<HTMLElement>('.mkt-chain');
   if (chainEl && chain) mktChainBind(chainEl, chain.edges);
   shell.onclick = ev => {

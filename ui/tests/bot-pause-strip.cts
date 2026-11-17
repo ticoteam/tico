@@ -35,7 +35,7 @@ async function open(browser: import('playwright').Browser, role: string, hash: s
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: manage ? 'ana' : 'cara', role: manage ? 'owner' : 'human', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active', host: 'keeper', can_chat: true, can_manage: manage,
       users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: state.revision}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});

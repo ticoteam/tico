@@ -78,7 +78,7 @@ const VIEW = {width: 390, height: 844};
       if (at === '/api/me') return json({...me, config});
       if (at === '/api/v2/config') return json(config);
       if (at === '/api/employees') return json([{name: 'pm', display_name: 'Tasks Product Owner'}]);
-      if (at === '/api/humans' || at === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (at === '/api/humans' || at === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (at === '/api/v2/pipelines') return json({pipelines: [pipeline]});
       if (at === '/api/v2/needs-you') return json({actor: 'human:ana', count: 1, version: '1', next: null, items: [need]});
       if (at === `/api/v2/oks/${RID}`) return json({error: 'not_found'}, 404);

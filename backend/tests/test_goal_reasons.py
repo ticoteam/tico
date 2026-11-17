@@ -1,6 +1,6 @@
 """An optional reason after turning down a Strategy Owner suggestion (spec "Clear Strategy Owner suggestion cards", follow-up:
 criteria 12 and 14): "No, leave it" rejects at once; the person who rejected it may then tell the Strategy Owner why, in one
-line, once (POST /api/v2/goal-proposals/{pid}/note), and a reader who may not read a bot the suggestion is about
+line, once (POST /api/v2/proposals/{pid}/note), and a reader who may not read a bot the suggestion is about
 never reads that reason."""
 
 from backend import goals as G
@@ -13,7 +13,7 @@ REASON = "no billing yet, don't track revenue"
 
 def rejected(api, token="ana-test", **query):
     q = "&".join(f"{k}={v}" for k, v in query.items())
-    return {p["id"]: p for p in get(api, "goal-proposals?status=rejected" + (f"&{q}" if q else ""), token)["proposals"]}
+    return {p["id"]: p for p in get(api, "proposals?status=rejected" + (f"&{q}" if q else ""), token)["proposals"]}
 
 
 def stored(api, proposal_id):
@@ -24,16 +24,14 @@ def stored(api, proposal_id):
 def test_no_leave_it_rejects_at_once_and_its_decider_adds_the_reason_afterwards(api):
     goal, _ = goal_with_kpi(api)
     p = propose(api, "goal_kpi", {"kpi": {"name": "Monthly Services revenue"}}, goal["id"])
-    done = post(api, f"goal-proposals/{p['id']}/decide", {"decision": "reject"})["proposal"]
+    done = post(api, f"proposals/{p['id']}/decide", {"decision": "reject"})["proposal"]
     assert (done["status"], done["decision_note"], done["may_reason"]) == ("rejected", "", True)
     # One line: spaces and line breaks fold into single spaces.
-    saved = post(api, f"goal-proposals/{p['id']}/note", {"note": "  no billing yet,\n don't track   revenue "})[
-        "proposal"
-    ]
+    saved = post(api, f"proposals/{p['id']}/note", {"note": "  no billing yet,\n don't track   revenue "})["proposal"]
     assert (saved["decision_note"], saved["may_reason"]) == (REASON, False)
     listed = rejected(api, goal_id=goal["id"])[p["id"]]  # what hub proposal list --status rejected prints
     assert (listed["decision_note"], listed["may_reason"]) == (REASON, False)
-    # Through the new name of the route as well (backend/route_renames.py).
+    # Through the kept old name of the route as well (backend/legacy_spellings.py).
     other = propose(api, "goal_wording", {"title": "Raise activation to 70%"}, goal["id"])
     post(api, f"proposals/{other['id']}/decide", {"decision": "reject"})
     assert (
@@ -45,38 +43,38 @@ def test_no_leave_it_rejects_at_once_and_its_decider_adds_the_reason_afterwards(
 def test_a_second_reason_anyone_else_a_waiting_or_confirmed_one_and_an_empty_one_are_refused(api):
     goal, _ = goal_with_kpi(api)
     waiting = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}}, goal["id"])
-    refused = post(api, f"goal-proposals/{waiting['id']}/note", {"note": REASON}, expected=422)
+    refused = post(api, f"proposals/{waiting['id']}/note", {"note": REASON}, expected=422)
     assert "turned down" in str(refused) and tuple(stored(api, waiting["id"])) == ("pending", "")
 
     yes = propose(api, "goal_kpi", {"kpi": {"name": "Trials started"}}, goal["id"])
-    post(api, f"goal-proposals/{yes['id']}/decide", {"decision": "confirm"})
-    post(api, f"goal-proposals/{yes['id']}/note", {"note": REASON}, expected=422)
+    post(api, f"proposals/{yes['id']}/decide", {"decision": "confirm"})
+    post(api, f"proposals/{yes['id']}/note", {"note": REASON}, expected=422)
     assert tuple(stored(api, yes["id"])) == ("confirmed", "")
 
     no = propose(api, "goal_kpi", {"kpi": {"name": "Monthly Services revenue"}}, goal["id"])
-    post(api, f"goal-proposals/{no['id']}/decide", {"decision": "reject"})
+    post(api, f"proposals/{no['id']}/decide", {"decision": "reject"})
     for empty in ("", "   ", "\n\t"):
-        post(api, f"goal-proposals/{no['id']}/note", {"note": empty}, expected=422)
-    long = post(api, f"goal-proposals/{no['id']}/note", {"note": "x" * (G.REASON_MAX + 1)}, expected=422)
+        post(api, f"proposals/{no['id']}/note", {"note": empty}, expected=422)
+    long = post(api, f"proposals/{no['id']}/note", {"note": "x" * (G.REASON_MAX + 1)}, expected=422)
     assert f"at most {G.REASON_MAX}" in str(long)
     # Ben and Cara read the goal too; only Ana turned it down.
     for token in ("ben-test", "cara-test"):
         assert "Only the person who turned" in str(
-            post(api, f"goal-proposals/{no['id']}/note", {"note": REASON}, token=token, expected=403)
+            post(api, f"proposals/{no['id']}/note", {"note": REASON}, token=token, expected=403)
         )
         assert rejected(api, token)[no["id"]]["may_reason"] is False
     assert tuple(stored(api, no["id"])) == ("rejected", "")
 
-    post(api, f"goal-proposals/{no['id']}/note", {"note": REASON})
-    again = post(api, f"goal-proposals/{no['id']}/note", {"note": "changed my mind"}, expected=422)
+    post(api, f"proposals/{no['id']}/note", {"note": REASON})
+    again = post(api, f"proposals/{no['id']}/note", {"note": "changed my mind"}, expected=422)
     assert "added once" in str(again) and tuple(stored(api, no["id"])) == ("rejected", REASON)
 
     # A reason typed with the reject is that reason: none is added after it.
     typed = propose(api, "goal_wording", {"title": "Raise activation to 70%"}, goal["id"])
-    done = post(api, f"goal-proposals/{typed['id']}/decide", {"decision": "reject", "note": "Too narrow"})["proposal"]
+    done = post(api, f"proposals/{typed['id']}/decide", {"decision": "reject", "note": "Too narrow"})["proposal"]
     assert done["may_reason"] is False
-    post(api, f"goal-proposals/{typed['id']}/note", {"note": REASON}, expected=422)
-    post(api, "goal-proposals/no-such/note", {"note": REASON}, expected=404)
+    post(api, f"proposals/{typed['id']}/note", {"note": REASON}, expected=422)
+    post(api, "proposals/no-such/note", {"note": REASON}, expected=404)
 
 
 def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_box(api):
@@ -85,17 +83,17 @@ def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_
     hidden, secret = inbox_measure(api)
     hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": secret["id"], "target": {"kind": "maintain", "max": 3}}, hers["id"])
-    post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "reject", "note": "Inbox only, not churn"})
+    post(api, f"proposals/{reuse['id']}/decide", {"decision": "reject", "note": "Inbox only, not churn"})
     definition = propose(api, "kpi_definition", {"definition": "Within 3 days"}, kpi_id=secret["id"])
-    post(api, f"goal-proposals/{definition['id']}/decide", {"decision": "reject"})
-    post(api, f"goal-proposals/{definition['id']}/note", {"note": "Inbox only, three days is too long"})
+    post(api, f"proposals/{definition['id']}/decide", {"decision": "reject"})
+    post(api, f"proposals/{definition['id']}/note", {"note": "Inbox only, three days is too long"})
     assert rejected(api)[reuse["id"]]["decision_note"] == "Inbox only, not churn"  # Ana reads both
     assert rejected(api)[definition["id"]]["decision_note"] == "Inbox only, three days is too long"
 
     for path in (
-        "goal-proposals?status=rejected",
-        "goal-proposals?status=all",
-        f"goal-proposals?status=rejected&goal_id={hers['id']}",
+        "proposals?status=rejected",
+        "proposals?status=all",
+        f"proposals?status=rejected&goal_id={hers['id']}",
         f"goals/{hers['id']}",
         "goals/tree",
         "goals",
@@ -115,13 +113,13 @@ def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_
 
     # She may turn such a suggestion down herself, but gets no box: its reason is not hers to read or add.
     again = propose(api, "goal_kpi", {"kpi_id": secret["id"]}, hers["id"])
-    done = post(api, f"goal-proposals/{again['id']}/decide", {"decision": "reject"}, token="cara-test")["proposal"]
+    done = post(api, f"proposals/{again['id']}/decide", {"decision": "reject"}, token="cara-test")["proposal"]
     assert done["may_reason"] is False
-    refused = post(api, f"goal-proposals/{again['id']}/note", {"note": "No"}, token="cara-test", expected=403)
+    refused = post(api, f"proposals/{again['id']}/note", {"note": "No"}, token="cara-test", expected=403)
     assert "may not read" in str(refused) and tuple(stored(api, again["id"])) == ("rejected", "")
     # A measure a new suggestion would give to the inbox bot is the same.
     named = propose(api, "goal_kpi", {"kpi": {"name": "Replies sent"}, "owner": "inbox"}, hers["id"])
-    post(api, f"goal-proposals/{named['id']}/decide", {"decision": "reject", "note": "Inbox again"})
+    post(api, f"proposals/{named['id']}/decide", {"decision": "reject", "note": "Inbox again"})
     assert rejected(api, "cara-test")[named["id"]]["decision_note"] == ""
     assert "Inbox again" not in str(get(api, f"goals/{hers['id']}", "cara-test"))
     # A note typed with a yes is kept from her the same way. Confirming this one is refused now (it would show her the
@@ -134,6 +132,6 @@ def test_a_reader_who_may_not_read_the_measures_bot_reads_no_reason_and_gets_no_
             (yes["id"],),
         )
         G._event(c, hers["id"], "human:ana", "proposal", "goal_kpi", "confirmed", "Inbox wants it")
-    for path in ("goal-proposals?status=confirmed", "goal-proposals?status=all", f"goals/{hers['id']}"):
+    for path in ("proposals?status=confirmed", "proposals?status=all", f"goals/{hers['id']}"):
         assert "Inbox wants it" not in str(get(api, path, "cara-test")), path
-    assert "Inbox wants it" in str(get(api, "goal-proposals?status=confirmed"))
+    assert "Inbox wants it" in str(get(api, "proposals?status=confirmed"))

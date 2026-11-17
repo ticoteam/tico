@@ -128,7 +128,7 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     let state: AskState = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?', ago(15)), msg('a2', 'bot:assistant', 'In Docs.', ago(10))], sent: [], read: [], decided: [], answers: [],
       tickets: [{id: 'sup_1', status: 'answered', unread: true, title: 'Board will not load', message: 'Board will not load', created_at: ago(30),
                  messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
-      card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
+      card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/humans', status: 'pending', result: null,
              description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created_at: ago(13)},
       picked: [],
       needs: [need('r9', 't9', 'bot:botops', 'Which inbox should the bot answer?', ago(12)),

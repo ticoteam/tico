@@ -168,7 +168,7 @@ def build(client, seed, sizes):
             },
             machine["token"],
         )
-        _api(client, "POST", f"runners/{machine['runner_id']}/turns-at-once", {"turns_at_once": 256})
+        _api(client, "POST", f"computers/{machine['runner_id']}/turns-at-once", {"turns_at_once": 256})
         computers.append(
             {
                 "runner_id": machine["runner_id"],

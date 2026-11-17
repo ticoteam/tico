@@ -38,10 +38,10 @@ WRITES = (
     "/api/v2/computer-subscriptions",
     "/api/v2/enrollments",
     "/api/v2/runners/enroll",
-    "/api/v2/runners/{rid}/logins",
-    "/api/v2/runners/{rid}/shared-key",
-    "/api/v2/runners/{rid}/keys",
-    "/api/v2/runners/{rid}/harness-actions",
+    "/api/v2/computers/{rid}/logins",
+    "/api/v2/computers/{rid}/shared-key",
+    "/api/v2/computers/{rid}/keys",
+    "/api/v2/computers/{rid}/harness-actions",
 )
 # The reads that are setup steps: GitHub Connect's form and GitHub's returns to it.
 READS = (

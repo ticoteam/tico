@@ -46,7 +46,7 @@ async function loginHosted(browser: import('playwright').Browser) {
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
         if (p === '/api/issues') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'sam', name: 'Sam'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'sam', name: 'Sam'}], teams: {}});
         if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});
@@ -264,7 +264,7 @@ async function toKey(browser: import('playwright').Browser) {
         if (p === '/api/v2/config') return json(config);
         if (p === '/api/employees') return json([]);
         if (p === '/api/issues') return json([]);
-        if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'sam', name: 'Sam'}], teams: {}});
+        if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'sam', name: 'Sam'}], teams: {}});
         if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
         if (p === '/api/v2/status') return json({bots: []});
         if (p === '/api/v2/needs-you') return json({items: []});

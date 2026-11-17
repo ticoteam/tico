@@ -46,7 +46,7 @@ const question = (n: number, bot: string, line: string): Item => {
       if (p === '/api/me') return json({...me, config});
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([{slug: 'pm', display_name: 'PM', status: 'active'}, {slug: 'ops', display_name: 'Ops', status: 'active'}]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: []});
       if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: needs.map(x => x.id).join(',') || '0', next: null});
       if (p.startsWith('/api/v2/oks/')) return json({error: 'not_found'}, 404);

@@ -41,7 +41,7 @@ declare var loadSettings: () => Promise<void>;
       if (p === '/api/v2/config') return json(config);
       if (p === '/api/employees') return json([{name: 'helper', display_name: 'Helper', status: 'active', owner_id: 'ana', can_manage: true, users: [], bot_owners: []}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});

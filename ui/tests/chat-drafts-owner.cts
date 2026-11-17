@@ -40,7 +40,7 @@ async function scenario(browser: import('playwright').Browser, name: string, nex
     if (p === '/api/me') { if (hold) await hold; return json(me); }
     if (p === '/api/v2/me') return json({id: me.id});
     if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: me.id, name: me.name}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: me.id, name: me.name}], teams: {}});
     if (p === '/api/v2/assistant') return json(assistantView('c1'));
     if (p.endsWith('/snapshot')) return json({messages: [], execution: null});
     if (p === '/api/v2/events' || p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});

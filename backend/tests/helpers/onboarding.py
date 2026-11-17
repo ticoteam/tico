@@ -206,7 +206,7 @@ def draft(api, **overrides):
         "selected": {},
     }
     body.update(overrides)
-    return api.put("/api/v2/onboarding", json=body, headers=signed_in())
+    return api.put("/api/v2/setup", json=body, headers=signed_in())
 
 
 LIBRARIAN_CARD = {

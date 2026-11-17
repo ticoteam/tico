@@ -1712,7 +1712,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         return await once(request, who.actor, run)
 
     # ------------------------------------------------------------------------------------------------ the pick
-    @app.post("/api/v2/runners/{rid}/browser-host")
+    @app.post("/api/v2/computers/{rid}/browser-host")
     def browser_host(request: Request, rid: str, body: BrowserHostSet) -> Any:
         """Make this computer the company's browser host (one per company), or stop. It then takes no other bots."""
         who = request.state.identity

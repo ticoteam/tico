@@ -194,6 +194,17 @@ function redesignAfterRoute() {
   finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
 }
 
+// The Strategy tabs with a section waiting on the person (Flow's mark beside the name). A page sets its tab from the
+// condition it already reads for its own section, so a tab not read yet this session shows none; the setting is kept
+// for the session, so the other tabs keep showing it, and no request is made for it.
+const STRAT_TAB_NEEDS = new Set<string>();
+function strategyTabNeeds(tab: string, needs: boolean): void {
+  if (needs) STRAT_TAB_NEEDS.add(tab); else STRAT_TAB_NEEDS.delete(tab);
+  document.querySelectorAll<HTMLElement>(`[data-strat-tab="${tab}"]`).forEach(el => {
+    el.querySelector(':scope > .needs-mark')?.remove();
+    if (needs) el.insertAdjacentHTML('beforeend', needsMarkHTML(12));
+  });
+}
 // The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view; Brand opens
 // from the Strategy tab and keeps it lit, so the Strategy tab is the way back from either.
 // Every tab has ⋯, last at the far right (style guide, "Top bars: one line"): what is used less than daily lives there
@@ -211,7 +222,7 @@ function redesignStrategyHead(tab: string): string {
   // The one page header (page-head.ts); #strat-actions is its button holder, which each tab fills.
   return pageHead({title: sub || 'Strategy', back: sub ? {href: '#/strategy', label: 'Strategy'} : undefined,
     hook: 'strat-head rd-strat-head', tabsHook: 'strat-tabs', tabsAttrs: 'aria-label="Strategy"',
-    tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`})),
+    tabs: tabs.map(([id = '', href = '', label = '']): PageTab => ({label, href, cur: on === id, attrs: `data-strat-tab="${id}"`, mark: STRAT_TAB_NEEDS.has(id)})),
     more, actId: 'strat-actions'});
 }
 

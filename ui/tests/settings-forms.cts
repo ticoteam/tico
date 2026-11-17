@@ -49,7 +49,7 @@ declare function settingsEditInstructions(slug: string): void;
       if (p === '/api/employees') return json(bots);
       if (p === '/api/issues') return json([]);
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
-      if (p === '/api/people') return json({people: [], teams: {}});
+      if (p === '/api/humans') return json({people: [], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/needs-you') return json({items: []});

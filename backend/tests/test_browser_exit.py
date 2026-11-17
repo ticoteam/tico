@@ -144,7 +144,7 @@ def test_removing_the_bots_computer_fences_a_grant_read_before_it(api, relay):
     post(api, "bots/ops/browser-exit", {"runner_id": rid})
     read_before = _bot_generation(api, "ops")
     relay.fenced.clear()
-    post(api, f"runners/{server['runner_id']}/revoke", {})
+    post(api, f"computers/{server['runner_id']}/revoke", {})
     # The relay refuses a grant carrying the older generation (exit_stale) and closes the bot's open tunnels.
     assert _bot_generation(api, "ops") > read_before
     assert relay.fenced == [("ops", "computer removed")]
@@ -227,7 +227,7 @@ def test_every_tunnel_fails_closed_with_words_that_name_the_exit(api, relay):
     refused(429, "browser_exit_over_cap", "Cara's MacBook reached its daily limit")
     assert len(relay.grants) == asked
     # A removed exit says so, and its tunnels close.
-    post(api, f"runners/{rid}/revoke", {}, token="cara-test")
+    post(api, f"computers/{rid}/revoke", {}, token="cara-test")
     refused(409, "browser_exit_removed", "Cara's MacBook was removed")
     assert (None, rid, "computer removed") in relay.closed
 

@@ -4274,7 +4274,7 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/people/{person}/assistant")
+    @app.get("/api/v2/humans/{person}/assistant")
     def person_assistant(request: Request, person: str):
         """The bot an `assistant:<person>` step runs on, once one has run (null before)."""
         from . import assistant

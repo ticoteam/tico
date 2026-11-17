@@ -10,6 +10,7 @@ from unittest import mock
 import pytest
 
 from clients.tico import APIError
+from runner_support import credential_socket
 from runner_support import worktrees as W
 from runner_support.repositories import GB
 from runner_support.tests.helpers.worktrees import git, trees
@@ -279,7 +280,7 @@ def test_setup_has_no_tokens_or_socket_but_keeps_toolchain(light, monkeypatch):
     monkeypatch.setenv('HUB_TOKEN', 'synthetic-attempt-token')
     monkeypatch.setenv('GH_TOKEN', 'synthetic-repository-token')
     monkeypatch.setenv('TICO_GITHUB_EXTRA', 'synthetic-helper-key')
-    monkeypatch.setenv(W.git_credentials.credential_socket.SOCKET_ENV, 'synthetic-socket')
+    monkeypatch.setenv(credential_socket.SOCKET_ENV, 'synthetic-socket')
     monkeypatch.setenv('JAVA_HOME', '/example/toolchain')
     command = 'env > setup-env'
     W.setup(workspace, command, os.environ.copy())

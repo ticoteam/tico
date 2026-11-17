@@ -54,7 +54,7 @@ async function serve(page: Page, errors: string[]): Promise<void> {
     if (p === '/api/me') return json({...me, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json(bots);
-    if (p === '/api/humans' || p === '/api/people') return json({people, teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people, teams: {}});
     if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
     if (p === '/api/v2/pipelines/product') return json({pipeline});
     if (p === '/api/v2/factories') return json({factories: [], pipelines: []});

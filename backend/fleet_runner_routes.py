@@ -83,7 +83,7 @@ def register(
         telemetry,
     )
 
-    @app.post("/api/v2/runners/{rid}/turns-at-once")
+    @app.post("/api/v2/computers/{rid}/turns-at-once")
     def runner_turns_at_once(request: Request, rid: str, body: M.RunnerTurnsAtOnce):
         """How many turns a computer runs at once; null is automatic, its own capacity. Owners and admins."""
         who = request.state.identity
@@ -108,7 +108,7 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/label")
+    @app.post("/api/v2/computers/{rid}/label")
     def runner_label(request: Request, rid: str, body: M.RunnerLabel):
         """Rename a computer. A cloud machine made again keeps the name. Owners and admins."""
         from . import cloud_machines
@@ -134,7 +134,7 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/member-bots")
+    @app.post("/api/v2/computers/{rid}/member-bots")
     def runner_member_bots(request: Request, rid: str, body: M.RunnerMemberBots):
         """Whether a computer takes the bots members create. Owners and admins."""
         who = request.state.identity
@@ -149,7 +149,7 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/runners/{rid}/gateway-fallback")
+    @app.post("/api/v2/computers/{rid}/gateway-fallback")
     def runner_gateway_fallback(request: Request, rid: str, body: M.RunnerGatewayFallback):
         """Whether this computer's turns run on Tico Gateway when its plans run out (backend/models_preset.py
         computer_falls_back). Off by default; owners and admins turn it on."""
@@ -374,13 +374,13 @@ def register(
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/people/{pid}/access")
+    @app.get("/api/v2/humans/{pid}/access")
     def person_access_read(request: Request, pid: str, on_behalf_of: str = ""):
         """Who may see, read and write to this person (docs/permissions.md). For whoever manages them."""
         return teammate_access_read(request, "human:" + pid, on_behalf_of)
 
-    @app.post("/api/v2/people/{pid}/access")  # the same write for the tools, whose client only posts
-    @app.put("/api/v2/people/{pid}/access")
+    @app.post("/api/v2/humans/{pid}/access")  # the same write for the tools, whose client only posts
+    @app.put("/api/v2/humans/{pid}/access")
     def person_access_write(request: Request, pid: str, body: M.TeammateAccess):
         return teammate_access_write(request, "human:" + pid, body)
 

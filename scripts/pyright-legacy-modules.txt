@@ -351,7 +351,6 @@ backend/roadmaps.py
 backend/rooms.py
 backend/roster_clock.py
 backend/route_memo.py
-backend/route_renames.py
 backend/routines.py
 backend/row_clock.py
 backend/rule_due.py

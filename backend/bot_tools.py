@@ -536,7 +536,7 @@ def listing(c, settings, bot, reads=None):
                     detail="",
                     problem=(
                         f"{label} holds the Google key, but {slug} is nobody's message bot on the server, so its runs get no mail "
-                        "token. An owner or admin names it: POST /api/v2/access/people/<person> "
+                        "token. An owner or admin names it: POST /api/v2/access/humans/<person> "
                         '{"inbox_bot": "' + bot + '", "mailbox": "<address>"}'
                     ),
                 )

@@ -8,7 +8,7 @@ import json
 import httpx
 import pytest
 
-from backend import egress
+from backend import api_tools, egress
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401
 from backend.tests.helpers.credentials import explicit_only, setup
@@ -358,3 +358,69 @@ def test_a_name_that_resolves_to_a_private_address_is_refused_and_nothing_is_sen
     from backend import tool_proxy
 
     assert "Change it on Tools > Meta" in tool_proxy.address_problem("https://metadata.internal/", "Meta")
+
+
+class Refusing:
+    """A vendor that answers every call 401 with `reply`, and `challenge` as its WWW-Authenticate when it has one."""
+
+    def __init__(self, reply=b"", challenge=""):
+        self.reply, self.challenge, self.seen = reply, challenge, []
+
+    def __call__(self, request):
+        self.seen.append(request)
+        headers = {"www-authenticate": self.challenge} if self.challenge else {}
+        return httpx.Response(401, headers=headers, content=self.reply)
+
+
+class Pieces(httpx.AsyncByteStream):
+    """A vendor answer that arrives in pieces, as a stream does."""
+
+    def __init__(self, parts):
+        self.parts = parts
+
+    async def __aiter__(self):
+        for part in self.parts:
+            yield part
+
+
+# A restricted key's answer to a call its scope does not cover (ElevenLabs words it so); synthetic.
+OUT_OF_SCOPE = b'{"detail":{"status":"missing_permissions"}}'
+
+
+def health(api, tid="close-crm"):
+    with api.app.state.store.read() as c:
+        return api_tools.call_health(c, tid)
+
+
+def test_three_out_of_scope_401s_are_no_rejected_key_and_three_plain_401s_are(api):
+    setup(api)
+    tool(api)
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    api.app.state.tool_proxy_transport = httpx.MockTransport(Refusing(OUT_OF_SCOPE))
+    for _ in range(3):
+        assert call(api, "GET", "api/v1/lead/", token, how="basic").status_code == 401
+    assert health(api) is None  # the vendor knows the key: three of these are no rejection
+    with api.app.state.store.read() as c:
+        assert [row[0] for row in c.execute("SELECT detail FROM tool_calls")] == [api_tools.MISSING_SCOPE] * 3
+    assert "missing_permissions" not in dump(api, "tool_calls")  # the reply's text is never kept
+    api.app.state.tool_proxy_transport = httpx.MockTransport(Refusing(b'{"detail":"Invalid API key"}'))
+    for _ in range(3):
+        assert call(api, "GET", "api/v1/lead/", token, how="basic").status_code == 401
+    assert health(api) == "rejected"
+
+
+def test_a_streamed_401_reaches_the_caller_unchanged_with_the_phrase_split_across_pieces(api):
+    setup(api)
+    tool(api)
+    give(api, key(api, "close-crm", FULL), "bot:ops")
+    _, attempt = run(api)
+    token = handed(api, attempt)["value"]
+    # The phrase is cut in two, and the body runs well past what the scope check reads.
+    parts = [OUT_OF_SCOPE[:25], OUT_OF_SCOPE[25:], b"." * 1000, b"0123456789" * 500]
+    api.app.state.tool_proxy_transport = httpx.MockTransport(lambda request: httpx.Response(401, stream=Pieces(parts)))
+    r = call(api, "GET", "api/v1/lead/", token, how="basic")
+    assert r.status_code == 401 and r.content == b"".join(parts)
+    with api.app.state.store.read() as c:
+        assert [row[0] for row in c.execute("SELECT detail FROM tool_calls")] == [api_tools.MISSING_SCOPE]

@@ -770,7 +770,7 @@ impl Runner {
     }
 }
 
-/// Give a bot's local history its first home on GitHub (git_credentials.publish_history): a checkout with commits
+/// Give a bot's local history its first home on GitHub: a checkout with commits
 /// and no upstream gets `origin` set to the bot's repository and `git push -u origin <branch>`, with the turn's own
 /// scoped token. Never forces; a remote holding history this checkout lacks is left alone and reported.
 /// (state, detail): `published`, `current` (nothing to do), `skipped` or `failed`.

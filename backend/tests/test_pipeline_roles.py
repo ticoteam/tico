@@ -42,10 +42,10 @@ def _no_roles(environment):
     draft["company"].update(name="Kiln & Co", about="We make pottery.")
     draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")]
     body = {"company_yaml": C.to_yaml(draft)}
-    preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
+    preview = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in())
     assert preview.status_code == 200, preview.text
     done = api.post(
-        "/api/v2/onboarding/company/import",
+        "/api/v2/setup/company/import",
         json={**body, "fingerprint": preview.json()["fingerprint"]},
         headers=signed_in(),
     )
@@ -125,7 +125,7 @@ def test_a_role_bot_that_appears_later_takes_its_stages_from_the_stand_in(enviro
 def test_a_new_company_on_the_default_chart_is_staffed_while_its_release_manager_is_planned(environment):
     """The default chart's live seats start planned until BotOps sets them up; the Release Owner is found then too."""
     api = environment()
-    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    done = api.post("/api/v2/setup/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     assert rows(api, "SELECT state FROM bots WHERE slug='release-owner'")[0]["state"] == "planned"
     assert [r["id"] for r in rows(api, "SELECT id FROM pipelines WHERE id IN ('product','engineering')")] == ["product"]

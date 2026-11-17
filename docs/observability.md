@@ -259,7 +259,7 @@ each steady window this way. Each route row and the totals give `p99` beside `p5
 `runner`, `service` or `anonymous`; `tico health metrics --caller human`) counts only that kind of caller's requests and
 ranks the routes by its count, so people's routes are not hidden behind bots' and runners'; the browsers' own timing
 sends (`POST /api/v2/web-timings`) count in the totals and are listed apart as `web_timings`.
-`GET /api/v2/ops/timing` still answers with the last 300 requests per route since the start.
+`GET /api/v2/operations/timing` still answers with the last 300 requests per route since the start.
 
 ### People's browser timings
 

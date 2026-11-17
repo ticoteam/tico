@@ -95,7 +95,7 @@ def propose_why(api, goal_id, why, token, reason="The vision is about rental own
 
     return post(
         api,
-        "goal-proposals",
+        "proposals",
         {"kind": "goal_why", "goal_id": goal_id, "payload": {"why": why}, "reason": reason},
         token=token,
     )["proposal"]

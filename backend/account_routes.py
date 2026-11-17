@@ -13,7 +13,7 @@ from .store import H, Problem, encode
 
 
 def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, store):
-    @app.get("/api/v2/catalog")
+    @app.get("/api/v2/templates")
     def catalog():
         """The bot templates this company may pick from, named for this company. Every signed-in
         identity reads it: runners and bots build repositories from the same cards."""
@@ -35,42 +35,43 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
         return value
 
-    @app.get("/api/v2/onboarding")
+    @app.get("/api/v2/setup")
+    @app.get("/api/v2/onboarding", deprecated=True)  # rc.1 runners (catalog_job reads the record)
     def onboarding_record(request: Request):
         who = request.state.identity
         onboarding.require_reader(who)
         with store.read() as c:
             return onboarding.view(c, who)
 
-    @app.put("/api/v2/onboarding")
+    @app.put("/api/v2/setup")
     def onboarding_save(request: Request, body: M.OnboardingDraft):
         who = request.state.identity
         return mutate(request, body, lambda c: onboarding.save(c, who, body))
 
-    @app.get("/api/v2/onboarding/departments")
+    @app.get("/api/v2/setup/groups")
     def onboarding_departments(request: Request):
         """The org builder's departments and cards, and whether this install may ask Tico HQ for suggestions."""
         return recruiter.departments(request.state.identity)
 
-    @app.post("/api/v2/onboarding/recruit")
+    @app.post("/api/v2/setup/recruit")
     def onboarding_recruit(request: Request, body: M.Recruit):
         """Suggested bots for one department. A sync handler, so the call to Tico HQ runs off the event loop; it
         writes nothing, so it is not a `mutate`."""
         return recruiter.recruit(request.state.identity, body)
 
-    @app.post("/api/v2/onboarding/complete")
+    @app.post("/api/v2/setup/complete")
     def onboarding_complete(request: Request, body: M.Empty):
         who = request.state.identity
         return mutate(request, body, lambda c: onboarding.complete(c, who))
 
-    @app.post("/api/v2/onboarding/company/preview")
+    @app.post("/api/v2/setup/company/preview")
     def onboarding_company_preview(request: Request, body: M.OnboardingCompanyFile):
         from . import company_import
 
         with store.read() as c:
             return company_import.preview(onboarding, c, request.state.identity, body.company_yaml)
 
-    @app.post("/api/v2/onboarding/company/import")
+    @app.post("/api/v2/setup/company/import")
     def onboarding_company_import(request: Request, body: M.OnboardingCompanyImport):
         from . import company_import
 
@@ -80,14 +81,14 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             lambda c: company_import.apply(onboarding, c, request.state.identity, body.company_yaml, body.fingerprint),
         )
 
-    @app.post("/api/v2/onboarding/company/import-failure/dismiss")
+    @app.post("/api/v2/setup/company/import-failure/dismiss")
     def onboarding_company_import_failure_dismiss(request: Request, body: M.Empty):
         """The owner leaves a kept setup-file failure they won't fix by importing (Health and setup)."""
         from . import company_import
 
         return mutate(request, body, lambda c: company_import.dismiss(onboarding, c, request.state.identity))
 
-    @app.post("/api/v2/onboarding/company/people/{key}/invite")
+    @app.post("/api/v2/setup/company/people/{key}/invite")
     def onboarding_company_invite(request: Request, key: str, body: M.OnboardingInvite):
         """Invite one person the company file from setup names: they go on the roster with this email (the seats that
         waited with the owner now report to them), then Tico's own sign-in mail invites them (backend/invites.py).

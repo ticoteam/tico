@@ -54,7 +54,7 @@ const NOTE = {kind: 'uncertain_work', title: 'Writer saved 1 stopped run for lat
       if (p === '/api/v2/health') return json(health);
       if (p === '/api/v2/health/findings') return json({findings: [], botops: true, reports_without_asking: false});
       if (p === '/api/v2/system/metrics') return json({});
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/employees' || p === '/api/issues') return json([]);
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
       if (p === '/api/v2/status') return json({bots: []});

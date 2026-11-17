@@ -42,7 +42,7 @@ from . import counsel
 from . import thread_api
 from . import recipients as recipient_gate
 from . import runs
-from . import bot_stops, turn_budgets, task_caps, reach
+from . import holds, turn_budgets, task_caps, reach
 from . import (
     check_models,
     profiles,
@@ -78,7 +78,7 @@ from . import rooms
 from . import fast_json
 from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
-from .route_renames import old_paths as old_route_paths
+from .legacy_spellings import legacy_of
 from . import settings_catalog
 from . import updates
 from .files import raw_media
@@ -136,7 +136,7 @@ STABLE_PATH = re.compile(
         re.sub(r"\\\{[^}]+\\\}", "[^/]+", re.escape(spelling))
         for path, *_ in STABLE_ROUTES
         if path != "/api/v2/events"
-        for spelling in (path, *old_route_paths(path))
+        for spelling in (path, *legacy_of(path))
     )
 )
 
@@ -1526,7 +1526,7 @@ def create_app(settings=None):
     class DisplayNameRoute(APIRoute):
         def __init__(self, path, endpoint, **options):
             # FastAPI calls the handler it was given; the JSON it answers is encoded by orjson (backend/fast_json.py).
-            # `endpoint` stays the handler itself, for the callers that read its dicts (backend/route_renames.py).
+            # `endpoint` stays the handler itself, for the callers that read its dicts.
             plain = isinstance(options.get("response_class", DefaultPlaceholder(None)), DefaultPlaceholder)
             super().__init__(
                 path, fast_json.answering_json(endpoint, options.get("status_code")) if plain else endpoint, **options
@@ -1547,7 +1547,7 @@ def create_app(settings=None):
     # type. Annotate before that wrapping so actual file/stream responses stay untouched.
     app.router.route_class = DisplayNameRoute
 
-    @app.get("/api/v2/ops/timing")
+    @app.get("/api/v2/operations/timing")
     def request_timings(request: Request):
         """Where requests spend their time (backend/timing.py): the owner, or BotOps."""
         who = request.state.identity
@@ -2005,7 +2005,7 @@ def create_app(settings=None):
         if note := (
             H.held_note(c, to)
             or usage_limits.warning(c, to)
-            or bot_stops.warning(c, to)
+            or holds.warning(c, to)
             or (None if H.is_human(who.actor) else H.setup_hold(c, to, who.actor))
         ):
             message = {**message, "warning": note}
@@ -2154,7 +2154,7 @@ def create_app(settings=None):
 
     billing_routes.register(app, admin_only, auth, mutate, settings, store)
 
-    @app.post("/api/v2/access/people")
+    @app.post("/api/v2/access/humans")
     def access_person_add(request: Request, body: M.AccessPersonAdd):
         """Add a person to the roster and the sign-in allow list. An owner or admin may add anyone; a member only
         a coworker in the company's email domain (and only if `add_people` is on for them). BotOps adds a coworker in the
@@ -2189,7 +2189,7 @@ def create_app(settings=None):
             auth.sync_access(c)
         return result
 
-    @app.post("/api/v2/access/people/{pid}/invite")
+    @app.post("/api/v2/access/humans/{pid}/invite")
     def access_person_invite(request: Request, pid: str, body: M.Empty):
         """Owners and admins send someone on the roster an invite from Tico's own sign-in mail (backend/invites.py),
         never the company's mailbox; a refusal says why, so the owner can tell the person themselves."""
@@ -2204,7 +2204,7 @@ def create_app(settings=None):
         at = invites.record_send(store, who, request, pid)  # a repeat answers the time its own send recorded
         return {"person": pid, "invited_at": at}
 
-    @app.post("/api/v2/access/people/{pid}/password")
+    @app.post("/api/v2/access/humans/{pid}/password")
     def access_person_password(request: Request, pid: str, body: M.Empty):
         """Owners and admins make someone on the roster a Tico account with a generated password (backend/invites.py
         `make_password`), answered once. Not `mutate`: its request cache would keep the password. Nothing else keeps
@@ -2223,7 +2223,8 @@ def create_app(settings=None):
             H.event(c, who.actor, "person.account_created", pid, {})
         return {"person": pid, "email": person["email"], "password": password}
 
-    @app.post("/api/v2/access/people/{pid}")
+    @app.post("/api/v2/access/humans/{pid}")
+    @app.post("/api/v2/access/people/{pid}", deprecated=True)  # rc.1 playbooks and mail setup text
     def access_person_edit(request: Request, pid: str, body: M.AccessPersonEdit):
         """Owners and admins edit a person, including what a member may do (create bots, add people). Only an
         owner makes or removes an admin. Through BotOps, a role or add_people change is a Confirm card."""
@@ -2258,7 +2259,7 @@ def create_app(settings=None):
                     c,
                     who,
                     "POST",
-                    "/api/v2/access/people/" + pid,
+                    "/api/v2/access/humans/" + pid,
                     changes,
                     "Change " + ", ".join(changes) + " for " + ((H.human(c, pid) or {}).get("name") or pid),
                 )
@@ -2297,7 +2298,7 @@ def create_app(settings=None):
 
         return teammate_access.can(c, who, "manage", "human:" + pid, auth=auth)
 
-    @app.post("/api/v2/people/{pid}")
+    @app.post("/api/v2/humans/{pid}")
     def person_update(request: Request, pid: str, body: M.PersonUpdate):
         caller = request.state.identity
 
@@ -3733,7 +3734,7 @@ def create_app(settings=None):
         note = " ".join(
             filter(
                 None,
-                (usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),),
+                (usage_limits.warning(c, owner) or holds.warning(c, owner) or H.setup_hold(c, owner),),
             )
         )
         return {
@@ -5146,10 +5147,8 @@ def create_app(settings=None):
             return {"bot": bot, "computer": runner["label"], "placed": True, "already": False}
         raise refusal
 
-    @app.get("/api/v2/fleet/check")
-    def fleet_check(request: Request):
+    def health_checks(who):
         """What is wrong with the bots this person may see, most urgent first, each with its one fix."""
-        who = request.state.identity
         auth.domain(who)
         with store.read_transaction() as c:  # one snapshot: company-wide reads are shared by every bot's row
             result = fleet_check_module.check(c, who, auth, settings)
@@ -5189,6 +5188,20 @@ def create_app(settings=None):
                 level: sum(i["severity"] == level for i in result["issues"]) for level in fleet_check_module.ORDER
             }
             return result
+
+    @app.get("/api/v2/health/issues")
+    def health_issues(request: Request):
+        """What is wrong with the bots this person may see, most urgent first, each with its one fix. The Assistant
+        also gets the live team snapshot (views.fleet_snapshot) with it."""
+        who = request.state.identity
+        checked = health_checks(who)
+        if getattr(who, "via", None) == "assistant":
+            from .views import fleet_snapshot
+
+            with store.read() as c:
+                snapshot = fleet_snapshot(c, auth, who, task_view)
+            return {**snapshot, **{key: checked[key] for key in ("checks", "issues", "services", "counts")}}
+        return checked
 
     def computer_rows(c, who):
         from .performance import load_statuses

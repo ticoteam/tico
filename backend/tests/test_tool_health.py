@@ -31,14 +31,16 @@ def answer(monkeypatch, code, missing_scope=False):
 
 
 def calls(api, tid, codes, hours_ago=1):
-    """Real calls through the proxy, oldest first, `hours_ago` back."""
+    """Real calls through the proxy, oldest first, `hours_ago` back. A code of "scoped" is a 401 whose reply names a
+    missing scope, as the proxy records it."""
     with api.app.state.store.transaction() as c:
         start = H.shift(H.now(), hours=-hours_ago)
         for i, code in enumerate(codes):
+            status, detail = (401, api_tools.MISSING_SCOPE) if code == "scoped" else (code, "")
             c.execute(
                 "INSERT INTO tool_calls(id,tool_id,credential_id,actor,bot,access_level,method,path,status_code,result,"
-                "detail,duration_ms,created_at) VALUES(?,?,NULL,'bot:ops','ops','read_write','GET','/x',?,'sent','',1,?)",
-                (H.new_id(), tid, code, H.shift(start, seconds=i)),
+                "detail,duration_ms,created_at) VALUES(?,?,NULL,'bot:ops','ops','read_write','GET','/x',?,'sent',?,1,?)",
+                (H.new_id(), tid, status, detail, H.shift(start, seconds=i)),
             )
 
 
@@ -316,3 +318,17 @@ def test_a_401_reply_is_read_only_up_to_its_first_bytes():
 
     late = b"x" * (api_tools.SCOPE_READ + 10) + b"missing_permissions"
     assert api_tools._missing_scope(httpx.Response(401, content=late)) is False
+
+
+def test_out_of_scope_401s_are_no_rejection_and_a_newer_one_ends_an_older_run(api, monkeypatch):
+    setup(api)
+    tid = tool(api, "ElevenLabs")["id"]  # its check path /v1/user needs user_read, which a restricted key lacks
+    key(api, tid, SECRET)
+    answer(monkeypatch, 401, missing_scope=True)
+    post(api, f"api-tools/{tid}/check", {})
+    calls(api, tid, ["scoped"] * 3)
+    assert shown(api, tid) == ("Works (limited)", "ok", False)
+    calls(api, tid, [401] * 3, hours_ago=2)  # older plain 401s, behind newer scoped ones: the key is known now
+    assert shown(api, tid) == ("Works (limited)", "ok", False)
+    calls(api, tid, [401] * 3, hours_ago=0)  # three plain 401s since: rejected
+    assert shown(api, tid) == ("Key rejected", "fail", True)

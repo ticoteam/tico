@@ -38,7 +38,7 @@ async function scenario(browser: import('playwright').Browser, role: 'owner' | '
     const config = {version: '0.6.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: 'ana', role: role === 'owner' ? 'owner' : 'member', name: 'Ana', email: 'ana@acme.example', registered: true, config});
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+    if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
     if (p === '/api/employees') return json([]);
     if (p === '/api/status') return json({active: [], recent_runs: [], health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});

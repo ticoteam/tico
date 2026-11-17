@@ -137,7 +137,7 @@ def test_leaving_revokes_a_persons_api_tokens(api):
             "INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) "
             "VALUES('t1','cara','x','h','2026-01-01T00:00:00Z','human:cara')"
         )
-    post(api, "people/cara", {"left": True})
+    post(api, "humans/cara", {"left": True})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT revoked_at FROM human_tokens WHERE id='t1'").fetchone()[0]
 

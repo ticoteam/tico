@@ -357,7 +357,7 @@ def test_asking_for_the_market_names_the_places_the_company_serves(api):
     _librarian(api)
     put(
         api,
-        "onboarding",
+        "setup",
         {
             "names": {"company_name": "Acme", "app_name": "Atlas", "assistant_name": "Morgan"},
             "answers": {"what_we_do": "Kits.", "regions": ["Texas", "Ohio"]},

@@ -30,7 +30,7 @@ const {unrouted} = require('./support/routes.cts') as Routes.Api;
       const config = {version: '0.1.0', app_name: 'Tico'};
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/humans' || p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/employees') return json([{name: 'rm', display_name: 'Release Owner', status: 'active', can_chat: true, can_manage: true,
         users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}]);
       if (p === '/api/status') return json({cloud: true, active: [], recent_runs: [], health_issues: [], schedules: []});

@@ -103,7 +103,7 @@ def _okta_deactivates_with_a_pathless_patch_and_the_user_stays_listed(scim):
 
 def _people_added_by_hand_and_the_owner_cannot_be_deactivated_by_scim(scim):
     hand = scim.post(
-        "/api/v2/access/people", json={"name": "Hand Made", "email": "hand@acme.example"}, headers=signed_in()
+        "/api/v2/access/humans", json={"name": "Hand Made", "email": "hand@acme.example"}, headers=signed_in()
     )
     assert hand.status_code == 200
     ids = {p["email"]: p["id"] for p in roster_of(scim).values()}

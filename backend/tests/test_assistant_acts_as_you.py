@@ -88,7 +88,7 @@ def test_the_never_list_stays_the_persons_own_tap(api):
         ("POST", "/api/v2/access/owner", {"person": "human:ben"}),
         ("POST", "/api/v2/sql", {"query": "SELECT body FROM messages"}),
         ("POST", "/api/v2/support/tickets", {"subject": "Help", "body": "Please"}),
-        ("DELETE", "/api/v2/people/ben", None),
+        ("DELETE", "/api/v2/humans/ben", None),
         ("DELETE", "/api/v2/company/server-connection", None),
         ("PUT", "/api/v2/assistant/settings", {"enabled": False}),
     ]
@@ -175,7 +175,7 @@ def test_admits_on_turn_refuses_what_the_person_alone_decides():
     assert admits_on_turn("POST", "/api/v2/bots/ops/archive", {"expected_revision": 1})
     assert not admits_on_turn("POST", "/api/v2/me/tokens", {})
     assert not admits_on_turn("POST", "/api/v2/sql", {"query": "select 1"})
-    assert not admits_on_turn("DELETE", "/api/v2/people/ben", None)
+    assert not admits_on_turn("DELETE", "/api/v2/humans/ben", None)
     assert not admits_on_turn("PUT", "/api/v2/access/rules", {"assistant_direct": False})
     assert not admits_on_turn("GET", "/api/v2/tasks", None)
     assert not admits_on_turn("POST", "/api/v2/tasks/t1", {"status": "done", "api_key": "x"})
@@ -362,7 +362,7 @@ def test_the_assistants_chat_turn_never_sends_the_morning_message(api):
 def test_a_morning_message_is_only_for_an_active_person(api):
     coo = setup_attempt(api, "assistant")[2]["token"]
     morning(api, coo, for_person="human:ghost", expected=404)
-    post(api, "access/people/cara", {"sign_in": False})
+    post(api, "access/humans/cara", {"sign_in": False})
     morning(api, coo, for_person="human:cara", expected=404)
 
 
@@ -440,7 +440,7 @@ def test_a_message_edited_after_it_was_posted_lends_no_words(api):
 REVIEWED = {
     "POST /api/v2/finance/ad-imports": "turns Finance's ad spend import on or off and picks, by id, which saved keys it reads with; reads or writes no secret",
     "POST /api/v2/humans/{pid}": "a profile edit; 'login' is a last-login field",
-    "POST /api/v2/people/{pid}": "a profile edit; 'login' is a last-login field",
+    "POST /api/v2/humans/{pid}": "a profile edit; 'login' is a last-login field",
     "POST /api/v2/runners/heartbeat": "the runner's own heartbeat; 'provider' is a field name",
     "POST /api/v2/bots/{bot}/go-live": "switches a bot live on credentials the person already granted; writes none",
     "POST /api/v2/grokbot/sync": "syncs a bot's state from its provider; writes no credential",
@@ -454,7 +454,7 @@ REVIEWED = {
     "POST /api/v2/credential-requests": "asks the person for a credential; they enter it in Settings, which is NEVER",
     "POST /api/v2/credential-requests/{rid}/cancel": "cancels that ask; writes no credential",
     "POST /api/v2/decisions": "asks the LLM judge; 'provider' is the model provider",
-    "POST /api/v2/judge": "asks the LLM judge; 'provider' is the model provider",
+    "POST /api/v2/decisions": "asks the LLM judge; 'provider' is the model provider",
     "POST /api/v2/rules/read": "reads a rules document with the company's model provider; writes nothing",
     "POST /api/v2/market/ask": "reads the market graph and asks the company's already-set model provider; writes no credential or provider setting",
     "POST /api/v2/bots/{bot}/tools": "registers a bot's tool manifest; clients/access_entry refuses any credential in it",
@@ -470,7 +470,7 @@ REVIEWED = {
     "PATCH /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
     "DELETE /api/v2/tool-proxy/{tool_id}/{path:path}": "a proxied tool call: no Tico identity, only a run's tool token; the key stays on the server",
     "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
-    "POST /api/v2/runners/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
+    "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }
 
 

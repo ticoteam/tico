@@ -419,7 +419,7 @@ def install_integrations(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/integrations")
+    @app.get("/api/v2/tools")
     def integrations(request: Request):
         with store.read() as c:
             counts = learning_counts(c)
@@ -448,7 +448,7 @@ def install_integrations(app, store, auth, mutate):
             "integrations": [item | {"learning_count": counts.get(item["service"], 0)} for item in items],
         }
 
-    @app.get("/api/v2/integrations/{service}")
+    @app.get("/api/v2/tools/{service}")
     def integration(request: Request, service: str):
         page = resolve(service, request.state.identity)
         with store.read() as c:
@@ -456,7 +456,8 @@ def install_integrations(app, store, auth, mutate):
             page = named(c, page)
         return {**page, "learnings": notes}
 
-    @app.get("/api/v2/integrations/{service}/queries")
+    @app.get("/api/v2/tools/{service}/queries")
+    @app.get("/api/v2/integrations/{service}/queries", deprecated=True)  # rc.1 CLI (dbquery)
     def queries(request: Request, service: str, term: str = "", id: str | None = None):
         """The catalog search `tico tool query-search` does, served so every client reads alike."""
         from clients.hubtools import query_search
@@ -469,7 +470,7 @@ def install_integrations(app, store, auth, mutate):
             raise Problem("not_found", f"No query {id} under {page['service']}", 404)
         return {"service": page["service"], "queries": query_search(page["queries"], term)}
 
-    @app.post("/api/v2/integrations/{service}/learnings")
+    @app.post("/api/v2/tools/{service}/learnings")
     def learn(request: Request, service: str, body: Learning):
         who = request.state.identity
         auth.domain(who)
@@ -482,7 +483,7 @@ def install_integrations(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/integrations/{service}/learnings/{lid}/delete")
+    @app.post("/api/v2/tools/{service}/learnings/{lid}/delete")
     def forget(request: Request, service: str, lid: str):
         who = request.state.identity
         if who.role != "owner":
