@@ -123,6 +123,7 @@ def record(c: Any, task_id: str, name: str, file_id: str, by: str | None = None)
 DocumentApprovals = dict[tuple[str, str], int]
 
 # Latest OK first. The event pins all submitted versions. Older answers only stored the version number on the answer.
+# Driving the join from the requested tasks keeps unrelated answers out of the read.
 APPROVALS_SQL = """
 WITH history AS MATERIALIZED (
     SELECT subject_id, json_extract(data,'$.answer_id') AS answer_id, json_extract(data,'$.pages') AS pages
@@ -135,7 +136,9 @@ SELECT v.task_id,json_extract(r.settings,'$.document') AS document,h.pages,
           AND p.version=a.page_version AND p.created_at<=a.created_at
         ORDER BY p.created_at DESC,p.rowid DESC LIMIT 1
     ) END AS legacy_page
-FROM visits v JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id
+FROM visits v INDEXED BY visits_task
+CROSS JOIN answers a INDEXED BY answers_visit ON a.visit_id=v.id
+JOIN requirements r ON r.id=a.requirement_id
 LEFT JOIN history h ON h.subject_id=v.task_id AND h.answer_id=a.id
 WHERE v.task_id IN ({marks}) AND a.answer='ok' AND a.undone_at IS NULL
   AND json_extract(r.settings,'$.document') IS NOT NULL

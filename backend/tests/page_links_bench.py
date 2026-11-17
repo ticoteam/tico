@@ -65,27 +65,27 @@ def compare_approvals(c):
     task_ids = [f't{i}' for i in range(50)]
     sql = task_documents.APPROVALS_SQL.format(marks=','.join('?' * len(task_ids)))
     plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + sql, (*task_ids, *task_ids))]
+    old_sql = (
+        "SELECT a.*,json_extract(r.settings,'$.document') AS document FROM visits v "
+        "JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id "
+        "WHERE v.task_id=? AND a.answer='ok' AND a.undone_at IS NULL ORDER BY a.created_at DESC,a.rowid DESC"
+    )
+    old_plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + old_sql, (task_ids[0],))]
 
     def previous():
         out = {}
         for task_id in task_ids:
             approved = out[task_id] = {}
-            answers = c.execute(
-                "SELECT a.*,json_extract(r.settings,'$.document') AS document FROM visits v "
-                "JOIN answers a ON a.visit_id=v.id JOIN requirements r ON r.id=a.requirement_id "
-                "WHERE v.task_id=? AND a.answer='ok' AND a.undone_at IS NULL ORDER BY a.created_at DESC,a.rowid DESC",
-                (task_id,),
-            )
-            for answer in answers:
+            for answer in c.execute(old_sql, (task_id,)):
                 if answer['document']:
                     for fid, version in task_pages.answer_pages(c, task_id, dict(answer)).items():
                         approved.setdefault((fid, answer['document']), version)
         return out
 
     assert previous() == task_documents._read_approvals(c, task_ids)
-    for kind, read in [
-        ('per-task/old', previous),
-        ('batched/new', lambda: task_documents._read_approvals(c, task_ids)),
+    for kind, read, query_plan in [
+        ('per-task/old', previous, old_plan),
+        ('batched/new', lambda: task_documents._read_approvals(c, task_ids), plan),
     ]:
         elapsed = []
         for _ in range(REPEATS):
@@ -93,7 +93,9 @@ def compare_approvals(c):
             read()
             elapsed.append((time.perf_counter() - start) * 1000)
         print(
-            json.dumps({'query': 'approvals/' + kind, 'median_ms': round(statistics.median(elapsed), 3), 'plan': plan})
+            json.dumps(
+                {'query': 'approvals/' + kind, 'median_ms': round(statistics.median(elapsed), 3), 'plan': query_plan}
+            )
         )
 
 
