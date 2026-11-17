@@ -26,7 +26,7 @@ from scripts import freeze_guard, main_red, release_train
 
 MANUAL_FILES = ("escapes.jsonl", "green_but_wrong.jsonl")
 REVERT_SHA = re.compile(r"\bThis reverts commit ([0-9a-f]{7,40})\b", re.IGNORECASE)
-REVERT_OK = re.compile(r"^Revert-Ok:\s*(\S+)\s*$", re.MULTILINE | re.IGNORECASE)
+REVERT_OK = re.compile(r"^Revert-Ok:\s*(\S+)", re.MULTILINE | re.IGNORECASE)
 HOTFIX = re.compile(r"\bhotfix\b", re.IGNORECASE)
 RELATION = re.compile(
     r"\b(?:reverts?|fixes|hotfix(?:\s+for)?|regression\s+(?:in|from)|originating-pr:)\s+"
@@ -358,9 +358,10 @@ def report(repo, main_episodes, post_release, unresolved, since, now, pulls=()):
     ]
     post_release = [row for row in post_release if since <= timestamp(row["timestamp"]) <= now]
     pulls = list(pulls)
+    numbers = {pr["number"] for pr in pulls}
     unresolved = {
         pr["number"] for pr in pulls if pr["number"] in unresolved and since <= timestamp(pr["merged_at"]) <= now
-    }
+    } | {origin for origin in unresolved if origin not in numbers}
     base = f"https://github.com/{repo}"
     weeks = Counter(iso_week(timestamp(row["timestamp"])) for row in closed)
     open_weeks = Counter(iso_week(timestamp(row["timestamp"])) for row in opened)
@@ -437,7 +438,10 @@ def report(repo, main_episodes, post_release, unresolved, since, now, pulls=()):
         f"Unattributed revert/hotfix PRs or manual origins (in this window): {len(unresolved)}. These require an originating PR or a manual record.",
         "",
     ]
-    lines += [f"- [#{origin}]({base}/pull/{origin})" for origin in sorted(unresolved, key=str)]
+    lines += [
+        f"- [#{origin}]({base}/pull/{origin})" if isinstance(origin, int) else f"- manual record {origin}"
+        for origin in sorted(unresolved, key=str)
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -487,7 +491,7 @@ def main(argv=None):
         born = timestamp(api.get("")["created_at"])
         pulls = {pr["number"]: pr for pr in api.pages("pulls", state="closed") if pr.get("merged_at")}
         history = History(ROOT, api.pages("releases"))
-        runs = validation_runs(api, born, since, now)
+        runs = [run for run in validation_runs(api, born, since, now) if timestamp(run["updated_at"]) <= now]
         post_release, unresolved = collect(api, history, pulls)
         markdown = report(api.repo, episodes(runs), post_release, unresolved, since, now, pulls.values())
         print(markdown, end="")

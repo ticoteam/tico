@@ -568,3 +568,24 @@ def test_markdown_and_html_show_separate_numbers_and_safe_links():
     assert '<a href="https://github.com/acme/tico/actions/runs/1">1</a>' in rendered
     assert rendered.count("<table>") == rendered.count("</table>")
     assert "&lt;script&gt;" in metrics.html_page("# <script>")
+
+
+def test_revert_ok_trailer_with_a_reason_names_its_origin():
+    numbers, shas = metrics.references("Revert-Ok: #12 intentional rollback\nRevert-Ok: abc1234 bad deploy", REPO)
+    assert numbers == {12}
+    assert shas == {"abc1234"}
+
+
+def test_unmapped_manual_origin_stays_listed():
+    page = metrics.report(
+        REPO,
+        [],
+        [],
+        {"0123abc", 2},
+        metrics.timestamp("2026-11-02T00:00:00Z"),
+        metrics.timestamp("2026-11-10T00:00:00Z"),
+        [pull(2, merged="2026-08-01T12:00:00Z")],
+    )
+    assert "(in this window): 1." in page
+    assert "- manual record 0123abc" in page
+    assert "pull/2)" not in page
