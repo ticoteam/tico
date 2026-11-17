@@ -228,14 +228,11 @@ def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(
         c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), FILE_MIGRATION))
     post(api, 'runner-credential-migration', values, machine['token'])
     assert get(api, 'runner-credential-grants', machine['token'])['bots'] == {'ops': []}
-    # The first pass on an unreported runner preserves a later HUB_ pass for the upgraded runner.
+    # A database an rc.1 server left with a HUB_ pass for a bot serves it to any runner, then drains it.
     from backend.credentials import HUB_MIGRATION
 
-    with api.app.state.store.read() as c:
-        assert 'ops' in json.loads(
-            c.execute('SELECT value FROM registry_metadata WHERE key=?', (HUB_MIGRATION,)).fetchone()[0]
-        )
-    post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'release': '0.2.32'}, machine['token'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (json.dumps(['ops']), HUB_MIGRATION))
     assert get(api, 'runner-credential-migration', machine['token'])['bots'] == ['ops']
     post(api, 'runner-credential-migration', {'bot': 'ops', 'credentials': []}, machine['token'])
     assert get(api, 'runner-credential-migration', machine['token'])['bots'] == []

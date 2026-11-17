@@ -937,8 +937,6 @@ def _is_id(c, cipher, row):
 
 
 def install_credentials(app, store, delegate=None, propose=None):
-    from . import runner_versions
-
     vault = app.state.vault = Vault(store, auth=getattr(app.state, 'auth', None))
 
     def migration_runner(c, who):
@@ -959,8 +957,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                 )
             )
             row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (HUB_MIGRATION,)).fetchone()
-            if runner_versions.at_least(c, who.runner_id, '0.2.31'):
-                pending |= set(json.loads(row[0])) if row else set()
+            pending |= set(json.loads(row[0])) if row else set()
             return {
                 'bots': [
                     r[0]
@@ -1004,12 +1001,6 @@ def install_credentials(app, store, delegate=None, propose=None):
             if bot not in pending and bot not in hub_pending:
                 return {'migrated': True}
             first = bot in pending
-            supports_hub = runner_versions.at_least(c, who.runner_id, '0.2.31')
-            if not first and not supports_hub:
-                return {'migrated': False, 'min_runner': '0.2.31'}
-            if first and not supports_hub and bot not in hub_pending:
-                hub_pending.append(bot)
-                c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(hub_pending), HUB_MIGRATION))
             subject = 'bot:' + bot
             label = (H.bot(c, bot) or {}).get('slug') or bot
             from . import api_tools, tool_settings
@@ -1063,8 +1054,6 @@ def install_credentials(app, store, delegate=None, propose=None):
 
             later = []
             for item in body.credentials:
-                if item.env.startswith('HUB_') and not supports_hub:
-                    continue
                 if not first and not item.env.startswith('HUB_'):
                     continue  # the bot migrated before: only the HUB_ keys 0.2.30 could not take
                 if item.env in RESERVED_ENV or item.env.startswith(RESERVED_PREFIXES):
@@ -1086,7 +1075,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             if first:
                 pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(pending), FILE_MIGRATION))
-            if bot in hub_pending and supports_hub:
+            if bot in hub_pending:
                 hub_pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(hub_pending), HUB_MIGRATION))
             return {'migrated': True}
