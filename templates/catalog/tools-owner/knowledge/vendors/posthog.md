@@ -7,15 +7,15 @@ Docs: https://posthog.com/docs/api, https://posthog.com/docs/api/personal-api-ke
 - Kinds: personal API key (`phx_...`, for private endpoints); project token (`phc_...`, ingestion only, public POST endpoints, needs no secret); project secret API key (beta, server-to-server, one project, only the scopes granted).
 - Read-only: choose only `:read` scopes (for example `insight:read`); `*` means full access.
 - Shape: Bearer (`Authorization: Bearer <key>`).
-- Variable: `POSTHOG_API_KEY` (personal key). Keep the `phc_` project token as a separate value.
+- Variables (Tico template `posthog`, manage skill 2b): `POSTHOG_API_KEY` (secret, `phx_...`; also `POSTHOG_PERSONAL_API_KEY`), `POSTHOG_PROJECT_API_KEY` (secret, `phc_...`, optional), `POSTHOG_HOST` (setting, also `POSTHOG_API_HOST`), `POSTHOG_PROJECT_ID` (id). A second account of one company is a second tool whose variables carry its label (`POSTHOG_CRO_API_KEY`).
 - Expiry: none stated.
 
 ## Check
 - `GET https://us.posthog.com/api/users/@me/` (EU: `https://eu.posthog.com`): the user. 401: key invalid. 403: valid but the scope is missing; a key without the user scope may get 403 here, so a project path is a better check (unconfirmed).
 
 ## In Tico
-- Route: API tool on the proxy, Auth `bearer`.
-- Settings (not keys): region host (`https://us.posthog.com` or `https://eu.posthog.com`; self-hosted uses its own domain) and project id, used in paths like `/api/projects/<id>/...` (the path form is unconfirmed in these docs).
+- Route: one PostHog tool on the proxy; the proxy sends `Authorization: Bearer` with `POSTHOG_API_KEY`. Paste key, host and project id together: the key becomes a key, host and project id Settings.
+- Settings (not keys): `POSTHOG_HOST` (`https://us.posthog.com`, `https://eu.posthog.com` or a self-hosted domain) and `POSTHOG_PROJECT_ID`, used in paths under `/api/projects/<id>/`.
 - MCP: `https://mcp.posthog.com/mcp` by OAuth sign-in or a personal key as Bearer (catalog).
 
 ## Pitfalls

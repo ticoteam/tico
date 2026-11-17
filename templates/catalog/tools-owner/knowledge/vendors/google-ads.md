@@ -7,7 +7,7 @@ Docs: https://developers.google.com/google-ads/api/api-policy/developer-token, h
 - Kinds: OAuth client + user refresh token (a person signs in once), or a service account. Calls also carry a developer token header in the classic setup; the access-level doc says access is now tied to the Cloud project and no developer token or manager account is needed to apply (the `developer-token` header is not covered there: unconfirmed whether it is still required).
 - Read-only: no read-only key. Scope `https://www.googleapis.com/auth/adwords` is all-or-nothing; give the signing-in user Read-only access on the account in Google Ads (Admin > Access and security).
 - Shape: OAuth. Per call: `Authorization: Bearer <access token>`, `developer-token: <token>`, and `login-customer-id: <manager id, no hyphens>` only when a manager (MCC) account calls a client account.
-- Variable: Tico's service name is `google-ads` with `GOOGLE_ADS_DEVELOPER_TOKEN`; the rest as `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN`, `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (the client libraries' convention).
+- Variables (Tico template `google-ads`, manage skill 2b): secrets `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CLIENT_ID`, `GOOGLE_ADS_CLIENT_SECRET` (`GOCSPX-...`), `GOOGLE_ADS_REFRESH_TOKEN` (`1//...`); ids `GOOGLE_ADS_LOGIN_CUSTOMER_ID` and `GOOGLE_ADS_CUSTOMER_ID` (also `GOOGLE_ADS_CUSTOMER_IDS`), both optional. The client libraries read these names.
 - Expiry: access token ~1 hour; refresh token until revoked (7 days if the consent screen is in Testing).
 
 ## Access levels
@@ -19,8 +19,8 @@ Docs: https://developers.google.com/google-ads/api/api-policy/developer-token, h
 - No proxy check: the key alone cannot call. Bots verify with `GET https://googleads.googleapis.com/<version>/customers:listAccessibleCustomers` after minting a token (endpoint from the API reference, version number current at use; not fetched today). 401: token or developer token rejected. 403: valid token, no access to that account or project not approved for production.
 
 ## In Tico
-- Route: on computers (several fields, token minted by the bot's library). Not on the proxy; Tico has no base URL for it.
-- Settings (not keys): login customer id (MCC), customer id.
+- Route: one Google Ads tool, delivery on computers: paste the values together; all six go to the run's environment and the bot's client library refreshes the token. The proxy carries none of its calls and Tico has no check for it. Finance's ad spend import uses the same values.
+- Settings (not keys): `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (the manager, MCC) and `GOOGLE_ADS_CUSTOMER_ID`.
 - MCP: Google's `googleads/google-ads-mcp` is local and read-only (Application Default Credentials + developer token); no remote server.
 
 ## Pitfalls
