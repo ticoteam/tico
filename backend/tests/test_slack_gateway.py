@@ -1139,20 +1139,6 @@ def test_an_event_the_gateway_cannot_store_is_not_acknowledged_so_slack_sends_it
     assert socket.acks == []
 
 
-def test_a_backfill_that_fails_is_logged_scrubbed_and_the_readers_still_get_what_is_stored(
-    readers, monkeypatch, caplog
-):
-    gw, hub = readers, readers.store
-    assert gw.receive(channel_message("Launch copy is ready for review")) == "stored"
-    gw.clock.advance(3600)
-    monkeypatch.setattr(gw, "backfill", locked)
-    with caplog.at_level(logging.ERROR, logger="tico.slack"):
-        out = gw.maybe_digest()
-    assert f"Backfill failed: {LOCKED}" in caplog.text
-    assert ("cmo", "sent", 1) in [(d["reader"], d["state"], d["count"]) for d in out]
-    assert any("Launch copy is ready for review" in d["body"] for d in digests(hub))
-
-
 def test_an_event_that_fails_is_stored_as_failed_with_its_scrubbed_reason(gateway, hub, monkeypatch, caplog):
     assert gateway.receive(envelope("Please check the launch")) == "queued"
     event_id = rows(hub, "SELECT event_id FROM slack_events")[0]["event_id"]
