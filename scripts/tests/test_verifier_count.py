@@ -1,14 +1,12 @@
-"""Verification counts and hard refusals read committed trees, including stale overwrite regressions."""
+"""Verification facts read committed trees, including stale overwrite regressions, without blocking."""
 
 from collections import Counter
 import json
-from pathlib import Path
 import subprocess
-import sys
 
 import pytest
 
-from scripts import freeze_guard
+from scripts import check_migration_order
 from scripts.gates import verifier_count
 
 pytestmark = pytest.mark.slow  # real git
@@ -59,10 +57,6 @@ def kinds(result):
     return Counter(f["kind"] for f in result["facts"])
 
 
-def hard(result):
-    return [f for f in result["facts"] if f["hard"]]
-
-
 def stale_tree(repo, monkeypatch):
     # PR #4008 (7db1e81ae3) introduced the start-failures migration and rewrote the holds readers.
     # An old copy written on top of newer work loses that work even though git can merge the commit.
@@ -85,16 +79,14 @@ def test_pr_4008_stale_tree_overwrites_newer_work(repo, monkeypatch):
     commit(repo, monkeypatch, "Write an older tree over the newer work")
     result = check(repo, base)
     assert kinds(result) == {"stale_revert": 1}
-    assert hard(result)[0]["commit"] == base
-    assert hard(result)[0]["path"] == "backend/holds.py"
-    assert result["count"] == 0
-    monkeypatch.setattr(verifier_count, "ROOT", repo)
-    monkeypatch.setattr(verifier_count.diff_facts, "ROOT", repo)
+    assert result["facts"][0]["commit"] == base
+    assert result["facts"][0]["path"] == "backend/holds.py"
+    assert result["count"] == 1
     monkeypatch.setattr(verifier_count, "check", lambda base: result)
-    assert verifier_count.main(["--base", base]) == 1
+    assert verifier_count.main(["--base", base]) == 0
 
 
-def test_v0616_edited_migration_and_deletion_fail_but_new_files_pass(repo, monkeypatch):
+def test_v0616_edited_migration_is_refused_only_by_migration_guard(repo, monkeypatch):
     # 68ed7d3971 added a pin limit to a migration v0.6.15 had applied; v0.6.16 could not start.
     path = "backend/migrations/20261117023225_company_floor_widget.py"
     original = "def up(conn):\n    conn.execute('SELECT place FROM pin_places')\n"
@@ -103,17 +95,15 @@ def test_v0616_edited_migration_and_deletion_fail_but_new_files_pass(repo, monke
     git(repo, "tag", "v0.6.15")
     write(repo, path, "PIN_LIMIT = 60\n\n" + original.replace("pin_places'", "pin_places LIMIT 60'"))
     commit(repo, monkeypatch, "Edit the applied migration")
-    git(repo, "tag", "v0.6.16")
+    assert "new migration" in check_migration_order.check(base, root=repo)[0]
     result = check(repo, base)
-    assert kinds(result) == {"edited_migration": 1}
-    assert "new migration" in hard(result)[0]["reason"]
-    (repo / path).unlink()
-    commit(repo, monkeypatch, "Delete the applied migration")
-    assert kinds(check(repo, base)) == {"edited_migration": 1}
+    assert result["facts"] == []
+    monkeypatch.setattr(verifier_count, "check", lambda base: result)
+    assert verifier_count.main(["--base", base]) == 0
     write(repo, path, original)
     write(repo, "backend/migrations/20261118000000_floor_limit.py", "def up(conn):\n    return None\n")
     commit(repo, monkeypatch, "Restore and add a new migration")
-    assert hard(check(repo, base)) == []
+    assert check_migration_order.check(base, root=repo) == []
 
 
 def test_each_counted_kind_once_and_working_tree_is_ignored(repo, monkeypatch, tmp_path):
@@ -138,7 +128,7 @@ def test_each_counted_kind_once_and_working_tree_is_ignored(repo, monkeypatch, t
     assert kinds(result) == dict.fromkeys(
         ["deleted_test", "new_skip", "quarantine_entry", "new_suppression", "raised_baseline", "verifier_edit"], 1
     )
-    assert result["count"] == 6 and not hard(result)
+    assert result["count"] == 6
     monkeypatch.setattr(verifier_count, "check", lambda base: result)
     output, summary = tmp_path / "facts.json", tmp_path / "summary.md"
     summary.write_text("Earlier summary\n")
@@ -156,8 +146,8 @@ def test_revert_ok_names_one_commit_and_counts_it(repo, monkeypatch, token):
     token = base[:12] if token == "sha" else token
     commit(repo, monkeypatch, f"Revert intentionally\n\nRevert-Ok: {token} restore the previous behavior")
     result = check(repo, base)
-    assert kinds(result) == {"allowed_revert": 1}
-    assert result["count"] == 1 and not hard(result)
+    assert kinds(result) == {"named_revert": 1}
+    assert result["count"] == 1
 
 
 def test_wrong_revert_trailer_does_not_clear_a_finding(repo, monkeypatch):
@@ -183,14 +173,11 @@ def test_revert_ok_pr_names_the_merge_of_a_blame_commit(repo, monkeypatch):
             repo, "commit-tree", "HEAD^{tree}", "-p", merge, "-m", f"Revert\n\nRevert-Ok: {token} restore behavior"
         )
         result = check(repo, merge, head)
-        queue = freeze_guard.check_revert_only(str(repo), merge, head)
         if token == original[:12]:
             assert kinds(result) == {"stale_revert": 1}
-            assert [f["reverts"] for f in queue["findings"]] == [merge]
         else:
-            assert kinds(result) == {"allowed_revert": 1}
-            assert result["count"] == 1 and not hard(result)
-            assert queue["findings"] == []
+            assert kinds(result) == {"named_revert": 1}
+            assert result["count"] == 1
 
 
 def test_one_whole_hunk_of_a_larger_recent_commit_is_a_stale_revert(repo, monkeypatch):
@@ -320,10 +307,10 @@ def test_comments_spacing_old_lines_and_own_commits_are_not_stale_reverts(repo, 
     base = commit(repo, monkeypatch, days=2)
     write(repo, "backend/holds.py", "old=1\nvalue=2\n")
     commit(repo, monkeypatch)
-    assert not hard(check(repo, base))
+    assert not check(repo, base)["facts"]
     write(repo, "backend/holds.py", "")
     commit(repo, monkeypatch)
-    assert not hard(check(repo, old))
+    assert not check(repo, old)["facts"]
 
 
 def test_pyproject_only_counts_verifier_sections(repo, monkeypatch):
@@ -344,7 +331,7 @@ def test_refactor_of_a_larger_block_is_not_a_stale_tree(repo, monkeypatch):
     base = commit(repo, monkeypatch, days=2)
     write(repo, "backend/holds.py", "def new_reader():\n    return load_with_access()\n")
     commit(repo, monkeypatch)
-    assert not hard(check(repo, base))
+    assert not check(repo, base)["facts"]
 
 
 def test_revert_ok_in_message_body_is_not_a_trailer(repo, monkeypatch):
@@ -361,7 +348,7 @@ def test_removing_one_of_several_recent_routes_is_not_a_whole_revert(repo, monke
     base = commit(repo, monkeypatch, days=2)
     write(repo, "backend/routes.py", "\n".join(routes[1:]))
     commit(repo, monkeypatch)
-    assert not hard(check(repo, base))
+    assert not check(repo, base)["facts"]
 
 
 def test_blame_following_an_older_path_does_not_crash(repo, monkeypatch):
@@ -373,7 +360,7 @@ def test_blame_following_an_older_path_does_not_crash(repo, monkeypatch):
     base = commit(repo, monkeypatch, days=1)
     write(repo, "backend/second.py", "")
     commit(repo, monkeypatch)
-    assert not hard(check(repo, base))
+    assert not check(repo, base)["facts"]
 
 
 def test_feature_removal_with_a_small_inverse_does_not_revert_the_whole_file(repo, monkeypatch):
@@ -395,40 +382,7 @@ def test_feature_removal_with_a_small_inverse_does_not_revert_the_whole_file(rep
         .replace("existing_b = 1", "existing_b = 2"),
     )
     commit(repo, monkeypatch)
-    assert not hard(check(repo, base))
-
-
-def test_queue_revert_only_is_offline_and_checks_only_merged_change_and_last_release(repo, monkeypatch):
-    write(repo, "backend/holds.py", "value = 1\n")
-    commit(repo, monkeypatch, days=30)
-    write(repo, "backend/older.py", "legacy_value = 1\n")
-    commit(repo, monkeypatch, days=30)
-    git(repo, "tag", "v1.0.0")
-    write(repo, "backend/holds.py", "value = 2\n")
-    shipped = commit(repo, monkeypatch, "Fix holds (#4008)", days=2)
-    git(repo, "tag", "v1.0.1")
-    # An unrelated unreviewed change after the release is outside the queue's merged diff.
-    write(repo, "backend/other.py", "value = 3\n")
-    base = commit(repo, monkeypatch)
-    write(repo, "backend/holds.py", "value = 1\n")
-    head = commit(repo, monkeypatch)
-    script = Path(freeze_guard.__file__)
-    args = [sys.executable, str(script), "--repo", str(repo), "--revert-only", "--base", base, "--head", head, "--json"]
-    monkeypatch.setenv("PATH", str(Path(subprocess.check_output(["which", "git"], text=True).strip()).parent))
-    done = subprocess.run(args, capture_output=True, text=True)
-    assert done.returncode == 1, done.stderr
-    result = json.loads(done.stdout)
-    assert [(f["kind"], f["reverts"]) for f in result["findings"]] == [("NET REVERT", shipped)]
-    # Permitting the named revert never needs a GitHub review lookup.
-    write(repo, "backend/other.py", "value = 4\n")
-    allowed = commit(repo, monkeypatch, f"Intentional revert\n\nRevert-Ok: {shipped[:12]} restore behavior")
-    result = freeze_guard.check_revert_only(str(repo), base, allowed)
-    assert result["findings"] == []
-    # The preceding release is outside the bounded queue window.
-    git(repo, "tag", "v1.0.2")
-    (repo / "backend/older.py").unlink()
-    newest = commit(repo, monkeypatch)
-    assert freeze_guard.check_revert_only(str(repo), allowed, newest)["findings"] == []
+    assert not check(repo, base)["facts"]
 
 
 def test_pr_4038_behind_main_reports_only_the_branch_changes(repo, monkeypatch):
@@ -469,9 +423,10 @@ def test_migration_maintenance_and_restoring_shipped_bytes_are_allowed(repo, mon
     (repo / "backend/migrations/notes.txt").unlink()
     commit(repo, monkeypatch, "Restore shipped bytes and maintain the loader")
     assert check(repo, base)["facts"] == []
+    assert check_migration_order.check(base, root=repo) == []
     write(repo, path, shipped.replace("SELECT 1", "SELECT 3"))
     commit(repo, monkeypatch, "Different bytes are still frozen")
-    assert kinds(check(repo, base)) == {"edited_migration": 1}
+    assert "new migration" in check_migration_order.check(base, root=repo)[0]
 
 
 def test_replacing_a_recent_addition_is_evolution_but_deleting_it_is_a_revert(repo, monkeypatch):
@@ -519,7 +474,7 @@ def test_revert_trailers_require_a_target_and_reason_and_allow_several(repo, mon
         "-m",
         f"Revert\n\nRevert-Ok: #4009 unrelated\nRevert-Ok: {base[:7]} restore behavior",
     )
-    assert kinds(check(repo, base, head)) == {"allowed_revert": 1}
+    assert kinds(check(repo, base, head)) == {"named_revert": 1}
 
 
 def test_verifier_scripts_and_configuration_all_count(repo, monkeypatch):

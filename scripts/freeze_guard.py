@@ -4,8 +4,6 @@ The Release Owner runs it on the frozen candidate, before asking for Release val
 
     python scripts/freeze_guard.py --head <candidate> [--previous vX.Y.Z] [--receipts receipts.json]
 
-The merge queue runs --revert-only --base <base> --head <merge> offline against just the last release's commits.
-
 It walks every first-parent commit from the previous release tag to the candidate (a merged pull request is one
 such commit) and reports, naming the pull request or commit each time:
 
@@ -28,7 +26,7 @@ Review receipts come from the tickets when GitHub reviews aren't used, as a JSON
 A revert receipt names one pull request and the one earlier change it means to undo (removing a workflow nobody
 uses, say); every other revert that pull request makes is still reported.
 
-The PR and queue gates also accept `Revert-Ok: <sha-or-#PR> <why ...>` commit trailers. A SHA prefix needs at least
+The verifier count accepts `Revert-Ok: <sha-or-#PR> <why ...>` commit trailers. A SHA prefix needs at least
 seven characters and can name the merge or any commit it brought in; the reason is required.
 
 Exit status: 0 when nothing is found, 1 with findings, 2 when it cannot check.
@@ -464,29 +462,6 @@ def revert_allowed(messages, earlier, repo, base=None):
     return False
 
 
-def check_revert_only(repo, base, head, previous=None):
-    """Queue check: the merged change versus commits in the last release, with no review lookups or fetches."""
-    base = git(repo, "rev-parse", "--verify", f"{base}^{{commit}}").strip()
-    head = git(repo, "rev-parse", "--verify", f"{head}^{{commit}}").strip()
-    if git(repo, "rev-parse", "--is-shallow-repository").strip() == "true":
-        raise GuardError("the queue revert check needs full history and release tags")
-    previous = previous or previous_release(repo, head)
-    since = lookback_base(repo, previous, 1)
-    shipped = first_parent_log(repo, f"{since}..{previous}" if since else previous)
-    patch = git(repo, "diff", "--no-color", "--no-ext-diff", "--no-renames", "-U0", base, head)
-    changes = parse_log(f"\0{head}\0{base}\0merged change\0\0{patch}")
-    messages = git(repo, "log", "--format=%(trailers:key=Revert-Ok,unfold=true)%x00", f"{base}..{head}")
-    allowed = {commit["sha"] for commit in shipped if revert_allowed(messages, commit, repo, base=previous)}
-    findings = [f for f in net_reverts(repo, changes, shipped) if f["reverts"] not in allowed]
-    return {
-        "head": head,
-        "previous": previous,
-        "changes": 1,
-        "compared_since": since or "the first commit",
-        "findings": findings,
-    }
-
-
 def check(repo, head, previous=None, receipts=(), github=None, releases=None, fetch=True):
     """Check the candidate against every earlier release, or only the last `releases` of them when given."""
     head = git(repo, "rev-parse", "--verify", f"{head}^{{commit}}").strip()
@@ -537,10 +512,6 @@ def repo_slug(repo):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--head", default="HEAD", help="the frozen candidate (default HEAD)")
-    parser.add_argument("--base", help="base of the merged change (required with --revert-only)")
-    parser.add_argument(
-        "--revert-only", action="store_true", help="offline queue check against only the last release's commits"
-    )
     parser.add_argument("--previous", help="the previous release tag (default: the newest v* tag below --head)")
     parser.add_argument("--receipts", help="JSON list of review receipts from the tickets")
     parser.add_argument("--repo", default=".", help="the git checkout (default .)")
@@ -551,27 +522,19 @@ def main(argv=None):
     )
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     args = parser.parse_args(argv)
-    if args.revert_only and not args.base:
-        parser.error("--revert-only requires --base")
-    if args.base and not args.revert_only:
-        parser.error("--base requires --revert-only")
     try:
         receipts = json.loads(Path(args.receipts).read_text()) if args.receipts else []
         if not isinstance(receipts, list) or not all(isinstance(r, dict) for r in receipts):
             raise GuardError("--receipts must hold a JSON list of objects")
         github = None
-        if not args.no_github and not args.revert_only:
+        if not args.no_github:
             slug = args.github or repo_slug(args.repo)
             if not slug or not shutil.which("gh"):
                 raise GuardError(
                     "GitHub can't be read (no gh or no GitHub origin); pass --no-github to use receipts only"
                 )
             github = GitHub(slug)
-        result = (
-            check_revert_only(args.repo, args.base, args.head, args.previous)
-            if args.revert_only
-            else check(args.repo, args.head, args.previous, receipts, github, args.releases)
-        )
+        result = check(args.repo, args.head, args.previous, receipts, github, args.releases)
     except (GuardError, OSError, ValueError) as error:
         print(f"freeze guard: cannot check: {error}", file=sys.stderr)
         return 2

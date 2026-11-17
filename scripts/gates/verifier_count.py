@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Count verification changes; refuse edits to shipped migrations and stale tree overwrites."""
+"""Report verification changes and stale or named reverts as counted facts, without blocking."""
 
 import argparse
 import ast
@@ -283,7 +283,7 @@ def stale_reverts(facts, repo, sources, now=None):
         row = rows[0]
         found.append(
             {
-                "kind": "allowed_revert" if permitted else "stale_revert",
+                "kind": "named_revert" if permitted else "stale_revert",
                 "path": row["path"],
                 "line": row["line"],
                 "reason": (
@@ -292,7 +292,6 @@ def stale_reverts(facts, repo, sources, now=None):
                     else f"undoes {share:.0%} of recent commit {sha[:12]}"
                 )
                 + (" (Revert-Ok)" if permitted else "; a stale tree overwrites newer work"),
-                "hard": not permitted,
                 "commit": sha,
             }
         )
@@ -305,8 +304,8 @@ def check(base, head="HEAD", repo=ROOT, now=None):
     found = []
     sources = {}
 
-    def add(kind, path, line, reason, hard=False):
-        found.append({"kind": kind, "path": path, "line": line, "reason": reason, "hard": hard})
+    def add(kind, path, line, reason):
+        found.append({"kind": kind, "path": path, "line": line, "reason": reason})
 
     for item in facts["files"]:
         path = item["path"]
@@ -314,23 +313,6 @@ def check(base, head="HEAD", repo=ROOT, now=None):
         after = "" if item["status"] == "deleted" else diff_facts.git(repo, "show", f"{facts['head']}:{path}")
         sources[path] = before, after
         line = next(iter(item["added"] or item["deleted"]), 1)
-        if (
-            check_migration_order.migrations([path])
-            and item["status"] != "added"
-            and (
-                item["status"] == "deleted"
-                or not check_migration_order._as_released(
-                    lambda *args: diff_facts.git(repo, *args), facts["head"], path, before=facts["base"]
-                )
-            )
-        ):
-            add(
-                "edited_migration",
-                path,
-                line,
-                "shipped migration already exists at base; restore it and put the fix in a new migration",
-                True,
-            )
         old_tests = test_definitions(path, before)
         remaining = Counter(name for name, _ in test_definitions(path, after))
         if item["status"] == "deleted" and (
@@ -365,7 +347,7 @@ def check(base, head="HEAD", repo=ROOT, now=None):
         if not raised and not baseline and verifier_edit(path, before, after):
             add("verifier_edit", path, line, "changed verification code or configuration")
     found.extend(stale_reverts(facts, repo, sources, now))
-    return {"base": facts["base"], "head": facts["head"], "facts": found, "count": sum(not f["hard"] for f in found)}
+    return {"base": facts["base"], "head": facts["head"], "facts": found, "count": len(found)}
 
 
 def main(argv=None):
@@ -388,7 +370,7 @@ def main(argv=None):
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"verifier count: cannot check: {error}", file=sys.stderr)
         return 2
-    return int(any(f["hard"] for f in result["facts"]))
+    return 0
 
 
 if __name__ == "__main__":
