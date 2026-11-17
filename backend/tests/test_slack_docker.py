@@ -196,3 +196,56 @@ def test_slack_tokens_saved_before_kms_was_set_open_with_slack_key_and_are_resea
     slack_app.save(store, settings, "human:ana", BOT, APP_TOKEN)
     (tmp_path / "slack.key").unlink()
     assert slack_app.load(store, settings, vault) is None and not (tmp_path / "slack.key").exists()
+
+
+def test_the_gateway_reads_tokens_from_the_secret_arn_and_nowhere_else(monkeypatch):
+    from backend import config
+
+    fetched = []
+
+    class SecretsManager:
+        def get_secret_value(self, SecretId):
+            fetched.append(SecretId)
+            secret = {"bot_token": BOT, "app_token": APP_TOKEN, "team_id": "T0ARN", "app_id": "A0ARN"}
+            return {"SecretString": json.dumps(secret)}
+
+    arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:tico/slack"
+    monkeypatch.setattr(
+        "boto3.client", lambda name, **k: SecretsManager() if name == "secretsmanager" else pytest.fail(name)
+    )
+    real_path = config.Path
+
+    def guarded_path(value, *args):
+        assert str(value) != "/etc/tico/slack", "the gateway must not read /etc/tico/slack"
+        return real_path(value, *args)
+
+    monkeypatch.setattr(config, "Path", guarded_path)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-from-env")  # ignored: the environment pair is gone
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-from-env")
+    monkeypatch.setenv("TICO_SLACK_SECRET_ARN", arn)
+    monkeypatch.setenv("SLACK_TEAM_ID", "T0PINNED")
+    pinned = {"bot_token": BOT, "app_token": APP_TOKEN, "team_id": "T0PINNED", "app_id": "A0ARN"}
+    assert config.slack_credentials() == pinned
+    assert fetched == [arn]
+    monkeypatch.delenv("TICO_SLACK_SECRET_ARN")
+    assert config.slack_credentials() == {"bot_token": "", "app_token": "", "team_id": "T0PINNED", "app_id": ""}
+    assert fetched == [arn]
+
+
+def test_the_gateway_with_no_tokens_says_where_to_paste_them(tmp_path, monkeypatch, caplog):
+    for name, value in {
+        "TICO_COMPANY_NAME": "Acme",
+        "TICO_OWNER_EMAIL": "ana@acme.example",
+        "TICO_DB": str(tmp_path / "hub.db"),
+        "TICO_ENVIRONMENT_ID": "acme-test",
+        "TICO_SLACK_GATEWAY_ENABLED": "1",
+        "SLACK_BOT_TOKEN": "xoxb-from-env",  # not read by the gateway
+    }.items():
+        monkeypatch.setenv(name, value)
+    for name in ("TICO_AUTH_PROXY", "TICO_SLACK_SECRET_ARN", "TICO_SLACK_WAIT"):
+        monkeypatch.delenv(name, raising=False)
+    caplog.set_level("ERROR")
+    clients = len(FakeClient.instances)
+    assert G.main([], make_slack=FakeClient) == 1
+    assert len(FakeClient.instances) == clients  # no Slack client was built from the environment pair
+    assert "No Slack tokens: paste them in Tools > Slack or set TICO_SLACK_SECRET_ARN" in caplog.text

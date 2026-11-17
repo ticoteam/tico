@@ -162,41 +162,34 @@ def _emails(value):
 
 
 def slack_credentials(settings=None):
-    """The Slack gateway's tokens, read the way `_secret` reads the decisions keys and nowhere else.
+    """The Slack gateway's tokens from the JSON secret at `TICO_SLACK_SECRET_ARN`
+    (`{"bot_token","app_token","team_id","app_id"}`), read the way `_secret` reads the decisions keys.
 
-    Only `python -m backend.slack_gateway` calls this: the API process never holds a Slack token.
-    Precedence: `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` in the environment, then the JSON secret at
-    `TICO_SLACK_SECRET_ARN` (`{"bot_token","app_token","team_id","app_id"}`), then
-    `/etc/tico/slack` in the same shape for a self-hosted instance. `team_id` and `app_id` from
-    `SLACK_TEAM_ID`/`SLACK_APP_ID` win over the secret's, so the workspace the gateway will
-    accept events from is fixed in the reviewed server configuration.
+    Only `python -m backend.slack_gateway` calls this: the API process never holds a Slack token. Unset, the
+    tokens are empty and the gateway uses the ones sealed by Tools > Slack (`backend/slack_app.py`); they are
+    never read from the environment or a file. `team_id` and `app_id` from `SLACK_TEAM_ID`/`SLACK_APP_ID` win
+    over the secret's, so the workspace the gateway will accept events from is fixed in the reviewed server
+    configuration.
     """
     data = {}
-    bot, app = os.environ.get("SLACK_BOT_TOKEN", "").strip(), os.environ.get("SLACK_APP_TOKEN", "").strip()
-    if not (bot and app):
-        secret = (settings.slack_secret_arn if settings else os.environ.get("TICO_SLACK_SECRET_ARN", "")).strip()
-        if secret:
-            try:
-                import boto3
+    secret = (settings.slack_secret_arn if settings else os.environ.get("TICO_SLACK_SECRET_ARN", "")).strip()
+    if secret:
+        try:
+            import boto3
 
-                value = (
-                    boto3.client("secretsmanager", region_name=os.environ.get("AWS_DEFAULT_REGION") or None)
-                    .get_secret_value(SecretId=secret)
-                    .get("SecretString", "")
-                )
-                data = json.loads(value or "{}")
-            except Exception as exc:
-                # The gateway refuses to start without tokens; say why in its log, never the value.
-                logging.getLogger("tico.slack").error("Slack secret could not be read: %s", type(exc).__name__)
-                data = {}
-        else:
-            try:
-                data = json.loads(Path("/etc/tico/slack").read_text() or "{}")
-            except (OSError, ValueError):
-                data = {}
+            value = (
+                boto3.client("secretsmanager", region_name=os.environ.get("AWS_DEFAULT_REGION") or None)
+                .get_secret_value(SecretId=secret)
+                .get("SecretString", "")
+            )
+            data = json.loads(value or "{}")
+        except Exception as exc:
+            # The gateway refuses to start without tokens; say why in its log, never the value.
+            logging.getLogger("tico.slack").error("Slack secret could not be read: %s", type(exc).__name__)
+            data = {}
     return {
-        "bot_token": bot or str(data.get("bot_token") or "").strip(),
-        "app_token": app or str(data.get("app_token") or "").strip(),
+        "bot_token": str(data.get("bot_token") or "").strip(),
+        "app_token": str(data.get("app_token") or "").strip(),
         "team_id": (
             (settings.slack_team_id if settings else os.environ.get("SLACK_TEAM_ID", ""))
             or str(data.get("team_id") or "")

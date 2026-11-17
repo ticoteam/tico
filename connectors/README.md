@@ -61,7 +61,8 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
    `connections:write` under **Basic Information** (starts with `xapp-`); it opens the Socket
    Mode connection.
 5. Save the bot token in **Tools > Credentials** with **Bot variable name** `SLACK_BOT_TOKEN`, and
-   grant it to the bots that use Slack. Put both tokens in the server's `tico/slack` secret too
+   grant it to the bots that use Slack. For the gateway, paste both tokens in the server's
+   **Tools > Slack**, or put them in the secret named by `TICO_SLACK_SECRET_ARN`
    (`docs/slack-gateway.md`, Running it).
 6. Never paste the token into an Issue, a commit, a Slack message, or a bot prompt.
 7. Invite the bot to every channel the bots read. Public channels can be joined by the bot itself
