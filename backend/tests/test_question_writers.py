@@ -49,6 +49,28 @@ def test_a_bots_ok_shows_what_it_approves_and_a_persons_need_not(c, general):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     with pytest.raises(H.Refused, match="--show"):
         E.add_requirement(c, task_id, BUILDER, "ok", ANA, "OK the note?", seen_version=_seen(c, task_id))
+    # A link, a page that is not there, a version that is not there, or a page on a private task the bot cannot read
+    # approves nothing Tico holds: it is a question.
+    page = X.shown(c, bot="builder")[0]
+    private = H.task_create(c, "human:cara", "Private plan", "Secret", "human:cara", private=True, lint=False)
+    hidden = X.shown(c, bot="reviewer", task_id=private["id"])[0]
+    for shows in (
+        ["https://example.com/launch-note"],
+        ["page:file-not-there"],
+        [page + "@7"],
+        ["file:" + page[5:]],
+        [hidden],
+    ):
+        with pytest.raises(H.Refused, match="--show"):
+            E.add_requirement(
+                c, task_id, BUILDER, "ok", ANA, "OK the note?", shows=shows, seen_version=_seen(c, task_id)
+            )
+    shows = ["https://example.com/launch-note", "file:" + page[5:] + "@1"]
+    ok = E.add_requirement(c, task_id, BUILDER, "ok", ANA, "OK the note?", shows=shows, seen_version=_seen(c, task_id))
+    assert (
+        json.loads(c.execute("SELECT shows FROM requirements WHERE id=?", (ok["requirement_id"],)).fetchone()[0])
+        == shows
+    )
     rid = E.add_requirement(c, task_id, ANA, "ok", BEN, "OK the note", seen_version=_seen(c, task_id))["requirement_id"]
     row = c.execute("SELECT kind, person_id FROM requirements WHERE id=?", (rid,)).fetchone()
     assert (row[0], row[1]) == ("ok", BEN)

@@ -225,6 +225,28 @@ def old_question(c, task_id, by, person, line, choices=None, **settings):
     return E._write_ask(c, E.task(c, task_id), by, "answer", person, line, choices=choices, **settings)
 
 
+def shown(c, title="Launch note", bot="writer", task_id=None):
+    """A page a bot's OK can show (task_engine.shows_a_file): one version of a bot-wide file, or a task's when `task_id`
+    is given. Rows only, no bytes. Returns `["page:<id>"]`, as an OK's shows."""
+    now, blob = H.now(), H.new_id()
+    fid = "file-" + blob.replace("-", "")[:24]
+    c.execute(
+        "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+        (blob, "bot:" + bot, "sha256:" + blob, 1, "page.html", "text/html", now),
+    )
+    c.execute(
+        "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+        "last_activity_at, current_version, task_id) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?,1,?)",
+        (fid, bot, f"task:{task_id}" if task_id else "bot", fid, title, now, now, task_id),
+    )
+    c.execute(
+        "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+        "VALUES (?,1,?,?,1,'page.html','text/html',?,?)",
+        (fid, blob, "sha256:" + blob, "bot:" + bot, now),
+    )
+    return [f"page:{fid}"]
+
+
 def say_done(c, row, by=None):
     """The owner says the stage's work is finished: one `done` answer on the stage's owner_done requirement. The task is
     not moved; call `task_engine.advance` for that."""
