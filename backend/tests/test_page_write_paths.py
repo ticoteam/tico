@@ -157,6 +157,10 @@ def test_document_link_and_archive_changes_reconcile_the_open_approval(api):
     assert unlinked.status_code == 200, unlinked.text
     assert versions(api, tid) == {first: 1}
 
+    assert page(publish(api, text="<p>Revised separately</p>", page=second))["version"] == 2
+    link_spec(api, second, tid)
+    assert versions(api, tid) == {first: 1, second: 2}
+
 
 def test_legacy_document_upload_resubmits_shared_page_for_both_tasks(api):
     first = approval_task(api)

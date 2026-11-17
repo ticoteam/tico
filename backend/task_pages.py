@@ -285,7 +285,7 @@ def attach(
     document = TR.document_of(found)
     if document:
         _as_document(conn, by, task_id, document, file_id)
-        made = _submit_pages(conn, row, found, document, by, ref=(file_id, version), saying=saying)
+        made = _submit_pages(conn, row, found, document, file_id, version, by, saying=saying)
         if made is None:
             _refuse(conn, by, "task_requirement", "No such page", task_id)
         return made
@@ -307,7 +307,6 @@ WRITE_DOCUMENT = (
 
 def submit_linked(conn: "sqlite3.Connection", file_id: str, version: int | None, by: str) -> dict[tuple[str, str], Row]:
     """Refresh each task that uses this page as a document. Without a version, its archive status changed."""
-    ref = (file_id, version) if version is not None else None
     submitted: dict[tuple[str, str], Row] = {}
     for target, document in conn.execute(
         "SELECT target,role FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
@@ -316,13 +315,13 @@ def submit_linked(conn: "sqlite3.Connection", file_id: str, version: int | None,
     ).fetchall():
         task_id = str(target)[5:]
         name = str(document)
-        if made := submit(conn, task_id, name, by, ref=ref):
+        if made := submit(conn, task_id, name, file_id, version, by):
             submitted[(task_id, name)] = made
     return submitted
 
 
 def submit(
-    conn: "sqlite3.Connection", task_id: str, document: str, by: str, *, ref: tuple[str, int] | None = None
+    conn: "sqlite3.Connection", task_id: str, document: str, file_id: str, version: int | None, by: str
 ) -> Row | None:
     """Refresh the open stage's matching approval. A publish supplies its version; a link or archive edit reconciles
     membership. A publish by a bot that neither owns nor holds the task leaves the submission as it is."""
@@ -341,13 +340,13 @@ def submit(
     )
     if found is None:
         return None
-    if ref and by not in (row.get("owner_id"), W.holder(conn, row)) and not core.is_human(by):
+    if version is not None and by not in (row.get("owner_id"), W.holder(conn, row)) and not core.is_human(by):
         return None
     _, context, _ = judged_against(conn, row, found)
     heads: dict[str, str | None] = context.get("heads") or {}
     if not all(heads.values()):
         return None  # a PR not read yet: leave the write in place until the page can be submitted
-    return _submit_pages(conn, row, found, document, by, ref=ref)
+    return _submit_pages(conn, row, found, document, file_id, version, by)
 
 
 def _submit_pages(
@@ -355,27 +354,29 @@ def _submit_pages(
     row: Row,
     found: Row,
     document: str,
+    file_id: str,
+    version: int | None,
     by: str,
     *,
-    ref: tuple[str, int] | None,
     saying: Row | None = None,
 ) -> Row | None:
-    """Pin the live document set before evaluating the task. Link and archive edits preserve existing submissions."""
+    """Pin the live document set before evaluating the task. Link and archive edits leave other submissions alone."""
     from . import task_engine as E
 
     pages = live_documents(conn, row["id"], document)
-    if ref:
-        if ref[0] not in pages:
+    if version is not None:
+        if file_id not in pages:
             return None
-        pages[ref[0]] = ref[1]
+        pages[file_id] = version
     else:
         for page in current_pages(conn, row["visit"]["id"], found["id"]):
-            pages.pop(page["file_id"], None)
+            if page["file_id"] != file_id:
+                pages.pop(page["file_id"], None)
 
     result: Row | None = None
-    for file_id, version in pages.items():
-        selected = ref is not None and file_id == ref[0]
-        made = _pin(conn, row, found, file_id, version, by, (saying or {}) if selected else {}, advance=False)
+    for pid, number in pages.items():
+        selected = pid == file_id
+        made = _pin(conn, row, found, pid, number, by, (saying or {}) if selected else {}, advance=False)
         if selected:
             result = made
     if E.advance(conn, row["id"]) is None:

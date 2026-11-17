@@ -1823,7 +1823,7 @@ class Files:
                 raise Problem("validation", "as requires a task", 422)
             return ""
         task_id = self.auth.resolve_task(c, who, task)
-        if role and role != "related":
+        if role:
             from .task_reads import comment_rights
 
             comment_rights(c, self.auth, who, task_id)

@@ -522,7 +522,7 @@ class Pages:
             if changed and kind == "task" and chosen_role not in ("related", "writer"):
                 from . import task_pages
 
-                task_pages.submit(c, ident, chosen_role, who.actor)
+                task_pages.submit(c, ident, chosen_role, fid, None, who.actor)
             H.event(
                 c, who.actor, "page.unlink" if remove else "page.link", fid, {"target": selected, "role": chosen_role}
             )
