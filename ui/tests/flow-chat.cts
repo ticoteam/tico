@@ -205,7 +205,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     assert.ok(boxes.every(b => b.left >= 0 && b.right <= 390), `the three fit a 390 px phone (${JSON.stringify(boxes)})`);
     assert.ok(boxes.every(b => b.fits), `no label runs out of its button (${JSON.stringify(boxes)})`);
     assert.ok(boxes.every(b => Math.abs(b.top - boxes[0]!.top) <= 2 && b.bottom - b.top >= 44), `one line of 44 px targets (${JSON.stringify(boxes)})`);
-    const [snooze, more] = [await sides.locator('.dc-snzw').boundingBox(), await dialog.locator('.dc-side [data-key] [data-dc="ask-more"]').boundingBox()];
+    const [snooze, more] = [await sides.locator('.dc-snzw:not(.dc-askw)').boundingBox(), await dialog.locator('.dc-side [data-key] [data-dc="ask-more"]').boundingBox()];
     assert.ok(snooze && more && snooze.y >= boxes[0]!.bottom - 1 && more.y >= boxes[0]!.bottom - 1 && more.x > snooze.x, `Snooze and ⋯ take the line under them, ⋯ last (${JSON.stringify([snooze, more])})`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, 'no sideways scroll');
     await themed('ok-typed-phone');
