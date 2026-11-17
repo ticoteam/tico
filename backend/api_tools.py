@@ -21,8 +21,10 @@ keys, levels and settings. Mailboxes, Tico's numbers and addresses and Tico's ow
 
 A check is one authenticated GET to the tool's `check_path` (its known service's when it has none:
 tool_services.check_path_for) with each stored key: 2xx is Working, 403 Works (limited) (the vendor knows the key, the
-path needs a scope it lacks), only 401 Key rejected, anything else (a timeout, a refused address, a 500) Check failed.
-An id stored as a key is never sent as one. A proxied tool's real calls (`call_health`, over CALLS_WINDOW) outrank its
+path needs a scope it lacks), a 401 whose reply says the key lacks a permission for the path (`_missing_scope`) Works
+(limited) too, only any other 401 Key rejected, anything else (a timeout, a refused address, a 500) Check failed.
+An id stored as a key (`tool_settings.known_name`) is never sent as one, and a status never comes from a check that
+would not run today (`_checked_today`). A proxied tool's real calls (`call_health`, over CALLS_WINDOW) outrank its
 check: a 2xx makes it Working whatever the check said, and only REJECTED_AFTER 401s in a row, none 2xx since, make it
 Key rejected. The scheduler checks every API tool with a check path every CHECK_EVERY on a background thread, its keys
 on the proxy or on computers alike (the server holds every value); "Check now" runs one at once. A check sends
@@ -64,6 +66,7 @@ import re
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
+from typing import NamedTuple
 
 from fastapi import Query, Request
 from pydantic import ConfigDict, Field, SecretStr
@@ -98,6 +101,19 @@ RESULTS = ("sent", "refused", "failed", "use")
 CALLS_WINDOW = timedelta(hours=24)  # real calls this recent say whether a proxied tool works (`call_health`)
 REJECTED_AFTER = 3  # 401s in a row on real calls, none 2xx since, before a tool reads Key rejected
 LIMITED = "Works (limited)"  # a check that got 403: the vendor knows the key, this path needs a scope it lacks
+SCOPE_READ = 2048  # bytes of a 401's reply read to tell a restricted key from a bad one (`_missing_scope`)
+# What a 401's reply (lowercased) says when the key is known and lacks a permission for the path: ElevenLabs'
+# restricted keys answer missing_permissions, and RFC 6750 bearer challenges answer insufficient_scope.
+SCOPE_SAYS = (
+    "missing_permissions",
+    "missing the permission",
+    "missing permission",
+    "insufficient_scope",
+    "insufficient scope",
+    "insufficient permission",
+    "missing_scope",
+    "missing scope",
+)
 CHECK_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,299}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # connections.py's statuses, as the tones and words Tools shows them in.
@@ -269,9 +285,23 @@ def _check_text(ok, status_code, service=""):
 
 
 def _limited(tool, row):
-    """A check row that got a 403 from an API (not an MCP server's initialize) whose service does not answer a bad key
-    with 403: the key is accepted, its scope limited. Rows stored as failed before 403 meant this read the same."""
-    return row["status_code"] == 403 and not _field(tool, "mcp_url") and not TS.rejects(tool["service"], 403)
+    """A check row that found the key accepted but a scope of this path missing: a 401 whose reply said so (stored as
+    LIMITED), or a 403 from an API (not an MCP server's initialize) whose service does not answer a bad key with 403.
+    Rows stored as failed before 403 meant this read the same."""
+    if _field(tool, "mcp_url"):
+        return False
+    if row["ok"] and row["detail"] == LIMITED:
+        return True
+    return row["status_code"] == 403 and not TS.rejects(tool["service"], 403)
+
+
+def _checked_today(tool, key):
+    """Whether a check would send this key today: never an id (`tool_settings.known_name`), and only on a tool it can
+    reach, an MCP server or an address with a check path (`check_path_of`). A check row of a key no check sends any more
+    (an id, a tool whose address or path went) says nothing about the key now."""
+    if tool_settings.known_name(key["env"]):
+        return False
+    return bool(_field(tool, "mcp_url")) or bool(tool["base_url"] and check_path_of(tool))
 
 
 def call_health(c, tool_id, now=None):
@@ -315,8 +345,9 @@ def status(tool, keys, checks, today=None, calls=None):
     `call_health`: REJECTED_AFTER 401s in a row); a refused sign-in; a failed check, unless a real call got a 2xx
     within CALLS_WINDOW (a check's path may need a scope the key's calls do not); an expired key; then a key expiring
     within EXPIRING_DAYS (Needs you, not broken); then Working once a real call worked or every stored key passed its
-    last check (Works (limited) when a check got 403), else Not checked. How its key reaches runs (`delivery`) is never
-    one of them."""
+    last check (Works (limited) when a check got 403), else Not checked. Only the checks that would run today count
+    (`_checked_today`): an id stored as a key, or a tool whose check path went, is never Key rejected from an old check.
+    How its key reaches runs (`delivery`) is never one of them."""
     today = today or _today()
     stored = [k for k in keys if k["ciphertext"] is not None]
     if not stored:
@@ -324,7 +355,7 @@ def status(tool, keys, checks, today=None, calls=None):
         return {"tone": "fail", "text": "Not signed in" if _field(tool, "mcp_oauth") else "No key", "needs_you": True}
     if calls == "rejected":
         return {"tone": "fail", "text": "Key rejected", "needs_you": True}
-    last = [checks.get(k["id"]) for k in stored]
+    last = [checks.get(k["id"]) for k in stored if _checked_today(tool, k)]
     if _field(tool, "auth_template"):
         last = [r for r in last if r is not None] or [None]  # a template's keys are checked together, on one row
     failed = [r for r in last if r is not None and not r["ok"] and not _limited(tool, r)]
@@ -346,7 +377,7 @@ def status(tool, keys, checks, today=None, calls=None):
         }
     if calls == "working":
         return {"tone": "ok", "text": "Working", "needs_you": False}
-    if all(r is not None for r in last):
+    if last and all(r is not None for r in last):
         limited = any(_limited(tool, r) for r in last)
         return {"tone": "ok", "text": LIMITED if limited else "Working", "needs_you": False}
     return {"tone": "idle", "text": "Not checked", "needs_you": False}
@@ -865,9 +896,26 @@ def activity(c, who, tool_id, admins, auth, cursor="", limit=50, result=""):
 # ---- checks
 
 
+class Reply(NamedTuple):
+    """A check's answer: the status code, and whether a 401's reply says the key lacks a permission for the path."""
+
+    status_code: int
+    missing_scope: bool = False
+
+
+def _missing_scope(response):
+    """Whether a 401 says the key is known but lacks a permission or scope for this path (SCOPE_SAYS: a restricted key,
+    not a bad one). Only the WWW-Authenticate challenge and the first SCOPE_READ bytes of the reply are read, and
+    nothing of them is kept."""
+    said = response.headers.get("www-authenticate", "") + " "
+    said += next(response.iter_bytes(chunk_size=SCOPE_READ), b"").decode("utf-8", "replace")
+    said = said.lower()
+    return any(phrase in said for phrase in SCOPE_SAYS)
+
+
 def send_check(url, headers, params):
-    """One GET; its status code. Tests replace it. Only to a public https address, pinned to the IP it resolved to,
-    no redirects followed, no proxy from the environment, at most CHECK_TIMEOUT seconds."""
+    """One GET: a `Reply`. Tests replace it. Only to a public https address, pinned to the IP it resolved to, no
+    redirects followed, no proxy from the environment, at most CHECK_TIMEOUT seconds."""
     import httpx
     from . import egress
 
@@ -879,7 +927,8 @@ def send_check(url, headers, params):
         with client.stream(
             "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
         ) as response:
-            return response.status_code
+            code = response.status_code
+            return Reply(code, code == 401 and _missing_scope(response))
 
 
 def _check_one(tool, key, secret, auth=None):
@@ -901,11 +950,14 @@ def _check_one(tool, key, secret, auth=None):
     }
     url = tool["base_url"].rstrip("/") + check_path_of(tool)
     try:
-        code = send_check(url, headers, params)
+        reply = send_check(url, headers, params)
     except egress.Blocked:
         return False, None, "Check failed: address refused"
     except Exception as exc:  # noqa: BLE001 - every network failure is one answer: the check failed
         return False, None, "Check failed: " + ("timed out" if "Timeout" in type(exc).__name__ else "no answer")
+    code = reply.status_code
+    if code == 401 and reply.missing_scope:  # a restricted key: known to the vendor, this path needs another permission
+        return True, code, LIMITED
     rejected = TS.rejects(tool["service"], code)
     ok = 200 <= code < 300 or (code == 403 and not rejected)  # a 403: the key is known, the path needs another scope
     return ok, code, _check_text(ok, code, tool["service"]) if ok or rejected else f"Check failed: {code}"
@@ -927,10 +979,13 @@ def check_tool(store, vault, tool_id):
             mcp = False
         spec = None if mcp else tool_templates.spec_of(tool)
         together = tool_templates.check_auth(c, vault, tool, spec) if spec and spec.get("ways") else None
+        held = [k for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+        # An id stored as a key (TWILIO_ACCOUNT_SID, POSTHOG_PROJECT_ID) is no key to the vendor, whatever its value
+        # looks like: sent as one it would read Key rejected. It is never decrypted for a check.
         stored = (
             []
             if mcp or together
-            else [(k, vault.cipher.decrypt(c, k)) for k in _keys(c, tool_id) if k["ciphertext"] is not None]
+            else [(k, vault.cipher.decrypt(c, k)) for k in held if not tool_settings.known_name(k["env"])]
         )
     if mcp:  # initialize and tools/list, with a sign-in's access token when it signs in
         return mcp_connect.check(store, vault, tool_id)
@@ -938,11 +993,9 @@ def check_tool(store, vault, tool_id):
         key, headers, params = together
         return _record_checks(store, tool_id, [(key, *_check_one(tool, key, "", (headers, params)))])
     if not stored:
+        if held:
+            raise Problem("check", f"{tool['name']} holds only ids, no key to check", 409)
         raise Problem("check", f"{tool['name']} has no stored key. Add one in Tools > {tool['name']} > Keys", 409)
-    # An id stored as a key (TWILIO_ACCOUNT_SID) is no key to the vendor: sent as one it would read Key rejected.
-    stored = [(k, secret) for k, secret in stored if not tool_settings.is_setting(k["env"], secret)]
-    if not stored:
-        raise Problem("check", f"{tool['name']} holds only ids, no key to check", 409)
     results = [(key, *_check_one(tool, key, secret)) for key, secret in stored]
     stored = None  # the values leave scope before anything is written
     return _record_checks(store, tool_id, results)

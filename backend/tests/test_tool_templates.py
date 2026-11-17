@@ -201,7 +201,7 @@ def test_a_template_tools_check_sends_its_fields_together_on_one_row(api, monkey
 
     setup(api)
     sent = []
-    monkeypatch.setattr(api_tools, "send_check", lambda url, h, p: sent.append((url, h, p)) or 200)
+    monkeypatch.setattr(api_tools, "send_check", lambda url, h, p: sent.append((url, h, p)) or api_tools.Reply(200))
     tid = post(api, "api-tools", {"name": "Twilio"})["id"]
     post(api, f"api-tools/{tid}/paste", {"text": f"{SID}\n{AUTH_TOKEN}"})
     r = post(api, f"api-tools/{tid}/check", {})

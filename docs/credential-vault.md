@@ -54,10 +54,13 @@ the proxy's Read rules; a tool with no API address cannot be held to reads, and 
 service's own address) with each stored key, every 30 minutes for every tool with an address and a check path, its keys
 on the proxy or on computers alike (the server holds every value, and a check sends a key only to the tool's own public
 https address). A 2xx is **Working**; a 403 is **Works (limited)**, not a problem: the vendor knows the key and the
-path needs a scope the key was not given (a restricted ElevenLabs or Calendly key); only a 401 is **Key rejected**
-(and the 403 a known service answers a bad key with: Vercel's);
-anything else is **Check failed**. A proxied tool's real calls outrank its check: any 2xx in the last 24 hours makes it
-Working whatever the check said, and only 3 calls in a row answered 401, with no 2xx since, make it Key rejected.
+path needs a scope the key was not given (a restricted ElevenLabs or Calendly key). So is a 401 whose reply says a
+permission is missing (`missing_permissions`, `insufficient_scope`, read from the WWW-Authenticate challenge and the
+first 2 KB of the reply, nothing kept). Any other 401 is **Key rejected** (and the 403 a known service answers a bad key
+with: Vercel's); anything else is **Check failed**. A proxied tool's real calls outrank its check: any 2xx in the last
+24 hours makes it Working whatever the check said, and only 3 calls in a row answered 401, with no 2xx since, make it
+Key rejected. A status counts only the checks that would run today: an id stored as a key is never checked, and a tool
+with no address or check path reads from its real calls alone, so an old check row never keeps it Key rejected.
 
 **Ids are not keys.** A variable whose name says id (`_PROJECT_ID`, `_ACCOUNT_ID`, `_ACCOUNT_SID`, `_ORG_ID`,
 `_WORKSPACE_ID`, `_TEAM_ID`, `_CUSTOMER_ID`) and whose value is one short word that does not look like a credential is a
