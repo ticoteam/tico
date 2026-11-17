@@ -39,6 +39,7 @@ def _page(c, eng, file_id, item_versions, by, verdict="met"):
     rid = c.execute(
         "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
     ).fetchone()[0]
+    X.stub_document(c, eng, rid, file_id, by, 1)
     c.execute(
         "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "rubric_hash, created_at) VALUES (?,?,?,?,1,?,?,'',?)",

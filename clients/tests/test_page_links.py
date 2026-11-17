@@ -38,7 +38,7 @@ def fake_client(monkeypatch):
 
         def request(self, method, path, body=None, key=None, raw=None):
             sent.append((method, path, raw, None))
-            return {"file_id": "file-1", "version": 1}
+            return {"page": {"file_id": "file-1", "version": 1}}
 
     monkeypatch.setattr(remotecli, "Client", Client)
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
@@ -171,11 +171,12 @@ def test_task_attach_doc_is_refused_with_a_note_and_otherwise_a_page(monkeypatch
         remotecli.run(hubcli.parser().parse_args(["task", "attach", "T1", "spec.html", "--doc", "Spec", "--note", "x"]))
     assert refused.value.detail == DOCUMENT_NOTE
     assert sent == []
-    remotecli.run(hubcli.parser().parse_args(["task", "attach", "T1", "spec.html", "--doc", "Spec"]))
+    result = remotecli.run(hubcli.parser().parse_args(["task", "attach", "T1", "spec.html", "--doc", "Spec"]))
     method, target, _raw, _ = sent[-1]
     query = parse_qs(urlsplit(target).query)
     assert (method, urlsplit(target).path) == ("POST", "/api/v2/pages")
     assert query["task"] == ["T1"] and query["as"] == ["Spec"]
+    assert (result["file_id"], result["version"], result["document"]) == ("file-1", 1, "Spec")
 
 
 def test_page_show_keeps_its_json_output_with_links_and_writers(monkeypatch, capsys):

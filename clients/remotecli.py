@@ -516,13 +516,13 @@ def run(args, who=None):
         if sub == "attach":
             if getattr(args, "doc", None):  # a document is a page: the request `tico page publish --task --as` sends
                 from clients import hubtools
-                from clients.commands._shared import DOCUMENT_NOTE
+                from clients.commands._shared import DOCUMENT_NOTE, document_attachment
 
                 if getattr(args, "note", None) is not None:
                     raise APIError("validation", DOCUMENT_NOTE, 422)
                 fields = {"path": args.file, "task": args.id, "as": args.doc}
                 fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-                return hubtools.pages_publish_path(client, fields)
+                return document_attachment(hubtools.pages_publish_path(client, fields), args.doc)
             if getattr(args, "req", None):
                 return via_tool(client, args, page=args.file)
             path = Path(args.file)

@@ -576,6 +576,7 @@ KEEP = (
             "task_check_models",
             "task_delegations",
             "history_events",
+            "page_links",
             "task_documents",
             "task_file_reviews",
             "task_links",

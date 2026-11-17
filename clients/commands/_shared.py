@@ -187,6 +187,13 @@ def ambiguous_page(publish):
         ) from None
 
 
+def document_attachment(result, document):
+    """Keep the task attach shortcut's file id and version alongside the published page."""
+    if page := result.get("page"):
+        return {**result, "file_id": page["file_id"], "version": page["version"], "document": document}
+    return result
+
+
 def text_file(path):
     """A flag's type: the text a file holds (`-` for standard input), or a usage error that says why not."""
     import argparse

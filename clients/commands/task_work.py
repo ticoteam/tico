@@ -26,6 +26,7 @@ from clients.commands._shared import (
     _uploaded,
     _visuals,
     ambiguous_page,
+    document_attachment,
     text_file,
 )
 from clients.commands._requester import _as_person, _asked
@@ -704,7 +705,7 @@ def _document(api, args):
         body["text"] = args["text"]
     else:
         raise ValueError("Send the document's HTML as text, or path to an .html file")
-    return ambiguous_page(lambda: api.post("pages", body, key=_key(args)))
+    return document_attachment(ambiguous_page(lambda: api.post("pages", body, key=_key(args))), args["document"])
 
 
 @tool(
