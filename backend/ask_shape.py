@@ -4,7 +4,8 @@ shaped ask costs nothing and nothing is written.
 
 Every ask a bot puts to a person, a ❓ message or an OK, whichever way it is made, has a shape the server checks
 (`line_refusal`; H.task_ask and question_marks.mark run it on every path, the routes before the rule check's call): its
-first line is short and says what is asked (a list of questions may follow on the lines after it), it stands on its
+first line is short and says what is asked (every question to that person goes in the one ask, numbered on the lines
+after it: a bot's new ❓ replaces its open one), it stands on its
 own (nothing pointing at text the person cannot see from the ask, such as "the comment above"), it is words (a line
 of one letter, a lone ❓ or a number is a placeholder that asks nothing), and it carries no file
 paths, hashes, ids or code. It is a check in code, not an instruction, so nothing a bot was told overrides it. Whether
@@ -29,8 +30,8 @@ LETTER = re.compile(r"[^\W\d_]")
 
 # What a line that breaks the ask's shape is told, each one sentence the bot can act on.
 SHORT_LINE = (
-    f"Start with one short line, at most {LINE_MAX} characters, that says what you need from them; a list of "
-    "questions may follow on the lines after it."
+    f"Start with one short line, at most {LINE_MAX} characters, that says what you need from them; put every "
+    "question to them in this one ask, numbered on the lines after it."
 )
 PLACEHOLDER = (
     'Ask in words: "{line}" says nothing they can answer. The first line says what you need from them, in a few words.'

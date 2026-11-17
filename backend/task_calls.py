@@ -214,6 +214,10 @@ def task_done(
         _refuse(conn, actor, "not-found", "No such task")
     if row["status"] == "done":
         return row
+    if row["status"] == "open":
+        from . import question_marks
+
+        question_marks.refuse_ending(conn, actor, task_id)  # a bot's own open ❓ here waits for its reply
     own = next((s for s in R.standings(conn, row) if s.requirement["kind"] == "owner_done" and not s.met), None)
     pipe: Row = row.get("pipeline") or {}
     says = is_human(actor) or actor in (row.get("owner_id"), pipe.get("manager_id"), SYSTEM)
@@ -520,6 +524,10 @@ def task_answer(
 
     row = _open(conn, actor, task_id, work=False)
     _owners_done_is_work(conn, actor, row, requirement_id)
+    if value == "done":  # the owner's own done is `task_done` by another road
+        from . import question_marks
+
+        question_marks.refuse_ending(conn, actor, task_id)
     with task_effects.because(actor):
         return A.answer(
             conn,

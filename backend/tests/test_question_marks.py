@@ -555,3 +555,70 @@ def test_the_persons_reply_wakes_no_other_bot_and_a_defer_they_chose_stays(api):
     r = api.post(f"/api/v2/tasks/{task['id']}/comments", json=later, headers=headers("cara-test"))
     assert r.status_code == 200 and r.json()["sent_as"]["delivery"] == "defer" and not r.json()["woke"]
     assert _queued(api) == []
+
+
+# ---- a replaced ❓ is said, and a bot does not end a task over its own open ❓ ---------------------------------------
+
+
+def test_a_new_question_mark_names_the_open_one_it_replaced(c, general):
+    """The earlier ❓ leaves the person's Needs you: the bot is told which, so it asks everything in one."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    first = _ask(c, task_id)
+    assert first["replaced"] is None and Q.replaced_warning(first) is None
+    second = _ask(c, task_id, text="Which tone should the note take?")
+    assert second["replaced"]["id"] == first["id"]
+    assert Q.public(second)["replaced"]["line"] == ASKED
+    assert ASKED in (Q.replaced_warning(second) or "")
+    other = X.new_task(c, ANA, "Order the paper", assignee=BUILDER)["id"]
+    assert _ask(c, other)["replaced"] is None  # another task's chat: nothing replaced
+
+
+def test_the_question_route_warns_the_bot_when_its_new_question_mark_replaced_one(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    r = ask_on(api, task)
+    assert r.status_code == 200 and "warning" not in r.json(), r.text
+    first = r.json()["question"]
+    r = ask_on(api, task, text="Which tone should the note take?")
+    assert r.status_code == 200, r.text
+    assert r.json()["question"]["replaced"]["id"] == first["id"]
+    assert ASKED in r.json()["warning"]
+
+
+def _version(c, task_id):
+    return E.task(c, task_id)["version"]
+
+
+def test_a_bot_does_not_finish_move_on_or_close_its_task_while_its_question_mark_is_open(c, general):
+    """Ending the task clears the ❓ before the person saw it: the bot waits for the reply or takes the question back."""
+    from backend import threads
+
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    mark = _ask(c, task_id)
+    from backend import task_requirements as R
+
+    [own] = [s.requirement["id"] for s in R.standings(c, E.task(c, task_id)) if s.requirement["kind"] == "owner_done"]
+    for end in (
+        lambda: H.task_done(c, BUILDER, task_id, "Written", _version(c, task_id)),
+        lambda: H.task_answer(c, BUILDER, task_id, own, "done", None, _version(c, task_id)),
+        lambda: H.task_move(c, BUILDER, task_id, "next", "Moving on", _version(c, task_id)),
+        lambda: H.task_close(c, BUILDER, task_id, "Not needed", _version(c, task_id)),
+    ):
+        with pytest.raises(H.Refused) as refused:
+            end()
+        assert refused.value.rule == "task_question_open"
+        assert f"tico thread delete {mark['message_id']}" in refused.value.detail  # the way to take it back
+    assert E.task(c, task_id)["status"] == "open" and len(_open(c, task_id)) == 1
+    # Another bot's open ❓ does not hold this one, and taking its own back lets it finish.
+    threads.delete_message(c, BUILDER, mark["message_id"])
+    assert _open(c, task_id) == []
+    _ask(c, task_id, bot=MANAGER)
+    H.task_done(c, BUILDER, task_id, "Written", _version(c, task_id))
+    assert E.task(c, task_id)["status"] == "done"
+
+
+def test_a_person_finishes_a_task_with_a_bots_question_mark_open(c, general):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    _ask(c, task_id)
+    H.task_done(c, ANA, task_id, "Written", _version(c, task_id))
+    assert E.task(c, task_id)["status"] == "done" and _open(c, task_id) == []

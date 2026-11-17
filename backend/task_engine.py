@@ -1084,6 +1084,10 @@ def move(
     target, kind = _target(conn, by, row, to)
     if not target or kind is None:
         return row
+    if kind in ("forward", "done", "closed") and not cascade:
+        from . import question_marks
+
+        question_marks.refuse_ending(conn, by, task_id)  # a bot's own open ❓ here waits for its reply
     held = shut_out(conn, row, target)
     if held:
         _refuse(

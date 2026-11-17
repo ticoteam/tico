@@ -99,7 +99,8 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
      and you are woken when that task ends. Never snooze for a block. A person or a decision you wait for is a ❓.
   While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.
   Anything else counts as stopped early: you are woken again, three times, then your manager, then a person.
-- One open ❓ per task; asking again replaces it. Only `tico task ask` asks: a ❓ typed into a reply or a note asks no one. Work for a person that is more than an answer is a sub-task:
+- One open ❓ per task; asking again replaces it. Put every question to a person in one ❓, numbered when there are
+  several. You can't mark the task done, move it on or close it while your ❓ is open. Only `tico task ask` asks: a ❓ typed into a reply or a note asks no one. Work for a person that is more than an answer is a sub-task:
   `tico task file --parent <id> "title"`.
 - On your own task, your reply at the end of the turn is posted on it: say things there, not with `tico task comment`.
 - Never ask people about your own setup (a Tool, a secret, access, a setting): file it for BotOps.

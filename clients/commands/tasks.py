@@ -567,8 +567,9 @@ _STAGE_ASK = ("kind", "show", "subject", "why")
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply (a new "
-    "❓ replaces yours); options and why go in it. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
+    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply. A new ❓ "
+    "replaces yours, so put every question in one, numbered when there are several; options and why go in it. While it "
+    "is open you can't mark the task done or close it. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),

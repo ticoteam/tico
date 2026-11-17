@@ -123,7 +123,10 @@ tico chat ask --to <person> "Should the launch note go out on Friday?"        # 
 
 - Only a bot marks, only its own message, and only for a person who can read that chat. The message follows the "Asks
   to a person" rule like any ask.
-- A bot has one open ❓ per chat: a new one replaces it.
+- A bot has one open ❓ per chat: a new one replaces it, and the bot is told so. It puts every question to a person in
+  one ❓, numbered when there are several.
+- A bot can't say done, move its task on or close it while its own ❓ there is open: it waits for the reply, or takes
+  the question back first by deleting its message (`tico thread delete <message id>`).
 - It clears when that person replies in the chat (or their Assistant does, on their word), when the task is done,
   closed, merged or deleted, or when the message is deleted.
 - While it is open the never-stuck ladder does not chase the bot. Once the person replies, the reply is progress and

@@ -287,7 +287,7 @@ def register(
             "askOnTaskChat",
             "A bot's ❓: comment on the task's chat and mark it as needing one person's reply (`to`, `text`). It is "
             "listed in their Needs you until they reply there or the task ends; no task is filed and nothing else is "
-            "sent. One open ❓ per bot per chat: a new one replaces the old. Bots only",
+            "sent. One open ❓ per bot per chat: a new one replaces the old, and `warning` says so. Bots only",
             "CommentResult",
         ),
     )
@@ -326,7 +326,7 @@ def register(
         if not said.get("id"):
             return done
         mark = question_marks.mark(c, who.actor, said["id"], to)
-        return {**done, "question": question_marks.public(mark)}
+        return question_marks.with_warning({**done, "question": question_marks.public(mark)}, mark)
 
     def rule_question_audience(c, bot, replay):
         row = auth.task(c, bot, auth.resolve_task(c, bot, replay["task"]))

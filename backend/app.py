@@ -2840,7 +2840,7 @@ def create_app(settings=None):
         if not message.get("id"):
             return message
         mark = question_marks.mark(c, who.actor, str(message["id"]), sent.to)
-        return {**message, "question": question_marks.public(mark)}
+        return question_marks.with_warning({**message, "question": question_marks.public(mark)}, mark)
 
     @app.post(
         "/api/v2/questions/{mid}/give",
