@@ -7,6 +7,7 @@ text stays on the run.
 Synthetic rows only: the fictional company's bots `ops` and `cpo`, and Ana."""
 
 import importlib
+import json
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from backend import wake_rules
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner
+from backend.tests.helpers.events import live  # noqa: F401 (the fixture)
+from backend.tests.helpers.events import ready as ready_stream
 
 ANA = "human:ana"
 STOPPED = "You stopped before this task was finished. Try 2 of 3."
@@ -129,6 +132,34 @@ def test_the_reply_to_a_persons_own_act_still_shows(api):
     reply = _finish(api, machine, attempt, "On it: adding the button next to Export PDF.")
     assert reply
     assert "On it: adding the button next to Export PDF." in _people_read(api, task["id"], room)["thread"]
+
+
+def test_the_run_that_finishes_the_task_still_reports_to_the_person(api):
+    machine = _start(api)
+    task, room = _task(api)
+    _settle(api)
+    _poke(api, task["id"])
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "fixture-thread"}, machine["token"])
+    post(api, f"tasks/{task['id']}/done", {"version": attempt["task"]["version"]}, attempt["token"])
+    body = {"outcome": "completed", "last_seq": 0, "text": "Done: the button is live."}
+    assert post(api, f"attempts/{attempt['id']}/complete", body, machine["token"], key="done")["message"]
+    assert "Done: the button is live." in _people_read(api, task["id"], room)["thread"]
+
+
+def test_the_live_stream_brings_a_person_neither_the_notice_nor_a_quote_of_it(api, live):
+    machine = _start(api)
+    task, room = _task(api)
+    _settle(api)
+    ana = live("ana-test", "?topics=messages")
+    ready_stream(ana)
+    _poke(api, task["id"])
+    attempt = claim(api, machine)
+    said = "@ana should the button sit left of Export PDF?"
+    _finish(api, machine, attempt, said)
+    shown = ana.until(lambda e: e["event"] == "messages" and (e["data"].get("message") or {}).get("body") == said)
+    assert shown["data"]["message"]["reply_to"] is None
+    assert STOPPED not in json.dumps(ana.seen)
 
 
 # ----------------------------------------------------------------------------- what was already written
