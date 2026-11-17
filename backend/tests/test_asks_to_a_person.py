@@ -160,6 +160,47 @@ def test_a_question_that_stands_on_its_own_is_asked_and_a_list_may_follow_its_fi
     assert refusals(api) == []
 
 
+@pytest.mark.parametrize("text", ["x", "❓", "42", "x\nShould the launch note go out on Friday?"])
+def test_a_placeholder_question_is_refused_and_nothing_is_marked(ruled, text):
+    """A line of one letter, a lone ❓ or a number asks nothing: a ❓ on it would sit in a Needs you as "x"."""
+    api, judge = ruled
+    task = task_for_ops(api)
+    r = question(api, task, text)
+    assert 400 <= r.status_code < 500, r.text
+    assert refusal_of(r)[0] in ("task_ask_shape", "lint"), r.text
+    assert judge.calls == []
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(H.Refused):
+            Q.ask(c, "bot:ops", task["id"], "human:ana", text)
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 0
+
+
+def test_an_older_clients_question_on_the_asks_route_is_asked_as_a_mark_with_its_parts_in_its_words(ruled):
+    """A computer's `tico` from before ❓ marks sends a question to the asks route with its why and choices: it is
+    asked as a ❓, never refused with the command the bot just ran. An OK takes no choices, and a person asks no ❓."""
+    api, _ = ruled
+    task = task_for_ops(api)
+    parts = {
+        "line": LINE,
+        "why": "It goes out on Friday.",
+        "choices": ["Plain", "Playful"],
+        "details": ["Reads like a memo", ""],
+        "recommend": "Plain",
+    }
+    r = ask(api, task, parts)
+    assert r.status_code == 200, r.text
+    mark = r.json()["question"]
+    assert (mark["line"], mark["person_id"]) == (LINE, "human:ana")
+    [said] = sql(api, "SELECT body FROM messages WHERE id=?", (mark["message_id"],))
+    assert said["body"] == f"{LINE}\n\nIt goes out on Friday.\n\n- Plain: Reads like a memo\n- Playful\nI'd pick Plain."
+
+    assert ask(api, task, {"line": "x"}).status_code in (409, 422), "its words are checked as any ❓'s are"
+    assert ask(api, task, {**OK, "choices": ["Yes", "No"]}).status_code == 422
+    other = post(api, "tasks", {"owner": "ana", "title": "Pick the launch tone", "body": "Two drafts."})
+    assert ask(api, other, {"line": LINE}, to="ben", token="ana-test").status_code == 403
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 1
+
+
 def test_every_path_that_asks_a_person_checks_the_shape_whatever_the_bot_was_told(ruled):
     """H.task_ask is where every ask on a task is made (the asks routes, OKs, browser help, built-in bots) and
     question_marks.ask where every ❓ on a task's chat is, so a path that skips the route's early check is refused

@@ -5,7 +5,8 @@ shaped ask costs nothing and nothing is written.
 Every ask a bot puts to a person, a ❓ message or an OK, whichever way it is made, has a shape the server checks
 (`line_refusal`; H.task_ask and question_marks.mark run it on every path, the routes before the rule check's call): its
 first line is short and says what is asked (a list of questions may follow on the lines after it), it stands on its
-own (nothing pointing at text the person cannot see from the ask, such as "the comment above"), and it carries no file
+own (nothing pointing at text the person cannot see from the ask, such as "the comment above"), it is words (a line
+of one letter, a lone ❓ or a number is a placeholder that asks nothing), and it carries no file
 paths, hashes, ids or code. It is a check in code, not an instruction, so nothing a bot was told overrides it. Whether
 the words are plain beyond that (no Markdown) is the team's rule "Asks to a person" (org_rules.ASKS_TO_A_PERSON), judged
 by the rule check in the call it already makes. What a bot's OK shows is the engine's to check: a page or file version
@@ -22,10 +23,17 @@ _text: Any = _hubdb_text  # untyped module, through Any as in stage_rules.py
 # The ask's first line: the row in the person's Flow, read on its own.
 LINE_MAX = 140
 
+# The fewest letters a first line needs: a mark, a number or one letter ("x") asks nothing; "OK?" does.
+LETTERS_MIN = 2
+LETTER = re.compile(r"[^\W\d_]")
+
 # What a line that breaks the ask's shape is told, each one sentence the bot can act on.
 SHORT_LINE = (
     f"Start with one short line, at most {LINE_MAX} characters, that says what you need from them; a list of "
     "questions may follow on the lines after it."
+)
+PLACEHOLDER = (
+    'Ask in words: "{line}" says nothing they can answer. The first line says what you need from them, in a few words.'
 )
 UNSEEN = 'Write what you ask in the ask itself: they can\'t see what "{phrase}" points at.'
 PLAIN = "Say it in plain words, with detail in a page you show: {problems}."
@@ -55,6 +63,8 @@ def line_refusal(line: str | None) -> str | None:
     first = text.split("\n", 1)[0].strip()
     if not first or len(first) > LINE_MAX:
         fixes.append(SHORT_LINE)
+    elif len(LETTER.findall(first)) < LETTERS_MIN:
+        fixes.append(PLACEHOLDER.format(line=first))
     pointer = POINTS_ELSEWHERE.search(text)
     if pointer:
         fixes.append(UNSEEN.format(phrase=pointer.group(0)))

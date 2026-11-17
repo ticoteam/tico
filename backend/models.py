@@ -417,14 +417,22 @@ class TaskWhy(Contract):
 
 
 class TaskAsk(Contract):
-    """Ask a person on the task for an OK of what it `show`s (H.task_ask). `answer`, a question, is refused with how to
-    ask one now: a message marked ❓ (backend/question_marks.py)."""
+    """Ask a person on the task for an OK of what it `show`s (H.task_ask). `answer`, a question, is a message marked ❓
+    now (backend/question_marks.py): a bot's is asked as one, its line first and the older fields below as words in it,
+    so a `tico` from before ❓ marks (one a computer runs until it updates) still asks; anyone else's is refused."""
 
     to: ID
     line: Annotated[str, Field(min_length=1, max_length=300)]
     kind: Literal["answer", "ok"] = "answer"
     show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
     version: Version | None = None
+    # A question's parts as clients before ❓ marks sent them, as words in its ❓. An OK refuses choices and leaves out
+    # `why` and `title`, which those clients sent with every ask.
+    choices: list[Annotated[str, Field(min_length=1, max_length=60)]] | None = Field(default=None, max_length=6)
+    why: Annotated[str, Field(max_length=200)] | None = None
+    details: list[Annotated[str, Field(max_length=160)]] | None = Field(default=None, max_length=6)
+    recommend: Annotated[str, Field(max_length=60)] | None = None
+    title: Annotated[str, Field(max_length=60)] | None = None
 
 
 class TaskOkGive(Contract):
