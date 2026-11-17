@@ -77,8 +77,8 @@ def run(store, onboarding, telemetry, vault=None):
             task_depends.on_release(c, releases.version(), settings.release_repo)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("depends_released", exc)
-    # Questions written before a question was a ❓ become a ❓ from the bot that asked them (backend/old_questions.py).
-    # Idempotent: what it carried over is withdrawn, so a later start finds nothing.
+    # Questions written before a question was a ❓ are taken back, and the bot that asked each is woken to ask again with
+    # a ❓ (backend/old_questions.py). Idempotent: what it took back is withdrawn, so a later start finds nothing.
     try:
         from . import old_questions
 
