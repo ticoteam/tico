@@ -9,7 +9,10 @@ chased while it waits on its own open ❓ (waiting_on.of).
 - On a task, a bot's ❓ does not repeat what the stage's people-only page asks already (its message naming that page:
   the person OKs the page there), and in Product's Validate it is refused (validate_gate.check_question).
 - `ask` runs every check before it posts the message, so a refused ❓ leaves nothing in the chat.
-- One open ❓ per bot per chat (the chat's root conversation, `room_id`): a new one clears the old ("replaced").
+- One open ❓ per bot per chat (the chat's root conversation, `room_id`): a new one clears the old ("replaced"), and
+  the bot is told so (`replaced_warning`), so it puts every question to a person in one ❓.
+- A bot does not finish, move on or close a task while its own ❓ there is open (`refuse_ending`): ending the task would
+  clear it unanswered. It waits for the reply, or takes the question back by deleting its message (`TAKE_BACK`).
 
 It clears when the person replies in that chat, in their own hand or by their Assistant on their word (`replied`, from
 hubdb._write_message: `cleared_via` keeps which); when its task ends (done or closed: the migration's trigger; merged:
@@ -21,7 +24,9 @@ draws its glyph from the message alone and a change reaches open pages through t
 """
 
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Generator, Iterable, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, cast
 
 from . import ask_shape
@@ -59,9 +64,82 @@ class Asking:
 
 
 def public(mark: Mapping[str, Any]) -> Row:
-    """A mark as a route answers with it."""
+    """A mark as a route answers with it; `replaced`, the bot's open ❓ in that chat this one cleared, when there was one."""
     keys = ("id", "message_id", "conversation_id", "task_id", "bot_id", "person_id", "line", "created_at")
-    return {k: (mark.get(k) or None) if k == "task_id" else mark.get(k) for k in keys}
+    out = {k: (mark.get(k) or None) if k == "task_id" else mark.get(k) for k in keys}
+    if mark.get("replaced"):
+        out["replaced"] = mark["replaced"]
+    return out
+
+
+REPLACED = (
+    'This replaced your open ❓ from {when}, "{line}". Put every question in one ❓, numbered when there are several.'
+)
+
+
+def _when(at: object) -> str:
+    text = str(at or "")
+    return f"{text[:10]} {text[11:16]} UTC" if len(text) >= 16 else text
+
+
+def replaced_warning(mark: Mapping[str, Any]) -> str | None:
+    """What the bot is told when its new ❓ cleared its open one in that chat: the earlier question is no longer asked."""
+    old: Any = mark.get("replaced")
+    if not old:
+        return None
+    return REPLACED.format(when=_when(old.get("created_at")), line=old.get("line") or "")
+
+
+def with_warning(answer: Row, mark: Mapping[str, Any]) -> Row:
+    """A ❓ route's answer with `replaced_warning` added to any `warning` it carries (the CLI prints it)."""
+    said = replaced_warning(mark)
+    if not said:
+        return answer
+    return {**answer, "warning": " ".join(w for w in (answer.get("warning"), said) if w)}
+
+
+# How a bot takes back its own ❓: deleting its message clears the mark (the migration's trigger).
+TAKE_BACK = "tico thread delete {message}"
+STILL_OPEN = (
+    'Your ❓ to {name} is still open here: "{line}". Finishing, moving on or closing the task would clear it unanswered. '
+    "Wait for their reply, or take the question back first: " + TAKE_BACK + "."
+)
+
+
+# Tico's own feature ending a task whose ❓ it worded for its bot, because the answer no longer matters (a measure read
+# since, a vision set elsewhere): the ❓ ends with the task, as it does on any move Tico makes itself.
+_SETTLED: ContextVar[bool] = ContextVar("question_marks_settled", default=False)
+
+
+@contextmanager
+def settled() -> Generator[None]:
+    token = _SETTLED.set(True)
+    try:
+        yield
+    finally:
+        _SETTLED.reset(token)
+
+
+def open_of(conn: sqlite3.Connection, bot: str, task_id: object) -> Row | None:
+    """The bot's own open ❓ on this task's chat that its person can still answer, or None."""
+    found = conn.execute(
+        "SELECT * FROM question_marks WHERE task_id=? AND bot_id=? AND cleared_at IS NULL", (str(task_id), bot)
+    )
+    return next((m for m in (dict(r) for r in found) if answerable(conn, m)), None)
+
+
+def refuse_ending(conn: sqlite3.Connection, by: str, task_id: object) -> None:
+    """Refuse a bot's done, forward move or close of a task while its own ❓ there is open: the task ending would
+    clear the question before the person saw it. A person's moves, and Tico's own, are never held by a ❓."""
+    if not task_id or not H.is_bot(by) or by == H.KEEPER or _SETTLED.get():
+        return
+    found = open_of(conn, by, task_id)
+    if not found:
+        return
+    detail = STILL_OPEN.format(
+        name=H.actor_name(conn, found["person_id"]), line=found["line"], message=found["message_id"]
+    )
+    H.refuse(conn, by, "task_question_open", detail, task=str(task_id))
 
 
 def wait_id(mark: Mapping[str, Any]) -> str:
@@ -395,7 +473,8 @@ def _check(
 
 
 def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, checked: bool = True) -> Row:
-    """Mark the bot's own message ❓ for `person`, replacing the bot's open ❓ in that chat. Returns the mark.
+    """Mark the bot's own message ❓ for `person`, replacing the bot's open ❓ in that chat. Returns the mark, with
+    `replaced` the open ❓ it cleared ({id, line, created_at}) or None.
     `checked` False: a question Tico's own feature words and addresses for the bot (`ask`), so neither the bot's reach
     nor the words' shape is the bot's to answer for; the person must still be able to read the chat."""
     if not H.is_bot(bot) or bot == H.KEEPER:
@@ -412,6 +491,11 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, ch
     line = first_line(message.get("body"))
     room = room_of(conv)
     at = H.now()
+    before = conn.execute(
+        "SELECT id, line, created_at FROM question_marks WHERE room_id=? AND bot_id=? AND cleared_at IS NULL",
+        (room, bot),
+    ).fetchone()
+    replaced: Row | None = dict(before) if before else None
     conn.execute(
         "UPDATE question_marks SET cleared_at=?, cleared_reason='replaced', cleared_by_id=? "
         "WHERE room_id=? AND bot_id=? AND cleared_at IS NULL",
@@ -436,7 +520,7 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, ch
     )
     H.event(conn, bot, "question.marked", row["id"], {"message": message["id"], "to": target, "task": task_id})
     H._recount(conn, bot)  # its status's "waits on a person" (hubdb.status_counts)
-    return {**row, "cleared_at": None}
+    return {**row, "cleared_at": None, "replaced": replaced}
 
 
 def ask(

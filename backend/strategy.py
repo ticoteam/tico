@@ -1046,11 +1046,15 @@ def settle_vision(c):
         return
     from . import goal_asks as GA
     from . import goals as G
+    from . import question_marks
 
     for ref, owner, task_id in c.execute("SELECT ref, owner, task_id FROM goal_asks WHERE kind='vision'").fetchall():
         task = H.task(c, task_id)
         if task and task["status"] in GA.LIVE:
-            H.attempt(c, H.task_close, G.AUTO_ACTOR, task["id"], GA._resolved(c, "vision", ref), task.get("version"))
+            with question_marks.settled():  # its question is moot now
+                H.attempt(
+                    c, H.task_close, G.AUTO_ACTOR, task["id"], GA._resolved(c, "vision", ref), task.get("version")
+                )
         c.execute("DELETE FROM goal_asks WHERE kind='vision' AND ref=? AND owner=?", (ref, owner))
 
 

@@ -25,7 +25,7 @@ the bot on the org chart, as only a person decides one."""
 import logging
 
 from .batch_work import isolated
-from . import needs_shape, person_asks, strategy_bot
+from . import needs_shape, person_asks, question_marks, strategy_bot
 from . import goals as G
 from . import kpis as K
 from . import strategy as S
@@ -573,7 +573,8 @@ def sync(conn, owner_id, at=None, reads=None):
             with isolated(conn, "goal_ask_reshape", row["task_id"], private=True):
                 if task["status"] in LIVE:
                     note = VISION_REASKED.format(manager=strategy_bot.name(conn))
-                    H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
+                    with question_marks.settled():  # its question is moot now
+                        H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
                     closed.append(task["id"])
                 conn.execute("DELETE FROM goal_asks WHERE kind=? AND ref=? AND owner=?", key)
                 del have[key]
@@ -601,7 +602,8 @@ def sync(conn, owner_id, at=None, reads=None):
                     note = f"Now asked of {H.actor_name(conn, moved[key[:2]])}, who owns it now."
                 else:
                     note = _resolved(conn, row["kind"], row["ref"])
-                H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
+                with question_marks.settled():  # its question is moot now
+                    H.attempt(conn, H.task_close, G.AUTO_ACTOR, task["id"], note, task.get("version"))
                 closed.append(task["id"])
             conn.execute("DELETE FROM goal_asks WHERE kind=? AND ref=? AND owner=?", key)
             if again:
