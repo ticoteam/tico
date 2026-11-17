@@ -1,9 +1,9 @@
-/* ui/styles/task-code.css — The task window's layout (the head, the tabs and the three panes), its Details (Pages, To
-   leave, the facts, Code, Subtasks, Files, Activity and links) and the small PR badge on task rows.
+/* ui/styles/task-code.css — The task window's layout (the head, its documents' tabs and the panes), its Details (what
+   it is, Pages, To leave, the facts, Code, Subtasks, Files, Activity and links) and the small PR badge on task rows.
    Dense: thin dividers, small sentence-case headings, one line per item. */
 /* The task window, as the style guide's Task window (ui/style-guide/guide.html #sg-task): one head row (the title top
-   left, the actions right), three tabs under it (Description, Chat, Details), then one pane at a time with the full
-   width. The window has a fixed height so a pane scrolls inside it and the chat's box stays in view. Ids keep these
+   left, its documents' tabs when it has any (task-docs.css), the actions right, Details among them), then one pane at a
+   time with the full width: the chat, a document, or Details. The window has a fixed height so a pane scrolls inside it and the chat's box stays in view. Ids keep these
    above task-list.css, which loads later and styles the older window. */
 #task-modal:has(.task-layout){width:min(820px,calc(100vw - 32px))}
 #task-modal[open]:has(.task-layout){display:flex;flex-direction:column;height:min(86vh,900px)}
@@ -21,28 +21,31 @@
 #task-modal .tw-head .tmodal-age{padding:0 var(--s2);font-size:var(--t-sm);white-space:nowrap}
 #task-modal .tw-head .tmodal-sep{width:1px;height:18px;margin:0 var(--s1);background:var(--line)}
 #task-modal .tw-head>.tthread-back{flex:none;margin-top:0}
+/* The documents' tabs sit on the title row; the title gives way first (one line, then an ellipsis), then the row
+   scrolls. Details is an icon, pressed while it shows; its number is what still blocks the stage. */
+#task-modal .tw-head:has(>.tw-tabs) .tmodal-title{-webkit-line-clamp:1;line-clamp:1;min-width:4em}
+#task-modal .tw-head>.tw-tabs{max-width:min(60%,420px)}
+#task-modal .tw-head .tw-details{position:relative}
+#task-modal .tw-head .tw-details[aria-pressed="true"]{color:var(--ink);background:var(--surface2)}
+#task-modal .tw-head .tw-count{position:absolute;top:1px;right:0;min-width:14px;padding:0 3px;border-radius:7px;background:var(--bg);color:var(--muted);font-size:10px;line-height:14px}
 /* Someone else here, or an edit that did not save: one quiet line under the head, only then. An error stays until it saves. */
 #task-modal .task-edit-meta{display:flex;flex-wrap:wrap;gap:4px 16px;margin:-6px var(--s4) var(--s2);font-size:var(--t-sm)}
 #task-modal .task-edit-meta:not(:has([data-task-presence]:not(:empty),[data-task-edit-error]:not([hidden]))){display:none}
 #task-modal [data-task-edit-error]{color:var(--fail)}
 #task-modal .task-edit-current{margin:0 var(--s4) var(--s2);font-size:var(--t-sm);white-space:pre-wrap;overflow-wrap:anywhere}
-#task-modal .task-tabs{flex:none;display:flex;gap:var(--s4);padding:0 var(--s4);border-bottom:1px solid var(--line)}
-#task-modal .task-tab{display:inline-flex;align-items:center;gap:6px;min-height:var(--ctl);padding:var(--s2) 0;margin-bottom:-1px;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-base);cursor:pointer}
-#task-modal .task-tab:hover{color:var(--ink)}
-#task-modal .task-tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
-/* The Chat tab's dot: the chat ends on your own ask (Answer). */
-#task-modal .task-tab .tw-dot{width:6px;height:6px;border-radius:50%;background:var(--wait)}
-#task-modal .task-tab:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 #task-modal>.rule-holds:not([hidden]){flex:none;max-height:40%;overflow:auto;margin:var(--s2) var(--s4) 0}
 /* The panes fill the body; the one not shown is hidden but kept, so a file opened from a message still shows in the
    Files section's own viewer (task-files.ts, a modal dialog in the top layer, which takes visibility back). */
 #task-modal .tmodal-body.task-layout{position:relative;flex:1;min-height:0;max-height:none;display:block;overflow:hidden;padding:0;margin:0}
 #task-modal .task-layout>[role="tabpanel"]{position:absolute;inset:0;min-width:0;overflow:auto;overscroll-behavior:contain}
-#task-modal .task-layout:not([data-task-tab-shown="desc"])>.task-desc,#task-modal .task-layout:not([data-task-tab-shown="chat"])>.task-chat,
+#task-modal .task-layout:not([data-task-tab-shown="doc"])>.task-doc,#task-modal .task-layout:not([data-task-tab-shown="chat"])>.task-chat,
 #task-modal .task-layout:not([data-task-tab-shown="details"])>.task-side{visibility:hidden;pointer-events:none}
+#task-modal .task-layout>.task-doc{overflow:hidden}
 #task-modal .task-layout>.task-side .tf-view{visibility:visible;pointer-events:auto}
-/* Description: who asked and when, Edit, the request; then Done looks like and the owner's latest note. */
-#task-modal .task-desc{padding:var(--s4);font-size:var(--t-md);line-height:1.55}
+/* What the task is, first in Details: who asked and when, Edit, the request; then Done looks like and the owner's
+   latest note. */
+#task-modal .task-desc{font-size:var(--t-md);line-height:1.55}
+#task-modal .task-desc:not(:has(*)){display:none}
 #task-modal .task-desc>*{max-width:680px}
 #task-modal .task-desc-h{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s1);font-size:var(--t-sm);line-height:var(--lh)}
 #task-modal .task-desc .tdesc{margin:0;padding:0;background:none;font-size:inherit;line-height:inherit;max-height:none;white-space:normal}
@@ -122,8 +125,9 @@
 .prop[data-prop-row="visible"] .prop-vwrap{flex-wrap:wrap;gap:4px 6px}
 .prop[data-prop-row="visible"] .prop-ic.nav-icon{font-size:16px;width:16px;height:16px}
 .prop[data-prop-row="visible"] .prop-sep{color:var(--muted)}
-/* A phone: the window is the whole screen, the same three tabs; the head keeps Archive, ⋯ and ✕ (👍 👎 and the age are
-   in ⋯), every control a 44px target. */
+/* A phone: the window is the whole screen; the head keeps Archive, Details, ⋯ and ✕ (👍 👎 and the age are in ⋯),
+   every control a 44px target. With document tabs it holds only the title, the tabs, ⋯ and ✕: Details, Done and
+   Archive go into ⋯ (task-props.ts), the title keeps 40% of the row in up to two lines, and the tabs scroll. */
 @media (max-width:600px){
   #task-modal .tw-head{gap:var(--s1);padding:max(6px,env(safe-area-inset-top)) var(--s1) var(--s1) var(--s4)}
   #task-modal .tw-head .tmodal-title{padding-top:10px}
@@ -131,7 +135,9 @@
   #task-modal .tw-head .tw-ic,#task-modal .tw-head .tchip-snoozed{width:44px;min-width:44px;height:44px}
   #task-modal .tw-head .tchip-snoozed{width:auto;max-width:96px}
   #task-modal .tw-head .tmodal-act{min-height:44px}
-  #task-modal .task-tab{min-height:44px;min-width:44px;justify-content:center}
+  #task-modal .tw-head>.tw-tabs{flex:0 1 auto;max-width:none;align-self:center}
+  #task-modal .tw-head:has(>.tw-tabs) .tmodal-title{flex:1 0 40%;padding-top:0;align-self:center;min-width:40%;-webkit-line-clamp:2;line-clamp:2}
+  #task-modal .tw-head:has(>.tw-tabs) :is(.tw-details,[data-task-finish]){display:none}
   #task-modal .task-side .rail-h .prop-add,#task-modal .task-pages .tp-drop{min-height:44px;min-width:44px}
   #task-modal .task-pages .tp-row,#task-modal .task-pages .tp-result,#task-modal .task-requirements .task-req{min-height:44px}
   #task-modal .task-side .prop{min-height:44px}

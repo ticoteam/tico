@@ -22,6 +22,7 @@ from . import needs_shape
 from .api_contract import MARK
 from .legacy_spellings import legacy_of
 from .sources import KINDS as SOURCE_KINDS
+from .task_documents import NAMES as DOCUMENT_NAMES
 
 VERSION = "2.0.0"
 
@@ -4567,6 +4568,22 @@ SCHEMAS.update(
     }
 )
 SCHEMAS["Task"]["properties"]["tags"] = items(ref("Tag"))
+# A task's documents (backend/task_documents.py), on GET /api/v2/tasks/{id} only: newest change first, each version
+# readable at /api/v2/files/{file_id}?v=<n>. Written with POST /api/v2/tasks/{id}/files and `document`.
+SCHEMAS["TaskDocument"] = obj(
+    {
+        "name": {
+            "type": "string",
+            "description": ", ".join(DOCUMENT_NAMES) + " (the names a stage approves), or a bot's own",
+        },
+        "file_id": "s",
+        "version": "i",
+        "by": "s",
+        "at": "s",
+        "versions": items(obj({"n": "i", "by": "s", "at": "s", "note": "n"})),
+    }
+)
+SCHEMAS["Task"]["properties"]["documents"] = items(ref("TaskDocument"))
 SCHEMAS["Message"]["properties"]["source"] = ref("MessageSource")
 SCHEMAS["TaskDetail"]["properties"]["events"] = items(obj({"source": ref("MessageSource")}, required=["source"]))
 

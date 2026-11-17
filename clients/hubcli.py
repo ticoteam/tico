@@ -801,6 +801,12 @@ def parser():
     )
     s.add_argument("id")
     s.add_argument("file", help="a local file, or page:<file id>[@<version>] with --req")
+    s.add_argument(
+        "--doc",
+        metavar="NAME",
+        help="an .html file as the next version of the task's document NAME (a tab beside the task's chat): Spec, "
+        "QA report, Release report, Invoice and Email are the names a stage approves; say what changed with --note",
+    )
     s.add_argument("--req", help='the page requirement it is for, e.g. "Spec page"')
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")

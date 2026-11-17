@@ -23,7 +23,8 @@ interface MakeStatus {
 // A task's pages are the first part of its Details tab: "+" opens the page search, ⋯ › Make a page… the Describe box.
 async function pagesTab(p: Pick<import('playwright').Page, 'locator'>) {
     await p.locator('#task-modal[open] [data-task-pages]').waitFor({state: 'attached'});
-    await p.locator('#task-modal[open] [data-task-tab="details"]').click();
+    const details = p.locator('#task-modal[open] [data-task-tab="details"][aria-pressed="false"]');
+    if (await details.count()) await details.click();   // pressed again, Details would close
 }
 async function makePageOpen(p: Pick<import('playwright').Page, 'locator'>) {
     await p.locator('#task-modal[open] [data-task-more]').click();

@@ -28,7 +28,7 @@ from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
 from . import tools_delegation
-from . import task_followers
+from . import task_documents, task_followers
 from . import setup_failures
 from . import sources as SRC
 from . import start_places
@@ -3129,6 +3129,8 @@ def create_app(settings=None):
                 "task": {
                     **task_view(row, c, visible_sql=related_sql, who=who),
                     "followers": task_followers_seen(c, who, row),
+                    # Its documents, newest change first (backend/task_documents.py); none means no tabs.
+                    "documents": task_documents.listing(c, app.state.files, who, tid),
                 },
                 "events": history,
                 "can_comment": can_comment,

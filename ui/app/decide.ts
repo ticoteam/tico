@@ -1584,14 +1584,11 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
     const typed = DEC_CHAT?.item === it.id ? DEC_CHAT.typed : '';
     // Each item opens on what it needs from the person: an OK on what is to be approved (its Spec, Proof, Invoice...),
     // anything else on its chat. A redraw of the same item keeps the tab the person chose.
-    const fresh = DEC_CHAT?.item !== it.id, onTask = fresh ? decideKind(it) === 'ok' : !!$('.decide')?.classList.contains('dc-on-task');
-    if (fresh) $('.decide')?.classList.toggle('dc-on-task', onTask);
+    if (DEC_CHAT?.item !== it.id) DEC_TAB = decideKind(it) === 'ok' ? 'task' : 'chat';
     decideChatStop();
-    // A phone's two tabs, Chat and Task (decide.css): the task's chat, or the task itself, open, with its page.
-    const tab = (k: string, label: string, on: boolean) => `<button type="button" role="tab" data-dc="tab" data-dc-tab="${k}" aria-selected="${on}">${label}</button>`;
+    // A phone's title row and tabs (decide.css, decideTabsPaint): the task's chat, its documents, what an OK shows.
     const title = decideAboutOf(it)?.task?.title || it.task?.title || '';
-    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3><span role="tablist" aria-label="Show">${tab('chat', 'Chat', !onTask)}`
-      + `${tab('task', decideTabName(st, it), onTask)}</span></div><div class="dc-chat"></div>`;
+    host.innerHTML = `<div class="dc-tabs"><h3 class="dc-tabs-t">${esc(title)}</h3></div><div class="dc-chat"></div><div class="dc-doc"></div>`;
     const el = host.querySelector<HTMLElement>('.dc-chat')!;
     DEC_CHAT = {item: it.id, cid, view: null, typed};
     if (cid) {
@@ -1603,9 +1600,43 @@ function decideChatMount(st: DecState, it: NeedsEntry, host: HTMLElement, card: 
   else host.querySelector('.dc-chat .thv-list')!.innerHTML = decideAskBubbleHTML(st, it);
   host.querySelector(':scope > [data-key]')?.remove();
   host.insertAdjacentHTML('beforeend', card);
-  // The second tab's name waits on what the OK shows (an invoice, an email), which may land after the chat.
-  const second = host.querySelector<HTMLElement>('.dc-tabs [data-dc-tab="task"]'), name = decideTabName(st, it);
-  if (second && second.textContent !== name) second.textContent = name;
+  // The tabs wait on the task's read (its documents) and on what an OK shows (an invoice, an email): drawn on each pass.
+  decideTabsPaint(st, it, host);
+}
+// ---- a phone's tabs on an ask in the task's chat (ui/app/task-docs.ts, as the task window draws them): Chat, then the
+// task's documents, newest change first, with what an OK shows among them under its own name (its Spec, Proof,
+// Invoice...), or after Chat when it is no document of the task. A question on a task with no document has no tabs.
+let DEC_TAB = 'chat';   // the tab shown for the item on screen: 'chat', 'task' (what the OK shows) or a document's key
+function decideTabsOf(st: DecState, it: NeedsEntry): DocTab[] {
+  const docs: TaskDoc[] = decideAboutOf(it)?.task?.documents || [];
+  if (decideKind(it) !== 'ok') return docTabs(docs);
+  const name = decideTabName(st, it), shown = docs.find(d => d.name === name);
+  return [{key: 'chat', label: 'Chat'}, ...(shown ? [] : [{key: 'task', label: name}]),
+    ...docs.map(d => d === shown ? {key: 'task', label: d.name} : {key: docKey(d.name), label: d.name})];
+}
+function decideTabsPaint(st: DecState, it: NeedsEntry, host: HTMLElement) {
+  const bar = host.querySelector<HTMLElement>(':scope > .dc-tabs');
+  if (!bar) return;
+  const tabs = decideTabsOf(st, it), said = JSON.stringify(tabs);
+  if (!tabs.some(t => t.key === DEC_TAB)) DEC_TAB = 'chat';
+  if (bar.dataset.tabs !== said) {
+    bar.dataset.tabs = said;
+    bar.querySelector('.doc-tabs')?.remove();
+    bar.insertAdjacentHTML('beforeend', docTabsHTML(tabs, DEC_TAB, k => `data-dc="tab" data-dc-tab="${esc(k)}"`));
+    const row = bar.querySelector<HTMLElement>('.doc-tabs');
+    if (row) docTabsKeys(row, b => decideTabShow(it, b.dataset.dcTab || 'chat'));
+  }
+  decideTabShow(it, DEC_TAB);
+}
+/** Shows a tab: the chat, what the OK shows (the task open, with its page), or a document with its version line. */
+function decideTabShow(it: NeedsEntry, key: string) {
+  DEC_TAB = key;
+  const root = $('.decide'), doc = docOf(decideAboutOf(it)?.task?.documents, key), pane = $('.decide .dc-side > .dc-doc');
+  root?.classList.toggle('dc-on-task', key === 'task');
+  root?.classList.toggle('dc-on-doc', !!doc);
+  const bar = $('.decide .dc-side > .dc-tabs');
+  if (bar) docTabsPaint(bar, key, b => b.dataset.dcTab);
+  if (doc && pane) docViewMount(pane, doc);
 }
 /** The second tab, named for what it holds: the Spec a page's OK is about, the Proof a Validate or QA OK shows, an
     action's Invoice or Email, else the Task. */
@@ -1888,9 +1919,9 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   if (what === 'close') { decideStop(); return; }
   if (what === 'ping') { await decidePing(st); return; }
   if (what === 'tab') {
-    // A phone's Chat and Task tabs: the task's chat, or the task itself, open.
-    $('.decide')?.classList.toggle('dc-on-task', b.dataset.dcTab === 'task');
-    document.querySelectorAll('.decide .dc-tabs [role="tab"]').forEach(t => { t.setAttribute('aria-selected', String((t as HTMLElement).dataset.dcTab === b.dataset.dcTab)); });
+    // A phone's tabs: the task's chat, what an OK shows, or one of the task's documents.
+    const it = decideCurrent(st);
+    if (it) decideTabShow(it, b.dataset.dcTab || 'chat');
     // The ask's Proof link hides with the chat: the focus goes to the tab it opened.
     if (b.getAttribute('role') !== 'tab') ($(`.decide .dc-tabs [role="tab"][data-dc-tab="${b.dataset.dcTab}"]`) as HTMLElement | null)?.focus();
     return;

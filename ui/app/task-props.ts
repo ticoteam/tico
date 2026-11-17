@@ -544,6 +544,13 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
   if (more) more.onclick = () => {
     const r = taskPropRights(task), items: PropMenuAction[] = [], cur = (d.liveTask || task) as PropTask;
     const phone = matchMedia('(max-width:600px)').matches;
+    // A phone's head with document tabs holds only the title, the tabs, ⋯ and ✕ (task-code.css): Details, Done and
+    // Archive are here, first, and press the head's own.
+    for (const [sel, text, icon] of [['[data-task-tab="details"]', 'Details', 'fact_check'], ['[data-task-finish="done"]', 'Done', 'task_alt'],
+      ['[data-task-finish="close"]', 'Archive', 'archive']] as const) {
+      const b = $(`.tw-head ${sel}`, d) as HTMLElement | null;
+      if (phone && b && !b.offsetParent) items.push({text, icon, ...(b.hasAttribute('aria-pressed') ? {checked: b.getAttribute('aria-pressed') === 'true', read: true} : {}), run: () => b.click()});
+    }
     // The owning bot's screen (computer-screen.ts), where its session can be watched.
     const screen = !taskFinished(task) ? botScreenComputer(actorSlug(task.owner_id)) : '';
     if (screen) items.push({text: 'Watch the session', icon: 'computer', read: true, run: () => { location.hash = screenHref(screen); }});

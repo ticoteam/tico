@@ -1144,14 +1144,16 @@ def comment_file(c, auth, files, who, task_id, fid, number):
     return copy, file_version(c, task_id, copy, current)
 
 
-def file_added(c, who, task_id, item, number, poster=None):
-    """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line,
-    the task.file audit event and the preview worker's row. The caller wakes the media worker once it commits."""
+def file_added(c, who, task_id, item, number, poster=None, *, document=None):
+    """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line (a
+    "document" line naming it for a task's document), the task.file audit event and the preview worker's row. The
+    caller wakes the media worker once it commits."""
     provenance = {"file": item["id"], "version": number}
     if pages := page_references(item["id"], c):
         provenance["page_files"] = sorted(pages)
-    name, data = H.sourced_text(item["name"], [provenance], provenance)
-    H._task_event(c, task_id, who.actor, "file", None, name, "" if number == 1 else f"version {number}", data=data)
+    name, data = H.sourced_text(document or item["name"], [provenance], provenance)
+    note = "" if number == 1 else f"version {number}"
+    H._task_event(c, task_id, who.actor, "document" if document else "file", None, name, note, data=data)
     H.event(c, who.actor, "task.file", task_id, {**data, "name": name, "size": item["size"]})
     c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
 
@@ -1543,35 +1545,39 @@ class Files:
         fid, _ = self.attach_task(c, who, task_id, item, digest, bot)
         return fid
 
-    def attach_task(self, c, who, task_id, item, digest, bot):
-        """A visible file with the same task and display name continues its series."""
-        row = c.execute(
-            "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
-            "ON v.file_id=f.id AND v.version=f.current_version "
-            "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
-            "ORDER BY f.last_activity_at DESC",
-            (task_id, item["name"]),
-        ).fetchall()
-        row = next((r for r in row if self.visible(c, who, r, {})), None)
+    def attach_task(self, c, who, task_id, item, digest, bot, *, file=None, series=True):
+        """A visible file with the same task and display name continues its series. `file` is the one to continue
+        instead (a task's document, backend/task_documents.py); with `series` off and no `file`, a new one starts."""
+        row = file
+        if row is None and series:
+            rows = c.execute(
+                "SELECT f.* FROM bot_files f JOIN bot_file_versions v "
+                "ON v.file_id=f.id AND v.version=f.current_version "
+                "WHERE f.task_id=? AND f.archived=0 AND v.name=? "
+                "ORDER BY f.last_activity_at DESC",
+                (task_id, item["name"]),
+            ).fetchall()
+            row = next((r for r in rows if self.visible(c, who, r, {})), None)
         created = row is None
         legacy = None
         if row is None:
-            legacy = c.execute(
-                "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
-                "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
-                "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
-                "ORDER BY b.created_at DESC",
-                (task_id, item["name"], item["id"]),
-            ).fetchall()
-            legacy = next(
-                (
-                    b
-                    for b in legacy
-                    if not page_ref_denials(c, self.auth, who, b["id"])
-                    and privacy.blob_readable(c, privacy.actor(who), b["id"])
-                ),
-                None,
-            )
+            if series:
+                found = c.execute(
+                    "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id "
+                    "WHERE a.task_id=? AND b.name=? AND b.id<>? AND NOT EXISTS "
+                    "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id) "
+                    "ORDER BY b.created_at DESC",
+                    (task_id, item["name"], item["id"]),
+                ).fetchall()
+                legacy = next(
+                    (
+                        b
+                        for b in found
+                        if not page_ref_denials(c, self.auth, who, b["id"])
+                        and privacy.blob_readable(c, privacy.actor(who), b["id"])
+                    ),
+                    None,
+                )
             fid, stamp = (legacy["id"] if legacy else new_id()), H.now()
             c.execute(
                 "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,mime,locator,task_id,"
