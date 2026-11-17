@@ -36,9 +36,7 @@ question as a message instead (`tico message send <bot> "<the question>" --needs
 
 ```
 tico task create --title "<the decision, in a few words>" --body "<what you will do with the answer>"
-tico task ask <id> --to <person> "<the question>
-
-<what you will do with the answer>"
+tico task ask <id> --to <person> "<the question>. <what you will do with the answer>"
 ```
 
 ## When you are the one asked (a supervisor bot)

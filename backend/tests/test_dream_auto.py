@@ -253,16 +253,7 @@ def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
     plate(api, 15)  # a plate full enough that ingest would send a question back
     assert len(run(api)) == 1
     [row] = dream_rows(api, "ops")
-    r = api.post(
-        f"/api/v2/tasks/{row['id']}/asks",
-        json={
-            "to": "human:ben",
-            "line": QUESTIONS,
-            "version": row["version"],
-            "why": "It sets what goes out on launch day.",
-        },
-        headers=headers(token),
-    )
+    r = api.post(f"/api/v2/tasks/{row['id']}/questions", json={"to": "ben", "text": QUESTIONS}, headers=headers(token))
     assert r.status_code == 200, r.text
     assert "ingest" not in r.json() and [x for x in model.calls if x["label"] != "rule-check@1"] == []
     with api.app.state.store.read() as c:

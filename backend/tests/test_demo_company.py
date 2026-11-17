@@ -126,7 +126,7 @@ def test_the_pricing_decision_waits_for_ana(ana):
         for item in ana.get("/api/v2/needs-you").json()["items"]
         if item["task"]["title"] == "Raise Home Pro from $449 to $479 for December?"
     ]
-    assert [item["kind"] for item in waiting] == ["ask"]  # the Pricing Analyst's question to her
+    assert [item["kind"] for item in waiting] == ["question"]  # the Pricing Analyst's ❓ to her
 
 
 def test_tasks_are_open_done_or_closed_and_show_asks_snoozes_and_sub_tasks(ana):

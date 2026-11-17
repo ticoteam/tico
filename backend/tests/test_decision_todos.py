@@ -69,7 +69,7 @@ def test_a_decision_filed_as_a_to_do_is_closed_with_a_note_and_its_bot_is_woken_
             "SELECT why FROM visits WHERE task_id=? AND left_at IS NOT NULL ORDER BY left_at DESC LIMIT 1",
             (decision["id"],),
         ).fetchone()[0]
-    assert "this is a decision for" in why and "asks it as a question" in why
+    assert "this is a decision for" in why and "❓" in why
     # The bot that filed it is woken with how to ask it; the chore stays a to-do.
     [told] = [n for n in notices(api) if "was a decision" in n["body"]]
     assert DECISION in told["body"] and "tico task ask <task> --to ben" in told["body"]

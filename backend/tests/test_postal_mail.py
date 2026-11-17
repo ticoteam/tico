@@ -189,10 +189,11 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
     assert made["owner_id"] == "human:ana" and made["due_at"] == "2026-11-20"
     assert "A summons from the county court" in made["body"] and "2026-11-20" in made["body"]
     assert "/api/v2/files/" + row["blob_id"] in made["body"]
-    # A question to her from BotOps on her task, with its deadline: in her Needs you (and paged).
+    # A ❓ to her from BotOps on her task, with its deadline: in her Needs you (and paged).
     [ask] = [i for i in get(api, "needs-you", "ana-test")["items"] if (i.get("task") or {}).get("id") == row["task_id"]]
+    assert ask["kind"] == "question"
     with api.app.state.store.read() as c:
-        author = c.execute("SELECT added_by_id FROM requirements WHERE id=?", (ask["requirement_id"],)).fetchone()[0]
+        author = c.execute("SELECT bot_id FROM question_marks WHERE task_id=?", (row["task_id"],)).fetchone()[0]
     assert author == "bot:botops"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM task_assets WHERE task_id=?", (row["task_id"],)).fetchone()[0] == 1

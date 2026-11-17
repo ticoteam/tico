@@ -149,11 +149,8 @@ def test_a_red_kpi_asks_the_goal_owner_and_closes_once_back_on_track(api):
     assert red[0]["id"] in needs_tasks(api, "ben-test")
     assert red[0]["id"] not in needs_tasks(api, "ana-test")
     with api.app.state.store.read() as c:
-        authors = c.execute(
-            "SELECT r.added_by_id FROM requirements r JOIN visits v ON v.id=r.visit_id WHERE v.task_id=?",
-            (red[0]["id"],),
-        ).fetchall()
-    assert [a[0] for a in authors] == [MANAGER]  # only bots write questions: the Strategy Owner, never Tico
+        authors = c.execute("SELECT bot_id FROM question_marks WHERE task_id=?", (red[0]["id"],)).fetchall()
+    assert [a[0] for a in authors] == [MANAGER]  # only bots write a ❓: the Strategy Owner, never Tico
     log(api, kpi["id"], 75, token="ben-test", period_end=H.now())
     assert not [a for a in asks(api) if a["kind"] == "kpi_red"]
     assert red[0]["id"] in {t["id"] for t in manager_tasks(api, "closed")}

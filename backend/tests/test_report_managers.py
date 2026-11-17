@@ -173,7 +173,7 @@ def test_a_person_who_manages_the_report_sees_and_undoes_the_managers_change(api
 
 
 def test_a_routine_a_manager_bot_reaches_follows_both_switches(api):
-    lead = bot(api, "lead")
+    bot(api, "lead")
     bot(api, "counsel", reports_to="lead")
     store = api.app.state.store
     flow, who = {"owner": "bot:" + bot_id(api, "counsel")}, Identity("bot:" + bot_id(api, "lead"), "bot")
@@ -577,10 +577,10 @@ def test_the_weekly_cap_refuses_and_asks_the_person_above_the_manager(api, botop
     assert get(api, "bots/junior3")["state"] != "archived"
     finish(api, botops, attempt)
     with api.app.state.store.read() as c:
-        # The lead's own task, with its question to Cara (backend/person_asks.py): in her Needs you.
+        # The lead's own task, with its ❓ to Cara (backend/person_asks.py): in her Needs you.
         asks = c.execute(
-            "SELECT t.owner_id, t.requester_id, r.person_id, r.added_by_id FROM tasks t JOIN visits v ON v.task_id=t.id "
-            "JOIN requirements r ON r.visit_id=v.id WHERE t.title LIKE 'lead is at its weekly limit%'"
+            "SELECT t.owner_id, t.requester_id, q.person_id, q.bot_id FROM tasks t JOIN question_marks q "
+            "ON q.task_id=t.id WHERE t.title LIKE 'lead is at its weekly limit%'"
         ).fetchall()
     lead_bot = "bot:" + bot_id(api, "lead")
     # The lead asks, in its own words: only bots write questions.
