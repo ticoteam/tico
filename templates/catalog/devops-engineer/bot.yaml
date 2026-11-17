@@ -23,5 +23,5 @@ tools:
     identity: "the product repositories the owner lists for this bot"
     can: [read]
     note: "reads workflow runs, job timings, logs and releases; opens its own pull requests when asked; never reruns, cancels, triggers or edits a workflow, or merges"
-# The token can trigger workflows, so the only thing between this bot and a rerun or a deploy is this entry and
-#.claude/settings.json, which denies every run, workflow, cache, credential, api, merge and release command. Keep it read only.
+# The token can trigger workflows, so the only thing between this bot and a rerun or a deploy is this entry and its
+# instructions; .claude/settings.json denies only what cannot be undone. Keep it read only.

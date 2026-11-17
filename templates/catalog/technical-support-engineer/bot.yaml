@@ -19,6 +19,5 @@ tools:
     identity: "the product repositories the owner lists for this bot"
     can: [read]
     note: "reads code and issues to check whether a bug is known; a human files and comments. Writing stays off"
-# Filing issues is a human's act:.claude/settings.json denies gh issue create, comment and edit. To let
-# this bot file a requested report, the owner changes `can` to [read, write] and moves
-# `Bash(gh issue create *)` from `deny` to `allow`. It still never closes, labels or comments.
+# Filing issues is a human's act. To let this bot file a requested report, the owner changes `can` to
+# [read, write]. It still never closes, labels or comments.

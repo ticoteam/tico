@@ -3,8 +3,12 @@
 A bot does what its template says. Before 0.6 the Builder was told to merge when the merge rules passed, the reviewer
 to write a "verdict" on the task, and the release bot was called a Release Owner that never touched a pull request; a
 bot following that text would merge by hand around the merge queue or never attach the page its stage needs. So each
-template names its stages and the commands that leave them, the Builder and both GitHub-writing bots are denied
-`gh pr merge`, and the Release Owner (and only it) may push a fix to a pull request's branch."""
+template names its stages and the commands that leave them, and the Release Owner (and only it) may push a fix to a pull
+request's branch.
+
+Where Tico's merge queue merges, the bots leave merging to it: that is their instructions, not a deny. Nov 17: a company
+on git-flow with no queue stalled a release candidate because its Release Owner was denied `gh pr merge`. So no template
+denies ordinary GitHub work (merging, tagging, releasing, `gh api`); each denies only what cannot be undone."""
 
 import json
 import re
@@ -46,19 +50,74 @@ def card(template):
     return yaml.safe_load((CATALOG / template / "card.yaml").read_text())
 
 
-@pytest.mark.parametrize("template", ["builder", "feature-owner", "reviewer", "release-owner"])
-def test_no_github_bot_may_merge(template):
-    assert "Bash(gh pr merge *)" in settings(template)["deny"]
+ALL = sorted(c["template"] for c in catalog.cards())
+# Ordinary, reversible GitHub work no template denies.
+ORDINARY = (
+    "gh pr merge",
+    "gh pr create",
+    "gh pr edit",
+    "gh pr ready",
+    "gh pr comment",
+    "gh pr review",
+    "gh api",
+    "git tag",
+    "--tags",
+    "--follow-tags",
+    "refs/tags/",
+    "gh release create",
+    "gh release edit",
+    "gh workflow run",
+    "gh run rerun",
+    "gh run cancel",
+)
+# What cannot be undone, or is a credential, which every template denies.
+FORCE = "--" + "force"
+DESTRUCTIVE = (
+    f"Bash(git push {FORCE})",
+    f"Bash(git push {FORCE} *)",
+    "Bash(git push -f*)",
+    f"Bash(git push * {FORCE})",
+    f"Bash(git push * {FORCE} *)",
+    "Bash(gh repo delete *)",
+    "Bash(gh release delete *)",
+    "Bash(gh run delete *)",
+    "Bash(gh cache delete *)",
+    "Bash(gh secret *)",
+    "Bash(gh variable *)",
+    "Bash(gh workflow enable *)",
+    "Bash(gh workflow disable *)",
+)
+QUEUE = (
+    "Where {{app_name}}'s merge queue merges a repository, the queue merges: never merge by hand there. Where "
+    "{{company_name}} merges and releases another way (its own skill or playbook, git-flow, no queue), merge, tag and "
+    "release as that says. Never merge a pull request with red checks."
+)
 
 
-def test_the_feature_owner_reads_ci_by_repository_and_never_writes_it():
+@pytest.mark.parametrize("template", ALL)
+def test_templates_deny_only_what_cannot_be_undone(template):
+    rules = settings(template)["deny"]
+    for ordinary in ORDINARY:
+        assert not any(ordinary in rule for rule in rules), (template, ordinary)
+    assert not any(rule in ("Bash(gh *)", "Bash(gh release *)", "Bash(gh pr *)") for rule in rules), template
+    for rule in DESTRUCTIVE:
+        assert rule in rules, (template, rule)
+    # A push with a lease (after a rebase) is not swallowed by a wider deny.
+    assert not any(rule.startswith(f"Bash(git push {FORCE}*") for rule in rules), template
+
+
+@pytest.mark.parametrize("template", ["builder", "feature-owner", "release-owner"])
+def test_merging_follows_the_queue_where_there_is_one_and_the_companys_own_way_where_not(template):
+    # Tico's own Engineering pipeline behaves as before: its repository has the merge queue, so the queue merges.
+    assert QUEUE in agent(template)
+
+
+def test_the_feature_owner_reads_ci_by_repository():
     # Validate runs on a `git archive` copy, which has no remote: gh, and the runner's token for the repository, need
     # the pull request's link or -R to know which repository to read.
     rules = settings("feature-owner")
     for read in ("gh pr checks", "gh pr diff", "gh run list", "gh run view"):
         assert not any(read in rule for rule in rules["deny"]), read
-    for write in ("gh pr merge", "gh pr review", "gh run rerun", "gh run cancel", "gh workflow run"):
-        assert f"Bash({write} *)" in rules["deny"], write
     playbook = (CATALOG / "feature-owner" / "playbooks" / "validate-in-production.md").read_text()
     assert "gh pr checks <pull request link>" in playbook and "-R <owner/name>" in playbook
 
@@ -99,15 +158,15 @@ def test_reviews_start_from_the_diff():
 
 
 @pytest.mark.parametrize("template", ["builder", "feature-owner", "release-owner"])
-def test_the_builder_and_release_manager_may_push_a_rebased_branch_and_never_a_tag(template):
+def test_the_builder_and_release_manager_may_push_a_rebased_branch(template):
     # A conflict wake tells the Builder to rebase and push with a lease; the Release Owner rebases in Merge. A tag is a
-    # release on a repository that releases from tags, and only a person or the approved rollout makes one.
+    # release on a repository that releases from tags: where Tico releases, the approved rollout or `tico task release`
+    # makes it (their instructions); where the company releases its own way, the bot tags as that says.
     rules = settings(template)
-    # A bare force push stays denied, and the lease is not swallowed by a wider deny.
-    assert "Bash(git push --" + "force *)" in rules["deny"]
-    assert not any(rule.startswith("Bash(git push --" + "force*") for rule in rules["deny"])
-    for tag in ("Bash(git tag *)", "Bash(git push*--tags*)", "Bash(git push* refs/tags/*)"):
-        assert tag in rules["deny"], (template, tag)
+    # A bare forced push stays denied, and the lease is not swallowed by a wider deny.
+    assert f"Bash(git push {FORCE} *)" in rules["deny"]
+    assert not any(rule.startswith(f"Bash(git push {FORCE}*") for rule in rules["deny"])
+    assert not any("git tag" in rule or "tags" in rule for rule in rules["deny"]), template
     assert not any("gh pr checkout" in rule for rule in settings("release-owner")["deny"])
 
 

@@ -48,8 +48,7 @@ the requested work and granted Tools. Apply an owner’s routine changes directl
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Dismissing or re-rating an alert.** Record the reachability and risk evidence.
-- **Anything written to GitHub**: a pull request, comment, review, merge or setting. Access is read only
-  and `.claude/settings.json` denies the write verbs.
+- **Anything written to GitHub**: a pull request, comment, review, merge or setting. Access is read only.
 - **Sharing any detail of an unpatched flaw** beyond the engineering team, and contacting a vendor, a
   maintainer or a customer about one.
 

@@ -23,6 +23,6 @@ tools:
     identity: "the product repositories the owner lists for this bot"
     can: [read]
     note: "reads Dependabot pull requests, lockfiles and code to trace reachability; never dismisses an alert, merges or changes a setting"
-# The token can write, so the only thing between this bot and a change on GitHub is this entry and
-#.claude/settings.json, which denies gh api, every pull request write and every push. Keep it read only:
+# The token can write, so the only thing between this bot and a change on GitHub is this entry and its
+# instructions. Keep it read only:
 # engineers merge the upgrades the patch plan lists.

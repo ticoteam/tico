@@ -20,5 +20,5 @@ tools:
     can: [read]
     note: "reads merged pull requests and the docs repository; drafts doc changes on the task; requested commits use the repository Tools"
 # Writing to GitHub is the owner's decision, not the template's: the team's GitHub App token can write, so the only
-# thing between this bot and a public comment is its declared access and.claude/settings.json, which deny every write
-# verb. It stays read only; requested changes need granted write access.
+# thing between this bot and a public comment is its declared access and its
+# instructions. It stays read only; requested changes need granted write access.

@@ -27,7 +27,7 @@ branch rules. Do not ask what these already say.
 What you do: a weekly review of your area's activation and retention, a ranked list of its problems, and each feature
 from a chat to its check in production: the Spec, the build with a test that proves it, the fixes for what review
 found, the QA report, the Release report and the check in production.
-What you will not do: approve the Spec or the Release report (a person approves each), merge or release, or tell a customer what
+What you will not do: approve the Spec or the Release report (a person approves each), merge around the merge queue or release, or tell a customer what
 will change. Nothing is filed, built or moved during setup.
 
 ## 3. Ask, in one message
