@@ -11,7 +11,7 @@ import pytest
 
 from backend import hubdb as H
 from backend.finance import actions as FA
-from backend.finance import sync
+from backend.finance import banking, sync
 from backend.finance.store import tico as FT
 from backend.store import Store
 from backend.tests.helpers.api import headers, post
@@ -191,7 +191,7 @@ def test_a_sync_reads_the_key_while_its_connector_may_use_it_and_refuses_once_th
     assert tokens == ["mercury-secret-0001"]  # never read again
     with books.read() as c:
         row = c.execute("SELECT status, last_error FROM fin_connections WHERE id=?", (cid,)).fetchone()
-    assert row["status"] == "error" and "no longer" in row["last_error"]
+    assert (row["status"], row["last_error"]) == ("error", banking.KEY_NOT_USABLE_NOW)
     assert "category=credential_not_usable" in caplog.text and f"id={cid}" in caplog.text
     assert "mercury-secret-0001" not in caplog.text
 
@@ -232,3 +232,24 @@ def test_an_archived_bot_may_use_no_key_and_its_connection_stops_syncing(books: 
         pytest.fail("an archived bot's key reached Stripe")
 
     assert sync.connection(books, FT._VAULT[0], cid, make=make, at=AT) == "refused"
+
+
+def test_the_check_reads_by_key_and_scans_no_table(books: Store):
+    """Run at connect and for every connection on every sync: each statement it runs is a seek (no scan of credentials,
+    humans, grants or bots, as the owner-by-email lookup and `owned` once were)."""
+    with books.read() as c:
+        seen: list[str] = []
+        c.set_trace_callback(seen.append)
+        try:
+            for actor in (OWNER, CARA, BOT):
+                FT.may_use_credential(c, actor, "cred-stripe")
+        finally:
+            c.set_trace_callback(None)
+        plans = {
+            sql: [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
+            for sql in dict.fromkeys(seen)
+            if sql.lstrip().upper().startswith("SELECT")
+        }
+    assert plans
+    scanned = {sql: plan for sql, plan in plans.items() if any(p.startswith("SCAN") for p in plan)}
+    assert not scanned, scanned

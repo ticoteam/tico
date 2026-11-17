@@ -126,6 +126,7 @@ def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: s
 
 
 # ------------------------------------------------------------------------------------------------ connecting
+KEY_NOT_USABLE_NOW = "the key is not one this connection's creator may use now (a grant revoked, a person gone, a bot paused or archived)"
 KEY_NOT_YOURS = "that credential is not one you may use: pick a key you hold on Tools"
 
 
@@ -139,7 +140,7 @@ def require_usable_key(ctx: Ctx, who: str, credential_id: str) -> None:
 
 def unusable_key(store: Any, row: Mapping[str, Any]) -> str:
     """Why a sync must not read this connection's credential, or "" when it may: the person or bot who made the
-    connection may no longer use it (a grant revoked, a person gone). A credential with no value left is the sync's own
+    connection may no longer use it (a grant revoked, a person gone, a bot paused or archived). A credential with no value left is the sync's own
     "missing" case. Logged by category and id, never the value."""
     ref, creator = str(row["credential_ref"] or ""), str(row["created_by"] or "")
     with store.read() as c:
@@ -152,7 +153,7 @@ def unusable_key(store: Any, row: Mapping[str, Any]) -> str:
         ref,
         "the connection's creator may no longer use its credential",
     )
-    return "the key is no longer one its connector may use; connect again with a key you hold"
+    return KEY_NOT_USABLE_NOW
 
 
 def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
