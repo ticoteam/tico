@@ -113,6 +113,7 @@ def move(conn, cipher):
                 sub["added_by"],
                 "model_subscriptions",
                 sub["created_at"],
+                reference=False,  # the subscription names the row by id
             )
             conn.execute("UPDATE model_subscriptions SET credential_id=?,sealed='' WHERE id=?", (cid, sub["id"]))
             moved += 1

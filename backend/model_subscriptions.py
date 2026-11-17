@@ -233,7 +233,7 @@ def _keep_value(c, vault, sub, value, preview, actor, now):
         )
         return sub["credential_id"]
     cid = CREDENTIAL + sub["id"]
-    keep_service(c, vault.cipher, cid, "Model subscription", value, actor, "model_subscriptions", now)
+    keep_service(c, vault.cipher, cid, "Model subscription", value, actor, "model_subscriptions", now, False)
     return cid
 
 

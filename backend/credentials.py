@@ -392,11 +392,16 @@ def open_or_reseal(c, key, legacy_path, nonce, ciphertext, aad, table, where, va
     return plain
 
 
-def keep_service(c, cipher, cid, name, value, actor, source, at=None):
-    """`value` sealed in the service row `cid`, made or replaced in place. Returns what a record keeps in its place:
-    KEPT and the save's time (to the microsecond), so the reference changes with every save (a caller can tell one
-    save from the next: backend/company_server.py `_forget`) and is the same for the same save on the same clock (a
-    demo company built twice for one date comes out the same). It carries nothing of the value."""
+SAVES = 'vault-saves:'  # registry_metadata key + service row id: how many times a record has kept that row
+
+
+def keep_service(c, cipher, cid, name, value, actor, source, at=None, reference=True):
+    """`value` sealed in the service row `cid`, made or replaced in place. Returns what a record keeps in its place
+    (None with `reference=False`, for a row a table names by id): KEPT and the row's save count, `vault:<n>`. n is one
+    more each save and is kept apart from the record and the row (registry_metadata SAVES+cid), so it never comes back
+    after a link is forgotten and made again: a caller tells one save from any other (backend/company_server.py
+    `_forget`), whatever the clock says, and a demo company built twice comes out the same. It carries nothing of the
+    value."""
     at = at or H.now()
     ciphertext, nonce = cipher.encrypt(c, cid, value)
     c.execute(
@@ -406,7 +411,15 @@ def keep_service(c, cipher, cid, name, value, actor, source, at=None):
         "updated_by=excluded.updated_by WHERE credentials.kind='service'",
         (cid, name, SERVICE, ciphertext, nonce, source, at, at, actor, actor),
     )
-    return KEPT + at
+    if not reference:
+        return None
+    found = c.execute('SELECT value FROM registry_metadata WHERE key=?', (SAVES + cid,)).fetchone()
+    saves = (int(found[0]) if found and str(found[0]).isdigit() else 0) + 1
+    c.execute(
+        'INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+        (SAVES + cid, str(saves)),
+    )
+    return KEPT + str(saves)
 
 
 def kept_record(c, key, cids):

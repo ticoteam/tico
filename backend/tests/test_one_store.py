@@ -328,3 +328,35 @@ def test_a_subscription_saved_between_reads_never_pairs_its_new_value_with_the_r
         sub = MS.row(reader, "sub1")
         assert reader.saved and MS.value_of(reader, vault.cipher, sub) is None  # not the next save's value
         assert MS.value_of(c, vault.cipher, MS.row(c, "sub1")) == TOKEN[:-1] + "d"
+
+
+def test_references_count_saves_so_a_revoke_after_a_reconnect_keeps_the_new_link(tmp_path):
+    """Under a frozen clock two saves still differ (`vault:<n>`, n counted apart from the record), and a 401 about the
+    key read before a disconnect and reconnect does not forget the link made since."""
+    import time_machine
+
+    store, vault = _older_server(tmp_path)
+    _start(store)
+
+    def connect(key, company):
+        with store.transaction() as w:
+            ref = keep_service(
+                w, vault.cipher, company_server.VAULT_ROW, "Tico company server key", key, "tico", "company"
+            )
+            company_server._write(w, {"key": ref, "company": {"id": company}})
+            return ref
+
+    with time_machine.travel(NOW, tick=False):
+        with store.read() as c:
+            first = company_server._row(c)["key"]  # what a status check read before asking HQ
+        assert first == KEPT + "1"  # the move's save
+        with store.transaction() as c:
+            company_server._forget(c, "human:ana", "company_server.disconnected", first)
+        second = connect("tsk_" + "n" * 32, "co2")
+        third = connect("tsk_" + "m" * 32, "co3")
+        assert len({first, second, third}) == 3 and (second, third) == (KEPT + "2", KEPT + "3")
+        with store.transaction() as c:
+            company_server._forget(c, "tico", "company_server.revoked", first)  # HQ's late 401 for the first key
+            company_server._forget(c, "tico", "company_server.revoked", second)  # and for one replaced since
+    key, record = company_server._key(store, vault)
+    assert (key, record["company"]["id"]) == ("tsk_" + "m" * 32, "co3")
