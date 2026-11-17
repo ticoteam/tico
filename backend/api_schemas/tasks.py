@@ -246,7 +246,16 @@ SCHEMAS.update(
                 "asked_by": "n",
                 "shows": items({"type": "string"}),
                 # A page requirement: the page attached now, at the version an OK of it is for.
-                "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
+                "page": obj(
+                    {
+                        "file_id": "s",
+                        "version": "i",
+                        "ref": "s",
+                        "page_version": "s",
+                        "pages": items(obj({"file_id": "s", "version": "i", "ref": "s"})),
+                    },
+                    required=["file_id", "version", "ref"],
+                ),
                 # A stage's OK that names nothing to show: the page that counted last on an earlier visit of the task (the
                 # QA page at OK release), to a reader who may open it; to anyone else {removed, label} or absent.
                 "earlier": obj(
@@ -276,6 +285,8 @@ SCHEMAS.update(
                         "file_id": "n",
                         "version": {"type": ["integer", "null"]},
                         "unchecked": "b",
+                        "page_version": "s",
+                        "pages": items(obj({"file_id": "s", "version": "i"})),
                     },
                     required=["document", "visit_id", "file_id", "version", "unchecked"],
                 ),
@@ -546,11 +557,16 @@ SCHEMAS["TaskDocument"] = obj(
             "description": ", ".join(DOCUMENT_NAMES) + " (the names Tico knows), or a bot's own",
         },
         "file_id": "s",
+        "page_id": "s",
+        "links": items(obj({"target": "s", "role": "s", "name": "s", "by": "s", "at": "s"})),
+        "changed_since_ok": "b",
+        "approved_version": "i",
         "version": "i",
         "by": "s",
         "at": "s",
         "versions": items(obj({"n": "i", "by": "s", "at": "s", "note": "n"})),
-    }
+    },
+    required=["name", "file_id", "page_id", "links", "changed_since_ok", "version", "by", "at", "versions"],
 )
 
 SCHEMAS["Task"]["properties"]["documents"] = items(ref("TaskDocument"))
