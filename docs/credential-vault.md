@@ -474,7 +474,7 @@ breaks the `op://` form; reference it by its item id.
   server added in Tools needs the grant alone). Changing `tools:` is a task for the owner.
 - A granted value exists only for that run; do not copy it anywhere that outlives the run.
 - Each bot can have only one active granted Credential for a variable. Revoke its previous grant before replacing it.
-- `can:` describes intended operations; restrict the vendor key or endpoint to enforce read-only access. Tico does not filter a vendor's MCP tools by `can`.
+- `can:` in `bot.yaml` describes intended operations; Tico does not filter a vendor's MCP tools by it, so restrict the vendor key or endpoint. An MCP server held in Tools is different: a bot at Read may call only the tools the server marks `readOnlyHint`.
 - Store new values in Credentials and grant them to the bot; a shell export does not grant access.
 
 ## Delete a Credential
