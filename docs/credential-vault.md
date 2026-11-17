@@ -3,7 +3,7 @@
 How a credential reaches a bot. A bot receives only its granted Credentials; a `tools:` entry names the
 variable a tool needs. The runner retrieves the granted values and resolves 1Password references. It masks a run's
 granted values (as typed, URL-encoded or base64) with `••••` in everything it posts and logs, in the text
-files the run changed in the repository, and holds back a push whose commits contain one (`runner_support/redact.py`).
+files the run changed in the repository, and holds back a push whose commits contain one (`runner-rs/src/redact.rs`).
 Text-file scrubbing opens regular files without following symlinks and replaces them atomically in the same folder.
 Oversized files are left out of publication; scrubbing never writes through a swapped file or parent symlink.
 
