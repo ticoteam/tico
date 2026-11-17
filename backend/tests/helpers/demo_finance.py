@@ -118,7 +118,7 @@ def _rules_are_in_force_and_the_bookkeepers_proposal_waits_for_ana(book):
     settings, _ = book
     with signed_in(settings) as api, api.app.state.store.read() as c:
         [(owner,)] = c.execute(
-            "SELECT id FROM humans WHERE lower(email) = ?", (settings.local_owner_email.lower(),)
+            "SELECT id FROM humans WHERE lower(email) = ?", (settings.owner_email.lower(),)
         ).fetchall()
         rules = {r["name"]: r for r in tab_money.rules(c, "human:" + owner)["rules"]}
     for name in ("Spend over $500 needs Ana", "Marketplace fees go to 6200"):

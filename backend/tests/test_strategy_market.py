@@ -47,7 +47,7 @@ def test_writes_straight_to_the_graph_move_us_and_next_and_only_people_mark_them
     _, _, librarian = setup_attempt(api, "librarian")
     post(api, "market/segments/target", {"id": first, "target": "ours"}, token=librarian["token"], expected=403)
     post(api, "market/segments/target", {"id": first, "target": "none"}, token=librarian["token"], expected=403)
-    assert not segments(api)[first]["self"]
+    assert segments(api)[first]["self"]  # refused: the Librarian cannot clear a person's Us either
 
 
 def test_a_segment_merged_away_keeps_its_marks(api):
