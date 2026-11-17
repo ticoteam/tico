@@ -118,7 +118,9 @@ Work a person has to go and do is a sub-task for them, not an ask. An @ in the c
 ### ❓ on a bot's message
 
 A bot that needs one person's reply marks its own chat message ❓ for them. Nothing is filed and nothing is sent: the
-message shows a small ❓ at its top right and is in that person's Needs you, which opens the chat at it.
+message shows a small, muted "?" at its top right and is in that person's Needs you, under its task's title (or the
+bot's name in a direct chat). In Flow the item is that chat, at the marked message, with its composer: a reply there
+clears it and Flow moves on.
 
 ```sh
 tico task ask <id> --to <person> "Should the launch note go out on Friday?"   # on the task's chat

@@ -298,13 +298,15 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   const keep = !a ? '' : a.matches('[data-modal-close]') ? '[data-modal-close]' : a.matches('[data-task-more]') ? '[data-task-more]' : a.matches('.tmodal-title') ? '.tmodal-title'
     : a.matches('[data-thread-back]') ? '[data-thread-back]' : a instanceof HTMLElement && a.dataset.taskTab ? `[data-task-tab="${CSS.escape(a.dataset.taskTab)}"]`
     : a instanceof HTMLElement && a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
+  const quiet = a instanceof HTMLElement && a.dataset.quietFocus !== undefined;
   taskModalRunsKeep(d, kept);
   taskLiveFocusKeep(d);
   const fullForm = taskFormCapture(d);
   d.innerHTML = hubModalHTML(full, {thread: d.classList.contains('thread'), docs: taskDocsOf(d, full), tab: d.taskTab});
   adopt(); taskFormAdopt(d, fullForm);
   taskModalBind(d, full, true);
-  if (keep) $(keep, d)?.focus({preventScroll: true});
+  if (keep && quiet) taskQuietFocus($(keep, d) as HTMLElement | null);
+  else if (keep) $(keep, d)?.focus({preventScroll: true});
   taskPropFocus(d); d.focusProp = ''; taskLiveFocusRestore(d); taskFormRestore(d, fullForm);
   taskTabFirst(d, detail); taskLiveStart(d, after); d.scrollTop = scroll;
   void taskRailLoad(d, full, detail);
@@ -1514,6 +1516,14 @@ function taskActivityOpen(d: ModalDialog, focus = '.rail-h') {
   const el = $(focus, activity) as HTMLElement | null;
   if (el && !el.matches('input, button, a')) el.setAttribute('tabindex', '-1');
   el?.focus({preventScroll: true});
+}
+/** Where opening puts the focus, with no ring: Chrome draws one on script focus when nothing was clicked first (a link,
+    a reload). data-quiet-focus keeps it off (forms.css) until the focus moves; a redraw keeps it quiet. */
+function taskQuietFocus(el: HTMLElement | null) {
+  if (!el) return;
+  el.dataset.quietFocus = '';
+  el.addEventListener('blur', () => { delete el.dataset.quietFocus; }, {once: true});
+  el.focus({preventScroll: true, focusVisible: false} as FocusOptions);
 }
 // Whether the task waits on the reader's own answer (its turn is the reader's ask).
 const taskYours = (t: ModalTask) => { const turn = !taskFinished(t) ? t.turn : null, me = myActor(); return !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me && !!turn.line; };

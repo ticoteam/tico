@@ -77,7 +77,8 @@ export interface OpenOptions {
   mover?: boolean;
   tasks?: Task[];
   needs?: Need[];
-  /** A task's comments, by task id, as GET /api/v2/tasks/{id} sends them. */
+  /** A task's comments, by task id, as GET /api/v2/tasks/{id} sends them; also its chat's timeline (c-<id>), and a
+      direct chat's messages by its conversation id (GET /api/v2/threads/{id}/timeline). */
   comments?: Record<string, unknown[]>;
   /** A task's history events, by task id, as GET /api/v2/tasks/{id} sends them. */
   events?: Record<string, unknown[]>;
@@ -343,6 +344,22 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       return json({task: t, children: [], comments: comments[t.id] || [], events: events[t.id] || [], runs: runs[t.id] || [], messages: [], has_more: false, mover});
     }
     if (p === '/api/v2/conversations') return json({conversations: []});
+    // A chat (thread-view.ts): a task's chat is c-<task id>, its comments; a direct chat, the messages kept by its id.
+    const thread = p.match(/^\/api\/v2\/threads\/([^/]+)\/(timeline|messages)$/);
+    if (thread) {
+      const cid = decodeURIComponent(thread[1]!), t = find(cid.replace(/^c-/, '')), list = (comments[t ? t.id : cid] ||= []);
+      if (thread[2] === 'messages' && method === 'POST') {
+        const body = (req.postDataJSON() || {}) as Posted['body']; posts.push({p, body});
+        const m = {id: 'm' + (list.length + 1), seq: list.length + 1, kind: 'say', sender_id: 'human:ana', body: body.text, conversation_id: cid,
+          created_at: new Date().toISOString(), refs: t ? {task: t.id} : {}};
+        list.push(m);
+        return json({message: m});
+      }
+      // A direct chat is with whoever else wrote in it.
+      const dmWith = t ? {} : {kind: 'dm', dm_with: [...new Set(list.map(m => String((m as {sender_id?: string}).sender_id)))].filter(a => a !== 'human:ana').map(actor => ({actor}))};
+      if (thread[2] === 'timeline') return json({thread: {id: cid, root_id: cid, title: t?.title || '', task_id: t?.id || null, me: {can_post: true}, ...dmWith},
+        messages: list.map((m, i) => ({seq: i + 1, conversation_id: cid, ...(m as object)})), next_cursor: null});
+    }
     if (p.endsWith('/messages')) return json({messages: []});
     return json(unrouted(p));
   });

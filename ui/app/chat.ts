@@ -646,13 +646,15 @@ function chatTaskRunHTML(run: ChatMessage[]) {
     + chatTaskRowHTML(run.at(-1));
 }
 // A bot's open ❓ on its message (backend/question_marks.py): it needs one person's reply. Only the mark, at the top
-// right of the message (every chat draws it from refs.question): no outline, colour or label. Hover names whose reply.
+// right of the message (every chat draws it from refs.question): a plain "?" in the timestamp's muted tone, no outline,
+// colour or label; the person it waits on sees it at full ink. Hover names whose reply.
 interface ChatQuestionMark { id?: string | undefined; to?: string | undefined }
 function qmarkHTML(refs: object | null | undefined) {
   const q = (refs as { question?: unknown } | null | undefined)?.question as ChatQuestionMark | null | undefined;
   if (!q || typeof q !== 'object' || !q.id) return '';
-  const whose = q.to && q.to === myActor() ? 'your' : `${actorLabel(q.to || '') || 'a person'}'s`;
-  return `<span class="qmark" role="img" aria-label="Needs ${esc(whose)} reply" title="Needs ${esc(whose)} reply">❓</span>`;
+  const mine = !!q.to && q.to === myActor();
+  const whose = mine ? 'your' : `${actorLabel(q.to || '') || 'a person'}'s`;
+  return `<span class="qmark${mine ? ' mine' : ''}" role="img" aria-label="Needs ${esc(whose)} reply" title="Needs ${esc(whose)} reply">?</span>`;
 }
 // Tico Live was retired; the lines it left in rooms (refs.live) read as plain messages.
 function v2MessageHTML(m: ChatMessage) {
