@@ -68,9 +68,9 @@ async function desktop(browser: Browser): Promise<void> {
   assert.deepEqual(everyone, ['Ana', 'Sam', 'API Engineer', 'BotOps', 'Engineer', 'Finance Owner', 'Finance Product Owner', 'Jev', 'Release Owner', 'Reviewer 1', 'Reviewer 2'],
     'people then bots, A–Z; archived bots and the Assistant stay out, BotOps (id = slug) is listed');
 
-  // AC-3: requester, bots named (title, then body), the area tag's owner, then recent; no one twice; at most 8.
+  // AC-3: requester, bots named (title, then its first message), the area tag's owner, then recent; no one twice; at most 8.
   const suggested = await page.evaluate(() => giveToSuggest(giveToEntries(), {requester_id: 'human:sam', title: 'Ask BotOps about the stuck run',
-    body: 'Then finance-po writes it up; botops again.', tags: [{owner: 'bot:b-release'}, {owner: 'human:sam'}]},
+    request: {text: 'Then finance-po writes it up; botops again.'}, tags: [{owner: 'bot:b-release'}, {owner: 'human:sam'}]},
   ['bot:eng', 'bot:botops', 'bot:api', 'bot:jev', 'bot:reviewer-1', 'bot:reviewer-2']).map(s => `${s.entry.name}: ${s.why}`));
   assert.deepEqual(suggested, ['Sam: Asked for it', 'BotOps: Named in the task', 'Finance Product Owner: Named in the task', 'Release Owner: Owns its area',
     'Engineer: Recent', 'API Engineer: Recent', 'Jev: Recent', 'Reviewer 1: Recent']);
@@ -269,9 +269,9 @@ async function needsYou(browser: Browser): Promise<void> {
   assert.deepEqual(sent.map(b => (b as {owner: string}).owner), ['botops'], 'Give sends the value the old list sent');
 
   // Suggested reads the whole task the screen loads, not only the item's brief (title and requester): a bot named only
-  // in the body and the area tag's owner are suggested too, the same as the task's Owner menu (#385 in production).
+  // in its first message and the area tag's owner are suggested too, the same as the task's Owner menu (#385 in production).
   const bare = {...brief, id: 't-body', number: 9, title: 'The board shows the wrong stage', owner_id: 'bot:jev'};
-  const full = {...bare, body: 'BotOps sees it on every run; Engineer last touched the stage code.', tags: [{id: 'g-bugs', key: 'bugs', owner: 'bot:b-release'}]};
+  const full = {...bare, request: {text: 'BotOps sees it on every run; Engineer last touched the stage code.'}, tags: [{id: 'g-bugs', key: 'bugs', owner: 'bot:b-release'}]};
   const bodyItem = {id: 't-body', kind: 'task', line: bare.title, since: now, task: bare, task_id: 't-body'};
   let reads = 0;
   await page.route('**/api/v2/tasks/t-body', route => { reads++; return route.fulfill({json: {task: full}}); });
