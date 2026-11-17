@@ -8,11 +8,12 @@ import pytest
 from backend import never_stuck as NS
 from backend import org_rules as OR
 from backend import question_marks as Q
+from backend import task_followers as TF
 from backend import task_engine as E
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     not_a_friday,
     ruled,
@@ -492,3 +493,65 @@ def test_open_marks_are_checked_in_as_many_reads_for_eight_as_for_two(c, general
 
     two, eight = reads("a", 2), reads("b", 8)
     assert len(eight) == len(two), eight
+
+
+# ---- a reply wakes the bot that asked, and that bot only -----------------------------------------------------------
+
+
+def _asked_cara(api):
+    """Ana's task on a by-hand stage, worked by ops, with finance following live; Cara (neither on the task nor a
+    mover, and without Write on finance) is asked a ❓ by ops. Every job so far is done."""
+    with api.app.state.store.transaction() as c:
+        X.pipeline(
+            c,
+            pid="manual",
+            name="Manual",
+            stages=[{"name": "Review", "owner": "assignee", "by_hand": True, "requirements": [{"kind": "owner_done"}]}],
+        )
+        task = X.new_task(c, ANA, "Write a launch message", pipeline_id="manual", assignee="bot:ops")
+        TF.change(c, ANA, task["id"], "bot:finance", notify="live")
+        restrict(
+            c, "finance", see={"people": ["ana", "cara"]}, read={"people": ["ana", "cara"]}, write={"people": ["ana"]}
+        )
+        mark = Q.ask(c, "bot:ops", task["id"], "human:cara", ASKED)
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    return task, mark
+
+
+def _queued(api):
+    return sorted(r["bot_id"] for r in sql(api, "SELECT bot_id FROM jobs WHERE state='queued'"))
+
+
+def test_the_persons_plain_reply_wakes_the_bot_that_asked_now_even_on_a_by_hand_stage(api):
+    task, mark = _asked_cara(api)
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/comments", json={"text": "Yes, Friday works."}, headers=headers("cara-test")
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["woke"] and r.json()["sent_as"]["delivery"] == "steer"
+    assert _queued(api) == ["ops"]  # finance, following, takes it on its next turn here
+    with api.app.state.store.read() as c:
+        assert Q.get(c, mark["id"])["cleared_reason"] == "replied"
+        assert H.task_delegated(c, task["id"], "bot:ops") and not H.task_delegated(c, task["id"], "bot:finance")
+
+
+def test_the_persons_reply_wakes_no_other_bot_and_a_defer_they_chose_stays(api):
+    task, _mark = _asked_cara(api)
+    api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Friday."}, headers=headers("cara-test"))
+    steer = {"text": "Use a shorter message.", "delivery": "steer"}  # no ❓ waits on Cara: she may not wake a bot
+    assert api.post(f"/api/v2/tasks/{task['id']}/comments", json=steer, headers=headers("cara-test")).status_code == 403
+    with api.app.state.store.transaction() as c:
+        Q.ask(c, "bot:ops", task["id"], "human:cara", "Should we send a shorter message?")
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json=steer, headers=headers("cara-test"))
+    assert r.status_code == 200, r.text
+    assert _queued(api) == ["ops"]
+    modes = sql(api, "SELECT recipient, mode FROM message_deliveries WHERE message_id=?", (r.json()["comment"]["id"],))
+    assert {m["recipient"]: m["mode"] for m in modes}.get("bot:finance") == "defer"
+    with api.app.state.store.transaction() as c:
+        Q.ask(c, "bot:ops", task["id"], "human:cara", "Should it name the venue?")
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    later = {"text": "No venue.", "delivery": "defer"}
+    r = api.post(f"/api/v2/tasks/{task['id']}/comments", json=later, headers=headers("cara-test"))
+    assert r.status_code == 200 and r.json()["sent_as"]["delivery"] == "defer" and not r.json()["woke"]
+    assert _queued(api) == []

@@ -317,6 +317,16 @@ def due(conn, at, failures=None):
     return out
 
 
+def now(conn, bot, conversation_id):
+    """Start `bot`'s run in this session now, carrying everything deferred for it there, as its deadline would (a
+    person's reply to the bot's ❓, which wakes that bot only). The run's job, or None: a run already queued there
+    carries it, or nothing waits."""
+    from .harnesses import EXTERNAL_HARNESSES
+
+    H = _H()
+    return _fire(conn, H, H.actor_id(bot), conversation_id, H.now(), EXTERNAL_HARNESSES)
+
+
 def _fire(conn, H, bot, conversation_id, at, external):
     rows = H._rows(
         conn.execute(
