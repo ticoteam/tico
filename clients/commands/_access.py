@@ -469,6 +469,8 @@ DEVELOPER_TOOLS = frozenset(
         "tico_task_label",
         "tico_task_snooze",
         "tico_task_queue",
+        # Access to a tool or a repository a code bot needs (backend/access_requests.py), never a task to a person.
+        "tico_access_request",
         "tico_task_release",
         "tico_task_worktree_add",
         "tico_task_worktree_attach",
