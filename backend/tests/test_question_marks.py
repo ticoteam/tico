@@ -617,6 +617,17 @@ def test_a_bot_does_not_finish_move_on_or_close_its_task_while_its_question_mark
     assert E.task(c, task_id)["status"] == "done"
 
 
+def test_a_bot_withdraws_a_task_it_filed_with_its_question_mark_open(c, general):
+    """Closing a task the bot filed itself withdraws it: the question goes with it. Finishing it still waits."""
+    task_id = X.new_task(c, BUILDER, "Pick the launch date", assignee=ANA)["id"]
+    _ask(c, task_id)
+    with pytest.raises(H.Refused) as refused:
+        H.task_done(c, BUILDER, task_id, "Picked", _version(c, task_id))
+    assert refused.value.rule == "task_question_open"
+    H.task_close(c, BUILDER, task_id, "Not needed", _version(c, task_id))
+    assert E.task(c, task_id)["status"] == "closed" and _open(c, task_id) == []
+
+
 def test_a_person_finishes_a_task_with_a_bots_question_mark_open(c, general):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     _ask(c, task_id)
