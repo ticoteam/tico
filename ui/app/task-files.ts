@@ -381,16 +381,18 @@ function tfWire(d: TfDialog): void {
       void tfRemove(d, d.tfOpen.id, rm); return;
     }
     const ver = eventElement(ev)?.closest<HTMLElement>('[data-tf-v]');
-    if (ver && d.tfOpen) {
-      const open = d.tfOpen;
-      const n = Number(ver.dataset.tfV);
-      if (open.cmp === n) open.cmp = tfVersion(tfFile(d, open.id)!, open.n).n;
-      open.n = n; tfViewPaint(d); return;
-    }
-    if (eventElement(ev)?.closest('[data-tf-cmp]') && d.tfOpen) {
-      const open = d.tfOpen;
-      const f = tfFile(d, open.id)!, v = tfVersion(f, open.n);
-      open.cmp = open.cmp != null ? null : (f.versions.find(x => x.n < v.n) || f.versions.find(x => x.n !== v.n))!.n;
+    const compare = eventElement(ev)?.closest('[data-tf-cmp]');
+    if ((ver || compare) && d.tfOpen) {
+      const open = d.tfOpen, f = tfFile(d, open.id);
+      if (!f) return;
+      const v = tfVersion(f, open.n);
+      if (ver) {
+        const n = Number(ver.dataset.tfV);
+        if (open.cmp === n) open.cmp = v.n;
+        open.n = n;
+      } else {
+        open.cmp = open.cmp != null ? null : (f.versions.find(x => x.n < v.n) || f.versions.find(x => x.n !== v.n))!.n;
+      }
       tfViewPaint(d); return;
     }
     const step = eventElement(ev)?.closest<HTMLElement>('[data-tf-step]');

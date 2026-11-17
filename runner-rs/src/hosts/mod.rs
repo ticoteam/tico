@@ -1474,7 +1474,9 @@ mod tests {
             assert_eq!(command_program(&command), format!("tico page {action}"));
             assert!(!shell_reads_only(&command));
         }
-        assert!(shell_reads_only("tico page list --linked task:T1 --role Spec"));
+        assert!(shell_reads_only(
+            "tico page list --linked task:T1 --role Spec"
+        ));
     }
 
     #[test]
