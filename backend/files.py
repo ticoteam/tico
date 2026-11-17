@@ -37,7 +37,7 @@ from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
 from . import task_wakes
-from .api_contract import api_v2
+from .api_contract import ERROR, api_v2
 from clients import bot_files as BF
 
 LOG = logging.getLogger("tico.files")
@@ -2483,6 +2483,20 @@ class Files:
         return serve(request, self.blobs, blob, version is not None)
 
 
+MENTIONS_DESCRIPTION = (
+    "Turns the file paths and names a bot wrote (in a message, a page, a report) into its files, for links. "
+    "A value with a folder (`reports/pack.docx`, `/home/bot/checkout/reports/pack.docx`) matches the file published "
+    "from that path in the bot's checkout, else the one file whose path it ends with or that ends with it. A bare name "
+    "(`pack.docx`) matches only when exactly one of the bot's files has that name. Only the files the caller may see "
+    "count, by each file's current version; archived files and links never match. A value that is not exactly one "
+    "file is absent from `files`: none, two or more (never a guess), or one the caller may not read all look the same. "
+    "Tico's web app also tries a bare name inside a folder named earlier in the same paragraph; this route does not, "
+    "so send the joined path yourself. A caller who may see the bot but none of its files gets 200 with `files` "
+    "empty, as does a request with no m. Errors: 401 not signed in, 404 no such bot or one the caller may not see, "
+    "422 more than 60 m values."
+)
+
+
 def install_files(app, store, auth, blobs, mutate):
     from . import file_reviews
 
@@ -2620,6 +2634,13 @@ def install_files(app, store, auth, blobs, mutate):
             "resolveBotFileMentions",
             "The bot's files that the paths and names it wrote name (m, up to 60): each name that is exactly one file the caller may see, keyed by the name as sent; any other name is absent",
             "BotFileMentions",
+            description=MENTIONS_DESCRIPTION,
+            parameters={
+                "m": "A path or file name as the bot wrote it; repeat for each (m=a&m=b), at most 60. Values are "
+                "trimmed, a repeat counts once, and one over 300 characters is ignored. Before matching, "
+                "\\ becomes / and a leading ./ is dropped; the answer keeps the value as sent (trimmed)"
+            },
+            responses={"404": {**ERROR, "description": "not_found: no such bot, or one the caller may not see"}},
         ),
     )
     def bot_file_mentions(
@@ -2734,7 +2755,15 @@ def install_files(app, store, auth, blobs, mutate):
     @app.head("/api/v2/files/{fid}/versions/{number}", include_in_schema=False)
     @app.get(
         "/api/v2/files/{fid}/versions/{number}",
-        **api_v2("Files", "getFileVersion", "The bytes of one version (a download, never a storage address)"),
+        **api_v2(
+            "Files",
+            "getFileVersion",
+            "The bytes of one version (a download, never a storage address)",
+            answer={
+                "description": "The file's bytes (application/octet-stream, sent as an attachment)",
+                "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
+            },
+        ),
     )
     def version_bytes(request: Request, fid: str, number: int):
         return files.serve(request.state.identity, fid, number, request=request)

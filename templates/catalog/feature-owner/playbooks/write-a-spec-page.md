@@ -1,16 +1,16 @@
 # Write a spec page
 
-Used in the Spec stage, after a person OKed the pitch. Budget 60 minutes for a first version. The outcome is one Spec
-page attached to the Spec page requirement, which a person OKs from the page alone. You write it yourself, and you build
+Used in the Spec stage: a feature starts as a chat. Budget 60 minutes for a first version. The outcome is the task's
+Spec, one page a person approves from the page alone. You write it yourself, and you build
 from it: after a compaction it is the reference for what you are building.
 
 ---
 
-## 1. Read the pitch
+## 1. Read the chat
 
     tico task show <id>
 
-Read the pitch, the person's OK and what they said with it, and the evidence in the task's comments and
+Read the chat the feature started from, what the person said in it, and the evidence in the task's comments and
 `knowledge/problems.md`. Pull the repository, and if a spec for this problem already exists, extend it instead of
 starting a second file.
 
@@ -79,7 +79,7 @@ Read the top alone, as someone who has never seen the task: do they know exactly
 and the pictures? Then read it as a reviewer: can each criterion be tested? Is anything ambiguous ("quickly", "simple")? Is there a dependency
 on another team or another repository? Is every rabbit hole fixed, cut or time-boxed? Fix those before handing over.
 
-## 6. Build the page and attach it
+## 6. Build the page and write it on the task
 
 Follow `.claude/skills/build-the-page/SKILL.md`: screenshots at phone (390 px) and desktop (1280 px) width, arrows, then
 build and check it with the skill's `page.py` (`--kind bug-spec`, `screen-spec` or `change-spec`), then publish it:
@@ -87,12 +87,11 @@ build and check it with the skill's `page.py` (`--kind bug-spec`, `screen-spec` 
     tico page publish specs/<slug>.html --spec --task <id>
 
 It prints the file id. Render the published page with `page.py render` and look at it at both widths before you
-attach it: a broken page is never sent. Attach it to the requirement `tico task show` names:
+write it: a broken page is never sent. Then write it as the task's Spec; writing it in Spec or OK spec submits it:
 
-    tico task attach <id> page:<file id> --req "<requirement>" --version N
+    tico task attach <id> specs/<slug>.html --doc Spec --note "<what changed>"
 
-Put the open questions and who owes them in a note on the task. In Related input, one or two bots Jev picks comment on
-the page once: change the spec where they are right, publish and attach the new version, and answer the rest in one line
-on the task. Then a person OKs it, and the task moves to Build, which is yours. The stage asks the person for that OK:
-do not ask them again with `tico task ask`. If the person sends it back, their notes are on the task: change the spec,
-publish again and attach the new version.
+Put the open questions and who owes them in a note on the task. In Related input, one or two bots the decision model
+picks comment on the Spec once: change it where they are right, write the next version, and answer the rest in one line
+on the task. Then a person approves it, and the task moves to Build, which is yours. Never ask for that approval
+yourself. If the person sends it back, their notes are in the chat: change the spec and write the next version.

@@ -1304,8 +1304,10 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     # (readiness.prime_runners, prime_placed), not one read per bot per computer.
     readiness.prime_runners(c, online_ids)
     readiness.prime_placed(c, [row["bot"] for row in rows if row["reason"] == "not_ready"])
-    # Every quarantined bot's quarantine record, read together for its explanation (quarantine_display.explanation).
-    H.prime_quarantines(c, [row["bot"] for row in rows if row["reason"] == "quarantined"])
+    # Every quarantined bot's hold, read together for its explanation (hubdb.quarantine_words).
+    from . import holds
+
+    holds.prime(c, holds.QUARANTINE, "bot", [row["bot"] for row in rows if row["reason"] == "quarantined"])
     # Every stuck bot's configuration and operator, read together for its harness check and quarantine
     # explanation (readiness._config and auth.operator read them per bot otherwise).
     from .read_cache import prime
@@ -1388,9 +1390,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             text = updating_words({**row, "turns": visible_turns(c, row.get("turns") or [], who, auth)})
             fix = _fix("Open Computers", "#/settings", "devices")
         elif reason == "quarantined":
-            from .quarantine_display import explanation
-
-            text = explanation(c, row["bot"], who, auth)
+            manages = auth is not None and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"]))
+            text = H.quarantine_words(c, row["bot"], manages)
             fix = _fix(*BOT_SETTINGS)
         elif reason in HELD:
             words, where = HELD[reason]
@@ -1945,7 +1946,7 @@ def _backups(config, settings):
     key_here = bool(key.get("present"))  # a local credential key (/data/credential.key) is in use
     key_copied = bool(key.get("current"))
     files = backup.get("key_files") if isinstance(backup.get("key_files"), dict) else {}
-    # github-app.key and slack.key (backend/replication.py): present ones that the backup does not hold as they are now
+    # github-app.key (backend/replication.py): present ones that the backup does not hold as they are now
     uncopied = sorted(
         name
         for name, state in files.items()
@@ -2048,14 +2049,14 @@ SEALED_FIX = (
 
 def _sealed_secrets(c, settings, github):
     """Secrets sealed with a key file beside the database (the GitHub App and directory sync credentials with
-    github-app.key, the Slack tokens with slack.key, every credential with credential.key) that this server cannot
+    github-app.key, every credential with credential.key) that this server cannot
     open: a restore or a move that left a key file behind. Read only: nothing here creates a key."""
     import hashlib
     import hmac
 
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-    from . import credentials, directory, slack_app
+    from . import credentials, directory
 
     still_needs = {}  # {key file: rows only it opens}, under KMS
 
@@ -2120,26 +2121,6 @@ def _sealed_secrets(c, settings, github):
                         else "disconnect GitHub and connect it again, and save the directory sync credentials again",
                     )
                 )
-        slack = (
-            c.execute("SELECT * FROM slack_credentials WHERE id='app'").fetchone()
-            if table("slack_credentials")
-            else None
-        )
-        if slack:
-            # The key the Slack gateway opens them with: the vault's under KMS, else slack.key.
-            key = slack_app._key(settings, github.vault if kms else None, c, create=False)
-            if not (key and opens(key, slack, slack_app.AAD, slack_app.key_file(settings) if kms else None)):
-                problems.append(
-                    "The Slack tokens cannot be decrypted: "
-                    + (
-                        "slack.key is missing."
-                        if key is None
-                        else "the key they were sealed with is not this server's."
-                    )
-                )
-                fixes.append(
-                    SEALED_FIX.format(file="slack.key", redo="paste the Slack tokens again (Settings > Slack)")
-                )
         if vault and vault["kms_key"] == credentials.LOCAL and not settings.credential_kms_key:
             path = settings.db_path.parent / credentials.KEY_FILE
             data = path.read_bytes() if path.is_file() else None
@@ -2159,7 +2140,7 @@ def _sealed_secrets(c, settings, github):
     needed = ""
     if still_needs:
         counts = []
-        for name, n in sorted(still_needs.items()):  # "2 secrets still need github-app.key and 1 still needs slack.key"
+        for name, n in sorted(still_needs.items()):  # "2 secrets still need github-app.key"
             noun = ("secret " if n == 1 else "secrets ") if not counts else ""
             counts.append(f"{n} {noun}still {'needs' if n == 1 else 'need'} {name}")
         needed = (

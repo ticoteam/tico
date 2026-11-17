@@ -76,8 +76,6 @@ EMPTY = (
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects",
     "google_signin_refusals",
-    # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
-    "quarantine_holds",
     # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes",
     "memory_tidy_packets",
@@ -395,6 +393,9 @@ KEEP = (
             # Run-budget holds before migration 20261117061834_holds_runaway moves them into `holds`: a copy is pruned
             # before its first start runs that migration, so an unlisted table here would be emptied and its holds lost.
             "bot_budget",
+            # Quarantines on one task or chat before migration 20261117072054_holds_quarantine moves them into `holds`,
+            # kept for the same reason.
+            "quarantine_holds",
             "bot_config",
             "bot_settings",
             "bot_control",
@@ -454,7 +455,7 @@ KEEP = (
             "goals",
             "health_findings",
             "health_reports",
-            "holds",  # why a bot may not start work: the copy holds what the source held (runaway runs, so far)
+            "holds",  # why a bot may not start work: the copy holds what the source held (runaway runs, quarantines)
             "humans",
             "principals",
             "import_refs",
@@ -761,7 +762,7 @@ def check_destination(source, dest, force):
     holding key files, or a folder git would track."""
     if dest == source or (dest.exists() and os.path.samefile(dest, source)):
         raise SystemExit("devcopy: the destination is the source database")
-    for name in backup.KEY_FILES:
+    for name in backup.KEY_FILES + backup.OLD_KEY_FILES:
         if (dest.parent / name).exists():
             raise SystemExit(f"devcopy: {dest.parent} holds {name}; put the copy in a folder of its own")
     if not ignored_by_git(dest.parent):

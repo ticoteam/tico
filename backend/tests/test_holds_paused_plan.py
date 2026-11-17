@@ -1,12 +1,12 @@
-"""The pauses' reads and bots.state switch (backend/company_pause.py, holds._switch) plan from the holds indexes
-whatever sqlite_stat1 says. `holds` keeps every released hold as history, so a scan of the table grows with it; the
-open holds are a few dozen rows in holds_open (a partial index on released_at IS NULL)."""
+"""The pauses' reads and the bots.state switch of pauses and quarantines (backend/company_pause.py, holds._switch)
+plan from the holds indexes whatever sqlite_stat1 says. `holds` keeps every released hold as history, so a scan of the
+table grows with it; the open holds are a few dozen rows in holds_open (a partial index on released_at IS NULL)."""
 
 import sqlite3
 
 import pytest
 
-from backend import company_pause
+from backend import company_pause, holds
 from backend.config import Settings
 from backend.store import H, Store
 
@@ -42,6 +42,9 @@ def test_pause_reads_and_the_state_switch_search_holds_open_even_with_stale_stat
     try:
         assert company_pause.record(c) is None
         company_pause.pause_bot(c, "human:ana", "ops")
+        holds.put(c, holds.QUARANTINE, "bot", "ops", actor="bot:ops")
+        holds.release(c, holds.QUARANTINE, "bot", "ops", actor="human:ana", how="person")  # the switch: back to paused
+        assert c.execute("SELECT state FROM bots WHERE id='ops'").fetchone()[0] == "paused"
         company_pause.resume_bot(c, "human:ana", "ops")
         assert c.execute("SELECT state FROM bots WHERE id='ops'").fetchone()[0] == "active"
     finally:
@@ -50,9 +53,12 @@ def test_pause_reads_and_the_state_switch_search_holds_open_even_with_stale_stat
     reads = sorted(
         {s for s in seen if ("FROM holds" in s or s.startswith("UPDATE holds")) and not s.startswith("EXPLAIN")}
     )
-    assert any(s.lstrip().upper().startswith("UPDATE BOTS") for s in reads), reads  # the switch's NOT EXISTS
+    switch = [s for s in reads if s.lstrip().upper().startswith("UPDATE BOTS SET STATE=CASE")]
+    assert switch, reads  # a release's switch: which stopping hold is still open on the bot
     assert len(reads) >= 3, reads
     for sql in reads:
         plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
         on_holds = [step for step in plan if step.startswith(("SCAN holds", "SEARCH holds"))]
         assert on_holds and all("INDEX holds_open" in step for step in on_holds), (sql, plan)
+        if sql in switch:  # one seek per stopping kind (holds.STATE_KINDS)
+            assert len(on_holds) == len(holds.STATE_KINDS), (sql, plan)

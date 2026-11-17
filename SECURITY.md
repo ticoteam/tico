@@ -52,8 +52,8 @@ Someone who takes over the server in that case can read the stored provider key 
 questions as they are sent. It does hold the sign-in
 credentials (OIDC client secret, session secret) and, if you connect GitHub, the GitHub App's private key.
 Stored secrets are sealed at rest, never kept in plaintext in the database: credentials and support ticket secrets with
-the vault's data key; the GitHub App, directory sync and Slack secrets with the vault's KMS-wrapped key, or without KMS
-with `github-app.key` and `slack.key`; and an agent credential waiting for a paired profile to collect it, with a key
+the vault's data key, the Slack tokens included; the GitHub App and directory sync secrets with the vault's KMS-wrapped
+key, or without KMS with `github-app.key`; and an agent credential waiting for a paired profile to collect it, with a key
 only that profile's pairing secret opens ([Shared credentials](docs/credential-vault.md#other-secrets-the-vault-seals)).
 Someone who takes over the server can read and change team data and can mint GitHub tokens, so
 treat it like any internal application server: patch it, keep the data volume private, and restrict
@@ -221,9 +221,9 @@ it out if the server host runs anything else you care about.
 Litestream replicates the SQLite database continuously to a bucket you choose, and the data volume can
 be snapshotted. A backup contains everything the server holds, including the encrypted credential store
 and sign-in credentials, so give the bucket a private policy, encrypt it and restrict who can read it.
-In local-key mode, protect the copied keys too: automatic backups include `credential-key/credential.key`,
-`credential-key/github-app.key` (GitHub App and directory sync secrets) and `credential-key/slack.key` (Slack tokens) in the
-same destination as the database, and hand-run and scheduled bundle backups carry them beside their database copy, so
+In local-key mode, protect the copied keys too: automatic backups include `credential-key/credential.key`
+and `credential-key/github-app.key` (GitHub App and directory sync secrets) in the same destination as the database,
+and hand-run and scheduled bundle backups carry them beside their database copy, so
 read access to the backup bucket opens those secrets unless KMS is on: keep backups in a separate bucket or prefix with
 its own access.
 Anyone who reads both can decrypt those secrets. A restore without the keys cannot decrypt them.

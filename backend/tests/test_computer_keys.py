@@ -4,7 +4,7 @@ computer asks "this computer only" or "all of them"."""
 
 import json
 
-from backend.tests.helpers.computer_signin import computer_asks, grant, store, vault
+from backend.tests.helpers.computer_signin import computer_asks, store, vault
 from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
 from backend.tests.helpers.computer_keys import (
     CAPABLE,
@@ -17,6 +17,7 @@ from backend.tests.helpers.computer_keys import (
     pending,
     report,
     setup,
+    shared_before,
 )
 
 
@@ -76,7 +77,8 @@ def test_a_new_key_that_fails_its_check_is_deleted_and_the_old_one_stays(environ
     call(api, "POST", f"computers/{rid}/logins/{late['id']}/cancel", {})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM credentials WHERE source=?", ("computer:" + rid,)).fetchone()[0] == 1
-        assert c.execute("SELECT count(*) FROM computer_keys").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM computer_keys").fetchone()[0] == 0, "a checked key is a subscription"
+        assert c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] == 1
     # Checked, and the computer says it is putting it in place: from Tico's yes it is this computer's key, handed out
     # without the job (so a regular fetch meanwhile cannot bring the old one back), and a cancel comes too late.
     agreed = call(api, "POST", f"computers/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-agreed-0123456789"})
@@ -96,8 +98,8 @@ def test_a_cleared_key_is_not_signed_back_in_by_the_shared_key(environment):
     """Acceptance: a cleared key connection is not re-signed by the shared key's re-apply; adding a key or "Use the
     shared key" is what restores it."""
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     box = computer(api, "Team box", source="shared")
+    shared_before(api)
     rid = box["runner_id"]
     assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
     out = call(api, "POST", f"computers/{rid}/keys/clear", {"runtime": "codex"})["computers"]
@@ -137,9 +139,9 @@ def test_switch_to_subscription_keeps_the_key_it_runs_on_and_is_refused_once_the
     key there is no login to keep, so a switch (a page drawn before the clear) is refused rather than run as a plain
     sign-in whose cancel would read "The API key is still in use" on a computer with no login; Sign in is the way."""
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     switches = CAPABLE + ["model_switch_type_v1"]
     box = computer(api, "Team box", source="shared", capabilities=switches)
+    shared_before(api)
     rid = box["runner_id"]
     first = call(api, "POST", f"computers/{rid}/logins", {"runtime": "codex", "to": "subscription"})
     report(api, box, first["id"], "waiting")
@@ -162,11 +164,11 @@ def test_this_computer_only_or_all_of_them_for_a_key_serving_several_computers(e
     """Acceptance: the shared key's ask lists the computers it serves; "this computer only" leaves the others on it,
     "all of them" clears it everywhere, and an offline one clears its copy when it is next online."""
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     one = computer(api, "Alpha", source="shared")
     two = computer(api, "Bravo", source="shared")
     three = computer(api, "Charlie", source="shared")
     own = computer(api, "Delta", source="terminal")
+    team = shared_before(api)
     with api.app.state.store.transaction() as c:  # Charlie went offline
         c.execute(
             "UPDATE runner_states SET last_seen_at='2026-01-01T00:00:00Z' WHERE runner_id=?", (three["runner_id"],)
@@ -197,16 +199,18 @@ def test_this_computer_only_or_all_of_them_for_a_key_serving_several_computers(e
     assert fetch(api, three) == {"credentials": [], "signed_out": True, "clear_key": True}
     assert "signed_out" not in fetch(api, own), "a computer on its own key is not touched"
     assert call(api, "GET", "operations")  # still lists fine
-    # The shared key itself stays in Credentials for computers added later.
+    # The shared key itself stays; a computer added later gets it from "Use the shared key", not by itself.
     fresh = computer(api, "Echo", source=None)
+    assert fetch(api, fresh)["credentials"] == []
+    call(api, "POST", f"computers/{fresh['runner_id']}/shared-key", {"runtime": "codex", "credential": team})
     assert fetch(api, fresh)["credentials"][0]["value"] == SHARED
 
 
 def test_replacing_the_shared_key_for_all_of_them_is_a_credential_administrators_change(environment):
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     mine = computer(api, "Quinn's box", operator="quinn", source="shared")
     other = computer(api, "Team box", source="shared")
+    shared_before(api)
     quinn = as_person(api, "quinn")
     ask = call(api, "GET", f"computers/{mine['runner_id']}/keys?runtime=codex", who=quinn)
     assert ask["can_replace_all"] is False
@@ -283,8 +287,8 @@ def test_botops_never_clears_or_replaces_a_key(environment):
     from backend.auth import Identity
 
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     one = computer(api, "Alpha", source="shared")
+    shared_before(api)
     rid = one["runner_id"]
     api.app.state.store.settings.test_identities["morgan-via-botops"] = Identity(
         "human:morgan", "human", via="botops", confirmed=True
@@ -313,10 +317,9 @@ def test_replacing_a_shared_key_for_all_of_them_changes_only_the_kind_chosen(env
     token, api_key = "oauth-team-token-0123456789", "sk-ant-team-key-0123456789"
     oauth_id = store(api, "CLAUDE_CODE_OAUTH_TOKEN", token)
     key_id = store(api, "ANTHROPIC_API_KEY", api_key)
-    grant(api, oauth_id, "computers")
-    grant(api, key_id, "computers")
     box = computer(api, "Team box", source="shared", runtime="claude", name="ANTHROPIC_API_KEY")
     other = computer(api, "Oauth box", source="shared", runtime="claude", name="CLAUDE_CODE_OAUTH_TOKEN")
+    shared_before(api, oauth_id, key_id)
     rid = box["runner_id"]
     info = call(api, "GET", f"computers/{rid}/keys?runtime=claude")
     assert (info["name"], info["preview"]) == ("ANTHROPIC_API_KEY", "sk-…789")
@@ -330,8 +333,10 @@ def test_replacing_a_shared_key_for_all_of_them_changes_only_the_kind_chosen(env
         {"runtime": "claude", "secret": new, "env": "ANTHROPIC_API_KEY", "scope": "all"},
     )
     assert out["shared"] == {"id": key_id, "env": "ANTHROPIC_API_KEY", "preview": "sk-…321"}
-    values = {row["env"]: row["value"] for row in fetch(api, box, runtime="claude")["credentials"]}
-    assert values == {"CLAUDE_CODE_OAUTH_TOKEN": token, "ANTHROPIC_API_KEY": new}
+    # A computer is given one key for a runtime: the one it ran on.
+    assert fetch(api, box, runtime="claude")["credentials"] == [
+        {"env": "ANTHROPIC_API_KEY", "value": new, "source": "shared"}
+    ]
     assert listed(api, box)["shared_keys"]["claude"]["preview"] == "sk-…321"
     assert listed(api, other)["shared_keys"]["claude"]["preview"] == "oau…789"
     # No kind given: the one this computer runs on.
@@ -341,8 +346,8 @@ def test_replacing_a_shared_key_for_all_of_them_changes_only_the_kind_chosen(env
         f"computers/{other['runner_id']}/keys",
         {"runtime": "claude", "secret": "oauth-new-0123456789", "scope": "all"},
     )
-    values = {row["env"]: row["value"] for row in fetch(api, box, runtime="claude")["credentials"]}
-    assert values == {"CLAUDE_CODE_OAUTH_TOKEN": "oauth-new-0123456789", "ANTHROPIC_API_KEY": new}
+    assert [row["value"] for row in fetch(api, other, runtime="claude")["credentials"]] == ["oauth-new-0123456789"]
+    assert [row["value"] for row in fetch(api, box, runtime="claude")["credentials"]] == [new]
     # A kind the runtime does not take, or one not shared, changes nothing.
     call(
         api,
@@ -352,10 +357,11 @@ def test_replacing_a_shared_key_for_all_of_them_changes_only_the_kind_chosen(env
         expected=422,
     )
     call(api, "DELETE", f"credentials/{oauth_id}")
+    assert fetch(api, other, runtime="claude")["credentials"] == [], "its key is gone"
     refused = call(
         api,
         "POST",
-        f"computers/{other['runner_id']}/keys",
+        f"computers/{rid}/keys",
         {"runtime": "claude", "secret": "oauth-x-0123456789", "env": "CLAUDE_CODE_OAUTH_TOKEN", "scope": "all"},
         expected=409,
     )
@@ -364,11 +370,11 @@ def test_replacing_a_shared_key_for_all_of_them_changes_only_the_kind_chosen(env
 
 
 def test_a_computer_key_is_deleted_in_credentials_unless_it_is_being_checked(environment):
-    """Credentials > Delete on a computer's own key: one in use goes and the computer falls back to the shared key; one
+    """Credentials > Delete on a computer's own key: one in use goes and the computer is cleared, as Clear key does; one
     a computer is still checking is refused, so its check never confirms a key that is gone."""
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     box = computer(api, "Team box", source="shared")
+    shared_before(api)
     rid = box["runner_id"]
     first = call(api, "POST", f"computers/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-own-key-0123456789"})
     report(api, box, first["id"], "done")
@@ -378,15 +384,17 @@ def test_a_computer_key_is_deleted_in_credentials_unless_it_is_being_checked(env
     assert fetch(api, box, staged["id"])["credentials"][0]["value"] == "sk-proj-next-key-0123456789"
     assert pending(api, box)[0]["id"] == staged["id"]
     call(api, "POST", f"computers/{rid}/logins/{staged['id']}/cancel", {})
-    # The key in use goes: the computer gets the shared key at its next fetch, and its row no longer shows its own.
+    # The key in use goes: the computer is cleared, and its row no longer shows its own.
     active = call(api, "GET", f"computers/{rid}/keys?runtime=codex")
     assert active["source"] == "computer"
     with api.app.state.store.read() as c:
         own = c.execute(
-            "SELECT credential_id FROM computer_keys WHERE runner_id=? AND state='active'", (rid,)
+            "SELECT s.credential_id FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
+            "WHERE g.runner_id=?",
+            (rid,),
         ).fetchone()
     assert call(api, "DELETE", f"credentials/{own[0]}") == {"deleted": True, "id": own[0]}
-    assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
+    assert fetch(api, box) == {"credentials": [], "signed_out": True, "clear_key": True}
     assert listed(api, box)["keys"] == {}
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM computer_keys").fetchone()[0] == 0
@@ -409,7 +417,11 @@ def test_deleting_the_only_key_in_credentials_clears_it_on_the_computer(environm
     added = call(api, "POST", f"computers/{rid}/keys", {"runtime": "codex", "secret": "sk-proj-own-key-0123456789"})
     report(api, box, added["id"], "done")
     with api.app.state.store.read() as c:
-        own = c.execute("SELECT credential_id FROM computer_keys WHERE runner_id=?", (rid,)).fetchone()[0]
+        own = c.execute(
+            "SELECT s.credential_id FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
+            "WHERE g.runner_id=?",
+            (rid,),
+        ).fetchone()[0]
     call(api, "DELETE", f"credentials/{own}")
     assert fetch(api, box) == {"credentials": [], "signed_out": True, "clear_key": True}
     assert listed(api, box)["signed_out"]
@@ -423,20 +435,25 @@ def test_a_member_sees_another_persons_computer_without_its_key_previews(environ
     """Every person now sees every working computer (#610), but only an administrator or its operator reads which key
     it signs in with: a member gets each key's kind and no preview."""
     api = setup(environment)
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     box = computer(api, "Team box", source="shared")
+    other = computer(api, "Other box", source="shared")
+    shared_before(api)
     job = call(
         api, "POST", f"computers/{box['runner_id']}/keys", {"runtime": "codex", "secret": "sk-proj-own-0123456789"}
     )
     report(api, box, job["id"], "done")
     owner = listed(api, box)
-    assert owner["keys"]["codex"]["preview"] == "sk-…789" and owner["shared_keys"]["codex"]["preview"] == "sk-…789"
+    assert owner["keys"]["codex"]["preview"] == "sk-…789" and listed(api, other)["shared_keys"]["codex"] == {
+        "env": "OPENAI_API_KEY",
+        "preview": "sk-…789",
+    }
     quinn = as_person(api, "quinn")  # neither an administrator nor its operator
-    member = next(m for m in call(api, "GET", "operations", who=quinn)["computers"] if m["id"] == box["runner_id"])
+    seen = {m["id"]: m for m in call(api, "GET", "operations", who=quinn)["computers"]}
+    member = seen[box["runner_id"]]
     assert member["may_manage"] is False
     assert member["keys"] == {"codex": {k: v for k, v in owner["keys"]["codex"].items() if k != "preview"}}
-    assert member["shared_keys"] == {"codex": {"env": "OPENAI_API_KEY"}}
-    assert "sk-" not in json.dumps(member)
+    assert seen[other["runner_id"]]["shared_keys"] == {"codex": {"env": "OPENAI_API_KEY"}}
+    assert "sk-" not in json.dumps(seen)
 
 
 def test_switch_to_subscription_deletes_the_computers_own_key_and_a_key_added_later_is_in_use_again(environment):
@@ -588,9 +605,9 @@ def test_a_poll_with_no_key_to_send_takes_no_write_lock_and_a_sent_key_is_audite
     sent is still audited, in the write transaction that sends it."""
     api = setup(environment)
     db = api.app.state.store
-    grant(api, store(api, "OPENAI_API_KEY", SHARED), "computers")
     sends = computer(api, "Alpha", source="shared")
     idle = computer(api, "Bravo")
+    shared_before(api)
     real = db.transaction
     opened = []
 

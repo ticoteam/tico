@@ -145,6 +145,8 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-product"] .cf-org-top [data-cf-mate="bot:pm"]').count(), 1);
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-product"] .cf-org-row .cf-mate').count(), 8);
       assert.equal(await page.locator('.cf-hall[data-cf-factory="f-product"] .cf-org-row [data-cf-mate="bot:idle"]').count(), 1);
+      const drop = (sel: string) => page.locator(sel).evaluate(el => getComputedStyle(el, '::after').display);
+      assert.notEqual(await drop('.cf-hall[data-cf-factory="f-product"] .cf-org-top'), 'none', 'a drop from the manager to the bar');
       const scroll = await page.evaluate(() => { const m = document.querySelector('#main')!; return m.scrollWidth - m.clientWidth; });
       assert.ok(scroll <= 0, 'no sideways scroll');
       await shot(page, 'floor-desktop');

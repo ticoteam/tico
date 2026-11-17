@@ -430,6 +430,9 @@ def test_every_table_that_points_at_a_task_is_moved_kept_or_refuses_the_delete(a
     assert pointing - named == set()
 
 
+TASK_HOLD = "SELECT * FROM holds WHERE holdable_type='task' AND holdable_id=?"
+
+
 def test_a_deleted_task_keeps_its_quarantine_hold_when_restored(api):
     from backend import task_quarantine
 
@@ -443,18 +446,19 @@ def test_a_deleted_task_keeps_its_quarantine_hold_when_restored(api):
             "10 repeated refusals today",
             {"rule": "identity", "detail": "Only a person may make this change"},
         )
-        before = dict(c.execute("SELECT * FROM quarantine_holds WHERE task_id=?", (ticket["id"],)).fetchone())
+        before = dict(c.execute(TASK_HOLD, (ticket["id"],)).fetchone())
     assert post(api, f"tasks/{ticket['id']}/delete", {}) == {"deleted": ticket["id"]}
     with store.read() as c:
-        assert not c.execute("SELECT 1 FROM quarantine_holds WHERE task_id=?", (ticket["id"],)).fetchone()
+        assert not c.execute(TASK_HOLD, (ticket["id"],)).fetchone()
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
     post(api, f"tasks/{ticket['id']}/restore", {})
     with store.transaction() as c:
-        after = dict(c.execute("SELECT * FROM quarantine_holds WHERE task_id=?", (ticket["id"],)).fetchone())
-        assert {k: v for k, v in after.items() if k != "id"} == {k: v for k, v in before.items() if k != "id"}
+        after = dict(c.execute(TASK_HOLD, (ticket["id"],)).fetchone())
+        assert after == before
         assert H.bot(c, "ops")["state"] == "active"
-        assert H.lift_cooled_quarantines(c, cooldown=0) == ["ops"]
-        assert c.execute("SELECT released_at FROM quarantine_holds WHERE task_id=?", (ticket["id"],)).fetchone()[0]
+        c.execute("UPDATE holds SET until_at=? WHERE holdable_id=?", (H.now(), ticket["id"]))
+        assert H.lift_cooled_quarantines(c) == ["ops"]
+        assert c.execute(TASK_HOLD, (ticket["id"],)).fetchone()["released_at"]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
 
 

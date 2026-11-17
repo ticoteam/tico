@@ -215,9 +215,20 @@ function pvStageItemsHTML(state: PvState, stageId: string, tasks: TaskAny[], eac
     + (rest ? `<button type="button" class="ghost pv-more" data-pv-more="${esc(stageId)}">Show ${rest} more</button>` : '');
 }
 
+/** A stage's ⋯ at its header's right: what can be done to every task it shows (stage-menu.ts). None on a stage that
+ * shows no task, unless the viewer may change the pipeline (Edit stage); none in a read-only view. */
+/** The stage whose ⋯ menu is open: a live draw while it is open draws its ⋯ still expanded. */
+let PV_COL_OPEN = '';
+function pvColMenuHTML(state: PvState, stage: PipelineStageRec): string {
+  const id = stage.id ?? '';
+  if (!id || S.me?.read_only_view || (!state.rec.may_change && !pvInStage(state, id).length)) return '';
+  return `<button type="button" class="pv-col-more" data-pv-col-menu="${esc(id)}" aria-haspopup="menu" aria-expanded="${PV_COL_OPEN === id}"`
+    + ` aria-label="${esc(`More, ${stage.name}`)}" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
+}
+
 /** A column's header and cards, apart: the board draws again only the parts that changed (pvPaint). */
 const pvColHeadHTML = (state: PvState, stage: PipelineStageRec): string =>
-  `${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}`;
+  `${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}${pvColMenuHTML(state, stage)}`;
 const pvColBodyHTML = (state: PvState, stage: PipelineStageRec): string =>
   pvStageItemsHTML(state, stage.id ?? '', pvInStage(state, stage.id ?? ''), pvCardHTML);
 
@@ -237,7 +248,7 @@ function pvListHTML(state: PvState): string {
   const groups = state.rec.stages.map(stage => {
     const rows = pvInStage(state, stage.id ?? '');
     if (!rows.length && searching) return '';
-    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}${stageRulesButtonHTML(state.rec.id, stage)}</h2>
+    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvColHeadHTML(state, stage)}</h2>
       <div class="pv-rows">${pvStageItemsHTML(state, stage.id ?? '', rows, pvRowHTML)}</div></section>`;
   }).join('');
   return groups || '<p class="pv-empty muted">Nothing found</p>';
@@ -268,7 +279,7 @@ function pvPhoneHTML(state: PvState): string {
   // A phone has no tooltip: a limited stage whose tasks wait on a person says so in one muted line above its cards.
   // No ▶ beside the tabs: the header's ▶ Review opens the open stage's items (tasks-page.ts tasksReview).
   const on = stages.find(s => s.id === shown);
-  const rules = on ? stageRulesButtonHTML(state.rec.id, on) : '';
+  const rules = on ? stageRulesButtonHTML(state.rec.id, on) + pvColMenuHTML(state, on) : '';
   const tip = on && pvPersonCount(state, on) ? pvLimitTip(state, on) : '';
   return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${rules}</div>`
     + `${tip ? `<p class="pv-slots">${esc(tip)}</p>` : ''}<div class="pv-phone">${rows}</div>`;
@@ -399,6 +410,8 @@ function pvClick(state: PvState, ev: MouseEvent): void {
   if (rules) { void openPipelineEditor(state.rec.id, rules.dataset['srOpen'] ?? '', 'rules'); return; }
   const settings = target.closest<HTMLElement>('[data-pv-settings]');
   if (settings) { void openPipelineEditor(state.rec.id, settings.dataset['pvSettings'] ?? ''); return; }
+  const colMenu = target.closest<HTMLElement>('[data-pv-col-menu]');
+  if (colMenu) { pvColMenu(state, colMenu.dataset['pvColMenu'] ?? '', colMenu); return; }
   const play = target.closest<HTMLElement>('[data-pv-play]');
   if (play) { void decideStageOpen(play.dataset['pvPlay'] ?? ''); return; }
   const tab = target.closest<HTMLElement>('[data-pv-tab]');

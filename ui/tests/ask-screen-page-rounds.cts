@@ -196,14 +196,14 @@ async function open(page: Page, errors: string[]) {
     for (let i = 0; i < 50 && !fetched.includes('pa@1'); i++) await page.waitForTimeout(100);
     assert.ok(fetched.includes('pa@1') && !fetched.includes('pa@3'), `the viewer opens version 1 (${fetched})`);
 
-    // ---- A page the Decision model has not judged, at version 1: Decision model checking, no history, no switch, no parts with nothing to say.
+    // ---- A page the Decision model has not judged, at version 1: no "checking" state, no history, no switch, no parts with nothing to say.
     await page.goto('http://tico-ui.test/#/tasks');
     await page.locator('#task-play').click();
     await dialog.locator('.dc-meta').waitFor();
     await dialog.locator('[data-dc="next"]').click();
     await dialog.locator('.dc-tabs-t', {hasText: 'Paste images'}).waitFor({state: 'attached'});
-    await dialog.locator('.dc-jev-wait').waitFor();
-    assert.equal(await dialog.locator('.dc-jev-wait').innerText(), 'Decision model checking');
+    await dialog.locator('.dc-meta').waitFor();
+    assert.equal(await dialog.locator('.dc-jev').count(), 0);
     assert.equal(await dialog.locator('.dc-vmenu [data-dc-ver]').count(), 0);
     assert.equal(await dialog.locator('.dc-part').count(), 0);
     assert.equal(await dialog.locator('[data-dc-since]').count(), 0);

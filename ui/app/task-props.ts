@@ -73,15 +73,17 @@ function snoozeItems(): {value: string; text: string; html: string}[] {
   return ([['Tomorrow', day(1)], ['Next week', day(monday)], ['In two weeks', day(14)], ['In a month', day(30)]] satisfies [string, Date][]).map(([text, at]) =>
     ({value: at.toISOString(), text, html: `<span>${esc(text)}</span><span class="tl-mi-sub">${esc(at.toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}))}</span>`}));
 }
-function snoozeMenu(d: TaskDialog, anchor: HTMLElement, save: TaskSave): void {
-  propMenu(d, anchor, {label: 'Snooze until', items: snoozeItems(), entry: 'A date, like 2026-11-02', none: 'Type a date, then Enter',
-    onPick: it => void save('snooze', {snooze: it.value}),
+/** Snooze until: the choices, or a typed date; `run` takes the time picked. A task's Snooze, and a stage's Snooze all…. */
+function snoozePick(host: HTMLElement, anchor: HTMLElement, run: (until: string) => unknown): void {
+  propMenu(host, anchor, {label: 'Snooze until', items: snoozeItems(), entry: 'A date, like 2026-11-02', none: 'Type a date, then Enter',
+    onPick: it => run(it.value),
     onEntry: v => {
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v.trim()), at = m && new Date(+m[1]!, +m[2]! - 1, +m[3]!);
       if (!at || at.getDate() !== +m![3]! || at <= new Date()) { toast('Pick a date in the future, like 2026-11-02', true); return; }
-      void save('snooze', {snooze: at.toISOString()});
+      run(at.toISOString());
     }});
 }
+const snoozeMenu = (d: TaskDialog, anchor: HTMLElement, save: TaskSave): void => snoozePick(d, anchor, until => void save('snooze', {snooze: until}));
 // The task window (task-modal.ts) as its tabs and sections read it: the same dialog, typed with what that file keeps on it.
 const taskModalOf = (d: TaskDialog) => d as ModalDialog;
 // What the window passes in that this file does not draw: the Runs on row (task-modal.ts) and the goal's id.
@@ -632,18 +634,21 @@ async function taskStageMenu(d: TaskDialog, anchor: HTMLElement, task: PropTask,
 }
 /** Move to… (docs/pipelines-v3.md S5): every pipeline's work stages as "Backlog › On ice", the pipeline's first stage
     first; typing filters by each word. The stage the task is in is left out. Then the why, which a person may leave
-    empty, and Move; `confirm` is the line above it for many tasks ("Move 217 tasks to Backlog › On ice?"). */
-async function taskMoveToMenu(host: HTMLElement, anchor: HTMLElement, opts: {pipeline: string | null; stage: string | null;
-  confirm?: (where: string) => string; run: (p: PipelineRec, st: PipelineStageRec, why: string) => unknown}): Promise<void> {
+    empty, and Move; `confirm` is the line above it for many tasks ("Move 217 tasks to Backlog › On ice?"). `done`: the
+    task's own pipeline comes first, its stages by name alone, then Done (`st.id` 'done'); then the other pipelines. */
+async function taskMoveToMenu(host: HTMLElement, anchor: HTMLElement, opts: {pipeline: string | null; stage: string | null; done?: boolean;
+  confirm?: (where: string) => string; run: (p: PipelineRec, st: Pick<PipelineStageRec, 'id' | 'name'>, why: string) => unknown}): Promise<void> {
   if (!TASK_PIPELINES) await tasksPipelinesRead().catch(() => []);
   if (!anchor.isConnected) return;
-  type Spot = PropMenuItem & {p: PipelineRec; st: PipelineStageRec};
-  const spots: Spot[] = (TASK_PIPELINES || []).filter(p => !p.retired_at).flatMap(p => p.stages
+  type Spot = PropMenuItem & {p: PipelineRec; st: Pick<PipelineStageRec, 'id' | 'name'>};
+  const live = (TASK_PIPELINES || []).filter(p => !p.retired_at);
+  const own = opts.done ? live.filter(p => p.id === opts.pipeline) : [];
+  const spots: Spot[] = [...own, ...live.filter(p => !own.includes(p))].flatMap(p => [...p.stages, ...(own.includes(p) ? [{id: 'done', name: 'Done'}] : [])]
     .filter(st => st.id && st.id !== opts.stage)
-    .map(st => ({p, st, value: `${p.id}/${st.id}`, text: `${p.name} › ${st.name}`,
-      html: `<span>${esc(p.name)}</span><span class="muted"> › </span><span>${esc(st.name)}</span>`})));
+    .map(st => ({p, st, value: `${p.id}/${st.id}`, text: own.includes(p) ? st.name : `${p.name} › ${st.name}`,
+      html: own.includes(p) ? `<span>${esc(st.name)}</span>` : `<span>${esc(p.name)}</span><span class="muted"> › </span><span>${esc(st.name)}</span>`})));
   propMenu(host, anchor, {label: 'Move to', items: spots, find: 'Pipeline or stage', none: 'Nothing found', onPick: spot => {
-    const where = `${spot.p.name} › ${spot.st.name}`;
+    const where = own.includes(spot.p) ? spot.st.name : `${spot.p.name} › ${spot.st.name}`;
     setTimeout(() => {
       let pop: PropPop | undefined;
       const typed = (): string => pop?.querySelector<HTMLInputElement>('.tl-menu-q')?.value.trim() ?? '';

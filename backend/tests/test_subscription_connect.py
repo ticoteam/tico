@@ -66,7 +66,7 @@ def test_connect_signs_a_plan_in_on_a_computer_and_seals_the_result_without_the_
     m = computer(api)
     body = get(api, "model-subscriptions")
     assert body["connect"] == ["claude_token", "codex_login"]
-    assert [k["connect"] for k in body["kinds"]] == [True, True, False, False]
+    assert [k["connect"] for k in body["kinds"]] == [True, True, False, False, False, False]
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Company Max"})
     assert login["kind"] == "connect" and login["state"] == "requested" and login["runner_id"] == m["runner_id"]
     assert login["runtime"] == "claude" and login["computer"] == "Test Mac"

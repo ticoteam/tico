@@ -28,6 +28,7 @@ a.cf-hall-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focu
 .cf-org-row{position:relative;display:flex;gap:8px;justify-content:center;max-width:260px;flex-wrap:wrap}
 .cf-org-top{position:relative;display:flex}
 .cf-org-top::after{content:"";position:absolute;left:50%;top:100%;height:7px;border-left:1px solid var(--g5)}
+.cf-org-top:only-child::after{display:none} /* a manager with no one under them: no drop to nothing */
 .cf-org-under{padding-top:7px}
 .cf-org-under::before{content:"";position:absolute;top:0;left:7px;right:7px;border-top:1px solid var(--g5)}
 .cf-mate{position:relative;display:inline-flex;transition:transform var(--dur-fast) var(--ease),opacity var(--dur-fast) var(--ease)}

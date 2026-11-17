@@ -200,9 +200,6 @@ def _may_answer(
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
-    over = R.too_long(row, requirement) if kind == "ok" and value == OK else None
-    if over:
-        _refuse(conn, by, "task_requirement", f"{over} (tico task update {task_id} --body).", task_id)
     if kind == "ok" and validate_gate.held(conn, row, requirement):
         # A bot's OK in Validate is the person's only once Jev passed its page: not from the task page before then.
         _refuse(conn, by, "task_requirement", f"{validate_gate.HELD}.", task_id)
@@ -262,19 +259,48 @@ def _may_answer_page(
         _refuse(conn, by, "task_why", "Say which commits you read and what you checked", task_id)
 
 
+# A stale approval key: what the approver is told, beside the version that is submitted now (`extra.approval`).
+STALE_APPROVAL = "A newer version is submitted. Look again."
+APPROVE_SHOWN = "Approve the version you were shown"
+
+
 def _page_version(
-    conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, page_version: str | None
+    conn: "sqlite3.Connection",
+    by: str,
+    row: Row,
+    requirement: Row,
+    page_version: str | None,
+    value: str = "",
+    visit_id: str | None = None,
+    keyed: bool = False,
 ) -> int | None:
     """The page version an answer on a page is for: the one that counts now (task_requirements.page_for: the one
     attached, or the one a person's OK brought back from Merge). A caller that names the page it was shown
     (`<file id>@<version>`) is refused when another is attached since (`task_changed`): another file at the same
-    version number is another page."""
+    version number is another page. A document approval's OK carries its whole key, the visit and the version shown:
+    a person's from a client (`keyed`, the answer route) is refused without the version (a bot's OK there is a review
+    of new commits, never the approval), and a stale key is refused with the version submitted now
+    (`extra.approval`), which the approver is shown instead."""
     if requirement["kind"] != "page":
         return None
     page, _ = R.page_for(conn, row, requirement)
     now = int(page["version"]) if page else None
-    if page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}"):
-        _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
+    document = R.document_of(requirement)
+    if keyed and is_human(by) and document and value == OK and page_version in (None, ""):
+        _refuse(conn, by, "task_requirement", f"{APPROVE_SHOWN}: send its page_version", row["id"])
+    stale_visit = bool(visit_id) and visit_id != _part(row, "visit").get("id")
+    if stale_visit or (
+        page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}")
+    ):
+        if not document:
+            _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
+        approval = {
+            "document": document,
+            "visit_id": _part(row, "visit").get("id"),
+            "file_id": page["file_id"] if page else None,
+            "version": now,
+        }
+        _h().refuse(conn, by, "task_changed", STALE_APPROVAL, task=row["id"], extra={"approval": approval})
     return now
 
 
@@ -432,16 +458,19 @@ def answer(
     seen_version: int | str | None = None,
     own_click: bool = False,
     page_version: str | None = None,
+    visit_id: str | None = None,
+    keyed: bool = False,
 ) -> Row:
     """Answer a requirement of the task's open visit: `done` (owner says done), `ok`, `no` with notes or `again` (an
     OK), `ok` or `no` on a page (for the version attached now; `page_version`, when given, is the `<file id>@<version>`
-    the person was shown), or the choice or text (a question). If that was the last thing missing, the task moves in the same step. The
-    same answer given twice is one answer. `own_click`: the person's own click in their own session (_may_answer)."""
+    the person was shown; on a document approval `visit_id` too, the approval's key, which `keyed` requires), or the
+    choice or text (a question). If that was the last thing missing, the task moves in the same step. The same answer
+    given twice is one answer. `own_click`: the person's own click in their own session (_may_answer)."""
     row = _open_task(conn, task_id, by)
     E.check_version(conn, by, row, seen_version)
     requirement = _asked(conn, row, requirement_id, by)
     value = str(value or "").strip()
-    pinned = _page_version(conn, by, row, requirement, page_version)
+    pinned = _page_version(conn, by, row, requirement, page_version, value, visit_id, keyed)
     _may_answer(conn, by, row, requirement, value, notes, own_click=own_click)
     if requirement["kind"] == "answer":
         # One exact form: "080" is 80, a choice as the choice is spelled. What does not fit is refused in one line.

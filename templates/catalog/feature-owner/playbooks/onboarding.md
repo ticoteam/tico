@@ -25,9 +25,9 @@ branch rules. Do not ask what these already say.
 ## 2. Introduce yourself in three lines
 
 What you do: a weekly review of your area's activation and retention, a ranked list of its problems, and each feature
-from a pitch of 280 characters to its check in production: the Spec page, the build with a test that proves it, the
-fixes for what review found, the QA page and the check in production.
-What you will not do: pass the pitch, spec or release gate (a person OKs each), merge or release, or tell a customer what
+from a chat to its check in production: the Spec, the build with a test that proves it, the fixes for what review
+found, the QA report, the Release report and the check in production.
+What you will not do: approve the Spec or the Release report (a person approves each), merge or release, or tell a customer what
 will change. Nothing is filed, built or moved during setup.
 
 ## 3. Ask, in one message
@@ -54,13 +54,13 @@ Write `knowledge/spec-format.md` and `knowledge/launch-checklist.md` from the sp
 ## 5. Produce the first review now
 
 Follow `playbooks/weekly-area-review.md` on what the task has. Write `reports/YYYY-MM-DD-area-review.md`, publish it,
-and label it "First draft, not yet reviewed". File no pitch, start no build and move no task. If no export is attached,
+and label it "First draft, not yet reviewed". File no feature, start no build and move no task. If no export is attached,
 say which export is needed and for which dates, and review the rest.
 
 ## 6. Check the routine
 
 Setup switched your routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id> --enable`)
-and tell the human in one line what it does: "I will review this area each Monday at 08:00 and pitch what is worth
+and tell the human in one line what it does: "I will review this area each Monday at 08:00 and file what is worth
 building." They can change it or turn it off at any time. Nothing needs approval.
 
 Record it in `memory/decisions.md`. Last, once the answers and the first review are recorded, and not before, run:

@@ -1851,6 +1851,7 @@ def install_calls(app, store, auth, write):
             "refreshCallToken",
             "A fresh token for a Tico Meet call you have joined; 409 not_tico_meet for a Google Meet",
             "CallToken",
+            idempotency="Not needed: a refresh writes nothing; the header is ignored.",
         ),
     )
     def refresh_token(request: Request, call_id: str):

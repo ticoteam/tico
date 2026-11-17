@@ -1,6 +1,6 @@
-"""Product, one pipeline from pitch to production (docs/dev/pipelines-v3.md "Product"; pipeline_settings.PRODUCT): what a
-company that builds software gets in place of the Product and Engineering pair, its person gates (any person, never a
-bot), the 280-character pitch, the stages its feature owner holds, Validate's send back to Build, and adding it by hand
+"""Product, one pipeline from the Spec to production (docs/dev/pipelines-v3.md "Product"; pipeline_settings.PRODUCT): what
+a company that builds software gets in place of the Product and Engineering pair, its approvals (any person, never a
+bot, each of a document), the stages its feature owner holds, Validate's send back to Build, and adding it by hand
 beside the pair a company set up before 0.6 keeps (`add_preset`, POST /api/v2/pipelines/{id}/from-preset).
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, and its role bots.
@@ -24,7 +24,6 @@ from backend.tests.helpers.stage_inputs import _link_pr, _push
 ANA, BEN = X.ANA, "human:ben"
 OWNER = "bot:pm"  # the Product Owner of _team, as the feature owner the tasks are given to
 STAGES = [
-    "Pitch",
     "Spec",
     "Related input",
     "OK spec",
@@ -38,7 +37,7 @@ STAGES = [
     "Merge",
     "Validate",
 ]
-HELD_BY_THE_OWNER = {"Pitch", "Spec", "Related input", "OK spec", "Build", "Fixes 1", "Fixes 2"}
+HELD_BY_THE_OWNER = {"Spec", "Related input", "OK spec", "Build", "Fixes 1", "Fixes 2"}
 HELD_BY_THE_OWNER |= {"OK release", "Validate"}
 PITCH = "Shoppers lose their cart when the tab closes. Keep it for 30 days."
 
@@ -101,18 +100,15 @@ def test_a_company_that_builds_software_gets_product_and_no_engineering(c):
     stages = {s["name"]: s for s in product["stages"]}
     assert stages["Related input"]["expected_minutes"] >= 240  # never Late before it moves on by itself
     assert stages["Merge"]["on_enter"] == {"act": "github.queue"}
-    # The person gates: people only, nobody named, so any person clears them; QA's page names its person.
+    # The approvals: people only, each of a document; nobody named, so any person approves, but QA's names its person.
     gates = {name: r for name, s in stages.items() for r in s["requirements"] if r["who_oks"] == "people_only"}
-    assert sorted(gates) == ["OK release", "OK spec", "Pitch", "QA"]
-    assert {name: r["person_id"] for name, r in gates.items()} == {
-        "Pitch": None,
-        "OK spec": None,
-        "OK release": None,
-        "QA": ANA,
+    assert {name: (r["kind"], R.document_of(r), r["person_id"]) for name, r in gates.items()} == {
+        "OK spec": ("page", "Spec", None),
+        "QA": ("page", "QA report", ANA),
+        "OK release": ("page", "Release report", None),
     }
-    pitch = stages["Pitch"]["requirements"]
-    assert [(r["kind"], r["settings"]) for r in pitch] == [("ok", {"body_max": 280})]
-    assert stages["Pitch"]["id"] == "product-ideas", "Pitch keeps the id Tico Team's Product has"
+    assert R.document_of(stages["Spec"]["requirements"][0]) == "Spec", "the decision model checks the Spec first"
+    assert PS.IDEAS_STAGE not in {s["id"] for s in product["stages"]}, "no pitch: a feature starts as a chat"
 
 
 def test_a_new_company_waits_for_setup_and_one_that_builds_no_software_gets_product_retired(c):
@@ -138,46 +134,26 @@ def test_a_role_bot_that_appears_later_takes_its_stage_from_the_manager(c):
     assert {s["name"]: s["owner"] for s in PS.read(c, "product")["stages"]}["QA"] == "bot:qa"
 
 
-# ----------------------------------------------------------------------------- the pitch and the person gates
-def test_a_pitch_over_280_characters_is_its_owners_to_shorten_before_a_person_is_asked(c):
-    _product(c)
-    task = _task(c, body="x" * 281)
-    ok = _requirement(c, task["id"], "ok")
-    (standing,) = R.unmet(c, E.task(c, task["id"]))
-    assert (standing.on, standing.line) == (OWNER, "The pitch is 281 characters, over 280: shorten the task's body")
-    with pytest.raises(H.Refused, match="over 280"):
-        A.answer(c, task["id"], ok["id"], ANA, "ok")
-    c.execute("UPDATE tasks SET body=? WHERE id=?", ("x" * 280, task["id"]))
-    (standing,) = R.unmet(c, E.task(c, task["id"]))
-    assert (standing.state, standing.on) == (R.WAITING, None), "now any person is asked"
-    A.answer(c, task["id"], ok["id"], ANA, "ok")
-    assert R.unmet(c, E.task(c, task["id"])) == []
-
-
-def test_a_bots_pitch_is_not_set_aside_but_waits_for_a_persons_ok(c):
-    """In the pair's Ideas a bot's own idea starts snoozed; Pitch asks a person's OK, so it waits in their list."""
+# ----------------------------------------------------------------------------- the approvals
+def test_a_bots_feature_starts_in_spec_and_is_not_set_aside(c):
+    """In the pair's Ideas a bot's own idea starts snoozed; Product has no pitch, so its feature starts in Spec."""
     _product(c)
     row = H.task_create(c, OWNER, "Saved carts", PITCH, OWNER, pipeline="product", lint=False)
     task = E.task(c, row["id"])
-    assert task["stage_id"] == PS.IDEAS_STAGE and not task.get("snooze")
-    assert c.execute("SELECT 1 FROM idea_checks WHERE task_id=?", (row["id"],)).fetchone(), (
-        "the duplicate check is owed"
-    )
+    assert task["stage_id"] == "product-spec" and not task.get("snooze")
 
 
-@pytest.mark.parametrize("stage", ["product-ideas", "product-ok-release"])
-def test_any_person_clears_a_gate_and_no_bot_does(c, stage):
+@pytest.mark.parametrize("stage", ["product-ok-spec", "product-ok-release"])
+def test_no_bot_adds_an_ok_of_its_own_where_a_person_approves_a_document(c, stage):
+    """Who approves the written version is test_stage_approvals.py; here, the preset's approvals take no bot's OK."""
     _product(c)
     _past_merge(c)
-    task = _task(c, stage=None if stage == PS.IDEAS_STAGE else stage)
-    ok = _requirement(c, task["id"], "ok")
-    standing = next(s for s in R.unmet(c, E.task(c, task["id"])) if s.requirement["kind"] == "ok")
-    assert standing.state == R.WAITING and standing.on is None  # nobody named: it falls to the task's person
+    task = _task(c, stage=stage)
+    standing = next(s for s in R.unmet(c, E.task(c, task["id"])) if s.requirement["kind"] == "page")
+    assert (standing.state, standing.on) == (R.NOT_MET, OWNER), "the owner writes the document first"
     for bot in (OWNER, "bot:" + PPM):
-        with pytest.raises(H.Refused):
-            A.answer(c, task["id"], ok["id"], bot, "ok", seen_version=E.task(c, task["id"])["version"])
-    A.answer(c, task["id"], ok["id"], BEN, "ok")
-    assert all(s.requirement["kind"] != "ok" for s in R.unmet(c, E.task(c, task["id"]))), "Ben, any person, cleared it"
+        with pytest.raises(H.Refused, match="approve the"):
+            E.add_requirement(c, task["id"], bot, "ok", ANA, "OK it", seen_version=E.task(c, task["id"])["version"])
 
 
 def test_the_feature_owner_holds_build_and_both_fixes(c):
@@ -190,7 +166,7 @@ def test_the_feature_owner_holds_build_and_both_fixes(c):
 
 def test_the_owner_the_manager_picks_in_pitch_holds_build_the_fixes_and_validate_whoever_holds_a_stage_between(c):
     """Tico Team, Nov 14: a task with no assignee fell to the Engineering Manager in Build. The owner it has when it
-    leaves Pitch is its feature owner: a stand-in the manager names later holds that stage only."""
+    leaves Spec is its feature owner: a stand-in the manager names later holds that stage only."""
     _product(c)
     _past_merge(c)
     _role_bot(c, "fo-2", "segment-product-owner")
@@ -322,7 +298,7 @@ def test_a_person_adds_product_beside_the_pair_and_nothing_of_the_pair_changes(c
     added = PS.add_preset(c, ANA, PS.PRODUCT, "features", "Features", "F")
     ids = [s["id"] for s in added["stages"]]
     # Ids the pair's Product has get a number; the rest are the preset's.
-    assert ids[:4] == ["product-ideas-2", "product-spec-2", "product-related", "product-ok-spec"]
+    assert ids[:3] == ["product-spec-2", "product-related", "product-ok-spec"]
     assert ids[-1] == "product-validate-2" and G.is_stage(ids[-1])
     assert (added["preset"], added["name"], added["prefix"], added["factory_id"]) == (
         PS.PRODUCT,

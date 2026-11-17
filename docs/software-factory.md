@@ -5,8 +5,8 @@ reviewed, tested, documented and released change. Each role is a bot, and a pers
 be. Tico Team builds Tico this way. This page is a recommendation, not a rule the server enforces: rename the roles and
 drop the ones you don't need.
 
-The work runs through one pipeline a software company gets by default, [Product](dev/pipelines-v3.md#product): Pitch →
-Spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release → Merge. A Feature Owner takes each feature through
+The work runs through one pipeline a software company gets by default, [Product](dev/pipelines-v3.md#product): Spec →
+Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release → Merge. A Feature Owner takes each feature through
 it. Companies set up before 0.6 keep their older Product and Engineering pair. Each stage has an owner and says what it
 takes to leave; the roles below own those stages.
 
@@ -14,7 +14,7 @@ takes to leave; the roles below own those stages.
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Feature Owner | `feature-owner` | One per area: takes each feature from pitch to production in one task and one session: the pitch, the Spec page, the build and both Fixes, the QA page, the check in production |
+| 1 | Feature Owner | `feature-owner` | One per area: takes each feature from a chat to production in one task and one session: the Spec, the build and both Fixes, the QA report, the Release report, the check in production |
 | 2 | Product Manager and Engineering Manager | `product-manager`, `engineering-manager` | Each leads its team and manages its pipeline: picks up what is late or stuck and decides what happens next |
 | 3 | Reviewer 1 | `reviewer`, preferably on a different model company from the Feature Owner's tasks | Review 1: a Review page for the newest commit |
 | 4 | Reviewer 2 | `reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
@@ -24,8 +24,8 @@ takes to leave; the roles below own those stages.
 | 8 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
 The **Feature Owner** (`feature-owner`, which replaces the Product Owner) owns an area of the product,
-or a customer segment, and takes each feature from a pitch of 280 characters to production in one task: a person OKs
-the pitch, the spec and the release, and it writes the spec, the code, the fixes and the proof pages itself. The
+or a customer segment, and takes each feature from a chat to production in one task: a person approves the Spec and the
+Release report, and it writes them, the code, the fixes and the proof pages itself. The
 Builder template stays in the catalog for teams that want one, but no default chart has a Builder. The **Product Manager** (`product-manager`) and the **Engineering Manager**
 (`engineering-manager`) each lead their team's bots and keep their pipeline's tasks moving: when one stops, the Manager
 reassigns, moves back, moves on, snoozes or closes it, and never does a stage's work. A small team can
@@ -55,7 +55,7 @@ approval before merge.
 
 ## Rules that make it work
 
-1. **Product decides what, engineering decides how.** Feature ideas go to the Feature Owner's pitch first. Bugs and small
+1. **Product decides what, engineering decides how.** Feature ideas start as a chat with the Feature Owner, who writes the Spec. Bugs and small
    changes go straight to Engineering as a task.
 2. **Prefer different models for checks.** Reviewers and QA prefer a bot of a different model company than the
    Builder. Set this per bot (its task model, or its model), or use a check model on a sub-task
@@ -73,8 +73,8 @@ The Builder opens its PR, links it to the task and pushes freely; Build is done 
 pass. Each review is a Review page for the PR's newest commit, attached to the task with
 `tico task attach <task> page:<file id> --req "<requirement>" --version N`; Jev checks it is a real review. A push
 after a review needs a page for the new head. In Fixes 2 the Builder fixes what Review 2 found and says done (at once, when it found nothing). In QA it
-attaches the QA page (what changed, before and after screenshots or other proof, the checks at the head and what both
-reviewers found), Jev checks it and a person OKs it, which ships the change. On entering Merge, Tico queues the PRs in the repository's merge queue
+writes the QA report (what changed, before and after screenshots or other proof, the checks at the head and what both
+reviewers found), which submits it: the decision model checks it and a person approves it, which ships the change. On entering Merge, Tico queues the PRs in the repository's merge queue
 ([Merge queue](releasing.md#merge-queue)); no bot runs a merge command. If GitHub drops a PR from the queue, the
 Release Owner pushes a fix to the PR's branch or queues it again with `tico task queue <task> --version N`. The task
 leaves Release once the merge is in a published release (a repo that publishes no releases: once merged).
@@ -90,7 +90,7 @@ Every page a person reads to decide is built the same way, with the `build-the-p
 (`templates/catalog/_shared/.claude/skills/build-the-page/`, one copy the Feature Owner, Reviewer, Builder and Release
 Owner templates all take). Seven templates: a bug spec (the report, the root cause, the goal, then the fix before and
 after), a feature spec for a screen and one for a change with no screen (the goal, then the change before and after),
-a Review page, the Feature Owner's QA page (the result and what was not checked, then each acceptance criterion with its
+a Review page, the Feature Owner's QA report (the result and what was not checked, then each acceptance criterion with its
 result and proof), the release report for a batch (a changelog for customers with a screenshot per change, then why
 we are confident, the plan and at most three risks), and the Checked in production page. Each opens with what it is
 and what to decide in two or three lines, then real

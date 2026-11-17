@@ -830,6 +830,21 @@
   ],
   "idle": []
  },
+ "stage-menu": {
+  "files": [
+   "app/stage-menu.ts"
+  ],
+  "deps": [
+   "task",
+   "give-to",
+   "task-pick"
+  ],
+  "pages": [],
+  "calls": [
+   "pvColMenu"
+  ],
+  "idle": []
+ },
  "thread-call-live": {
   "files": [
    "app/thread-call-live.ts"

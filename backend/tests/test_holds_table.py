@@ -249,6 +249,51 @@ def test_a_bots_pause_hold_is_its_state_switch_but_never_wakes_an_archived_or_qu
         assert turn_budgets.release(c, "bot:botops", "ops") is False  # nothing open now
 
 
+def test_a_quarantine_wins_over_a_pause_and_the_bot_is_active_only_once_neither_is_open(api):
+    """holds.STATE_KINDS: a release sets bots.state to the stopping hold still open on the bot, quarantine over pause,
+    and active only when none is; it never touches an archived or planned bot."""
+
+    def state(c, bot="ops"):
+        return H.bot(c, bot)["state"]
+
+    def pause(c, bot="ops"):
+        company_pause.pause_bot(c, "human:ana", bot)
+
+    def quarantine(c, bot="ops"):
+        holds.put(c, holds.QUARANTINE, "bot", bot, actor="bot:ops", reason="too many refusals")
+
+    def lift(c, bot="ops"):
+        holds.release(c, holds.QUARANTINE, "bot", bot, actor="human:ana", how="person")
+
+    with api.app.state.store.transaction() as c:
+        pause(c)
+        quarantine(c)
+        assert state(c) == "quarantined"
+        lift(c)  # a quarantine released while paused: still paused
+        assert state(c) == "paused"
+
+        quarantine(c)
+        company_pause.resume_bot(c, "human:ana", "ops")  # a pause released while quarantined: still quarantined
+        assert state(c) == "quarantined"
+        lift(c)  # both released: active
+        assert state(c) == "active"
+
+        quarantine(c)
+        pause(c)  # a pause never covers a quarantine
+        assert state(c) == "quarantined"
+        lift(c)
+        company_pause.resume_bot(c, "human:ana", "ops")
+        assert state(c) == "active"
+
+        for bot, kept in (("cpo", "archived"), ("finance", "planned")):
+            c.execute("UPDATE bots SET state=? WHERE id=?", (kept, bot))
+            pause(c, bot)
+            quarantine(c, bot)
+            lift(c, bot)
+            company_pause.resume_bot(c, "human:ana", bot)
+            assert state(c, bot) == kept
+
+
 FAILING = DIRECTORY / "20261117072000_holds_failing.sql"
 OLD_FAILING = (
     "CREATE TABLE IF NOT EXISTS run_backoff(bot TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, wait_until TEXT, "

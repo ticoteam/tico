@@ -30,7 +30,7 @@ from pydantic import Field
 from .auth import validate_identity
 from .models import Contract
 from .store import H, Problem
-from .api_contract import api_v2
+from .api_contract import KEYLESS, api_v2
 
 ACTOR = "bot:finance-owner"
 READABLE = ("application/pdf", "image/png", "image/jpeg", "image/webp", "image/heic")
@@ -286,6 +286,7 @@ def install(app, store, auth):
             "setFinanceBillsAddress",
             "Set the email address vendors send bills to, or clear it with null (owner or admin). inbox_id is the Email & Phone inbox that receives it, else null: mail to it never reaches Tico and uploads still work",
             "FinanceBillsAddress",
+            idempotency=KEYLESS,
         ),
     )
     def bills_address_set(request: Request, body: BillsAddress):
