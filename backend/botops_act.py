@@ -371,7 +371,7 @@ DO = _routes(
     ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
     ("POST", r"slack/channels"),
-    ("POST", r"slack/channels/(remove|import)"),
+    ("POST", r"slack/channels/remove"),
     # Linking a thread to a Slack channel, taking the link away and checking a suspended one again: an owner's or an
     # admin's call, which the route checks (backend/slack_threads.py).
     ("POST", r"slack/links"),
