@@ -61,12 +61,12 @@ const RID = 'spec-ok-ana';
     // ---- the banner
     {
       // The ask is one of the stage's requirements, and says who asked (PM): the row names them.
-      const req = {requirement_id: RID, kind: 'answer', line: 'Which plan do signups get?', who: 'human:ana', asked_by: 'bot:pm', choices: ['Pro trial', 'Free'],
-        may: ['answer'], met: false, shows: [], standing: 'waiting', answer: null};
-      const t: Task = task('t-2', 'Signup plans', 'spec', {to_leave: [req], turn: {state: 'person', who: 'human:ana', line: 'Which plan do signups get?', since: null, until: null, ask: true, requirement_id: RID}});
-      const need: Need = {kind: 'ask', id: `ask-b:${RID}`, task_id: 't-2', requirement_id: RID, line: 'Which plan do signups get?', since: at(1), task: brief(t),
-        ask: {requirement_id: RID, kind: 'answer', line: 'Which plan do signups get?', who: 'human:ana', asked_by: 'bot:pm', choices: ['Pro trial', 'Free'],
-          may: ['answer', 'thumbs'], met: false, shows: [], standing: 'waiting', answer: null}};
+      const req = {requirement_id: RID, kind: 'ok', line: 'OK the signup plans?', who: 'human:ana', asked_by: 'bot:pm',
+        may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null};
+      const t: Task = task('t-2', 'Signup plans', 'spec', {to_leave: [req], turn: {state: 'person', who: 'human:ana', line: 'OK the signup plans?', since: null, until: null, ask: true, requirement_id: RID}});
+      const need: Need = {kind: 'ask', id: `ask-b:${RID}`, task_id: 't-2', requirement_id: RID, line: 'OK the signup plans?', since: at(1), task: brief(t),
+        ask: {requirement_id: RID, kind: 'ok', line: 'OK the signup plans?', who: 'human:ana', asked_by: 'bot:pm',
+          may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null}};
       const {page, errors} = await open(browser, {viewport: {width: 1280, height: 800}, hash: '#/task/t-2', tasks: [t], needs: [need]});
       const card = page.locator('#need-card[open]');
       await card.waitFor();
@@ -74,7 +74,7 @@ const RID = 'spec-ok-ana';
       const win = page.locator('#task-modal[open]');
       const banner = win.locator('.task-need');
       await banner.waitFor();
-      assert.match(await banner.innerText(), /Which plan do signups get\?/);
+      assert.match(await banner.innerText(), /OK the signup plans\?/);
       const head = (await banner.locator('.th-head').innerText()).replace(/\s+/g, ' ').trim();
       assert.match(head, /^PM waiting on you$/, `the asker, then "waiting on you": ${head}`);
       assert.equal(await banner.locator('.th-av').count(), 1, 'the asker\'s face');
@@ -86,7 +86,7 @@ const RID = 'spec-ok-ana';
       assert.ok(last, 'the ask is the last row of the chat');
       await banner.getByRole('button', {name: 'Answer'}).click();
       await card.waitFor();
-      await card.getByRole('button', {name: 'Pro trial'}).click();
+      await card.locator('[data-dc="approve"]:not([disabled])').click();
       await win.locator('.task-need').waitFor({state: 'detached'});
       assert.equal(await win.locator('.task-need').count(), 0, 'answered: the banner goes');
       assert.deepEqual(errors, []);

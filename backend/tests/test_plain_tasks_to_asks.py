@@ -33,7 +33,7 @@ def c(company):
 
 def asked(c, person, task_id, by="bot:botops"):
     """The ❓ on `task_id` in `person`'s Needs you, each marked by `by` (a bot, never Tico: only bots write
-    questions) on its own message, whose first line and why pass the checks a bot's question passes
+    questions) on its own message, whose words, its line and then its why, pass the checks a bot's question passes
     (ask_shape.line_refusal)."""
     found = [n for n in W.needs(c, person) if n["kind"] == "question" and n["task_id"] == task_id]
     for item in found:
@@ -45,7 +45,7 @@ def asked(c, person, task_id, by="bot:botops"):
         assert message["sender_id"] == by
         line, _, why = message["body"].partition("\n\n")
         assert line == item["line"]
-        assert why and ask_shape.line_refusal(item["line"], why) is None, (item["line"], why)
+        assert why and ask_shape.line_refusal(message["body"]) is None, message["body"]
         assert H.task_view(c, task_id, person), "the person reads the task"
     return found
 
@@ -62,7 +62,6 @@ def test_a_person_asked_on_a_bots_task_finds_it_in_needs_you_and_the_bot_holds_i
         bot="bot:builder",
     )
     assert made["owner_id"] == "bot:builder" and len(asked(c, ANA, made["id"], by="bot:builder")) == 1
-    assert ask_shape.refusal("Ana", why="It is stuck.", choices=None, details=None, recommend=None, shows=None) is None
 
 
 def test_with_no_such_bot_the_task_is_the_persons_and_botops_asks(c):

@@ -430,7 +430,7 @@ def shut_out(
     if private and new_owner and not names(target, new_owner) and not H.task_private_readable(conn, new_owner, full):
         blocked.append((new_owner, "owns"))
     for requirement in R.on_stage(conn, target["id"]):
-        who = R.person_of(conn, requirement, "") if requirement["kind"] in ("ok", "answer") else None
+        who = R.person_of(conn, requirement, "") if requirement["kind"] == "ok" else None
         if who and who != owner and not H.task_private_readable(conn, who, after):
             blocked.append((who, "is asked in"))
     if not blocked:
@@ -2292,17 +2292,14 @@ def add_requirement(
     person: str | None,
     line: str,
     *,
-    choices: list[str] | None = None,
     shows: object = None,
     seen_version: int | str | None = None,
     for_action: bool = False,
-    brief: Row | None = None,
-    title: str | None = None,
     ends_with_task: bool = False,
 ) -> Row:
     """Add an OK from a named person to this task, for this visit (C30). A question is refused: it is a message marked
-    ❓ (backend/question_marks.py); a bot's OK not bound to an action shows what it approves (a page or a file). `brief`
-    and `title`, the ask's short heading, are kept in the requirement's settings. `ends_with_task`: an OK a feature asks
+    ❓ (backend/question_marks.py); a bot's OK not bound to an action shows what it approves (a page, a file or a web
+    address). `ends_with_task`: an OK a feature asks
     about the task's own work (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it
     never holds it alone. The task does not leave the stage until it is answered, withdrawn or pushed past. A bot has
     one open per task: asking again replaces it (C15, `_replace_open`). A bot does not ask an OK in Product's Validate
@@ -2325,10 +2322,10 @@ def add_requirement(
         # A bot never satisfies its own request. A person may ask themself: their own click is what answers it (an OK
         # of their own ask is refused unless it is that click, answers._may_answer).
         _refuse(conn, by, "task_requirement", "Nobody answers their own ask: ask someone else", task_id)
-    if kind == "ok" and not is_human(person):
+    if not is_human(person):
         _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
     if is_bot(by) and not for_action:
-        page = _people_page(conn, row, kind, shows, choices)
+        page = people_page(conn, row, shows)
         if page and page in R.APPROVED:
             # A stage's approval is asked by Tico when the bot writes the document, never by the bot.
             hint = R.DOCUMENT_OK_HINT.format(document=page)
@@ -2336,7 +2333,7 @@ def add_requirement(
         if page:
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
     if not for_action:
-        shows = validate_gate.check_ask(conn, row, by, person, kind, shows, choices)
+        shows = validate_gate.check_ask(conn, row, by, person, shows)
         if is_bot(by) and not shows_a_file(conn, by, shows):
             # A bot's OK that is not bound to an action approves something it shows: a page or a file it may read. A
             # bare "OK?", or one that shows only a link, is a question.
@@ -2348,9 +2345,7 @@ def add_requirement(
         _refuse(conn, by, "private", told(conn, by, row, unshared), task_id, said=said)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
-    return _write_ask(
-        conn, row, by, kind, person, line, choices=choices, shows=shows, brief=brief, title=title, ends=ends_with_task
-    )
+    return _write_ask(conn, row, by, kind, person, line, shows=shows, ends=ends_with_task)
 
 
 def _write_ask(
@@ -2361,10 +2356,7 @@ def _write_ask(
     person: str | None,
     line: str,
     *,
-    choices: list[str] | None = None,
     shows: object = None,
-    brief: Row | None = None,
-    title: str | None = None,
     ends: bool = False,
 ) -> Row:
     """The ask `add_requirement` checked, written on the task's visit: it replaces the bot's open one, starts the
@@ -2377,8 +2369,8 @@ def _write_ask(
         _replace_open(conn, task_id, visit["id"], by, ts)
     requirement_id = H.new_id()
     conn.execute(
-        "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, choices, "
-        "settings, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, shows, settings, "
+        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
             requirement_id,
             visit["id"],
@@ -2389,14 +2381,7 @@ def _write_ask(
             1 if is_bot(by) else 0,
             line.strip(),
             None if shows is None else json.dumps(shows),
-            None if choices is None else json.dumps(choices),
-            json.dumps(
-                {
-                    **({"brief": brief} if brief else {}),
-                    **({"title": title} if title else {}),
-                    **({"ends_with_task": True} if ends else {}),
-                }
-            ),
+            json.dumps({"ends_with_task": True} if ends else {}),
             ts,
         ),
     )
@@ -2411,17 +2396,12 @@ def _write_ask(
     return out
 
 
-def _people_page(
-    conn: "sqlite3.Connection", row: Row, kind: str, shows: object, choices: list[str] | None
-) -> str | None:
+def people_page(conn: "sqlite3.Connection", row: Row, shows: object, *, question: bool = False) -> str | None:
     """The name of the stage's people-only page requirement a bot's ask would duplicate, or None: an OK that shows that
-    page or shows nothing, or a yes/no question that shows that page, while the stage has one; any OK at all while the
-    stage names a document for a person to approve (its name, task_requirements.APPROVED). A person OKs that page
-    already, every version, so the bot's ask adds a second one and nothing passes on it. A yes/no that shows nothing is
+    page or shows nothing, or a ❓ (`question`) whose message names that page, while the stage has one; any OK at all
+    while the stage names a document for a person to approve (its name, task_requirements.APPROVED). A person OKs that
+    page already, every version, so the bot's ask adds a second one and nothing passes on it. A ❓ that names no page is
     a plain question (a Spec stage's clarifying question) and is allowed."""
-    yes_no = kind == "answer" and sorted(str(c).strip().lower() for c in (choices or [])) == ["no", "yes"]
-    if kind != "ok" and not yes_no:
-        return None
     from . import task_pages as P
 
     refs = [str(ref) for ref in cast("list[object]", shows)] if isinstance(shows, list) else []
@@ -2430,13 +2410,13 @@ def _people_page(
         if requirement["kind"] != "page" or not requirement.get("stage_id") or not signoff:
             continue
         document = R.document_of(requirement)
-        if document and kind == "ok":
+        if document and not question:
             return document
         if not R.people_only(requirement):
             continue
         attached = P.current(conn, row["visit"]["id"], requirement["id"])
         named = bool(attached) and any(str(attached["file_id"]) in ref for ref in refs)
-        if named or (kind == "ok" and not refs):
+        if named or (not question and not refs):
             return R.name_of(requirement)
     return None
 

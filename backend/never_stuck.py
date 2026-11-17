@@ -649,7 +649,7 @@ def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str,
 
 
 # The question a stopped task's bot asks a person when no manager hears of it, in its own voice (only bots write
-# questions): a first line that says what is asked, a why, no paths (backend/ask_shape.py). `{who}` is "I" from the
+# questions): a first line that says what is asked, then why, no paths (backend/ask_shape.py). `{who}` is "I" from the
 # stalled bot, or the bot's name when BotOps asks for it.
 STUCK_ASK = "{who} stuck on {stage}: {line}. Can you help or tell me what to do?"
 STUCK_LINES = {

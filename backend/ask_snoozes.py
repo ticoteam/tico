@@ -5,7 +5,7 @@ The ask (its visit and requirement, `waiting_on.ask_id`) leaves that person's Ne
 badge until the time they picked, and comes back then with nothing run: the list leaves out a snooze only while its
 time is to come (`waiting_on.ask_snoozes`). It also comes back when the ask is asked again or asks something else: a
 snooze holds only while the ask was asked at the moment it was snoozed (`asked_at`, the ask's `since`) and asks the
-same (`ask_version`: its words, choices and each page it shows at the same version, as Flow's opinion names it). A
+same (`ask_version`: its words and each page it shows at the same version, as Flow's opinion names it). A
 bot's ❓ (backend/question_marks.py) snoozes the same way, keyed on its mark (`qmark:<mark id>`): a new ❓ is a new mark.
 
 Nobody else's list changes, and the task does not: its bot is not told, not woken and not held, and the whole-task

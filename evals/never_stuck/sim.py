@@ -558,8 +558,12 @@ class Sim:
                     task,
                 )
             else:
+                # The bot's reach is not what the rig checks: Tico words the ❓ for it (checked=False).
                 self.act(
-                    bot, f"asks {person} a ❓", lambda c: Q.ask(c, bot, task, person, "Is this the right plan?"), task
+                    bot,
+                    f"asks {person} a ❓",
+                    lambda c: Q.ask(c, bot, task, person, "Is this the right plan?", checked=False),
+                    task,
                 )
             return
         if behaviour == FILE:
@@ -592,8 +596,6 @@ class Sim:
                     self.act(
                         bot, "OKs it", lambda c, rid=rid: A.answer(c, task, rid, bot, "ok", seen_version=seen), task
                     )
-            elif kind == "answer" and rid:
-                self.act(bot, "answers", lambda c, rid=rid: A.answer(c, task, rid, bot, "Yes", seen_version=seen), task)
             elif kind == "linked_done":
                 if rng.random() < 0.2:
                     self.act(
@@ -716,7 +718,7 @@ class Sim:
         if kind == "ask":
             rid = str(item["requirement_id"])
             requirement = self.world.read(lambda c: R.get(c, rid)) or {}
-            choice = rng.choice(("answer", "answer", "no", "give", "push past", "thumbs down", SILENT))
+            choice = rng.choice(("answer", "answer", "no", "give", "push past", SILENT))
             self.stats.add(self.stats.people, f"ask: {choice}")
             if choice == SILENT:
                 return
@@ -725,17 +727,12 @@ class Sim:
                 self.act(person, f"gives it to {other}", lambda c: A.give_to(c, task, rid, person, other), task)
             elif choice == "push past":
                 self.act(person, "pushes past", lambda c: E.move(c, task, E.NEXT, person, "Go ahead", version), task)
-            elif choice == "thumbs down":
-                self.act(
-                    person, "gives a thumbs down", lambda c: A.thumbs_down(c, task, rid, person, "Not useful"), task
-                )
             elif choice == "no" and requirement.get("kind") == "ok":
                 self.act(
                     person, "sends it back", lambda c: A.answer(c, task, rid, person, "no", "Change the plan"), task
                 )
             else:
-                value = "ok" if requirement.get("kind") == "ok" else "Yes, go"
-                self.act(person, f"answers {value}", lambda c: A.answer(c, task, rid, person, value), task)
+                self.act(person, "answers ok", lambda c: A.answer(c, task, rid, person, "ok"), task)
             return
         # The task is theirs: their own, or one they must let someone see.
         choice = rng.choice(("try again", "done", "reassign", "close", "snooze", "push past", SILENT, SILENT))

@@ -33,7 +33,7 @@ _core: Any = hubdb_core
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
-WHY_MAX = ask_shape.WHY_MAX
+WHY_MAX = 200  # the why line under the question
 # What a feature's question says when its own words would fail the ask checks (`shaped`).
 PLAIN_ASK = "Can you take a look at this?"
 PLAIN_WHY = "Only a person can act on it."
@@ -147,7 +147,7 @@ def shaped(question: str, why: str) -> tuple[str, str]:
     if ask_shape.line_refusal(line):
         log.warning("A feature's question failed the ask checks; asked in plain words instead")
         line = PLAIN_ASK
-    if not said or ask_shape.line_refusal(PLAIN_ASK, said):
+    if not said or ask_shape.line_refusal(f"{PLAIN_ASK}\n{said}"):
         said = PLAIN_WHY
     return line, said
 

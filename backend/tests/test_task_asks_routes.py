@@ -13,6 +13,7 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers
+from backend.tests.helpers.page_requirement import _page
 
 # A reply to a Tico HQ ticket: a kind the generic routes take (task_asks.GENERIC). Ben, asked by default, manages the
 # bots made here (as_bot), so he may OK it.
@@ -676,8 +677,16 @@ def test_what_an_ok_is_for_shows_only_to_its_parties_in_every_read_of_its_task(a
     bot = as_bot(api)
     as_member(api, "ben@acme.example")  # Ben is a party as the one asked, not as an Admin
     tid = bots_task(api, bot, title="Answer the ticket")
-    with api.app.state.store.transaction() as c:
+    store = api.app.state.store
+    terms = "file-globex-terms"  # the bot's own page of the deal: a real page it reads, named for the deal
+    with store.transaction() as c:
         c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
+        c.execute(
+            "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+            "last_activity_at) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?)",
+            (terms, "ops", "bot", terms, "Globex terms", H.now(), H.now()),
+        )
+        _page(c, store, "<h1>Globex terms</h1><p>Globex pays 40M.</p>", fid=terms)
     status, code, detail, out = call(
         api,
         "POST",
@@ -688,7 +697,7 @@ def test_what_an_ok_is_for_shows_only_to_its_parties_in_every_read_of_its_task(a
             "line": "Post the Globex merger terms to TK-9?",
             "subject": "hq_reply:TK-9",
             "content": {"text": "Globex pays 40M."},
-            "show": ["page:globex-terms"],
+            "show": [f"page:{terms}@1"],
             "version": version(api, tid),
         },
     )
@@ -704,7 +713,7 @@ def test_what_an_ok_is_for_shows_only_to_its_parties_in_every_read_of_its_task(a
     # Ben, the one asked, reads what it is for, in the task and in Needs you.
     mine = api.get(f"/api/v2/tasks/{tid}", headers=headers("ben-test")).json()
     ok = next(r for r in (mine.get("task") or mine)["to_leave"] if r["requirement_id"] == rid)
-    assert ok["line"] == "Post the Globex merger terms to TK-9?" and ok["shows"] == ["page:globex-terms"]
+    assert ok["line"] == "Post the Globex merger terms to TK-9?" and ok["shows"] == [f"page:{terms}@1"]
     item = next(i for i in get(api, "needs-you", token="ben-test")["items"] if i.get("requirement_id") == rid)
     assert item["line"] == "Post the Globex merger terms to TK-9?"
 

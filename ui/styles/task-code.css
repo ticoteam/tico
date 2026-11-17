@@ -91,7 +91,6 @@
 #task-modal .task-requirements .task-req[data-state="met"] .task-req-dot{color:var(--run)}
 #task-modal .task-requirements .task-req[data-state="back"] .task-req-dot{color:var(--fail)}
 #task-modal .task-requirements .task-req-name{flex:1;min-width:0}
-#task-modal .task-requirements .task-req-val{margin-left:auto;color:var(--muted);font-weight:400;font-size:var(--t-sm)}
 #task-modal .task-requirements .task-req-end{flex:none}
 #task-modal .task-requirements .task-req-count{margin-left:var(--s1)}
 /* The facts: a muted label, then the value; Code's lines and Subtasks under them. */

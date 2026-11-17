@@ -41,8 +41,7 @@ def register(
     def replying_to(c, who, task_id, body):
         """A reply to a bot's question (`ask`): the bot that asked it, and whether the question waits on the writer.
         A person's plain comment on a task where a bot's ❓ waits on them is their reply to it (writing it clears the ❓,
-        hubdb). (None, False) for any other plain comment. 422 when `ask` is not a bot's unanswered question on this
-        task's open visit."""
+        hubdb). (None, False) for any other plain comment. 422 when `ask` is not a bot's open ❓ on this task."""
         if not body.ask:
             if who.role == "bot" or body.public or body.delivery == "goal":
                 return None, False
@@ -58,17 +57,7 @@ def register(
         if marked and marked["task_id"] == task_id and not marked.get("cleared_at"):
             # A reply to a bot's ❓ on this task: to the bot that marked it. Writing it clears the ❓ (hubdb).
             return marked["bot_id"], marked["person_id"] == who.actor
-        found = c.execute(
-            "SELECT r.added_by_id, r.person_id FROM requirements r JOIN visits v ON v.id=r.visit_id "
-            "WHERE r.id=? AND v.task_id=? AND v.left_at IS NULL AND r.kind='answer' AND r.withdrawn_at IS NULL "
-            # Unanswered as hubdb counts an open ask: an undone answer, a Give to or an Ask again leaves it open.
-            "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id=r.id AND a.visit_id=r.visit_id "
-            "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again'))",
-            (body.ask, task_id),
-        ).fetchone()
-        if not found or not H.is_bot(found[0]):
-            raise Problem("validation", "That is not a bot's question on this task", 422)
-        return found[0], found[1] == who.actor
+        raise Problem("validation", "That is not a bot's question on this task", 422)
 
     def comment_write(c, who, tid, body, ingest=None, rc=None, reader=None, ask_to=None):
         """One task comment, as `POST /api/v2/tasks/{tid}/comments` writes it and Send anyway replays it. `ask_to`: the

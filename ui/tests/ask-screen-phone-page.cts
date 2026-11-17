@@ -27,7 +27,7 @@ const brief = (id: string, title: string) => ({id, title, number: 80, pipeline_i
 const TITLE = 'Decision view: a page that comes back after two send backs';
 const need = {kind: 'ask', id: ITEM, task_id: 't-a', requirement_id: RID, line: 'OK Ana (version 3)', since: '2026-11-13T10:00:00Z',
   task: brief('t-a', TITLE),
-  ask: {requirement_id: RID, kind: 'page', line: 'OK Ana (version 3)', who: 'human:ana', asked_by: 'bot:pm', choices: null, may: ['ok', 'no'],
+  ask: {requirement_id: RID, kind: 'page', line: 'OK Ana (version 3)', who: 'human:ana', asked_by: 'bot:pm', may: ['ok', 'no'],
     met: false, shows: ['page:pa@3'], standing: 'waiting', answer: null, page: {file_id: 'pa', version: 3, ref: 'page:pa@3'}}};
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,

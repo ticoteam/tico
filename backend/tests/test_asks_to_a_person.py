@@ -15,7 +15,7 @@ from backend import org_rules as OR
 from backend import question_marks as Q
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.counsel import store_file
 from backend.tests.helpers.org_rule_check import (  # noqa: F401 - fixtures
     COLOR,
@@ -90,56 +90,6 @@ def test_a_bots_ok_shows_a_page_or_a_file_version_not_a_task_or_a_web_address(ru
     r = ask(api, task, {**OK, "show": [ref.format(file=file_id, task=task["id"])]})
     assert r.status_code == (200 if ok else 409), r.text
     assert ok or r.json()["error"] == "task_requirement"
-
-
-# ---- an ask's short title (decision view part 2, task #390) --------------------------------------------------------
-
-
-def needs_you_ask(api, rid, token="ana-test"):
-    return next(
-        i["ask"] for i in get(api, "needs-you", token)["items"] if (i.get("ask") or {}).get("requirement_id") == rid
-    )
-
-
-def test_an_asks_short_title_is_on_its_entry_and_in_needs_you(ruled):
-    api, _ = ruled
-    task = task_for_ops(api)
-    r = ask(api, task, {**OK, "title": "  Launch note tone  "})
-    assert r.status_code == 200, r.text
-    rid = r.json()["requirement_id"]
-    view = get(api, f"tasks/{task['id']}")
-    view = view.get("task", view)
-    [entry] = [e for e in view["to_leave"] if e["requirement_id"] == rid]
-    assert entry["title"] == "Launch note tone"
-    assert entry["line"] == OK["line"], "the full ask stays the line"
-    assert needs_you_ask(api, rid)["title"] == "Launch note tone"
-    post(api, f"tasks/{task['id']}/asks/{rid}/answer", {"value": "ok", "version": version(api, task)})
-    # The bot's next ask replaces it; the answered one stays on the task as decided, title and all.
-    again = ask(api, {**task, "version": version(api, task)}, {**OK, "line": "OK the launch day?"})
-    assert again.status_code == 200, again.text
-    view = get(api, f"tasks/{task['id']}")
-    view = view.get("task", view)
-    [answered] = [e for e in view["to_leave"] if e["requirement_id"] == rid]
-    assert answered.get("replaced") and answered["title"] == "Launch note tone", "a decided ask keeps its title"
-
-
-def test_an_asks_title_over_60_characters_is_refused_and_nothing_is_asked(ruled):
-    api, _ = ruled
-    task = task_for_ops(api)
-    r = ask(api, task, {**OK, "title": "x" * 61})
-    assert r.status_code == 422, r.text
-    assert sql(api, "SELECT count(*) AS n FROM requirements WHERE line=?", (OK["line"],))[0]["n"] == 0
-    assert ask(api, task, {**OK, "title": "x" * 60}).status_code == 200
-
-
-@pytest.mark.parametrize("title", [None, "   "])
-def test_an_ask_without_a_title_is_asked_as_before_and_carries_none(ruled, title):
-    api, _ = ruled
-    task = task_for_ops(api)
-    r = ask(api, task, {**OK, **({} if title is None else {"title": title})})
-    assert r.status_code == 200, r.text
-    rid = r.json()["requirement_id"]
-    assert "title" not in needs_you_ask(api, rid)
 
 
 def test_the_shape_is_a_bots_ask_of_a_person_only(ruled):
@@ -217,17 +167,17 @@ def test_every_path_that_asks_a_person_checks_the_shape_whatever_the_bot_was_tol
     api, _ = ruled
     task = task_for_ops(api)
     with api.app.state.store.transaction() as c:
+        shown = X.shown(c, bot="ops")
         for line, why in (
             (UNSEEN[1], None),
             ("Which onboarding flow first?", "Background: knowledge/onboarding-in-flow.md"),
         ):
+            words = " ".join(filter(None, (line, why)))
             with pytest.raises(H.Refused) as refused:
-                H.task_ask(
-                    c, "bot:ops", task["id"], "human:ana", line, seen_version=task["version"], brief={"why": why}
-                )
+                H.task_ask(c, "bot:ops", task["id"], "human:ana", words, shows=shown, seen_version=task["version"])
             assert refused.value.rule == "lint"
             with pytest.raises(H.Refused) as refused:
-                Q.ask(c, "bot:ops", task["id"], "human:ana", " ".join(filter(None, (line, why))))
+                Q.ask(c, "bot:ops", task["id"], "human:ana", words)
             assert refused.value.rule == "lint"
         assert Q.on_task(c, task["id"]) == []
         made = Q.ask(c, "bot:ops", task["id"], "human:ana", LIST)
@@ -363,8 +313,9 @@ def test_a_reply_to_a_bots_question_reaches_that_bot_on_the_task_and_wakes_it_an
     assert cleared == {"cleared_reason": "replied", "cleared_message_id": said["id"]}, "her reply answers it"
 
 
-@pytest.mark.parametrize("which", ["missing", "a person's"])
+@pytest.mark.parametrize("which", ["missing", "a person's", "a bot's OK"])
 def test_a_reply_names_a_bots_question_on_that_task(ruled, which):
+    """Only a bot's open ❓: an OK, a person's or a bot's, is answered with OK or Send back, never named by a reply."""
     api, _ = ruled
     task = task_for_ops(api)
     rid = "nope"
@@ -372,40 +323,13 @@ def test_a_reply_names_a_bots_question_on_that_task(ruled, which):
         rid = ask(api, task, {"line": "OK the tone?", "kind": "ok"}, to="ben", token="ana-test").json()[
             "requirement_id"
         ]
+    if which == "a bot's OK":
+        rid = ask(api, task, OK).json()["requirement_id"]
     r = api.post(
         f"/api/v2/tasks/{task['id']}/comments", json={"text": "Hello", "ask": rid}, headers=headers("ana-test")
     )
     assert r.status_code == 422, r.text
     assert sql(api, "SELECT count(*) AS n FROM messages WHERE body='Hello'")[0]["n"] == 0
-
-
-def test_a_reply_cannot_name_a_question_already_answered(ruled):
-    """A question stored before a question was a ❓ (old_question), answered on its card and then undone."""
-    api, _ = ruled
-    task = task_for_ops(api)
-    with api.app.state.store.transaction() as c:
-        rid = X.old_question(c, task["id"], "bot:ops", "human:ana", LINE, choices=["Plain", "Playful"])[
-            "requirement_id"
-        ]
-    answered = api.post(
-        f"/api/v2/tasks/{task['id']}/asks/{rid}/answer",
-        json={"value": "Plain", "version": version(api, task)},
-        headers=headers("ana-test"),
-    )
-    assert answered.status_code == 200, answered.text
-    r = api.post(
-        f"/api/v2/tasks/{task['id']}/comments", json={"text": "One more thing", "ask": rid}, headers=headers("ana-test")
-    )
-    assert r.status_code == 422, r.text
-    assert sql(api, "SELECT count(*) AS n FROM messages WHERE body='One more thing'")[0]["n"] == 0
-    # Undone, the question is open again, and a reply may name it.
-    [answer] = sql(api, "SELECT id FROM answers WHERE requirement_id=?", (rid,))
-    undone = api.post(f"/api/v2/answers/{answer['id']}/undo", json={}, headers=headers("ana-test"))
-    assert undone.status_code == 200, undone.text
-    r = api.post(
-        f"/api/v2/tasks/{task['id']}/comments", json={"text": "One more thing", "ask": rid}, headers=headers("ana-test")
-    )
-    assert r.status_code == 200, r.text
 
 
 def test_a_question_once_replied_to_cannot_be_named_again(ruled):

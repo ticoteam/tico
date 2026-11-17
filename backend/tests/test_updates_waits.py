@@ -5,7 +5,7 @@ import pytest
 
 from backend import question_marks, updates
 from backend.store import H
-from backend.tests.helpers.engine import old_question
+from backend.tests.helpers.engine import ok_ask
 
 ANA, BEN = "human:ana", "human:ben"
 DAY = "2026-11-10"
@@ -53,14 +53,13 @@ def test_a_persons_draft_lists_what_waits_on_someone_else(c):
 
 def test_a_persons_draft_reads_her_answers_from_the_answers(c):
     task = H.task_create(c, "bot:ops", "Pick the launch date", "Please.", "bot:ops", lint=False)
-    # Her answers to questions as the engine wrote them before a question was a ❓ (old_question), read as before.
-    added = old_question(c, task["id"], "bot:ops", ANA, "Which date?")
-    first = H.task_answer(c, ANA, task["id"], added["requirement_id"], "The 11th")
+    added = ok_ask(c, task["id"], "bot:ops", ANA, "OK the 11th?")
+    first = H.task_answer(c, ANA, task["id"], added["requirement_id"], "no", "The 11th clashes")
     H.task_answer_undo(c, ANA, first["answer_id"])  # taken back: not hers any more
-    H.task_answer(c, ANA, task["id"], added["requirement_id"], "The 12th")
+    H.task_answer(c, ANA, task["id"], added["requirement_id"], "ok", "The 11th works after all")
     hidden = H.task_create(c, "bot:ops", "Private pick", "Please.", "bot:ops", lint=False, private=True)
-    other = old_question(c, hidden["id"], "bot:ops", ANA, "Secret?")
-    H.task_answer(c, ANA, hidden["id"], other["requirement_id"], "Secret answer")
+    other = ok_ask(c, hidden["id"], "bot:ops", ANA, "OK the secret?")
+    H.task_answer(c, ANA, hidden["id"], other["requirement_id"], "no", "Secret answer")
     facts = updates.draft_facts(c, ANA, "daily", DAY)[0]
-    assert "On Pick the launch date: The 12th" in facts
-    assert "Secret answer" not in facts and "The 11th" not in facts
+    assert "On Pick the launch date: OK: The 11th works after all" in facts
+    assert "Secret answer" not in facts and "clashes" not in facts

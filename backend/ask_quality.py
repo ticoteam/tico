@@ -1,8 +1,9 @@
 # pyright: strict
 """How well each bot asks people (Tasks spec "Bots ask people a question with choices", AC-12), for the Decide readout
 (backend/decide_readout.py): per bot, its asks to people in the window (its ❓ questions and its OKs), how many a
-person sent back as "Badly written" (the decision view's chip, a 👎 on the ask), and the share (the target is under 1 in 20, read three weeks after the
-release: `tico decision readout --days 21`). A 👎 counts on the day it was last set, as answers.thumbs_down_count reads it.
+person sent back as "Badly written" (a 👎 on the ask, as asks had until ❓ questions; the old `feedbacks` rows still
+count), and the share (the target is under 1 in 20, read three weeks after the release: `tico decision readout --days
+21`). A 👎 counts on the day it was last set.
 
 The guard: refusing badly written asks must not stop a bot asking at all. Each refusal of a bot's ask to a person (its
 shape, `task_ask_shape`; a rule that covers it, `task_rule`; a decision filed as a to-do, ask ingest's `decision`) is
@@ -22,13 +23,12 @@ BADLY_WRITTEN = "Badly written"  # the chip's words, which the 👎 reason start
 TARGET = 1 / 20
 REFUSED_RULES = ("task_ask_shape", "task_rule")
 DAY = timedelta(days=1)
-# A bot's asks to people made in [?, ?): its questions, each a message marked ❓ (question_marks), then its OKs and the
-# questions it added as asks before a question was a ❓, both on a task's visit (requirements). The bounds go in twice,
-# once per table.
+# A bot's asks to people made in [?, ?): its questions, each a message marked ❓ (question_marks), then its OKs on a
+# task's visit (requirements). The bounds go in twice, once per table.
 ASKS = (
     "SELECT bot_id, created_at FROM question_marks WHERE created_at>=? AND created_at<? "
     "UNION ALL SELECT added_by_id, created_at FROM requirements WHERE by_bot=1 AND visit_id IS NOT NULL "
-    "AND person_id LIKE 'human:%' AND kind IN ('answer','ok') AND created_at>=? AND created_at<?"
+    "AND person_id LIKE 'human:%' AND kind='ok' AND created_at>=? AND created_at<?"
 )
 
 

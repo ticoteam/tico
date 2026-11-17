@@ -257,15 +257,6 @@ and external copies already delivered remain outside this operation. An edit acc
 not `ask` or attachments.
 A client can tell a server offers this by the `editTaskComment` and `deleteTaskComment` operations in `GET /api/v2/openapi.json`.
 
-`POST /api/v2/tasks/{tid}/comments/{mid}/resolve` settles an open question `mid` on the task. With
-`{"quote": "..."}` (at most 4000 characters), the question's asker or the task's owner bot records the person's
-words from wherever they answered as a `kind: "answer"` reply with `refs.quoted: true`; on a structured question
-its `answer` is `{target, answers: {}, other: <quote>, dismiss: false, by: <caller>, at, quoted: true}`. With `{}`,
-the asker withdraws the question: it stays in the thread with `superseded_at`. Either way it leaves every Needs
-you list and count, wakes nobody, and answers as an edit does, with the answer (or the withdrawn question) as
-`comment`. `404` when `mid` is not a question on this task; `403 identity` for any other caller; `422 kind` when
-it was already answered or withdrawn.
-
 ## Branches
 
 `POST /api/v2/bots/{bot}/copies` (also `/branches`) makes the caller's branch and returns its definition,

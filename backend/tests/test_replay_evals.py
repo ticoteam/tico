@@ -41,10 +41,9 @@ def test_capture_splits_opening_state_from_outcome_and_needs_a_signature():
                 {"requirement_id": "o", "kind": "owner_done", "who": "bot:dev", "asked_by": None, "met": True},
                 {
                     "requirement_id": "k",
-                    "kind": "answer",
+                    "kind": "ok",
                     "who": "human:ana",
                     "asked_by": "bot:dev",
-                    "choices": ["Chrome", "Safari"],
                     "met": True,
                 },
             ],
@@ -125,7 +124,7 @@ def test_capture_splits_opening_state_from_outcome_and_needs_a_signature():
 
 class FakeTico:
     """Just enough of the API for run.py. The bot runs when it is handed the task, when a person comments after that,
-    and when its ask is answered, as `behave` says."""
+    and when its ❓ is answered, as `behave` says."""
 
     def __init__(self, behave):
         self.behave, self.tasks, self.calls = behave, {}, []
@@ -165,18 +164,18 @@ class FakeTico:
                     f"2099-01-01T00:{len(row['runs']):02}:55Z" if handed else "2099-01-01T00:00:01Z",
                 )
             )
-            if handed:
+            marked = [m for m in row["messages"] if (m.get("refs") or {}).get("question")]
+            if handed and marked:  # a reply in the chat clears the person's ❓
+                for m in marked:
+                    m["refs"] = {}
+                row["task"]["turn"] = None
+                self.behave(self, row, "answered")
+            elif handed:
                 self.behave(self, row, "commented")
             return 200, {}
         if path.endswith("/owner"):
             row["task"]["owner_id"] = body["owner"]
             self.behave(self, row, "assigned")
-            return 200, {}
-        if path.endswith("/answer"):
-            asked = next(r for r in row["task"]["to_leave"] if r["requirement_id"] == path.split("/")[3])
-            asked.update(met=True, answer=body["value"])
-            row["task"]["turn"] = None
-            self.behave(self, row, "answered")
             return 200, {}
         return 200, row
 
@@ -193,16 +192,10 @@ def bot_asks_then_finishes(fake, row, event):
     """Asks the owner on the task, which makes it their turn, then finishes once answered."""
     if event == "assigned":
         row["runs"].append(run_at(1))
-        row["task"]["to_leave"].append(
-            {
-                "requirement_id": "a1",
-                "kind": "answer",
-                "who": "human:owner",
-                "asked_by": "bot:engineering-manager",
-                "choices": None,
-                "met": False,
-            }
-        )
+        # The bot's question is its chat message marked ❓ (refs.question), open until the person replies.
+        asked = message("q1", "bot:engineering-manager", "Which repository?", "2099-01-01T00:01:30Z")
+        asked["refs"] = {"question": {"id": "a1", "to": "human:owner"}}
+        row["messages"].append(asked)
         row["task"]["turn"] = {"state": "person", "who": "human:owner"}
     elif event == "answered":
         row["runs"].append(run_at(2))
@@ -262,9 +255,9 @@ def test_replay_scores_candidate_against_original(behave, verdict, monkeypatch, 
     assert f"1 case: {int(verdict == 'win')} wins, {int(verdict == 'regression')} regressions" in text
     assert code == (0 if verdict == "win" else 1)
     if verdict == "win":
-        # The simulated person answered the bot's ask with the case's first answer, through the ask.
-        assert server.tasks["r1"]["task"]["to_leave"][0]["answer"] == "Use the main repository only."
-        assert ("POST", "tasks/r1/asks/a1/answer") in posts
+        # The simulated person replied to the bot's ❓ in the task's chat with the case's first answer.
+        assert server.tasks["r1"]["comments"][-1]["body"] == "Use the main repository only."
+        assert not any((m.get("refs") or {}).get("question") for m in server.tasks["r1"]["messages"])
         assert "runs 4→2" in text
     else:
         assert "## Regressions" in text and "no longer done" in text

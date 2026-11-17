@@ -153,7 +153,6 @@ def standing(conn: "sqlite3.Connection", row: Row) -> "R.Standing | None":
         "who_oks": "none",
         "settings": {},
         "shows": None,
-        "choices": None,
         "created_at": row["visit"]["entered_at"],
     }
     line = LINE.format(ref=ref(earlier))

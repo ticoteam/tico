@@ -1,6 +1,7 @@
 """Every writer asks a question as a message marked ❓ (backend/question_marks.py): the engine refuses a question ask, a
 bot's OK shows what it approves, and a question still open from before is taken back and its bot woken to ask again
-(backend/old_questions.py). Synthetic rows only: the fictional company's people and bots (backend/tests/helpers/engine.py)."""
+(backend/old_questions.py; the migration that keeps them is tested in backend/tests/test_no_structured_questions.py).
+Synthetic rows only: the fictional company's people and bots (backend/tests/helpers/engine.py)."""
 
 import json
 
@@ -76,25 +77,13 @@ def test_a_bots_ok_shows_what_it_approves_and_a_persons_need_not(c, general):
 
 
 def _old_question(c, task_id, by=BUILDER, person=ANA):
-    """A question the older engine added: a `requirements` row of kind `answer` on the task's visit."""
+    """A question the older engine added, as the migration kept it while it was open: an `old_questions` row on the
+    task's visit, with the ladder resting on the person."""
     visit = E.task(c, task_id)["visit"]["id"]
     rid = H.new_id()
     c.execute(
-        "INSERT INTO requirements (id, visit_id, kind, who_oks, person_id, added_by_id, by_bot, line, choices, settings, "
-        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            rid,
-            visit,
-            "answer",
-            "people_with_exceptions",
-            person,
-            by,
-            1,
-            "Which tone?",
-            json.dumps(["A", "B"]),
-            "{}",
-            H.now(),
-        ),
+        "INSERT INTO old_questions (id, visit_id, task_id, added_by_id, line, choices, created_at) VALUES (?,?,?,?,?,?,?)",
+        (rid, visit, task_id, by, "Which tone?", json.dumps(["A", "B"]), H.now()),
     )
     c.execute("UPDATE visits SET level='person', tries=3, person_id=?, next_try_at=NULL WHERE id=?", (person, visit))
     return rid, visit
@@ -109,7 +98,8 @@ def _queued(c, task_id):
 
 
 def _withdrawn(c, rid):
-    return c.execute("SELECT withdrawn_at FROM requirements WHERE id=?", (rid,)).fetchone()[0]
+    """Taken back: its row is gone."""
+    return not c.execute("SELECT 1 FROM old_questions WHERE id=?", (rid,)).fetchone()
 
 
 def _wakes(c, task_id):
@@ -127,17 +117,14 @@ def _wakes(c, task_id):
 def test_an_open_question_from_before_is_taken_back_and_its_bot_woken_to_ask_again(c, general):
     asked = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     open_rid, _ = _old_question(c, asked)
-    answered = X.new_task(c, ANA, "Pick the colour", assignee=BUILDER)
-    done_rid, _ = _old_question(c, answered["id"])
-    X.answer(c, answered, done_rid, "A", ANA)
     closed = X.new_task(c, ANA, "Order the paper", assignee=BUILDER)["id"]
-    _old_question(c, closed)
+    closed_rid, _ = _old_question(c, closed)
     H.task_close(c, ANA, closed, "Not needed.", _seen(c, closed))
     X.settled(c)
 
     assert OQ.carry_over(c) == 1
 
-    assert _withdrawn(c, open_rid) and not _withdrawn(c, done_rid)
+    assert _withdrawn(c, open_rid) and _withdrawn(c, closed_rid), "a closed task's row goes, with no note or wake"
     took = "SELECT count(*) FROM history_events WHERE subject_id=? AND note=?"
     assert c.execute(took, (closed, OQ.NOTE)).fetchone()[0] == 0 and _wakes(c, closed) == []
     assert Q.on_task(c, asked) == [], "nothing is converted: the bot asks again"
@@ -190,7 +177,7 @@ def test_a_persons_old_question_is_taken_back_with_no_bot_to_wake_and_a_long_one
     long = X.new_task(c, ANA, "Name the release", assignee=BUILDER)["id"]
     long_rid, _ = _old_question(c, long)
     c.execute(
-        "UPDATE requirements SET line=?, choices=? WHERE id=?",
+        "UPDATE old_questions SET line=?, choices=? WHERE id=?",
         ("Which name? " + "x" * 2000, json.dumps(["y" * 500] * 20), long_rid),
     )
     X.settled(c)
@@ -209,6 +196,6 @@ def test_a_persons_old_question_is_taken_back_with_no_bot_to_wake_and_a_long_one
     assert len(wake) < 2000
 
 
-def test_the_open_questions_read_their_answers_by_visit(c, general):
-    plan = " ".join(str(row[-1]) for row in c.execute("EXPLAIN QUERY PLAN " + OQ.OPEN))
-    assert "answers_visit" in plan and "SCAN a" not in plan, plan
+def test_with_no_old_questions_table_there_is_nothing_to_take_back(c, general):
+    c.execute("DROP TABLE old_questions")
+    assert OQ.carry_over(c) == 0

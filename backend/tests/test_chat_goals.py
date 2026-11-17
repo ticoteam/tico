@@ -219,9 +219,9 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
         },
         machine['token'],
     )
-    # The owner's older ask of another bot on the task (X.old_question): its turn, in the task's room.
+    # The owner's older OK ask of another bot on the task (X.ok_ask): its turn, in the task's room.
     with api.app.state.store.transaction() as c:
-        X.old_question(c, task['id'], 'bot:ops', 'bot:product-design', 'Is the summary right?')
+        X.ok_ask(c, task['id'], 'bot:ops', 'bot:product-design', 'OK the summary?')
     other = claim(api, machine)
     assert other['bot'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']

@@ -10,7 +10,7 @@ from backend import execution
 from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, post, ready, runner
-from backend.tests.helpers.engine import old_question
+from backend.tests.helpers.engine import ok_ask
 
 
 def _setup(api):
@@ -73,16 +73,15 @@ def test_a_bot_that_hands_its_own_task_on_keeps_its_turn_and_the_new_owner_waits
 
 
 def test_a_bot_asked_on_the_task_runs_beside_the_owner(api):
-    """A turn the task still gives another bot (asked for an OK or an answer) never holds the owner's: only a turn
-    that moved on to someone else does. Nothing asks a bot a question now (a question is a ❓ to a person); a company's
-    older one is read as before, written here as the engine wrote it (old_question)."""
+    """A turn the task still gives another bot (asked for an OK) never holds the owner's: only a turn that moved on to
+    someone else does. An OK asked of a bot, as older companies have, written here as the engine wrote it (ok_ask)."""
     machine = _setup(api)
     token = machine["token"]
     tid = post(api, "tasks", {"owner": "ops", "title": "Price the plan", "body": "Draft it."})["id"]
     first = claim(api, machine)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t-" + first["id"]}, token)
     with api.app.state.store.transaction() as c:
-        old_question(c, tid, "human:ana", "bot:cpo", "Which tier?")
+        ok_ask(c, tid, "human:ana", "bot:cpo", "OK the tier")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM jobs WHERE bot_id='cpo' AND state='queued'").fetchone()
     second = claim(api, machine)

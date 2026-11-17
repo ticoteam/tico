@@ -100,6 +100,7 @@ def test_only_work_the_rater_reads_and_did_not_make_takes_feedback_and_only_from
     give(api, mine["id"], subject_type="task", expected=422)  # a task you filed yourself
     rated = give(api, filed["id"], subject_type="task", reason="Wrong venue")
     assert rated["bot_id"] == "bot:cpo"
+    give(api, filed["id"], subject_type="ask", expected=422)  # asks lost their thumbs: no longer a subject
     assert rows(api, "SELECT subject_revision FROM feedbacks WHERE id=?", rated["id"])[0]["subject_revision"] == 1
 
 

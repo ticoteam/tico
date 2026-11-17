@@ -2,8 +2,8 @@
 // Every request is answered from the fixtures below, in the shapes backend/openapi_v2.py gives them (ui/types/api.d.ts):
 // GET /api/v2/pipelines, /needs-you (NeedsYou), /tasks (TaskBrief rows), /tasks/{id} (TaskDetail), and the writes on a
 // task (edit with its version, done, move, owner, snooze, an ask's answer, a comment). Checks here:
-//  - You: Needs you under Answer, Review and Do, each row its task's title (an Answer row the question under it); a question with two choices answers in
-//    place and leaves (not on a phone); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
+//  - You: Needs you under Answer, Review and Do, each row its task's title (an Answer row, a bot's ❓, the question under
+//    it); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
 //  - You: the person's own open tasks (nothing asked of them, so not in Needs you or its count) at the end of Do, kept live;
 //  - the view button lists You and every pipeline still in use (a retired one is not offered); picking one puts it in
 //    the address and reads its open tasks, snoozed ones too, drawn last in their stage and dimmed;
@@ -55,7 +55,7 @@ export interface Task {
 // One item of Needs you (NeedsYouItem).
 export interface Need {
   id: string;
-  kind: 'task' | 'ask' | 'paused' | 'mention';
+  kind: 'task' | 'ask' | 'paused' | 'mention' | 'question';
   line: string;
   since: string | null;
   task_id?: string | null;
@@ -200,9 +200,8 @@ function brief(t: Task) {
     // a finished task's own time, as the server's list rows carry it
     ...(t['done_at'] ? {done_at: t['done_at']} : {}), ...(t['closed_at'] ? {closed_at: t['closed_at']} : {})};
 }
-const ask = (rid: string, kind: 'ok' | 'answer', line: string, choices: string[] | null = null): Requirement => ({requirement_id: rid, kind, line,
-  who: 'human:ana', asked_by: 'bot:pm', choices, may: kind === 'ok' ? ['ok', 'no', 'thumbs'] : ['answer', 'thumbs'], met: false, shows: [],
-  standing: 'waiting', answer: null});
+const ask = (rid: string, line: string): Requirement => ({requirement_id: rid, kind: 'ok', line, who: 'human:ana', asked_by: 'bot:pm',
+  may: ['ok', 'no'], met: false, shows: [], standing: 'waiting', answer: null});
 function fixtures(): Task[] {
   return [
     task('t-1', 'Checkout flow', 'spec', {turn: turn('person', 'human:ana', 'Waiting on Ana', {ask: true, requirement_id: 'r1'})}),
@@ -216,14 +215,14 @@ function fixtures(): Task[] {
     task('t-7', 'Old pricing test', 'closed', {updated_at: at(5), closed_at: at(60 * 70)}),
   ];
 }
-/** Needs you for these tasks: an OK, a question with two choices, and a task Ana owns. */
+/** Needs you for these tasks: an OK, a bot's ❓ in a task's chat (backend/question_marks.py), and a task Ana owns. */
 function needsOf(tasks: Task[]): Need[] {
   const of = (id: string) => brief(tasks.find(t => t.id === id)!);
   return [
     {kind: 'ask', id: 'r1', task_id: 't-1', requirement_id: 'r1', line: 'Approve the spec for Checkout flow', since: at(90), task: of('t-1'),
-      ask: ask('r1', 'ok', 'Approve the spec for Checkout flow')},
-    {kind: 'ask', id: 'r2', task_id: 't-2', requirement_id: 'r2', line: 'Which plan do new signups get?', since: at(60), task: of('t-2'),
-      ask: ask('r2', 'answer', 'Which plan do new signups get?', ['Free', 'Pro trial'])},
+      ask: ask('r1', 'Approve the spec for Checkout flow')},
+    {kind: 'question', id: 'r2', mark_id: 'q2', task_id: 't-2', message_id: 'm-q2', conversation_id: 'c-t-2', root_id: 'c-t-2',
+      from_id: 'bot:pm', requirement_id: null, line: 'Which plan do new signups get?', since: at(60), task: of('t-2')},
     {kind: 'task', id: 'task:t-3', task_id: 't-3', line: 'Book the team offsite', since: at(300), task: of('t-3')},
   ];
 }
@@ -401,15 +400,11 @@ async function you(browser: Browser) {
     await page.locator('#task-body .empty', {hasText: 'No matches'}).waitFor();
     await page.locator('#task-q').press('Escape');
     await page.waitForFunction(() => document.querySelectorAll('#task-body .tk-row').length === 3);
-    // A question with two choices answers in place, with the task's version, and leaves the list (a phone opens it instead).
-    if (viewport.width < 640) { assert.equal(await page.locator('[data-need-answer]:visible').count(), 0); await page.close(); continue; }
-    await page.locator('[data-need="r2"] [data-need-answer="Pro trial"]').click();
-    await page.locator('[data-need="r2"]').waitFor({state: 'detached'});
-    assert.deepEqual(posts, [{p: '/api/v2/tasks/t-2/asks/r2/answer', body: {value: 'Pro trial', version: 3}}]);
+    assert.deepEqual(posts, [], 'a row answers nothing in place');
     assert.deepEqual(errors, []);
     await page.close();
   }
-  console.log('You: Answer, Review and Do; rows by task title; search; a two-choice answer in place: ok');
+  console.log('You: Answer, Review and Do; rows by task title; search: ok');
 }
 
 /** A person's own open tasks, with nothing asked of them, are not in Needs you (its count, ▶, the badge) but are in You:
@@ -422,7 +417,7 @@ async function youOwnTasks(browser: Browser) {
   const of = (id: string) => brief(tasks.find(t => t.id === id)!);
   // Needs you as the server gives it now: the asks, and a bot's private task Ana must let someone see (a Do row); t-3 and
   // t-8 are Ana's own, with nothing asked of her, so Needs you leaves them out.
-  const needs: Need[] = [...needsOf(tasks).filter(n => n.kind === 'ask'),
+  const needs: Need[] = [...needsOf(tasks).filter(n => n.kind !== 'task'),
     {kind: 'task', id: 'task:t-4', task_id: 't-4', line: 'Let Sam see this task', since: at(120), task: of('t-4')}];
   for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
     const {page, errors, reads} = await open(browser, {viewport, tasks, needs});

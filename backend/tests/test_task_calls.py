@@ -3,8 +3,7 @@ life looks like through them: made by `H.task_create`, worked with `H.task_done`
 `task_reassign`, `task_ask`, `task_answer`, `task_snooze`, edited with `H.task_update`, deleted and restored.
 
 A bot's question to a person is a message marked ❓ (backend/question_marks.py); what a task waits on is an OK. A bot's
-OK shows what it approves (`shows`), a person's need not. `X.old_question` writes a question row as the engine did,
-for the code that still reads and answers them."""
+OK shows what it approves (`shows`), a person's need not."""
 
 import json
 
@@ -156,31 +155,21 @@ def test_a_person_says_a_bots_task_is_done_and_tico_finishing_one_needs_no_push(
 
 
 # ----------------------------------------------------------------------------- ask and answer
-def test_a_bot_asks_a_person_who_answers_and_the_bot_is_woken_with_the_answer(c):
-    """A question row as the engine wrote one (X.old_question): read and answered as before."""
+def test_a_bot_asks_a_person_for_an_ok_who_answers_and_the_bot_is_woken_with_the_answer(c):
     row = _new(c)
     X.settled(c)
-    asked = X.old_question(c, row["id"], BUILDER, ANA, "Ship it on Monday or Friday?", choices=["Monday", "Friday"])
-    rid = asked["requirement_id"]
+    rid = _ok(c, row["id"], line="OK shipping it on Friday?")["requirement_id"]
     view = H.task_view(c, row["id"], ANA)
     ask = next(r for r in view["to_leave"] if r["requirement_id"] == rid)
-    assert (ask["kind"], ask["met"], ask["who"], ask["asked_by"], ask["choices"]) == (
-        "answer",
-        False,
-        ANA,
-        BUILDER,
-        ["Monday", "Friday"],
-    )
-    assert {"answer", "give", "thumbs"} <= set(ask["may"])
+    assert (ask["kind"], ask["met"], ask["who"], ask["asked_by"]) == ("ok", False, ANA, BUILDER)
+    assert {"ok", "no", "give"} <= set(ask["may"])
     assert (view["turn"]["state"], view["turn"]["who"]) == ("person", ANA)
-    assert (
-        "answer" not in next(r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == rid)["may"]
-    )
+    assert "ok" not in next(r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == rid)["may"]
     with _refused("task_requirement"):
-        H.task_answer(c, BEN, row["id"], rid, "Monday")
-    H.task_answer(c, ANA, row["id"], rid, "Friday")
+        H.task_answer(c, BEN, row["id"], rid, "ok")
+    H.task_answer(c, ANA, row["id"], rid, "ok")
     after = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == rid)
-    assert (after["met"], after["answer"]["value"], after["answer"]["by"]) == (True, "Friday", ANA)
+    assert (after["met"], after["answer"]["value"], after["answer"]["by"]) == (True, "ok", ANA)
     assert [w[1] for w in X.wakes(c, row["id"]) if ":answer:" in w[0]] == [BUILDER]
 
 
@@ -196,32 +185,6 @@ def test_a_bots_open_ask_counts_as_waiting_on_a_person_until_it_is_answered(c):
     assert H.status_counts(c, BUILDER) == (before[0], before[1] + 1)
     H.task_comment(c, ANA, row["id"], "Friday.")
     assert H.status_counts(c, BUILDER) == before
-
-
-def test_a_thumbs_down_that_lets_the_task_finish_is_the_persons_move(c):
-    row = _new(c)
-    asked = _ok(c, row["id"])
-    H.task_done(c, BUILDER, row["id"], "Drafted both.", _version(c, row["id"]))
-    out = H.task_thumbs(c, ANA, row["id"], asked["requirement_id"], False, "Either day is fine; do not ask.")
-    assert out["status"] == "done"
-    updates = c.execute(
-        "SELECT actor FROM events WHERE action='task.update' AND target=? AND detail LIKE '%\"done\"%'", (row["id"],)
-    ).fetchall()
-    assert [u[0] for u in updates] == [ANA]  # what the move causes is Ana's, not Tico's
-
-
-def test_a_thumb_is_offered_only_on_a_bots_ask(c):
-    row = _new(c, by=BEN)
-    theirs = H.task_ask(c, BEN, row["id"], ANA, "OK the venue?", kind="ok", seen_version=_version(c, row["id"]))
-    ask = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == theirs["requirement_id"])
-    assert "thumbs" not in ask["may"]  # a person's ask on a bot's task
-    with _refused("Only a bot's ask takes a thumb"):
-        H.task_thumbs(c, ANA, row["id"], theirs["requirement_id"], True)
-    stage_ok = X.requirement(c, "general-todo", "ok", person=ANA, line="OK the venue")
-    mine = _new(c, owner=BEN, title="Book the venue")
-    on_bot = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == stage_ok)
-    on_person = next(r for r in H.task_view(c, mine["id"], ANA)["to_leave"] if r["requirement_id"] == stage_ok)
-    assert "thumbs" in on_bot["may"] and "thumbs" not in on_person["may"]  # a stage's ask is the owner bot's
 
 
 def test_a_bots_ask_to_a_person_is_plain_words(c):
@@ -693,20 +656,18 @@ def test_a_persons_own_ask_is_okd_only_by_their_own_click(c):
 
 
 def test_a_bots_new_ask_keeps_what_was_decided_and_replaces_only_its_open_ask(c):
-    """C15: a bot's new ask replaces its ask that is still open. An answered question and an OK'd OK stay on the task,
-    met, with their answers (smoke 2026-11-10, item 3)."""
+    """C15: a bot's new ask replaces its ask that is still open, a sent back one included (nothing was decided). An
+    OK'd OK stays on the task, met, with its answer (smoke 2026-11-10, item 3)."""
     row = _new(c, by=BEN, owner=BUILDER)
-    question = X.old_question(c, row["id"], BUILDER, BEN, "Which CRM?")  # a question row the engine wrote before
-    H.task_answer(c, BEN, row["id"], question["requirement_id"], "New CRM")
+    back = _ok(c, row["id"], BEN, "OK the old CRM?", shows=X.shown(c, "Old CRM"))
+    H.task_answer(c, BEN, row["id"], back["requirement_id"], "no", "Use the new CRM")
     ok = _ok(c, row["id"], BEN, "OK the budget?", shows=X.shown(c))
     H.task_answer(c, BEN, row["id"], ok["requirement_id"], "ok")
     open_one = _ok(c, row["id"], BEN, "OK the launch day?", shows=X.shown(c))
     last = _ok(c, row["id"], BEN, "OK the launch week?", shows=X.shown(c))
     shown = {r["requirement_id"]: r for r in H.task_view(c, row["id"], BEN)["to_leave"]}
     assert open_one["requirement_id"] not in shown  # it was still open: replaced
-    assert (
-        shown[question["requirement_id"]]["met"] and shown[question["requirement_id"]]["answer"]["value"] == "New CRM"
-    )
+    assert back["requirement_id"] not in shown  # sent back, the bot's to revise: replaced too
     assert shown[ok["requirement_id"]]["met"] and shown[ok["requirement_id"]]["standing"] == "OK'd"
     assert not shown[last["requirement_id"]]["met"]
 
@@ -739,10 +700,10 @@ def test_a_bots_new_ask_never_drops_an_ok_given_for_exact_content_it_has_not_use
 
 def test_an_answer_the_assistant_gives_for_a_person_says_so_on_the_task(c):
     row = _new(c, by=BEN, owner=BUILDER)
-    asked = X.old_question(c, row["id"], BUILDER, BEN, "Which CRM?")["requirement_id"]  # a question row from before
+    asked = _ok(c, row["id"], BEN, "OK the old CRM?")["requirement_id"]
     via = H.VIA.set("assistant")
     try:
-        H.task_answer(c, BEN, row["id"], asked, "New CRM")
+        H.task_answer(c, BEN, row["id"], asked, "no", "Use the new CRM")  # a send back: the Assistant gives no OK
     finally:
         H.VIA.reset(via)
     answer = next(r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == asked)["answer"]

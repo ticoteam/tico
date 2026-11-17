@@ -90,7 +90,7 @@ label `dream`, and its instructions reach the bot through its run (like a routin
 the same checks as any task create; while one is open, starting again returns it (or 409 `busy`, without its
 questions, to someone who may not read the bot). Starting one also records a `dream.start` event on the task; that
 event, not the label, is what makes a task a dream, since anyone can label a task `dream`. It runs as a task turn with the
-bot's own model, and its session resumes after the question. The question is the task's one ask (`tico_task_ask`); ask
+bot's own model, and its session resumes after the question. The question is the task's one ❓ (`tico_task_ask`); ask
 ingest never judges it, since the person started the dream to be asked. They answer it in the panel, on the bot's
 page, where it shows until answered, or in Needs you; the answer wakes the bot as any answer does. While it works, the bot keeps
 the task note at one short line on what it is doing now, and the panel shows that line and how long the dream has run
@@ -106,7 +106,7 @@ the commits whose source is the dream's task, and **Wake up** returns to the his
 A bot is in need when it is active, keeps memory, has no dream job waiting and no open dream, its last dream of either
 kind started at least 48 hours ago (a bot that never dreamed must be 48 hours old), and its work since that dream's start,
 or 14 days back if that is later, is at least 10: its finished turns (a dream's own left out), plus five for each
-correction by a person (a thumbs-down on its work, or an org rule that applies to it added, changed or retired by a
+correction by a person (an org rule that applies to it added, changed or retired by a
 person). Memory diffs do not count. A person's edit to the bot's instructions does not count yet: the runner reports
 only `memory/` and `knowledge/` commits, and one with no known run may be Tico's own as well as a person's. At most "Most bots per
 run" are queued a run (three by default), most need first; a bot whose dream is still waiting is skipped, so it never
@@ -123,7 +123,7 @@ roster), else the company owner. The task is filed as a dream, with a `dream.aut
 its reason ("Auto dream: 23 turns and 2 corrections from people since 2026-10-28") as the first line of its instructions. The
 panel shows that reason under the status line. Its instructions say nobody is waiting: the bot applies and commits what
 it can settle, commits, and finishes without waiting. Only if it needs the requester does it ask, at most three business
-questions, each its own task with one ask (`skills/add-to-flow`), never on the dream: they reach the requester's Flow
+questions, each its own task with one question (`skills/add-to-flow`), never on the dream: they reach the requester's Flow
 like any bot's question, with a plain title instead of the dream's instructions, and the answer reaches the bot on that
 task. A dream a person starts still asks on the dream itself, answered on the panel. **Automations › Maintenance** switches it off. Its **Run now** starts
 the Dream step only when that step is due, as the schedule does; the bot rules above still apply.

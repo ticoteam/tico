@@ -330,7 +330,6 @@ def ask(api, tid, to="ben", line="OK to book the barn?", kind="ok", token="ana-t
         "line": line,
         "kind": kind,
         "version": show(api, tid)["version"],
-        "why": "It sets what goes out on launch day.",
         **({"show": shows} if shows else {}),
     }
     r = api.post(f"/api/v2/tasks/{tid}/asks", json=body, headers=headers(token))
@@ -360,8 +359,8 @@ def test_a_reader_who_cannot_work_the_task_cannot_give_someone_elses_ask_away(ap
 
 
 def test_a_reader_who_was_not_asked_cannot_send_a_bots_ask_back(api):
-    """Codex review 2, 2: the bot said its own work is done and waits only on Ben's OK. Cara's thumbs down would
-    withdraw that ask and so finish the task: refused. Ben, who was asked, may decline it."""
+    """Codex review 2, 2: the bot said its own work is done and waits only on Ben's OK. Cara, who was not asked, may not
+    send it back: refused, and the task is as it was. Ben, who was asked, may."""
     bot = as_bot(api)
     made = task(api, owner="ops")
     tid = made["id"]
@@ -374,12 +373,14 @@ def test_a_reader_who_was_not_asked_cannot_send_a_bots_ask_back(api):
     assert done.status_code == 200, done.text
     before = show(api, tid)
     assert before["status"] == "open"
-    thumbs = f"tasks/{tid}/asks/{rid}/thumbs"
-    body = refused(api, thumbs, {"up": False, "note": "Nobody needs this"}, token="cara-test", status=403)
-    assert body["error"]["code"] == "identity"
+    answer = f"tasks/{tid}/asks/{rid}/answer"
+    body = refused(api, answer, {"value": "no", "note": "Nobody needs this"}, token="cara-test")
+    assert body["error"] == "task_requirement" and body["detail"] == "This is asked of Ben"
     assert show(api, tid) == before
-    post(api, thumbs, {"up": False, "note": "We already picked June"}, token="ben-test")
-    assert show(api, tid)["status"] == "done"
+    said = post(api, answer, {"value": "no", "note": "We already picked June"}, token="ben-test")
+    with api.app.state.store.read() as c:
+        found = c.execute("SELECT by_id, answer, notes FROM answers WHERE id=?", (said["answer_id"],)).fetchone()
+    assert tuple(found) == ("human:ben", "no", "We already picked June")
 
 
 def test_only_who_gave_an_answer_takes_it_back(api):

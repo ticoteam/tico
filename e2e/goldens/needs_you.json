@@ -15,19 +15,22 @@
         "ask": {
           "answer": null,
           "asked_by": "bot:ops",
-          "choices": null,
           "kind": "ok",
           "line": "Spend $9 on ads for a second test?",
           "may": [
             "ok",
             "no",
             "give",
-            "withdraw",
-            "thumbs"
+            "withdraw"
           ],
           "met": false,
           "requirement_id": "<pending_ask>",
-          "shows": [],
+          "shows": [
+            "file:<file>@1"
+          ],
+          "source": [
+            "file:<file>@1"
+          ],
           "standing": "Spend $9 on ads for a second test?",
           "who": "human:ana"
         },

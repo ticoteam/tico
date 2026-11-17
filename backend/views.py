@@ -1883,15 +1883,12 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here. An ask the person
     snoozed for themselves (backend/ask_snoozes.py) is out until its time; `snoozed` "only" lists just those, each with
     its `snoozed_until`."""
-    from . import question_marks, strategy_merge, teammate_access, waiting_on
+    from . import question_marks, teammate_access, waiting_on
 
     if not H.is_human(who.actor):
         return []
     visible = auth.task_sql(c, who)
-    # The asks the Strategy Owner merged into one item stay out while that item is open; the item names them (`merged`).
-    merged = strategy_merge.hidden_by_item(c, who.actor)
-    hidden = {rid for ids in merged.values() for rid in ids}
-    raw = [i for i in waiting_on.needs(c, who.actor, snoozed) if i.get("requirement_id") not in hidden]
+    raw = list(waiting_on.needs(c, who.actor, snoozed))
     mentions = _mentions(c, who) if snoozed != "only" else []  # an @ is not snoozed: only asks are
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
@@ -1930,7 +1927,6 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 "missing": it["missing"],
                 "since": it["since"],
                 "task": briefs.get(it["task_id"]),
-                **({"merged": merged[it["task_id"]]} if it["task_id"] in merged else {}),
                 **({"snoozed_until": it["snoozed_until"]} if it.get("snoozed_until") else {}),
             }
         )
@@ -1942,13 +1938,17 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     # Their messages and chats in one read each, not one per ❓.
     stored = H.prime_messages(c, {it["message_id"] for it in questions})
     chats = question_marks.chat_rows(c, {m["conversation_id"] for m in stored.values()})
+    from . import threads
+
+    reader = threads.actor_viewer(c, who.actor) if questions else None
     for it in questions:
         if it.get("task_id") and it["task_id"] not in readable:
             continue
-        message = H.message(c, it["message_id"])
-        if not message or not question_marks.readable(
-            c, who.actor, message, chats.get(str(message["conversation_id"]))
-        ):
+        found = stored.get(it["message_id"]) if stored else None
+        message = H.message_view(c, found) if found else H.message(c, it["message_id"])
+        if not message or message.get("deleted_at") or reader is None:
+            continue
+        if not question_marks.readable(c, who.actor, message, chats.get(str(message["conversation_id"])), reader):
             continue
         marked.add(it["message_id"])
         refs = H._json(message.get("refs"), {}) or {}

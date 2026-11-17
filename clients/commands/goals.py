@@ -251,35 +251,6 @@ def goal_strategy_bot(api, args):
 
 
 @tool(
-    "tico_goal_strategy_bot_merge",
-    "Refused now: a bot's question to a person is a ❓ message on its own task, so there is nothing to merge.",
-    {
-        "person": _s("The person they all wait on: a person id"),
-        "title": _s("The merged item's title"),
-        "question": _s("The one question that answers them all"),
-        "tasks": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "2 to 10 task ids waiting on that person",
-        },
-    },
-    required=("person", "title", "question", "tasks"),
-    writes=True,
-)
-def goal_strategy_bot_merge(api, args):
-    return api.post(
-        "strategy-bot/merge",
-        {
-            "person": _target(api, args["person"]),
-            "title": args["title"],
-            "question": args["question"],
-            "tasks": list(args["tasks"]),
-        },
-        key=_key(args),
-    )
-
-
-@tool(
     "tico_goal_strategy_bot_level3_offer",
     "The Strategy Owner only: record that its Monday note offered level 3, once "
     "`level3_offer.due` in tico_goal_strategy_bot is true (10 recoveries approved in a row "
@@ -801,12 +772,6 @@ GOAL = (
         "goal strategy-bot",
         "the Strategy Owner: its level, regular checks and today's Needs you count per person",
         example="tico goal strategy-bot",
-    ),
-    Command(
-        "goal strategy-bot-merge",
-        "the Strategy Owner at level 2+: one item for several bots' same ask of a person",
-        args=(Arg("tasks", action="store", nargs="+"),),
-        example="tico goal strategy-bot-merge human:ana 'Pricing' 'Which plan first?' t_1 t_2",
     ),
     Command(
         "goal strategy-bot-level3-offer",

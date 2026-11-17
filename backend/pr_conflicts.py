@@ -43,7 +43,7 @@ is_bot: Callable[[object], bool] = _core.is_bot
 KIND = "conflict"  # the kind of the standing; no requirement row has it
 LINE = "No merge conflict"
 # Said in a person's Needs you on an ask the conflict is held for (`held`), after the ask's own line.
-ASK_LINE = "The PR has a merge conflict: {builder} fixes it after your {answer}."
+ASK_LINE = "The PR has a merge conflict: {builder} fixes it after your OK."
 # The task's open PRs GitHub says conflict with their base branch, oldest link first.
 _LINKS = (
     "SELECT task_id, id, url, title, repo, number, detail FROM task_links WHERE task_id IN (%s) AND kind='pr' "
@@ -174,7 +174,6 @@ def standing(conn: "sqlite3.Connection", row: Row, others: "Iterable[R.Standing]
         "who_oks": "none",
         "settings": {},
         "shows": None,
-        "choices": None,
         "created_at": row["visit"]["entered_at"],
     }
     line = f"{refs} conflicts with its base branch: {name} rebases it on its base branch"
@@ -197,11 +196,11 @@ def _person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     return W.person_for(conn, row)
 
 
-def ask_line(conn: "sqlite3.Connection", conflict: "R.Standing", kind: str) -> str:
-    """The line a held conflict adds to a person's ask of `kind` in their Needs you (`ASK_LINE`)."""
+def ask_line(conn: "sqlite3.Connection", conflict: "R.Standing") -> str:
+    """The line a held conflict adds to a person's OK in their Needs you (`ASK_LINE`)."""
     who = conflict.on
     name = str(_h().actor_name(conn, who)) if who else "its owner"
-    return ASK_LINE.format(builder=name, answer="answer" if kind == "answer" else "OK")
+    return ASK_LINE.format(builder=name)
 
 
 def is_conflict(requirement: Row) -> bool:

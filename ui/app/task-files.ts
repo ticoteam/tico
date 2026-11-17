@@ -8,8 +8,7 @@
 type TfKind = 'markdown' | 'csv' | 'json' | 'text' | 'html' | 'image' | 'video' | 'audio' | 'pdf' | 'other';
 interface TfAttachment { id: string; name?: string; title?: string; mime?: string; content_type?: string; size?: number; created_at?: string; url?: string; version?: number | string | null; file_id?: string | null; }
 interface TfAnswer { by?: string | null; text?: string; answers?: Record<string, string[]> | null; dismiss?: boolean; other?: string | null; at?: string | null; quoted_by?: string | null; }
-interface TfOption { label: string; description?: string | null; file?: string | null; }
-interface TfQuestion { id: string; header?: string | null; question?: string | null; options?: TfOption[]; multi?: boolean; other?: boolean; }
+interface TfQuestion { id: string; header?: string | null; question?: string | null; }
 interface TfAsk { questions?: TfQuestion[]; who?: string | null; by?: string | null; }
 interface TfVersion {
   n: number; size?: number | null | undefined; mime?: string; created_at?: string | null; by?: string | null; comment_id?: number | string | null;
@@ -270,7 +269,7 @@ function tfViewPaint(d: TfDialog, force = false): void {
       <button type="button" class="ghost tf-x" data-tf-review aria-label="Open full screen" title="Open full screen"><span class="nav-icon" aria-hidden="true">open_in_full</span></button>
       <button type="button" class="ghost tf-x" data-tf-close aria-label="Close" title="Close (Esc)" autofocus>✕</button></div>
     ${cmp ? tfCompareHTML(f, cmp, v, kind) : `<div class="tf-body">${tfBodyHTML(f, v, kind, d)}</div>`}
-    ${tfVersionMetaHTML(d, v)}`;
+    ${tfVersionMetaHTML(v)}`;
   tfBodyWire(box);
   if (!box.open && box.isConnected && d.open) box.showModal();
   if (refocus) $(refocus, el)?.focus({preventScroll: true});      // the redraw never drops the focus on the page
@@ -297,12 +296,12 @@ function tfCompareHTML(f: TfFile, a: TfVersion, b: TfVersion, kind: TfKind): str
   if (['markdown', 'csv', 'json', 'text'].includes(kind)) return `<div class="tf-body"><div class="tf-diff" data-tf-diff="${esc(a.url)}" data-tf-diff-b="${esc(b.url)}" aria-busy="true"><div class="tf-doc-skel"></div></div></div>`;
   return `<div class="tf-body tf-pair">${[a, b].map(x => `<div class="tf-side"><span class="tf-side-v tnum">v${x.n}</span>${tfBodyHTML(f, x, kind, null)}</div>`).join('')}</div>`;
 }
-function tfVersionMetaHTML(d: TfDialog, v: TfVersion): string {
+function tfVersionMetaHTML(v: TfVersion): string {
   const who = v.by ? actorLabel(v.by) : '';
   const line = [who, v.created_at ? ago(v.created_at) : '', v.size != null ? bytes(Number(v.size)) : ''].filter(Boolean).map(esc).join(' · ');
   return `<div class="tf-vmeta">${line ? `<div class="tf-vline muted">${v.by ? actorFace(v.by, 14) : ''}<span>${line}</span></div>` : ''}
     ${v.note ? `<div class="tf-note">${esc(v.note)}</div>` : ''}
-    ${v.ask ? askHTML(v.ask, v.answers, v.ask.by || v.by, tfFiles(d)) : ''}</div>`;
+    ${v.ask ? askHTML(v.ask, v.answers, v.ask.by || v.by) : ''}</div>`;
 }
 const TF_TEXT = new Map<string, Promise<string>>();          // versioned url -> Promise<text>, for the visit
 function tfText(url: string): Promise<string> {
@@ -475,10 +474,9 @@ document.addEventListener('click', ev => {
   if (d) tfOpen(d, jump.dataset.tfJump, jump.dataset.tfN, {scroll: true});
 });
 
-// ---- questions. An ask: {questions: [{id, header, question, options: [{label, description, file}], multi, other}],
-// who}. On a comment it is that comment's (an 'ask' message, its refs.questions); on a file version it is the
-// version's. It shows the question, its choices and the answers given; a person answers in the thread, and a bot that
-// needs an answer to go on asks on the task (docs/dev/pipelines-v3.md: the ask screen), so there are no controls here.
+// ---- questions. An ask: {questions: [{id, header, question}], who}. On a comment it is that comment's (an 'ask'
+// message, its refs.questions); on a file version it is the version's. It shows the question's text and the answers
+// given, never choices: a person answers in the thread, as to any bot's ❓ (backend/question_marks.py).
 function askOf(m: TfMessage | null | undefined): TfAsk | null {
   if (!m) throw new Error('The question has no message');
   if (m.ask?.questions) return m.ask;
@@ -495,17 +493,7 @@ function askAnswerWords(a: TfAnswer, ask: TfAsk | null | undefined): string {
   });
   return parts.join('; ');
 }
-function askOptionHTML(o: TfOption, files: TfFile[]): string {
-  let pic = '';
-  const [fid, fn] = String(o.file || '').split('@');
-  const f = fid && files.find(x => x.id === fid);
-  if (f) {
-    const v = tfVersion(f, fn), kind = tfKind(f.name, v.mime || f.mime), src = tfPicture(v, kind);
-    if (src) pic = `<span class="ask-pic tf-skel"><img alt="" data-tf-src="${esc(src)}"></span>`;
-  }
-  return `<span class="ask-opt ro"${o.description ? ` title="${esc(o.description)}"` : ''}>${pic}<span class="ask-l">${esc(o.label)}</span>${o.description ? `<span class="ask-d">${esc(o.description)}</span>` : ''}</span>`;
-}
-function askHTML(ask: TfAsk | null | undefined, answers: TfAnswer[] | null | undefined, asker: string | null | undefined, files: TfFile[] = []): string {
+function askHTML(ask: TfAsk | null | undefined, answers: TfAnswer[] | null | undefined, asker: string | null | undefined): string {
   const qs = (ask?.questions || []).filter(q => q && q.id);
   if (!qs.length) return '';
   answers = answers || [];
@@ -513,7 +501,6 @@ function askHTML(ask: TfAsk | null | undefined, answers: TfAnswer[] | null | und
   const answered = answers.length > 0;
   const body = qs.map(q => `<div class="ask-q" data-qid="${esc(q.id)}">
       <div class="ask-line">${q.header ? `<span class="ask-chip">${esc(q.header)}</span>` : ''}<span class="ask-text">${esc(q.question || '')}</span></div>
-      ${mine || !(q.options || []).length ? '' : `<div class="ask-opts">${(q.options ?? []).map(o => askOptionHTML(o, files)).join('')}</div>`}
     </div>`).join('');
   const list = answered ? `<ul class="ask-answers">${answers.map(a => `<li>${a.by ? actorFace(a.by, 14) : ''}<b>${esc(a.by ? actorLabel(a.by) : 'Someone')}</b>${a.quoted_by ? `<span class="muted">(quoted by ${esc(actorLabel(a.quoted_by))})</span>` : ''}
       <span class="${a.dismiss ? 'muted' : ''}">${esc(askAnswerWords(a, ask))}</span>${a.other ? `<span class="ask-o">${esc(a.other)}</span>` : ''}${a.at ? `<time class="muted tnum" title="${esc(fmt(a.at))}">${esc(ageShort(a.at))}</time>` : ''}</li>`).join('')}</ul>` : '';

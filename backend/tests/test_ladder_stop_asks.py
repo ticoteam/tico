@@ -79,7 +79,7 @@ def test_a_stopped_task_whose_visit_was_already_late_asks_a_person(c, time_machi
 def test_a_persons_task_whose_bot_never_answered_asks_her_again(c, time_machine):
     X.pipeline(c, manager="bot:manager")
     row = X.new_task(c, ANA, "Write the launch note", assignee=ANA)
-    X.old_question(c, row["id"], ANA, "bot:reviewer", "Please review")  # an older ask of a bot, which it never answers
+    X.ok_ask(c, row["id"], ANA, "bot:reviewer", "OK the note")  # an OK asked of a bot, which it never gives
     _stop(c, time_machine, row["id"], "bot:reviewer")
     [ask] = _asked(c, ANA, row["id"])
     assert (

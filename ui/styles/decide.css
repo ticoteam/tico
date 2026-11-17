@@ -118,37 +118,24 @@
 .dc-attach.disabled{opacity:.5;cursor:default}
 .dc-status{margin:0;font-size:var(--t-sm)}
 .dc-file-note{margin:4px 0 0;font-size:var(--t-sm)}
-.dc-acts,.dc-choices,.dc-more{display:flex;flex-wrap:wrap;gap:8px}
-.dc-acts button,.dc-choices button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
-/* what an item is about (decide-about.ts): who asked, the task's text, its links, files and pages; Go to; the reply */
+.dc-acts,.dc-more{display:flex;flex-wrap:wrap;gap:8px}
+.dc-acts button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
+/* what an item is about (decide-about.ts): who asked, the task's text, its links, files and pages */
 .dc-who{margin:0;color:var(--muted);font-size:var(--t-sm)}
 .dc-who b{color:var(--ink);font-weight:600}
 .dc-md{font-size:var(--t-base);line-height:var(--lh-body,1.5)}
 .dc-refs{display:flex;flex-wrap:wrap;gap:6px}
 .dc-ref-chip{display:inline-flex;align-items:center;max-width:100%;min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:999px;color:var(--ink);font-size:var(--t-sm);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dc-ref-chip:hover{background:var(--surface2)}
-/* a question (#3786): itself once, in full, its meta line under it; then its choices, the box and one row:
-   Send · Snooze · ⋯. Its task is the background: one line that opens (decideBgHTML), on the left on a wide screen. */
-.dc-ask{display:flex;flex-direction:column;gap:4px}
+/* an ask in the chat (decideAskBubbleHTML): its question once, in full, its meta line under it */
 .dc-q.dc-q-ask{font-size:var(--t-lg)}
 .dc-q.dc-q-ask{white-space:pre-wrap}
 .dc-ask-meta{min-height:28px}
 .dc-ask-meta .dc-meta-who{flex:0 1 auto;min-width:24px;overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
 .dc-ask-meta .dc-task-link{min-height:28px;padding:0 4px;margin:0 -4px}
-.dc-ask-acts{flex-wrap:nowrap;align-items:center}
-.dc-ask-acts>button{white-space:nowrap}
 .dc-acts .dc-more-b{font-size:var(--t-lg);line-height:1}
 .dc-askw{flex:none}
 .dc-acts .dc-snzw+.dc-askw{margin-left:0}
-.dc-bg{min-width:0}
-.dc-bg-t{margin:0 0 8px;font-size:var(--t-base);font-weight:600;color:var(--ink)}
-.dc-bg-body{display:flex;flex-direction:column;gap:12px;padding-top:4px}
-.dc-links{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
-.dc-links .dc-open-task{margin:0}
-.dc-go{min-height:36px;padding:0 12px;border-radius:10px;font-weight:600}
-.dc-sent{color:var(--muted);font-size:var(--t-sm)}
-.dc-held{display:flex;flex-direction:column;gap:6px}
-.dc-held-line{margin:0;font-size:var(--t-sm);font-weight:600}
 /* Skip: a quiet link after the buttons, never a row of its own */
 .dc-acts .dc-skip{min-width:44px;min-height:40px;padding:0 6px;border:0;background:none;color:var(--muted);font-weight:500;text-decoration:underline}
 @media (min-width:761px){
@@ -157,16 +144,6 @@
   .dc-acts-row button{min-height:36px;padding:0 14px;border-radius:10px;white-space:nowrap}
 }
 .dc-more{padding-top:4px}
-/* a bot's question: why it matters, a card per choice with its line, the recommended one outlined */
-.dc-why{margin:0;overflow-wrap:anywhere}
-.dc-choice-list{display:flex;flex-direction:column;gap:8px}
-.dc-choice{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:44px;padding:10px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.dc-choice:hover:not(:disabled){border-color:var(--muted)}
-.dc-choice:disabled{opacity:.6;cursor:default}
-.dc-choice-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
-.dc-choice-name{font-weight:600;overflow-wrap:anywhere}
-.dc-rec-tag{padding:2px 8px;border-radius:999px;background:var(--line);font-size:var(--t-sm);font-weight:600}
-.dc-choice-line{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
 /* Snooze (#3769): on an ask, a quiet clock at the far end of the answer row, clear of Approve and Send back; its menu
    (1 hour … 1 month, Other) opens from it, upward (down from a row near the top: .dc-snz-down), at the row's end, over
    the page above and never over the row's own buttons. The open menu's row sits over the pinned meta line on a phone. */
@@ -294,7 +271,6 @@ button.dc-jev{cursor:pointer}
 /* Flow's chat has the day divider only: the thread's "New" line is left out here */
 .dc-chat .th-newline{display:none}
 .dc-msg-ask .dc-q{margin:0 0 4px}
-.dc-msg-ask .dc-why{margin:0 0 8px;color:var(--muted)}
 /* one line under the ask's question: what changed, Jev's take, what the stage said; cut, its whole in the title */
 .dc-msg-ask .dc-one{margin:0 0 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* a Validate or QA OK's verdict: up to 3 short check rows; Proof opens the Proof tab (a phone's; wide, the page is
@@ -363,11 +339,6 @@ button.dc-jev{cursor:pointer}
   .dc-thing:empty,.dc-thing:has(>.dc-bare:only-child){display:none}
   .dc-side{overflow:visible;border-left:0;border-top:1px solid var(--line);padding:12px 16px}
   .dc-thing:empty+.dc-side,.dc-thing:has(>.dc-bare:only-child)+.dc-side{border-top:0}
-  /* a question: the question and its answer first, its task's one line under them */
-  .dc-main.dc-qmain{display:flex;flex-direction:column}
-  .dc-qmain>.dc-side{order:1;flex:none;border-top:0}
-  .dc-qmain>.dc-thing{order:2;flex:none;padding:0 16px 16px}
-  .dc-qmain>.dc-thing>.dc-bg{border-top:1px solid var(--line)}
   /* Notes starts one line tall (rows in decide.ts) and grows with its text */
   .dc-side textarea[data-dc-grow]{min-height:44px}
   .dc-q{font-size:var(--t-lg)}
@@ -440,7 +411,7 @@ button.dc-jev{cursor:pointer}
   .dc-vmenu{top:auto;bottom:calc(100% + 4px)}
   /* Notes starts one row, the clip inside it, and opens up when it is focused */
   .dc-note-row textarea:focus{min-height:88px}
-  .dc-file-x,.dc-attach,.dc-open-task,.dc-go,.dc-acts .dc-skip{min-height:44px}
+  .dc-file-x,.dc-attach,.dc-open-task,.dc-acts .dc-skip{min-height:44px}
   .dc-acts .dc-snz-b{width:44px;min-width:44px;height:44px;min-height:44px}
   .dc-snz .dc-mi,.dc-snz-at input{min-height:44px}
   .dc-acts .dc-snz-at .dc-icon{width:44px;min-width:44px;height:44px;min-height:44px}

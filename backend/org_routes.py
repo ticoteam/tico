@@ -260,16 +260,15 @@ def register(app, auth, settings, settings_admin, store):
         ask = next((w for w in asks if w.who == who.actor), None) or (asks[0] if asks else None)
         task = {"id": row["id"], "title": row.get("title") or ""} if privacy.task_readable(c, who, row) else None
         if ask:
-            found = c.execute("SELECT kind FROM requirements WHERE id=?", (ask.requirement_id,)).fetchone()
-            what = "OK" if found and found["kind"] in ("ok", "page") else "answer"
+            # A person's ask is an OK (a question is a ❓ message, not an ask the task waits on).
             mine = ask.who == who.actor
             whose = "your" if mine else H.actor_name(c, ask.who) + "'s"
             out = {
-                "cause": f"{name} is waiting for {whose} {what}",
+                "cause": f"{name} is waiting for {whose} OK",
                 "fix": "open_ask" if mine and task else None,
                 # Its words only to a viewer who may open the task they are on.
                 "ask": {
-                    "kind": "ok" if what == "OK" else "answer",
+                    "kind": "ok",
                     "mine": mine,
                     **({"line": ask.line} if task else {}),
                 },

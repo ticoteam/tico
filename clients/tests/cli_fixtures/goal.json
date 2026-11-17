@@ -484,50 +484,6 @@
  {
   "argv": [
    "goal",
-   "strategy-bot-merge",
-   "person-1",
-   "Launch",
-   "question-1",
-   "tasks-1",
-   "tasks-1b"
-  ],
-  "tools": [
-   [
-    "tico_goal_strategy_bot_merge",
-    {
-     "operation_id": null,
-     "person": "person-1",
-     "question": "question-1",
-     "tasks": [
-      "tasks-1",
-      "tasks-1b"
-     ],
-     "title": "Launch"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "strategy-bot/merge",
-    {
-     "person": "person-1",
-     "title": "Launch",
-     "question": "question-1",
-     "tasks": [
-      "tasks-1",
-      "tasks-1b"
-     ]
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "goal",
    "strategy-bot-level3-offer"
   ],
   "tools": [

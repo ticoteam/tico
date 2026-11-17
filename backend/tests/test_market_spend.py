@@ -412,23 +412,25 @@ def test_the_owner_changes_the_sentence_of_a_sized_market(api):
     assert seen["sizing"]["id"] == sent["task_id"] and seen["total"]["spend_usd"] == B
 
 
-def test_the_spend_view_carries_the_open_sizing_task_and_the_question_it_asks_the_reader(api):
+def test_the_spend_view_carries_the_open_sizing_task_and_the_ok_it_asks_the_reader(api):
     assert get(api, "market/spend")["sizing"] is None
     _librarian(api)
     task_id = post(api, "market/spend/research", {"description": "Software for small landlords"})["task_id"]
     shown = get(api, "market/spend")["sizing"]
     assert shown["id"] == task_id and shown["turn"] == "working" and shown["ask"] is None
     with api.app.state.store.transaction() as c:
-        # An older company's question row: the view still shows it and its answer route still answers it.
-        asked = X.old_question(c, task_id, "bot:librarian", "human:ana", "Which country should we size first?")
+        # An OK on the task (a question is a ❓, below): the view shows it and the task's answer route answers it.
+        asked = X.ok_ask(
+            c, task_id, "bot:librarian", "human:ana", "OK sizing the US first", shows=["https://example.com/plan"]
+        )
     shown = get(api, "market/spend?dimension=buyer")["sizing"]
     assert shown["turn"] == "person"
-    assert shown["ask"]["requirement_id"] == asked["requirement_id"] and shown["ask"]["kind"] == "answer"
-    assert shown["ask"]["line"] == "Which country should we size first?" and shown["ask"]["choices"] == []
+    assert shown["ask"]["requirement_id"] == asked["requirement_id"] and shown["ask"]["kind"] == "ok"
+    assert shown["ask"]["line"] == "OK sizing the US first" and "choices" not in shown["ask"]
     post(
         api,
         f"tasks/{task_id}/asks/{asked['requirement_id']}/answer",
-        {"value": "The US", "version": shown["version"]},
+        {"value": "ok", "version": shown["version"]},
     )
     after = get(api, "market/spend")["sizing"]
     assert after["id"] == task_id and after["ask"] is None and after["turn"] == "working"

@@ -353,7 +353,7 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
         if (
             named
             and not R.outside(named)
-            and standing.requirement["kind"] in ("ok", "answer", "page")
+            and standing.requirement["kind"] in ("ok", "page")
             and not H.task_private_readable(conn, named, row)
         ):
             return named
@@ -862,7 +862,7 @@ _VISIT_ASKS = (
 )
 # GitHub conditions whose standing names the task's owner, GitHub or nobody's turn, never a person by the ladder.
 _NAMED_CONDITIONS = ("pr_open", "checks_pass", "pr_merged")
-_ASK_KINDS = ("ok", "answer", "page")
+_ASK_KINDS = ("ok", "page")
 
 
 def _listed(values: Iterable[str]) -> tuple[str]:
@@ -1246,8 +1246,7 @@ def ask_snoozes(conn: "sqlite3.Connection", *people: str) -> dict[tuple[str, str
 
 def ask_version(conn: "sqlite3.Connection", row: Row, wait: "Wait", requirement: Row | None = None) -> str:
     """What `wait`'s ask asks now, as Flow's opinion names it (flow_opinions.ask_version, the one definition of "the
-    ask changed"): its sentence, the requirement's line, choices, typed question, brief and title, and what it shows,
-    each page at its current version. The same for everyone it asks. `requirement` is the ask's, when the caller has
+    ask changed"): its sentence, the requirement's line and what it shows, each page at its current version. The same for everyone it asks. `requirement` is the ask's, when the caller has
     it; "" when the task's open visit has no such requirement."""
     from . import flow_opinions, task_calls
 
@@ -1276,7 +1275,7 @@ def snoozed_until(
 ) -> str | None:
     """When the person's snooze of this ask ends, or None when it is not snoozed for them: a snooze holds only while
     the ask is the one they snoozed, asked at the same moment and asking the same (`ask_version`: its words, its
-    choices, each page it shows at the same version), so a new question or a new page version is never hidden."""
+    each page it shows at the same version), so a new ask or a new page version is never hidden."""
     visit_id = _visit_id(row)
     if not wait.ask or not visit_id:
         return None
@@ -1311,7 +1310,6 @@ def _lists(
         standings = R.standings(conn, row) if row.get("visit") else []
         waits = listed(of(conn, row, seen, standings), row)
         held = next((s for s in standings if pr_conflicts.held(s)), None)
-        kinds = {str(s.requirement["id"]): str(s.requirement.get("kind")) for s in standings}
         asks: dict[str, Row] = {str(s.requirement["id"]): s.requirement for s in standings}
         people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who and wait.who in only})
         for person in people:
@@ -1335,7 +1333,7 @@ def _lists(
                     continue
                 line = wait.line
                 if held and wait.ask:
-                    line = R.sentences(line, pr_conflicts.ask_line(conn, held, kinds.get(str(wait.requirement_id), "")))
+                    line = R.sentences(line, pr_conflicts.ask_line(conn, held))
                 out.setdefault(person, []).append(
                     {
                         "kind": "ask" if wait.ask else "task",

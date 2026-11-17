@@ -133,7 +133,7 @@ class BatchRespond(Contract):
     kind: Literal["decide", "needs_info", "instruct", "rule", "skip", "later"]
     text: str = Field(default="", max_length=4000)
     item: int | None = Field(default=None, ge=1)  # 1-based position; the current item when omitted
-    decision: Literal["ok", "send_back", "done", "close", "answer"] | None = None
+    decision: Literal["ok", "send_back", "done", "close"] | None = None
     heard: str = Field(default="", max_length=2000)  # what the person actually said, when spoken
     until: str | None = Field(default=None, max_length=40)
 
@@ -417,23 +417,13 @@ class TaskWhy(Contract):
 
 
 class TaskAsk(Contract):
-    """Ask a person on the task (H.task_ask): a question (`answer`, with `choices` where there are some) or an OK."""
+    """Ask a person on the task for an OK of what it `show`s (H.task_ask). `answer`, a question, is refused with how to
+    ask one now: a message marked ❓ (backend/question_marks.py)."""
 
     to: ID
     line: Annotated[str, Field(min_length=1, max_length=300)]
     kind: Literal["answer", "ok"] = "answer"
-    choices: list[Annotated[str, Field(min_length=1, max_length=60)]] | None = Field(
-        default=None, min_length=2, max_length=6
-    )
     show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
-    # A bot's question to a person (backend/ask_shape.py): why it matters, a line per choice on what happens on it (in
-    # the choices' order) and the choice it recommends. Required there; anyone else may send them too.
-    why: Annotated[str, Field(max_length=200)] | None = None
-    details: list[Annotated[str, Field(max_length=160)]] | None = Field(default=None, max_length=6)
-    recommend: Annotated[str, Field(max_length=60)] | None = None
-    # A short title the decision view shows as the ask's heading, with `line` once under it. Optional: an ask without
-    # one is headed by its line.
-    title: Annotated[str, Field(max_length=60)] | None = None
     version: Version | None = None
 
 
@@ -463,7 +453,7 @@ class OkUse(Contract):
 
 
 class TaskAskAnswer(Contract):
-    """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer).
+    """ok, or no (send it back, with a note) (H.task_answer).
     `page_version`: on a page, the `<file id>@<version>` the person was shown; refused when another is attached now.
     `visit_id`: on a document approval, the visit it was asked on: with `page_version`, the approval's key. A stale key
     is refused (`task_changed`) with the version submitted now in `approval`."""
@@ -497,13 +487,6 @@ class TaskAskGive(Contract):
     to: ID
     version: Version | None = None
     on_behalf_of: ID | None = None
-
-
-class TaskAskThumbs(Contract):
-    """Was this worth asking (H.task_thumbs). A thumbs down says what was wrong."""
-
-    up: StrictBool
-    note: str | None = Field(default=None, max_length=2000)
 
 
 class TaskFilter(Contract):
@@ -2444,14 +2427,6 @@ class StrategyBotChecks(Contract):
 
 class StrategyBotLevel(Contract):
     level: Literal[1, 2, 3]
-
-
-# Several bots' asks waiting on one person, made one Strategy Owner item (backend/strategy_merge.py).
-class StrategyBotMerge(Contract):
-    person: str = Field(min_length=1, max_length=200)
-    title: str = Field(min_length=1, max_length=300)
-    question: str = Field(min_length=1, max_length=4000)
-    tasks: list[str] = Field(min_length=2, max_length=10)
 
 
 # One change in a decision the Strategy Owner makes alone at level 3 (backend/strategy_acts.py).

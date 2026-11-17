@@ -10,8 +10,8 @@
 //   in one group after them;
 // - the editor names what someone else changed when its save is refused as out of date;
 // - the editor offers every kind, a page's and In a release's settings, and a stage's On entering list (its Limit and
-//   actions, the owner change among them, as rows; + Rule and + Action), and saves them as the record stores them; an answer's name follows its title until edited, and its type keeps only its own fields;
-// - a task's row for a stage's answer is its title, and once met its value.
+//   actions, the owner change among them, as rows; + Rule and + Action), and saves them as the record stores them;
+// - a task's row for a stage's OK is its title alone, met or not; what it waits on is its tooltip.
 // Run: node ui/tests/pipeline-view-unit.cts
 'use strict';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -377,38 +377,6 @@ const factories = (async () => {
   assert.equal(state.draft.stages[0]!['by_hand'], false);
   assert.equal(state.draft.stages[0]!['requests_move_on'], false, 'only a by-hand stage keeps it');
 }
-// ---- the editor: a stage's answer
-{
-  const state = {id: 'product', pipelines: [], draft: rec({stages: [stage('spec', 'Spec', {requirements: [req('owner_done')]})]})};
-  const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '') =>
-    Object.assign(Object.create(ctx[kind].prototype), {dataset: {peSi: '0', peRi: '0', ...data}, value, type: 'text', closest: () => null});
-  const r = () => plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
-  const html = () => ctx.peReqEdHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0, 'ed') as string;
-  assert.equal(ctx.peReqText(state.draft.stages[0]!.requirements[0]!), 'Owner says done');
-  // An answer, added from + Requirement: its title names it; the name follows the title.
-  state.draft.stages[0]!.requirements[0] = ctx.peReqNew(state, 'answer');
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence'));
-  assert.deepEqual([r()['kind'], r()['settings'], r()['who_oks'], r()['choices']], ['answer', {type: 'text', name: 'confidence'}, 'none', null]);
-  assert.match(html(), /<span>Title<\/span><input data-pe-rf="line"/);
-  assert.match(html(), /<span>From<\/span><select data-pe-rf="person_id"[^>]*><option value="">Task owner<\/option>/);
-  assert.match(html(), /data-pe-rf="answer_name"[^>]*value="confidence"/);
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence (0-100)'));
-  assert.equal((r()['settings'] as Record<string, unknown>)['name'], 'confidence_0_100', 'the name follows the title');
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'answer_name'}, 'conf'));
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence'));
-  assert.equal((r()['settings'] as Record<string, unknown>)['name'], 'conf', 'a name edited by hand stays');
-  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'number'));
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'min'}, '0'));
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'max'}, '100'));
-  ctx.peInput(state, field('HTMLInputElement', {peRf: 'question'}, 'How sure are you?'));
-  assert.deepEqual(r()['settings'], {type: 'number', name: 'conf', min: 0, max: 100, question: 'How sure are you?'});
-  assert.match(html(), /<span>Min<\/span><input type="number"[^>]*value="0">/);
-  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'choice'));
-  assert.deepEqual([r()['settings'], r()['choices']], [{type: 'choice', name: 'conf', question: 'How sure are you?'}, []], 'a choice has no bounds');
-  assert.match(html(), /data-pe-yes-no/);
-  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'text'));
-  assert.equal(r()['choices'], null, 'text has no choices');
-}
 // ---- the editor: the stage window in task order, and an Owner that is "One of several"
 {
   const bots = [{id: 'b1', name: 'Builder'}, {id: 'b2', name: 'Builder 2'}, {id: 'r1', name: 'Reviewer 1'}];
@@ -523,18 +491,17 @@ const factories = (async () => {
   assert.match(card, /Waiting for a free Reviewer"/, 'pointing at the card shows the line');
   assert.equal(ctx.taskLine(waiting), 'Waiting for a free Reviewer');
 }
-// ---- a task's row for a stage's answer
+// ---- a task's row for a stage's OK
 {
-  const typed = {name: 'confidence', type: 'number', min: 0, max: 100, question: 'How sure are you?'};
-  const row = (extra: Record<string, unknown>) => ctx.taskReqRowHTML({requirement_id: 'r1', kind: 'answer', line: 'Confidence', met: false,
-    standing: 'How sure are you?', who: 'bot:builder', asked_by: null, choices: null, typed, shows: [], answer: null, may: [], ...extra}) as string;
+  const row = (extra: Record<string, unknown>) => ctx.taskReqRowHTML({requirement_id: 'r1', kind: 'ok', line: 'Confidence', met: false,
+    standing: 'How sure are you?', who: 'bot:builder', asked_by: null, shows: [], answer: null, may: [], ...extra}) as string;
   const open = row({});
   assert.match(open, /<span class="task-req-name">Confidence<\/span>/, 'the title only');
   // What it is waiting on is in the row's tooltip; the row itself draws the title alone.
   assert.match(open, / title="Not yet · Checks: builder · How sure are you\?"/);
-  assert.doesNotMatch(open.replace(/ title="[^"]*"/, ''), /How sure|task-req-val/);
-  const met = row({met: true, who: null, standing: '80', answer: {id: 'a1', at: '', by: 'bot:builder', note: null, value: '80'}});
+  assert.doesNotMatch(open.replace(/ title="[^"]*"/, ''), /How sure/);
+  const met = row({met: true, who: null, standing: 'OK', answer: {id: 'a1', at: '', by: 'bot:builder', note: null, value: 'ok'}});
   assert.match(met, /<span class="task-req-name">Confidence<\/span>/);
-  assert.match(met, /<span class="task-req-val">80<\/span>/, 'once met, its value');
+  assert.doesNotMatch(met.replace(/ title="[^"]*"/, ''), /task-req-val/, 'once met, still the title alone');
 }
 factories.then(() => console.log('pipeline-view-unit: ok'), error => { console.error(error); process.exitCode = 1; });

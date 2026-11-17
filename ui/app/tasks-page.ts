@@ -566,7 +566,8 @@ function tasksRailOff() {
 const tasksGroupHTML = (name: string, rows: string[]) => !rows.length ? ''
   : `<section class="tk-section"><h2 class="tk-group">${esc(name)} <span class="n">${rows.length}</span></h2>${rows.join('')}</section>`;
 const tasksNone = (state: TasksPageState) => `<p class="empty muted">${state.q || taskFiltersOn(state.filters) ? 'No matches' : 'Nothing here'}</p>`;
-/** Which group of You an item is in: Answer (questions, mentions, stuck tasks), Review (OKs of a page or a draft) or Do. */
+/** Which group of You an item is in: Answer (a bot's ❓, mentions, stuck tasks, an ask of a kind not known here),
+    Review (OKs of a page or a draft) or Do. */
 function needsGroup(it: NeedsEntry): 'answer' | 'review' | 'do' {
   if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'review' : 'answer';
   if (it.kind === 'mention' || it.kind === 'question') return 'answer';
@@ -584,19 +585,17 @@ function needsTitle(it: NeedsEntry): string {
   if (it.kind === 'question') return it.task?.title || actorLabel(it.from_id || '') || it.line || 'Untitled';
   return (it.kind !== 'paused' && it.task?.title) || it.line || 'Untitled';
 }
-/** Its second line: the question, under an Answer row's title (its buttons answer it); other asks keep it as the tooltip. */
+/** Its second line: the question, under an Answer row's title; other asks keep it as the tooltip. */
 function needsAsk(it: NeedsEntry): string {
   return needsGroup(it) === 'answer' && needsTitle(it) !== it.line ? it.line : '';
 }
-/** One row of You: its task's title (needsTitle), an Answer row's question under it; a question with two choices answers in place (S1.8). */
+/** One row of You: its task's title (needsTitle), an Answer row's question under it. */
 function needsRowHTML(it: NeedsEntry): string {
-  const ask = it.ask, two = it.kind === 'ask' && ask?.kind === 'answer' && ask.choices?.length === 2 && ask.may.includes('answer');
-  const after = two ? ask!.choices!.map((c, i) => `<button type="button" class="${i ? 'ghost' : 'primary'} sm" data-need-answer="${esc(c)}">${esc(c)}</button>`).join('') : '';
+  const ask = it.ask;
   const who = it.kind === 'mention' || it.kind === 'question' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
   const tip = it.kind !== 'task' && needsTitle(it) !== it.line && !needsAsk(it) ? ` title="${esc(it.line)}"` : '';
   return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0"${tip}>`
     + `<span class="tk-two"><span class="tk-title">${esc(needsTitle(it))}</span>${needsAsk(it) ? `<span class="tk-ask">${esc(needsAsk(it))}</span>` : ''}</span>${it.task ? lateTagHTML(it.task) : ''}`
-    + (after ? `<span class="tk-after">${after}</span>` : '')
     + `<span class="tk-who">${who ? actorFace(who, 16) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }
 /** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
@@ -661,20 +660,8 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   if (el?.closest('[data-reload]')) { state.failed = ''; state.loading = true; tasksRender(state); void tasksLoad(state); return; }
   const chip = el?.closest<HTMLElement>('[data-need-stage]');
   if (chip) { void decideStageOpen(chip.dataset.needStage || ''); return; }
-  const answer = el?.closest<HTMLButtonElement>('[data-need-answer]');
   const row = el?.closest<HTMLElement>('[data-need]');
   const it = row ? state.needs.find(n => n.id === row.dataset.need) : null;
-  if (answer && it?.task_id && it.requirement_id) {
-    ev.stopPropagation();
-    answer.disabled = true;
-    try {
-      await taskAnswer(it.task_id, it.requirement_id, answer.dataset.needAnswer || '', it.task?.version ?? null);
-      state.needs = state.needs.filter(n => n !== it);
-      tasksRender(state);
-      void v2Refresh();
-    } catch (e) { answer.disabled = false; toast(errorMessage(e, 'Not answered.')); }
-    return;
-  }
   if (it) { decideOpen(it.id); return; }
   const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
   // On a pipeline's board on a phone a card opens at its conversation, its box asking the task's owner.

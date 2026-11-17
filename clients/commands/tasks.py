@@ -295,8 +295,6 @@ def task_text(task, actors=None, events=()):
         answer = item.get("answer")
         if answer:
             words.append(f"answer: {answer.get('value')}" + (f", {answer['note']}" if answer.get("note") else ""))
-        if item.get("choices"):
-            words.append("choices: " + ", ".join(str(c) for c in item["choices"]))
         words.append(f"id {item.get('requirement_id')}")
         if item.get("may"):
             words.append("you may: " + ", ".join(item["may"]))
@@ -559,12 +557,12 @@ def _own_ask(api, task_id, requirement=None):
 
 
 # What makes tico_task_ask a stage ask rather than a ❓: any of these.
-# A question is a message marked ❓ (backend/question_marks.py); its choices and why are words in it.
+# A question is a message marked ❓ (backend/question_marks.py); its options and why are words in it.
 QUESTION_INSTEAD = (
-    'A question is a message: tico task ask <id> --to <person> "<question>", with no --kind, choices or --why. Say the '
+    'A question is a message: tico task ask <id> --to <person> "<question>", with no --kind or --show. Say the '
     "options, your pick and why in the message."
 )
-_STAGE_ASK = ("kind", "choices", "choice", "recommend", "title", "show", "subject", "why")
+_STAGE_ASK = ("kind", "show", "subject", "why")
 
 
 @tool(
@@ -580,7 +578,6 @@ _STAGE_ASK = ("kind", "choices", "choice", "recommend", "title", "show", "subjec
             "enum": ["ok"],
             "description": "ok: approve or send back what `show` names",
         },
-        "title": _s("An OK's short heading", maxLength=60),
         "show": {
             "type": "array",
             "items": _s("page:<id>, file:<id>@<version> or a link"),
@@ -615,23 +612,15 @@ def task_ask(api, args):
         raise ValueError(QUESTION_INSTEAD)
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
     if args.get("subject"):
-        if args.get("choices") or args.get("kind") == "answer" or "content" not in args:
-            raise ValueError("An OK bound to a subject is an ok with its content, never a question with choices")
-        if args.get("title"):
-            raise ValueError("An OK bound to a subject shows its content, not a title: leave out title")
+        if "content" not in args:
+            raise ValueError("An OK bound to a subject is an ok with its content")
         body.update({"subject": args["subject"], "content": args["content"]})
         if args.get("show"):
             body["show"] = args["show"]
         return api.post(f"tasks/{args['id']}/oks", body, key=_key(args))
-    for field in ("kind", "choices", "show", "why", "recommend", "title"):
+    for field in ("kind", "show"):
         if args.get(field):
             body[field] = args[field]
-    if args.get("choice"):
-        if args.get("choices"):
-            raise ValueError("Give the answers once: choice (Label|what happens) or choices, not both")
-        pairs = [str(one).partition("|") for one in args["choice"]]
-        body["choices"] = [label.strip() for label, _, _ in pairs]
-        body["details"] = [detail.strip() for _, _, detail in pairs]
     return api.post(f"tasks/{args['id']}/asks", body, key=_key(args))
 
 
@@ -659,13 +648,11 @@ def ok_use(api, args):
 @tool(
     "tico_task_answer",
     "Answer what you are asked on a task (a bot named on an OK or a question): ok, no (send it "
-    "back, with a note), again (look again), or your answer. The requirement id is in "
-    "tico_task_show's To leave. A stage's answer is named there (confidence): give the name, then "
-    "a whole number in its range, one of its choices, or text.",
+    "back, with a note). The requirement id is in tico_task_show's To leave.",
     {
         "id": TASK_ID,
-        "requirement": _s("The requirement's id, or a stage's answer by its name"),
-        "value": _s("ok, no, again, or your answer: one of its choices or your own words"),
+        "requirement": _s("The requirement's id"),
+        "value": _s("ok or no", enum=["ok", "no"]),
         "note": _s("What they read with it, word for word; required with no"),
         "version": VERSION,
         "on_behalf_of": ASKED,

@@ -1,6 +1,5 @@
 # The queue: Needs you, bot-made tasks, the sources that file them, and undo. Case 1 is the real Nov 3 chat (split into
-# its four asks), on Pipelines v3: tasks are open, done or closed; a bot asks a person through an ask on its task (an OK
-# or a question), and what waits on the person is `tico needs-you show`. The fictional company is Acme; the owner is
+# its four asks), on Pipelines v3: tasks are open, done or closed; a bot asks a person an OK on its task or a question marked ❓ in its chat, and what waits on the person is `tico needs-you show`. The fictional company is Acme; the owner is
 # Dana. Canned hub outputs are shaped like the real routes (backend/views.py needs-you, docs/dev/pipelines-v3-cutover.md
 # "The task as JSON"; clients/hubcli.py for the commands).
 #
@@ -29,7 +28,7 @@
       out: &q_needs
         actor: "human:dana"
         count: 11
-        by_kind: {task: 7, ask: 4}
+        by_kind: {task: 7, ask: 3, question: 1}
         bots: {"bot:technical-writer": 3, "bot:botops": 4, "bot:release-manager": 2, "bot:chief-of-staff": 1, "bot:engineering-manager": 1}
         items:
           - kind: task
@@ -48,7 +47,7 @@
             missing: ["OK to publish release v0.5.17 to stable"]
             since: "2026-10-30T10:00:00Z"
             task: {id: b1c2d3e4-1000-4000-8000-000000000007, number: 110, title: "Release v0.5.17 (replaced by v0.5.20, which shipped)", status: open, version: 5, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager"}
-            ask: {requirement_id: 2a7f0c9e-4000-4000-8000-000000000001, kind: ok, line: "OK to publish release v0.5.17 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.17"], answer: null, may: [ok, no, give, thumbs]}
+            ask: {requirement_id: 2a7f0c9e-4000-4000-8000-000000000001, kind: ok, line: "OK to publish release v0.5.17 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", shows: ["release:v0.5.17"], answer: null, may: [ok, no, give]}
           - kind: ask
             id: 5f3e21c0-4000-4000-8000-000000000002
             task_id: 7d21c4a0-1000-4000-8000-000000000008
@@ -57,16 +56,18 @@
             missing: ["OK to publish release v0.5.0 to stable"]
             since: "2026-11-01T09:00:00Z"
             task: {id: 7d21c4a0-1000-4000-8000-000000000008, number: 105, title: "Release v0.5.0", status: open, version: 2, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager"}
-            ask: {requirement_id: 5f3e21c0-4000-4000-8000-000000000002, kind: ok, line: "OK to publish release v0.5.0 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.0"], answer: null, may: [ok, no, give, thumbs]}
-          - kind: ask
-            id: 7b2c3d4e-4000-4000-8000-000000000004
+            ask: {requirement_id: 5f3e21c0-4000-4000-8000-000000000002, kind: ok, line: "OK to publish release v0.5.0 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", shows: ["release:v0.5.0"], answer: null, may: [ok, no, give]}
+          - kind: question
+            id: "qmark:7b2c3d4e-4000-4000-8000-00000000000b"
+            mark_id: 7b2c3d4e-4000-4000-8000-00000000000b
+            message_id: 7b2c3d4e-4000-4000-8000-00000000000c
+            conversation_id: 7b2c3d4e-4000-4000-8000-00000000000d
+            root_id: 7b2c3d4e-4000-4000-8000-00000000000d
             task_id: 9f7e3a2c-1000-4000-8000-000000000010
-            requirement_id: 7b2c3d4e-4000-4000-8000-000000000004
+            from_id: "bot:botops"
             line: "May CEO Bot edit company goals, or only suggest changes?"
-            missing: ["May CEO Bot edit company goals, or only suggest changes?"]
             since: "2026-11-01T11:00:00Z"
             task: {id: 9f7e3a2c-1000-4000-8000-000000000010, number: 109, title: "CEO Bot: edit company goals or only suggest?", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "bot:botops"}
-            ask: {requirement_id: 7b2c3d4e-4000-4000-8000-000000000004, kind: answer, line: "May CEO Bot edit company goals, or only suggest changes?", met: false, who: "human:dana", asked_by: "bot:botops", choices: ["Edit goals", "Suggest only"], shows: [], answer: null, may: [answer, give]}
           - kind: ask
             id: 6a1b2c3d-4000-4000-8000-000000000003
             task_id: 8e6d2f1b-1000-4000-8000-000000000009
@@ -75,7 +76,7 @@
             missing: ["OK to add the Engineering group under Product"]
             since: "2026-11-02T14:00:00Z"
             task: {id: 8e6d2f1b-1000-4000-8000-000000000009, number: 108, title: "Org chart: the new Engineering group", status: open, version: 4, pipeline_id: general, stage_id: general-todo, owner: "bot:chief-of-staff"}
-            ask: {requirement_id: 6a1b2c3d-4000-4000-8000-000000000003, kind: ok, line: "OK to add the Engineering group under Product", met: false, who: "human:dana", asked_by: "bot:chief-of-staff", choices: null, shows: ["page:org-chart"], answer: null, may: [ok, no, give, thumbs]}
+            ask: {requirement_id: 6a1b2c3d-4000-4000-8000-000000000003, kind: ok, line: "OK to add the Engineering group under Product", met: false, who: "human:dana", asked_by: "bot:chief-of-staff", shows: ["page:org-chart"], answer: null, may: [ok, no, give]}
           - kind: task
             id: 3c2e7a49-1000-4000-8000-000000000003
             task_id: 3c2e7a49-1000-4000-8000-000000000003
@@ -140,12 +141,13 @@
         requester: "bot:release-manager"
         turn: {state: person, who: "human:dana", line: "Dana: OK to publish release v0.5.17 to stable", since: "2026-10-30T10:00:00Z"}
         to_leave:
-          - {requirement_id: 2a7f0c9e-4000-4000-8000-000000000001, kind: ok, line: "OK to publish release v0.5.17 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.17"], answer: null, may: [ok, no, give, thumbs]}
+          - {requirement_id: 2a7f0c9e-4000-4000-8000-000000000001, kind: ok, line: "OK to publish release v0.5.17 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", shows: ["release:v0.5.17"], answer: null, may: [ok, no, give]}
   must:
     - '^task close (1a0c5e27|2b1d6f38|3c2e7a49|4d3f8b5a|5e4a9c6b|6f5b0d7c)'
   must_not:
     - '^task (close|done|move|update|reassign) \S*(7d21c4a0|8e6d2f1b|9f7e3a2c)'
     - '^task answer \S*(7d21c4a0|8e6d2f1b|9f7e3a2c)'
+    - '^task comment \S*9f7e3a2c'
     - '^task answer \S+ \S+ ok\b'
     - '^assistant propose'
     - '^message send'
@@ -253,7 +255,7 @@
       out:
         actor: "human:dana"
         count: 193
-        by_kind: {task: 130, ask: 63}
+        by_kind: {task: 130, ask: 62, question: 1}
         bots: {"bot:technical-writer": 20, "bot:botops": 26, "bot:engineering-manager": 19, "bot:release-manager": 18, "bot:reviewer": 15, "bot:chief-of-staff": 11, "bot:ceo-bot": 12, "bot:finance-analyst": 14, "bot:recruiting": 9, "bot:website": 6, "bot:growth": 20, "bot:support-bot": 1}
         items:
           - kind: ask
@@ -264,7 +266,7 @@
             missing: ["OK to publish release v0.5.0 to stable"]
             since: "2026-11-01T09:00:00Z"
             task: {id: 7d21c4a0-1000-4000-8000-000000000008, number: 105, title: "Release v0.5.0", status: open, version: 2, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager"}
-            ask: {requirement_id: 5f3e21c0-4000-4000-8000-000000000002, kind: ok, line: "OK to publish release v0.5.0 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: ["release:v0.5.0"], answer: null, may: [ok, no, give, thumbs]}
+            ask: {requirement_id: 5f3e21c0-4000-4000-8000-000000000002, kind: ok, line: "OK to publish release v0.5.0 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", shows: ["release:v0.5.0"], answer: null, may: [ok, no, give]}
           - kind: ask
             id: 9d4e5f60-4000-4000-8000-000000000005
             task_id: a3b4c5d6-1000-4000-8000-000000000012
@@ -273,7 +275,7 @@
             missing: ["OK to merge tico PR 2041 into main"]
             since: "2026-11-02T14:00:00Z"
             task: {id: a3b4c5d6-1000-4000-8000-000000000012, number: 2041, title: "Release branch: merge PR 2041", status: open, version: 6, pipeline_id: engineering, stage_id: review, owner: "bot:reviewer"}
-            ask: {requirement_id: 9d4e5f60-4000-4000-8000-000000000005, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:reviewer", choices: null, shows: ["pr:2041"], answer: null, may: [ok, no, give, thumbs]}
+            ask: {requirement_id: 9d4e5f60-4000-4000-8000-000000000005, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:reviewer", shows: ["pr:2041"], answer: null, may: [ok, no, give]}
           - kind: ask
             id: 6a1b2c3d-4000-4000-8000-000000000003
             task_id: 8e6d2f1b-1000-4000-8000-000000000009
@@ -282,16 +284,18 @@
             missing: ["OK to add the Engineering group under Product"]
             since: "2026-11-02T14:00:00Z"
             task: {id: 8e6d2f1b-1000-4000-8000-000000000009, number: 108, title: "Org chart: the new Engineering group", status: open, version: 4, pipeline_id: general, stage_id: general-todo, owner: "bot:chief-of-staff"}
-            ask: {requirement_id: 6a1b2c3d-4000-4000-8000-000000000003, kind: ok, line: "OK to add the Engineering group under Product", met: false, who: "human:dana", asked_by: "bot:chief-of-staff", choices: null, shows: ["page:org-chart"], answer: null, may: [ok, no, give, thumbs]}
-          - kind: ask
-            id: 7b2c3d4e-4000-4000-8000-000000000004
+            ask: {requirement_id: 6a1b2c3d-4000-4000-8000-000000000003, kind: ok, line: "OK to add the Engineering group under Product", met: false, who: "human:dana", asked_by: "bot:chief-of-staff", shows: ["page:org-chart"], answer: null, may: [ok, no, give]}
+          - kind: question
+            id: "qmark:7b2c3d4e-4000-4000-8000-00000000000b"
+            mark_id: 7b2c3d4e-4000-4000-8000-00000000000b
+            message_id: 7b2c3d4e-4000-4000-8000-00000000000c
+            conversation_id: 7b2c3d4e-4000-4000-8000-00000000000d
+            root_id: 7b2c3d4e-4000-4000-8000-00000000000d
             task_id: 9f7e3a2c-1000-4000-8000-000000000010
-            requirement_id: 7b2c3d4e-4000-4000-8000-000000000004
+            from_id: "bot:botops"
             line: "May CEO Bot edit company goals, or only suggest changes?"
-            missing: ["May CEO Bot edit company goals, or only suggest changes?"]
             since: "2026-11-01T11:00:00Z"
             task: {id: 9f7e3a2c-1000-4000-8000-000000000010, number: 109, title: "CEO Bot: edit company goals or only suggest?", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "bot:botops"}
-            ask: {requirement_id: 7b2c3d4e-4000-4000-8000-000000000004, kind: answer, line: "May CEO Bot edit company goals, or only suggest changes?", met: false, who: "human:dana", asked_by: "bot:botops", choices: ["Edit goals", "Suggest only"], shows: [], answer: null, may: [answer, give]}
           - kind: task
             id: 4d3f8b5a-1000-4000-8000-000000000004
             task_id: 4d3f8b5a-1000-4000-8000-000000000004
@@ -328,7 +332,7 @@
     - '^task (close|done|move|update)\b'
     - '^assistant propose'
   reply: |
-    Gives the exact count from Needs you's own numbers: 193 items need Dana, split as 130 tasks and 63 asks, and the split
+    Gives the exact count from Needs you's own numbers: 193 items need Dana, split as 130 tasks, 62 asks and 1 question, and the split
     by bot (BotOps 26, the Technical Writer 20, Growth 20 and so on, with the numbers the tool returned). These numbers
     match the tool output exactly, not the owner's round figure. It gives the cause in one line first: most of the 193 are
     leftover bot-made tasks, repeat test pings, per-release docs tasks and old questions, not decisions. Then it names the
@@ -406,26 +410,30 @@
       out: &q_two_questions
         actor: "human:dana"
         count: 2
-        by_kind: {ask: 2}
+        by_kind: {question: 2}
         items:
-          - kind: ask
-            id: 3b7e9f10-8200-4000-8000-000000000011
+          - kind: question
+            id: "qmark:3b7e9f10-8200-4000-8000-00000000001b"
+            mark_id: 3b7e9f10-8200-4000-8000-00000000001b
+            message_id: 3b7e9f10-8200-4000-8000-00000000001c
+            conversation_id: 3b7e9f10-8200-4000-8000-00000000001d
+            root_id: 3b7e9f10-8200-4000-8000-00000000001d
             task_id: 8e21d4c0-8200-4000-8000-000000000001
-            requirement_id: 3b7e9f10-8200-4000-8000-000000000011
+            from_id: "bot:head-of-engineering"
             line: "Install keys: name-level access for every key, or staff-only until the terms check clears?"
-            missing: ["Install keys: name-level access for every key, or staff-only until the terms check clears?"]
             since: "2026-11-04T10:00:00Z"
             task: {id: 8e21d4c0-8200-4000-8000-000000000001, number: 311, title: "Install keys access", status: open, version: 4, pipeline_id: engineering, stage_id: spec, owner: "bot:head-of-engineering"}
-            ask: {requirement_id: 3b7e9f10-8200-4000-8000-000000000011, kind: answer, line: "Install keys: name-level access for every key, or staff-only until the terms check clears?", met: false, who: "human:dana", asked_by: "bot:head-of-engineering", choices: ["Staff-only", "Name-level access"], shows: [], answer: null, may: [answer, give]}
-          - kind: ask
-            id: 4c8e2a17-8200-4000-8000-000000000012
+          - kind: question
+            id: "qmark:4c8e2a17-8200-4000-8000-00000000001b"
+            mark_id: 4c8e2a17-8200-4000-8000-00000000001b
+            message_id: 4c8e2a17-8200-4000-8000-00000000001c
+            conversation_id: 4c8e2a17-8200-4000-8000-00000000001d
+            root_id: 4c8e2a17-8200-4000-8000-00000000001d
             task_id: 6f1c9a02-8200-4000-8000-000000000002
-            requirement_id: 4c8e2a17-8200-4000-8000-000000000012
+            from_id: "bot:botops"
             line: "Still need the runner queue test ping, yes or no?"
-            missing: ["Still need the runner queue test ping, yes or no?"]
             since: "2026-11-05T06:00:00Z"
             task: {id: 6f1c9a02-8200-4000-8000-000000000002, number: 318, title: "Runner queue test ping", status: open, version: 2, pipeline_id: general, stage_id: general-todo, owner: "bot:botops"}
-            ask: {requirement_id: 4c8e2a17-8200-4000-8000-000000000012, kind: answer, line: "Still need the runner queue test ping, yes or no?", met: false, who: "human:dana", asked_by: "bot:botops", choices: null, shows: [], answer: null, may: [answer, give]}
         version: "7e3d2c10"
         next: null
     - match: '^task show 8e21d4c0\S*'
@@ -441,20 +449,19 @@
         owner_id: "bot:head-of-engineering"
         requester: "bot:head-of-engineering"
         turn: {state: person, who: "human:dana", line: "Dana: install keys, name-level access or staff-only?", since: "2026-11-04T10:00:00Z"}
-        to_leave:
-          - {requirement_id: 3b7e9f10-8200-4000-8000-000000000011, kind: answer, line: "Install keys: name-level access for every key, or staff-only until the terms check clears?", met: false, who: "human:dana", asked_by: "bot:head-of-engineering", choices: ["Staff-only", "Name-level access"], shows: [], answer: null, may: [answer, give]}
+        to_leave: []
   must:
-    - '^task answer 8e21d4c0\S* 3b7e9f10\S* Staff-only'
+    - '^task comment 8e21d4c0\S* .*Staff-only'
   must_not:
-    - '^task answer 8e21d4c0\S* \S+ Name'
-    - '^task answer 6f1c9a02'
+    - '^task comment 8e21d4c0\S* .*Name-level'
+    - '^task comment 6f1c9a02'
+    - '^task answer'
     - '^task (close|done|move|update|reassign)\b'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Answers the install keys question as Dana with her pick, Staff-only, the choice's label, on its task (8e21d4c0). It
-    does not pick Name-level access and does not message Engineering or anyone else. The other question, the runner queue
-    test ping, stays open. It says in one line that Engineering hears the answer once and that an answer cannot be taken
-    back, with no undo line. Plain lines, with the task's link.
+    Replies to the install keys question as Dana with her pick, Staff-only, in the task's chat (8e21d4c0). It does not
+    pick Name-level access and does not message Engineering or anyone else. The other question, the runner queue test
+    ping, stays open. It says in one line that Engineering sees the reply in the task's chat, with no undo line. Plain lines, with the task's link.
 
 - id: queue-answer-recommended-pick
   group: queue
@@ -465,16 +472,17 @@
     - match: '^task show 8e21d4c0\S*'
       out: *q_install_keys
   must:
-    - '^task answer 8e21d4c0\S* 3b7e9f10\S* Staff-only'
+    - '^task comment 8e21d4c0\S* .*Staff-only'
   must_not:
-    - '^task answer 8e21d4c0\S* \S+ Name'
-    - '^task answer 6f1c9a02'
+    - '^task comment 8e21d4c0\S* .*Name-level'
+    - '^task comment 6f1c9a02'
+    - '^task answer'
     - '^task (close|done|move|update|reassign)\b'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Takes the recommended pick on the install keys question: Staff-only, the choice Engineering recommends on the task. It
-    answers that question with the choice's label and nothing else. It says which choice it took, that Engineering
-    recommended it, and that the answer cannot be taken back. It sends no message and leaves the runner queue question
+    Takes the recommended pick on the install keys question: Staff-only, the option Engineering recommends in the task
+    body. It replies to that question in the task's chat with that pick and nothing else. It says which option it took and
+    that Engineering recommended it. It sends no message and leaves the runner queue question
     open. Two or three plain lines, with the task's link.
 
 - id: queue-decline-question
@@ -496,17 +504,16 @@
         owner_id: "bot:botops"
         requester: "bot:botops"
         turn: {state: person, who: "human:dana", line: "Dana: still need the runner queue test ping, yes or no?", since: "2026-11-05T06:00:00Z"}
-        to_leave:
-          - {requirement_id: 4c8e2a17-8200-4000-8000-000000000012, kind: answer, line: "Still need the runner queue test ping, yes or no?", met: false, who: "human:dana", asked_by: "bot:botops", choices: null, shows: [], answer: null, may: [answer, give]}
+        to_leave: []
   must:
-    - '^(task answer 6f1c9a02\S* 4c8e2a17\S* [Nn]o\b|task close 6f1c9a02\S*)'
+    - '^(task comment 6f1c9a02\S* .*\b[Nn]o\b|task close 6f1c9a02\S*)'
   must_not:
-    - '^task answer 8e21d4c0'
-    - '^task answer \S+ \S+ ok\b'
+    - '^task comment 8e21d4c0'
+    - '^task answer'
     - '^task (close|done|move|update|reassign) (?!6f1c9a02)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Says no to the BotOps runner queue test ping question for Dana, once, on its task (6f1c9a02): an answer in her words
-    ("No", "No, drop it") or a close of that task are both right, and either way BotOps hears it once. It touches nothing
-    else: not the install keys question, no OK, and no message to BotOps. An answer cannot be taken back, so it gives no
-    undo line for it (a close may get "say undo to reopen it"). Two or three plain lines, with the task's link.
+    Says no to the BotOps runner queue test ping question for Dana, once, on its task (6f1c9a02): a reply in the task's
+    chat in her words ("No", "No, drop it") or a close of that task are both right, and either way BotOps hears it once.
+    It touches nothing else: not the install keys question, no OK, and no message to BotOps. A reply gets no undo line (a
+    close may get "say undo to reopen it"). Two or three plain lines, with the task's link.

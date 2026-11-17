@@ -187,7 +187,7 @@ def _asks(conn: Any, task_id: str) -> list[Row]:
         {"line": row["line"], "kind": row["kind"], "person": row["person_id"]}
         for row in conn.execute(
             "SELECT r.line, r.kind, r.person_id FROM requirements r JOIN visits v ON v.id=r.visit_id "
-            "AND v.left_at IS NULL WHERE v.task_id=? AND r.withdrawn_at IS NULL AND r.kind IN ('ok','answer') "
+            "AND v.left_at IS NULL WHERE v.task_id=? AND r.withdrawn_at IS NULL AND r.kind='ok' "
             "ORDER BY r.position, r.created_at",
             (task_id,),
         )

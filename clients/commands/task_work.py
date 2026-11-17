@@ -35,8 +35,7 @@ FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task"])
 
 @tool(
     "tico_feedback_give",
-    "Rate a message or task a bot or another person made, 👍 (up) or 👎 (down), with an optional reason (an ask: "
-    "tico_task_thumbs). Rating again replaces your earlier one. tell_bot (a 👎 on a bot's work only) leaves the bot a "
+    "Rate a message or task a bot or another person made, 👍 (up) or 👎 (down), with an optional reason Rating again replaces your earlier one. tell_bot (a 👎 on a bot's work only) leaves the bot a "
     "note for its next run in that conversation. People only, never on your own work.",
     {
         "subject_type": FEEDBACK_SUBJECT,
@@ -53,27 +52,6 @@ def feedback_give(api, args):
         k: args[k] for k in ("subject_type", "subject_id", "rating", "reason", "tell_bot") if args.get(k) is not None
     }
     return api.post("feedback", body, key=_key(args))
-
-
-@tool(
-    "tico_task_thumbs",
-    "Was this ask worth asking: 👍 (up) or 👎 (down) on an ask a bot put to you, with an optional note saying what was "
-    "wrong. A 👎 sends an open ask back to the bot with your words. For the person asked only.",
-    {
-        "id": _s("The task id"),
-        "requirement": _s("The ask's requirement id"),
-        "up": {"type": "boolean", "description": "true for 👍, false for 👎"},
-        "note": _s("What was wrong, in a few words (at most 2000 characters)"),
-    },
-    required=("id", "requirement", "up"),
-    writes=True,
-)
-def task_thumbs(api, args):
-    body = {"up": bool(args["up"])}
-    if args.get("note"):
-        body["note"] = args["note"]
-    path = f"tasks/{quote(args['id'], safe='')}/asks/{quote(args['requirement'], safe='')}/thumbs"
-    return api.post(path, body, key=_key(args))
 
 
 @tool(
@@ -934,7 +912,7 @@ FEEDBACK = (
     Group("feedback", "a person's 👍/👎 on a bot's work: give, list, make a rule"),
     Command(
         "feedback give",
-        "rate a message or task a bot made; again replaces it (an ask: task thumbs)",
+        "rate a message or task a bot made; again replaces it",
         example="tico feedback give task T1 down --reason 'Wrong owner' --tell-bot",
     ),
     Command(

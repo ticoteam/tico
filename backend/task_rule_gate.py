@@ -1,7 +1,7 @@
 # pyright: strict
 """The org rule check (backend/org_rule_check.py) on the v3 task routes (backend/task_moves_routes.py): the one place a
-task write that says something goes through. A done note, a move's or a hand-off's why, an ask's line and choices, an
-answer, a snooze's why: each is checked like any other write of its author, outside the store's write, and its verdict
+task write that says something goes through. A done note, a move's or a hand-off's why, an ask's line, an answer's
+note, a snooze's why: each is checked like any other write of its author, outside the store's write, and its verdict
 applied inside it.
 
 - Pass: the write goes as it was sent.
@@ -38,8 +38,6 @@ COVERS = "task_rule"
 # The write a `kind:ask` rule meets, when a bot makes it to a person: a question on a task.
 ASKS = "task_ask"
 FAILED = "The rule check could not run, so nothing was written. Try again."
-# Answers that are buttons, not words: nothing to check.
-BUTTONS = {"ok", "no", "again", "done"}
 
 # What each write is, in the words the judge reads and the bot is told ("Your a task marked done was held...").
 org_rule_check.OPERATIONS.setdefault("task_done", "a task marked done")
@@ -51,7 +49,6 @@ org_rule_check.OPERATIONS.setdefault("task_withdraw_ask", "an ask taken back")
 org_rule_check.OPERATIONS.setdefault("task_ask_answer", "an answer on a task")
 org_rule_check.OPERATIONS.setdefault("task_ok_ask", "an ask for an OK")
 org_rule_check.OPERATIONS.setdefault("task_ok_use", "an OK used")
-org_rule_check.OPERATIONS.setdefault("strategy_merge", "an ask merged for a person")
 org_rule_check.OPERATIONS.setdefault("strategy_decision", "a decision made alone")
 org_rule_check.OPERATIONS.setdefault("batch_note", "a note to a bot on its item")
 org_rule_check.OPERATIONS.setdefault("task_bulk", "a change to many tasks")

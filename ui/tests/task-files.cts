@@ -315,10 +315,10 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     assert.deepEqual(await view.locator('.tf-vers button').allTextContents(), ['v1', 'v2', 'v3']);
     assert.match(await view.locator('.tf-vmeta').innerText(), /Editor · \d+h[\s\S]*Tighter intro, new music\./);
     assert.equal(await cutTile.getAttribute('aria-expanded'), 'true');
-    // the file's question: chip, question, options with their description
+    // the file's question: its chip and question, no choices (a reply in the thread answers it)
     const fileAsk = view.locator('.ask');
     assert.match(await fileAsk.locator('.ask-line').innerText(), /ROUGH CUT|Rough cut/);
-    assert.equal(await fileAsk.locator('.ask-opt').nth(1).getAttribute('title'), 'Say what to change');
+    assert.equal(await fileAsk.locator('.ask-opt, .ask button').count(), 0, 'no choices');
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`task-video-versions-desktop-${mode}`); }
     await theme('dark');
     // Compare: two versions side by side
@@ -413,8 +413,8 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
     await fold();
     await modal.locator('[data-modal-close]').click();
 
-    // ---- a reader (can_comment false): the questions, their choices and answers, no controls and no comment box;
-    // an older runner's answer reads as its text, folded
+    // ---- a reader (can_comment false): the questions and their answers, no controls and no comment box; an older
+    // runner's answer reads as its text
     const answersBefore = posted.filter(x => x.path.endsWith('/answers')).length;
     for (const [width, height, where] of [[390, 844, 'phone'], [1280, 900, 'desktop']] as [number, number, string][]) {
       await page.setViewportSize({width, height});
@@ -422,13 +422,11 @@ const AMBER = png(160, 90, (x, y) => [220, 110 + (y >> 1), 40 + (x >> 2)]);
       const legacy = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="tone"]')});
       await legacy.locator('.ask.answered').waitFor();
       assert.match(await legacy.locator('.ask-answers').innerText(), /Sam\s*Keep it warm and short\./);
-      assert.equal(await legacy.locator('.ask-opt').first().isVisible(), false, 'answered: folded');
       const font = modal.locator('.tcomment', {has: page.locator('.ask-q[data-qid="font"]')});
-      assert.equal(await font.locator('.ask-opt.ro').count(), 2);
+      assert.equal(await font.locator('.ask-text').innerText(), 'Which font?', 'the question alone, no choices');
       assert.equal(await modal.locator('.task-chat .ask button, .task-chat .ask input').count(), 0, 'no answer controls');
       assert.equal(await modal.locator('.task-chat form').isHidden(), true, 'no comment box');
       assert.equal(await modal.locator('.task-files [data-tf-add]').isHidden(), true, 'a reader cannot add files');
-      await font.locator('.ask-opt.ro').first().click();
       await tab('details'); await modal.locator('.tf-tile[data-tf-file="f-notes"]').click();
       await view.locator('.ask-q[data-qid="ok"]').waitFor();
       assert.equal(await view.locator('.ask button, .ask input').count(), 0);

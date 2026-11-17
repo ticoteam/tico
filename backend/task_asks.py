@@ -474,8 +474,7 @@ def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: obj
     it is not give_ok answering it, else None. A send back and an undo stay plain answers."""
     if value != "ok" or _GIVING.get() == requirement_id:
         return None
-    found = conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone()
-    return FROM_PREVIEW if found else None
+    return FROM_PREVIEW if bound(conn, requirement_id) else None
 
 
 # The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
@@ -488,7 +487,7 @@ def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, 
     """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
     an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
     BotOps (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
-    Else None. A send back, a look again and a question's answer stay theirs to give."""
+    Else None. A send back stays theirs to give."""
     if str(value or "").strip().casefold() != "ok":
         return None
     via = str(getattr(who, "via", "") or "")

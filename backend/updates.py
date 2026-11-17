@@ -802,8 +802,8 @@ def shared_tasks_sql(hidden, prefix=""):
     return rule
 
 
-# How an OK's answer reads in a draft; a question's answer is its own words.
-_ANSWER_WORDS = {"ok": "OK", "no": "Sent back", "again": "Asked to look again"}
+# How an OK's answer reads in a draft.
+_ANSWER_WORDS = {"ok": "OK", "no": "Sent back"}
 WAITING_MAX = 8  # tasks a request or a draft lists as waiting on someone else
 WAITING_SCAN = 50  # newest open tasks whose waits are read for that list
 
@@ -908,7 +908,7 @@ def draft_facts(c, author, kind, day):
         for r in c.execute(
             "SELECT t.title, a.answer, a.notes FROM answers a JOIN visits v ON v.id=a.visit_id "
             "JOIN tasks t ON t.id=v.task_id JOIN requirements q ON q.id=a.requirement_id "
-            "WHERE a.by_id=? AND a.undone_at IS NULL AND a.created_at>=? AND q.kind IN ('ok','answer') "
+            "WHERE a.by_id=? AND a.undone_at IS NULL AND a.created_at>=? AND q.kind='ok' "
             "AND a.answer NOT IN ('pushed_past','give') AND NOT EXISTS (SELECT 1 FROM answers later "
             "WHERE later.visit_id=a.visit_id AND later.requirement_id=a.requirement_id AND later.undone_at IS NULL "
             f"AND later.rowid>a.rowid) AND {shared_tasks_sql(hidden, 't.')} ORDER BY a.created_at DESC LIMIT ?",

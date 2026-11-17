@@ -91,9 +91,6 @@ SCHEMAS.update(
                         {
                             "id": "s",
                             "state": {"type": "string", "enum": ["ready", "pending", "none"]},
-                            "pick": "s",
-                            "line": "s",
-                            "note": "s",
                             "score": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
                         }
                     )

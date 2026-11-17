@@ -58,24 +58,12 @@ class NoCredential(CliError):
         self.code = code
 
 
-def thumb(value):
-    """up or down, as the thumbs route's `up`."""
-    if value not in ("up", "down"):
-        raise argparse.ArgumentTypeError("up or down")
-    return value == "up"
-
-
 def json_value(value):
     """`--content`: any JSON value, read exactly; a plain word that is not JSON is refused."""
     try:
         return json.loads(value)
     except ValueError:
         raise argparse.ArgumentTypeError("--content is JSON, for example '{\"usd\": \"10.00\"}'") from None
-
-
-def choice_list(value):
-    """`--choices a,b`: the answers a person picks from, in order."""
-    return [choice.strip() for choice in value.split(",") if choice.strip()]
 
 
 def out(obj):
@@ -704,14 +692,9 @@ def parser():
     s.add_argument("--to", help="the person you ask: their id")
     s.add_argument(
         "--kind",
-        choices=["answer", "ok"],
+        choices=["ok"],
         help="ok: approve or send back what --show names (a question is the default)",
     )
-    # A question's choices and why go in its message now (backend/question_marks.py): refused if sent.
-    s.add_argument("--choices", type=choice_list, help=argparse.SUPPRESS)
-    s.add_argument("--choice", action="append", metavar="LABEL|WHAT HAPPENS", help=argparse.SUPPRESS)
-    s.add_argument("--recommend", metavar="LABEL", help=argparse.SUPPRESS)
-    s.add_argument("--title", help="an OK's short title, at most 60 characters (not with --for)")
     s.add_argument("--show", action="append", metavar="REF", help="what they look at: page:12, file:ID@N; repeat")
     s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
@@ -720,12 +703,6 @@ def parser():
     s.add_argument("-m", "--why", help="with --withdraw: why")
     s.add_argument("--version", type=int, help=version_help)
     s.set_defaults(fn="task ask")
-    s = task.add_parser("thumbs", help="was this ask worth asking: up or down; a down sends an open ask back")
-    s.add_argument("id")
-    s.add_argument("requirement", help="the ask's requirement id, from tico task show")
-    s.add_argument("up", metavar="up|down", type=thumb, help="up: worth asking; down: what was wrong goes in --note")
-    s.add_argument("--note", help="what was wrong, in a few words")
-    s.set_defaults(fn="task thumbs")
     s = task.add_parser("give", help="give what you are asked on a task to another person")
     s.add_argument("id")
     s.add_argument("requirement", help="the requirement's id, from tico task show")

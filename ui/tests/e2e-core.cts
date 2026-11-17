@@ -166,9 +166,8 @@ const tasks = (() => {
 
 // ---- e2e-needs-you
 const needsYou = (() => {
-  // A bot asks Dana on two of its own tasks: a question with two choices, and an OK. A task is one row of You (its newest
-  // ask), and the row opens its card.
-  const QUESTION = 'Should we ship the beta on Nov 3?';
+  // A bot asks Dana for an OK on a task of its own. A task is one row of You (its newest ask), and the row opens its
+  // card. (A bot's question is a ❓ on a chat message, question-marks.cts.)
   const OK = 'OK a $40 daily limit for builder-claude';
   return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
@@ -181,34 +180,20 @@ const needsYou = (() => {
       assert.ok(rid, `${where}: ${what} is recorded`);
       return async () => (await read(id)).to_leave?.find(r => r.requirement_id === rid);
     };
-    // A bot's question to a person says why it matters, what each choice does and which it recommends (backend/ask_shape.py).
-    const question = await ask('Plan the beta', {line: QUESTION, why: 'The beta invitations go out on Friday.', choices: ['Yes', 'No'],
-      details: ['The beta opens to the waiting list on Friday.', 'The beta waits a week for the fixes.'], recommend: 'Yes'}, 'the bot asks a question');
     const ok = await ask('Set the beta budget', {line: OK, kind: 'ok'}, 'the bot asks for an OK');
 
     const page = await open(browser, hub, 'dana', {phone, hash: '#/tasks'});
     // This OK binds no content (no grant), so its card's preview read is a 404 and the card shows the ask's own line.
     expectFailure(page, 404, '^/api/v2/oks/[^/]+$', 'GET');
-    const row = (text: string) => page.locator('#task-body [data-need]', {hasText: text}).first();
-    await row(QUESTION).waitFor({timeout: t(20000)});
-    // An OK row leads with its task's title, the ask is its tooltip (a question keeps its line under the title).
+    // An OK row leads with its task's title, the ask is its tooltip.
     const okRow = page.locator('#task-body [data-need]', {hasText: 'Set the beta budget'}).first();
     await okRow.waitFor({timeout: t(20000)});
     assertClean(page, `${where}: needs you drawn`);
 
-    // The question: answer it on its card.
-    await row(QUESTION).click();
+    // The OK: its row opens its card, and she approves it there. A phone opens an OK on its task (the Task tab, where
+    // Approve is), and the OK's ask sits in the Chat tab, so that tab is opened to read it first.
     const card = page.locator('#need-card');
-    await card.locator('.dc-q', {hasText: QUESTION}).first().waitFor({timeout: t(20000)});
-    await card.locator('[data-dc-choice="Yes"]').first().click();
-    // The card sends the answer when its undo runs out, so the hub is read until the answer is there.
-    const reply = await until(async () => (await question())?.answer?.value, `${where}: the answer on the hub`);
-    assert.equal(reply, 'Yes', `${where}: the hub has the answer to the question`);
-    assertClean(page, `${where}: answered`);
-
-    // The OK: the card goes on to it (or its row opens it), and she approves it there. A phone opens an OK on its task
-    // (the Task tab, where Approve is), and the OK's ask sits in the Chat tab, so that tab is opened to read it first.
-    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await okRow.click();
+    await okRow.click();
     if (phone) await card.locator('[data-dc="tab"][data-dc-tab="chat"]').click({timeout: t(20000)});
     await card.locator('.dc-q', {hasText: OK}).first().waitFor({timeout: t(20000)});
     await card.locator('[data-dc="approve"]:not([disabled])').first().click();

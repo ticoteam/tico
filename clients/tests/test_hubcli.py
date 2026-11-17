@@ -570,7 +570,6 @@ class Stub(BaseHTTPRequestHandler):
                 "/api/v2/webhooks",
                 "/api/v2/release/now",
                 "/oks",
-                "/thumbs",
             )
         ):
             return self.reply(200, {"ok": True})
@@ -757,8 +756,6 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual(code, 0, out)
         used = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/oks/r-1/use"]
         self.assertEqual(used, [{"subject": "budget_raise:launch", "content": {"project": "launch", "usd": "10.00"}}])
-        code, _ = run_hub(*argv, "--choices", "a,b", "--content", content, "--version", "3", env=self.env)
-        self.assertNotEqual(code, 0)  # a bound OK is never a question with choices
 
     def test_task_snooze_sends_its_date_why_and_version(self):
         def last(method, path):

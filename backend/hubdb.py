@@ -3930,7 +3930,7 @@ def task_comment(
     their level says). `delegate`: whether a person's comment delegates the task to the bots it wakes (default: `wake`;
     only one who may direct the task does). `reach`: the bot's Identity when this is its own write through the API, so
     whoever the comment reaches is checked against the bot's reach as a thread post is (reach.check_thread). `to`: the
-    bot it is written to besides (a relayed answer, strategy_merge). A bot's question to a person is a ❓ on its comment
+    bot it is written to besides (a relayed answer). A bot's question to a person is a ❓ on its comment
     (question_marks.ask). `checked` False: words Tico's own feature wrote for a bot (question_marks.ask), so the bot's
     standing to write here (a quarantine, reading a private task) is not asked."""
     if checked:
@@ -7334,7 +7334,6 @@ from .task_calls import (
     task_release as task_release,
     task_requeue as task_requeue,
     task_snooze as task_snooze,
-    task_thumbs as task_thumbs,
     task_try_again as task_try_again,
     task_unsnooze as task_unsnooze,
     task_view as task_view,

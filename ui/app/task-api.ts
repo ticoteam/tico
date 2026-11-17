@@ -39,8 +39,6 @@ interface PipelineReqRec {
   who_oks: 'none' | 'people_only' | 'people_with_exceptions';
   person_id: string | null;
   line: string;
-  /** An answer's choices, when it is a choice; null on every other requirement. */
-  choices?: string[] | null;
 }
 interface PipelineStageRec {
   id?: string;
@@ -323,15 +321,15 @@ const askUnsnooze = (id: string): Promise<{id: string}> => post('/v2/needs-you/u
 const taskTryAgain = (id: string, why?: string): Promise<TaskMoved> => post(`${taskPath(id)}/try-again`, why ? {why} : {}, newRequestId());
 
 // ---- asks
-interface TaskAskNew { to: string; line: string; kind?: 'answer' | 'ok'; choices?: string[]; show?: string[]; }
+interface TaskAskNew { to: string; line: string; kind: 'ok'; show?: string[]; }
 const taskAsk = (id: string, b: TaskAskNew, version: number | null): Promise<TaskMoved> =>
   post(`${taskPath(id)}/asks`, withVersion(version, {...b}), newRequestId());
 const taskWithdrawAsk = (id: string, rid: string, why?: string): Promise<TaskMoved> =>
   writeRequest('DELETE', `/v2/tasks/${encodeURIComponent(id)}/asks/${encodeURIComponent(rid)}`, why ? {why} : {});
-/** ok, no (send back, with a note), again (look again), or the answer to a question. On a page, `pageVersion` is the
-    page the person was shown (`<file id>@<version>`): refused when another is attached now. With `visitId` it is a
-    document approval's whole key: a stale one is refused with the version submitted now (decide.ts). */
-const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: string, visitId?: string): Promise<TaskMoved> =>
+/** ok, no (send back, with a note) or done. On a page, `pageVersion` is the page the person was shown
+    (`<file id>@<version>`): refused when another is attached now. With `visitId` it is a document approval's whole
+    key: a stale one is refused with the version submitted now (decide.ts). */
+const taskAnswer = (id: string, rid: string, value: 'ok' | 'no' | 'done', version: number | null, note?: string, pageVersion?: string, visitId?: string): Promise<TaskMoved> =>
   post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {}), ...(visitId ? {visit_id: visitId} : {})}), newRequestId());
 const answerUndo = (answerId: string): Promise<TaskMoved> => post(`/v2/answers/${encodeURIComponent(answerId)}/undo`, {}, newRequestId());
 

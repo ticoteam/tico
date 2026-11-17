@@ -400,7 +400,7 @@ def _vision_question(conn, item, title, body):
     return H.task(conn, made["id"]) or made
 
 
-# Why each ask matters to the person, the line the ask checks want under its question (backend/ask_shape.py).
+# Why each ask matters to the person, said under its question.
 WHYS = {
     "kpi_red": "A measure on your goal is off track, and you own what happens next.",
     "kpi_stale": "Goals are judged on their numbers, and these have no current reading.",

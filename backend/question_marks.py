@@ -6,6 +6,9 @@ chased while it waits on its own open ❓ (waiting_on.of).
 - Only a bot marks, and only its own message. Tico itself never authors one.
 - The person must be on the roster, in the bot's reach (as an ask is), and able to read the message.
 - The message's first line passes ask_shape.line_refusal, as any ask to a person does.
+- On a task, a bot's ❓ does not repeat what the stage's people-only page asks already (its message naming that page:
+  the person OKs the page there), and in Product's Validate it is refused (validate_gate.check_question).
+- `ask` runs every check before it posts the message, so a refused ❓ leaves nothing in the chat.
 - One open ❓ per bot per chat (the chat's root conversation, `room_id`): a new one clears the old ("replaced").
 
 It clears when the person replies in that chat, in their own hand or by their Assistant on their word (`replied`, from
@@ -221,12 +224,13 @@ def _message_task(conn: sqlite3.Connection, message: Row, conv: Row) -> str:
     return str(task_id) if task_id else ""
 
 
-def readable(conn: sqlite3.Connection, person: str, message: Row, chat: Row | None = None) -> bool:
+def readable(conn: sqlite3.Connection, person: str, message: Row, chat: Row | None = None, viewer: Any = None) -> bool:
     """Whether `person` may read the marked message: the thread's members and the message's own check. `chat`, the
-    message's chat row when the caller has read it, saves reading it again."""
+    message's chat row, and `viewer`, the person's threads.actor_viewer, when the caller has read them for many ❓s,
+    save reading them again for each."""
     threads = _mod("threads")
 
-    viewer = threads.actor_viewer(conn, person)
+    viewer = viewer if viewer is not None else threads.actor_viewer(conn, person)
     if viewer is None:
         return False
     if chat is not None:
@@ -237,10 +241,11 @@ def readable(conn: sqlite3.Connection, person: str, message: Row, chat: Row | No
 
 
 def _addressee(
-    conn: sqlite3.Connection, actor: str, person: str, message: Row, task_id: str, *, checked: bool = True
+    conn: sqlite3.Connection, actor: str, person: str, message: Row | None, task_id: str, *, checked: bool = True
 ) -> str:
     """The person a ❓ (or its Give to) names, refused with a clear reason when it may not be: someone off the roster,
-    out of the bot's reach (`checked`: the bot's own pick), or unable to read the chat."""
+    out of the bot's reach (`checked`: the bot's own pick), or unable to read the chat (`message`; None before it is
+    posted, when the task's own check stands for it)."""
     target = str(H._reach(conn, actor, person))
     if not H.is_human(target):
         H.refuse(conn, actor, "reach", f"{H.actor_name(conn, target)} is a bot: a ❓ is for a person's reply")
@@ -258,18 +263,47 @@ def _addressee(
         if task_id:
             reach.check(conn, who, target, "task", task_id=task_id)
         else:
-            reach.check(conn, who, target, "chat", conversation_id=message.get("conversation_id"))
+            reach.check(conn, who, target, "chat", conversation_id=(message or {}).get("conversation_id"))
     if task is not None:
         task_calls = _mod("task_calls")
 
         task_calls.bring_in(conn, actor, task, target)
-    if not readable(conn, target, message):
+    if message is not None and not readable(conn, target, message):
         H.refuse(
             conn,
             actor,
             "private",
             f"{H.actor_name(conn, target)} can't read this chat, so they can't reply: add them to it first",
         )
+    return target
+
+
+def _check(
+    conn: sqlite3.Connection, bot: str, task_id: str, person: str, body: str, message: Row | None, *, checked: bool
+) -> str:
+    """Everything a ❓ must pass, before or after its message is posted (`message` None: before). Returns the person."""
+    if not H.is_bot(bot) or bot == H.KEEPER:
+        H.refuse(conn, bot, "identity", "Only a bot marks a message ❓")
+    row = None
+    if task_id:
+        engine = _mod("task_engine")
+
+        status = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not status or status[0] != "open":
+            H.refuse(conn, bot, "identity", "The task has ended: a ❓ is for an open task's chat")
+        row = engine.task(conn, task_id)
+    target = _addressee(conn, bot, person, message, task_id, checked=checked)
+    shape = ask_shape.line_refusal(body) if checked else None
+    if shape:
+        H.refuse(conn, bot, "lint", shape)
+    if checked and row:
+        engine = _mod("task_engine")
+        R = _mod("task_requirements")
+
+        page = engine.people_page(conn, row, [body], question=True) if row.get("visit") else None
+        if page:
+            engine._refuse(conn, bot, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
+        _mod("validate_gate").check_question(conn, row, bot, target)
     return target
 
 
@@ -287,15 +321,8 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, ch
     if not conv:
         H.refuse(conn, bot, "identity", "That message has no chat")
     task_id = _message_task(conn, message, conv)
-    if task_id:
-        status = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if not status or status[0] != "open":
-            H.refuse(conn, bot, "identity", "The task has ended: a ❓ is for an open task's chat")
-    target = _addressee(conn, bot, person, message, task_id, checked=checked)
+    target = _check(conn, bot, task_id, person, str(message.get("body") or ""), message, checked=checked)
     line = first_line(message.get("body"))
-    shape = ask_shape.line_refusal(str(message.get("body") or "")) if checked else None
-    if shape:
-        H.refuse(conn, bot, "lint", shape)
     room = room_of(conv)
     at = H.now()
     conn.execute(
@@ -347,6 +374,7 @@ def ask(
         row: Row | None = H.task(conn, task_id)
         if row and not H.task_private_readable(conn, person, row):
             H.task_reach(conn, bot, row, person)
+    _check(conn, bot, task_id, person, text, None, checked=checked)
     said: Row = H.task_comment(conn, bot, task_id, text, wake=False, checked=checked, extra_refs=refs)
     return mark(conn, bot, str(said["id"]), person, checked=checked)
 

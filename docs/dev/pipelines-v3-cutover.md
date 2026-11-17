@@ -19,8 +19,8 @@ cut-over, this file wins.
 - The public roadmap is off in 0.6.0-rc.1: it was built on task types and steps. It comes back with the Product
   pipeline, on its stages.
 - Growth ideas are General tasks with labels in 0.6.0-rc.1. A Growth pipeline comes with Product in phase 2, as a third
-  preset: Ideas (by hand), On deck, Running, Measuring. A result question (Succeeded, Failed, Inconclusive, with one
-  line of evidence) must be answered to leave Measuring. A person OKs an idea before Running only when it spends
+  preset: Ideas (by hand), On deck, Running, Measuring. The owner says the result (Succeeded, Failed, Inconclusive,
+  with one line of evidence) before it leaves Measuring. A person OKs an idea before Running only when it spends
   money or publishes. A dropped idea is Closed.
 
 ## What a task is after the cut-over
@@ -43,7 +43,8 @@ What the old words become:
 | review, ready | a stage, or "everything is met" |
 | declined | closed, with a why |
 | type, step | pipeline, stage |
-| question task, approval object | a requirement that names a person (`answer` or `ok`) |
+| question task | a ❓ on the bot's chat message (no requirement) |
+| approval object | a requirement that names a person (`ok`) |
 | check back, stale, stuck, stranded, loop | the never-stuck check |
 
 ## The Python calls
@@ -71,12 +72,12 @@ H.task_update(conn, actor, task_id, *, title, body, due, labels, rank, private, 
     # Field edits only. For the mass of old call sites it still takes status= ("done" -> task_done, "closed" ->
     # task_close, "open" on an ended task -> task_move(REOPEN)) and owner= (-> task_reassign). Any other status is a
     # ValueError. Gone: step, type, lane, mover, strict, waiting_on, skip_step_wake, override_requirements.
-H.task_ask(conn, actor, task_id, person, line, *, kind="answer", choices=None, shows=None, ver)
+H.task_ask(conn, actor, task_id, person, line, *, kind="ok", shows=None, ver)
+H.task_question(conn, actor, task_id, person, text)        # a ❓ on the task's chat; no requirement
 H.task_withdraw_ask(conn, actor, requirement_id, why=None)
 H.task_answer(conn, actor, task_id, requirement_id, value, note=None, ver)
 H.task_give(conn, actor, task_id, requirement_id, person, ver)
 H.task_answer_undo(conn, actor, answer_id)
-H.task_thumbs(conn, actor, task_id, requirement_id, up, note=None)
 H.task_snooze(conn, actor, task_id, why=None, until=None, ver)
 H.task_unsnooze(conn, actor, task_id, why=None)
 H.task_try_again(conn, actor, task_id, why=None)
@@ -95,7 +96,7 @@ Rules for callers:
 
 - **Who may.** Every call: the actor is on the roster and may read the task. A call that works the task (done, move,
   close, reassign, ask, snooze, try again) also runs the check a field edit runs today, plus the pipeline's manager
-  and owner. An answer, a give, an undo and a thumbs are for whoever the requirement is asked of: the engine checks
+  and owner. An answer, a give and an undo are for whoever the requirement is asked of: the engine checks
   that, so someone named on an OK answers it without being on the task. The engine then applies its own rules, C8
   among them: a bot cannot close a task a person asked for; it asks that person.
 - **Version.** `tasks.version` says "this row changed since you looked", nothing more. The engine bumps it on a move
@@ -147,11 +148,10 @@ not ready (`worktree_waits`, for that task only). Each stops the tries and shows
 | `POST /api/v2/tasks/{id}/snooze` | `until?, why?, version` | |
 | `POST /api/v2/tasks/{id}/unsnooze` | `why?` | |
 | `POST /api/v2/tasks/{id}/try-again` | `why?` | a person hands a task back to its owner, in their own session: the Assistant, BotOps and tokens get `task_needs_person` |
-| `POST /api/v2/tasks/{id}/asks` | `to, line, kind?, choices?, show?, version` | ask a person (C19) |
+| `POST /api/v2/tasks/{id}/asks` | `to, line, kind?, show?, version` | ask a person (C19) |
 | `DELETE /api/v2/tasks/{id}/asks/{requirement_id}` | `why?` | withdraw |
-| `POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` | `value, note?, version` | OK, send back (`no` with a note), look again, or an answer |
+| `POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` | `value, note?, version` | OK or send back (`no` with a note) |
 | `POST /api/v2/tasks/{id}/asks/{requirement_id}/give` | `to, version` | give it to another person |
-| `POST /api/v2/tasks/{id}/asks/{requirement_id}/thumbs` | `up, note?` | was this worth asking |
 | `POST /api/v2/answers/{id}/undo` | | |
 | `POST /api/v2/task-bulk` | `ids, action: move / owner / close / tags, ...` | people only |
 | `GET /api/v2/needs-you` | | see below |
@@ -208,10 +208,9 @@ requirement_id, kind, line, met: bool
 standing        one sentence: how it stands ("OK'd", "Sent back: ...", "No task filed yet")
 who             actor or task id | null   who or what it waits on
 asked_by        actor | null              set when it was added to this task
-choices         [str, ...] | null
 shows           [ref, ...]                what to look at ("page:12", "file:...")
 answer          null | {"id", "value", "note", "by", "at"}
-may             ["done", "ok", "no", "again", "answer", "give", "undo", "withdraw", "thumbs"]   for this viewer; a hint
+may             ["done", "ok", "no", "give", "undo", "withdraw"]   for this viewer; a hint
 ```
 
 Brief (`GET /api/v2/tasks`, lists, Needs you): `status, version, pipeline_id, stage_id, owner, assignee, turn, late,
@@ -231,9 +230,9 @@ tico task done <id> -m "what was done" --version N
 tico task move <id> next|<stage> -m "why" --version N
 tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
-tico task ask <id> --to <person> "line" [--choices a,b] [--show page:12] --version N
+tico task ask <id> --to <person> "line" [--kind ok] [--show page:12] --version N
 tico task ask <id> --withdraw
-tico task answer <id> <requirement> ok|no|<answer> [-m "note"] --version N      (a bot named on an OK or a question)
+tico task answer <id> <requirement> ok|no [-m "note"] --version N      (a bot named on an OK)
 tico task give <id> <requirement> --to <person> --version N
 tico task file --parent <id> [--pipeline general] "title"
 tico task snooze <id> [--until date] -m "why" --version N
@@ -319,7 +318,7 @@ relation: `add_blocker`, `remove_blocker`, `set_parent`, `live_blocker` and the 
 `pipeline_stats` goes, but two things in it are kept and move to their one user first: the bot page's queue counts
 (`bot_rows`) and the queue classification Health uses.
 
-Kept and rewired, not deleted: `reconnects`, `worktree_waits`, `wake_rules`, `strategy_merge`, `goal_asks`, `rules`,
+Kept and rewired, not deleted: `reconnects`, `worktree_waits`, `wake_rules`, `goal_asks`, `rules`,
 `automations`, `task_relations` (relate and link only). `pipeline_judges` keeps how Jev judges; its dispatcher over the
 old stage tables is removed and nothing calls it until the Jev requirement kind (phase 2).
 
@@ -328,9 +327,8 @@ something, or deleted.
 
 ## Approvals and questions
 
-Anything that asked a person through an approval object or a question task uses a task and adds a requirement:
+Anything that asked a person through an approval object uses a task and adds a requirement:
 
-- Question: `H.task_ask(..., kind="answer", choices=[...])`.
 - Approval of something that leaves the company or spends (send this email, publish this edition, spend this, raise
   this cap): an OK that is bound to exactly what was shown. `backend/task_asks.py` (new, `# pyright: strict`):
 
@@ -357,11 +355,11 @@ use(conn, requirement_id, subject, content, by) -> None
   used_at, used_by_id)`. There is no approval that expires: Late handles an OK nobody gives.
 - A task that `ask_ok` filed ends with the ask: whoever does the act finishes it with what was done; a sent back or
   withdrawn one is closed with that as the why.
+- A question is not a requirement. It is a ❓ on the task's chat (`H.task_question`), and a reply in that chat answers it.
 
 ## After the cut-over merge
 
-Before 0.6.0-rc.1 (phase 1 is not done without them): the rule check on a bot's new ask (C21, scenarios 48 and 49);
-screens S1 to S6 and S13 to S17 beyond what the readers need to work; the batched read that makes one never-stuck pass
+Before 0.6.0-rc.1 (phase 1 is not done without them): screens S1 to S6 and S13 to S17 beyond what the readers need to work; the batched read that makes one never-stuck pass
 fast; the fault rig green on 10,000 runs.
 
 Later phases: the other requirement kinds; Product and Engineering.

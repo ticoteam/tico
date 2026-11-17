@@ -105,7 +105,7 @@ SCHEMAS.update(
                         "ask": {
                             "type": "object",
                             "properties": {
-                                "kind": {"enum": ["ok", "answer"]},
+                                "kind": {"enum": ["ok"]},
                                 "mine": {"type": "boolean"},
                                 "line": {"type": "string"},
                             },

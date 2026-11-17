@@ -84,6 +84,7 @@ def populate(client):
             "to": "human:ana",
             "line": "Spend $5 on ads for the launch test?",
             "kind": "ok",
+            "show": ["file:%s@1" % ids["file"]],  # a bot's OK shows what it approves (task_engine.OK_SHOWS)
             "version": seen["version"],
         },
     )
@@ -100,6 +101,7 @@ def populate(client):
             "to": "human:ana",
             "line": "Spend $9 on ads for a second test?",
             "kind": "ok",
+            "show": ["file:%s@1" % ids["file"]],  # a bot's OK shows what it approves (task_engine.OK_SHOWS)
             "version": seen["version"],
         },
     )

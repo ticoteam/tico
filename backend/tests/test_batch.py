@@ -1,6 +1,5 @@
 """A batch (backend/batch.py): Needs you, frozen, walked one item at a time, applied on commit with the person's own
-identity through the task calls. OK and Send back on a bot's ask, an answer to its question, Done or Close on a task
-it filed for the person. An OK bound to what it lets go is never given on a walk. On a store with no app."""
+identity through the task calls. OK and Send back on a bot's ask, Done or Close on a task it filed for the person. An OK bound to what it lets go is never given on a walk. On a store with no app."""
 
 import pytest
 
@@ -56,16 +55,15 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
         seen_version=ads["version"],
     )
     other = _work(c, "Pick the launch day")
-    # An older question (a requirement of kind answer): the batch still answers such rows.
-    question = X.old_question(c, other["id"], FINANCE, "ana", "Monday or Friday?", choices=["Monday", "Friday"])
+    launch = X.ok_ask(c, other["id"], FINANCE, "ana", "Launch on Monday?", shows=["https://example.com/launch-plan"])
     # A task handed to her with nothing asked is in her Tasks, not Needs you: the batch leaves it out.
     chore = H.task_create(c, FINANCE, "Sign the lease", "Sign it today.", "human:ana", lint=False)
     batch = _start(c)
     keys = [B._items(c.execute("SELECT * FROM batches WHERE id=?", (batch["id"],)).fetchone())]
     assert batch["total"] == 2 and batch["item"]["key"] == "ask:" + _ask_id(c, ads, ok)
-    assert {i["key"] for i in keys[0]} == {"ask:" + _ask_id(c, ads, ok), "ask:" + _ask_id(c, other, question)}
+    assert {i["key"] for i in keys[0]} == {"ask:" + _ask_id(c, ads, ok), "ask:" + _ask_id(c, other, launch)}
     B.respond(c, ANA.actor, batch["id"], "decide", "Go ahead.", n=1, decision="ok")
-    B.respond(c, ANA.actor, batch["id"], "decide", "Friday", n=2, decision="answer")
+    B.respond(c, ANA.actor, batch["id"], "decide", "Friday instead", n=2, decision="send_back")
     held = H.task_view(c, ads["id"], "human:ana")["to_leave"]
     assert not next(r for r in held if r["requirement_id"] == ok["requirement_id"])["met"]  # nothing applied yet
     log = []
@@ -74,7 +72,8 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
     view = H.task_view(c, ads["id"], "human:ana")
     assert next(r for r in view["to_leave"] if r["requirement_id"] == ok["requirement_id"])["met"]
     asked = H.task_view(c, other["id"], "human:ana")["to_leave"]
-    assert next(r for r in asked if r["requirement_id"] == question["requirement_id"])["answer"]["value"] == "Friday"
+    sent_back = next(r for r in asked if r["requirement_id"] == launch["requirement_id"])["answer"]
+    assert (sent_back["value"], sent_back["note"]) == ("no", "Friday instead")
     assert H.task(c, chore["id"])["status"] == "open"
     assert [to for to, _, _ in log] == [FINANCE]
 

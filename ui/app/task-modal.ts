@@ -882,7 +882,7 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
     <div class="th-main"><div class="th-head">${taskMsgWho(m)}${kind}${roadmapCommentMark(m, taskId)}<time datetime="${esc(m.created_at)}" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
       m.refs?.quiet ? '<span class="th-state muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}${qmarkHTML(m.refs)}</div>
     ${taskStepsHTML(m)}<div class="th-body-wrap"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? messageMd('th-body md', body, m.sender_id) : ''}
-    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id, files) : ''}${fbRowHTML(fb, m.body || '')}</div></div></div>`;
+    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id) : ''}${fbRowHTML(fb, m.body || '')}</div></div></div>`;
 }
 // A message's face and name, as the chat shows them: the Assistant passing on a person's words is that person's
 // Assistant; yours reads "You"; a bot's or a person's name opens their page.

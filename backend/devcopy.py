@@ -43,6 +43,8 @@ EMPTY = (
     "growth_customer_loads",
     # A file from before the Pipelines v3 cut-over still has the old OKs; the copy's first start drops the table.
     "approvals",
+    # Questions from before ❓ marks, waiting for a start to post them as ❓ (backend/old_questions.py).
+    "old_questions",
     # Provider jobs and send grants never become actionable in a rehearsal copy.
     "letter_sources",
     "letter_proofs",
@@ -422,7 +424,6 @@ KEEP = (
             "strategy_actions",
             "ask_ingest_items",
             "ask_ingest_settings",
-            "strategy_merges",
             "changes",
             "chat_goals",
             "schema_migrations",

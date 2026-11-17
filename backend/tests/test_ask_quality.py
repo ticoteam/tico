@@ -16,19 +16,30 @@ def stamp(t):
 
 
 def ask(c, n):
-    """A task of ops' own with one ask to Ben on it, an OK of the page it shows; returns (task id, requirement id)."""
+    """A task of ops' own with one ask to Ben on it, an OK of the page it shows (written without the ask's checks:
+    what is counted is the row); returns (task id, requirement id)."""
     made = H.task_create(c, "bot:ops", f"Pricing step {n}", "", "bot:ops", lint=False)
-    added = H.task_ask(
+    added = X.ok_ask(
         c,
-        "bot:ops",
         made["id"],
+        "bot:ops",
         "human:ben",
         f"OK the pricing page for step {n}?",
-        kind="ok",
         shows=X.shown(c, f"Pricing step {n}", bot="ops"),
-        seen_version=made["version"],
     )
     return made["id"], added["requirement_id"]
+
+
+def thumbs_down(c, task_id, requirement_id, reason):
+    """Ben's 👎 on the ask, as a row from before asks lost their thumbs: a `feedbacks` row of subject `ask`
+    (`<visit id>:<requirement id>`) that stays as history."""
+    visit = c.execute("SELECT visit_id FROM requirements WHERE id=?", (requirement_id,)).fetchone()[0]
+    at = H.now()
+    c.execute(
+        "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,rating,reason,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (H.new_id(), "human:ben", "ask", f"{visit}:{requirement_id}", "bot:ops", "down", reason, at, at),
+    )
 
 
 def refused(c, at, rule="task_ask_shape"):
@@ -45,8 +56,8 @@ def test_badly_written_send_backs_are_counted_per_bot_over_its_asks_to_people(ga
     with api.app.state.store.transaction() as c:
         asked = [ask(c, n) for n in range(4)]
         # Ben sends one back as badly written and one for another reason; only the first counts.
-        H.task_thumbs(c, "human:ben", asked[0][0], asked[0][1], False, "Badly written: no why, no choices")
-        H.task_thumbs(c, "human:ben", asked[1][0], asked[1][1], False, "Wrong person")
+        thumbs_down(c, asked[0][0], asked[0][1], "Badly written: no why")
+        thumbs_down(c, asked[1][0], asked[1][1], "Wrong person")
         refused(c, stamp(now - timedelta(days=3)))  # nothing got through in the day after: stuck
         refused(c, stamp(now - timedelta(hours=1)), "task_rule")  # the asks above followed it within the day
         refused(c, stamp(now - timedelta(hours=1)), "lint")  # not an ask's refusal
@@ -64,7 +75,7 @@ def test_the_decide_readout_names_each_bots_share_and_the_guard(gate):  # noqa: 
     api, _, _ = gate
     with api.app.state.store.transaction() as c:
         first = ask(c, 1)
-        H.task_thumbs(c, "human:ben", first[0], first[1], False, "Badly written")
+        thumbs_down(c, first[0], first[1], "Badly written")
     out = get(api, "decisions/readout?days=21")
     [row] = out["asks_to_people"]
     assert (row["asks"], row["badly_written"], row["share"], row["stuck"]) == (1, 1, 1.0, 0)
@@ -77,7 +88,7 @@ def test_a_thumbs_down_counts_in_the_window_its_badly_written_reason_was_given(g
     now = datetime.now(timezone.utc)
     with api.app.state.store.transaction() as c:
         made, req = ask(c, 1)
-        H.task_thumbs(c, "human:ben", made, req, False, "Badly written: no choices")
+        thumbs_down(c, made, req, "Badly written: unclear")
         # The 👎 was made ten days ago; its reason was set (or changed) to "Badly written" an hour ago.
         c.execute(
             "UPDATE feedbacks SET created_at=?, updated_at=? WHERE subject_type='ask'",
@@ -91,7 +102,7 @@ def test_a_thumbs_down_counts_in_the_window_its_badly_written_reason_was_given(g
 
 def test_a_question_mark_is_an_ask_and_one_after_a_refusal_means_the_bot_is_not_stuck(gate):  # noqa: F811
     """A question is a message marked ❓ now (backend/question_marks.py): it counts as the bot's ask, and as the ask that
-    got through after a refusal; a question asked as an ask before still counts."""
+    got through after a refusal."""
     from backend import question_marks as QM
 
     api, _, _ = gate
@@ -103,7 +114,6 @@ def test_a_question_mark_is_an_ask_and_one_after_a_refusal_means_the_bot_is_not_
         c.execute(
             "UPDATE question_marks SET created_at=? WHERE id=?", (stamp(now - timedelta(days=2, hours=-1)), mark["id"])
         )
-        X.old_question(c, made["id"], "bot:ops", "ben", "Which day should it go out?")
     with api.app.state.store.read() as c:
         [row] = Q.per_bot(c, stamp(now - timedelta(days=3)), stamp(now + timedelta(hours=1)))
-    assert (row["bot"], row["asks"], row["refused"], row["stuck"]) == ("bot:ops", 2, 1, 0)
+    assert (row["bot"], row["asks"], row["refused"], row["stuck"]) == ("bot:ops", 1, 1, 0)
