@@ -46,7 +46,7 @@ function pvMenuHost(): HTMLElement {
   return host;
 }
 
-/** Move to… for the picked tasks: the picker, one line to confirm ("Move 12 tasks to Backlog › On ice?"), then one
+/** Move to… for the picked tasks: the picker, one line that asks first ("Move 12 tasks to Backlog › On ice?"), then one
     write. The result says what moved and what stayed and why; those that stayed stay picked, to try again. */
 function pvSelectMove(state: PvState, anchor: HTMLElement): void {
   const ids = [...state.sel].filter(id => state.tasks.some(t => t.id === id));
