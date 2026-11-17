@@ -60,6 +60,8 @@
 .flow-mark.live .f1{animation-delay:-.5s}
 @keyframes fl-ride{0%,100%{transform:translateY(-1.5px)}50%{transform:translateY(1.5px)}}
 @media (prefers-reduced-motion:reduce){.flow-mark g{animation:none!important}}
+/* The mark beside a heading or a tab that waits on the person (needsMarkHTML): a small gap after its text, on the text's line. */
+.needs-mark{display:inline-flex;vertical-align:middle;margin-inline-start:.4em;line-height:0}
 /* The phone bar's Flow tab (tasks.ts flowTabPaint): the tabs' grey, jade only while something needs you. */
 .mobile-flow .flow-mark{width:24px}
 .mobile-flow .flow-mark svg{--fm:currentColor}

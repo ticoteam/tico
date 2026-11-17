@@ -457,7 +457,8 @@
    "goalSheetOpen",
    "goalsRefresh",
    "headGoalsLoad",
-   "openGoal"
+   "openGoal",
+   "strategyBrandSaved"
   ],
   "idle": [
    "companyPageStop",

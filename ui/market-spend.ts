@@ -229,8 +229,9 @@ const mktGrowthPts = (tree: MktTree): MktGrowthGroup[] => tree.drawn.filter((g):
 // ------------------------------------------------------------------ Where is the money going?
 
 // Nothing sized yet: the owner describes the market in a sentence and the Librarian sizes it (POST
-// /v2/market/spend/research); the notice then stands in for the form until the sizes arrive.
-function mktSizeForm(host: HTMLElement, description: string | null | undefined): void {
+// /v2/market/spend/research); the notice then stands in for the form until the sizes arrive. `started` runs once the
+// sizing is filed, when the form is gone.
+function mktSizeForm(host: HTMLElement, description: string | null | undefined, started?: () => void): void {
   host.innerHTML = `<form class="mkt-card mkt-start" data-mkt-size novalidate>
       <label class="mkt-lab" for="mkt-describe">Describe the market in a sentence</label>
       <input id="mkt-describe" name="description" type="text" maxlength="400" autocomplete="off" value="${esc(description || '')}" placeholder="What small offices spend on cleaning services">
@@ -252,6 +253,7 @@ function mktSizeForm(host: HTMLElement, description: string | null | undefined):
       const sent = await post('/v2/market/spend/research', {description});
       host.innerHTML = `<div class="mkt-card market-researching" data-mkt-researching role="status"><span class="market-spin" aria-hidden="true"></span>
         <div><strong>On it.</strong>${sent?.task_id ? `<p><a href="#/task/${esc(sent.task_id)}">View task</a></p>` : ''}</div></div>`;
+      started?.();
     } catch (error) {
       submit.disabled = false;
       line.textContent = errorMessage(error, 'That did not go through.'); line.hidden = false;
