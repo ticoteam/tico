@@ -1,9 +1,8 @@
+# pyright: strict
 """The deterministic lint. Every rule has a stable id, a severity, and a one-line fix.
 
-Pure: text in, findings out. No network, no Google, no model. `mail lint` runs it standalone, `draft`,
-`reply` and `schedule` run it on the draft as writing feedback (errors stop the draft, warnings are recorded in
-the audit line), and Tico runs it again on every bot's queued send (backend/email_sending.py), where an error asks
-a person. A rule id never changes meaning, because playbooks and Issues quote them; a retired id is never reused.
+Pure: text in, findings out. No network, no Google, no model. Tico runs it on every bot's queued send
+(backend/email_sending.py), where an error asks a person. A rule id never changes meaning, because playbooks and Issues quote them; a retired id is never reused.
 
     id    severity  what it catches
     L001  error     a forbidden phrase (docs/company.md "What we are not")
@@ -42,9 +41,14 @@ recipient; Tico's sending policy asks a person about that on the queued send).
 """
 
 import re
-from datetime import datetime, timedelta
+from collections.abc import Iterable, Sequence
+from datetime import datetime, timedelta, tzinfo
+from typing import Any
 
 from . import DEFAULT_TZ, zone
+
+Finding = dict[str, str]
+Slot = dict[str, Any]
 
 # ---------------------------------------------------------------- rule inputs
 
@@ -121,17 +125,17 @@ TIME_RE = re.compile(r"""(?ix)
 # ---------------------------------------------------------------- findings
 
 
-def finding(rid, severity, message, fix):
+def finding(rid: str, severity: str, message: str, fix: str) -> Finding:
     return {"id": rid, "severity": severity, "message": message, "fix": fix}
 
 
-class Result(dict):
+class Result(dict[str, Any]):
     @property
-    def ok(self):
+    def ok(self) -> bool:
         return not self["errors"]
 
 
-def result(findings):
+def result(findings: list[Finding]) -> Result:
     errors = [f for f in findings if f["severity"] == "error"]
     warnings = [f for f in findings if f["severity"] == "warn"]
     return Result(
@@ -148,19 +152,19 @@ def result(findings):
 # ---------------------------------------------------------------- the scheduling parser
 
 
-def _hour24(h, ampm, fallback_ampm=""):
+def _hour24(h: str, ampm: str | None, fallback_ampm: str = "") -> int:
     ap = (ampm or fallback_ampm or "").replace(".", "").lower()
-    h = int(h)
+    hour = int(h)
     if ap.startswith("p"):
-        return h + 12 if h < 12 else h
+        return hour + 12 if hour < 12 else hour
     if ap.startswith("a"):
-        return 0 if h == 12 else h
-    return h  # bare "13:00" is 24-hour; "1:00" is 1am
+        return 0 if hour == 12 else hour
+    return hour  # bare "13:00" is 24-hour; "1:00" is 1am
 
 
-def _year_for(month, day, hour, minute, now, tz):
+def _year_for(month: int, day: int, hour: int, minute: int, now: datetime, tz: tzinfo) -> datetime | None:
     """The year that puts this date nearest to now: last Dec is not next Dec."""
-    best = None
+    best: datetime | None = None
     for y in (now.year - 1, now.year, now.year + 1):
         try:
             dt = datetime(y, month, day, hour, minute, tzinfo=tz)
@@ -171,7 +175,7 @@ def _year_for(month, day, hour, minute, now, tz):
     return best
 
 
-def parse_times(text, now=None, tz_name=DEFAULT_TZ):
+def parse_times(text: str | None, now: datetime | None = None, tz_name: str = DEFAULT_TZ) -> list[Slot]:
     """Every "Tue Sep 8, 1:00-1:20pm PT" in the text, in the order it appears.
 
     Each entry: {text, start, end, tz_named}. Times with no am/pm are read as 24-hour, which is
@@ -180,8 +184,9 @@ def parse_times(text, now=None, tz_name=DEFAULT_TZ):
     """
     tz = zone(tz_name)
     now = (now or datetime.now(tz)).astimezone(tz)
-    out = []
-    for m in TIME_RE.finditer(text or ""):
+    text = text or ""
+    out: list[Slot] = []
+    for m in TIME_RE.finditer(text):
         mon = MONTHS.get(m.group("mon")[:3].lower())
         if not mon:
             continue  # pragma: no cover - regex guarantees it
@@ -189,11 +194,11 @@ def parse_times(text, now=None, tz_name=DEFAULT_TZ):
         minute = int(m.group("min") or 0)
         if hour > 23 or minute > 59:
             continue
-        named_tz = m.group("tz") and zone(TZ_ZONES[" ".join(m.group("tz").lower().split())])
+        named_tz = zone(TZ_ZONES[" ".join(m.group("tz").lower().split())]) if m.group("tz") else None
         start = _year_for(mon, int(m.group("day")), hour, minute, now, named_tz or tz)
         if start is None:
             continue
-        end = None
+        end: datetime | None = None
         if m.group("h2"):
             h2 = _hour24(m.group("h2"), m.group("ap2") or m.group("ap"))
             min2 = int(m.group("min2") or 0)
@@ -209,7 +214,12 @@ def parse_times(text, now=None, tz_name=DEFAULT_TZ):
     return out
 
 
-def overlaps(start, end, busy, buffer_minutes=BUFFER_MINUTES):
+def overlaps(
+    start: datetime,
+    end: datetime,
+    busy: Iterable[tuple[datetime, datetime]] | None,
+    buffer_minutes: int = BUFFER_MINUTES,
+) -> list[tuple[datetime, datetime]]:
     """The busy intervals this slot collides with once the buffer is applied both sides."""
     pad = timedelta(minutes=buffer_minutes)
     lo, hi = start - pad, end + pad
@@ -220,23 +230,23 @@ def overlaps(start, end, busy, buffer_minutes=BUFFER_MINUTES):
 
 
 def run(
-    body,
-    subject="",
-    to=(),
-    cc=(),
-    slug="",
-    reply_to="",
-    is_reply=None,
-    thread_participants=None,
-    internal_domains=("acme.example",),
-    signature_names=None,
-    now=None,
-    tz_name=DEFAULT_TZ,
-    busy=None,
-    check_calendar=False,
-    slot=None,
-    minutes=DEFAULT_MEETING_MINUTES,
-):
+    body: object,
+    subject: str | None = "",
+    to: Iterable[object] | None = (),
+    cc: Iterable[object] | None = (),
+    slug: object = "",
+    reply_to: object = "",
+    is_reply: bool | None = None,
+    thread_participants: Iterable[object] | None = None,
+    internal_domains: Iterable[str] = ("acme.example",),
+    signature_names: Sequence[str] | None = None,
+    now: datetime | None = None,
+    tz_name: str = DEFAULT_TZ,
+    busy: Iterable[tuple[datetime, datetime]] | None = None,
+    check_calendar: bool = False,
+    slot: object = None,
+    minutes: int = DEFAULT_MEETING_MINUTES,
+) -> Result:
     """Every rule, in id order. Returns a Result; nothing here raises on a bad draft.
 
     `signature_names` None skips L055: a caller that does not know whose name signs (the server) does not guess.
@@ -250,7 +260,7 @@ def run(
     slug = str(slug or "").strip().lower()
     if is_reply is None:
         is_reply = bool(reply_to) or bool(re.match(r"(?i)^\s*re\s*:", subject))
-    f = []
+    f: list[Finding] = []
     low = body.lower()
 
     # -- content ----------------------------------------------------
@@ -267,7 +277,7 @@ def run(
 
     urls = URL_RE.findall(body)
     allowed_hosts = tuple(h for d in internal_domains for h in (d, "www." + d))
-    bad_hosts = []
+    bad_hosts: list[str] = []
     for u in urls:
         host = re.sub(r"^https?://", "", u, flags=re.I).split("/")[0].split("@")[-1]
         host = host.split(":")[0].lower()
@@ -483,7 +493,7 @@ def run(
                 )
             )
         if check_calendar:
-            clashes = []
+            clashes: list[str] = []
             for t in times:
                 end = t["end"] or (t["start"] + timedelta(minutes=minutes))
                 if overlaps(t["start"], end, busy):
@@ -517,17 +527,3 @@ def run(
             )
         )
     return result(f)
-
-
-# ---------------------------------------------------------------- rendering
-
-
-def render(res, title="Lint"):
-    lines = [f"# {title}", ""]
-    if not res["findings"]:
-        return "\n".join(lines + ["clean: no rule fired.", ""])
-    for x in res["findings"]:
-        lines.append(f"{x['severity'].upper():<5} {x['id']}  {x['message']}")
-        lines.append(f"      fix: {x['fix']}")
-    lines += ["", res["summary"] + ("" if res["ok"] else " - errors block the draft; fix them and run it again.")]
-    return "\n".join(lines) + "\n"

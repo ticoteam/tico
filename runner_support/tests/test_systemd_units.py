@@ -26,14 +26,14 @@ KW = dict(
 
 
 def test_each_helper_runs_its_own_command_and_an_environment_has_its_own_names():
-    for kind in ("connectors", "close-calls", "importers"):
+    for kind in ("close-calls", "importers"):
         text = su.render(kind, **KW)
         assert f'"--config" "/home/ana/.config/tico/runner.json" "{kind}"' in text
         assert f"TICO_SYSTEMD_UNIT=tico-{kind}.service" in text
     acme = su.render("bot", env_slug="acme", **KW)
     assert "TICO_SYSTEMD_UNIT=tico-acme-bot.service" in acme and "Description=Tico runner (acme)" in acme
     assert su.helper_units("tico-acme-bot.service") == {
-        k: f"tico-acme-{k}.service" for k in ("connectors", "close-calls", "importers")
+        k: f"tico-acme-{k}.service" for k in ("close-calls", "importers")
     }
     assert su.helper_units("tico-bot.service")["importers"] == "tico-importers.service"
     assert su.helper_units("something.service") == {}
@@ -84,7 +84,7 @@ def run_through_forwarder(argv):
     assert old.stdout == new.stdout and command in old.stdout
 
 
-@pytest.mark.parametrize("kind", ["bot", "connectors", "close-calls", "importers"])
+@pytest.mark.parametrize("kind", ["bot", "close-calls", "importers"])
 def test_a_unit_starts_its_job_by_the_runner_name_an_older_release_also_has(kind):
     # Units outlive this release: a computer moved back to a release from before runner_support/ must still start.
     exec_line = next(line for line in su.render(kind, **KW).splitlines() if line.startswith("ExecStart="))
@@ -93,7 +93,7 @@ def test_a_unit_starts_its_job_by_the_runner_name_an_older_release_also_has(kind
     run_through_forwarder(argv)
 
 
-@pytest.mark.parametrize("kind", ["bot", "connectors", "close-calls", "importers"])
+@pytest.mark.parametrize("kind", ["bot", "close-calls", "importers"])
 def test_a_launchd_plist_starts_its_job_by_the_runner_name_an_older_release_also_has(kind):
     # The plist scripts/tico-computer install writes on a Mac, rendered by bash from the script's own heredoc.
     script = (ROOT / "scripts" / "tico-computer").read_text()
@@ -182,12 +182,15 @@ def test_install_on_linux_writes_units_starts_them_and_explains_linger(tmp_path)
 @pytest.mark.slow
 def test_install_on_linux_is_quiet_about_linger_when_it_is_on_and_handles_one_job(tmp_path):
     env, log = fake_linux(tmp_path, linger="yes")
-    done = tico(env, "install", "connectors")
+    (tmp_path / "units").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "units" / "tico-connectors.service").write_text("[Service]\n")  # a retired job set up earlier
+    done = tico(env, "install", "importers")
     assert done.returncode == 0 and "enable-linger" not in done.stdout
-    assert [p.name for p in (tmp_path / "units").iterdir()] == ["tico-connectors.service"]
-    gone = tico(env, "uninstall", "connectors")
-    assert gone.returncode == 0 and not list((tmp_path / "units").iterdir())
+    assert [p.name for p in (tmp_path / "units").iterdir()] == ["tico-importers.service"]
     assert "systemctl --user disable --now tico-connectors.service" in log.read_text()
+    gone = tico(env, "uninstall", "importers")
+    assert gone.returncode == 0 and not list((tmp_path / "units").iterdir())
+    assert "systemctl --user disable --now tico-importers.service" in log.read_text()
 
 
 @pytest.mark.slow
@@ -198,7 +201,7 @@ def test_status_and_restart_on_linux_read_systemd(tmp_path):
     restarted = tico(env, "restart", "bot")
     assert restarted.returncode == 0 and "restarted tico-bot.service" in restarted.stdout
     status = tico(env, "status")  # the cloud is unreachable here; the job lines come first
-    assert "bot: running (pid 77)" in status.stdout and "connectors: not installed" in status.stdout
+    assert "bot: running (pid 77)" in status.stdout and "importers: not installed" in status.stdout
 
 
 def test_install_refuses_a_public_runner_registration(tmp_path):

@@ -6,14 +6,10 @@ Gmail call, kept for CACHE_SECONDS so a send decided again within a few minutes 
 enqueue and again at dispatch) asks Gmail once. Callers that hold the write lock warm the cache first, under a read
 (`warm`). Only Gmail's answers are kept. Gmail not answering, or refusing (it refuses for a rate limit too, and a
 token that cannot be had refuses), raises a retryable Problem and keeps nothing: a decision that needs a fact waits for
-Gmail, never guesses.
-
-A mailbox no server credential covers (backend/gmail_watch.py `watched`) cannot be asked: its facts come from the
-last copy its computer synced (`mail_messages`) until the computer side and the copies go.
+Gmail, never guesses. A mailbox no server credential covers cannot be asked, so its facts are unknown the same way.
 """
 
 import collections
-import json
 import re
 import sqlite3
 import threading
@@ -21,7 +17,7 @@ import time
 from collections.abc import Callable
 from typing import Any, TypeVar, cast
 
-from . import gmail_live, gmail_watch
+from . import gmail_live
 from .store import Problem
 
 T = TypeVar("T")
@@ -71,27 +67,11 @@ def _found(c: Conn, mailbox: str, q: str) -> bool:
     return cast("Callable[[Conn, str, str], Json | None]", gmail_live.first)(c, mailbox, q) is not None
 
 
-def _copy(c: Conn, sql: str, args: tuple[Any, ...]) -> Any:
-    """A row of the last copy a computer synced of a mailbox no server credential covers."""
-    return c.execute(sql, args).fetchone()
-
-
 def sent_to(c: Conn, mailbox: str, address: str) -> bool:
     """Whether this mailbox ever sent mail to `address` (Gmail `in:sent`)."""
     box, addr = mailbox.lower(), str(address or "").strip().lower()
     if not ADDRESS.fullmatch(addr):
         return False
-    if not gmail_watch.watched(c, box):
-        return bool(
-            _copy(
-                c,
-                "SELECT 1 FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL AND lower(from_addr)=? "
-                "AND EXISTS (SELECT 1 FROM json_each(labels) WHERE value='SENT') "
-                "AND (EXISTS (SELECT 1 FROM json_each(to_addresses) WHERE lower(value)=?) "
-                "OR EXISTS (SELECT 1 FROM json_each(cc) WHERE lower(value)=?)) LIMIT 1",
-                (box, box, addr, addr),
-            )
-        )
     return _cached(("sent_to", box, addr), lambda: _found(c, box, f"in:sent {{to:{addr} cc:{addr}}}"))
 
 
@@ -100,13 +80,6 @@ def known(c: Conn, mailbox: str, address: str) -> bool:
     box, addr = mailbox.lower(), str(address or "").strip().lower()
     if not ADDRESS.fullmatch(addr):
         return False
-    if not gmail_watch.watched(c, box):
-        wrote = _copy(
-            c,
-            "SELECT 1 FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL AND lower(from_addr)=? LIMIT 1",
-            (box, addr),
-        )
-        return bool(wrote) or sent_to(c, box, addr)
     return _cached(("heard_from", box, addr), lambda: _found(c, box, f"from:{addr}")) or sent_to(c, box, addr)
 
 
@@ -115,14 +88,6 @@ def by_message_id(c: Conn, mailbox: str, message_id: str) -> Json | None:
     box = mailbox.lower()
     if not MESSAGE_ID.fullmatch(message_id or ""):
         return None
-    if not gmail_watch.watched(c, box):
-        row = _copy(
-            c,
-            "SELECT msg_id,thread_id FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL "
-            "AND json_extract(send_facts,'$.message-id')=? LIMIT 1",
-            (box, message_id),
-        )
-        return {"id": row["msg_id"], "threadId": row["thread_id"]} if row else None
     first = cast("Callable[[Conn, str, str], Json | None]", gmail_live.first)
     return _cached(("rfc822", box, message_id), lambda: first(c, box, "rfc822msgid:" + message_id[1:-1]))
 
@@ -131,22 +96,6 @@ def message(c: Conn, mailbox: str, msg_id: str) -> Json | None:
     """What a send decision reads of the message it answers: sender, thread and its header facts; None when Gmail no
     longer has it. The body is not kept."""
     box = mailbox.lower()
-    if not gmail_watch.watched(c, box):
-        row = _copy(
-            c,
-            "SELECT msg_id,thread_id,from_addr,send_facts FROM mail_messages WHERE mailbox=? AND msg_id=? "
-            "AND deleted_at IS NULL",
-            (box, msg_id),
-        )
-        if not row:
-            return None
-        facts = cast("Json", json.loads(row["send_facts"] or "{}"))
-        return {
-            "msg_id": row["msg_id"],
-            "thread_id": row["thread_id"],
-            "from_addr": row["from_addr"],
-            "send_facts": facts,
-        }
 
     def read() -> Json | None:
         try:

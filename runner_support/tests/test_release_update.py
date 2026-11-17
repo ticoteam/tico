@@ -1447,29 +1447,31 @@ def install_plists(agents, *labels):
         (agents / f"{label}.plist").write_text("<plist/>")
 
 
-def test_only_installed_helpers_are_restarted(tmp_path):
+def test_only_installed_helpers_are_restarted_and_the_retired_connectors_job_is_removed(tmp_path):
     agents = tmp_path / "agents"
     install_plists(agents, "team.tico.tico-bot", "team.tico.tico-connectors", "team.tico.tico-importers")
     launchctl, said = Launchctl(), []
     done = ru.restart_helpers({}, launchctl, agents, uid=501, say=said.append)
-    assert done == ["connectors", "importers"]  # close-calls has no plist; the bot job is not touched here
+    assert done == ["importers"]  # close-calls has no plist; the bot job is not touched here
     assert launchctl.calls == [
-        ["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-connectors"],
+        ["launchctl", "bootout", "gui/501/team.tico.tico-connectors"],
         ["launchctl", "kickstart", "-k", "gui/501/team.tico.tico-importers"],
     ]
-    assert len(said) == 2 and "team.tico.tico-connectors" in said[0]
+    assert not (agents / "team.tico.tico-connectors.plist").exists()
+    assert (agents / "team.tico.tico-bot.plist").exists() and len(said) == 2
+    assert ru.restart_helpers({}, Launchctl(), agents, uid=501, say=lambda line: None) == ["importers"]
 
 
 def test_an_installed_helper_that_is_not_loaded_is_bootstrapped(tmp_path):
     agents = tmp_path / "agents"
-    install_plists(agents, "team.tico.tico-connectors")
-    launchctl = Launchctl(fail_kickstart={"team.tico.tico-connectors"})
+    install_plists(agents, "team.tico.tico-importers")
+    launchctl = Launchctl(fail_kickstart={"team.tico.tico-importers"})
     done = ru.restart_helpers({}, launchctl, agents, uid=501, say=lambda line: None)
-    assert done == ["connectors"] and launchctl.calls[-1] == [
+    assert done == ["importers"] and launchctl.calls[-1] == [
         "launchctl",
         "bootstrap",
         "gui/501",
-        str(agents / "team.tico.tico-connectors.plist"),
+        str(agents / "team.tico.tico-importers.plist"),
     ]
 
 
@@ -1508,18 +1510,20 @@ def test_a_failed_systemctl_falls_back_to_stopping_the_process(monkeypatch):
     assert killed[0] == ru.signal.SIGTERM  # Restart=always starts it again
 
 
-def test_only_installed_helper_units_are_restarted_through_systemctl(tmp_path):
+def test_only_installed_helper_units_are_restarted_through_systemctl_and_connectors_is_removed(tmp_path):
     units = tmp_path / "units"
     units.mkdir()
     for name in ("tico-bot.service", "tico-connectors.service", "tico-importers.service"):
         (units / name).write_text("[Service]\n")
     systemctl, said = Systemctl(), []
     done = ru.restart_helpers_systemd(SYSTEMD, systemctl, unit_dir=units, say=said.append)
-    assert done == ["connectors", "importers"]  # close-calls has no unit; the runner's own is not touched here
+    assert done == ["importers"]  # close-calls has no unit; the runner's own is not touched here
     assert systemctl.calls == [
-        ["systemctl", "--user", "restart", "tico-connectors.service"],
+        ["systemctl", "--user", "disable", "--now", "tico-connectors.service"],
+        ["systemctl", "--user", "daemon-reload"],
         ["systemctl", "--user", "restart", "tico-importers.service"],
     ]
+    assert not (units / "tico-connectors.service").exists() and len(said) == 2
     (units / "tico-acme-close-calls.service").write_text("[Service]\n")
     assert ru.restart_helpers_systemd(
         {"TICO_SYSTEMD_UNIT": "tico-acme-bot.service"}, Systemctl(), unit_dir=units, say=lambda line: None

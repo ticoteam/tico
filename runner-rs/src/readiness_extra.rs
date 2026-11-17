@@ -24,7 +24,6 @@ pub const OPTIONAL: &[&str] = &[
     "worktree_waits",
     "worktrees",
     "harnesses",
-    "mail_key",
     "shared_env",
     "recent_errors",
     "container_exec",

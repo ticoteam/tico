@@ -66,7 +66,6 @@ CHROME_KEY_URL = "https://dl.google.com/linux/linux_signing_key.pub"
 NODE_KEY_URL = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
 JOBS = (
     "bot",
-    "connectors",
     "close-calls",
     "importers",
 )  # scripts/tico-computer install's units (runner_support/systemd_units.py)

@@ -33,3 +33,22 @@ def test_runner_cloud_machine_is_runner_support_cloud_machine():
     old, new = run("-m", "runner.cloud_machine", "--help"), run("-m", "runner_support.cloud_machine", "--help")
     assert old.returncode == new.returncode == 0, old.stderr
     assert old.stdout == new.stdout
+
+
+def test_the_retired_connectors_job_waits_idle_until_stopped(monkeypatch, tmp_path, capsys):
+    # A launchd job or systemd unit set up before mail moved to the server may still start it: it must not exit and
+    # be started again in a loop, and it needs no registration to wait.
+    import signal
+
+    from runner_support import __main__ as cli
+
+    parked = []
+    monkeypatch.setattr(cli, "park", lambda: parked.append(True))
+    cli.main(["--config", str(tmp_path / "missing.json"), "connectors"])
+    assert parked == [True]
+    blocked, waited = [], []
+    monkeypatch.undo()
+    cli.park(block=lambda how, signals: blocked.append((how, signals)), wait=waited.append)
+    stop = {signal.SIGTERM, signal.SIGINT}
+    assert blocked == [(signal.SIG_BLOCK, stop)] and waited == [stop]
+    assert "retired" in capsys.readouterr().out

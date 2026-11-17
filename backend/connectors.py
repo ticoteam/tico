@@ -1,12 +1,9 @@
-"""Bounded reads and queued writes through explicitly authorized local connectors, and the calendar appointment routes.
-
-No computer holds a Google credential. A computer that owns a mailbox asks for a short-lived access token for it
-(`/connectors/mail/workspace/token`), which the server takes from the Workspace key or the person's own Connect Google
-grant (backend/google_tokens.py, the one door). Who may act for which mailbox is decided in backend/google_rights.py.
+"""The calendar appointment routes: a person's or bot's appointments, read live, and a booking made on Google.
 
 The appointment routes (`/calendar/appointments`, `/calendar/upcoming`) read a calendar live on the server
-(backend/gcal_live.py, a 60 s cache), and a booking is made on Google in the request, its `calendar_actions` row the
-receipt. No computer reads or books a calendar any more.
+(backend/gcal_live.py, a 60 s cache) with the server's credential for it (backend/google_tokens.py, the one door: the
+Workspace key or the person's own Connect Google grant). A booking is made on Google in the request, its
+`calendar_actions` row the receipt. No computer reads, books or holds a key for a calendar or a mailbox.
 """
 
 from collections import OrderedDict
@@ -18,12 +15,11 @@ import threading
 import time
 
 from fastapi import Request
-from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
 from . import models as M
-from . import gcal_live, google_connect, google_rights, reconnects, routines
+from . import gcal_live, routines
 from . import google_workspace as workspace
 from .store import H, P, Problem, encode
 
@@ -36,41 +32,6 @@ def instant(value):
     if parsed.tzinfo is None:
         raise ValueError("Calendar timestamps must include a timezone")
     return parsed
-
-
-class CalendarEvent(M.Contract):
-    occurrence_id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
-    event_id: str = Field(default="", max_length=500)
-    title: str = Field(min_length=1, max_length=240)
-    start: str = Field(max_length=50)
-    end: str = Field(max_length=50)
-    attendees: list[str] = Field(default_factory=list, max_length=100)
-    meeting_url: str = Field(default="", max_length=2000)
-
-    @field_validator("attendees")
-    @classmethod
-    def emails(cls, values):
-        normalized = []
-        for value in values:
-            value = str(value).strip().lower()
-            if not EMAIL.fullmatch(value) or value in normalized:
-                raise ValueError("Calendar attendees must be distinct email addresses")
-            normalized.append(value)
-        return normalized
-
-    @field_validator("meeting_url")
-    @classmethod
-    def secure_url(cls, value):
-        if value and not re.fullmatch(r"https://[^\s<>]{1,1992}", value):
-            raise ValueError("Calendar meeting links must use HTTPS")
-        return value
-
-    @model_validator(mode="after")
-    def interval(self):
-        start, end = instant(self.start), instant(self.end)
-        if end <= start or (end - start).total_seconds() > 7 * 24 * 60 * 60:
-            raise ValueError("Calendar event interval is invalid")
-        return self
 
 
 SNAPSHOT_DAYS = 14  # the appointment routes' window: from the start of today (UTC)
@@ -153,31 +114,6 @@ def appointments_view(c, address):
     return {"calendar": address, "events": events, "updated_at": at, "version": 1, "stale": False}
 
 
-class CalendarSnapshot(M.Contract):
-    email: str = Field(min_length=3, max_length=320)
-    # The start of today plus SNAPSHOT_DAYS (an older computer sends its next 24 hours, which still fits).
-    events: list[CalendarEvent] = Field(default_factory=list, max_length=SNAPSHOT_EVENTS)
-
-    @field_validator("email")
-    @classmethod
-    def email_address(cls, value):
-        value = value.lower()
-        if not EMAIL.fullmatch(value):
-            raise ValueError("Calendar target must be an email address")
-        return value
-
-
-class CalendarPublish(M.Contract):
-    snapshots: list[CalendarSnapshot] = Field(min_length=1, max_length=25)
-    # The calendars read successfully this tick (plan v5 T); absent from an older runner, the snapshots' calendars.
-    ok_accounts: list[str] | None = Field(default=None, max_length=200)
-
-
-class WorkspaceToken(M.Contract):
-    mailbox: str = Field(min_length=3, max_length=320)
-    service: Literal["gmail", "calendar"]
-
-
 class CalendarAppointmentCreate(M.Contract):
     calendar: str = Field(default="", max_length=320)
     title: str = Field(min_length=1, max_length=240)
@@ -214,28 +150,8 @@ class CalendarAppointmentCreate(M.Contract):
         return self
 
 
-class CalendarActionResult(M.Contract):
-    status: str = Field(pattern=r"^(succeeded|failed|unknown)$")
-    event_id: str = Field(default="", max_length=500)
-    meeting_url: str = Field(default="", max_length=2000)
-    error: str = Field(default="", max_length=200)
-
-    @field_validator("meeting_url")
-    @classmethod
-    def meeting_link(cls, value):
-        if value and not re.fullmatch(r"https://[^\s<>]{1,1992}", value):
-            raise ValueError("Calendar meeting links must use HTTPS")
-        return value
-
-    @model_validator(mode="after")
-    def result_shape(self):
-        if self.status == "succeeded" and not self.event_id:
-            raise ValueError("A succeeded calendar action must include the provider event id")
-        return self
-
-
-def calendar_action(row, *, connector=False):
-    """The durable scheduling record; description is exposed only to its connector."""
+def calendar_action(row):
+    """The durable scheduling record (its description stays with the event, never in this answer)."""
     out = {
         "id": row["id"],
         "requested_by": row["requested_by"],
@@ -251,158 +167,11 @@ def calendar_action(row, *, connector=False):
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
-    if connector:
-        out["description"] = row["description"]
     return out
 
 
-MAIL_BODY_MAX = 32 * 1024
-MAIL_CLIP = {
-    "thread_id": 200,
-    "date": 80,
-    "from_addr": 500,
-    "from_header": 500,
-    "subject": 998,
-    "snippet": 2000,
-    "list_id": 500,
-    "to": 100,
-    "cc": 100,
-    "labels": 50,
-    "attachments": 50,
-    "rule_hits": 100,
-}
-MAIL_BATCH = 100
-
-
-class MailMessage(M.Contract):
-    msg_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._-]+$")
-    thread_id: str = Field(default="", max_length=200)
-    epoch: int = Field(default=0, ge=0)
-    date: str = Field(default="", max_length=80)
-    from_addr: str = Field(default="", max_length=500)
-    from_header: str = Field(default="", max_length=500)
-    to: list[str] = Field(default_factory=list, max_length=100)
-    cc: list[str] = Field(default_factory=list, max_length=100)
-    subject: str = Field(default="", max_length=998)
-    snippet: str = Field(default="", max_length=2000)
-    labels: list[str] = Field(default_factory=list, max_length=50)
-    body: str = Field(default="", max_length=MAIL_BODY_MAX)
-    body_truncated: bool = False
-    attachments: list = Field(default_factory=list, max_length=50)
-    list_id: str = Field(default="", max_length=500)
-    is_internal: bool = False
-    has_unsubscribe: bool = False
-    rule_hits: list = Field(default_factory=list, max_length=100)
-    # Set by the computer from its copy of the owner's sends (connectors/mail/db.py). None from a computer that predates it.
-    known_sender: bool | None = None
-    send_facts: dict[str, str] = Field(default_factory=dict, max_length=5)
-
-    # A field over its cap is cut, not refused: the batch is never acknowledged, so one refused
-    # message came back first on every retry and stopped its mailbox's copy for hours. Only the
-    # message id stays strict; it has to be exact.
-    @model_validator(mode="before")
-    @classmethod
-    def clip(cls, data):
-        if not isinstance(data, dict):
-            return data
-        data = dict(data)
-        if isinstance(data.get("body"), str) and len(data["body"]) > MAIL_BODY_MAX:
-            data["body"], data["body_truncated"] = data["body"][:MAIL_BODY_MAX], True
-        for key, cap in MAIL_CLIP.items():
-            if isinstance(data.get(key), (str, list)) and len(data[key]) > cap:
-                data[key] = data[key][:cap]
-        return data
-
-
-class ConnectorFailure(M.Contract):
-    account: str = Field(min_length=3, max_length=320)
-    # Only the kind of failure reaches the cloud, never the provider's message or a local path.
-    reason: Literal["signin", "network", "error", "delegation", "admin_policy"]
-
-
-class ConnectorHealth(M.Contract):
-    service: Literal["calendar", "mail"]
-    failing: list[ConnectorFailure] = Field(default_factory=list, max_length=50)
-    # The accounts this computer read successfully this tick (plan v5 T). Absent from an older runner: every account it
-    # reports on, except the failing ones, counts as read.
-    ok_accounts: list[str] | None = Field(default=None, max_length=200)
-
-
-CONNECTOR_REASON = {
-    "signin": "its Google sign-in was refused, so retrying won't fix it",
-    "network": "Google or the network can't be reached; the Mac keeps retrying",
-    "error": "the connector failed; the Mac keeps retrying",
-    "admin_policy": "the Google Workspace for {domain} has a policy that blocks Tico; only that "
-    "Workspace's administrator can allow it (Admin console > Security > API controls > "
-    "App access control), and Tico does not ask for more access to get around it",
-    "delegation": "the Google service account has no domain-wide delegation for the domain {domain}, "
-    "so it can't act as this mailbox; add that domain's delegation in Google Workspace, "
-    "or give the message bot a mailbox on a domain the key covers",
-}
-
-
-class MailPublish(M.Contract):
-    mailbox: str = Field(min_length=3, max_length=320)
-    messages: list[MailMessage] = Field(default_factory=list, max_length=MAIL_BATCH)
-    deleted: list[str] = Field(default_factory=list, max_length=MAIL_BATCH)
-    synced_at: str = Field(min_length=1, max_length=50)
-    history_id: str | None = Field(default=None, max_length=80)
-
-    @field_validator("mailbox")
-    @classmethod
-    def mailbox_address(cls, value):
-        value = value.lower()
-        if not EMAIL.fullmatch(value):
-            raise ValueError("Mail target must be an email address")
-        return value
-
-    @field_validator("deleted")
-    @classmethod
-    def deleted_ids(cls, values):
-        seen = []
-        for value in values:
-            value = str(value).strip()
-            if not value or len(value) > 200 or not re.fullmatch(r"[A-Za-z0-9._-]+", value):
-                raise ValueError("Deleted mail ids must be Gmail message ids")
-            if value not in seen:
-                seen.append(value)
-        return seen
-
-    @field_validator("synced_at")
-    @classmethod
-    def synced_stamp(cls, value):
-        instant(value)
-        return value
-
-
-def _mail_fts(c, mailbox, msg_id, subject="", body="", from_addr="", to_text=""):
-    c.execute("DELETE FROM mail_fts WHERE mailbox=? AND msg_id=?", (mailbox, msg_id))
-    c.execute(
-        "INSERT INTO mail_fts(subject,body,from_addr,to_text,mailbox,msg_id) VALUES(?,?,?,?,?,?)",
-        (subject, body, from_addr, to_text, mailbox, msg_id),
-    )
-
-
-def _refresh_mailbox(c, address, person_id, runner_id, synced_at, watching_since):
-    stats = c.execute(
-        "SELECT count(*) AS n, min(epoch) AS oldest, max(epoch) AS newest "
-        "FROM mail_messages WHERE mailbox=? AND deleted_at IS NULL",
-        (address,),
-    ).fetchone()
-    c.execute(
-        "INSERT INTO mail_mailboxes(address,person_id,runner_id,synced_at,message_count,"
-        "oldest_epoch,newest_epoch,error,watching_since_at) VALUES(?,?,?,?,?,?,?,NULL,?) "
-        "ON CONFLICT(address) DO UPDATE SET person_id=excluded.person_id,"
-        "runner_id=excluded.runner_id,synced_at=excluded.synced_at,"
-        "message_count=excluded.message_count,oldest_epoch=excluded.oldest_epoch,"
-        "newest_epoch=excluded.newest_epoch,error=NULL,"
-        "watching_since_at=COALESCE(mail_mailboxes.watching_since_at,excluded.watching_since_at)",
-        (address, person_id, runner_id, synced_at, stats["n"], stats["oldest"], stats["newest"], watching_since),
-    )
-
-
 def human_of(c, address):
-    """A connector mailbox's person; a known shared inbox has an address but no person id."""
+    """A mailbox's person; a known shared inbox has an address but no person id."""
     address = str(address or "").strip().lower()
     row = c.execute("SELECT id,email FROM humans WHERE lower(email)=?", (address,)).fetchone()
     if row:
@@ -450,226 +219,15 @@ def calendar_allowed(c, who, address, person=None, change=False):
     raise Problem("forbidden", "That calendar is not yours to read or schedule on", 403)
 
 
-def install_connectors(app, store, execution, mutate):
-    def publisher(c, who):
-        runner = execution.runner(c, who)
-        if runner["owner_id"] not in (store.settings.processing_operators or (execution.auth.owner_id(c),)):
-            raise Problem("forbidden", "This machine is not assigned the private app-connector capability", 403)
-        return runner
-
-    def member(c, who):
-        """The computer making a call, and whether it is a publisher. Raises for a person, a bot or a revoked computer;
-        each route then applies google_rights.refusal to the mailboxes it names."""
-        runner = google_rights.runner_of(execution, c, who)
-        return runner, google_rights.publishes(store, execution, c, runner)
-
-    def reader(c, who, mailbox=None):
-        """The gate of a connector call that a publisher or a computer owning a mailbox may make (plan v3 B, v4 O).
-        Anyone else gets publisher()'s refusal, as before. With `mailbox`, a computer that owns nothing is told why about
-        that mailbox first (workspace_owned or personal_grant, else forbidden)."""
-        runner, named = member(c, who)
-        owned = workspace.owned_mailboxes(c, runner["id"])
-        if not named and not owned:
-            if mailbox:
-                google_rights.check(c, runner["id"], named, mailbox, owned)
-            raise Problem("forbidden", google_rights.FORBIDDEN, 403)
-        return runner, named, owned
-
-    @app.get("/api/v2/runners/connectors")
-    def assigned(request: Request):
-        """Which connector jobs this computer runs: all of them when the owner named it an operator in
-        TICO_PROCESSING_OPERATORS, and mail and calendar when it owns a mailbox a Google Workspace key or a person's
-        Connect Google grant covers (google_workspace.owned_mailboxes)."""
-        with store.read() as c:
-            runner = execution.runner(c, request.state.identity)
-            named = runner["owner_id"] in store.settings.processing_operators
-            if named or workspace.owned_mailboxes(c, runner["id"]):
-                return {"connectors": ["mail", "calendar"]}
-            return {"connectors": []}
-
-    google_connect.install(app, store, mutate)
-
-    @app.get("/api/v2/connectors/calendar/targets")
-    def targets(request: Request):
-        with store.read() as c:
-            runner, named, owned = reader(c, request.state.identity)
-        # Every calendar is read live on the server now: a computer is given none to read. `hours` is what a computer
-        # from before `days` reads.
-        return {"people": [], "hours": 24, "days": SNAPSHOT_DAYS, "refresh_seconds": 45}
-
-    @app.post("/api/v2/connectors/calendar/snapshots")
-    def publish(request: Request, body: CalendarPublish):
-        def work(c):
-            runner, named, owned = reader(c, request.state.identity)
-            seen = set()
-            for snapshot in body.snapshots:
-                if snapshot.email in seen:
-                    raise Problem("duplicate", "Publish at most one snapshot per person", 422)
-                seen.add(snapshot.email)
-                google_rights.check(c, runner["id"], named, snapshot.email, owned)
-                person = human_of(c, snapshot.email)
-                if not person or not person["id"]:
-                    raise Problem(
-                        "not_found", "Calendar target is not on the " + store.settings.app_name + " roster", 404
-                    )
-                payload = {"events": [event.model_dump() for event in snapshot.events]}
-                c.execute(
-                    "INSERT INTO connector_snapshots(kind,owner,version,payload,updated_at,runner_id) "
-                    "VALUES('calendar',?,1,?,?,?) ON CONFLICT(kind,owner) DO UPDATE SET "
-                    "version=connector_snapshots.version+1,payload=excluded.payload,"
-                    "updated_at=excluded.updated_at,runner_id=excluded.runner_id",
-                    (person["id"], encode(payload), H.now(), runner["id"]),
-                )
-            read = list(body.ok_accounts) if body.ok_accounts is not None else list(seen)
-            for account in read:
-                google_rights.check(c, runner["id"], named, account, owned)
-            google_rights.report(c, "calendar", runner["id"], H.now(), ok=read)
-            reconnects.google_good(c, "calendar", read)  # a published calendar is that account working
-            return {"ok": True, "snapshots": len(seen)}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/connectors/health")
-    def connector_health(request: Request, body: ConnectorHealth):
-        """See programmatically when something disconnected. The Mac reports each refresh: the accounts it could not read
-        and the ones it did (plan v5 T). A failing account stays failing until a report lists it as read; a clean report
-        is the heartbeat and clears only what it lists."""
-
-        def work(c):
-            runner, named, owned = reader(c, request.state.identity)
-            failing = {f.account.strip().lower(): f for f in body.failing}
-            read = [account.strip().lower() for account in body.ok_accounts] if body.ok_accounts is not None else None
-            for account in list(failing) + list(read or []):
-                google_rights.check(c, runner["id"], named, account, owned)
-            allowed = google_rights.reportable(c, runner["id"], named, owned)
-            if read is None:  # an older runner: every account it may report on, except the failing ones, was read
-                read = sorted(account for account in allowed if account not in failing)
-            label = "Calendar" if body.service == "calendar" else "Mail"
-            messages = {
-                account: (
-                    f"{label} can't refresh for {account}: "
-                    + CONNECTOR_REASON[f.reason].format(domain=account.rpartition("@")[2]),
-                    f.reason,
-                )
-                for account, f in failing.items()
-            }
-            google_rights.report(
-                c, body.service, runner["id"], H.now(), failing=messages, ok=read, reportable_set=allowed
-            )
-            # The tasks a refused sign-in stops get a card for the mailbox's person; an account this service no longer
-            # lists works again for it (backend/reconnects.py).
-            refused = [account for account, f in failing.items() if f.reason == "signin"]
-            still = google_rights.failing_accounts(c, body.service, H.now())
-            reconnects.google_report(
-                c, body.service, refused, list(failing), ok=[account for account in read if account not in still]
-            )
-            return {"ok": not failing}
-
-        return mutate(request, body, work)
-
+def install(app, store, execution, mutate):
     CALENDAR_OFF = (
         "The company turned Create and change calendar events off in Tico (Tools > Settings > Email > What Tico "
         "may do), so Tico will not add the event"
     )
 
-    @app.post("/api/v2/connectors/calendar/actions/claim")
-    def claim_calendar_action(request: Request):
-        """Claim once: an uncertain provider result is never retried into a duplicate invite."""
-        with store.transaction() as c:
-            runner, named, owned = reader(c, request.state.identity)
-            cutoff = H.shift(H.now(), minutes=-5)
-            stale = c.execute(
-                "SELECT id,requested_by FROM calendar_actions WHERE status='running' AND started_at<?", (cutoff,)
-            ).fetchall()
-            for row in stale:
-                now = H.now()
-                c.execute(
-                    "UPDATE calendar_actions SET status='unknown',error=?,updated_at=?,finished_at=? "
-                    "WHERE id=? AND status='running'",
-                    ("The connector did not confirm the provider result", now, now, row["id"]),
-                )
-                H.event(c, row["requested_by"], "calendar.schedule.unknown", row["id"], {})
-            if not workspace.permissions(c)["change_calendar"]:
-                # What Tico may do has Change calendar off: what this computer would claim fails now rather than
-                # lands later. Calendars it may not act for wait for their own computer, which fails them the same way.
-                now = H.now()
-                for row in c.execute(
-                    "SELECT id,requested_by,calendar_email FROM calendar_actions WHERE status='pending'"
-                ).fetchall():
-                    if google_rights.refusal(c, runner["id"], named, row["calendar_email"], owned) is not None:
-                        continue
-                    c.execute(
-                        "UPDATE calendar_actions SET status='failed',error=?,updated_at=?,finished_at=? "
-                        "WHERE id=? AND status='pending'",
-                        (CALENDAR_OFF, now, now, row["id"]),
-                    )
-                    H.event(
-                        c,
-                        row["requested_by"],
-                        "calendar.schedule.failed",
-                        row["id"],
-                        {"calendar": row["calendar_email"], "event_id": ""},
-                    )
-                return {"action": None}
-            # The first pending action on a calendar this computer may act for (plan v3 B): never the whole queue.
-            row = next(
-                (
-                    found
-                    for found in c.execute(
-                        "SELECT * FROM calendar_actions WHERE status='pending' ORDER BY created_at,id"
-                    ).fetchall()
-                    if google_rights.refusal(c, runner["id"], named, found["calendar_email"], owned) is None
-                ),
-                None,
-            )
-            if not row:
-                return {"action": None}
-            now = H.now()
-            c.execute(
-                "UPDATE calendar_actions SET status='running',runner_id=?,started_at=?,updated_at=? WHERE id=?",
-                (runner["id"], now, now, row["id"]),
-            )
-            row = c.execute("SELECT * FROM calendar_actions WHERE id=?", (row["id"],)).fetchone()
-            return {"action": calendar_action(row, connector=True)}
-
-    @app.post("/api/v2/connectors/calendar/actions/{action_id}/result")
-    def finish_calendar_action(action_id: str, request: Request, body: CalendarActionResult):
-        with store.transaction() as c:
-            runner = google_rights.runner_of(execution, c, request.state.identity)
-            row = c.execute("SELECT * FROM calendar_actions WHERE id=?", (action_id,)).fetchone()
-            if not row or row["runner_id"] != runner["id"]:
-                # Not the lease holder: only then does the gate apply, and the answer is the same as before.
-                reader(c, request.state.identity)
-            if not row:
-                raise Problem("not_found", "Calendar action not found", 404)
-            if row["runner_id"] != runner["id"]:
-                raise Problem("forbidden", "This calendar action belongs to another connector", 403)
-            if row["status"] in ("succeeded", "failed", "unknown"):
-                return {"action": calendar_action(row)}
-            if row["status"] != "running":
-                raise Problem("state", "Calendar action is not running", 409)
-            result = {"event_id": body.event_id, "meeting_url": body.meeting_url}
-            now = H.now()
-            c.execute(
-                "UPDATE calendar_actions SET status=?,result=?,error=?,updated_at=?,finished_at=? WHERE id=?",
-                (body.status, encode(result), body.error, now, now, action_id),
-            )
-            H.event(
-                c,
-                row["requested_by"],
-                "calendar.schedule." + body.status,
-                action_id,
-                {"calendar": row["calendar_email"], "event_id": body.event_id},
-            )
-            return {
-                "action": calendar_action(
-                    c.execute("SELECT * FROM calendar_actions WHERE id=?", (action_id,)).fetchone()
-                )
-            }
-
     def calendar_person(c, address):
-        """The person a calendar belongs to and the address the connector acts as: the mailbox their
-        message bot declares, else their email. Either address names the calendar."""
+        """The person a calendar belongs to and the address its events are made as: the mailbox their message bot
+        declares, else their email. Either address names the calendar."""
         address = str(address or store.settings.owner_email).strip().lower()
         if not EMAIL.fullmatch(address):
             raise Problem("calendar", "Calendar must be an email address", 422)
@@ -841,7 +399,7 @@ def install_connectors(app, store, execution, mutate):
             error = "Tico did not hear back from Google; check the calendar before booking again"
         classification = raw_mail = None
         if status == "succeeded" and attendees:
-            from connectors.mail import compose
+            from .mail_lib import compose
             from . import email_sending
 
             start, end = instant(row["start"]), instant(row["end"])
@@ -919,256 +477,6 @@ def install_connectors(app, store, execution, mutate):
             if not row or (who.role != "owner" and row["requested_by"] != who.actor):
                 raise Problem("not_found", "Calendar action not found", 404)
             return {"action": calendar_action(row)}
-
-    @app.get("/api/v2/connectors/mail/targets")
-    def mail_targets(request: Request):
-        with store.read() as c:
-            runner, named, owned = reader(c, request.state.identity)
-            targets = google_rights.visible(c, runner["id"], named, owned=owned)
-            company = workspace.permissions(c)
-        # The server watches every mailbox's mail itself (backend/gmail_watch.py), so no computer syncs one: `mailboxes`
-        # is empty. `acts_for` are the mailboxes whose automation mail actions and queued sends this computer still
-        # carries out (runner_support/connectors.py) until the server does those too.
-        acts_for = [{"address": target["address"], "person_id": target["person_id"]} for target in targets]
-        # What Tico may do (Tools), which the mail CLI the runner runs checks every write against
-        # (connectors/mail/policy.py runner_company): it reads it here, over the runner's own registration.
-        return {
-            "mailboxes": [],
-            "acts_for": acts_for,
-            "batch": MAIL_BATCH,
-            "retention_days": store.settings.mail_retention_days,
-            "company": company,
-        }
-
-    @app.post("/api/v2/connectors/mail/messages")
-    def mail_publish(request: Request, body: MailPublish):
-        def work(c):
-            runner, named, owned = reader(c, request.state.identity, body.mailbox)
-            google_rights.check(c, runner["id"], named, body.mailbox, owned)
-            seen = set()
-            for message in body.messages:
-                if message.msg_id in seen:
-                    raise Problem("duplicate", "Publish a message at most once per batch", 422)
-                seen.add(message.msg_id)
-            person = human_of(c, body.mailbox)
-            if not person:
-                raise Problem("not_found", "Mail target is not on the " + store.settings.app_name + " roster", 404)
-            now = H.now()
-            from . import automations
-
-            # The mailbox's first batch sets its watch and later batches keep it (automations.mail_watch); a mailbox
-            # with no `mailboxes` row keeps it on its sync row until this computer route goes.
-            kept = c.execute("SELECT watching_since_at FROM mail_mailboxes WHERE address=?", (body.mailbox,)).fetchone()
-            watch = (kept and kept["watching_since_at"]) or automations.mail_watch(c, body.mailbox, body.synced_at)
-            from . import mailbox_access
-            from .entities import ingest
-
-            box_id = str((mailbox_access.row_by_address(c, body.mailbox) or {}).get("id") or "")
-            for message in body.messages:
-                # A message seen for the first time is what a mail automation hears (backend/automations.py).
-                fresh = not c.execute(
-                    "SELECT 1 FROM mail_messages WHERE mailbox=? AND msg_id=?", (body.mailbox, message.msg_id)
-                ).fetchone()
-                c.execute(
-                    "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,from_header,"
-                    "to_addresses,cc,subject,snippet,labels,body,body_truncated,attachments,"
-                    "list_id,is_internal,has_unsubscribe,rule_hits,updated_at,deleted_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL) "
-                    "ON CONFLICT(mailbox,msg_id) DO UPDATE SET "
-                    "thread_id=excluded.thread_id,epoch=excluded.epoch,date=excluded.date,"
-                    "from_addr=excluded.from_addr,from_header=excluded.from_header,"
-                    "to_addresses=excluded.to_addresses,cc=excluded.cc,subject=excluded.subject,"
-                    "snippet=excluded.snippet,labels=excluded.labels,body=excluded.body,"
-                    "body_truncated=excluded.body_truncated,attachments=excluded.attachments,"
-                    "list_id=excluded.list_id,is_internal=excluded.is_internal,"
-                    "has_unsubscribe=excluded.has_unsubscribe,rule_hits=excluded.rule_hits,"
-                    "updated_at=excluded.updated_at,deleted_at=NULL",
-                    (
-                        body.mailbox,
-                        message.msg_id,
-                        message.thread_id,
-                        message.epoch,
-                        message.date,
-                        message.from_addr,
-                        message.from_header,
-                        encode(message.to),
-                        encode(message.cc),
-                        message.subject,
-                        message.snippet,
-                        encode(message.labels),
-                        message.body,
-                        1 if message.body_truncated else 0,
-                        encode(message.attachments),
-                        message.list_id,
-                        1 if message.is_internal else 0,
-                        1 if message.has_unsubscribe else 0,
-                        encode(message.rule_hits),
-                        now,
-                    ),
-                )
-                _mail_fts(
-                    c,
-                    body.mailbox,
-                    message.msg_id,
-                    message.subject,
-                    message.body,
-                    message.from_addr,
-                    " ".join(message.to),
-                )
-                c.execute(
-                    "UPDATE mail_messages SET send_facts=? WHERE mailbox=? AND msg_id=?",
-                    (
-                        encode(
-                            {
-                                key: str(message.send_facts.get(key) or "")[
-                                    : 4096 if key == "delivery-status" else 1000
-                                ]
-                                for key in (
-                                    "auto-submitted",
-                                    "precedence",
-                                    "return-path",
-                                    "message-id",
-                                    "delivery-status",
-                                )
-                            }
-                        ),
-                        body.mailbox,
-                        message.msg_id,
-                    ),
-                )
-                from .email_sending import record_bounces
-
-                record_bounces(
-                    c,
-                    body.mailbox,
-                    message.from_addr,
-                    message.body + "\n" + message.send_facts.get("delivery-status", "")[:4096],
-                )
-                if fresh:
-                    automations.on_mail(c, body.mailbox, message, watch)
-                    headers = {
-                        "from_addr": message.from_addr,
-                        "from_header": message.from_header,
-                        "list_id": message.list_id,
-                        "has_unsubscribe": message.has_unsubscribe,
-                        "send_facts": message.send_facts,
-                    }
-                    ingest.safely(c, "mail", ingest.from_mail, c, box_id, headers)
-            for msg_id in body.deleted:
-                existing = c.execute(
-                    "SELECT epoch FROM mail_messages WHERE mailbox=? AND msg_id=?", (body.mailbox, msg_id)
-                ).fetchone()
-                epoch = (
-                    existing["epoch"] if existing and existing["epoch"] else int(instant(body.synced_at).timestamp())
-                )
-                if existing:
-                    c.execute(
-                        "UPDATE mail_messages SET deleted_at=?, updated_at=? WHERE mailbox=? AND msg_id=?",
-                        (now, now, body.mailbox, msg_id),
-                    )
-                else:
-                    c.execute(
-                        "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,from_header,"
-                        "to_addresses,cc,subject,snippet,labels,body,body_truncated,attachments,"
-                        "list_id,is_internal,has_unsubscribe,rule_hits,updated_at,deleted_at) "
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (
-                            body.mailbox,
-                            msg_id,
-                            "",
-                            epoch,
-                            "",
-                            "",
-                            "",
-                            "[]",
-                            "[]",
-                            "",
-                            "",
-                            "[]",
-                            "",
-                            0,
-                            "[]",
-                            "",
-                            0,
-                            0,
-                            "[]",
-                            now,
-                            now,
-                        ),
-                    )
-                c.execute("DELETE FROM mail_fts WHERE mailbox=? AND msg_id=?", (body.mailbox, msg_id))
-            _refresh_mailbox(c, body.mailbox, person["id"], runner["id"], body.synced_at, watch)
-            c.execute(
-                "UPDATE mailboxes SET watching_since_at=coalesce(watching_since_at,?) WHERE address=?",
-                (watch, body.mailbox),
-            )
-            accepted = len(body.messages) + len(body.deleted)
-            google_rights.report(c, "mail", runner["id"], now, ok=[body.mailbox])  # that account is working
-            reconnects.google_good(c, "mail", [body.mailbox])  # a synced mailbox is that account working
-            return {"accepted": accepted}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/connectors/mail/workspace/token")
-    def workspace_token(request: Request, body: WorkspaceToken):
-        """A short-lived access token, for one service, for a mailbox this computer owns: from the Google Workspace key,
-        or from the person's own Connect Google grant, which wins (backend/google_tokens.py). Allowed for the mailboxes
-        it owns (the connector: its sync and the actions the server leased it) and for those its turns hold a level on
-        now (backend/mailbox_access.py: its bots', a live Assistant turn's person's), checked again on every mint. A
-        turn's mailbox held read only gets the read-only scopes, and a personal grant never more than it holds (the
-        answer's `scopes`, which the computer refuses writes by). Never through mutate(): tokens stay out of the
-        idempotency store."""
-        from . import google_tokens
-
-        box = body.mailbox.strip().lower()
-        with store.read() as c:
-            runner, named = member(c, request.state.identity)
-            auth = workspace.authority(c, box)
-            if auth == "legacy":
-                raise Problem(
-                    "not_connected", "The Google Workspace does not cover " + box, 403, extra={"kind": "not_connected"}
-                )
-            owned = workspace.owned_mailboxes(c, runner["id"])
-            from . import mailbox_access
-
-            connector = mailbox_access.connector_for(c, runner["id"], named, owned)
-            held = (
-                "read_write"
-                if box in owned and mailbox_access.level(c, connector, box) != "none"
-                else google_rights.turn_level(c, runner["id"], box, execution.auth)
-            )
-            if held == "none":
-                kind = "workspace_owned" if named else "not_this_mailbox"
-                raise Problem(
-                    kind,
-                    google_rights.MESSAGES.get(
-                        kind, "This computer does not run the message bot that reads " + box
-                    ).format(box=box),
-                    403,
-                    extra={"kind": kind},
-                )
-            scopes = "allowed" if held == "read_write" else "read"
-            if auth == "personal":
-                return google_tokens.access(c, box, body.service, scopes)
-            row = workspace.active(c)
-            try:
-                answer, failure = google_tokens.access(c, box, body.service, scopes), None
-            except Problem as refused:
-                answer, failure = None, refused
-        with store.transaction() as c:
-            # The outcome counts toward the key's failing clock (backend/google_workspace.py record_mint).
-            workspace.record_mint(
-                c,
-                row,
-                box,
-                body.service,
-                runner["id"],
-                failure is None,
-                "" if failure is None else failure.extra.get("kind", "other"),
-            )
-        if failure is not None:
-            raise failure
-        return answer
 
     def upcoming(request: Request):
         who = request.state.identity

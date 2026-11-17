@@ -544,7 +544,7 @@ def install_mail(app, store, auth):
         return {"mailbox": addr, "ok": not found["errors"], "errors": found["errors"], "warnings": found["warnings"]}
 
     def _attachments(c, addr, mid):
-        from connectors.mail import gmail as gm
+        from .mail_lib import gmail as gm
 
         return gm.attachment_refs((gmail_live.payload(c, addr, mid) or {}).get("payload") or {})
 
@@ -567,8 +567,8 @@ def install_mail(app, store, auth):
     def attachment(request: Request, msg_id: str, ref: str, mailbox: str = ""):
         """One attachment's bytes (base64), at most gmail_live.ATTACHMENT_MAX_BYTES; `tico email attachment` writes
         them to a private file."""
-        from connectors.mail import Failure
-        from connectors.mail import gmail as gm
+        from .mail_lib import Failure
+        from .mail_lib import gmail as gm
 
         who = request.state.identity
         reader(who)

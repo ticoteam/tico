@@ -68,7 +68,7 @@ mod lanes;
 mod lease;
 mod lock;
 mod login;
-mod mail_key;
+mod mail_retire;
 mod manifest;
 mod mcp;
 mod memory_history;
@@ -477,8 +477,6 @@ async fn start(command: Command, config: config::Config) -> i32 {
     };
     match &command {
         Command::Adopt { team, bot } => {
-            // After a re-enrollment, the protected mail key follows this operator's previous registration once.
-            mail_key::carry_protected(&config);
             return match commands::adopt(&config, &client, team.as_deref(), bot).await {
                 Ok(lines) => {
                     lines.iter().for_each(|l| println!("{l}"));
@@ -488,7 +486,6 @@ async fn start(command: Command, config: config::Config) -> i32 {
             };
         }
         Command::Doctor => {
-            mail_key::carry_protected(&config);
             return match commands::doctor(&config, &client).await {
                 Ok((out, ready)) => {
                     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
@@ -518,13 +515,13 @@ async fn start(command: Command, config: config::Config) -> i32 {
             }
         };
     }
-    // After a re-enrollment, the protected mail key follows this operator's previous registration once.
-    mail_key::carry_protected(&config);
     let state_dir = config.state_dir();
     if let Err(e) = std::fs::create_dir_all(&state_dir) {
         fail(&format!("cannot create {}: {e}", state_dir.display()));
     }
     let _lock = lock::acquire(&state_dir.join("runner.lock")).unwrap_or_else(|e| fail(&e));
+    // The mail copy and Google credentials the retired mail job kept on this computer go (docs/mail.md).
+    mail_retire::once(&config);
     flight::init(&state_dir);
     panics::install();
     let state = state::State::open(&state_dir).unwrap_or_else(|e| fail(&e));
@@ -550,7 +547,6 @@ async fn start(command: Command, config: config::Config) -> i32 {
             }
         }
     }
-    mail_key::init(&config); // an inbox bot's turn asks the credential socket for its mailbox's token
     let mut service = runner::Runner::new(config, client.clone(), state);
     match gitcred::CredentialSocket::serve(client.clone(), service.tokens.clone()) {
         Ok(socket) => service.socket = Some(socket),
@@ -580,7 +576,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
         service.config.runner_id()
     ));
     tls::announce(util::log);
-    // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
+    // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers and close-calls.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
     browser_exit::start(client.clone());

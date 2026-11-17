@@ -1,7 +1,7 @@
 //! Side jobs on a runner with no launchd: with TICO_SIDE_JOBS=1 the runner also supervises
-//! `importers`, `close-calls` and `connectors`, each only while it is wanted (the hub assigned meeting importers
-//! here, the Close key is in this computer's secrets, the Google key is here or the hub names this computer for
-//! mail). Each is a Python job (`python -m runner_support --config <path> <job>`), a separate child
+//! `importers` and `close-calls`, each only while it is wanted (the hub assigned meeting importers here, the Close
+//! key is in this computer's secrets). Mail and calendar run on the server (docs/mail.md), so no computer runs a
+//! mail job. Each is a Python job (`python -m runner_support --config <path> <job>`), a separate child
 //! process, so a crash in one never takes down the bot runner, and each restarts with backoff.
 
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ pub const STABLE_SECONDS: f64 = 120.0;
 pub const BACKOFF_START: u64 = 10;
 pub const BACKOFF_MAX: u64 = 300;
 pub const STOP_GRACE: Duration = Duration::from_secs(30);
-pub const JOBS: &[&str] = &["importers", "close-calls", "connectors"];
+pub const JOBS: &[&str] = &["importers", "close-calls"];
 pub const IMPORTERS: &[&str] = &["granola", "zoom", "google-meet"];
 
 /// (failures, seconds to wait) after a job exited with `code` having run `ran` seconds.
@@ -128,25 +128,11 @@ impl SideJobs {
             } else {
                 vec!["close".into()]
             }),
-            _ => {
-                crate::mail_key::protect(&self.config);
-                if crate::mail_key::credential_present(&self.config) {
-                    return Ok(vec!["mail".into(), "calendar".into()]);
-                }
-                match self.client.get("runners/connectors").await {
-                    Ok(answer) => Ok(rows(&answer, "connectors")
-                        .iter()
-                        .filter_map(|r| r.as_str())
-                        .map(String::from)
-                        .collect()),
-                    Err(e) if e.status == 404 => Ok(vec![]), // a hub from before the assignment
-                    Err(e) => Err(e),
-                }
-            }
+            _ => Ok(vec![]),
         }
     }
 
-    /// How a crash shows up in Settings (a connector's missing heartbeat shows it stale on its own).
+    /// How a crash shows up in Settings.
     async fn report(&self, name: &str, sources: &[String]) {
         match name {
             "importers" => {

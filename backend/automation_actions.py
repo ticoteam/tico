@@ -4,15 +4,14 @@ Each runs inside one short write transaction (backend/automations.py opens it) a
 the rules' task and event runners (backend/rules.py), outgoing webhooks, updates, and tasks. An action never raises
 for an ordinary refusal; it answers {"ok": False, "detail": ...} and the run records it.
 
-Mail actions are queued in `automation_mail_actions`; archive, label and leave run on the server for Whole Workspace
-mailboxes. Other mail actions wait for the mailbox's computer to claim and report them
-(POST .../mail-actions/claim, POST .../mail-actions/{id}/result; backend/automations.py). The step waits until the
+Mail actions are queued in `automation_mail_actions`, and the server carries each out for any mailbox it holds a
+credential for (backend/automations.py `drain_workspace_mail`, backend/mail_actions.py). The step waits until the
 result comes back. On a Slack message, send_reply posts in the thread (the `slack_posts` outbox) and draft_reply
 leaves the draft with the owner as a task.
 
 `send_reply` honors the inbox's send switch (`automation_inboxes`, on unless set off): off saves a draft and logs
 `automation.send_off`. The switch is read again when the send leaves: a mail send claimed, or a Slack post delivered,
-after it went off is a draft too (`slack_held`, the claim route).
+after it went off is a draft too (`slack_held`, `automations._claim_workspace_mail`).
 
 An automation acts as its owner (`acts_as`), never as Tico: the owner's task rights decide what it may change, and
 every event its writes leave says `via: automation:<id>` (backend/automations.py sets it). Only a notice to a bot is

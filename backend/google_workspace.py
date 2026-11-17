@@ -1,15 +1,14 @@
 """Tools > Settings > Email, the Workspace connection: one service-account key for the whole Workspace, kept on this server.
 
 An admin makes the key once (scripts/google-setup.sh, or a key file uploaded in Tools > Settings > Email). The key is sealed
-(vault.cipher, context `google-workspace:<id>`) and never leaves the server. A computer asks for a token for one
-mailbox and one service; the server signs a JWT with the key, impersonating that mailbox, and answers with the access
-token only (`mint`). The key covers mailboxes on the Workspace's domain (`covers`).
+(vault.cipher, context `google-workspace:<id>`) and never leaves the server. For one
+mailbox and one service the server signs a JWT with the key, impersonating that mailbox, and gets an access token
+(`mint`). The key covers mailboxes on the Workspace's domain (`covers`).
 
 Who may use a mailbox is `authority`: `personal` when the person's own Connect Google grant is live (it always wins),
 `workspace` when the active key covers it, otherwise `legacy`, which is what Tico did before. Both credentials stay on
-this server (backend/google_tokens.py is the one door to a token). A computer's share of the work (`owned_mailboxes`)
-is the same for both: a covered mailbox follows its inbox bot, or gets one eligible online sync computer when it has
-no host.
+this server (backend/google_tokens.py is the one door to a token), and the server reads, watches and sends the mail
+itself: no computer syncs a mailbox.
 
 Nothing here logs a token or a key. Google's refusals reach a caller as a kind, never as Google's text.
 """
@@ -334,93 +333,6 @@ def workspace_mailboxes(c):
         )
         if (box["kind"] == "shared" or box["person_id"] in people) and _decide(box["address"], row, live) == "workspace"
     ]
-
-
-def sync_owners(c):
-    """One sync computer per covered mailbox: a Workspace one, or one a person's Connect Google grant covers (the
-    server holds both credentials, so either follows the same rule). Placement wins; fallback uses an isolated company
-    server or the person's own computer, never an unrelated person's private computer. Shared mailboxes fall back to
-    servers only."""
-    from . import access, google_rights
-    from .store import readiness_document
-
-    row, live = active(c), _live_mailboxes(c)
-    if not row and not live:
-        return {}
-    runners = google_rights.live_runners(c)
-    placed = {
-        r["bot"]: r["runner_id"]
-        for r in c.execute("SELECT bot,runner_id FROM assignments")
-        if r["runner_id"] in runners
-    }
-    hosts = {}
-    for box in routines.message_bot_mailboxes(c):
-        address = box["address"]
-        if box["bot"] in placed and _decide(address, row, live) != "legacy":
-            hosts.setdefault(address, set()).add(placed[box["bot"]])
-    # A message-bot host stays authoritative while offline. Without that placement,
-    # only computers currently answering can take the mail. Isolated runners supervise the connectors side job.
-    online = {
-        r["id"]: r
-        for r in c.execute(
-            "SELECT id,owner_id,readiness,accepts_member_bots FROM runners_with_state "
-            "WHERE revoked_at IS NULL AND last_seen_at>?",
-            (H.shift(H.now(), seconds=-google_rights.ONLINE_SECONDS),),
-        )
-    }
-    assistant = getattr(getattr(c, "settings", None), "assistant_bot", None)
-    assistant_bot = H.bot(c, assistant) if assistant else None
-    assistant_host = placed.get(assistant) if assistant_bot and assistant_bot["state"] != "archived" else None
-    emails = set(access.owner_and_admin_emails(c))
-    admins = {
-        p["id"]
-        for p in routines._roster(c).get("people", [])
-        if not p.get("hidden") and p.get("email", "").lower() in emails
-    }
-    # Another member's computer never holds someone's mail, even a server that takes members' bots.
-    server = min(
-        (
-            rid
-            for rid, r in online.items()
-            if readiness_document(r["readiness"]).get("isolated") is True and r["owner_id"] in admins
-        ),
-        default=None,
-    )
-    personal_hosts = {}
-    for rid in sorted(online):
-        personal_hosts.setdefault(online[rid]["owner_id"], rid)
-    people = {p["id"] for p in routines._roster(c).get("people", []) if not p.get("hidden")}
-    covered = workspace_mailboxes(c) + [box for box in personal_mailboxes(c) if box["person_id"] in people]
-    for box in covered:
-        if box["address"] not in hosts:
-            person = box["person_id"] if box["kind"] != "shared" else None
-            helper = (
-                assistant_host
-                if assistant_host in online and online[assistant_host]["owner_id"] in admins | {person}
-                else None
-            )
-            owner = (helper if person else None) or server or personal_hosts.get(person)
-            if owner:
-                hosts[box["address"]] = {owner}
-    return {address: min(candidates) for address, candidates in hosts.items()}
-
-
-def owned_mailboxes(c, runner_id):
-    """The mailboxes this computer may publish, claim, read the calendar of and report on, and nothing else (`sync_owners`):
-    a covered mailbox, Workspace or personal, follows its message bot's non-revoked host. Without a host, a known
-    mailbox follows the person's Assistant's online host, else an online isolated server owned by an owner or admin, else
-    the person's own online computer. Shared mailboxes fall back to servers only. Among equals, the lowest runner id wins;
-    with no eligible computer, no one syncs. Online means contact within google_rights.ONLINE_SECONDS; an offline or
-    revoked fallback owner is replaced on the next check. This is sync authority only: it grants no bot access to the
-    mailbox, and the computer gets each token from the server (backend/google_tokens.py)."""
-    from . import google_rights
-
-    if runner_id not in google_rights.live_runners(c):
-        return set()
-    owned = {address for address, owner in sync_owners(c).items() if owner == runner_id}
-    from . import mailbox_access
-
-    return owned - mailbox_access.stopped(c)
 
 
 def _fail(status, body):

@@ -206,7 +206,6 @@ backend/goal_read_back.py
 backend/goal_routes.py
 backend/goals.py
 backend/google_connect.py
-backend/google_rights.py
 backend/google_workspace.py
 backend/granola_mcp.py
 backend/groups.py
