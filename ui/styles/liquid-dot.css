@@ -54,15 +54,16 @@
 /* Flow's mark (liquid-dot.ts flowMarkHTML): two play-shaped dots in the dot's jade. Live, each rides up and down a
    little, out of step with the other (transform only); still everywhere else and with reduced motion. */
 .flow-mark{display:inline-block;width:16px;aspect-ratio:1;flex:none;vertical-align:middle;pointer-events:none}
-.flow-mark svg{display:block;width:100%;height:100%;fill:var(--dot);overflow:visible}
-.flow-mark.live g{animation:fl-ride 2.2s ease-in-out infinite}
-.flow-mark.live .f1{animation-delay:-.75s}
-@keyframes fl-ride{0%,100%{transform:translateY(-3.2px)}50%{transform:translateY(3.2px)}}
+.flow-mark svg{display:block;width:100%;height:100%;--fm:var(--dot);fill:var(--fm);overflow:visible}
+.flow-mark .f1{fill:color-mix(in srgb,var(--fm) 58%,var(--bg))}
+.flow-mark.live g{animation:fl-ride 3.6s ease-in-out infinite}
+.flow-mark.live .f1{animation-delay:-.5s}
+@keyframes fl-ride{0%,100%{transform:translateY(-1.5px)}50%{transform:translateY(1.5px)}}
 @media (prefers-reduced-motion:reduce){.flow-mark g{animation:none!important}}
 /* The phone bar's Flow tab (tasks.ts flowTabPaint): the tabs' grey, jade only while something needs you. */
 .mobile-flow .flow-mark{width:24px}
-.mobile-flow .flow-mark svg{fill:currentColor}
-.mobile-flow[data-waiting] .flow-mark svg{fill:var(--dot)}
+.mobile-flow .flow-mark svg{--fm:currentColor}
+.mobile-flow[data-waiting] .flow-mark svg{--fm:var(--dot)}
 /* Moving (ldotFly): a copy flies on top of everything, by transform alone, while the dot it lands on waits unseen. The
    copies stay in one fixed layer, made once, and show only while they fly: a flight adds nothing to the page. */
 .ldot-layer{position:fixed;inset:0;z-index:70;pointer-events:none;contain:size layout style}

@@ -73,7 +73,7 @@ def test_the_stage_panel_lists_every_rule_that_applies_grouped_most_specific_fir
     assert other_stage["id"] not in ids and other_pipeline["id"] not in ids
     assert [r["scope"] for r in got["items"]] == ["stage", "pipeline", "company", "company", "company"]
     # Each rule says what it costs: a Jev question is one call per event, the rest are free.
-    jev = "one Jev call per event"
+    jev = "one Decision model call per event"
     assert [r["cost"] for r in got["items"]] == ["free", "free", jev, "free", jev]
     assert got["items"][0]["stage_names"] == ["Build"] and got["items"][0]["pipeline_name"] == "Engineering"
     # Built in is listed, and read-only: it has no id to edit.

@@ -37,8 +37,18 @@ function dayWords(value: WhenInput, opts: {weekday?: boolean} = {}): string {
   const off = dayOffset(d);
   if (off === 0) return 'Today';
   if (off === 1) return 'Tomorrow';
-  return d.toLocaleDateString(DATE_LOCALE, {weekday: opts.weekday ? 'short' : undefined, month: 'short', day: 'numeric',
-    year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric'});
+  return dayFormat(!!opts.weekday, d.getFullYear() !== new Date().getFullYear()).format(d);
+}
+// The formats dayWords writes with, made once each: toLocaleDateString builds one per call, which a board of a thousand
+// cards felt (task-pipelines.ts).
+const DAY_FORMATS = new Map<string, Intl.DateTimeFormat>();
+function dayFormat(weekday: boolean, year: boolean): Intl.DateTimeFormat {
+  const key = `${weekday ? 'w' : ''}${year ? 'y' : ''}`;
+  const kept = DAY_FORMATS.get(key);
+  if (kept) return kept;
+  const made = new Intl.DateTimeFormat(DATE_LOCALE, {weekday: weekday ? 'short' : undefined, month: 'short', day: 'numeric', year: year ? 'numeric' : undefined});
+  DAY_FORMATS.set(key, made);
+  return made;
 }
 // "10:15 AM", "9:00 PM": the clock alone, 12-hour, no leading zero.
 const clockWords = (value: WhenInput): string => { const d = dateOf(value); return d ? d.toLocaleTimeString(DATE_LOCALE, {hour: 'numeric', minute: '2-digit'}) : ''; };

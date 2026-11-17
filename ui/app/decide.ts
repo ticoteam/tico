@@ -1,6 +1,6 @@
 /* ui/app/decide.ts — Flow, the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A
    modal on a wide screen, the whole screen on a phone. The top bar is where you are (All mine / a pipeline / a stage, a
-   menu), Flow's mark, the mic, Tico's line, the next ask Tico is still thinking about, then ‹ › ✕ (‹ › on a wide screen
+   menu), Flow's mark, the mic, the undo notice (what was just done), the next ask Tico is still thinking about, then ‹ › ✕ (‹ › on a wide screen
    only; Skip, in the answer row, steps on at every width). The thing asked about is on the left, shown in full (the page, the email, what an OK is for); the
    sentence asked, who asks, Notes and the buttons are on the right. A stage's typed answer asks its question: a choice is its buttons, a number a whole-number box
    with its range, text a box; a value the server refuses stays typed, under the server's line.
@@ -129,8 +129,6 @@ const DEC_FILES_MAX = 10;                   // files on one note
 let DEC_FILE_KEY = 0;
 let DEC_VOICE = false;                      // the mic is on: voice is not built, so the bar says it is coming
 const DEC_START_MS = 600;                   // "Getting ready to flow" over the first item, which is usable under it
-/** Tico's line on an item and the answer it would press (decideLineSet), by item id. */
-const DEC_LINES = new Map<string, {line: string; pick: string}>();
 /** Snooze's choices, one menu for an ask and for your own task: exact spans from now, then Other (a time of your own). */
 const DEC_SNOOZE: [string, string][] = [['hour', '1 hour'], ['day', '1 day'], ['week', '1 week'], ['month', '1 month']];
 /** Snooze, drawn as the mic and the clip are: an alarm clock. */
@@ -214,7 +212,7 @@ function decideDialog(): HTMLDialogElement {
       <span class="dc-flow">${flowMarkHTML(24)}</span>
       <button type="button" class="dc-wave" data-dc="voice" aria-label="Voice" aria-pressed="true" title="Voice" hidden><i></i><i></i><i></i><i></i><i></i></button>
       <button type="button" class="dc-mic" data-dc="voice" aria-label="Voice" aria-pressed="false" title="Voice">${DEC_MIC}</button>
-      <div class="dc-sayw"><button type="button" class="dc-say" data-dc-say aria-expanded="false"></button><span class="dc-vh" aria-live="polite"></span><span class="dc-bar" role="status" hidden></span></div>
+      <div class="dc-sayw"><span class="dc-say"></span><span class="dc-vh" aria-live="polite"></span><span class="dc-bar" role="status" hidden></span></div>
       <span class="dc-up"></span>
       <span class="dc-nav">
         <button type="button" class="dc-icon dc-wide" data-dc="prev" aria-label="Previous" title="Previous (←)">‹</button>
@@ -230,8 +228,6 @@ function decideDialog(): HTMLDialogElement {
     const box = eventElement(ev) as HTMLTextAreaElement | HTMLInputElement | null;
     if (!DEC || !box?.matches('textarea, input')) return;
     if (box instanceof HTMLTextAreaElement && box.matches('[data-dc-grow]')) decideGrow(box);
-    // The person's own typing in Notes: Tico's note never fills it after that (decidePaintSide).
-    if (ev.isTrusted && box.id === 'dc-notes' && DEC.at) DEC_OP.typed.add(DEC.at);
     if (box instanceof HTMLInputElement && box.id === 'dc-snz-at') box.setCustomValidity('');
     decideNeedsText(root);
   });
@@ -581,24 +577,16 @@ function decidePaintHead(st: DecState) {
   }
   ($('[data-dc="prev"]', root) as HTMLButtonElement).disabled = !it || at <= 0;
   ($('[data-dc="next"]', root) as HTMLButtonElement).disabled = !it || at >= live.length - 1;
-  // Voice on: the wave stands where the mark was and the mic goes; the line says voice is coming.
+  // Voice on: the wave stands where the mark was and the mic goes; the slot says voice is coming.
   $('.dc-flow', root)!.hidden = DEC_VOICE;
   $('.dc-mic', root)!.hidden = DEC_VOICE;
   $('.dc-wave', root)!.hidden = !DEC_VOICE;
-  const said = !DEC_VOICE && it ? DEC_LINES.get(it.id) : undefined;
-  const say = DEC_VOICE ? 'Voice is coming soon' : said?.line || '';
+  // The slot over the bar's undo notice holds the voice notice while the mic is on, and nothing else.
+  const say = DEC_VOICE ? 'Voice is coming soon' : '';
   const line = $('.dc-say', root)!, heard = line.nextElementSibling as HTMLElement;
-  if ((line.getAttribute('aria-label') || '') !== say) {
-    // What Tico would press is its icon, and the line gives its leading word to the fact; the name keeps the line whole.
-    const icon = said && it && decideKind(it) === 'ok' ? DEC_SAY_ICON[said.pick] : undefined;
-    const rest = icon ? say.replace(icon[2], '') || say : say;
-    line.innerHTML = say ? (icon ? `<span class="nav-icon dc-say-i${said?.pick === 'approve' ? ' dc-say-ok' : ''}" aria-hidden="true" title="${icon[1]}">${icon[0]}</span>` : '')
-      + `<span class="dc-say-t">${esc(rest)}</span>` : '';
-    if (say) line.setAttribute('aria-label', say); else line.removeAttribute('aria-label');
-    line.setAttribute('aria-expanded', 'false');
-    heard.textContent = say;
-  }
-  // On a phone the line is a callout under the bar, its caret at the mark (decide.css).
+  if (line.textContent !== say) line.textContent = say;
+  if (heard.textContent !== say) heard.textContent = say;
+  // On a phone the notice is a callout under the bar, its caret at the mark (decide.css).
   const wrap = line.parentElement, mark = $(DEC_VOICE ? '.dc-wave' : '.dc-flow', root);
   if (say && wrap && mark && decidePhone()) {
     const m = mark.getBoundingClientRect(), w = wrap.getBoundingClientRect();
@@ -612,66 +600,35 @@ function decidePaintHead(st: DecState) {
   const up = upItem ? upItem.task?.title || upItem.line : '', upEl = $('.dc-up', root)!;
   if (upEl.textContent !== up) upEl.textContent = up;
 }
-/** Tico's line for the item `itemId` (a Needs you id) and the answer it would press: the line fills the top bar and
-    that answer's button becomes the main one while the item is on screen. `pick` is a button's `data-dc` (approve,
-    sendback, done, snooze, again, ...) or a choice's label. Null takes it away, and the screen is as it was. Nothing is
-    read or sent. */
-function decideLineSet(itemId: string, o: {line: string; pick: string} | null): void {
-  if (o) DEC_LINES.set(itemId, {line: o.line, pick: o.pick}); else DEC_LINES.delete(itemId);
-  if (DEC && DEC.at === itemId) { decidePaintHead(DEC); decidePaintSide(DEC); }
-}
-/** The pick of Tico's line on an OK, as the main button: the others go plain. While an OK waits on Tico (decideOpWaits)
-    no answer is the main button; with no pick, they are as drawn. A question's choices never change for it: no choice
-    looks chosen before the person taps one (Tico's line says its pick; Recommended is the bot's tag), and Send stays
-    the main button (#3786). */
-function decideLinePick(it: NeedsEntry, host: HTMLElement) {
-  const pick = DEC_LINES.get(it.id)?.pick;
-  if (decideKind(it) === 'question') return;
-  const btns = [...host.querySelectorAll<HTMLButtonElement>('.dc-acts button[data-dc]:not(.linkish)')];
-  if (!pick && decideOpWaits(it)) {
-    for (const b of btns) if (b.classList.contains('primary')) { b.classList.remove('primary'); b.classList.add('ghost'); }
-    return;
-  }
-  const to = pick ? btns.find(b => b.dataset.dc === pick || b.dataset.dcChoice === pick) : undefined;
-  // A pick with no button of its own (Send back: a reply in the task's chat) leaves no answer the main one.
-  if (!to) { if (pick) for (const b of btns) if (b.classList.contains('primary')) { b.classList.remove('primary'); b.classList.add('ghost'); } return; }
-  for (const b of btns) { b.classList.toggle('primary', b === to); b.classList.toggle('ghost', b !== to); }
-}
-// ---- Tico's opinions (POST /v2/flow/opinions, backend/flow_opinions.py): its line and pick on each ask, and a score
-// the walk is ordered by and never shown. Tico only advises: nothing here answers anything.
+// ---- Tico's opinions (POST /v2/flow/opinions, backend/flow_opinions.py): a score on each ask that the walk is ordered
+// by and never shown; its line and pick are not shown either. Tico only advises: nothing here answers anything.
 /** One ask's opinion as the route answers it. Typed here by hand: the generated api types on this branch do not have
-    the route yet. */
-interface FlowOpinion {id: string; state: 'ready' | 'pending' | 'none'; pick: string; line: string; note: string; score: number | null}
+    the route yet. Only the state and the score are read: the route's pick, line and note are not shown. */
+interface FlowOpinion {id: string; state: 'ready' | 'pending' | 'none'; score: number | null}
 const DEC_OP_MAX = 30;            // ids in one request, the one request of a round
 const DEC_OP_POLL_MS = 2000;      // the next round, while some are pending or not yet asked
 const DEC_OP_FOR_MS = 60_000;     // pending ones are given up on this long after the last new ask was sent
 const DEC_OP_ORDER_MIN = 6;       // a set this big has its unseen items ordered by score
-/** What Tico would press on an OK, as the line shows it: the icon, its name, the leading word it stands for. */
-const DEC_SAY_ICON: Record<string, [string, string, RegExp]> = {
-  approve: ['thumb_up', 'Approve', /^approve\.\s*/i], sendback: ['thumb_down', 'Send back', /^send back\.\s*/i]};
-/** An OK's pick as the screen's buttons name it; a question's pick is its choice as written. */
-const DEC_OP_PICK: Record<string, string> = {approve: 'approve', send_back: 'sendback'};
-/** This visit's opinions: each asked ask's state, the fingerprint of the ask it is for (decideOpPrint), its score, the
-    note a send back would carry, the items whose Notes the person typed in; the next round's timer, whether a round is
+/** This visit's opinions: each asked ask's state, the fingerprint of the ask it is for (decideOpPrint) and its score; the
+    next round's timer, whether a round is
     out (one at a time) and its abort, when the last new ask was sent, `off` once the route failed or is missing
     (nothing is asked again this visit, and the screen is as it was without it), and the visit, which closing moves on
     so nothing from an earlier visit lands in this one. */
 const DEC_OP = {state: new Map<string, FlowOpinion['state']>(), print: new Map<string, string>(), score: new Map<string, number>(),
-  note: new Map<string, string>(), typed: new Set<string>(), timer: 0, busy: false, abort: null as AbortController | null,
-  since: 0, off: false, visit: 0};
+  timer: 0, busy: false, abort: null as AbortController | null, since: 0, off: false, visit: 0};
 function decideOpinionsEnd() {
   DEC_OP.visit++;
   DEC_OP.abort?.abort();
   clearTimeout(DEC_OP.timer);
   DEC_OP.timer = 0; DEC_OP.busy = false; DEC_OP.abort = null; DEC_OP.since = 0; DEC_OP.off = false;
-  DEC_OP.state.clear(); DEC_OP.print.clear(); DEC_OP.score.clear(); DEC_OP.note.clear(); DEC_OP.typed.clear(); DEC_LINES.clear();
+  DEC_OP.state.clear(); DEC_OP.print.clear(); DEC_OP.score.clear();
 }
 /** What an opinion is about: the ask's sentence, choices, what it shows and its page's version. A bot that edits the
     ask or puts up a new page under the same id changes it. */
 const decideOpPrint = (it: NeedsEntry): string =>
   JSON.stringify([it.line, it.ask?.line ?? '', it.ask?.choices ?? null, decideShowRefs(it), decidePage(it)]);
-/** An ask still waiting on its opinion: asked (or about to be) with none back yet. Its answers have no main button
-    meanwhile, so the main one never changes under the person. Not while the route is off. */
+/** An ask still waiting on its opinion: asked (or about to be) with none back yet, so the mark moves. Not while the
+    route is off. */
 const decideOpWaits = (it: NeedsEntry | null | undefined): boolean => !!it && it.kind === 'ask' && !DEC_OP.off
   && !S.me?.read_only_view && DEC_OP.state.get(it.id) !== 'ready' && DEC_OP.state.get(it.id) !== 'none';
 /** The asks of the walk from the item on screen on (it first), then round to those before it. */
@@ -679,19 +636,18 @@ function decideOpAsks(st: DecState): NeedsEntry[] {
   const live = decideLive(st), at = Math.max(0, st.at ? live.indexOf(st.at) : 0);
   return [...live.slice(at), ...live.slice(0, at)].map(k => st.items.get(k)).filter((it): it is NeedsEntry => it?.kind === 'ask');
 }
-/** On opening, on a new set and on each refresh: an ask that changed since its opinion was asked loses its line, pick,
-    note and score and is asked again; then a round starts unless one is out or due (it takes in what joined). */
+/** On opening, on a new set and on each refresh: an ask that changed since its opinion was asked loses its state and
+    score and is asked again; then a round starts unless one is out or due (it takes in what joined). */
 function decideOpinions(st: DecState) {
   if (DEC !== st || DEC_OP.off || S.me?.read_only_view) return;
-  let mine = false;
+  let changed = false;
   for (const it of st.items.values()) {
     const was = DEC_OP.print.get(it.id);
     if (was === undefined || was === decideOpPrint(it)) continue;
-    DEC_OP.state.delete(it.id); DEC_OP.print.delete(it.id); DEC_OP.score.delete(it.id); DEC_OP.note.delete(it.id);
-    DEC_LINES.delete(it.id);
-    mine ||= it.id === st.at;
+    DEC_OP.state.delete(it.id); DEC_OP.print.delete(it.id); DEC_OP.score.delete(it.id);
+    changed = true;
   }
-  if (mine) { decidePaintHead(st); decidePaintSide(st); }
+  if (changed) decidePaintHead(st);
   if (!DEC_OP.busy && !DEC_OP.timer) decideOpRound(st);
 }
 /** One round: ONE request of at most DEC_OP_MAX asks, the pending ones first, then those not yet asked nearest after
@@ -704,7 +660,6 @@ function decideOpRound(st: DecState) {
   if (!fresh.length && pending.length && Date.now() - DEC_OP.since > DEC_OP_FOR_MS) {
     for (const it of pending) DEC_OP.state.set(it.id, 'none');
     decidePaintHead(st);
-    if (pending.some(it => it.id === st.at)) decidePaintSide(st);
     return;
   }
   const want = [...pending, ...fresh].slice(0, DEC_OP_MAX);
@@ -717,9 +672,8 @@ function decideOpRound(st: DecState) {
     if (now()) decideOpinionsTake(st, sent, got);
   }, () => {
     if (!now()) return;
-    DEC_OP.off = true;   // refused or failing: no line this visit, no more asking, buttons as they were
+    DEC_OP.off = true;   // refused or failing: no score this visit, no more asking, the walk keeps its order
     decidePaintHead(st);
-    decidePaintSide(st);
   }).finally(() => {
     if (visit !== DEC_OP.visit) return;
     DEC_OP.busy = false; DEC_OP.abort = null;
@@ -742,27 +696,20 @@ async function decideOpinionsRead(ids: string[], abort: AbortController): Promis
     return list.filter((o): o is FlowOpinion => !!o && typeof o === 'object' && typeof (o as FlowOpinion).id === 'string');
   } finally { clearTimeout(late); }
 }
-/** What came back for the asks `sent` (id → fingerprint when asked): a ready opinion's line and pick go on the screen,
-    with its note when it would send back; an id the answer left out counts as none. An answer for an ask that changed
-    since it was asked is dropped, and the ask is asked again. */
+/** What came back for the asks `sent` (id → fingerprint when asked): a ready opinion's score orders the walk; an id the
+    answer left out counts as none. An answer for an ask that changed since it was asked is dropped, and the ask is
+    asked again. Nothing is shown: the buttons stay as drawn. */
 function decideOpinionsTake(st: DecState, sent: Map<string, string>, got: FlowOpinion[]) {
   const byId = new Map(got.map(o => [o.id, o]));
-  let mine = false;
   for (const [id, print] of sent) {
     const it = st.items.get(id);
     if (!it || decideOpPrint(it) !== print) continue;
     const o = byId.get(id), state = o?.state === 'ready' || o?.state === 'pending' ? o.state : 'none';
-    if (id === st.at && (DEC_OP.state.get(id) !== state || state === 'ready')) mine = true;
     DEC_OP.state.set(id, state); DEC_OP.print.set(id, print);
     if (typeof o?.score === 'number') DEC_OP.score.set(id, o.score);
-    if (state !== 'ready' || !o?.line) continue;
-    const pick = decideKind(it) === 'ok' ? DEC_OP_PICK[o.pick] || '' : String(o.pick || '');
-    if (pick === 'sendback' && o.note) DEC_OP.note.set(id, String(o.note));
-    DEC_LINES.set(id, {line: String(o.line), pick});
   }
   decideScoreOrder(st);
   decidePaintHead(st);
-  if (mine) decidePaintSide(st);
 }
 /** A set of more than 5: the items not yet seen this visit go highest score first, those with none after them in the
     list's order; the item on screen and every one seen (or answered) keep their place, so ‹ goes back to what was just
@@ -984,9 +931,6 @@ function decidePaintSide(st: DecState) {
   if (saidBox && heldSaid) saidBox.value = heldSaid;
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
-  // Tico would send it back: its note fills an empty Notes the person has not typed in, never over their words.
-  const ticoNote = DEC_OP.note.get(it.id);
-  if (note && !note.value && ticoNote && DEC_LINES.get(it.id)?.pick === 'sendback' && !DEC_OP.typed.has(it.id)) note.value = ticoNote;
   const reply = host.querySelector<HTMLTextAreaElement>('#dc-reply');
   if (reply && heldReply) reply.value = heldReply;
   host.querySelectorAll<HTMLTextAreaElement>('textarea[data-dc-grow]').forEach(decideGrow);
@@ -999,7 +943,6 @@ function decidePaintSide(st: DecState) {
   if (caret && back && !back.disabled) { back.focus({preventScroll: true}); back.setSelectionRange(caret.from, caret.to, caret.dir); }
   decideHeldWire(st, host);
   decideMenuPlace(host);
-  decideLinePick(it, host);
   decideNeedsText($('.decide')!);
   decideBarRoom();
 }
@@ -1053,20 +996,20 @@ function decideRoundsHTML(st: DecState, it: NeedsEntry, rounds: DecRound[], vers
   const said = now.jev.verdict ? DEC_JEV[now.jev.verdict] : undefined;
   const dot = '<span class="dc-dot" aria-hidden="true">·</span>', wide = (h: string) => `<span class="dc-m-wide">${h}</span>`;
   const jev = said ? `<span class="dc-jev" data-v="${esc(now.jev.verdict || '')}">${said[0]}${wide(` ${esc(said[1])}`)}</span>`
-    : `<span class="dc-jev dc-jev-wait"><span class="dc-m-narrow">…</span>${wide('Jev checking')}</span>`;
+    : `<span class="dc-jev dc-jev-wait"><span class="dc-m-narrow">…</span>${wide('Decision model checking')}</span>`;
   // The line: who asked first, cut first when the line is too long (decide.css); the date and Jev's word only when wide.
   const line = [who ? `<span class="dc-meta-who">${esc(who)}</span>` : '', stage ? `<span>${esc(stage)}</span>` : '', `<span>v${now.version}</span>`,
     date ? wide(esc(date)) : '', jev].filter(Boolean).map((h, i) => (i ? h.startsWith('<span class="dc-m-wide"') ? wide(dot) : dot : '') + h).join('');
   const row = (r: DecRound, i: number) => {
     const j = r.jev.verdict ? DEC_JEV[r.jev.verdict] : undefined, answer = decideRoundAnswer(r, i === rounds.length - 1);
-    const bits = [`<b>v${r.version}</b>`, esc(shortDate(r.at)), j ? `<span class="dc-vjev" data-v="${esc(r.jev.verdict || '')}" title="${esc(`Jev: ${j[1]}${r.jev.reason ? ` · ${r.jev.reason}` : ''}`)}">${j[0]}</span>` : '',
+    const bits = [`<b>v${r.version}</b>`, esc(shortDate(r.at)), j ? `<span class="dc-vjev" data-v="${esc(r.jev.verdict || '')}" title="${esc(`Decision model: ${j[1]}${r.jev.reason ? ` · ${r.jev.reason}` : ''}`)}">${j[0]}</span>` : '',
       answer ? `<span class="dc-step-ans" data-a="${esc(answer)}">${esc(answer)}</span>` : ''].filter(Boolean);
     return `<button type="button" role="menuitem" class="dc-mi dc-vrow" data-dc-ver="${esc(r.file_id)}@${r.version}"${i === at ? ' aria-current="true"' : ''}>${bits.join(' · ')}</button>`;
   };
   const change = since ? `<button type="button" role="menuitemcheckbox" class="dc-mi dc-vrow" aria-checked="${since.on}" data-dc-since${since.same ? ' disabled' : ''}>`
     + `Changes since v${since.version}${since.same ? '<span class="dc-since-none"> · No text changes</span>' : ''}</button>` : '';
   const info = [[who, stage, `v${now.version}`, date].filter(Boolean).join(' · '),
-    said ? `Jev: ${said[1]}${now.jev.reason ? ` · ${now.jev.reason}` : ''}` : 'Jev checking'];
+    said ? `Decision model: ${said[1]}${now.jev.reason ? ` · ${now.jev.reason}` : ''}` : 'Decision model checking'];
   const sheet = info.map(t => `<p class="dc-vinfo" role="presentation">${esc(t)}</p>`).join('')
     + (rounds.length > 1 ? rounds.map(row).join('') : '') + change;
   const sub = `<div class="dc-meta"><span class="dc-vwrap"><button type="button" class="dc-vbtn${since?.on ? ' on' : ''}" data-dc-vmenu aria-haspopup="menu" aria-expanded="${menu}">`
@@ -1362,13 +1305,13 @@ function decideMoreHTML(st: DecState, it: NeedsEntry): string {
   }
   return '';
 }
-/** After an action, in Tico's line slot over the next item's line: "✓ <what was done>" and Undo, which takes it back.
+/** After an action, in the top bar's slot: "✓ <what was done>" and Undo, which takes it back.
     It stays DEC_UNDO_MS, longer while it has the focus, then fades. A failed undo says so there. */
 function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
   const st = DEC, bar: HTMLElement | null = $('.decide .dc-bar');
   if (!st || !bar) return;
   clearTimeout(st.barTimer);
-  // In Tico's line slot, over the next item's line, for DEC_UNDO_MS: "✓ Approved with comments · Undo".
+  // In the top bar's slot, for DEC_UNDO_MS: "✓ Approved with comments · Undo".
   bar.innerHTML = `<span class="dc-bar-w">✓ ${esc(label)}</span>` + (undo ? '<button type="button" data-dc="undo">Undo</button>' : '');
   bar.classList.remove('dc-bar-out', 'dc-bar-err');
   const b = $('button', bar) as HTMLButtonElement | null;
@@ -1919,7 +1862,7 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
   } finally { hold(false); }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
-  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-walk], [data-dc-more], [data-dc-ver], [data-dc-since], [data-dc-vmenu], [data-dc-say]');
+  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-walk], [data-dc-more], [data-dc-ver], [data-dc-since], [data-dc-vmenu]');
   // A link in the task's text to a place in the app: there, as Go to goes (the item stays in Needs you).
   const link = el?.closest<HTMLAnchorElement>('.dc-thing a[href]'), there = link ? decideAppHref(link.getAttribute('href') || '') : '';
   if (there && !ev.defaultPrevented && ev.button === 0 && !ev.metaKey && !ev.ctrlKey && !ev.shiftKey) { ev.preventDefault(); decideGoThere(st, there); return; }
@@ -1933,11 +1876,6 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   const vmenu = at ? `${at.id}:vmenu` : '';
   if (vmenu && st.open.has(vmenu) && !el?.closest('[data-dc-vmenu]')) { st.open.delete(vmenu); decidePaintSide(st); }
   if (!b || (b as HTMLButtonElement).disabled) return;
-  if (b.hasAttribute('data-dc-say')) {
-    // Tico's line is one line; a tap shows it whole, another cuts it again.
-    b.setAttribute('aria-expanded', String(b.getAttribute('aria-expanded') !== 'true'));
-    return;
-  }
   if (at && b.hasAttribute('data-dc-vmenu')) {
     if (st.open.has(vmenu)) st.open.delete(vmenu); else st.open.add(vmenu);
     decidePaintSide(st);

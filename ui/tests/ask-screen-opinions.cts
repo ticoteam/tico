@@ -1,18 +1,16 @@
 import type {Route} from 'playwright';
-// Offline browser check of Tico's line in Flow (ui/app/decide.ts decideOpinions), against a fake of
-// POST /api/v2/flow/opinions (backend/flow_opinions.py), on a desktop:
-// - a ready opinion puts its line in the bar and, on an OK, makes its pick the main button (a send back, a reply in the
-//   chat, leaves none; a question's choices stay as drawn: none looks chosen before a tap);
-// - while an ask is pending the next one still waiting is named before ‹ ›, and the pending ones are asked again (only
-//   they) until they are ready;
+// Offline browser check of Flow's opinions (ui/app/decide.ts decideOpinions), against a fake of
+// POST /api/v2/flow/opinions (backend/flow_opinions.py), on a desktop. An opinion's score orders the walk; nothing of it is
+// shown:
+// - a ready opinion shows no line and no thumb, and changes no button: Approve stays the main one on an OK, and no
+//   question's choice looks chosen; Notes is not filled with a send back's note;
+// - while an ask is pending the next one still waiting is named before ‹ ›, and the mark moves; ready, it rests;
 // - in a set of more than 5, the items not yet seen go highest score first and the ones seen keep their place;
-// - while the ask on screen waits on Tico no answer is the main button, and the mark moves; ready, the pick is; none
-//   leaves the buttons as they always are; an opinion that comes after the person typed in Notes leaves their words;
-// - an ask that changes under the same id loses its line and is asked again, and an answer about the old ask is dropped;
+// - an ask that changes under the same id is asked again, and an answer about the old ask is dropped;
 // - a request from a closed visit that fails later does not stop the next visit asking;
 // - each round is one request of at most 30 asks, pending ones first, then the next ones not yet asked, one at a time;
-// - a failing route is asked once: no line, and the screen answers as it did.
-// FLOW_SHOTS=<folder> saves the bar with a line and a pending next ask, desktop and phone.
+// - a failing route is asked once, and the screen answers as it did.
+// FLOW_SHOTS=<folder> saves the bar with a pending next ask, desktop and phone.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -102,8 +100,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     const walk = () => page.evaluate('decideLive(DEC)') as Promise<string[]>;
     const at = (n: number) => dialog.locator('.dc-q', {hasText: title(n)}).waitFor();
     const main = (sel: string) => dialog.locator(sel).evaluate(b => b.classList.contains('primary'));
-    const mains = () => dialog.locator('.dc-side .primary').count();
-    const said = async () => await dialog.locator('.dc-say').getAttribute('aria-label') ?? '';
+    const slot = async () => await dialog.locator('.dc-say').textContent() ?? '';
     const open = async (first: string) => {
       await page.goto('about:blank');   // a fresh load each time, so the list is read again
       asked.length = 0; times.length = 0;
@@ -135,17 +132,19 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     };
     await open('r2');
     await at(2);   // the list's first (questions before OKs), before any score came
-    await dialog.locator('.dc-say', {hasText: 'No. The launch moved to Friday'}).waitFor();
+    await page.waitForFunction("DEC_OP.state.get('r2') === 'ready'");
     assert.equal(asked[0]![0], 'r2', 'the item on screen is asked about first');
     assert.deepEqual([...asked[0]!].sort(), ['r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'], 'one request for the set');
-    // A question's choices stay as drawn: none looks chosen before a tap; the line says the pick.
+    // Nothing of an opinion is shown: no line in the bar, and a question's choices stay as drawn, none looking chosen.
+    assert.equal(await slot(), '', 'no line in the bar');
+    assert.equal(await dialog.locator('.dc-say-i, .dc-say-t').count(), 0, 'no thumb');
     assert.equal(await main('[data-dc-choice="No"]'), false, 'no choice looks chosen');
     assert.equal(await main('[data-dc-choice="Yes"]'), false);
     assert.equal(await dialog.locator('.dc-up').textContent(), 'Pick the venue', 'the next ask still pending is named');
     assert.equal(await dialog.locator('.dc-flow .flow-mark.live').count(), 0, 'the mark rests: the item on screen is ready');
     // Unseen ones by score, highest first; no score after, in the list's order; the one on screen stays first.
     assert.deepEqual(await walk(), ['r2', 'r5', 'r1', 'r7', 'r3', 'r4', 'r6']);
-    await shot('flow-line');
+    await shot('flow-no-line');
     // Only the pending one is asked again; once ready (and scored highest) it moves up among the unseen.
     const before = asked.length;
     ops['r4'] = {state: 'ready', pick: 'Yes', line: 'Yes. The North barn is free.', score: 99};
@@ -160,67 +159,73 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('[data-dc="prev"]').click();
     await at(4);
     assert.deepEqual((await walk()).slice(0, 3), ['r2', 'r4', 'r5']);
-    // The OK: Tico would send it back, which is a reply in the chat: no answer is the main button, and the box stays empty.
+    // The OK Tico would send back: Approve stays the main answer as drawn, and the box stays empty.
     await dialog.locator('[data-dc="next"]').click();
     await dialog.locator('[data-dc="next"]').click();
-    await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor();
-    assert.equal(await main('[data-dc="approve"]'), false);
+    await page.waitForFunction("DEC_OP.state.get('r1') === 'ready'");
+    assert.equal(await main('[data-dc="approve"]'), true, 'the buttons stay as drawn');
     assert.equal(await dialog.locator('.dc-chat .p-text').inputValue(), '', 'Tico never types for the person');
     assert.deepEqual(writes, [], 'an opinion answers nothing');
     await close();
 
-    // ---- 2. Waiting on Tico: no main button, the mark moves; typing first keeps the words. None: as always.
+    // ---- 2. Waiting on Tico: the mark moves and the buttons stay as drawn; typed words are never replaced. None: as always.
     needs = [ok(1), ok(5)];
     ops = {r1: {state: 'pending'}, r5: {state: 'none'}};
     await open('r1');
     await at(1);
     await page.waitForFunction(() => !!document.querySelector('.decide .dc-flow .flow-mark.live'));
-    assert.equal(await mains(), 0, 'while Tico thinks, no answer is the main one');
+    assert.equal(await main('[data-dc="approve"]'), true, 'while Tico thinks, Approve is as drawn');
     await dialog.locator('.dc-chat .p-text').fill('My own words');
     ops['r1'] = {state: 'ready', pick: 'send_back', line: 'Send back. The price is missing.', note: 'Add the price.', score: 80};
-    await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor({timeout: 8000});
+    await page.waitForFunction("DEC_OP.state.get('r1') === 'ready'", undefined, {timeout: 8000});
     assert.equal(await dialog.locator('.dc-chat .p-text').inputValue(), 'My own words', 'never over their typing');
-    assert.equal(await main('[data-dc="approve"]'), false, 'ready: a send back leaves Approve plain');
+    assert.equal(await main('[data-dc="approve"]'), true, 'ready: still as drawn, no pick pre-filled');
     assert.equal(await dialog.locator('.dc-flow .flow-mark.live').count(), 0, 'the mark rests once it is ready');
     assert.equal(await dialog.locator('.dc-up').textContent(), '');
+    assert.equal(await slot(), '', 'no line in the bar');
     await dialog.locator('[data-dc="next"]').click();
     await at(5);
     assert.equal(await main('[data-dc="approve"]'), true, 'none: Approve is the main one, as always');
-    assert.equal(await said(), '');
+    assert.equal(await slot(), '');
     await close();
 
-    // ---- 3. The ask changes under the same id: its old line goes, and an answer about the old ask is dropped.
+    // ---- 3. The ask changes under the same id: an answer about the old ask never lands, each changed ask is asked again,
+    // and a fresh visit shows the changed question.
+    // The card's question text is drawn when the item on screen changes, so it is checked on a fresh visit.
     needs = [question(2)];
-    ops = {r2: {state: 'pending'}};
+    ops = {r2: {state: 'ready', pick: 'No', line: 'Old line', score: 99}};
+    const late = holdNext();   // the first request is answered as the old ask was, only once released
     await open('r2');
     await at(2);
-    await page.evaluate(`window.__said = []; new MutationObserver(() => window.__said.push(document.querySelector('.decide .dc-say').getAttribute('aria-label') || ''))
-      .observe(document.querySelector('.decide .dc-say'), {attributes: true, attributeFilter: ['aria-label']})`);
-    // The next poll is answered about the ask as it was asked, but only after the ask changed.
-    ops['r2'] = {state: 'ready', pick: 'No', line: 'Old line', score: 10};
-    const polls = asked.length, late = holdNext();
-    while (asked.length === polls) await page.waitForTimeout(100);
-    (needs[0]!.ask)['line'] = 'Launch date: Friday or Monday?';
-    needs[0]!['line'] = 'Launch date: Friday or Monday?';
-    (needs[0]!.ask)['choices'] = ['Friday', 'Monday'];
-    version++;
+    while (asked.length !== 1) await page.waitForTimeout(100);
+    await page.evaluate(`window.__scores = []; const set = DEC_OP.score.set.bind(DEC_OP.score);
+      DEC_OP.score.set = (id, v) => { if (id === 'r2') window.__scores.push(v); return set(id, v); };`);
+    const change = (question_: string, choices: string[]) => {
+      needs[0]!['line'] = question_;
+      (needs[0]!.ask)['line'] = question_;
+      (needs[0]!.ask)['choices'] = choices;
+      version++;
+    };
+    change('Launch date: Friday or Monday?', ['Friday', 'Monday']);
     ops['r2'] = {state: 'ready', pick: 'Friday', line: 'Friday. The venue is free.', score: 10};
     await page.evaluate('v2Refresh()');
-    await dialog.locator('.dc-q', {hasText: 'Friday or Monday'}).waitFor();
+    await page.waitForFunction("DEC.items.get('r2')?.ask?.choices?.[1] === 'Monday'", undefined, {timeout: 8000});
     late.release();
-    await dialog.locator('.dc-say', {hasText: 'Friday. The venue is free.'}).waitFor({timeout: 8000});
-    assert.equal(await main('[data-dc-choice="Friday"]'), false, 'the new line, with no choice looking chosen');
-    assert.ok(!(await page.evaluate('window.__said') as string[]).includes('Old line'), 'the answer about the old ask is dropped');
-    // A ready line on an ask that then changes goes at once, and the new one is asked for.
+    await page.waitForFunction("DEC_OP.score.get('r2') === 10", undefined, {timeout: 8000});
+    assert.ok(!(await page.evaluate('window.__scores') as number[]).includes(99), 'the answer about the old ask is dropped');
+    assert.equal(await slot(), '', 'no line in the bar');
+    // A ready answer on an ask that changes again: the new ask is asked for, alone.
     const n = asked.length;
-    needs[0]!['line'] = 'Launch date: Friday, Monday or Tuesday?';
-    (needs[0]!.ask)['line'] = 'Launch date: Friday, Monday or Tuesday?';
-    (needs[0]!.ask)['choices'] = ['Friday', 'Monday', 'Tuesday'];
-    version++;
-    ops['r2'] = {state: 'ready', pick: 'Tuesday', line: 'Tuesday. Monday is a holiday.', score: 10};
+    change('Launch date: Friday, Monday or Tuesday?', ['Friday', 'Monday', 'Tuesday']);
+    ops['r2'] = {state: 'ready', pick: 'Tuesday', line: 'Tuesday. Monday is a holiday.', score: 20};
     await page.evaluate('v2Refresh()');
-    await dialog.locator('.dc-say', {hasText: 'Tuesday. Monday is a holiday.'}).waitFor({timeout: 8000});
-    assert.ok(asked.length > n && asked.slice(n).every(ids => ids.length === 1 && ids[0] === 'r2'));
+    await page.waitForFunction("DEC_OP.score.get('r2') === 20", undefined, {timeout: 8000});
+    assert.ok(asked.length > n && asked.slice(n).every(ids => ids.length === 1 && ids[0] === 'r2'), 'the changed ask is asked again, alone');
+    await close();
+    await open('r2');
+    await dialog.locator('.dc-q', {hasText: 'Friday, Monday or Tuesday'}).waitFor();
+    assert.equal(await main('[data-dc-choice="Tuesday"]'), false, 'the new ask, with no choice looking chosen');
+    assert.equal(await slot(), '', 'no line in the bar');
     await close();
 
     // ---- 4. A request from a closed visit, failing after the close, leaves the next visit asking.
@@ -234,8 +239,8 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await page.locator('#task-play').click();
     await at(1);
     stale.release();
-    await dialog.locator('.dc-say[aria-label="Send back. The price is missing."]').waitFor({timeout: 8000});
-    assert.equal(await main('[data-dc="approve"]'), false);
+    await page.waitForFunction("DEC_OP.state.get('r1') === 'ready'", undefined, {timeout: 8000});
+    assert.equal(await main('[data-dc="approve"]'), true, 'the buttons stay as drawn');
     await close();
 
     // ---- 5. A big walk: one request a round, at most 30 asks, pending ones first, then the next ones not yet asked.
@@ -266,7 +271,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await at(2);
     await page.waitForTimeout(4500);   // two rounds' worth
     assert.equal(asked.length, 1, `asked once: ${JSON.stringify(asked)}`);
-    assert.equal(await said(), '');
+    assert.equal(await slot(), '');
     assert.equal(await dialog.locator('.dc-flow .flow-mark.live').count(), 0);
     await dialog.locator('[data-dc="next"]').click();
     await at(1);
@@ -279,6 +284,6 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
 
     assert.deepEqual(errors, []);
     await page.close();
-    console.log("PASS: Tico's line picks the button only when ready; changed asks are asked again; rounds are one request of 30 at most; a failing route or a closed visit changes nothing.");
+    console.log("PASS: Flow's opinions order the walk and show nothing; changed asks are asked again; rounds are one request of 30 at most; a failing route or a closed visit changes nothing.");
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

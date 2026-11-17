@@ -3,10 +3,13 @@ GET that proves the key works.
 
 An API tool (backend/api_tools.py) names one of these as its `service`; a new tool fills its empty base URL, auth scheme
 and check path from here, and the data migration that made a tool for every stored key matched them the same way. A
-check path is an authenticated GET that answers 2xx for a good key and 401 (403 for Vercel) for a bad one: each was
-tried with a made-up key. Services whose API answers a bad key with something else (400 from Gemini, xAI, Resend and
-Attio, 410 from Todoist, 200 from Apollo) or has no cheap GET (Linear's GraphQL) get no check path, since a check that
-cannot tell a bad key from a good one would show Working for both. Their calls still go through the proxy. Google Ads
+check path is an authenticated GET that answers 2xx for a good key and 401 (403 for Vercel: `rejected`) for a bad one:
+each was tried with a made-up key. Any other service's 403 answers a key it knows that lacks the path's scope. Services
+whose API answers a bad key with something else (400 from Gemini, xAI, Resend and Attio, 410 from Todoist, 200 from
+Apollo) or has no cheap GET (Linear's GraphQL; Slack's auth.test answers 200 with ok:false) get no check path, since a
+check that cannot tell a bad key from a good one would show Working for both. Their calls still go through the proxy.
+A tool with no check path of its own checks with its service's when it is at that service's address
+(`check_path_for`), so one made before its service had a path is checked too. Google Ads
 is known by name only: its OAuth needs several values on each call, which no proxy key can carry, so it has no base URL
 and its tools stay on computers.
 
@@ -22,7 +25,7 @@ import re
 AUTH_SCHEME = re.compile(r"^(bearer|basic_user|basic_password|header:[A-Za-z0-9-]{1,60}|query:[A-Za-z0-9_.-]{1,60})$")
 
 
-def _s(name, base_url, check_path="", auth="bearer", env="", aliases=(), username="", headers=None):
+def _s(name, base_url, check_path="", auth="bearer", env="", aliases=(), username="", headers=None, rejected=(401,)):
     return {
         "name": name,
         "base_url": base_url,
@@ -32,6 +35,7 @@ def _s(name, base_url, check_path="", auth="bearer", env="", aliases=(), usernam
         "aliases": tuple(aliases),
         "username": username,
         "headers": dict(headers or {}),
+        "rejected": tuple(rejected),
     }
 
 
@@ -117,7 +121,8 @@ SERVICES = {
         headers={"Accept": "application/json"},
     ),
     "render": _s("Render", "https://api.render.com", "/v1/owners", env="RENDER_API_KEY"),
-    "vercel": _s("Vercel", "https://api.vercel.com", "/v2/user", env="VERCEL_TOKEN"),
+    # Vercel answers a bad token with 403, so its 403 is a rejection, not a scope the key lacks.
+    "vercel": _s("Vercel", "https://api.vercel.com", "/v2/user", env="VERCEL_TOKEN", rejected=(401, 403)),
     "gemini": _s(
         "Gemini", "https://generativelanguage.googleapis.com", "", "query:key", "GEMINI_API_KEY", ("google ai",)
     ),
@@ -362,6 +367,24 @@ def defaults(service):
     }
 
 
+def check_path_for(service, base_url, check_path=""):
+    """The path a tool's check GETs: its own `check_path`, else its known service's when the tool is at that service's
+    own address (a tool made before its service had a check path, or whose path was left empty). A service's path
+    belongs to its address, so a tool at another address gets none. "" when there is none."""
+    if check_path:
+        return check_path
+    row = SERVICES.get(service or "") or SERVICES.get(service_for_address(base_url))
+    if not row or not row["check_path"] or not row["base_url"]:
+        return ""
+    return row["check_path"] if str(base_url or "").rstrip("/") == row["base_url"] else ""
+
+
+def service_for_address(base_url):
+    """The known service whose own address `base_url` is ("" for none)."""
+    url = str(base_url or "").rstrip("/")
+    return next((key for key, row in SERVICES.items() if row["base_url"] and row["base_url"] == url), "")
+
+
 def apply_auth(scheme, secret, username=""):
     """(headers, query params) that carry `secret` the way `scheme` says. `basic_password` sends the stored username
     (Twilio's Account SID, Mailgun's "api") as the user and the key as the password; `basic_user` the key as the user."""
@@ -377,6 +400,12 @@ def apply_auth(scheme, secret, username=""):
     if kind == "query" and name:
         return {}, {name: secret}
     raise ValueError("unknown auth scheme")
+
+
+def rejects(service, code):
+    """Whether `service`'s check answering `code` says the key is bad: a 401, or what the service names (Vercel's
+    403)."""
+    return code in ((SERVICES.get(service or "") or {}).get("rejected") or (401,))
 
 
 def check_headers(service):

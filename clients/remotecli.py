@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import cli_spec, hubcli_pipelines, s3links
+from clients import cli_spec, hubcli_pipelines
 from clients.tico import APIError, Client
 
 
@@ -446,11 +446,7 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "contacts":
         return via_tool(client, _contacts_args(args))
-    if args.cmd == "settings":
-        return via_tool(client, args)
     if fn in ("token list", "token create", "token revoke"):  # clients/cli_plumbing.py
-        return via_tool(client, args)
-    if args.cmd == "feedback":
         return via_tool(client, args)
     if args.cmd == "call":
         return via_tool(client, args)
@@ -720,8 +716,13 @@ def run(args, who=None):
         return client.get("service-keys")["keys"]
     if args.cmd == "ok":
         return unwrap(via_tool(client, args))
-    identity = client.get("me")
-    actor = identity["actor"]
+    identity = []  # GET /me, read the first time a command needs the caller: most of these never do
+
+    def me():
+        if not identity:
+            identity.append(client.get("me"))
+        return identity[0]
+
     key = os.environ.get("HUB_OPERATION_ID")
 
     def post(path, body, suffix="", delegate=False):
@@ -734,20 +735,13 @@ def run(args, who=None):
         return result["task"] if isinstance(result, dict) and set(result) == {"task"} else result
 
     def target(value):
-        return actor if value in ("me", "self") else value
-
-    def refs(values):
-        out = {}
-        for value in values or []:
-            kind, _, ident = value.partition(":")
-            out.setdefault(kind, []).append(ident)
-        return out
+        return me()["actor"] if value in ("me", "self") else value
 
     cmd, sub = args.cmd, getattr(args, "sub", None)
     if cmd == "whoami":
         from clients import cli_plumbing
 
-        return cli_plumbing.identity(client, identity)  # plus the company, its address and the profile in use
+        return cli_plumbing.identity(client, me())  # plus the company, its address and the profile in use
     if fn == "message send":
         from clients import hubtools
 
@@ -767,15 +761,19 @@ def run(args, who=None):
                 **({"visuals": visuals_from_args(args)} if getattr(args, "visual", None) else {}),
             },
         )
+
+    def call_tool(name, fields):
+        """The tool a command runs, with the request's operation id (a retry lands once)."""
+        from clients import hubtools
+
+        return hubtools.BY_NAME[name]["fn"](client, {**fields, "operation_id": key} if key else fields)
+
     if fn == "note create":
         text = Path(args.text_file).read_text() if args.text_file else args.text
-        payload = {
-            "to": target(args.to),
-            "text": text,
-            **({"defer_for": args.defer_for} if getattr(args, "defer_for", None) else {}),
-        }
-        links = s3links.apply(client, payload, ("text",))
-        return s3links.annotate(post("notes", payload)["note"], links)
+        return call_tool(
+            "tico_note_create",
+            {"to": target(args.to), "text": text, "defer_for": getattr(args, "defer_for", None)},
+        )
     if fn == "note list":
         since = args.since
         m = re.fullmatch(r"(\d+)([hd])", since or "")
@@ -791,7 +789,7 @@ def run(args, who=None):
             limit=args.limit,
         )
     if fn == "note delete":
-        return post(f"notes/{args.id}/cancel", {})["note"]
+        return call_tool("tico_note_delete", {"id": args.id})
     if cmd == "task":
         asked = getattr(args, "on_behalf_of", None) or False
         if sub == "create":
@@ -837,7 +835,7 @@ def run(args, who=None):
                 return hubtools.BY_NAME["tico_task_show_many"]["fn"](client, {"ids": ids})
             return hubtools.task_show(client, {"id": ids[0]})
         if sub == "run":
-            return post(f"tasks/{args.id}/run-now", {})
+            return unwrap(call_tool("tico_task_run", {"id": args.id}))
         if sub in ("list", "readers", "followers", "follow", "unfollow", "caps"):
             return via_tool(client, args)
         if sub in (
@@ -876,58 +874,42 @@ def run(args, who=None):
             for index, path in enumerate(getattr(args, "attach", None) or []):
                 made = post(f"tasks/{args.id}/files", attachment(path), suffix=f":attachment:{index}")
                 references.append(f"{made['file_id']}@{made['version']}")
-            local = []
-            if getattr(args, "visual", None):
-                from clients import hubtools
-
-                visuals, local = hubtools._visuals(
-                    client,
-                    visuals_from_args(args),
-                    lambda index, name, data: hubtools._uploaded(
-                        hubtools._posted_file(
-                            client, f"tasks/{args.id}/files", name, data, (key + ":visual:" + index) if key else None
-                        )
-                    ),
-                )
-                references.extend(visuals)
-            body = {"text": args.text}
+            fields = {"id": args.id, "text": args.text, **_delivery(args)}
             if references:
-                body["attachments"] = references
+                fields["attachments"] = references
+            if getattr(args, "visual", None):
+                fields["visuals"] = visuals_from_args(args)
             if getattr(args, "needs_action", False):
-                body["needs_action"] = True
-            body.update(_delivery(args))
+                fields["needs_action"] = True
             if getattr(args, "public", None):
-                body["public"] = True
+                fields["public"] = True
             if getattr(args, "ok", None):
-                body["approval_id"] = args.ok
-            links = s3links.apply(client, body, ("text",))
-            result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
-            return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
+                fields["ok"] = args.ok
+            if asked:
+                fields["on_behalf_of"] = asked
+            return call_tool("tico_task_comment", fields)  # a CommentResult, never a bare task
         if sub == "comment-edit":
-            body = {"text": args.text}
+            fields = {"id": args.id, "comment_id": args.comment_id, "text": args.text}
             if getattr(args, "ok", None):
-                body["approval_id"] = args.ok
-            links = s3links.apply(client, body, ("text",))
-            return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
+                fields["ok"] = args.ok
+            return call_tool("tico_task_comment_edit", fields)
         if sub == "comment-delete":
-            return post(f"tasks/{args.id}/comments/{args.comment_id}/delete", {})
+            return call_tool("tico_task_comment_delete", {"id": args.id, "comment_id": args.comment_id})
         if sub == "delete":
-            return post(f"tasks/{args.id}/delete", {})
+            return unwrap(call_tool("tico_task_delete", {"id": args.id}))
         if sub == "deleted":
-            return client.get("deleted-tasks")
+            return call_tool("tico_task_deleted", {})
         if sub == "restore":
-            return post(f"tasks/{args.id}/restore", {})
+            return unwrap(call_tool("tico_task_restore", {"id": args.id}))
         if sub == "link":
-            return post(
-                f"tasks/{args.id}/links",
-                {
-                    "url": args.url,
-                    "title": args.title,
-                    **({"kind": "session"} if args.session else {}),
-                    **({"wake_once": args.wake_once} if args.wake_once is not None else {}),
-                },
-                delegate=asked,
-            )
+            fields = {"id": args.id, "url": args.url, "title": args.title}
+            if args.session:
+                fields["kind"] = "session"
+            if args.wake_once is not None:
+                fields["wake_once"] = args.wake_once
+            if asked:
+                fields["on_behalf_of"] = asked
+            return unwrap(call_tool("tico_task_link", fields))
         if sub in ("relate", "unrelate"):
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
@@ -967,18 +949,14 @@ def run(args, who=None):
             return post("listening/sources/" + quote(args.source, safe="") + "/items", read)
         return client.get("listening/sources", due=1, automation=args.automation)
     if fn == "conversation show":
-        page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
-        return {
-            "conversation": page.get("conversation"),
-            "messages": page.get("messages", []),
-            "has_more": bool(page.get("has_more")),
-            "next_before": page.get("next_before"),
-        }
+        return call_tool(
+            "tico_conversation_show", {"conversation": args.conversation, "before": args.before, "since": args.since}
+        )
     if cmd == "automation":
         return automation(client, args)
     if fn.startswith("bot status"):
         if fn == "bot status set":
-            bot = args.bot or actor.split(":", 1)[-1]
+            bot = args.bot or me()["actor"].split(":", 1)[-1]
             return post(f"bots/{bot}/status", {"state": args.state, "focus": args.focus, "task_id": args.task})
         if fn == "bot status history":
             return client.get(f"bots/{args.bot}/history", since=args.since)
@@ -1001,10 +979,9 @@ def run(args, who=None):
             },
         )
     if cmd == "sql":
-        body = {"sql": args.sql, "params": sql_params(args.param)}
-        if args.max_rows:
-            body["max_rows"] = args.max_rows
-        return post("sql", body)
+        return unwrap(
+            call_tool("tico_sql", {"sql": args.sql, "params": sql_params(args.param), "max_rows": args.max_rows})
+        )
     raise APIError("unsupported", "This command is not supported by the remote API")
 
 
