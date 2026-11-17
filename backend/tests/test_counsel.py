@@ -1,4 +1,4 @@
-"""Counsel over the API (docs/rules-plan.md §2, §5): a document becomes a Files version and one Counsel task, a bot's
+"""Counsel over the API (docs/dev/rules-plan.md §2, §5): a document becomes a Files version and one Counsel task, a bot's
 suggestion lands as suggested with a cite that must be in the file, a link's cite keeps pointing at the version it was
 read as, and a can-I question is answered with the rules that apply. Acme is the fictional company here."""
 

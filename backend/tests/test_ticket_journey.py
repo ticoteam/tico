@@ -1,4 +1,4 @@
-"""A ticket's whole journey on the default company, in one Product task held by its feature owner (docs/pipelines-v3.md
+"""A ticket's whole journey on the default company, in one Product task held by its feature owner (docs/dev/pipelines-v3.md
 "Product"): a person types a request, the owner pitches it and the person OKs the pitch, the owner writes the spec,
 the bots it touches comment, and the person OKs the spec; the owner builds it, two reviewers review it and the owner
 fixes what they found; the QA Owner builds the QA page and the person OKs it; the person OKs the release, the Release

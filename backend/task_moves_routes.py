@@ -556,7 +556,7 @@ def register(
     @app.post("/api/v2/tasks/{tid}/asks")
     def task_ask(request: Request, tid: str, body: M.TaskAsk):
         """Ask a person on the task, in one sentence: a question (with choices, or a typed answer) or an OK (C19). A
-        bot's ask a company rule covers is refused with the rule's words (docs/pipelines-v3.md, "How a rule stops the
+        bot's ask a company rule covers is refused with the rule's words (docs/dev/pipelines-v3.md, "How a rule stops the
         next one"). A bot's ask to a person has a short first line that stands on its own, and a question says why it
         matters, with choices (2 to 4) that each say what happens and the one it recommends (backend/ask_shape.py):
         refused before any check otherwise."""

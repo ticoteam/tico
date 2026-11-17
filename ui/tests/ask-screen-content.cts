@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check that an OK's Approve waits for the exact content it is for (docs/pipelines-v3.md S3):
+// Offline browser check that an OK's Approve waits for the exact content it is for (docs/dev/pipelines-v3.md S3):
 // - a letter's OK reads the letter's own preview (GET /api/v2/letters/{id}) and its proof; Approve is off until the proof is
 //   drawn, then sends the letter's shown_hash;
 // - a letter whose proof does not load leaves Approve off; Send back still works;

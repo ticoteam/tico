@@ -35,6 +35,9 @@ from .store import H, Problem
 LIMITS = {"owner": (5000, 20.0), "human": (500, 5.0), "bot": (500, 5.0)}
 # Readable as they are, by everyone: nothing personal, nothing secret, plus the schema.
 OPEN = {"rate_limits", "service_health", "learnings", "sqlite_master"}
+# A message's own read rule (guarded), as a view of the unfiltered messages that no caller reads by name: the views of
+# the tables read it, `messages` among them with the timeline's cut (a person's timeline shows only messages with a seq).
+READABLE_MESSAGES = "readable_messages"
 # The Company page's tables the owner reads as the page's API does; the readers' own tables are not here at all.
 COMPANY_PAGE_OWNER_TABLES = (
     "company_page_settings",
@@ -464,9 +467,22 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     )
 
     by_task = "task_id IN (SELECT id FROM tasks)"
+    # A message's own rule: what the API lets the caller read of it. It is the hidden view READABLE_MESSAGES, which
+    # runs' jobs, attempts, mentions and files read by name: they follow the message whether or not a person's timeline
+    # shows it (the task's Runs show a notice the run acted on). Inlining the rule instead nests it too deep for
+    # SQLite's parser in CI (parser stack overflow).
+    readable_message = (
+        "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
+        + legacy_messages
+        + " AND "
+        + msg_gate
+        + " AND "
+        + function("page_message")
+        + "(refs)"
+    )
     # Correlate large history tables by primary key. An IN subquery materializes
     # every readable message/job/attempt before even a LIMIT 1 can return.
-    by_message = "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)"
+    by_message = f"EXISTS (SELECT 1 FROM {inner(READABLE_MESSAGES)} readable WHERE readable.id=source.message_id)"
     by_schedule = "schedule_id IN (SELECT id FROM schedules)"
     by_attempt = "EXISTS (SELECT 1 FROM attempts readable WHERE readable.id=source.attempt_id)"
     by_job = "EXISTS (SELECT 1 FROM jobs readable WHERE readable.id=source.job_id)"
@@ -524,20 +540,21 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     # Imported drafts do not enter company search, exports or the audit feed.
     meetings = f"({meetings}) AND review_state='live'"
     events = f"({events}) AND target NOT IN (SELECT id FROM {inner('meetings')} WHERE review_state<>'live')"
+    # A person reads a room's messages through its timeline: the ones with a seq (task_privacy.page, threads.timeline).
+    # Tico's notices to a bot have none; they are the bot's run input (H.run_notice), so only a bot's view holds them.
+    timeline = "1" if bot else "seq IS NOT NULL"
     rules = {
         "conversations": conversations,
+        # The message rule itself, read by name below; connect builds it as a hidden view, never a table.
+        READABLE_MESSAGES: readable_message,
         # Rooms are the small authorization set, unlike message/run history.
         # Build their id set once rather than re-evaluate the room view per message.
-        "messages": (
-            "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
-            + legacy_messages
-            + " AND "
-            + msg_gate
-        ),
+        "messages": f"EXISTS (SELECT 1 FROM {inner(READABLE_MESSAGES)} readable WHERE readable.id=source.id) AND "
+        + timeline,
         # Thread membership and follows are read with their thread; mentions with their message.
         "thread_members": "thread_id IN (SELECT id FROM conversations)",
         "thread_followers": "thread_id IN (SELECT id FROM conversations)",
-        "message_mentions": "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)",
+        "message_mentions": by_message,
         "tasks": tasks,
         "tags": tag_gate,
         "task_tags": by_task,
@@ -714,7 +731,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         )
         rules[table] = "(" + rules[table] + ") AND " + content_gate(cols)
     rules["task_assets"] += " AND " + function("blob") + "(blob_id)"
-    rules["messages"] += " AND " + function("page_message") + "(refs)"
     rules["task_file_reviews"] = "file_id IN (SELECT id FROM bot_files) OR file_id IN (SELECT id FROM blobs)"
     rules["bot_file_activity"] += (
         " AND (task_id IS NULL OR " + by_task + ") AND (attempt_id IS NULL OR " + by_attempt + ")"
@@ -1033,6 +1049,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         columns = schema_columns(conn, path)
         unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
         tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
+        readable = tables.pop(READABLE_MESSAGES)
         # Page visibility traverses letter proofs and current agent standing through trusted callbacks only.
         source_tables = set(tables) | {
             "pages",
@@ -1179,7 +1196,12 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         conn.execute(f'CREATE TEMP VIEW {inner("pages")} AS SELECT file_id,audience FROM main.pages')
         if deadline is not None:
             conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 2000)
-        tables = materialize(conn, index, tables, inner, function, private)
+        tables = materialize(conn, index, {**tables, READABLE_MESSAGES: readable}, inner, function, private)
+        readable = tables.pop(READABLE_MESSAGES)
+        # The rule over the unfiltered messages: each row is `source`, as materialize's gates read it.
+        conn.execute(
+            f"CREATE TEMP VIEW {inner(READABLE_MESSAGES)} AS SELECT * FROM {inner('messages')} AS source WHERE {readable[0]}"
+        )
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
         masks["messages"] = {**masks.get("messages", {}), "refs": function("page_refs") + "(source.refs)"}
@@ -1241,7 +1263,7 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
     except BaseException:
         conn.close()
         raise
-    inner_names = {prefix + table for table in set(tables) | sources | {"pages"}}
+    inner_names = {prefix + table for table in set(tables) | sources | {"pages", READABLE_MESSAGES}}
     sets = {private(name) for name in SETS}
 
     def fts_parent(name):
@@ -1251,11 +1273,16 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         return None
 
     def authorize(action, table, column, schema, context):
+        # Who may read a private object: a table's view, or the message rule's view (which reads the same sets and
+        # functions the table views read on its behalf).
+        def reads(view):
+            return view in tables or view == prefix + READABLE_MESSAGES
+
         if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_RECURSIVE):
             return sqlite3.SQLITE_OK
         if action == sqlite3.SQLITE_FUNCTION:
             if column and column.startswith(prefix + "privacy_"):
-                return sqlite3.SQLITE_OK if context in tables else sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK if reads(context) else sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_DENY if column in DENIED_FUNCTIONS else sqlite3.SQLITE_OK
         # FTS5 checks main.data_version before reading; nothing else may PRAGMA.
         if action == sqlite3.SQLITE_PRAGMA:
@@ -1303,12 +1330,12 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
             return sqlite3.SQLITE_DENY
         if schema == "temp":
             if table in sets:
-                return sqlite3.SQLITE_OK if context in tables else sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK if reads(context) else sqlite3.SQLITE_DENY
             if table in tables or table in views or table in worked_out:
                 return sqlite3.SQLITE_OK
             if table in inner_names and context in views:
                 return sqlite3.SQLITE_OK if table[len(prefix) :] in views[context][0] else sqlite3.SQLITE_DENY
-            return sqlite3.SQLITE_OK if table in inner_names and context in tables else sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK if table in inner_names and reads(context) else sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_DENY
 
     conn.set_authorizer(authorize)

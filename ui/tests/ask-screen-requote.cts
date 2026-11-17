@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check of a letter quoted again between showing and clicking (docs/pipelines-v3.md S3): the click on
+// Offline browser check of a letter quoted again between showing and clicking (docs/dev/pipelines-v3.md S3): the click on
 // what was shown is refused (409 task_requirement, the old ask is not asked any more), and the screen moves to the ask
 // that took its place, reads its new proof and hash, and only a new click sends that hash. No dead end.
 const {chromium} = require('playwright') as typeof import('playwright');

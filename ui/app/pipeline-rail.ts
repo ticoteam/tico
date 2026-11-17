@@ -1,4 +1,4 @@
-/* ui/app/pipeline-rail.ts — The pipeline manager is the Tasks page's chat (docs/pipelines-v3.md S10; style guide "Where
+/* ui/app/pipeline-rail.ts — The pipeline manager is the Tasks page's chat (docs/dev/pipelines-v3.md S10; style guide "Where
    chat lives"). There is no rail of its own: while a pipeline is shown, the Tasks page's owner chat (page-chat.ts, the
    column docked where the page fits beside it and the tab on the right edge where it does not) answers as the pipeline's manager, and each
    message carries the board on screen as a chip above the box and as `refs.board` (pipeline-ask.ts paBoard), as the

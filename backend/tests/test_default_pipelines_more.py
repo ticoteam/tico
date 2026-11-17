@@ -1,4 +1,4 @@
-"""The default pipelines beyond Product and Engineering (backend/pipeline_presets_more.py, docs/pipelines-v3.md
+"""The default pipelines beyond Product and Engineering (backend/pipeline_presets_more.py, docs/dev/pipelines-v3.md
 "Default pipelines"): a new company gets Growth Experiments, Growth Monitoring, Lead and Opportunity in the Growth factory
 and Customer, Success Experiments and Success Monitoring in the Success factory, once; nothing it retired comes back; no
 stage is left without an owner; an experiment goes live only once a person OKs its Go-live page. Legal and Finance (private, in the Corporate

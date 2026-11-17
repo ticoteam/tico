@@ -1,4 +1,4 @@
-// Counsel on the Rules page (ui/app/org-rules.ts, docs/rules-plan.md §2, §5) on a real hub with Counsel on and a vendor's
+// Counsel on the Rules page (ui/app/org-rules.ts, docs/dev/rules-plan.md §2, §5) on a real hub with Counsel on and a vendor's
 // terms in Files (evals/redesign/seeds.py `counsel`): Counsel is in no bot list and its bot page has no composer; Dana
 // adds the terms on External and a private Counsel task opens (asked again, the same task); Counsel's suggestions, one
 // with no Who, wait in Suggested with no quote on the rows; Add all adds only the rows with a Who; the one with no Who
@@ -84,6 +84,12 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     assert.equal(await page.locator('[data-org="b:rules-owner"], #side a[href="#/bot/rules-owner"]').count(), 0, 'Counsel is not on the Team list');
     await go(page, '#/bot/rules-owner');
     await page.locator('#bot-thread .thv-scroll').waitFor({timeout: t(15000)});
+    // The Home is blank until its read lands, then draws its rows ("No messages yet", or the messages) and its composer
+    // with them: the check waits for those rows, or it passes or fails on whether the read beat it.
+    await page.waitForFunction(() => {
+      const host = document.querySelector('#bot-thread');
+      return !!host && (host.querySelector('.th-empty') !== null || (host.querySelector('.thv-list')?.children.length ?? 0) > 0);
+    }, null, {timeout: t(15000)});
     assert.equal(await page.locator('#bot-thread textarea').count(), 0, 'no composer on its page');
     assert.equal(await page.locator('#btabs [data-bt="dm"]').count(), 0, 'and no DM tab');
 

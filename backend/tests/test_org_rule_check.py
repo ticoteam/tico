@@ -1,4 +1,4 @@
-"""Org rule checks (backend/org_rule_check.py, docs/rules-plan.md §3): a bot's output is checked against the rules that
+"""Org rule checks (backend/org_rule_check.py, docs/dev/rules-plan.md §3): a bot's output is checked against the rules that
 apply to it before it lands. One Decide call outside the write's transaction; a held write answers 200 with `held`
 and writes nothing but its hold; Escalate files one review task for a person; Warn delivers with a line; any
 failure lets the output through with `rules.unchecked`, except an output too large to check, which is held.
@@ -2285,7 +2285,7 @@ def test_a_rule_checks_judge_call_names_the_rules_it_asked(ruled):
 
 
 def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
-    """docs/pipelines-v3.md, "How a rule stops the next one": the rule check that reads what bots send also reads their
+    """docs/dev/pipelines-v3.md, "How a rule stops the next one": the rule check that reads what bots send also reads their
     asks; an ask a rule covers is refused back to the bot with the rule's words (tick list 49)."""
     api, judge = ruled
     color_rule(api)

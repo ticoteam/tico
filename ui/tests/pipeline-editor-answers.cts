@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check of a stage's typed answer in the pipeline editor (docs/pipelines-v3.md kind 6, C30): To leave is
+// Offline browser check of a stage's typed answer in the pipeline editor (docs/dev/pipelines-v3.md kind 6, C30): To leave is
 // a list of requirement rows; + Requirement opens one plain pick list (Esc closes it and + Requirement has the focus
 // back; what is not ready yet is listed, off, with Soon); a pick with something to choose opens its editor under its
 // row, the focus in its first field; one editor is open at a time and Remove is in it; an answer's name follows its

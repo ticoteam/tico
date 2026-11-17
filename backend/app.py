@@ -2367,8 +2367,6 @@ def create_app(settings=None):
                     row = {**row, "goals": body.goals}
                 if body.notes is not None:
                     row = {**row, "notes": body.notes}
-                if body.notify_slack_task_done is not None:
-                    row = {**row, "notify_slack_task_done": body.notify_slack_task_done}
                 if login is not None:
                     row = {**row, "github": login}
                 if body.notify_slack_bot_messages is not None:
@@ -2407,7 +2405,6 @@ def create_app(settings=None):
                         "about": body.about is not None,
                         "goals": body.goals is not None,
                         "notes": body.notes is not None,
-                        "notify_slack_task_done": body.notify_slack_task_done,
                         "github": body.github is not None,
                         "notify_slack_bot_messages": body.notify_slack_bot_messages,
                         "update_draft": body.update_draft,

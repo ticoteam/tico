@@ -136,7 +136,7 @@ function ticoReplayPlayer(): TicoReplayModule {
   const QUIET_MS = 1500;          // the longest a quiet stretch lasts, in real time, with Skip quiet on
   const FEED_MAX = 80;
   const DONE_MAX = 12;
-  // A task's status (docs/pipelines-v3.md): open, done or closed; each is a column and its word.
+  // A task's status (docs/dev/pipelines-v3.md): open, done or closed; each is a column and its word.
   type ReplayColumn = 'open' | 'done' | 'closed';
   const COLUMNS: readonly (readonly [ReplayColumn, string])[] = [['open', 'Open'], ['done', 'Done'], ['closed', 'Closed']];
   const STATUS_WORDS: Record<ReplayColumn, string> = {open: 'Open', done: 'Done', closed: 'Closed'};

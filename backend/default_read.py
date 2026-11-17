@@ -108,11 +108,27 @@ def _explicit(c: Any, explicit: frozenset[str]) -> tuple[set[str], set[str]]:
     return held_tools, held_envs
 
 
+LIVE_BOT_SQL = "SELECT 1 FROM bots WHERE id=? AND state<>'archived'"
+
+
+def prime_readers(c: Any, subjects: Any) -> None:
+    """Whether each bot is live, read in one query for all of them and kept in the snapshot, so `reads` for each bot
+    reads none of it again. Outside a snapshot nothing is kept."""
+    bots = sorted({H.actor_id(s) for s in subjects if str(s or "").startswith("bot:")})
+    live: set[str] = set()
+    for part in H.chunks(bots):
+        marks = ",".join("?" * len(part))
+        live.update(
+            row[0] for row in c.execute(f"SELECT id FROM bots WHERE state<>'archived' AND id IN ({marks})", part)
+        )
+    read_cache.prime(c, LIVE_BOT_SQL, {(bot,): (1,) if bot in live else None for bot in bots})
+
+
 def _reader(c: Any, subject: str) -> bool:
     """A live bot other than the Tools page's owner, which holds no key."""
     if not str(subject or "").startswith("bot:"):
         return False
-    live = c.execute("SELECT 1 FROM bots WHERE id=? AND state<>'archived'", (H.actor_id(subject),)).fetchone()
+    live = read_cache.one(c, LIVE_BOT_SQL, (H.actor_id(subject),))
     if live is None:
         return False
     page_owners: Any = importlib.import_module(".page_owners", __package__)

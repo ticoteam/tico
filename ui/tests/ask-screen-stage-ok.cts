@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check of a stage's page OK on the ask screen (docs/pipelines-v3.md S3). A stage's requirement ("OK Ana")
+// Offline browser check of a stage's page OK on the ask screen (docs/dev/pipelines-v3.md S3). A stage's requirement ("OK Ana")
 // is the same on every task in the stage, so two tasks in Spec ask it with one requirement id:
 // - each ask shows its own task's page at its own version, never the other's;
 // - the heading is the task's title, with the version under it, not the person's own name;

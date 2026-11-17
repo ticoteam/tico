@@ -1,5 +1,5 @@
 import type {Route} from 'playwright';
-// Offline browser check of Tasks › You and the ask screen (docs/pipelines-v3.md S2, S3), against a fake of the new routes:
+// Offline browser check of Tasks › You and the ask screen (docs/dev/pipelines-v3.md S2, S3), against a fake of the new routes:
 // - You lists each item as the sentence asked, under Answer and Review; Flow opens the first;
 // - an OK shows exactly what GET /api/v2/oks/{id} returned, and Approve sends that preview's hash;
 // - when the engine says it changed (409 task_changed), the new content is shown with "It changed. Look again." and

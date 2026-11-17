@@ -1,6 +1,6 @@
 """How a written test receipt line is read (backend/test_receipts.py): which head a pass or failure belongs to, and
 which earlier failures a line only mentions. The release checklist (scripts/release_checklist.py) reads them. No gate
-counts one as passing checks any more: checks pass reads GitHub only (docs/pipelines-v3.md, D44)."""
+counts one as passing checks any more: checks pass reads GitHub only (docs/dev/pipelines-v3.md, D44)."""
 
 import pytest
 

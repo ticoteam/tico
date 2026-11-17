@@ -2,7 +2,7 @@
 
 Every task sits in a pipeline, at one stage, with one owner, and always says whose turn it is. One function moves
 tasks, one read says what a task waits on, and a check every 10 seconds makes sure someone is on it. The full design
-is the spec, [Pipelines v3](pipelines-v3.md). This page is the short version and the commands.
+is the spec, [Pipelines v3](dev/pipelines-v3.md). This page is the short version and the commands.
 
 ## Pipelines and stages
 
@@ -14,14 +14,14 @@ A new company has one pipeline, **General**, managed by the General Manager bot:
 - **To do.** Owner: the task's assignee. To leave: the owner says done. No limit. Expected time: 1 day for a bot.
 - **Done.** When the owner says done, it is Done. Nobody checks it. It can be reopened with a note.
 
-A task with no assignee wakes the General Manager to pick one. Product and Engineering pipelines come later
-([Default pipelines](pipelines-v3.md#default-pipelines)).
+A task with no assignee wakes the General Manager to pick one. Other pipelines come later
+([Software factory](software-factory.md)).
 
 A task's status is `open`, `done` or `closed`. Nothing else is stored about where it is: its pipeline, its stage and
 its owner, all changed only by the engine. Every change raises the task's `version`. A bot's command carries the version
 it was last shown, and a move made against an old one is refused: "changed since you looked".
 
-The moves ([The moves](pipelines-v3.md#the-moves)):
+The moves ([The moves](dev/pipelines-v3.md#the-moves)):
 
 - **Forward.** The engine moves the task the moment everything is met and the next stage has room.
 - **Push past.** Forward with something unmet, with a reason. Anyone may, bots included.
@@ -35,7 +35,7 @@ A bot cannot close a task a person asked for. It asks that person instead.
 ## Whose turn it is
 
 What a task waits on is worked out, never stored. The first match is the line under the title; the task lists all of
-them ([the ten states](pipelines-v3.md#whose-turn-it-is-the-ten-states-of-an-open-task)):
+them ([the ten states](dev/pipelines-v3.md#whose-turn-it-is-the-ten-states-of-an-open-task)):
 
 1. Snoozed
 2. A person's turn: an ask names them, or the task is theirs
@@ -143,7 +143,7 @@ blocked on another task (depends_on; never a snooze). While its own pull request
 Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and 50
 minutes (inside the hour its session stays cached); then its manager bot, three tries more; then one person, once, in
 Needs you, with Try again, Reassign, Move back, Close and Snooze. Any change to the task starts the count again. See
-[The never-stuck check](pipelines-v3.md#the-never-stuck-check).
+[The never-stuck check](dev/pipelines-v3.md#the-never-stuck-check).
 
 A person hands a task back to its owner with **Try again** (`POST /api/v2/tasks/{id}/try-again`).
 
@@ -263,7 +263,7 @@ tico task file "title" --parent <id> --after <other-id>
 ```
 
 An order is for two tasks that change the same lines: they build and are reviewed side by side, and Merge queues the
-later one only once the earlier one has merged ([Pipelines](pipelines-v3.md), "GitHub", Merge). Both pages show it,
+later one only once the earlier one has merged ([Pipelines](dev/pipelines-v3.md), "GitHub", Merge). Both pages show it,
 "After #40 · Merge" and "Before #42", read-only.
 
 The API is `POST /api/v2/tasks/{id}/relations` with `{"task": "<other id>", "kind": "...", "remove": false}`. In SQL

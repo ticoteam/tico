@@ -55,12 +55,14 @@ def test_info_is_the_rail_row_of_a_file_the_viewer_sees(api):
 
 def traced(api, request):
     """(the response, every SQL statement the request ran)."""
+    from backend.tests.helpers.statement_scope import measuring, recorder
+
     store, statements = api.app.state.store, []
     take, give = store._take, store._give
 
     def tracing():
         c = take()
-        c.set_trace_callback(statements.append)
+        c.set_trace_callback(recorder(statements))
         return c
 
     def untracing(c):
@@ -69,7 +71,9 @@ def traced(api, request):
 
     store._take, store._give = tracing, untracing
     try:
-        return request(), statements
+        with measuring(statements):
+            result = request()
+        return result, statements
     finally:
         store._take, store._give = take, give
 

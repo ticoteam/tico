@@ -1,5 +1,5 @@
 # pyright: strict
-"""What a task needs before it leaves a stage (docs/pipelines-v3.md, "The six requirement kinds").
+"""What a task needs before it leaves a stage (docs/dev/pipelines-v3.md, "The six requirement kinds").
 
 A requirement sits on a stage (every task that visits it) or on one visit (this task, this time). Each kind answers one
 question for a task's open visit: met, waiting on something named, or not met and why. A kind reads tables only. It never
@@ -942,7 +942,7 @@ def review_commands(task_id: str, requirement_id: str) -> str:
 
 
 def _unsure_to_bots(conn: "sqlite3.Connection", task: Row, requirement: Row, line: str) -> Standing | None:
-    """Jev unsure of a page on a stage a bot holds (docs/pipelines-v3.md "Jev is checking"; the two sign-offs rule of
+    """Jev unsure of a page on a stage a bot holds (docs/dev/pipelines-v3.md "Jev is checking"; the two sign-offs rule of
     Nov 11 put this before a person). The pipeline's manager bot looks once per version: it gets Jev's line naming the
     part it can't tell, and OKs the page or sends it back, with why, as an answer on the task. The page's own bot is not
     sent back to rewrite on an unsure (task #351: after unsure, 76 reviews and 25 Validate pages were rewritten and

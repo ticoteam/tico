@@ -55,7 +55,7 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
     back = claim(api, machine)
     assert back["task"]["id"] == parent["id"]
     assert back["config"]["runtime"] == "claude" and "check" not in back["task"]
-    # The engine wakes the parent's owner once with how the sub-task ended (docs/pipelines-v3.md "A task waits a day on
+    # The engine wakes the parent's owner once with how the sub-task ended (docs/dev/pipelines-v3.md "A task waits a day on
     # a sub-task"); the review's note is on the sub-task itself. v3 has no verdict fields.
     assert "The tasks this one filed have ended: Review PR 700 with another model: Done" in back["message"]["body"]
     with api.app.state.store.read() as c:

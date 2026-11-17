@@ -320,7 +320,7 @@ plan, nothing moves. An API key is not a plan.
 
 | Role | | Claude only | ChatGPT only | Both |
 | --- | --- | --- | --- | --- |
-| Builder, Reviewer 1, every Owner, Product Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
+| Builder, Reviewer 1, every Owner, Feature Owner and manager, every other role | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | Haiku 5.5, extra high |
 | | tasks | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
 | The Assistant (it chats; no task model) | bot | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
 | Reviewer 2 (no task model) | bot | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |

@@ -1,4 +1,4 @@
-"""Due dates on rules (docs/rules-plan.md §1, §4): a date, a repeat, an owner and a status for each rule that has one.
+"""Due dates on rules (docs/dev/rules-plan.md §1, §4): a date, a repeat, an owner and a status for each rule that has one.
 
 - A due date is its own row (`rule_due_dates`), so one rule can have several (quarterly returns and an annual report).
   Its occurrences are worked out from the first date and the repeat; nothing stores them. `rule_due_status` holds each
@@ -388,7 +388,7 @@ def on_task_status(c, actor, task, old, new):
 
 
 def _completes(task, actor):
-    """Completed (docs/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done
+    """Completed (docs/dev/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done
     and a close by Tico (cleanup, a task closed with the one above it) never are."""
     if not actor or actor == H.KEEPER:
         return False

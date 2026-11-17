@@ -303,7 +303,7 @@ runner heartbeats or the server's Git sync worker. Definitions, instruction snap
 versions, operational settings and deletion/run history remain in SQLite. The cloud is the
 clock and the record; the Mac executes queued tasks from the saved version. Bot pages and
 scheduler queries use the same database records, including an empty active set. See
-[routine format, synchronization and rollout](routines.md) for details.
+[routine format, synchronization and rollout](../routines.md) for details.
 
 ## 10. Bot-side conventions (template AGENT.md, and the three bots' AGENT.md)
 "You are always on. Messages arrive as turns. Read the database before asking a bot (`hub

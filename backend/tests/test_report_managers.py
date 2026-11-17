@@ -15,6 +15,7 @@ from backend.tests.helpers.api import claim, get, headers, post, put  # noqa: F4
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (botops is a fixture)
+from backend.tests.helpers.statement_scope import measuring, recorder
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 
@@ -160,7 +161,7 @@ def test_a_person_who_manages_the_report_sees_and_undoes_the_managers_change(api
     counsel = bot_id(api, "counsel")
     [row] = [c for c in get(api, "settings/history", token="ben-test")["changes"] if c["bot"] == counsel]
     assert row["via"] == "report_manager" and row["can_undo"] is True
-    assert get(api, "settings/history", token="ben-test")["transitions"] == []
+    assert "transitions" not in get(api, "settings/history", token="ben-test")
     assert get(api, "settings/history", token="cara-test")["changes"] == []
     undo = f"settings/history/{row['id']}/undo"
     post(api, undo, {"expected_revision": revision(api, "counsel")}, token="cara-test", expected=403)
@@ -293,14 +294,16 @@ def test_a_caller_who_manages_no_bot_reads_no_settings_change_and_a_person_sees_
     @contextmanager
     def traced():
         with read() as c:
-            c.set_trace_callback(statements.append)
+            c.set_trace_callback(recorder(statements))
             try:
                 yield c
             finally:
                 c.set_trace_callback(None)
 
     monkeypatch.setattr(api.app.state.store, "read", traced)
-    assert get(api, "settings/history", token="cara-test")["changes"] == []
+    with measuring(statements):
+        assert get(api, "settings/history", token="cara-test")["changes"] == []
+    assert statements, "the request ran no statement at all"
     # Nothing reads the install's settings changes for her: no statement touches the table at all.
     assert not [sql for sql in statements if "settings_changes" in sql]
     # A person sees only the manager changes to the bots they manage.
@@ -319,14 +322,15 @@ def settings_reads(api, monkeypatch, path, token):
     @contextmanager
     def traced():
         with read() as c:
-            c.set_trace_callback(statements.append)
+            c.set_trace_callback(recorder(statements))
             try:
                 yield c
             finally:
                 c.set_trace_callback(None)
 
     monkeypatch.setattr(store, "read", traced)
-    answer = get(api, path, token=token)
+    with measuring(statements):
+        answer = get(api, path, token=token)
     with read() as c:
         plans = [
             " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql))
@@ -403,7 +407,7 @@ def test_a_tie_of_changes_at_one_time_pages_in_id_order_and_no_read_sorts_it(api
     @contextmanager
     def traced():
         with real() as c:
-            c.set_trace_callback(statements.append)
+            c.set_trace_callback(recorder(statements))
             try:
                 yield c
             finally:
@@ -414,7 +418,8 @@ def test_a_tie_of_changes_at_one_time_pages_in_id_order_and_no_read_sorts_it(api
     def read_page(path, token):
         """One page of a history read, and the query plan of each statement it runs on settings_changes."""
         del statements[:]
-        answer = get(api, path, token=token)
+        with measuring(statements):
+            answer = get(api, path, token=token)
         with real() as c:
             plans = [
                 " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql))

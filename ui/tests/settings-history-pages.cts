@@ -67,7 +67,7 @@ declare function settingsHistoryShow(view?: string): void;
         const bot = url.searchParams.get('bot') || '', before = url.searchParams.get('before') || '';
         calls.push({bot, before});
         const rows = CHANGES.filter(row => !bot || row.bot === bot);
-        return json({...pageOf(rows, before), transitions: []});
+        return json({...pageOf(rows, before)});
       }
       if (p === '/api/v2/history') {
         const q = Object.fromEntries(url.searchParams);

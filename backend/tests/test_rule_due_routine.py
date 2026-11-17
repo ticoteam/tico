@@ -1,4 +1,4 @@
-"""A rule's due date with its routine (backend/rule_due_routine.py, docs/rules-plan.md §4): turning it on makes one "Before
+"""A rule's due date with its routine (backend/rule_due_routine.py, docs/dev/rules-plan.md §4): turning it on makes one "Before
 a due date" automation linked by routine_id, whose run opens the owner's task on time; completing that task marks the
 day Satisfied, a cancel or the keeper's close doesn't, and reopening takes it back; a day marked by hand is skipped; an
 edit moves the routine to the new row; removing the due date turns it off; Due soon follows its lead time."""

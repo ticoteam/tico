@@ -61,7 +61,7 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     assert claim(api, machine) is None  # the scope never lifts a pause
     control(action="resume")
     post(api, "chat/ops", {"text": "Anything new?"})  # new work outside the task arrives during the check
-    # The task waits on the sub-task it filed (docs/pipelines-v3.md): its own wake is let go, and inside the limit
+    # The task waits on the sub-task it filed (docs/dev/pipelines-v3.md): its own wake is let go, and inside the limit
     # only the sub-task runs.
     taken = [(claim(api, machine) or {}).get("lane") for _ in range(3)]
     # A sub-task runs in its session root's lane (session_roots_v1), so the sub-task's lane is the parent's.

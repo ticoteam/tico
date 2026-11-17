@@ -1,5 +1,5 @@
 # The Rules Owner. Installed with every environment: it reads a contract or terms a person adds and suggests the rules that bind us
-# (docs/rules-plan.md §2, §5). A helper: the Assistant hands it "can I...?" questions, and it sits outside the org chart.
+# (docs/dev/rules-plan.md §2, §5). A helper: the Assistant hands it "can I...?" questions, and it sits outside the org chart.
 template: rules-owner
 slug: rules-owner
 name: Rules Owner

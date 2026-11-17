@@ -111,9 +111,10 @@ def test_a_home_timeline_says_who_wrote_each_line(api):
     thread = api.get("/api/v2/threads/home/bot:ops", headers=headers()).json()["id"]
     with api.app.state.store.transaction() as c:
         H.say(c, "human:ana", "bot:ops", "Can you check the build?", conversation_id=thread)
+        # Tico's notices to the bot stay on its runs (no seq); the ones a person's timeline shows are addressed to them.
         with SRC.writing_as("follow-up-timer"):
-            H.say(c, H.KEEPER, "bot:ops", "Follow up on the build", kind="notice", conversation_id=thread)
-        H.say(c, H.KEEPER, "bot:ops", "The build is green", kind="notice", conversation_id=thread)
+            H.say(c, H.KEEPER, "human:ana", "Follow up on the build", kind="notice", conversation_id=thread)
+        H.say(c, H.KEEPER, "human:ana", "The build is green", kind="notice", conversation_id=thread)
     lines = {m["body"]: m for m in api.get(f"/api/v2/threads/{thread}/timeline", headers=headers()).json()["messages"]}
     assert lines["Can you check the build?"]["source"]["kind"] == "person"
     assert lines["Can you check the build?"]["source"]["name"]

@@ -276,3 +276,58 @@ def test_a_database_with_a_migration_this_code_does_not_know_is_refused_untouche
     with pytest.raises(migrations.MigrationError, match=re.escape(version)):
         boot(path)
     assert snapshot(path) == before
+
+
+def test_concurrent_first_starts_on_a_new_file_load_the_baseline_once_and_all_succeed(tmp_path):
+    """Two starts (two processes, or a request's connection beside the start) that both find the file empty: one loads
+    the baseline and runs the files after it, the others wait for its write lock, find it loaded and run nothing twice.
+    Each round is a new file, so the race is met many times."""
+    import threading
+
+    for round_ in range(8):
+        path = tmp_path / f"hub-{round_}.sqlite"
+        barrier, errors = threading.Barrier(4), []
+
+        def start():
+            barrier.wait()
+            try:
+                H.connect(path).close()
+            except Exception as exc:  # the assertion below names it
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=start) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert errors == []
+        with sqlite3.connect(path) as c:
+            versions = _versions(c)
+            assert len(versions) == len(set(versions)) and {m.version for m in migrations.files()} <= set(versions)
+            assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+        single = tmp_path / f"single-{round_}.sqlite"
+        H.connect(single).close()
+        assert snapshot(path)[0] == snapshot(single)[0]
+
+
+def test_a_file_another_start_ran_since_the_records_were_read_is_skipped(tmp_path):
+    """Under its write lock a pending file looks at the records again: one another start ran meanwhile is not run twice."""
+    directory = tmp_path / "migrations"
+    directory.mkdir()
+    (directory / "20261101000001_once.sql").write_text("CREATE TABLE once(x);\n")
+    (only,) = migrations.files(directory)
+    conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
+    try:
+        conn.execute(migrations.TABLE)
+        conn.execute("INSERT INTO schema_migrations VALUES(?,?,?)", (only.version, only.checksum, "elsewhere"))
+        migrations._run(conn, only)  # the records this start read did not have it
+        assert "once" not in _tables(conn) and not conn.in_transaction
+        assert conn.execute("SELECT applied_at FROM schema_migrations").fetchall() == [("elsewhere",)]
+    finally:
+        conn.close()
+
+
+def test_a_baseline_that_ends_inside_a_statement_is_refused(tmp_path):
+    (tmp_path / migrations.BASELINE).write_text("CREATE TABLE whole(x);\nCREATE TABLE cut(x\n")
+    with pytest.raises(migrations.MigrationError, match="ends inside a statement"):
+        migrations._baseline(tmp_path / migrations.BASELINE)

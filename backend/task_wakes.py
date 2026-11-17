@@ -1,5 +1,5 @@
 # pyright: strict
-"""A bot's wake about a task on the engine (docs/pipelines-v3.md, "Effects travel with the move").
+"""A bot's wake about a task on the engine (docs/dev/pipelines-v3.md, "Effects travel with the move").
 
 A wake is a row in `messages` with a `wake_key`: `<task id>:<visit id>:<level>:<try>`. The key is unique, so writing the
 same wake twice is one wake. It is written in the same transaction as the move that causes it. The body says what is

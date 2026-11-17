@@ -70,7 +70,7 @@ const SIZES = ['100K', '150K', '200K', '250K', '300K', '400K', '500K', '600K', '
       if (p === '/api/v2/providers') return json({enabled: ['openai', 'anthropic'], default: catalog.default, revision: 1,
         providers: [{id: 'openai', label: 'OpenAI'}, {id: 'anthropic', label: 'Anthropic'}]});
       if (p === '/api/v2/usage/limits') return json({bots: {}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
