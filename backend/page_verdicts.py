@@ -17,6 +17,8 @@ Every function takes the caller's open write transaction and never commits, exce
 
 import hashlib
 import json
+import re
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -61,21 +63,49 @@ def get(conn: "sqlite3.Connection", file_id: str, version: int, key: str) -> Row
     )
 
 
+# Each page's versions Jev passed, with the page requirement each counted for: newest version first, then the newest
+# verdict. `checks_of` reads one page; `prime_checks` reads many together.
+PASSED = (
+    "SELECT p.file_id, p.version, p.requirement_id FROM requirement_pages p JOIN page_verdicts v ON v.file_id = p.file_id "
+    "AND v.version = p.version AND v.rubric_hash = COALESCE(p.rubric_hash, '') WHERE p.file_id IN (SELECT value FROM "
+    "json_each(?)) AND v.verdict='met' ORDER BY p.version DESC, v.updated_at DESC"
+)
+
+
+def _passed(conn: "sqlite3.Connection", file_ids: list[str]) -> dict[str, list[tuple[int, str]]]:
+    out: dict[str, list[tuple[int, str]]] = {fid: [] for fid in file_ids}
+    if file_ids:
+        for fid, version, rid in conn.execute(PASSED, (json.dumps(file_ids),)).fetchall():
+            out[str(fid)].append((int(version), str(rid)))
+    return out
+
+
+def prime_checks(conn: "sqlite3.Connection", refs: Iterable[object]) -> None:
+    """Read what Jev passed on the pages of many `page:<id>[@<version>]` refs together, for the `checks_of` that follow
+    in this snapshot (Needs you shows an OK's check rows for each OK on it). Without a read snapshot it reads nothing."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    ids = {
+        m.group(1) for m in (re.fullmatch(r"page:([A-Za-z0-9_-]+)(?:@[0-9]{1,9})?", str(r or "")) for r in refs) if m
+    }
+    for fid, found in _passed(conn, sorted(i for i in ids if (PASSED, i) not in values)).items():
+        values.setdefault((PASSED, fid), found)
+
+
 def checks_of(conn: "sqlite3.Connection", file_id: str, version: int | None = None) -> list[str]:
     """The check rows of a page version (its newest, with no version) that Jev passed: one short line per part of the
     check it was judged by (pipeline_judges.CHECKS, `Part.found`). An OK that shows the page lists them under its
     question; [] when no verdict on it passed, or its check is a company's own."""
     from . import pipeline_judges as PJ
+    from . import read_cache
     from . import task_requirements as R
 
-    found = conn.execute(
-        "SELECT p.requirement_id FROM requirement_pages p JOIN page_verdicts v ON v.file_id = p.file_id "
-        "AND v.version = p.version AND v.rubric_hash = COALESCE(p.rubric_hash, '') WHERE p.file_id=? "
-        "AND (? IS NULL OR p.version=?) "
-        "AND v.verdict='met' ORDER BY p.version DESC, v.updated_at DESC LIMIT 1",
-        (file_id, version, version),
-    ).fetchone()
-    requirement: Row = (R.get(conn, str(found[0])) if found else None) or {}
+    passed = read_cache.value(conn, (PASSED, file_id), lambda: _passed(conn, [file_id])[file_id], shared=True)
+    found = next((rid for at, rid in passed if version is None or at == int(version)), None)
+    requirement: Row = (R.get(conn, found) if found else None) or {}
     settings: Row = requirement.get("settings") or {}
     check = PJ.check_of(settings.get("rubric"))
     return [part.found for part in PJ.CHECKS[check] if part.found] if check else []
