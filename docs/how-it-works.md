@@ -149,24 +149,26 @@ one `SELECT` at a time, each caller seeing only what the JSON API would show it,
 
 **Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner_support/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
-`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico-computer`. Their plists name
+`~/.config/tico/runner.json`). Three launchd jobs, installed and managed with `scripts/tico-computer`. Their plists name
 `runner`, which forwards to `runner_support/` (runner/__init__.py), so a computer moved back to an older release still
 starts them:
 
 | Job | Command | What it does |
 |---|---|---|
 | `team.tico.tico-bot` | `python -m runner run` (execs `tico-runner run`) | Heartbeats every 15 s with readiness, claims work for the bots assigned to this computer, runs each run in the bot's local repository with the local model CLI, streams output back |
-| `team.tico.tico-connectors` | `python -m runner connectors` | Publishes calendar snapshots, executes Tico-queued calendar appointments, and pushes persisted mail from local Google access (Ana's Mac, or a Linux runner that holds the Google key) |
 | `team.tico.tico-close-calls` | `python -m runner close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico-computer install close-calls`) |
 | `team.tico.tico-importers` | `python -m runner importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico-computer install importers`) |
 
 A Linux runner (the Docker image) has no launchd: with `TICO_SIDE_JOBS=1` (set by the image) `tico-runner run` supervises `importers` (while Tico assigns importers to this computer) and
-`close-calls` (while the Close key is in `secrets/`) and `connectors` (while `secrets/google-sa.json` is there, or
-Tico names this computer's owner in `TICO_PROCESSING_OPERATORS`) as child processes with restart and backoff
+`close-calls` (while the Close key is in `secrets/`) as child processes with restart and backoff
 (`runner-rs/src/sidejobs.rs`). A Mac keeps its checkout-sibling layout; a Linux runner names the same places with
-`TICO_PROJECTS_DIR` and `TICO_MAIL_VENV` (see [Message bots](mail.md#works-on-linux-runners)).
+`TICO_PROJECTS_DIR`.
 
-Logs are `~/.config/tico/logs/tico-{bot,connectors,close-calls,importers}.log`. The runner makes outbound
+No computer runs a mail or calendar job: the server reads Gmail and Google Calendar live, watches mailboxes, sends
+queued mail and books calendars ([Message bots](mail.md#how-tico-hears-new-mail)). An update removes the old
+`tico-connectors` job from a computer that still has one.
+
+Logs are `~/.config/tico/logs/tico-{bot,close-calls,importers}.log`. The runner makes outbound
 HTTPS calls only; nothing listens on the Mac. Model subscriptions (Codex, Claude, Gemini, Grok
 Build) are signed in on the Mac and never leave it. Bot Credentials are stored in
 **Tools → Credentials**, granted to each bot and delivered only for its run. Existing own files,
@@ -196,7 +198,7 @@ a choice with a confidence, a score on ordered levels, or the probability a stat
 It writes no prose, so a bot uses it to decide (sort a listing, dedupe, route, gate a draft) and
 its own model to write. Tico holds the one key and audits every call by label, never the
 state (`backend/judge.py`); the decisions themselves are versioned files in `questions/`
-(`questions/README.md`), which the meeting brain and the mail CLI read the same way a bot does.
+(`questions/README.md`), which the meeting brain reads the same way a bot does.
 `skills/decisions/SKILL.md` says when to reach for it.
 
 **Bot ids** — a bot has a stable id and a renameable slug. A bot made before ids keeps its slug as its id; a bot made now
@@ -694,9 +696,9 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 |---|---|
 | `backend/` | the cloud API, authorization, write layer, scheduler, backups (FastAPI, SQLite) |
 | `runner-rs/` | the local runner (`tico-runner`): enrolment, readiness, leases, runs, harnesses, updates |
-| `runner_support/` | the runner's Python helpers: the `python -m runner_support run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
+| `runner_support/` | the runner's Python helpers: the `python -m runner_support run` shim, Close call and meeting import, catalog set-up, the update process |
 | `clients/` | what bots and the runner call: the `tico` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
-| `connectors/` | shared Slack, mail/calendar and browser adapters bots use instead of vendor APIs |
+| `connectors/` | shared Slack and browser adapters bots use instead of vendor APIs (mail and calendar run on the server) |
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `tico tool show <service>`, with the learnings bots add |
 | `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, an automation's decide step, the meeting brain): one versioned JSON file per decision, with its thresholds |
 | `ui/` | the web interface (`index.html`, `app/` scripts, `styles/`, feature scripts, browser tests; see `ui/README.md`) |

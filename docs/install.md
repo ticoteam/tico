@@ -707,8 +707,8 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
   sh install.sh --runner --url http://server:8765 --server-network tico_default --code <code> --label "This computer"
 ```
 
-**Add a second computer on the same host (for a message bot).** A message bot must have a computer of its
-own, so a second one on the same host is the usual next step ([mail](mail.md)). Give it a name and run the installer again with
+**Add a second computer on the same host.** A second computer on the same host keeps some bots apart from the others,
+for example a message bot. Give it a name and run the installer again with
 a new code from Settings > Computers > Add computer; the first computer is not touched:
 
 ```
@@ -821,17 +821,10 @@ and only while they are wanted:
 `docker logs '<container-name>'` carries the jobs' lines (`Tico side jobs: started importers`), and each importer's health
 shows on its Settings card and the Meetings Sources strip.
 
-*Mail and calendar (`connectors`)* run on a Linux runner the same way, from the team's Google service-account
-key ([Message bots](mail.md#works-on-linux-runners) has the Google Workspace setup). Put the key in the runner's state directory,
-where only the runner can read it, and keep it on one computer only:
-`docker exec -i -u ticorun '<container-name>' sh -c 'umask 077; cat > "$(ls -d /home/runner/state-* | head -1)/google-sa.json"' < google-sa.json`
-(the runner refuses a key that is not mode 0600). A key an older install kept in `workspace/secrets/google-sa.json` is moved
-there once, automatically. Bots cannot read it; a message bot asks the runner for a token for its own mailbox, and a message bot
-gets a computer to itself ([Message bots](mail.md#who-can-read-the-key)).
-The job starts within a minute of the file appearing, builds its Python environment into the volume the first time
-(about a minute; `docker logs` shows it), and stops when the file is removed. Instead of the key, an owner who
-sets `TICO_PROCESSING_OPERATORS` on the server assigns the job to that owner's runners. `docker exec '<container-name>'
-python -m runner_support --config /home/runner/runner.json connectors-doctor` says whether the key is found.
+*Mail and calendar* need nothing on a computer: the Tico server reads and acts on Gmail and Google Calendar itself,
+with the key or grants set up in Tools > Settings > Email ([Message bots](mail.md#set-up-google-in-settings)). The first
+start after the update deletes a Google key, connected-account file and mail database an older install left on the
+runner.
 `TICO_SIDE_JOBS=0` in the container's environment turns the supervisor off.
 
 Update a runner with `docker pull ghcr.io/ticoteam/tico-runner:latest`, then remove and re-run the container
@@ -952,7 +945,7 @@ in Add computer and **Use a Tico checkout instead**, then in the Tico checkout o
 `https://<TICO_DOMAIN>`, runs under launchd, and reconnects on its own after the server restarts.
 
 **Mac updates.** The runner follows the server's release by itself ([updates.md](updates.md#a-mac-or-linux-checkout)).
-After a healthy update it also restarts the side jobs installed beside it (`connectors`, `close-calls`, `importers`), and
+After a healthy update it also restarts the side jobs installed beside it (`close-calls`, `importers`), and
 each side job exits and restarts when it sees the checkout move to another revision (checked about once a minute), so no job
 keeps old code in memory. `scripts/tico-computer restart` does the same by hand.
 
@@ -984,7 +977,7 @@ systemd **user** units instead of launchd; no root is needed:
 
 ```
 scripts/tico-computer -e <env> enroll --code-file <file> --label "Build box"     # or scripts/setup-runner.sh
-scripts/tico-computer -e <env> install            # tico-bot, tico-connectors, tico-close-calls, tico-importers: Restart=always
+scripts/tico-computer -e <env> install            # tico-bot, tico-close-calls, tico-importers: Restart=always
 scripts/tico-computer -e <env> status
 ```
 
