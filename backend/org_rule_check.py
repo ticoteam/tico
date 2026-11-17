@@ -1,4 +1,4 @@
-"""Org rule checks (docs/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
+"""Org rule checks (docs/dev/rules-plan.md §3): a bot's output is checked against the org rules that apply to it before it
 is delivered (`questions/rule-check.json`, asked through the server's Decide engine, on Decide's one monthly budget).
 
 Like ask ingest (backend/ask_ingest.py): one call per output, outside the write's transaction (`preflight`); plain

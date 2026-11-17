@@ -39,7 +39,6 @@ DEFAULT_PERSON = {
     "slack": "",
     "slack_id": "",
     "github": "",
-    "notify_slack_task_done": True,
     "notify_slack_bot_messages": True,
     "slack_muted_bots": [],
     "phone": "",
@@ -96,7 +95,6 @@ def _person(row):
         "slack_id": _clean(row.get("slack_id")),
         # Their GitHub login, which a review request on a linked pull request names (backend/github.py).
         "github": _clean(row.get("github")).lstrip("@").lower(),
-        "notify_slack_task_done": row.get("notify_slack_task_done") is not False,
         "notify_slack_bot_messages": row.get("notify_slack_bot_messages") is not False,
         # The Assistant drafts their daily update unless they turn it off.
         "update_draft": row.get("update_draft") is not False,
@@ -517,7 +515,6 @@ def profile(person_row):
         "slack": p.get("slack") or "",
         "slack_id": p.get("slack_id") or "",
         "github": p.get("github") or "",
-        "notify_slack_task_done": p.get("notify_slack_task_done") is not False,
         "notify_slack_bot_messages": p.get("notify_slack_bot_messages") is not False,
         "update_draft": p.get("update_draft") is not False,
         "notify_browser": p.get("notify_browser") is True,

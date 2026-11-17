@@ -10,6 +10,7 @@ import random
 from backend import meetings
 from backend.context_search import excerpt, meeting_info, readable, terms, transcript_text
 from backend.store import Problem
+from backend.tests.helpers.statement_scope import measuring, recorder
 
 WORDS = (
     "pricing renewal contract onboarding churn invoice discount pilot rollout budget quarter roadmap security review "
@@ -214,7 +215,7 @@ def traced(store):
     @contextlib.contextmanager
     def borrowed():
         with original() as c:
-            c.set_trace_callback(seen.append)
+            c.set_trace_callback(recorder(seen))
             try:
                 yield c
             finally:
@@ -222,6 +223,7 @@ def traced(store):
 
     store.read = borrowed
     try:
-        yield seen
+        with measuring(seen):
+            yield seen
     finally:
         del store.read

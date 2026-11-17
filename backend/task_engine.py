@@ -1,5 +1,5 @@
 # pyright: strict
-"""The one writer of a task's stage, owner and status (docs/pipelines-v3.md, "The five rules").
+"""The one writer of a task's stage, owner and status (docs/dev/pipelines-v3.md, "The five rules").
 
 Every change to `tasks.status`, `stage_id`, `owner_id` and `pipeline_id` is made here, by `_write`, which opens the
 guard the trigger `tasks_move_only` reads, writes, and closes it again inside the caller's transaction. Reassign, Done,
@@ -407,7 +407,7 @@ def shut_out(
     conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None, *, new: bool = False
 ) -> Row | None:
     """Why private task `row` may not go into work stage `target`, as a plain `{"who", "cause", "fix"}`, or None when
-    it may. The engine never adds a reader, an owner or a party to a private task (docs/pipelines-v3.md, "Private
+    it may. The engine never adds a reader, an owner or a party to a private task (docs/dev/pipelines-v3.md, "Private
     tasks. Same engine. Who can see them doesn't change."), so the task stops before a stage whose owner, or someone the
     stage asks, cannot read it, and waits until a person who can see it shares it. A bot the pipeline names for the
     stage (`names`) is the exception: it reads the task while it holds the stage, and only then (`stage_read`).

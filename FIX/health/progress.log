@@ -1,7 +1,0 @@
-2026-10-02 Read current origin/main, local owner rules and issues #2/#3/#4 through read-only issue views; existing fixes identified.
-2026-10-02 Implemented registry question overrides and Listening log/Health diagnostics without overlapping privacy or Granola files.
-2026-10-02 Focused regressions verified overrides, version rescoring, vetoes, secret omission, scoped grants, batching, proxy configuration and archived cleanup compatibility.
-2026-10-02 Extended real local Git retention checks; no live provider calls, no test deletions, and no full suite.
-2026-10-02 Final review added a clear safe 422 for malformed custom decision questions before calling a provider; focused refusal and valid routing checked.
-2026-10-02 Addressed root containment review with anchored no-follow regular-file loading and fixed invalid override diagnostics; outside symlink/file-swap and fallback compatibility proofs passed.
-2026-10-02 Deduplicated unchanged configuration logs with bounded locked fingerprints, preserved current owner/admin Health, and replaced raw malformed-entry exceptions with a fixed schema message; final focused run 19 passed and 12 subtests passed in 8.33s.

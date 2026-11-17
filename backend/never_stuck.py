@@ -1,5 +1,5 @@
 # pyright: strict
-"""The never-stuck check (docs/pipelines-v3.md, "The never-stuck check").
+"""The never-stuck check (docs/dev/pipelines-v3.md, "The never-stuck check").
 
     check(conn, now=None) -> dict[str, int]      one pass over every open task, on the Heartbeat every 10 seconds
     rules_hold(conn) -> list[str]                the seven rules that hold at all times; empty when they do (each
@@ -108,7 +108,7 @@ def _usable(conn: "sqlite3.Connection", bot: str | None, seen: dict[str, str | N
 
 
 def _reads(conn: "sqlite3.Connection", actor: str | None, row: Row) -> bool:
-    """Whether `actor` may read this task already. The engine never adds a reader (docs/pipelines-v3.md: private
+    """Whether `actor` may read this task already. The engine never adds a reader (docs/dev/pipelines-v3.md: private
     tasks, "Who can see them doesn't change"), so on a private task the ladder skips a manager bot that cannot read it,
     and a bot that cannot read it is never woken: the task goes to a person who may."""
     return bool(actor) and bool(_h().task_private_readable(conn, actor, row))
@@ -750,7 +750,7 @@ def _late(
             )
             if _asks_only(waits):
                 # It waits only on people's answers. The manager bot's one move is to push past an ask it may push
-                # past (docs/pipelines-v3.md "A task waits a day on you"); with none it is not woken. Never a snooze:
+                # past (docs/dev/pipelines-v3.md "A task waits a day on you"); with none it is not woken. Never a snooze:
                 # the ask stays in the person's list, and Late at 3 times adds nothing to a person's turn.
                 lead = (
                     f"{said} It waits on: {waits_on}. It stays in {_name(conn, head.who)}'s list. Look once: if the "
@@ -899,7 +899,7 @@ class Break(str):
 
 
 def rules_hold(conn: "sqlite3.Connection") -> list[str]:
-    """The seven rules (docs/pipelines-v3.md, "Rules that hold at all times"), checked against the database as it is.
+    """The seven rules (docs/dev/pipelines-v3.md, "Rules that hold at all times"), checked against the database as it is.
     Returns one sentence per break; empty when they all hold. The fault rig runs it after every step."""
     H = _h()
     broken: list[str] = []

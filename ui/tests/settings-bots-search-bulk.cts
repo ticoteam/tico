@@ -76,7 +76,7 @@ type Call = {slug: string; what: string; body: {expected_revision: number; model
       if (p === '/api/v2/providers') return json({enabled: ['anthropic'], revision: 1, providers: [{id: 'anthropic', label: 'Anthropic'}]});
       // alpha has a limit, beta none (an empty Limit cell whose Set limit shows on hover or focus), the rest none to edit
       if (p === '/api/v2/usage/limits') return json({bots: {alpha: {may_edit: true, daily_usd: 20, percent: 10}, beta: {may_edit: true, percent: 0}}});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });

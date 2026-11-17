@@ -111,6 +111,11 @@ Docs (internal and linked), Files, Meetings, Strategy (with Market as its tab), 
 | API keys | Credentials |
 | judge | Decision |
 | hub | Tico |
+| board | pipeline |
+| boards | pipelines |
+| Recurring | Routine |
+| Go through | Catch up |
+| Product Owner | Feature Owner |
 
 ## Branches
 

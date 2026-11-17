@@ -1536,11 +1536,10 @@ class SettingsAdmin:
 
     def history(self, c, who, limit=100, bot="", before=""):
         """One page of the settings changes the caller may see, newest first, and `next_before` for the page after it.
-        The owner sees every change, and the newest `limit` transitions on the first page. A person who manages a bot
-        sees only the changes its manager bots made to the bots they manage (via `report_manager`), and no transitions.
-        Anyone else sees none. `bot` keeps to one bot; `before` (a page's `next_before`) keeps to older changes. The
-        page is at most HISTORY_PAGE_BYTES as it is sent: its transitions come first, newest first, and
-        `transitions_truncated` says when some were left out; its changes take what is left."""
+        The owner sees every change. A person who manages a bot sees only the changes its manager bots made to the bots
+        they manage (via `report_manager`). Anyone else sees none. `bot` keeps to one bot; `before` (a page's
+        `next_before`) keeps to older changes. The page is at most HISTORY_PAGE_BYTES as it is sent; a change too big
+        for a page comes without its values."""
         if who.role not in ("owner", "human"):
             raise Problem(
                 "forbidden", "Only the owner, or a person who manages the bot, sees its settings changes", 403
@@ -1554,30 +1553,14 @@ class SettingsAdmin:
         changes = [self._history_change(c, row, owner) for row in rows[:limit]]
         actor_names.annotate(c, changes)
         # What the page takes besides its changes: its keys, and a cursor as long as an id.
-        room = HISTORY_PAGE_BYTES - _bytes(
-            {"changes": [], "next_before": H.new_id(), "transitions": [], "transitions_truncated": True}
-        )
+        room = HISTORY_PAGE_BYTES - _bytes({"changes": [], "next_before": H.new_id()})
         for value in changes:
             if _bytes(value) + 1 > room:
                 # Bigger than a page on its own (a long list of people, say): sent without its values. It is still
                 # taken, so the page moves on past it.
                 value.update(before=None, after=None, truncated=True)
-        transitions, cut, used = [], False, 0
-        if owner and not before:
-            ids = c.execute(
-                "SELECT id FROM bot_transitions"
-                + (" WHERE bot=?" if bot else "")
-                + " ORDER BY created_at DESC LIMIT ?",
-                ([bot] if bot else []) + [limit + 1],
-            ).fetchall()
-            transitions = [self.get(c, who, row[0]) for row in ids[:limit]]
-            actor_names.annotate(c, transitions)
-            # The first change keeps its room, so a page that has transitions still takes a change.
-            transitions, used, cut = _fit(transitions, room - (_bytes(changes[0]) + 1 if changes else 0))
-            # More than `limit` transitions: the older ones are left out as surely as those the bytes cut.
-            cut = cut or len(ids) > limit
-        changes = _fit(changes, room - used)[0]
-        return self._page(c, rows, changes, transitions, cut)
+        changes = _fit(changes, room)[0]
+        return self._page(c, rows, changes)
 
     def _history_change(self, c, row, owner):
         """A settings change with what the page says about it (`can_undo`); `history` fits it afterwards."""
@@ -1600,15 +1583,12 @@ class SettingsAdmin:
         value["truncated"] = False
         return value
 
-    def _page(self, c, rows, changes, transitions, cut):
+    def _page(self, c, rows, changes):
         """The page as it is sent: its names are added (they are bytes too), then, while it is over a page, its last
-        change goes to the next page, then its last transition. A lone change still over a page comes without its
-        values."""
+        change goes to the next page. A lone change still over a page comes without its values."""
         while True:
             page = {
                 "changes": changes,
-                "transitions": transitions,
-                "transitions_truncated": cut,
                 "next_before": changes[-1]["id"] if len(rows) > len(changes) else None,
             }
             actor_names.annotate(c, page)
@@ -1616,9 +1596,6 @@ class SettingsAdmin:
                 return page
             if len(changes) > 1:
                 changes.pop()
-            elif transitions:
-                transitions.pop()
-                cut = True
             elif changes[0]["truncated"]:
                 return page
             else:

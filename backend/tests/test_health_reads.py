@@ -1,6 +1,8 @@
 """The health checks read the company's settings once a page, and each bot's own rows once for all the bots."""
 
+import contextlib
 import re
+import threading
 from collections import Counter
 
 from backend.tests.helpers.api import headers, ready  # noqa: F401
@@ -172,3 +174,36 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
         # The control reads several times the batched total (about 560 against 200).
         assert slow > 2 * total, (total, slow)
         assert api.get("/api/v2/health", headers=headers("ana-test")).content == primed
+
+
+def test_a_read_another_thread_runs_during_the_request_is_not_counted(api, monkeypatch):
+    # CI run 43990123595 counted one more bot_status read at 12 bots than at 6 on /api/employees: a read another thread
+    # ran on the store while the request was in flight. Here the first connection the request borrows starts a read on
+    # a thread of its own and joins it, so that read lands in the window every time. The request's count must stay what
+    # it was without it.
+    store = api.app.state.store
+    machine = setup(api, monkeypatch, tasks=2)
+    busy(api, machine, 0, 6)
+    counted(api, monkeypatch, "/api/employees")  # warm
+    _, alone = counted(api, monkeypatch, "/api/employees")
+    real_read, ran = store.read, []
+
+    def elsewhere():
+        with store.read() as other:
+            other.execute("SELECT * FROM bot_status WHERE bot IN ('busy-0','busy-1')").fetchall()
+
+    @contextlib.contextmanager
+    def read_with_a_read_elsewhere():
+        if not ran:
+            ran.append(True)
+            worker = threading.Thread(target=elsewhere)
+            worker.start()
+            worker.join()
+        with real_read() as c:
+            yield c
+
+    monkeypatch.setattr(store, "read", read_with_a_read_elsewhere)
+    body, beside = counted(api, monkeypatch, "/api/employees")
+    assert ran, "the employees request borrowed no connection"
+    assert len([row for row in body if str(row.get("name", "")).startswith("busy-")]) >= 6
+    assert beside == alone, (alone, beside)

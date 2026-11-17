@@ -318,7 +318,7 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     assert shown(api, t)["task"]["status"] == "open"
     with api.app.state.store.read() as c:
         assert R.hold(c, t["id"])["why"] == "Codex on Test Mac to be reconnected"
-    # The bot is Paused on it: one row for the person who can fix it, naming the task (docs/pipelines-v3.md, Paused).
+    # The bot is Paused on it: one row for the person who can fix it, naming the task (docs/dev/pipelines-v3.md, Paused).
     [row] = paused(api)
     assert row["line"] == "ops has a login to reconnect" and row["task_ids"] == [t["id"]]
     # The same refusal again (the queued job's retry) changes nothing: one card, one item.

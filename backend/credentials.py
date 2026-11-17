@@ -158,11 +158,13 @@ def explicitly_granted(c, subject):
 def prime_granted(c, subjects):
     """`explicitly_granted` for many subjects in one read per 500, seeded into the snapshot so each later
     `granted(c, subject)` reads no grant again. Outside a snapshot nothing is kept."""
-    from . import read_cache
+    from . import default_read, read_cache
 
+    subjects = list(subjects)
     values = read_cache.cache(c)
     if values is None:
         return
+    default_read.prime_readers(c, subjects)  # each bot's default reads ask whether it is live: one read for all
     wanted = sorted({s for s in subjects if ("credential_granted_explicit", s) not in values})
     found = {s: set() for s in wanted}
     for part in H.chunks(wanted):

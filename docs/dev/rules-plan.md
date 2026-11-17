@@ -78,7 +78,7 @@ lives on other pages; on this page the button is **+ Add document**.
 2. **Rules › Internal** (board 2): list with Rule | Followed by | With | Due; filters Followed by, With, and "Settings too" (off).
    Clicking a rule opens a side panel: rule, description, Followed by, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
    Who may reach whom, how often, and the lines between teammates (each line's rule an internal rule): see
-   [reach.md](reach.md).
+   [reach.md](../reach.md).
 3. **Blocked** (board 3): what a blocked bot gets back and does next (Block, the default), and an Escalate review task
    for the bot's manager (Keep blocked / Send anyway / Edit rule). **Nav:** Rules is a top-level item under Automations and Library, collapsed by default.
 4. **Rules › External** (board 4): the page is **Rules** with tabs **Internal · External · Due · Suggested**. External
@@ -200,7 +200,7 @@ ahead of time so it doesn't try.
     tool steps, not the reply text, until the verdict says deliver. On Block or Escalate the text lives only on the
     `org_rule_holds` row; `final_text`, `result`, the run log and the bot session show the one-line note. The
     privacy withhold keeps text on the attempt; this doesn't.
-  - thread writes ([Threads](threads.md)): a post into a thread (`POST /api/v2/threads/{id}/messages`, a sub-thread reply
+  - thread writes ([Threads](../threads.md)): a post into a thread (`POST /api/v2/threads/{id}/messages`, a sub-thread reply
     included), a thread started with a first message (`POST /api/v2/threads`), and an edit (`PATCH /api/v2/messages/{id}`)
     are judged as a message to a person is, before the write; on Block the message is held and does not reach the thread
     until a reviewer releases it (`message.held` tells the owners and admins);

@@ -1,4 +1,4 @@
-/* ui/app/pipeline-editor.ts — The pipeline editor (docs/pipelines-v3.md S11): a pipeline's Goal, Manager, Factory and
+/* ui/app/pipeline-editor.ts — The pipeline editor (docs/dev/pipelines-v3.md S11): a pipeline's Goal, Manager, Factory and
    Prefix (no Private: pipeline_settings refuses a private pipeline until one is defined), then its stages, one panel
    each, closed until clicked. A stage is edited as its phases, in the order a task moves (style guide, Stage editor):
    its Name and Goal (stored as `purpose`); On entering, one list of what happens as a task enters (its Limit, its

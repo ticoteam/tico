@@ -154,7 +154,7 @@
   .tl-pipeline-edit::before { content: ""; position: absolute; inset: -7px -8px; }
 }
 
-/* The pipeline editor (ui/app/pipeline-editor.ts, docs/pipelines-v3.md S11), its only styles: labels left-aligned above
+/* The pipeline editor (ui/app/pipeline-editor.ts, docs/dev/pipelines-v3.md S11), its only styles: labels left-aligned above
    their controls as in every form, short fields short, and each stage one dense row with a thin divider, opened by a
    click. Fields take the shared field look (forms.css): 44 px on a phone. */
 .pe-dialog{width:min(640px,calc(100vw - 32px))}

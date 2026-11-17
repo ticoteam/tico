@@ -1,4 +1,0 @@
-2026-10-03T00:17:00Z Grouped 69 combined failures: 67 privacy/task cases and two coordinator-owned cases.
-2026-10-03T00:22:33Z Confirmed delegated credential loss and a stale claim snapshot; first three original failures pass.
-2026-10-03T00:28:23Z All 67 original in-scope cases pass sequentially in 61.64 seconds.
-2026-10-03T00:30:00Z Six focused credential, revocation, private reassignment and claim optimization checks pass in 7.82 seconds.

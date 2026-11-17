@@ -1,4 +1,4 @@
-"""What each stage of the Product and Engineering presets is handed (backend/stage_inputs.py, docs/pipelines-v3.md
+"""What each stage of the Product and Engineering presets is handed (backend/stage_inputs.py, docs/dev/pipelines-v3.md
 "What a stage is handed"): the wake that wakes a stage's bot, and the task's own read, list the Spec page, the PR, each
 earlier Review page and what was said at done; a page an earlier stage never attached is named as missing.
 

@@ -5,10 +5,10 @@ reviewed, tested, documented and released change. Each role is a bot, and a pers
 be. Tico Team builds Tico this way. This page is a recommendation, not a rule the server enforces: rename the roles and
 drop the ones you don't need.
 
-The work runs through two pipelines a software company gets by default: [Product](pipelines-v3.md#product) (Ideas →
-Spec → In development → Validate) and [Engineering](pipelines-v3.md#engineering) (On deck → Build → Review 1 → Fixes 1 →
-Review 2 → Fixes 2 → QA → Merge → Release). Each stage has an owner and says what it takes to leave; the roles below own
-those stages.
+The work runs through one pipeline a software company gets by default, [Product](dev/pipelines-v3.md#product): Pitch →
+Spec → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → OK release → Merge. A Feature Owner takes each feature through
+it. Companies set up before 0.6 keep their older Product and Engineering pair. Each stage has an owner and says what it
+takes to leave; the roles below own those stages.
 
 ## The roles, in order
 
@@ -23,7 +23,7 @@ those stages.
 | 7 | Technical Writer | `technical-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
 | 8 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
-The **Feature Owner** (`feature-owner`, the Product Owner and Builder templates in one) owns an area of the product,
+The **Feature Owner** (`feature-owner`, which replaces the Product Owner) owns an area of the product,
 or a customer segment, and takes each feature from a pitch of 280 characters to production in one task: a person OKs
 the pitch, the spec and the release, and it writes the spec, the code, the fixes and the proof pages itself. The
 Builder template stays in the catalog for teams that want one, but no default chart has a Builder. The **Product Manager** (`product-manager`) and the **Engineering Manager**
@@ -55,7 +55,7 @@ approval before merge.
 
 ## Rules that make it work
 
-1. **Product decides what, engineering decides how.** Feature ideas go to the Product Owner first. Bugs and small
+1. **Product decides what, engineering decides how.** Feature ideas go to the Feature Owner's pitch first. Bugs and small
    changes go straight to Engineering as a task.
 2. **Prefer different models for checks.** Reviewers and QA prefer a bot of a different model company than the
    Builder. Set this per bot (its task model, or its model), or use a check model on a sub-task
@@ -81,7 +81,7 @@ leaves Release once the merge is in a published release (a repo that publishes n
 
 ## Visual specs
 
-A spec can be a visual page. The Product Owner publishes it on the task it describes with
+A spec can be a visual page. The Feature Owner publishes it on the task it describes with
 `tico page publish <file.html> --spec --task <task>`. Tico's styles are inlined into the page at publish, so it
 reads as Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
 A spec that is narrowed to some readers, or on a private task, gives the link only.
@@ -97,7 +97,7 @@ and what to decide in two or three lines, then real
 screenshots of the app at phone (390 px) and desktop width with red numbered arrows, then the details. Screenshots are
 never drawn: production through the read-only view (`tico bot app-shot`), and the branch through the demo
 (`scripts/release_shots.py`). The skill's `page.py` embeds the pictures, checks the page against those rules, and draws
-the published copy at both widths, which the bot looks at before it attaches the page. In Validate, the Product Owner
+the published copy at both widths, which the bot looks at before it attaches the page. In Validate, the Feature Owner
 does the checking itself; a person never does. Existing bots take the skill and their playbooks at their next template
 refresh ([Bots follow their template](updates.md#bots-follow-their-template)).
 
@@ -126,4 +126,4 @@ Nobody is asked to name a private task.
 ## After launch
 
 For features with a success measure, the Customer Insights Analyst reports "did it work?" 14 days after launch. The
-Product Owner uses that report at the next triage.
+Product Manager uses that report at the next triage.

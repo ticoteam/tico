@@ -83,7 +83,7 @@ interface Me { id: string; name: string; role: string; cloud: boolean; email: st
         {id: 'r9', label: 'Helper (cloud)', owner_id: 'ana', bots: [], cloud_machine: {bot: 'helper', shared: false, size: 'default', state: 'stopped'}},
         {id: 'r8', label: 'Shared cloud machine', owner_id: 'ana', bots: [], cloud_machine: {bot: null, shared: true, size: 'default', state: 'running'}},
         {id: 'r7', label: 'Scout (cloud)', owner_id: 'ana', bots: [], cloud_machine: {bot: 'scout', shared: false, size: 'small', state: 'stopped'}}]});
-      if (p === '/api/v2/settings/history') return json({changes: [], transitions: []});
+      if (p === '/api/v2/settings/history') return json({changes: []});
       if (p === '/api/v2/access/rules' && method === 'PUT') {
         rules = {...rules, ...request.postDataJSON()};
         return json(rules);

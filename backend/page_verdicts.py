@@ -1,5 +1,5 @@
 # pyright: strict
-"""Jev's verdicts on pages: one per page version and rubric (docs/pipelines-v3.md "The nine requirement kinds", 3).
+"""Jev's verdicts on pages: one per page version and rubric (docs/dev/pipelines-v3.md "The nine requirement kinds", 3).
 
 A page attached to a page requirement (backend/task_pages.py) is owed a verdict. The Jev step on the Heartbeat (`run`)
 judges what is owed through `pipeline_judges.judge_many`, with no write transaction held during the model call, and

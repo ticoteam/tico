@@ -124,7 +124,7 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C15.** A bot can have one requirement of its own open on a task at a time. If it asks again, the new one replaces the
   old one. People have no such limit.
 - **C16.** The person at the top of the ladder is the first person above the pipeline's manager bot on the org chart. If
-  there is none, the org owner. A task with a Human ([tasks.md](tasks.md#the-tasks-human)) falls to them first.
+  there is none, the org owner. A task with a Human ([tasks.md](../tasks.md#the-tasks-human)) falls to them first.
 - **C17.** From phase 1 until the proof, the other orgs stay on today's release. A fix for them comes from a branch off
   that release. Only the new Tico Team takes new releases.
 - **C18.** Version: phases 1 to 3 go to the new Tico Team as 0.6.0 pre-releases. 0.6.0 itself is published when
@@ -929,7 +929,7 @@ Stages: Ideas → Spec → In development → Validate → Done · Closed
 - **Validate.** Owner: Product Owner. To leave: a "Checked in production" page that names the version production runs
   and shows the change working there: what was run or looked at, and what it gave. Jev checks it. No person. Expected time: 1 day.
   The Product Owner takes the page's screenshots itself, in a read-only view of the app
-  ([computers.md](computers.md#let-a-bot-view-the-app-read-only)).
+  ([computers.md](../computers.md#let-a-bot-view-the-app-read-only)).
 
 #### Engineering
 
@@ -1301,7 +1301,7 @@ late. Nothing depends on the exact 10 seconds.
   Tico task's PR the Merge stage did not queue there, and neutral when the others are PRs no Tico task links (a repo
   shared with people: their PRs are not Tico's to pass or fail). Only the server's own token writes checks; no bot's
   token does. A repo ruleset that requires the check, pinned to the company App, stops a bot merging
-  or queuing a PR around the Merge stage ([GitHub App](github-app.md#require-ticos-merge-check)). It means "Tico's Merge
+  or queuing a PR around the Merge stage ([GitHub App](../github-app.md#require-ticos-merge-check)). It means "Tico's Merge
   stage queued this PR after the person's OK": a commit pushed after the OK is queued by a bot only when it changes the
   same lines, or after Reviewer 2 read it (C22), and by a person as they choose. A post that fails queues nothing and
   is tried again like any failed call.

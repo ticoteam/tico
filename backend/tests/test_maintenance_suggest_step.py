@@ -17,6 +17,7 @@ from backend.maintenance_steps import update as update_step
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, put  # noqa: F401
 from backend.tests.helpers.maintenance_learn_step import complete, queue, start
+from backend.tests.helpers.statement_scope import belongs, measuring
 
 
 @pytest.fixture(autouse=True)
@@ -613,7 +614,7 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
         with original_read() as c:
 
             def trace(sql):
-                if sql.startswith("UPDATE credential_keys"):
+                if belongs(writes) and sql.startswith("UPDATE credential_keys"):
                     writes.append(bool(c.in_transaction and c.write_transaction))
 
             c.set_trace_callback(trace)
@@ -629,7 +630,8 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
 
     monkeypatch.setattr(install, "read", read)
     monkeypatch.setattr(credentials, "Vault", fresh_vault)
-    assert run_step(install)["status"] == "ran"
+    with measuring(writes):
+        assert run_step(install)["status"] == "ran"
     assert suggestions.target(install) == ("install-test-key", "https://gateway.acme.example")
     assert calls == ["encrypt", "decrypt"] and writes == [True]
     with install.read() as c:
