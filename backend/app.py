@@ -3574,7 +3574,15 @@ def create_app(settings=None):
         )
         c.execute("UPDATE tasks SET acceptance=? WHERE id=?", (encode(body.acceptance_criteria), row["id"]))
         if asks_person:
-            person_asks.ask_on(c, who.actor, row, owner, body.title, person_asks.handed_why(c, who.actor))
+            person_asks.ask_on(
+                c,
+                who.actor,
+                row,
+                owner,
+                body.title,
+                person_asks.handed_why(c, who.actor),
+                ends_with_task=holder == owner,
+            )
             row = {**row, **(H.task(c, row["id"]) or {})}
         if body.for_actor:
             H._task_event(

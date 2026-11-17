@@ -1426,12 +1426,16 @@ STUCK_TITLE = "Stuck"  # the heading of a stopped task's question (never_stuck.a
 
 
 def stuck_ask(requirement: Row) -> bool:
-    """A stopped task's question to a person on this visit (never_stuck.ask_person), by its heading."""
+    """A question on this visit taken back once nothing else holds the task: a stopped task's (never_stuck.ask_person,
+    by its heading) or a feature's about the task's own work (`ends_with_task`, backend/person_asks.py)."""
     if not requirement.get("visit_id"):
         return False
     settings: object = requirement.get("settings")
     found: object = json.loads(settings) if isinstance(settings, str) and settings else settings
-    return isinstance(found, dict) and cast("dict[str, object]", found).get("title") == STUCK_TITLE
+    if not isinstance(found, dict):
+        return False
+    said = cast("dict[str, object]", found)
+    return said.get("title") == STUCK_TITLE or bool(said.get("ends_with_task"))
 
 
 def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
@@ -2078,10 +2082,12 @@ def add_requirement(
     for_action: bool = False,
     brief: Row | None = None,
     title: str | None = None,
+    ends_with_task: bool = False,
 ) -> Row:
     """Add an OK or an answer from a named person to this task, for this visit (C30). `brief`: a question's why, its
     choices' lines and the one recommended (backend/ask_shape.py), and `title`, the ask's short heading, kept in the
-    requirement's settings. The task does not leave the stage
+    requirement's settings. `ends_with_task`: a question a feature asks about the task's own work
+    (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it never holds it alone. The task does not leave the stage
     until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
     `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
     (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
@@ -2142,7 +2148,13 @@ def add_requirement(
             line.strip(),
             None if shows is None else json.dumps(shows),
             None if choices is None else json.dumps(choices),
-            json.dumps({**({"brief": brief} if brief else {}), **({"title": title} if title else {})}),
+            json.dumps(
+                {
+                    **({"brief": brief} if brief else {}),
+                    **({"title": title} if title else {}),
+                    **({"ends_with_task": True} if ends_with_task else {}),
+                }
+            ),
             ts,
         ),
     )

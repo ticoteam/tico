@@ -7,7 +7,9 @@ Needs you holds only what is asked of a person (backend/waiting_on.py `needs`): 
 their Tasks and nowhere they are told. So a feature that needs a person to act files a task owned by the bot that
 owns the feature (`bot`), and that bot asks the person `question` on it, with `why` it matters: the person finds it in
 Needs you, and their answer wakes the bot. With no such bot here (none named, removed or archived) the task is the
-person's own and Tico asks the question on it, so nothing a person is meant to act on is left out of Needs you.
+person's own, and the bot that filed it asks, else BotOps, the built-in bot that owns Tico's own notices: only bots
+write questions. Such a question is taken back once the person finishes the task (task_engine.advance), so nothing a
+person is meant to act on is left out of Needs you, and nothing holds them once it is done.
 
 The question is the ask's first line, short and plain, the way the ask checks want it (backend/ask_shape.py): it says
 what is asked, with no paths or hashes; the task's body keeps the detail.
@@ -72,12 +74,21 @@ def ask(
     owner = owner_bot(conn, bot) or target
     create.setdefault("lint", False)
     made: Row = H.task_create(conn, by, title, body, owner, **create)
-    asker = owner if is_bot(owner) else (by if is_bot(by) or is_human(by) else H.KEEPER)
-    ask_on(conn, asker, made, target, question, why)
+    asker = owner if is_bot(owner) else by if is_bot(by) or is_human(by) else botops(conn) or H.KEEPER
+    ask_on(conn, asker, made, target, question, why, ends_with_task=not is_bot(owner))
     return H.task(conn, made["id"]) or made
 
 
-def ask_on(conn: "sqlite3.Connection", asker: str, task: Row, person: str, question: str, why: str) -> str:
+def ask_on(
+    conn: "sqlite3.Connection",
+    asker: str,
+    task: Row,
+    person: str,
+    question: str,
+    why: str,
+    *,
+    ends_with_task: bool = False,
+) -> str:
     """`asker` asks `person` `question` on `task`, with `why` it matters: a person who may not read a private task is
     let in first, as an OK filed for a person is (task_asks.ask_ok). Returns the requirement's id."""
     from . import task_engine as E
@@ -90,7 +101,15 @@ def ask_on(conn: "sqlite3.Connection", asker: str, task: Row, person: str, quest
     line = " ".join(question.split())
     brief: Row = {"why": " ".join(why.split())[:WHY_MAX], "details": None, "recommend": None}
     asked: Row = E.add_requirement(
-        conn, row["id"], asker, "answer", person, line, seen_version=row.get("version"), brief=brief
+        conn,
+        row["id"],
+        asker,
+        "answer",
+        person,
+        line,
+        seen_version=row.get("version"),
+        brief=brief,
+        ends_with_task=ends_with_task,
     )
     return str(asked["requirement_id"])
 

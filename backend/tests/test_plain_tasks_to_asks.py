@@ -25,14 +25,18 @@ ANA = X.ANA
 def c(company):
     with company.transaction() as conn:
         X.bot(conn, "builder")
+        X.bot(conn, "botops")  # the built-in bot that asks for Tico's own notices
         X.pipeline(conn)
         yield conn
 
 
-def asked(c, person, task_id):
-    """The asks on `task_id` in `person`'s Needs you, each checked the way a bot's question is (ask_shape)."""
+def asked(c, person, task_id, by="bot:botops"):
+    """The asks on `task_id` in `person`'s Needs you, each checked the way a bot's question is (ask_shape), and each
+    written by `by`: a bot, never Tico (only bots write questions)."""
     found = [n for n in W.needs(c, person) if n["kind"] == "ask" and n["task_id"] == task_id]
     for item in found:
+        author = c.execute("SELECT added_by_id FROM requirements WHERE id=?", (item["requirement_id"],)).fetchone()[0]
+        assert author == by, author
         line = item["line"]
         assert line and len(line) <= 200 and "/" not in line, line  # short, says what is asked, no paths
         assert H.task_view(c, task_id, person), "the person reads the task"
@@ -50,11 +54,11 @@ def test_a_person_asked_on_a_bots_task_finds_it_in_needs_you_and_the_bot_holds_i
         "It is stuck.",
         bot="bot:builder",
     )
-    assert made["owner_id"] == "bot:builder" and len(asked(c, ANA, made["id"])) == 1
+    assert made["owner_id"] == "bot:builder" and len(asked(c, ANA, made["id"], by="bot:builder")) == 1
     assert ask_shape.refusal("Ana", why="It is stuck.", choices=None, details=None, recommend=None, shows=None) is None
 
 
-def test_with_no_such_bot_the_task_is_the_persons_and_tico_asks(c):
+def test_with_no_such_bot_the_task_is_the_persons_and_botops_asks(c):
     made = PA.ask(
         c, H.KEEPER, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.", bot="bot:ghost"
     )
@@ -93,7 +97,7 @@ def test_market_insights_ask_the_company_owner_on_the_curators_task(c):
     from backend import market
 
     made = market._file_owner_task(c, "bot:builder", ANA, "Decide these market insights.\n\n> one: a claim")
-    assert made["owner_id"] == "bot:builder" and len(asked(c, ANA, made["id"])) == 1
+    assert made["owner_id"] == "bot:builder" and len(asked(c, ANA, made["id"], by="bot:builder")) == 1
 
 
 def test_a_bots_task_for_a_person_through_the_api_is_its_own_with_a_question_to_them(gate):  # noqa: F811
@@ -106,3 +110,13 @@ def test_a_bots_task_for_a_person_through_the_api_is_its_own_with_a_question_to_
     assert task["owner_id"] == "bot:ops"
     items = get(api, "needs-you", "ben-test")["items"]
     assert [i["kind"] for i in items if i.get("task_id") == task["id"]] == ["ask"]
+
+
+def test_a_question_on_the_persons_own_task_ends_when_they_finish_it(c):
+    made = PA.ask(c, H.KEEPER, ANA, "Check the lease", "x", "Can you check the lease?", "It ends soon.")
+    assert asked(c, ANA, made["id"])
+    from backend import task_engine as E
+
+    X.say_done(c, E.task(c, made["id"]))
+    E.advance(c, made["id"])
+    assert H.task(c, made["id"])["status"] == "done" and not asked(c, ANA, made["id"])
