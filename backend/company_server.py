@@ -49,7 +49,7 @@ from clients.gateway import user_agent
 from .census import hq_url
 from .replication import rehearsal_on
 from .inbound import connection_json
-from .credentials import drop_service, keep_service, open_kept
+from .credentials import drop_service, keep_service, kept_record, open_kept
 from .models import Contract
 from .store import H, Problem
 
@@ -106,13 +106,17 @@ def _hold(digest):
         _pending.update(digest=digest, until=time.monotonic() + PENDING_S if digest else 0.0)
 
 
-def _row(c):
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+def _decode(text):
     try:
-        stored = json.loads(row[0]) if row else {}
+        stored = json.loads(text) if text else {}
     except ValueError:
         stored = {}
     return stored if isinstance(stored, dict) else {}
+
+
+def _row(c):
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    return _decode(row[0] if row else None)
 
 
 def _write(c, record):
@@ -380,8 +384,10 @@ def connect(store, vault, settings, who, body, install_id):
 
 def _key(store, vault):
     with store.read() as c:
-        record = _row(c)
-        return open_kept(c, vault.cipher, VAULT_ROW, CONTEXT, record.get("key")), record
+        # The link and its key in one statement (`kept_record`): a reconnect between two reads cannot pair them.
+        text, rows = kept_record(c, KEY, [VAULT_ROW])
+        record = _decode(text)
+        return open_kept(c, vault.cipher, VAULT_ROW, CONTEXT, record.get("key"), rows), record
 
 
 def status(store, vault, now=None):

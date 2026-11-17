@@ -41,7 +41,7 @@ import time
 from clients import gateway as G
 
 from . import destinations, read_cache
-from .credentials import drop_service, keep_service, open_kept
+from .credentials import drop_service, keep_service, kept_record, open_kept
 from .store import H, Problem
 
 KEY = "gateway-connection"
@@ -102,19 +102,33 @@ def env_url(settings=None):
     return configured if configured and G.base_url(configured) != G.DEFAULT_BASE else ""
 
 
-def _row(c):
-    row = read_cache.metadata(c, KEY)
+def _decode(text):
     try:
-        stored = json.loads(row[0]) if row else {}
+        stored = json.loads(text) if text else {}
     except ValueError:
         stored = {}
     return stored if isinstance(stored, dict) else {}
 
 
-def _secret(c, vault, record, field):
-    """The key or install secret `record` keeps ('' with none). Never logged."""
+def _row(c):
+    """The saved connection, without its secrets. A read that opens one takes both from `_snapshot`."""
+    row = read_cache.metadata(c, KEY)
+    return _decode(row[0] if row else None)
+
+
+def _snapshot(c):
+    """(the saved connection, its secrets' service rows), read in one statement (`kept_record`): a key saved with a
+    new address between two reads can never be paired with the old address (and sent to it), whether or not `c` is in
+    a transaction."""
+    text, rows = kept_record(c, KEY, [cid for cid, _, _ in SECRETS.values()])
+    return _decode(text), rows
+
+
+def _secret(c, vault, snapshot, field):
+    """The key or install secret the connection keeps ('' with none), from `_snapshot`. Never logged."""
+    record, rows = snapshot
     cid, _, context = SECRETS[field]
-    return open_kept(c, vault.cipher, cid, context, record.get(field))
+    return open_kept(c, vault.cipher, cid, context, record.get(field), rows)
 
 
 def _seal(c, vault, field, value):
@@ -155,7 +169,7 @@ def key(c, vault, settings=None):
     `target`."""
     if env_key(settings):
         return env_key(settings)
-    return _secret(c, vault, _row(c), "key")
+    return _secret(c, vault, _snapshot(c), "key")
 
 
 def url(c, settings=None, record=None):
@@ -170,13 +184,14 @@ def target(c, vault, settings=None):
     key) would pair the key it took away with an address it was never kept for. A demo's key is the sample's and goes
     nowhere: here it is '' as if none were set, so every send that takes it (search, fetch, images, judges, the postal
     reader, Billing) acts as it does without a key and sends nothing."""
-    record = _row(c)
+    snapshot = _snapshot(c)
+    record = snapshot[0]
     if _demo(settings):
         secret = ""
     elif env_key(settings):
         secret = env_key(settings)
     else:
-        secret = _secret(c, vault, record, "key")
+        secret = _secret(c, vault, snapshot, "key")
     return secret, url(c, settings, record), _fingerprint(c, settings, record)
 
 
@@ -708,11 +723,11 @@ def _utc(value):
 def bot_header(c, vault, slug):
     """{X-Tico-Bot: gb_...} for a Gateway call made for bot `slug` with an automatic key, else {}. The id is opaque
     (an HMAC under the install's secret), so the Gateway's ledger can tell bots apart without learning their names."""
-    record = _row(c)
-    if not slug or not record.get("install_secret") or not getattr(vault, "configured", False):
+    snapshot = _snapshot(c)
+    if not slug or not snapshot[0].get("install_secret") or not getattr(vault, "configured", False):
         return {}
     try:
-        secret = _secret(c, vault, record, "install_secret")
+        secret = _secret(c, vault, snapshot, "install_secret")
     except Exception:
         return {}
     return {G.BOT_HEADER: G.bot_id(secret, slug)}
@@ -758,15 +773,16 @@ def auto_tick(store, vault, settings=None, opener=None, now=None):
 
 def _auto_tick(store, vault, settings, opener, now):
     with store.read() as c:
-        record = _row(c)
+        snapshot = _snapshot(c)  # the address, key and install secret of one save
+        record = snapshot[0]
         linked = _linked(c, settings)
         action = _due(record, settings, now, linked)
         if not action:
             return None
         base = url(c, settings, record)  # the address this record's key was kept for (`target`)
-        current = _secret(c, vault, record, "key") if action == "rotate" else ""
+        current = _secret(c, vault, snapshot, "key") if action == "rotate" else ""
         install = str(record.get("install") or "")
-        secret = _secret(c, vault, record, "install_secret") if install else ""
+        secret = _secret(c, vault, snapshot, "install_secret") if install else ""
     try:
         G.safe_base(base)
     except ValueError:

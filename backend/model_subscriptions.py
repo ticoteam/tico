@@ -304,8 +304,13 @@ def value_of(c, cipher, sub):
     """A subscription's value, from the vault row `credential_id` names: its own service row, or a kept key's
     credential. None when that row is gone. A row from before D11-11 the move left opens from `sealed`."""
     if sub["credential_id"]:
+        # The credential the subscription names at the revision `sub` was read at, in one statement: on a connection
+        # outside a transaction (a runner's poll, `Store.read`) a save between two reads would otherwise pair this
+        # row (its kind, its revision) with the value saved for the next one. A save since then: None, as if gone.
         found = c.execute(
-            "SELECT * FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (sub["credential_id"],)
+            "SELECT * FROM credentials WHERE id=(SELECT credential_id FROM model_subscriptions WHERE id=? AND revision=?)"
+            " AND ciphertext IS NOT NULL",
+            (sub["id"], sub["revision"]),
         ).fetchone()
         if not found:
             return None

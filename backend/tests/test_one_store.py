@@ -13,7 +13,7 @@ import pytest
 from backend import company_server, gateway_connection, migrations
 from backend import model_subscriptions as MS
 from backend.config import Settings
-from backend.credentials import KEPT, CredentialCipher, Vault
+from backend.credentials import KEPT, CredentialCipher, Vault, keep_service
 from backend.store import Problem, Store
 from scripts.benchmark_model_keys import insert
 
@@ -67,7 +67,7 @@ def _values(store, vault):
         return (
             MS.value_of(c, vault.cipher, MS.row(c, "sub1")),
             gateway_connection.key(c, vault),
-            gateway_connection._secret(c, vault, gateway_connection._row(c), "install_secret"),
+            gateway_connection._secret(c, vault, gateway_connection._snapshot(c), "install_secret"),
             company_server._key(store, vault)[0],
         )
 
@@ -163,7 +163,7 @@ def test_a_change_writes_the_vault_and_a_cleared_record_leaves_no_copy(tmp_path)
         assert kinds == {"model-subscription-sub1"}
         assert gateway_connection.key(c, vault) == "" and company_server._row(c) == {}
         assert gateway_connection._row(c)["install_secret"].startswith("sealed:")  # kept as it was, still opens
-        assert gateway_connection._secret(c, vault, gateway_connection._row(c), "install_secret") == INSTALL
+        assert gateway_connection._secret(c, vault, gateway_connection._snapshot(c), "install_secret") == INSTALL
 
 
 # The model-key reads on the claim and turn path: each a seek by key, whatever sqlite_stat1 says.
@@ -202,8 +202,15 @@ def test_the_turns_value_and_the_gateway_key_are_sought_by_key(tmp_path, stats):
     c.row_factory = sqlite3.Row
     sub = c.execute("SELECT * FROM model_subscriptions WHERE id='sub1'").fetchone()
     found = _plans(c, lambda: (MS.value_of(c, vault.cipher, sub), gateway_connection.target(c, vault)))
-    reads = [p for sql, p in found.items() if "FROM credentials" in sql]
-    assert reads and all(p == ["SEARCH credentials USING INDEX sqlite_autoindex_credentials_1 (id=?)"] for p in reads)
+    value = next(plan for sql, plan in found.items() if "id=(SELECT credential_id" in sql)  # with its subscription row
+    assert [p for p in value if p.startswith(("SEARCH", "SCAN"))] == [
+        "SEARCH credentials USING INDEX sqlite_autoindex_credentials_1 (id=?)",
+        "SEARCH model_subscriptions USING INDEX sqlite_autoindex_model_subscriptions_1 (id=?)",
+    ], value
+    record = next(plan for sql, plan in found.items() if "UNION ALL" in sql)  # the Gateway record with its key
+    assert [p for p in record if p.startswith(("SEARCH", "SCAN"))] == [
+        "SEARCH registry_metadata USING INDEX sqlite_autoindex_registry_metadata_1 (key=?)",
+    ] + ["SEARCH credentials USING INDEX sqlite_autoindex_credentials_1 (id=?)"] * len(gateway_connection.SECRETS)
     kept = c.execute(
         f"EXPLAIN QUERY PLAN SELECT 1 FROM model_subscriptions WHERE id=? AND {MS.KEPT_KEY.format('')}", ("x",)
     )
@@ -211,3 +218,113 @@ def test_the_turns_value_and_the_gateway_key_are_sought_by_key(tmp_path, stats):
         "SEARCH model_subscriptions USING INDEX sqlite_autoindex_model_subscriptions_1 (id=?)"
     ]
     assert not [p for plan in found.values() for p in plan if p.startswith("SCAN")], found
+
+
+# A record and the value it keeps are read as one snapshot, even on a connection outside a transaction
+# (`Store.read`): a save landing between two reads must never pair one save's address or row with another's value.
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return self.rows
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class _SaveBetween:
+    """A reader's connection: once the first read whose SQL holds `after` has finished, `save` commits on another
+    connection before the reader's next read, as a save from another request can."""
+
+    def __init__(self, c, after, save):
+        self.c, self.after, self.save, self.saved = c, after, save, False
+
+    def execute(self, sql, args=()):
+        rows = self.c.execute(sql, args).fetchall()
+        if not self.saved and self.after in sql:
+            self.saved = True
+            self.save()
+        return _Rows(rows)
+
+    def __getattr__(self, name):
+        return getattr(self.c, name)
+
+
+OLD_URL, NEW_URL, NEW_KEY = "https://old-gateway.example.test", "https://new-gateway.example.test", "tgk_" + "n" * 32
+
+
+def test_a_gateway_key_saved_with_a_new_address_between_reads_never_goes_to_the_old_one(tmp_path):
+    store, vault = _older_server(tmp_path)
+    _start(store)
+    with store.transaction() as c:
+        record = gateway_connection._row(c)
+        gateway_connection._write(c, {**record, "url": OLD_URL})
+
+    def save():
+        with store.transaction() as w:
+            record = gateway_connection._row(w)
+            new_key = gateway_connection._seal(w, vault, "key", NEW_KEY)
+            gateway_connection._write(w, {**record, "key": new_key, "url": NEW_URL, "revision": 4})
+
+    with store.read() as c:
+        reader = _SaveBetween(c, "registry_metadata", save)
+        key, base, _ = gateway_connection.target(reader, vault)
+        assert reader.saved  # the save landed after the reader's first read
+    assert (key, base) == (GATEWAY, gateway_connection.G.base_url(OLD_URL))  # one save's pair: the old key, old address
+    with store.read() as c:
+        assert gateway_connection.target(c, vault)[:2] == (NEW_KEY, gateway_connection.G.base_url(NEW_URL))
+
+
+def test_a_company_server_key_and_its_link_come_from_one_save(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    store, vault = _older_server(tmp_path)
+    _start(store)
+
+    def reconnect():
+        with store.transaction() as w:
+            key = keep_service(
+                w,
+                vault.cipher,
+                company_server.VAULT_ROW,
+                "Tico company server key",
+                "tsk_" + "n" * 32,
+                "tico",
+                "company",
+            )
+            company_server._write(w, {"key": key, "company": {"id": "co2"}})
+
+    read = store.read
+
+    @contextmanager
+    def between():
+        monkeypatch.setattr(store, "read", read)  # only `_key`'s own read: the reconnect's transaction reads as ever
+        with read() as c:
+            yield _SaveBetween(c, "registry_metadata", reconnect)
+
+    monkeypatch.setattr(store, "read", between)
+    key, record = company_server._key(store, vault)
+    assert (key, record["company"]["id"]) == (SERVER, "co1")
+    key, record = company_server._key(store, vault)
+    assert (key, record["company"]["id"]) == ("tsk_" + "n" * 32, "co2")
+
+
+def test_a_subscription_saved_between_reads_never_pairs_its_new_value_with_the_row_read_before(tmp_path):
+    store, vault = _older_server(tmp_path)
+    _start(store)
+
+    def save():
+        with store.transaction() as w:
+            sub = MS.row(w, "sub1")
+            MS._keep_value(w, vault, sub, TOKEN[:-1] + "d", "p", "human:ana", NOW)
+            w.execute("UPDATE model_subscriptions SET revision=revision+1 WHERE id='sub1'")
+
+    with store.read() as c:
+        reader = _SaveBetween(c, "FROM model_subscriptions WHERE id", save)
+        sub = MS.row(reader, "sub1")
+        assert reader.saved and MS.value_of(reader, vault.cipher, sub) is None  # not the next save's value
+        assert MS.value_of(c, vault.cipher, MS.row(c, "sub1")) == TOKEN[:-1] + "d"

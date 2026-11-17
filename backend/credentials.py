@@ -407,15 +407,29 @@ def keep_service(c, cipher, cid, name, value, actor, source, at=None):
     return KEPT + os.urandom(8).hex()
 
 
-def open_kept(c, cipher, cid, context, stored):
-    """The secret a record keeps for service row `cid`: the row's value when `stored` is KEPT ('' when the row is gone,
-    as in a dev copy), else, from before D11-11, the value sealed in the record itself (`CredentialCipher.seal` under
-    `context`). '' when `stored` is empty."""
+def kept_record(c, key, cids):
+    """The `registry_metadata` record `key` (its stored text, None when absent) and the service rows `cids` it keeps
+    references to ({id: row}), read in ONE statement. A statement is one snapshot even on a connection outside a
+    transaction (`Store.read`), so a save between two reads cannot pair a record (the Gateway's address) with a value
+    saved for another one (a newly typed key): the record and its values always come from the same commit."""
+    # One arm per row, each a seek by its key whatever the statistics say (an IN list over a small table may scan).
+    arms = " UNION ALL SELECT id,NULL,kind,ciphertext,nonce FROM credentials WHERE id=? AND kind='service'" * len(cids)
+    found = c.execute(
+        'SELECT NULL,value,NULL,NULL,NULL FROM registry_metadata WHERE key=?' + arms, (key, *cids)
+    ).fetchall()
+    rows = {r[0]: {'id': r[0], 'kind': r[2], 'ciphertext': r[3], 'nonce': r[4]} for r in found if r[0] is not None}
+    return next((r[1] for r in found if r[0] is None), None), rows
+
+
+def open_kept(c, cipher, cid, context, stored, rows):
+    """The secret a record keeps for service row `cid`, from `rows` read with the record (`kept_record`): the row's
+    value when `stored` is KEPT ('' when the row is gone, as in a dev copy), else, from before D11-11, the value sealed
+    in the record itself (`CredentialCipher.seal` under `context`). '' when `stored` is empty."""
     if not stored:
         return ''
     if not stored.startswith(KEPT):
         return cipher.unseal(c, context, stored)
-    row = c.execute('SELECT * FROM credentials WHERE id=? AND kind=?', (cid, SERVICE)).fetchone()
+    row = rows.get(cid)
     return cipher.open_service(c, row) if row else ''
 
 
