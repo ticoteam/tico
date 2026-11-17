@@ -81,7 +81,7 @@
 #task-modal.thread[open] .tthread-back{flex:none;display:grid;place-items:center;color:var(--ink)}
 #task-modal.thread[open] .tthread-back svg{width:14px;height:14px;flex:none}
 #task-modal.thread[open] .tw-head .tmodal-title,#task-modal.thread[open] .tw-head .tmodal-title[contenteditable="plaintext-only"]{display:-webkit-box;padding-top:0;font-size:var(--t-card);-webkit-line-clamp:1;line-clamp:1;overflow:hidden}
-#task-modal.thread[open] .task-tabs,#task-modal.thread[open] .task-desc,#task-modal.thread[open] .task-side,#task-modal.thread[open]>.rule-holds{display:none}
+#task-modal.thread[open] .tw-tabs,#task-modal.thread[open] .task-desc,#task-modal.thread[open] .task-side,#task-modal.thread[open]>.rule-holds{display:none}
 #task-modal.thread[open] .task-layout>.task-chat{visibility:visible;pointer-events:auto}
 @media (min-width:761px){#task-modal.thread[open]{width:min(680px,calc(100vw - 32px));height:min(86vh,900px)}}
 .task-chat .task-pill{flex:none;display:flex;flex-direction:column;gap:4px;margin:8px 0 0;padding:0;border:0;background:none}

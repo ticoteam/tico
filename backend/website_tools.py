@@ -41,6 +41,7 @@ from . import tool_services as TS
 from . import totp as T
 from .models import ID, AccessAudience, Contract
 from .store import H as hubdb, Problem
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -1410,29 +1411,69 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
             vaults.validate_identity(c, request.state.identity)
             return fn(c, request.state.identity)
 
-    @app.post("/api/v2/website-tools")
+    @app.post(
+        "/api/v2/website-tools",
+        **api_v2(
+            "Tools",
+            "createWebsiteTool",
+            "Add a website tool (credential administrators): its sites (hostnames; a subdomain matches; http://host allows plain http) and whether only the browser host opens it. The name defaults to the first site",
+            "WebsiteToolCreated",
+        ),
+    )
     def create_website_tool(request: Request, body: WebsiteToolCreate) -> Any:
         """Add a website tool (credential administrators): its sites and whether only the browser host opens it."""
         who = request.state.identity
         return change(request, body, manager, lambda c: create_tool(c, who, body, admins()))
 
-    @app.get("/api/v2/website-tools/groups")
+    @app.get(
+        "/api/v2/website-tools/groups",
+        **api_v2(
+            "Tools",
+            "listWebsiteToolGroups",
+            "Each group with its member count and its people and bots (actors), nested groups included, for Who can use it (credential administrators)",
+            "WebsiteToolGroups",
+        ),
+    )
     def website_tool_groups(request: Request) -> Any:
         """Each group with its member count, for the Who can use it picker (credential administrators)."""
         with store.read_transaction() as c:
             return groups_view(c, request.state.identity, admins())
 
-    @app.get("/api/v2/website-tools/{tool_id}")
+    @app.get(
+        "/api/v2/website-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "getWebsiteTool",
+            "One website tool: its accounts the caller uses or manages (never a password or a 2FA key), each account's browser session, the browser host, the newest Activity; to whoever may change it, who can see it. A tool the caller may not see is a 404",
+            "WebsiteTool",
+        ),
+    )
     def get_website_tool(request: Request, tool_id: str) -> Any:
         with store.read_transaction() as c:
             return detail(c, request.state.identity, tool_id, admins(), auth)
 
-    @app.patch("/api/v2/website-tools/{tool_id}")
+    @app.patch(
+        "/api/v2/website-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "updateWebsiteTool",
+            "Rename it, change its sites or Central only (credential administrators), or who can see it: audience null for Everyone, or an audience for Only listed",
+            "WebsiteToolSettings",
+        ),
+    )
     def update_website_tool(request: Request, tool_id: str, body: WebsiteToolUpdate) -> Any:
         who = request.state.identity
         return change(request, body, setter, lambda c: update_tool(c, who, tool_id, body, admins(), auth))
 
-    @app.delete("/api/v2/website-tools/{tool_id}")
+    @app.delete(
+        "/api/v2/website-tools/{tool_id}",
+        **api_v2(
+            "Tools",
+            "deleteWebsiteTool",
+            "Remove a website tool with its accounts, their grants and its Activity (credential administrators)",
+            "WebsiteDeleted",
+        ),
+    )
     def delete_website_tool(request: Request, tool_id: str) -> Any:
         """The tool, its accounts and their grants, and its Activity."""
 
@@ -1447,7 +1488,15 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
 
         return plain(request, work)
 
-    @app.post("/api/v2/website-tools/{tool_id}/accounts")
+    @app.post(
+        "/api/v2/website-tools/{tool_id}/accounts",
+        **api_v2(
+            "Tools",
+            "addWebsiteAccount",
+            "Add an account: shared (credential administrators) or own (holder: yourself or a bot you manage; one per holder). password and totp (a 2FA setup key or otpauth:// link) are stored sealed and never shown again. username and password may be left out for a site a person signs in to by hand. Shared accounts default to all_bots: true, including future bots; set false for selected teammates only. Own accounts stay private",
+            "WebsiteAccountSaved",
+        ),
+    )
     def add_website_account(request: Request, tool_id: str, body: WebsiteAccountCreate) -> Any:
         who = request.state.identity
         return change(
@@ -1457,7 +1506,15 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
             lambda c: add_account(c, who, vault(), tool_id, body, admins(), auth),
         )
 
-    @app.patch("/api/v2/website-tools/{tool_id}/accounts/{account_id}")
+    @app.patch(
+        "/api/v2/website-tools/{tool_id}/accounts/{account_id}",
+        **api_v2(
+            "Tools",
+            "updateWebsiteAccount",
+            "Replace login: the username, the password, or the 2FA key (totp null removes it)",
+            "WebsiteAccountSaved",
+        ),
+    )
     def update_website_account(request: Request, tool_id: str, account_id: str, body: WebsiteAccountUpdate) -> Any:
         who = request.state.identity
         receipt = api_tools._Receipt(body, totp_set="totp" in body.model_fields_set)
@@ -1468,11 +1525,22 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
             lambda c: update_account(c, who, vault(), tool_id, account_id, body, admins(), auth),
         )
 
-    @app.delete("/api/v2/website-tools/{tool_id}/accounts/{account_id}")
+    @app.delete(
+        "/api/v2/website-tools/{tool_id}/accounts/{account_id}",
+        **api_v2("Tools", "deleteWebsiteAccount", "Remove an account and its grants", "WebsiteDeleted"),
+    )
     def delete_website_account(request: Request, tool_id: str, account_id: str) -> Any:
         return plain(request, lambda c, who: delete_account(c, who, tool_id, account_id, admins(), auth))
 
-    @app.put("/api/v2/website-tools/{tool_id}/accounts/{account_id}/access/{subject}")
+    @app.put(
+        "/api/v2/website-tools/{tool_id}/accounts/{account_id}/access/{subject}",
+        **api_v2(
+            "Tools",
+            "setWebsiteAccountAccess",
+            "Give a shared account to a person, a bot, a group (group:<id>, credential administrators; every person and bot in it and in the groups under it uses it) or All bots (subject: bots, credential administrators; every bot, including later ones), or take it away (on: false). Turn off All bots before removing a bot. Answers the account's whole access list",
+            "WebsiteAccountAccessSet",
+        ),
+    )
     def set_website_account_access(
         request: Request, tool_id: str, account_id: str, subject: str, body: WebsiteAccountAccess
     ) -> Any:
@@ -1484,14 +1552,30 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
             lambda c: set_access(c, who, vault(), tool_id, account_id, subject, body.on, admins(), auth),
         )
 
-    @app.get("/api/v2/website-tools/{tool_id}/accounts/{account_id}/code")
+    @app.get(
+        "/api/v2/website-tools/{tool_id}/accounts/{account_id}/code",
+        **api_v2(
+            "Tools",
+            "getWebsiteAccountCode",
+            "The current 2FA code, to a signed-in person who uses the account (never a bot, a token or an assistant). Logged, without the code",
+            "WebsiteCode",
+        ),
+    )
     def website_account_code(request: Request, tool_id: str, account_id: str) -> Any:
         """The current 2FA code, to a signed-in person who uses the account. Logged, without the code."""
         with store.transaction() as c:
             vaults.validate_identity(c, request.state.identity)
             return current_code(c, request.state.identity, vault(), tool_id, account_id, admins(), auth)
 
-    @app.get("/api/v2/website-tools/{tool_id}/activity")
+    @app.get(
+        "/api/v2/website-tools/{tool_id}/activity",
+        **api_v2(
+            "Tools",
+            "listWebsiteToolActivity",
+            "Who opened, filled, copied or asked for a code, on which page (host and path), with which account and where, newest first. Follow next with cursor",
+            "WebsiteToolActivity",
+        ),
+    )
     def website_tool_activity(
         request: Request,
         tool_id: str,

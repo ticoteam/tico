@@ -190,6 +190,9 @@ const STRAT_WRONG_KINDS: Record<string, string> = {kpi: 'KPI', thesis: 'Market',
 const STRAT_CHECK_DAYS = 90;
 const stratCheckBy = () => new Date(Date.now() + STRAT_CHECK_DAYS * 864e5).toISOString().slice(0, 10);
 const STRAT_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const STRAT_PEN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>';
+// The segment of Where we play whose name is being edited, if any.
+let STRAT_SEG_RENAME = '';
 const STRAT_NEWS_MAX = 8;
 const STRAT_TAGS: Record<string, string> = {hot: 'Hot', lead: 'Lead', rival: 'Rival', market: 'Market'};
 
@@ -198,6 +201,7 @@ window.strategyHeadHtml = (tab: string) => redesignStrategyHead(tab);
 
 window.strategyStop = function strategyStop() {
   STRAT_LOAD++;
+  STRAT_SEG_RENAME = '';
   if (STRAT) S.lastRead.strategy = {data: STRAT.data, market: STRAT_MKT};   // the next visit paints it at once
   STRAT = null;
   const dlg = document.getElementById('strat-versions');
@@ -473,6 +477,15 @@ function strategyAddRowHtml(kind: string, placeholder: string) {
   return `<form class="strat-addrow" data-add="${kind}" novalidate><input type="text" name="name" maxlength="${kind === 'rival' ? 300 : 120}" autocomplete="off" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}">
       <button type="submit" class="strat-add">Add</button></form>`;
 }
+// The owner's segment row: a name, an optional one-line summary, and the segment it sits under (POST /v2/market/segments).
+function strategySegAddHtml(segs: StratSeg[]) {
+  const parents = segs.filter(s => (s.depth || 1) < 4);
+  return `<form class="strat-addrow strat-addseg" data-add="seg" novalidate><input type="text" name="name" maxlength="120" autocomplete="off" placeholder="Add a segment" aria-label="Add a segment">
+      <input type="text" name="summary" maxlength="300" autocomplete="off" placeholder="Summary" aria-label="Summary">
+      ${parents.length ? `<select name="parent" aria-label="Under"><option value="">Top level</option>${parents.map(s =>
+        `<option value="${esc(s.id)}">${'\u2003'.repeat(Math.max(0, (s.depth || 1) - 1))}${esc(s.name)}</option>`).join('')}</select>` : ''}
+      <button type="submit" class="strat-add">Add</button></form>`;
+}
 const stratSk = () => skelRows(3, {dot: false});
 // The sources behind a segment's dollar figure, counted the way the spend API counts it (market_spend.py, rolled spend):
 // the selected size's own evidence when that size has a spend, else the sum of its parts' sources. A part with no source
@@ -506,7 +519,7 @@ function strategyWhereHtml(owner: boolean) {
   // No helper line: what a tile does is its name (aria-pressed, and its title on hover).
   const head = '<div class="strat-card-head"><h2 class="strat-k">Where we play</h2></div>';
   if (spend === undefined) return head + stratSk();
-  const add = owner ? strategyAddRowHtml('seg', 'Add a segment') : '';
+  const add = owner ? strategySegAddHtml(segs) : '';
   if (!spend || !segs.length) return `${head}<p class="strat-none-s">No market map yet.</p>${add}`;
   const {drawn: sized}: {drawn: StratGroup[]} = mktTree(spend);
   const W = 200, H = 100, shown = new Set<string>();
@@ -521,9 +534,13 @@ function strategyWhereHtml(owner: boolean) {
     // No source, no dollar figure: the name stays, the figure goes.
     const figure = urls.length && value ? value : 0;
     const title = `${seg.name}${figure ? `: about ${mktMoney(figure)} a year, an estimate, from ${urls.map(strategyHost).join(', ')}` : ''}`;
+    // The owner renames a segment in place (POST /v2/market/entities/{id} {name}).
+    const name = owner && STRAT_SEG_RENAME === seg.id
+      ? `<form class="strat-tm-rename" data-seg-rename novalidate><input type="text" name="name" maxlength="300" autocomplete="off" aria-label="Name" value="${esc(seg.name)}"></form>`
+      : `<b>${esc(seg.name)}</b>`;
     return `<div class="strat-tm${seg.self ? ' ours' : seg.next ? ' next' : ''}${owner ? ' pick' : ''}" data-seg="${esc(seg.id)}"${r ? ` style="${pos(r)}"` : ''}${owner
-      ? ` role="button" tabindex="0" aria-pressed="${seg.self ? 'true' : seg.next ? 'mixed' : 'false'}"` : ''} title="${esc(title)}">${mark ? `<em>${mark}</em>` : ''}<b>${esc(seg.name)}</b>${figure ? ` <span class="strat-est">~${mktMoney(figure)}</span>${strategySourceLine(urls)}` : ''}${owner
-      ? `<button type="button" class="strat-x" data-seg-x aria-label="Remove ${esc(seg.name)}">${STRAT_X}</button>` : ''}</div>`;
+      ? ` role="button" tabindex="0" aria-pressed="${seg.self ? 'true' : seg.next ? 'mixed' : 'false'}"` : ''} title="${esc(title)}">${mark ? `<em>${mark}</em>` : ''}${name}${figure ? ` <span class="strat-est">~${mktMoney(figure)}</span>${strategySourceLine(urls)}` : ''}${owner
+      ? `<button type="button" class="strat-x" data-seg-x aria-label="Remove ${esc(seg.name)}">${STRAT_X}</button><button type="button" class="strat-pen" data-seg-edit aria-label="Rename ${esc(seg.name)}">${STRAT_PEN}</button>` : ''}</div>`;
   };
   // One sized segment is not a map: then every segment is a plain tile.
   const mapped = drawn.length >= 2 ? drawn : [];
@@ -990,8 +1007,9 @@ function strategyBindMarket(state: StratState, body: HTMLElement) {
     where.onclick = ev => {
       if (!STRAT || STRAT !== state) return;
       const target = eventElement(ev);
-      if (target?.closest('a')) return;   // a source link opens out; it does not target its tile
+      if (target?.closest('a, [data-seg-rename]')) return;   // a source link opens out, and a name being edited stays put
       const x = target?.closest('[data-seg-x]'), tile = target?.closest<HTMLElement>('[data-seg]');
+      if (target?.closest('[data-seg-edit]') && tile?.dataset.seg) { renameOpen(tile.dataset.seg); return; }
       if (x && tile) {
         const id = tile.dataset.seg, now = spend(), all = now?.segments || [], seg = all.find(s => s.id === id);
         if (!now || !seg) return;
@@ -1004,11 +1022,36 @@ function strategyBindMarket(state: StratState, body: HTMLElement) {
       if (tile) cycle(tile);
     };
     where.onkeydown = ev => {
+      if (ev.key === 'Escape' && eventElement(ev)?.closest('[data-seg-rename]')) { ev.preventDefault(); renameClose(); return; }
       const tile = eventElement(ev)?.closest<HTMLElement>('[data-seg]');
       if (!tile || ev.target !== tile || (ev.key !== 'Enter' && ev.key !== ' ')) return;
       ev.preventDefault();
       cycle(tile);
     };
+  }
+  // A name edited in place: Enter or leaving the field saves it, Escape keeps the old one.
+  const renameField = () => document.querySelector<HTMLInputElement>('#strat-where [data-seg-rename] input[name="name"]');
+  function renameOpen(id: string) {
+    STRAT_SEG_RENAME = id;
+    strategyPaintMarket('spend');
+    const field = renameField();
+    if (field) { field.focus(); field.select(); field.onblur = () => { void renameSave(); }; }
+  }
+  function renameClose() {
+    const id = STRAT_SEG_RENAME;
+    STRAT_SEG_RENAME = '';
+    strategyPaintMarket('spend');
+    if (id) $(`#strat-where [data-seg="${CSS.escape(id)}"]`)?.focus();
+  }
+  async function renameSave() {
+    const id = STRAT_SEG_RENAME, seg = (spend()?.segments || []).find(s => s.id === id);
+    const name = (renameField()?.value || '').replace(/\s+/g, ' ').trim();
+    if (!id) return;
+    if (!seg || !name || name === seg.name) { renameClose(); return; }
+    seg.name = name;
+    renameClose();
+    try { await post('/v2/market/entities/' + id.split('/').map(encodeURIComponent).join('/'), {name}); await again('spend'); }
+    catch (error) { failed('spend', error); }
   }
   const rivals = body.querySelector<HTMLElement>('#strat-rivals');
   if (rivals) rivals.onclick = ev => {
@@ -1027,28 +1070,36 @@ function strategyBindMarket(state: StratState, body: HTMLElement) {
   for (const [box, kind] of [['#strat-where', 'seg'], ['#strat-rivals', 'rival']] as const) {
     const card = body.querySelector<HTMLElement>(box);
     if (card) card.onsubmit = async ev => {
+      if (kind === 'seg' && eventElement(ev)?.closest('[data-seg-rename]')) { ev.preventDefault(); void renameSave(); return; }
       const f = eventElement(ev)?.closest<HTMLFormElement>(`[data-add="${kind}"]`);
       if (!f) return;
       ev.preventDefault();
       const nameField = (f.elements as unknown as StratAddControls).name;
       const name = nameField.value.replace(/\s+/g, ' ').trim();
       if (!name) { nameField.focus(); return; }
-      f.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(el => { el.disabled = true; });
+      // A segment's summary and parent are optional (strategySegAddHtml).
+      const summary = f.querySelector<HTMLInputElement>('input[name="summary"]')?.value.replace(/\s+/g, ' ').trim() || '';
+      const parent = f.querySelector<HTMLSelectElement>('select[name="parent"]')?.value || '';
+      f.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select').forEach(el => { el.disabled = true; });
       try {
         if (kind === 'seg') {
           if (!spend()?.definition) await put('/v2/market/definition', {root_name: `${companyName() || 'Our'} market`});
-          await post('/v2/market/segments', {name});
+          await post('/v2/market/segments', {name, ...(summary ? {summary} : {}), ...(parent ? {parent_id: parent} : {})});
         } else await post('/v2/market/competitors', {name});
       } catch (error) {
         toast(errorStatus(error) === 409 ? 'Already there' : errorMessage(error, 'Could not add it'), errorStatus(error) !== 409);
-        f.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button').forEach(el => { el.disabled = false; });
+        f.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select').forEach(el => { el.disabled = false; });
         nameField.focus();
         return;
       }
       await again(kind === 'seg' ? 'spend' : 'rivals');
       // The row may be the same node as before (its markup did not change): emptied and on again, for the next one.
       const row = $(`${box} [data-add="${kind}"]`);
-      if (row) { row.querySelectorAll('input, button').forEach((el: HTMLInputElement | HTMLButtonElement) => { el.disabled = false; }); row.elements.name.value = ''; row.elements.name.focus(); }
+      if (row) {
+        row.querySelectorAll('input, button, select').forEach((el: HTMLInputElement | HTMLButtonElement | HTMLSelectElement) => { el.disabled = false; });
+        row.querySelectorAll('input, select').forEach((el: HTMLInputElement | HTMLSelectElement) => { el.value = ''; });
+        row.elements.name.focus();
+      }
     };
   }
 }

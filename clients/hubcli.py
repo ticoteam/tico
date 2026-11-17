@@ -801,6 +801,12 @@ def parser():
     )
     s.add_argument("id")
     s.add_argument("file", help="a local file, or page:<file id>[@<version>] with --req")
+    s.add_argument(
+        "--doc",
+        metavar="NAME",
+        help="an .html file as the next version of the task's document NAME (a tab beside the task's chat): Spec, "
+        "QA report, Release report, Invoice and Email are the names a stage approves; say what changed with --note",
+    )
     s.add_argument("--req", help='the page requirement it is for, e.g. "Spec page"')
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--name", help="the name people see; defaults to the file's own")
@@ -857,55 +863,9 @@ def parser():
     s.add_argument("--file", required=True, help="JSON: {status, error, items: [...]}; - for stdin")
     s.set_defaults(fn="listening save")
 
-    def mcp_flags(s):
-        s.add_argument(
-            "--mcp-url",
-            dest="mcp_url",
-            help="the tool is a remote MCP server at this https address (http only for localhost)",
-        )
-        s.add_argument("--transport", choices=["http", "sse"], help="the MCP server's transport (default http)")
-        s.add_argument(
-            "--header",
-            dest="headers",
-            action="append",
-            metavar="'NAME: VALUE'",
-            help='an MCP header; the value may use ${VAR_NAME} for the tool\'s --env variable, never the value itself; repeatable',
-        )
-
-    tools = sub.add_parser(
-        "tool",
-        help="what the team uses: each tool, what a bot uses, its model, repository and declared tools (docs/creating-bots.md)",
-    ).add_subparsers(dest="sub")
-    s = tools.add_parser("list", help="the team's tools; with --bot, that bot's tools with their status")
-    s.add_argument("--bot", help="a bot's slug, or me: that bot's own tools instead of the team's")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="tool list")
-    s = tools.add_parser("show", help="one tool: the page, its queries and the learnings")
-    s.add_argument("service")
-    s.add_argument("--json", action="store_true", help="print the API response as JSON")
-    s.set_defaults(fn="tool show")
-    s = tools.add_parser("index", help="Tools: every API tool, mailbox, number and connection you may see")
-    s.add_argument("--cursor")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="tool index")
-    s = tools.add_parser("check", help="check an API tool's keys now")
-    s.add_argument("id", help="the API tool id (`tico tool index`)")
-    s.set_defaults(fn="tool check")
-    s = tools.add_parser(
-        "activity",
-        help="an API tool's recent calls and key uses, with repeated calls and errors summed up; never a value",
-    )
-    s.add_argument("id", metavar="tool", help="the API tool id (`tico tool index`)")
-    s.add_argument("--since", help="only rows from this window on: 24h, 7d or an ISO time")
-    s.add_argument("--result", choices=("sent", "refused", "failed", "use"), help="only rows with this result")
-    s.add_argument("--limit", type=int, help="rows on the page (default 50, at most 200)")
-    s.add_argument("--cursor", help="the previous page's next")
-    s.set_defaults(fn="tool activity")
-    s = tools.add_parser("level", help="set a bot's level on an API tool: read, read_write or none")
-    s.add_argument("id", help="the API tool id (`tico tool index`)")
-    s.add_argument("bot", help="the bot's slug")
-    s.add_argument("level", choices=("read", "read_write", "none"))
-    s.set_defaults(fn="tool level")
+    # `tico tool` (clients/commands/tools.py): every leaf but `call`, which runs the vendor call on this computer.
+    cli_spec.add(sub, tools_commands.TOOL)
+    tools = _group_subparsers(sub, "tool")
     s = tools.add_parser("call", help="call a proxied API tool from a turn; Tico adds the real key")
     s.add_argument("tool", help="the API tool id, e.g. close-crm (its TICO_TOOL_<ID>_URL)")
     s.add_argument("method", type=str.upper, choices=("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"))
@@ -913,58 +873,7 @@ def parser():
     s.add_argument("--data", help="a JSON body")
     s.add_argument("--query", action="append", default=[], help="a query parameter, key=value (repeatable)")
     s.set_defaults(fn="tool call")
-    s = tools.add_parser("query-search", help="search a tool's query catalog")
-    s.add_argument("service")
-    s.add_argument("term", nargs="?", default="", help="matched against id, title, description, tags and SQL")
-    s.add_argument("--id", dest="query_id", help="print one query's SQL and params")
-    s.add_argument("--json", action="store_true", help="print the matching queries as JSON")
-    s.set_defaults(fn="tool query-search")
-    s = tools.add_parser("learn", help='add a learning: tico tool learn <service> "<text>"')
-    s.add_argument("service")
-    s.add_argument("text")
-    s.set_defaults(fn="tool learn")
-    s = tools.add_parser("report", help="report the external profile's complete current tool list")
-    s.add_argument("tools", help="JSON array of tool entries")
-    s.set_defaults(fn="tool report")
-    s = tools.add_parser("add", help="register a tool: BotOps adds it to bot.yaml; never a credential value")
-    s.add_argument("bot")
-    s.add_argument("service", help="a short name such as posthog or google-calendar")
-    s.add_argument("--can", required=True, help="read, draft, post, act, use, send or write; comma separated")
-    s.add_argument("--identity", help="who it acts as, in words for a person")
-    s.add_argument(
-        "--scope",
-        action="append",
-        metavar="KEY=VALUE",
-        help="database=warehouse, channels=#a,#b, project=123; repeatable",
-    )
-    s.add_argument("--env", help="the variable's NAME, such as POSTHOG_KEY; the owner installs the value")
-    s.add_argument("--note")
-    mcp_flags(s)
-    s.add_argument("--title-prefix", dest="title_prefix", help="prefix for the generated BotOps task")
-    s.add_argument("--dry-run", dest="dry_run", action="store_true", help="validate without opening a task")
-    s.set_defaults(fn="tool add")
-    s = tools.add_parser(
-        "update", help="change a declared tool's can, scope or note in place; never remove and add again"
-    )
-    s.add_argument("id", help="the tool id from `tico tool list --bot`")
-    s.add_argument("--bot", required=True, help="the bot's slug")
-    s.add_argument(
-        "--can", help="the full list from now on: read, draft, post, act, use, send or write; comma separated"
-    )
-    s.add_argument(
-        "--scope",
-        action="append",
-        metavar="KEY=VALUE",
-        help="set a key (database=warehouse, channels=#a,#b); KEY= takes it off; repeatable",
-    )
-    s.add_argument("--note", help='the new note; "" clears it')
-    mcp_flags(s)
-    s.add_argument("--title-prefix", dest="title_prefix", help="prefix for the generated BotOps task")
-    s.set_defaults(fn="tool update")
-    s = tools.add_parser("remove", help="ask BotOps to remove a tool, or withdraw a pending request")
-    s.add_argument("bot")
-    s.add_argument("id", help="the tool id from `tico tool list --bot`")
-    s.set_defaults(fn="tool remove")
+    cli_spec.add(sub, tools_commands.TOOL_AFTER_CALL, parents={("tool",): tools})
     cli_spec.add(sub, tools_admin.TOOL_CLI, parents={("tool",): tools})  # clients/commands/tools_admin.py
 
     # Automations (clients/commands/automations.py): every leaf but create, update and inbox, which stay here.
@@ -1391,13 +1300,9 @@ def parser():
         help="+actions lets the bot run workflows there, +edit edit workflow files (Owner or admin)",
     )
     s.set_defaults(fn="bot repos")
-    repos = sub.add_parser("repo", help="team repositories").add_subparsers(dest="sub")
-    s = repos.add_parser("list")
-    s.set_defaults(fn="repo list")
-    for verb in ("tick", "untick"):
-        s = repos.add_parser(verb)
-        s.add_argument("full_name")
-        s.set_defaults(fn="repo " + verb)
+    # `tico repo` (clients/commands/tools.py and connections.py): every leaf but review and product-create.
+    cli_spec.add(sub, tools_commands.REPO)
+    repos = _group_subparsers(sub, "repo")
     s = repos.add_parser("review", help="submit a GitHub review at an exact PR head; shared App falls back to COMMENT")
     s.add_argument("repository", metavar="OWNER/REPO")
     s.add_argument("number", type=int)
@@ -1571,9 +1476,6 @@ def parser():
     s.add_argument("channel")
     s.add_argument("--reader", help="only this bot stops reading it")
     s.set_defaults(fn="slack channel remove")
-    chan.add_parser("import", help="store the channels of the old registry/slack-channels.yaml").set_defaults(
-        fn="slack channel import"
-    )
     cli_spec.add(sub, computers.SUPPORT)  # tico support: clients/commands/computers.py
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.

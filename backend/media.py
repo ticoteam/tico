@@ -26,6 +26,7 @@ from . import rooms
 from . import visuals
 from .store import H, P, Problem, encode, digest as request_digest
 from .views import default_bot, human_only, roster
+from .api_contract import api_v2
 
 
 class Note(M.Contract):
@@ -48,13 +49,20 @@ class Send(M.Contract):
 
 
 class TaskFile(M.Contract):
-    """A deliverable a bot (or person) attaches to a task: text as-is, or bytes base64-encoded."""
+    """A deliverable a bot (or person) attaches to a task: text as-is, or bytes base64-encoded. With `document`, it is a
+    new version of one of the task's documents (backend/task_documents.py): HTML text, its file named for it."""
 
     model_config = {**M.Contract.model_config, "str_strip_whitespace": False}
-    name: str = Field(min_length=1, max_length=200)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
     text: str | None = Field(default=None, min_length=1, max_length=2_000_000)
     content_base64: str | None = Field(default=None, min_length=1, max_length=14_000_000)
     note: str | None = Field(default=None, max_length=500)
+    document: str | None = Field(
+        default=None,
+        max_length=40,
+        description="The task's document this is the next version of (HTML text): Spec, QA report, Release report, "
+        "Invoice and Email are the names a stage approves; any other name is a document no stage asks for",
+    )
 
 
 def task_file_contract():
@@ -760,13 +768,24 @@ def install_media(
 
         return await asyncio.to_thread(write, request, body, uploads, work)
 
-    @app.get("/api/v2/tasks/{tid}/files")
+    @app.get(
+        "/api/v2/tasks/{tid}/files", **api_v2("Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList")
+    )
     def task_files(request: Request, tid: str):
         with store.read() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
             return files.task_listing(c, request.state.identity, task_id)
 
-    @app.post("/api/v2/tasks/{tid}/files", openapi_extra=task_file_contract())
+    @app.post(
+        "/api/v2/tasks/{tid}/files",
+        **api_v2(
+            "Tasks",
+            "attachTaskFile",
+            "Attach a file; the same name adds a version",
+            "TaskFileResult",
+            openapi_extra=task_file_contract(),
+        ),
+    )
     async def task_attach(request: Request, tid: str):
         who = request.state.identity
         from .files import edit_file_version, file_added
@@ -786,11 +805,14 @@ def install_media(
 
             fields, uploads, stack = await parse(request, store.settings.upload_max_bytes, blobs.directory)
             try:
+                if fields.get("document"):
+                    raise Problem("validation", "A document is HTML text: send it as text", 422)
                 upload = uploads["file"]
                 fields.setdefault("name", upload["filename"])
+                name = str(fields["name"])
                 body = TaskFile.model_validate(fields)
                 supplied_type = upload["mime"].lower().split(";", 1)[0].strip()
-                content_type = guessed_type(body.name) or (
+                content_type = guessed_type(name) or (
                     supplied_type
                     if re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", supplied_type)
                     else "application/octet-stream"
@@ -798,7 +820,7 @@ def install_media(
                 size = upload["size"]
                 if who.role == "bot":
                     try:
-                        BF.check_name(body.name)
+                        BF.check_name(name)
                     except BF.Refused as exc:
                         raise Problem("file_refused", str(exc), 422) from exc
                 digest = upload["digest"]
@@ -813,9 +835,9 @@ def install_media(
                         "name": "poster",
                         "content_type": poster_type,
                     }
-                receipt = {**body.model_dump(), "digest": digest, "size": size, "poster": poster}
+                receipt = {**body.model_dump(exclude={"document"}), "digest": digest, "size": size, "poster": poster}
                 replay = await asyncio.to_thread(
-                    replay_upload, store, request, {**body.model_dump(), "uploads": [receipt]}
+                    replay_upload, store, request, {**body.model_dump(exclude={"document"}), "uploads": [receipt]}
                 )
                 if replay is not None:
                     return replay
@@ -835,27 +857,38 @@ def install_media(
                 raise Problem("validation", "Invalid task file fields", 422) from exc
             if (body.text is None) == (body.content_base64 is None):
                 raise Problem("validation", "Send exactly one of text or content_base64", 422)
-            if body.text is not None:
+            if body.document is not None:
+                from . import task_documents as TD
+
+                document = TD.canonical(body.document)
+                if body.text is None:
+                    raise Problem("validation", "A document is HTML text: send it as text", 422)
+                body = body.model_copy(update={"document": document, "name": TD.file_name(document)})
+                data = TD.clean(body.text)
+            elif body.text is not None:
                 data = body.text.encode("utf-8")
             else:
                 try:
                     data = base64.b64decode(body.content_base64, validate=True)
                 except (ValueError, binascii.Error) as exc:
                     raise Problem("validation", "content_base64 is not valid base64", 422) from exc
+            if not body.name:
+                raise Problem("validation", "Say the file's name", 422)
+            name = body.name
             size = len(data)
             if not data or size > 10_000_000:
                 raise Problem("validation", "A file is at least one byte and at most 10 MB", 422)
-            content_type = guessed_type(body.name) or (
-                "text/plain" if body.text is not None else "application/octet-stream"
-            )
+            content_type = guessed_type(name) or ("text/plain" if body.text is not None else "application/octet-stream")
             if who.role == "bot":
                 try:
-                    BF.check_name(body.name)
+                    BF.check_name(name)
                 except BF.Refused as exc:
                     raise Problem("file_refused", str(exc), 422) from exc
             payload = body.model_dump()
             if not body.note:
                 payload.pop("note")
+            if not body.document:
+                payload.pop("document")  # an older runner's replayed receipt hashes as it did
             replay = await asyncio.to_thread(replay_upload, store, request, payload)
             if replay is not None:
                 return replay
@@ -864,18 +897,28 @@ def install_media(
         def work(c):
             task = comment_rights(c, auth, who, tid)
             H._writer(c, who.actor, task_id=tid)
-            item = register(c, who, digest, size, body.name, content_type)
+            item = register(c, who, digest, size, name, content_type)
             bot_actor = next((a for a in (who.actor, task["owner_id"], task["requester_id"]) if H.is_bot(a)), None)
-            fid, number = files.attach_task(
-                c, who, tid, item, digest, H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings)
-            )
+            bot = H.actor_id(bot_actor) if bot_actor else default_bot(c, store.settings)
+            document = None
+            if body.document:
+                from . import task_documents as TD
+
+                document = TD.named(c, tid, body.document)
+                # A document continues its own file whoever writes it, never another file of the same name.
+                fid, number = files.attach_task(
+                    c, who, tid, item, digest, bot, file=TD.file_of(c, tid, document), series=False
+                )
+                TD.record(c, tid, document, fid)
+            else:
+                fid, number = files.attach_task(c, who, tid, item, digest, bot)
             c.execute("INSERT INTO task_assets VALUES(?,?)", (tid, item["id"]))
             if body.note is not None:
                 edit_file_version(c, auth, who, tid, fid, number, M.FileVersionEdit(note=body.note))
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), tid))
             # The task's own activity says a file was added, as it says a link was.
             preview = register(c, who, **poster)["id"] if poster else None
-            file_added(c, who, tid, item, number, preview)
+            file_added(c, who, tid, item, number, preview, document=document)
             if preview:
                 c.execute(
                     "UPDATE bot_file_versions SET poster_blob_id=? WHERE file_id=? AND version=?",
@@ -886,10 +929,11 @@ def install_media(
                 "file_id": fid,
                 "version": number,
                 "link": store.settings.public_url + f"/api/v2/files/{fid}?v={number}",
+                **({"document": document} if document else {}),
             }
 
         # Include byte identity in the receipt without storing multipart bytes.
-        receipt = {**body.model_dump(), "digest": digest, "size": size, "poster": poster}
+        receipt = {**body.model_dump(exclude={"document"}), "digest": digest, "size": size, "poster": poster}
         if request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
             result = await asyncio.to_thread(write_upload, store, request, body, [receipt], work)
         else:

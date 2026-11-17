@@ -27,6 +27,7 @@ import sqlite3
 
 from . import hubdb as H
 from .store import Problem
+from .api_contract import api_v2
 
 SLUG = "general-manager"
 NAME = "General Manager"
@@ -192,13 +193,15 @@ def _paused(c):
 
 
 def _held(c):
-    """Bots held after five fast failures in a row (run_backoff) or for going over a turn budget (turn_budgets). Each
+    """Bots held after five fast failures in a row (run_failures) or for going over a turn budget (turn_budgets). Each
     hold already has its Needs-you item; this line hands the look at its runs to BotOps, since the General Manager never
     releases a bot itself."""
     rows = []
     for sql, why in (
         (
-            "SELECT bot, held_at, error_class AS reason FROM run_backoff WHERE held_at IS NOT NULL",
+            "SELECT holdable_id AS bot, json_extract(details,'$.held_at') AS held_at, "
+            "json_extract(details,'$.error_class') AS reason FROM holds WHERE kind='failing' AND holdable_type='bot' "
+            "AND until_at IS NULL AND released_at IS NULL",
             "held after five fast failures in a row",
         ),
         (
@@ -513,7 +516,14 @@ def install(app, store, auth, mutate, onboarding, settings_admin, settings):
             raise Problem("forbidden", "People and bots read this", 403)
         return who
 
-    @app.get("/api/v2/general-manager")
+    @app.get(
+        "/api/v2/general-manager",
+        **api_v2(
+            "Health",
+            "getGeneralManager",
+            "People and bots: whether the General Manager is on, its hourly report's switch, schedule and last run, and each department's last check and open check task",
+        ),
+    )
     def general_manager(request: Request):
         """Whether the General Manager is on, the routine's switch and schedule, and for each department how many items its
         last check found and its open Task check task (a task a reader may not open is left out)."""
@@ -525,14 +535,24 @@ def install(app, store, auth, mutate, onboarding, settings_admin, settings):
                     row["task"] = None
             return out
 
-    @app.post("/api/v2/general-manager/turn-on")
+    @app.post(
+        "/api/v2/general-manager/turn-on",
+        **api_v2(
+            "Health",
+            "turnOnGeneralManager",
+            "Owner only: add the General Manager from the catalog (or wake a paused one) and activate it",
+        ),
+    )
     def turn_on(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns the " + NAME + " back on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_general_manager(c, who))
 
-    @app.post("/api/v2/general-manager/turn-off")
+    @app.post(
+        "/api/v2/general-manager/turn-off",
+        **api_v2("Health", "turnOffGeneralManager", "Owner only: pause the General Manager"),
+    )
     def turn_off(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":

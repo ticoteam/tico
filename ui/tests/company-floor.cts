@@ -40,6 +40,26 @@ const FLOOR = {factories: [
 const ERRANDS = {id: 'errands', name: 'Errands', manager_id: 'bot:pm', in: {day: 1, week: 4}, out: {day: 0, week: 2}, stages: [
   stage('errand-do', 'Do', [o('bot:f1', 2)]),
 ]};
+// Handoffs: a stage that files a linked task into another pipeline (`into`). Leads' last stage hands off to Deals in the
+// same hall, so they are one line; Deals' last stage hands off to Accounts in another hall, and Ideas hands off to
+// Fixes (another hall) from a middle stage: those are marked where they are, two chevrons, named only for a reader.
+const hand = (st: ReturnType<typeof stage>, into: string) => ({...st, into});
+const LEADS = {id: 'leads', name: 'Leads', manager_id: 'bot:pm', in: {day: 14, week: 90}, out: {day: 0, week: 1}, stages: [
+  stage('lead-new', 'New', [o('bot:f1', 6)]), hand(stage('lead-ok', 'Qualified', [o('bot:f2', 2)]), 'deals'),
+]};
+const DEALS = {id: 'deals', name: 'Deals', manager_id: 'bot:pm', in: {day: 2, week: 9}, out: {day: 1, week: 5}, stages: [
+  stage('deal-talk', 'Talking', [o('bot:f3', 3)]), hand(stage('deal-won', 'Won', [o('bot:f4', 1)]), 'accounts'),
+]};
+const IDEAS = {id: 'ideas', name: 'Ideas', manager_id: 'bot:pm', in: {day: 1, week: 6}, out: {day: 1, week: 4}, stages: [
+  hand(stage('idea-ready', 'Ready', [o('bot:f5', 2)]), 'fixes'), stage('idea-done', 'Shipped', []),
+]};
+const ACCOUNTS = {id: 'accounts', name: 'Accounts', manager_id: 'bot:em', in: {day: 1, week: 5}, out: {day: 0, week: 0}, stages: [
+  stage('acct-onboard', 'Onboard', [o('bot:qa', 1)]),
+]};
+const HANDOFFS = {factories: [
+  {id: 'f-growth', name: 'Growth', manager_id: null, pipelines: [LEADS, DEALS, IDEAS]},
+  {id: 'f-eng', name: 'Engineering', manager_id: null, pipelines: [FIXES, ACCOUNTS]},
+]};
 const OTHER = {factories: [...FLOOR.factories, {id: null, name: 'Other', manager_id: null, pipelines: [ERRANDS]}]};
 // `idle` reports to the Product manager and holds no task: it is on the hall's chart all the same.
 const BOTS = ['pm', 'f1', 'f2', 'f3', 'f4', 'f5', 'b1', 'rm', 'em', 'fb', 'qa', 'idle', ...Array.from({length: 12}, (_, i) => `fx${i}`)]
@@ -314,6 +334,43 @@ const levels = (page: Page, sel: string) => page.locator(sel).evaluateAll(els =>
       assert.deepEqual(await levels(page, '[data-cf-line="errands"] .cf-stack'), [2]);
       await page.locator('[data-cf-line="errands"] .cf-stack').hover();
       await page.locator('#cf-card .cf-row').first().waitFor();
+      assert.deepEqual(errors, []);
+      await close();
+    }
+    // A handoff joins two lines in a hall into one, and is marked where it goes anywhere else; each pipeline is named.
+    {
+      const hub: Hub = {floor: HANDOFFS, fail: false, reads: []};
+      const {page, errors, close} = await open(1440, 900, hub);
+      await page.locator('.cf-hall').first().waitFor();
+      const growth = page.locator('.cf-hall[data-cf-factory="f-growth"]');
+      assert.deepEqual(await growth.locator('.cf-line').evaluateAll(els => els.map(el => el.getAttribute('data-cf-line'))), ['leads', 'ideas']);
+      assert.deepEqual(await levels(page, '[data-cf-line="leads"] .cf-stack'), [5, 2, 3, 1], 'Deals carries on Leads\' line');
+      assert.deepEqual(await page.locator('[data-cf-line="leads"] .cf-sub').allInnerTexts(), ['Leads', 'Deals']);
+      assert.deepEqual(await page.locator('[data-cf-line="leads"] .cf-rate').allInnerTexts(), ['14/day', '1/day'], 'in to the first, out of the last');
+      assert.equal(await page.locator('[data-cf-line="leads"] .cf-chev.cf-into').count(), 2);
+      assert.equal(await page.locator('[data-cf-line="leads"] .cf-chev.cf-end.cf-into').getAttribute('aria-label'), 'Into Accounts');
+      // A handoff from a middle stage: two chevrons after it; the line goes on, named as any other.
+      assert.equal(await page.locator('[data-cf-line="ideas"] .cf-chev.cf-into').getAttribute('aria-label'), 'Into Fixes');
+      assert.equal(await page.locator('[data-cf-line="ideas"] .cf-chev.cf-end.cf-into').count(), 0);
+      assert.equal(await page.locator('[data-cf-line="ideas"] .cf-sub').count(), 0);
+      assert.equal(await page.locator('[data-cf-line="ideas"] .cf-pname').innerText(), 'Ideas');
+      // A line with no handoff is as it was: its name under the rail's start.
+      assert.equal(await page.locator('[data-cf-line="fixes"] .cf-sub').count(), 0);
+      assert.equal(await page.locator('[data-cf-line="fixes"] .cf-pname').innerText(), 'Fixes');
+      await shot(page, 'floor-handoffs');
+      // Deals' stacks open Deals' cards.
+      await page.locator('[data-cf-line="leads"] .cf-stack[data-cf-stage="deal-talk"]').hover();
+      await page.locator('#cf-card .cf-row').first().waitFor();
+      assert.ok(hub.reads.some(u => u.pathname === '/api/v2/tasks' && u.searchParams.get('pipeline') === 'deals'), 'the card reads Deals');
+      // The subs sit under the rail, not over the stacks, and nothing scrolls sideways.
+      const [rail, sub] = await page.locator('[data-cf-line="leads"]').evaluate(el => [
+        el.querySelector('.cf-rail')!.getBoundingClientRect().bottom, el.querySelector('.cf-sub')!.getBoundingClientRect().bottom]);
+      assert.ok(sub! <= rail! + 1, 'the names fit in the track');
+      // A factory's page marks the handoff too.
+      await page.evaluate((h: string) => { location.hash = h; }, '#/overview/floor/f-growth');
+      await page.locator('.cf-one').waitFor();
+      assert.equal(await page.locator('[data-cf-line="leads"] .cf-chev.cf-end.cf-into').getAttribute('aria-label'), 'Into Deals');
+      await shot(page, 'floor-handoffs-factory');
       assert.deepEqual(errors, []);
       await close();
     }

@@ -1,19 +1,18 @@
 """Failed runs wait, then stop (quiet task flow, section 7).
 
-A bot's run that fails within FAST seconds of starting is not the same as one that fails after real work: it
-changed nothing and will fail the same way again. Each such failure makes the bot wait before its next run, per bot,
-15 s doubling to 8 h and reset by a run that completes normally. A person's message sent after the last failure does not wait it out:
-it is the retry someone is watching, and its failure counts like any other (re-queued, it then waits as the rest do). After HOLD_AFTER of them in a row the bot is held:
-no claim starts its queued work (a person's chat message included) until a person releases it, and the bot's
-operator gets one Needs-you item while Health names the error class. The held bot's queued work is kept.
+A bot's run that fails within FAST seconds of starting is not the same as one that fails after real work: it changed
+nothing and will fail the same way again. Each such failure makes the bot wait before its next run, and HOLD_AFTER in a
+row hold it: a `failing` hold on the bot (backend/holds.py, whose KINDS row sets the waits and tries). A run that
+completes normally starts the count over. A person's message sent after the last failure does not wait it out: it is
+the retry someone is watching, and its failure counts like any other (re-queued, it then waits as the rest do). A held
+bot starts none of its queued work (a person's chat message included) until a person releases it or a try completes;
+the bot's operator gets one Needs-you item while Health names the error class. Its queued work is kept.
 
-A hold does not need a person to end it. Tico tries one run on its own, the first PROBE_FIRST after the hold and each
-later one after twice the gap before it (up to MAX_WAIT), so a shared outage (a provider answering every bot with an
-error, the network down) lets every bot go again once it is over, while a broken bot still makes only a few runs a day.
-The claim hands out exactly one job when the try is due and pushes the next try out at once (`probe`), so several
-lanes or computers, or a runner that vanishes, never open the gate twice. The try is whichever queued job the queue
-puts first, a person's chat message ahead of the rest. A run that completes normally releases the bot (`reset`), and a
-fast failure of the try doubles the gap; a person can still release the bot at once.
+Tico tries one run of a held bot on its own (holds.take_probe), at growing intervals, so a shared outage (a provider
+answering every bot with an error, the network down) lets every bot go again once it is over, while a broken bot still
+makes only a few runs a day. The try is whichever queued job the queue puts first, a person's chat message ahead of
+the rest. A run that completes normally releases the bot (`reset`), and a fast failure of the try doubles the gap; a
+person can still release the bot at once.
 
 A failure that is a provider's usage limit takes the usage-limit hold instead (backend/login_holds.py), however the
 provider wrapped it: `classify` reads the text of any failed run, so a runner that did not flag it (an older one)
@@ -33,14 +32,12 @@ import re
 
 from clients import gateway
 
-from . import login_holds
+from . import holds, login_holds
 from .store import H
 
 FAST = 60  # a run that fails sooner than this after starting is a fast failure
-FIRST_WAIT = 15  # seconds the bot waits after its first fast failure; doubles for each one in a row
-MAX_WAIT = 8 * 3600  # and never longer than this
-HOLD_AFTER = 5  # fast failures in a row that hold the bot
-PROBE_FIRST = 30 * 60  # seconds a held bot waits before its first try; doubles for each failed try, up to MAX_WAIT
+FAILING = holds.FAILING
+HOLD_AFTER = holds.KINDS[FAILING].held_after  # fast failures in a row that hold the bot
 ERROR_CHARS = 300
 
 # A provider's limit named anywhere in an error: "You've hit your weekly limit", "usage limit reached", "rate limit".
@@ -207,88 +204,45 @@ def compact_settle(c, aid, completed):
         c.execute("UPDATE compact_first SET taken_by=NULL WHERE taken_by=?", (aid,))
 
 
-# ---------------------------------------------------------------------------------------------------- the state
-GET_SQL = "SELECT * FROM run_backoff WHERE bot=?"
+# ---------------------------------------------------------------------------------------------------- the hold
+# A `failing` hold on the bot (backend/holds.py) is open while fast failures in a row are on record (its streak). Its
+# until_at is the wait after the last one; a held bot has none, and probe_at is when its next try is due. Its details
+# keep the last failure's class, its error and when it failed, and when the bot was held.
 
 
-def get(c, bot):
-    """The bot's row, read once per snapshot (read_cache): a status page primes every bot's (events.prime_status_lines)."""
-    from .read_cache import one
-
-    row = one(c, GET_SQL, (bot,))
-    return dict(row) if row else {}
-
-
-def wait_for(fails):
-    """Seconds the bot waits after `fails` fast failures in a row."""
-    return min(FIRST_WAIT * 2 ** max(fails - 1, 0), MAX_WAIT)
-
-
-def get_many(c, bots):
-    """{bot: its row as get returns it} for every bot in `bots`, read in set queries (the claim checks each one)."""
-    from .hubdb import chunks
-
-    rows = {}
-    for part in chunks(bots):
-        for row in c.execute(f"SELECT * FROM run_backoff WHERE bot IN ({','.join('?' * len(part))})", part):
-            rows[row["bot"]] = dict(row)
-    return {bot: rows.get(bot, {}) for bot in bots}
-
-
-def refusal(c, bot, state=None):
-    """Why a claim passes over all of the bot's work for its failed runs: "run_hold" while it is held (until its next
-    try is due), "backoff" until its wait ends, else None. Read only, as every refusal (execution.claim_refusal).
-    `state`: the bot's row as get returns it, when the caller has read it already."""
-    row = get(c, bot) if state is None else state
+def _read(row):
+    """A hold row as a dict, its details read ({} for none)."""
     if not row:
-        return None
-    if row["held_at"]:
-        return None if probe_due(c, bot, row) else "run_hold"
-    return "backoff" if row["wait_until"] and row["wait_until"] > H.now() else None
+        return {}
+    try:
+        details = json.loads(row["details"] or "{}")
+    except (TypeError, ValueError):
+        details = {}
+    return {**dict(row), "details": details if isinstance(details, dict) else {}}
 
 
-def probe_wait(fails):
-    """Seconds a held bot waits for its next try once `fails` fast failures in a row are on record."""
-    return min(PROBE_FIRST * 2 ** max(fails - HOLD_AFTER, 0), MAX_WAIT)
-
-
-def probe_at(state):
-    """When a held bot's next try is due: the time kept in `wait_until`, else PROBE_FIRST after the hold began (a hold
-    from before tries existed has none). None for a bot that is not held."""
-    return (state.get("wait_until") or H.shift(state["held_at"], seconds=PROBE_FIRST)) if state.get("held_at") else None
-
-
-def probe_due(c, bot, state, now=None):
-    """Whether a held bot may take a try now: its time has come and none of its runs is out."""
-    at = probe_at(state)
-    return bool(
-        at
-        and at <= (now or H.now())
-        and not c.execute(
-            "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)
-        ).fetchone()
+def get(c, bot, loads=None):
+    """The bot's open hold ({} when none): from what the claim read for its bots (claim_loads) when it is given, else
+    once per snapshot (a page primes every bot's: holds.prime)."""
+    return _read(
+        loads.failing[bot] if loads is not None and bot in loads.failing else holds.get(c, FAILING, "bot", bot)
     )
 
 
-def probe(c, bot):
-    """Called by the claim, in its write transaction, with the bot whose job it is about to hand out: True when the job
-    must be passed over because the bot is held and its try is not due. When it is due this is the try: the next one is
-    pushed out as if it failed, so a second claim in the same window, a second lane or computer, and a try whose runner
-    vanishes all wait the longer gap."""
-    state = get(c, bot)
-    if not state.get("held_at"):
-        return False
-    if not probe_due(c, bot, state):
-        return True
-    c.execute(
-        "UPDATE run_backoff SET wait_until=? WHERE bot=?",
-        (H.shift(H.now(), seconds=probe_wait(int(state.get("fails") or 0) + 1)), bot),
-    )
-    return False
+def is_held(hold):
+    """Whether the hold holds the bot (HOLD_AFTER failures in a row), not only a wait."""
+    return bool(hold) and hold["until_at"] is None
+
+
+def probe(c, bot, job_id):
+    """Called by the claim, in its write transaction, with the job it is about to hand out: True when it must pass the
+    job over because the bot is held and this is not its try (holds.take_probe)."""
+    hold = get(c, bot)
+    return is_held(hold) and not holds.take_probe(c, hold, job_id)
 
 
 def _since_failure(c, bot):
-    return get(c, bot).get("last_failed_at") or ""
+    return get(c, bot).get("details", {}).get("last_failed_at") or ""
 
 
 def person_waiting(c, bot):
@@ -302,35 +256,38 @@ def person_waiting(c, bot):
     )
 
 
-def job_refusal(c, bot, message):
-    """ "backoff" for a job the bot's wait holds: any but a person's message sent since the last failure. Read only
-    (execution.job_refusal)."""
-    if refusal(c, bot) != "backoff":
-        return None
-    fresh = H.typed_by_person(message) and str(message.get("created_at") or "") > _since_failure(c, bot)
-    return None if fresh else "backoff"
+def typed_since(c, bot, message):
+    """Whether a person typed this message after the bot's last failed run: the one job a back-off wait lets through."""
+    return H.typed_by_person(message) and str(message.get("created_at") or "") > _since_failure(c, bot)
+
+
+def _put(c, bot, hold, **change):
+    """Write the bot's hold: what it holds now, with `change` over it."""
+    kept = {k: hold.get(k) for k in ("reason", "details", "streak", "until_at", "probe_at", "upkeep_task_id")}
+    return holds.put(c, FAILING, "bot", bot, actor=H.KEEPER, **{**kept, "reason": kept["reason"] or "", **change})
 
 
 def reset(c, bot):
     """A run completed normally: the count starts over. A held bot is released by it: the try worked, or the cause
     went away by itself. The operator's Needs-you item closes and an event says so."""
-    state = get(c, bot)
-    if state.get("held_at"):
+    hold = get(c, bot)
+    if not hold:
+        return
+    held = is_held(hold)
+    holds.release(c, FAILING, "bot", bot, actor=H.KEEPER, how="probe_passed" if held else "expired")
+    if held:
         from . import bot_stops
 
-        c.execute("UPDATE run_backoff SET fails=0,wait_until=NULL,held_at=NULL,task_id=NULL WHERE bot=?", (bot,))
         bot_stops.close_item(
-            c, state.get("task_id"), f"{bot_stops.name_of(c, bot)} ran normally again, so Tico released it."
+            c, hold["upkeep_task_id"], f"{bot_stops.name_of(c, bot)} ran normally again, so Tico released it."
         )
         H.event(
             c,
             H.KEEPER,
             "bot.run_recovered",
             bot,
-            {"fails": state.get("fails"), "error_class": state.get("error_class")},
+            {"fails": hold["streak"], "error_class": hold["details"].get("error_class")},
         )
-        return
-    c.execute("UPDATE run_backoff SET fails=0,wait_until=NULL WHERE bot=? AND held_at IS NULL AND fails>0", (bot,))
 
 
 def fast(row, now):
@@ -341,59 +298,60 @@ def fast(row, now):
 
 def failed(c, settings, row, body, aid, now=None):
     """Count a run that ended in failure and wait or hold. The caller leaves out the runs that do not count (a Stop, a
-    usage limit, a busy model, a yield). A slow failure changes nothing. Answers the bot's new state, or None."""
+    usage limit, a busy model, a yield). A slow failure changes nothing."""
     now = now or H.now()
     if not fast(row, now):
-        return None
+        return
     bot = row["bot_id"]
     text = (texts(c, aid, body) or [""])[0]
     kind = error_class(text)
     error = " ".join(text.split())[:ERROR_CHARS]
-    state = get(c, bot)
-    fails = int(state.get("fails") or 0) + 1
-    held = bool(state.get("held_at"))
-    hold_now = fails >= HOLD_AFTER and not held
-    if fails < HOLD_AFTER:
-        wait = H.shift(now, seconds=wait_for(fails))
-    elif held and str(row["created_at"]) >= str(state["held_at"]):
-        wait = H.shift(now, seconds=probe_wait(fails))  # a try failed: the next one comes later
-    else:
-        wait = state.get("wait_until")  # held now (hold sets it), or a run out before the hold
-    c.execute(
-        "INSERT INTO run_backoff(bot,fails,wait_until,error_class,error,last_failed_at) VALUES(?,?,?,?,?,?) "
-        "ON CONFLICT(bot) DO UPDATE SET fails=excluded.fails,wait_until=excluded.wait_until,"
-        "error_class=excluded.error_class,error=excluded.error,last_failed_at=excluded.last_failed_at",
-        (bot, fails, wait, kind, error, now),
+    hold = get(c, bot)
+    fails = int(hold.get("streak") or 0) + 1
+    held_at, task_id = hold["details"].get("held_at") if is_held(hold) else None, hold.get("upkeep_task_id")
+    later = H.shift(now, seconds=holds.wait(FAILING, fails))
+    until, probe_at, newly = later, None, False
+    if held_at:
+        # Held already: a try that failed puts the next one later; a run out before the hold leaves it as it is.
+        until, probe_at = None, later if str(row["created_at"]) >= held_at else hold["probe_at"]
+    elif fails >= HOLD_AFTER:
+        held_at, until, probe_at, newly = now, None, later, True
+        task_id = _hold_item(c, settings, bot, fails, kind, error)
+    details = {"error_class": kind, "error": error, "last_failed_at": now, "held_at": held_at}
+    reason = _sentence(c, bot, fails, kind) if held_at else ""
+    _put(
+        c,
+        bot,
+        hold,
+        streak=fails,
+        until_at=until,
+        probe_at=probe_at,
+        details=details,
+        reason=reason,
+        upkeep_task_id=task_id,
     )
-    if hold_now:
-        hold(c, settings, bot, fails, kind, error, now)
-    return get(c, bot)
+    if newly:
+        H.event(c, H.KEEPER, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
+        H.hook(
+            c,
+            "bot.held",
+            bot,
+            lambda: {"bot": bot, "reason": "failed_runs", "fails": fails, "error_class": kind, "task": task_id},
+            H.KEEPER,
+            revision=now,
+        )
 
 
-def hold(c, settings, bot, fails, kind, error, now):
-    """Hold the bot: one Needs-you item for its operator, and an event. Its queued work is kept, and its first try is
-    due PROBE_FIRST from now."""
+def _hold_item(c, settings, bot, fails, kind, error):
+    """The held bot's one Needs-you item for its operator, or None. A sign-in a standing login card on its task already
+    puts in front of the person who fixes it is that card, not a second item (backend/reconnects.py): the hold still
+    stands, Health names it, and the card's fix releases it."""
     from . import reconnects
 
-    # A sign-in a standing login card on its task already puts in front of the person who fixes it is that card, not
-    # a second item (backend/reconnects.py): the hold still stands, Health names it, and the card's fix releases it.
-    task_id = (
+    return (
         None
         if kind == SIGN_IN and reconnects.bot_open(c, bot, "login:")
         else _item(c, settings, bot, fails, kind, error)
-    )
-    c.execute(
-        "UPDATE run_backoff SET held_at=?,task_id=?,wait_until=? WHERE bot=?",
-        (now, task_id, H.shift(now, seconds=PROBE_FIRST), bot),
-    )
-    H.event(c, H.KEEPER, "bot.run_held", bot, {"fails": fails, "error_class": kind, "task": task_id})
-    H.hook(
-        c,
-        "bot.held",
-        bot,
-        lambda: {"bot": bot, "reason": "failed_runs", "fails": fails, "error_class": kind, "task": task_id},
-        H.KEEPER,
-        revision=now,
     )
 
 
@@ -401,6 +359,7 @@ def _item(c, settings, bot, fails, kind, error):
     from . import bot_stops
 
     name = bot_stops.name_of(c, bot)
+    first = holds.KINDS[FAILING].probe_first
     return bot_stops.raise_item(
         c,
         settings,
@@ -408,7 +367,7 @@ def _item(c, settings, bot, fails, kind, error):
         f"{name} stopped after {fails} failed runs in a row",
         f"Tico stopped {name}: its last {fails} runs each failed within a minute, with {CLASS_WORDS[kind]}.\n\n"
         f"Last error: {error or 'none was reported'}\n\n"
-        f"Tico tries one run of {name} on its own, first in {PROBE_FIRST // 60} minutes and then at growing intervals, and "
+        f"Tico tries one run of {name} on its own, first in {first // 60} minutes and then at growing intervals, and "
         f"releases it when one completes. To start it sooner, check its last runs in Runs, fix the cause and release "
         f"{name} (Settings > Bots > {name}, or `tico bot release {bot}`). Everything queued for it is kept.",
     )
@@ -416,33 +375,38 @@ def _item(c, settings, bot, fails, kind, error):
 
 def raise_hold_item(c, settings, bot):
     """A held bot whose login card stood for its item (backend/reconnects.py) lost that card unfixed: its own item."""
-    state = get(c, bot)
-    if state.get("held_at") and not state.get("task_id"):
-        task_id = _item(
-            c, settings, bot, int(state.get("fails") or 0), state.get("error_class") or OTHER, state.get("error")
-        )
-        c.execute("UPDATE run_backoff SET task_id=? WHERE bot=?", (task_id, bot))
+    hold = get(c, bot)
+    if is_held(hold) and not hold["upkeep_task_id"]:
+        details = hold["details"]
+        task_id = _item(c, settings, bot, hold["streak"], details.get("error_class") or OTHER, details.get("error"))
+        _put(c, bot, hold, upkeep_task_id=task_id)
         return task_id
     return None
 
 
+def fold_item(c, bot):
+    """A login card on the held bot's task asks for the same fix as its item: the item closes, the card stands for it."""
+    hold = get(c, bot)
+    if is_held(hold) and hold["details"].get("error_class") == SIGN_IN and hold["upkeep_task_id"]:
+        from . import bot_stops
+
+        _put(c, bot, hold, upkeep_task_id=None)
+        bot_stops.close_item(c, hold["upkeep_task_id"], "A reconnect card on its task asks for the same fix.")
+
+
 def release(c, actor, bot):
-    """Lift the hold and the wait, and start the count over. Answers whether the bot had either."""
-    state = get(c, bot)
-    if not (state.get("held_at") or state.get("wait_until") or state.get("fails")):
+    """Lift the hold or the wait, and start the count over. Answers whether the bot had either."""
+    ended = holds.release(
+        c, FAILING, "bot", bot, actor=actor, how="botops" if str(actor).startswith("bot:") else "person"
+    )
+    if not ended:
         return False
     from . import bot_stops
 
-    c.execute(
-        "UPDATE run_backoff SET fails=0,wait_until=NULL,held_at=NULL,task_id=NULL,released_at=?,released_by=? "
-        "WHERE bot=?",
-        (H.now(), actor, bot),
-    )
-    bot_stops.close_item(c, state.get("task_id"), "Released.")
-    if state.get("held_at"):
-        H.event(
-            c, actor, "bot.run_released", bot, {"fails": state.get("fails"), "error_class": state.get("error_class")}
-        )
+    bot_stops.close_item(c, ended["upkeep_task_id"], "Released.")
+    if ended["until_at"] is None:
+        fails, kind = ended["streak"], _read(ended)["details"].get("error_class")
+        H.event(c, actor, "bot.run_released", bot, {"fails": fails, "error_class": kind})
         H.hook(
             c,
             "bot.released",
@@ -451,27 +415,36 @@ def release(c, actor, bot):
             actor,
             revision=H.now(),
         )
-    return bool(state.get("held_at") or state.get("wait_until"))
+    return True
+
+
+HELD_SQL = (
+    "SELECT * FROM holds WHERE kind='failing' AND holdable_type='bot' AND until_at IS NULL AND released_at IS NULL"
+)
 
 
 def held(c):
-    """Every bot held for failed runs: the rows Health lists."""
-    return [dict(r) for r in c.execute("SELECT * FROM run_backoff WHERE held_at IS NOT NULL ORDER BY held_at")]
+    """Every bot held for failed runs, longest held first: the holds Health lists."""
+    return [_read(row) for row in c.execute(HELD_SQL + " ORDER BY json_extract(details,'$.held_at')")]
+
+
+def _sentence(c, bot, fails, kind):
+    from . import bot_stops
+
+    return (
+        f"Tico stopped {bot_stops.name_of(c, bot)}: its last {fails} runs failed within a minute "
+        f"({CLASS_WORDS.get(kind) or CLASS_WORDS[OTHER]}). Tico tries one run on its own at growing intervals and "
+        "releases it when one completes. Check its last runs, or release it now."
+    )
 
 
 def words(c, bot):
     """What the pages say about the bot's failed runs: the hold, or the wait before its next try."""
+    hold = get(c, bot)
+    if is_held(hold):
+        return hold["reason"]
     from . import bot_stops
 
-    state = get(c, bot)
-    name = bot_stops.name_of(c, bot)
-    if state.get("held_at"):
-        cause = CLASS_WORDS.get(state.get("error_class") or "") or CLASS_WORDS[OTHER]
-        return (
-            f"Tico stopped {name}: its last {state.get('fails')} runs failed within a minute ({cause}). "
-            "Tico tries one run on its own at growing intervals and releases it when one completes. "
-            "Check its last runs, or release it now."
-        )
-    until, at = H.parse_ts(state.get("wait_until")), H.parse_ts(H.now())
+    until, at = H.parse_ts(hold.get("until_at")), H.parse_ts(H.now())
     left = max(1, int((until - at).total_seconds())) if until is not None and at is not None else 0
-    return f"{name} is pausing {left} s after a failed run before it tries again" if left else ""
+    return f"{bot_stops.name_of(c, bot)} is pausing {left} s after a failed run before it tries again" if left else ""

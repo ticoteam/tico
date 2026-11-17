@@ -114,7 +114,7 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     await dialog.locator('.dc-bar:not([hidden])').waitFor();
     assert.deepEqual(writes[1], {p: '/api/v2/tasks/t1/asks/r1/ok', body: {shown_hash: 'b'.repeat(64)}});
     const undo = dialog.locator('.dc-bar [data-dc="undo"]');
-    assert.equal((await dialog.locator('.dc-sayw > .dc-bar').innerText()).replace(/\s+/g, ' ').trim(), '✓ Approved Undo', "in the bar's slot: what was done, then Undo");
+    assert.equal((await dialog.locator('.dc-head > .dc-bar').innerText()).replace(/\s+/g, ' ').trim(), '✓ Approved Undo', "in the top bar: what was done, then Undo");
     assert.equal((await undo.innerText()).trim(), 'Undo');
     // Undo stays while it has the keyboard's focus, and fades a few seconds after it is left.
     await undo.focus();

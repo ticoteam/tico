@@ -252,6 +252,8 @@ def _bare(trigger):
         "CREATE TABLE runners(id TEXT PRIMARY KEY, revoked_at TEXT);"
         "CREATE TABLE holds(id TEXT PRIMARY KEY, kind TEXT, holdable_type TEXT, holdable_id TEXT, bot_id TEXT,"
         " released_at TEXT);"  # enqueue reads the company pause here
+        "CREATE UNIQUE INDEX holds_open ON holds(kind, holdable_type, holdable_id, coalesce(bot_id,''))"
+        " WHERE released_at IS NULL;"
         "INSERT INTO runners VALUES('mac', NULL), ('old-mac', '2026-01-01');"
     )
     if trigger:

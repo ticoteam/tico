@@ -40,6 +40,7 @@ from . import models as M
 from . import strategy as S
 from . import strategy_prompt as P
 from .store import Problem, encode
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.strategy_setup")
 
@@ -464,7 +465,14 @@ def install(app, store, auth, mutate):
                 "forbidden", "Only the owner drafts the strategy from the team's website, on their own click", 403
             )
 
-    @app.post("/api/v2/strategy/draft-from")
+    @app.post(
+        "/api/v2/strategy/draft-from",
+        **api_v2(
+            "Strategy",
+            "draftStrategyFrom",
+            "Owner only: research the team's website and/or the owner's words into the draft; answers the job (running, or no_model with no model)",
+        ),
+    )
     def strategy_draft_from(request: Request, body: M.StrategyDraftFrom):
         """Owner only: research the team's website and/or the owner's words into the draft. Answers the job; poll
         GET /strategy/draft-from/{id}."""
@@ -475,7 +483,14 @@ def install(app, store, auth, mutate):
             spawn(lambda: run(store, job["id"]))
         return job
 
-    @app.get("/api/v2/strategy/draft-from/{job_id}")
+    @app.get(
+        "/api/v2/strategy/draft-from/{job_id}",
+        **api_v2(
+            "Strategy",
+            "getStrategyDraftFromJob",
+            "Owner only: one research job (latest for the newest): running, done, gave_up, failed or no_model, with what it found and wrote",
+        ),
+    )
     def strategy_draft_from_job(request: Request, job_id: str):
         """Owner only: one research job (`latest` for the newest): its state, the pages read, what it found and what
         it wrote."""

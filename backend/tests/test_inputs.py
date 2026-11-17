@@ -96,7 +96,7 @@ def test_acknowledged_input_requeued_by_a_finished_run_is_delivered_once_to_the_
         assert {
             s for (s,) in c.execute("SELECT state FROM jobs WHERE message_id IN (?,?)", (origin["id"], follow["id"]))
         } == {"queued"}
-    assert claim(api, r) is None  # a run that failed at once makes the bot pause (backend/run_backoff.py)
+    assert claim(api, r) is None  # a run that failed at once makes the bot pause (backend/run_failures.py)
     post(api, "bots/ops/release", {})
     second = claim(api, r)
     post(api, f"attempts/{second['id']}/started", {"thread_id": "thread-2"}, r["token"])

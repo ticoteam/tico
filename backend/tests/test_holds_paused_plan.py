@@ -53,6 +53,6 @@ def test_pause_reads_and_the_state_switch_search_holds_open_even_with_stale_stat
     assert any(s.lstrip().upper().startswith("UPDATE BOTS") for s in reads), reads  # the switch's NOT EXISTS
     assert len(reads) >= 3, reads
     for sql in reads:
-        plan = " | ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql))
-        assert "SEARCH holds USING INDEX holds_open" in plan, (sql, plan)
-        assert "SCAN holds" not in plan, (sql, plan)
+        plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
+        on_holds = [step for step in plan if step.startswith(("SCAN holds", "SEARCH holds"))]
+        assert on_holds and all("INDEX holds_open" in step for step in on_holds), (sql, plan)

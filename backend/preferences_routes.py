@@ -14,6 +14,7 @@ from . import strategy_bot as strategy_bot_module
 from . import task_privacy
 from . import views as views_module
 from .store import H as hubdb, Problem, encode
+from .api_contract import api_v2
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -75,7 +76,15 @@ def check(who: Any, key: str, value: object) -> None:
 
 
 def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any) -> None:
-    @app.get("/api/v2/preferences/{key}")
+    @app.get(
+        "/api/v2/preferences/{key}",
+        **api_v2(
+            "Team",
+            "getPreference",
+            "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share); null when unset",
+            "PreferenceValue",
+        ),
+    )
     def preference(request: Request, key: str) -> dict[str, Any]:
         """One of the caller's own preferences; null when it has none."""
         who: Any = request.state.identity
@@ -85,7 +94,12 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (who.actor, key)).fetchone()
             return {"key": key, "value": json.loads(row[0]) if row else None}
 
-    @app.post("/api/v2/preferences/{key}")
+    @app.post(
+        "/api/v2/preferences/{key}",
+        **api_v2(
+            "Team", "setPreference", "Keep one of your own preferences; a value is at most 4 KB", "PreferenceValue"
+        ),
+    )
     def set_preference(request: Request, key: str, body: M.Preference) -> Any:
         """Keep one of the caller's own preferences."""
         who: Any = request.state.identity

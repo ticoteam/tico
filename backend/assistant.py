@@ -31,6 +31,7 @@ from . import visuals
 from .media import upload_contract
 from . import rooms
 from .store import H, Problem, digest
+from .api_contract import api_v2
 
 RUNNING_TTL_S = 120  # a confirm that has not settled in two minutes failed
 CONFIRM_TTL_H = 24  # a proposal nobody confirmed for a day is not run
@@ -1903,7 +1904,15 @@ def install(app, store, auth, mutate, onboarding):
             "earlier": earlier,
         }
 
-    @app.get("/api/v2/assistant")
+    @app.get(
+        "/api/v2/assistant",
+        **api_v2(
+            "Assistant",
+            "getAssistant",
+            "The caller's Assistant (the Strategy Owner, for the owner): their private room id, whether it is on, the recent messages and what waits for their OK",
+            "Assistant",
+        ),
+    )
     def assistant(request: Request):
         """The caller's own chat: their Assistant room, the owner's included."""
         who = own(request)
@@ -2018,7 +2027,15 @@ def install(app, store, auth, mutate, onboarding):
             replay.get("titles") or [],
         )
 
-    @app.post("/api/v2/assistant/messages")
+    @app.post(
+        "/api/v2/assistant/messages",
+        **api_v2(
+            "Assistant",
+            "sendAssistantMessage",
+            "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` is handed the recent updates the caller may read",
+            "AssistantSent",
+        ),
+    )
     async def assistant_message(request: Request, body: M.AssistantMessage):
         who = own(request)
 
@@ -2032,7 +2049,15 @@ def install(app, store, auth, mutate, onboarding):
         rc = await asyncio.to_thread(assistant_checks, who, info["bot"], body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, None, rc)
 
-    @app.post("/api/v2/tasks/{tid}/make-page")
+    @app.post(
+        "/api/v2/tasks/{tid}/make-page",
+        **api_v2(
+            "Tasks",
+            "makeTaskPage",
+            "Ask the caller's Assistant to make and pin a task page with their normal rights; 409 at 60 pins",
+            "AssistantSent",
+        ),
+    )
     async def make_page(request: Request, tid: str, body: M.MakePage):
         from .pages import Pages
 
@@ -2066,7 +2091,15 @@ def install(app, store, auth, mutate, onboarding):
 
         return await asyncio.to_thread(mutate, request, body, work)
 
-    @app.get("/api/v2/tasks/{tid}/make-page")
+    @app.get(
+        "/api/v2/tasks/{tid}/make-page",
+        **api_v2(
+            "Tasks",
+            "getTaskMakePage",
+            "The caller's latest Make page request: making, made, failed or update_required",
+            "TaskMakePage",
+        ),
+    )
     def make_page_status(request: Request, tid: str):
         """Only the requester's latest Make page request, including after a reconnect or another chat turn."""
         who = own(request)
@@ -2122,7 +2155,14 @@ def install(app, store, auth, mutate, onboarding):
         rc = await asyncio.to_thread(assistant_checks, who, bot, body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, uploads, rc)
 
-    @app.post("/api/v2/assistant/turn-on")
+    @app.post(
+        "/api/v2/assistant/turn-on",
+        **api_v2(
+            "Assistant",
+            "turnOnAssistant",
+            "Owner only: restore the archived assistant, or add it from the catalog, and activate it",
+        ),
+    )
     def turn_on(request: Request, body: M.Empty):
         who = person(request)
         if who.via and not who.confirmed:  # the owner's own click, or their tap on a Confirm card
@@ -2131,7 +2171,15 @@ def install(app, store, auth, mutate, onboarding):
             raise Problem("forbidden", "Only the owner turns the " + settings.assistant_name + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_assistant(c, who))
 
-    @app.post("/api/v2/assistant/actions")
+    @app.post(
+        "/api/v2/assistant/actions",
+        **api_v2(
+            "Assistant",
+            "proposeAssistantAction",
+            "Propose one operation for the caller to confirm (what the assistant's `tico assistant propose` calls)",
+            "AssistantActionResult",
+        ),
+    )
     def propose(request: Request, body: M.AssistantAction):
         caller = request.state.identity
         # The Assistant's own background run (its daily sweep: a routine of the Assistant bot, so `via` is never
@@ -2211,7 +2259,14 @@ def install(app, store, auth, mutate, onboarding):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/assistant/morning")
+    @app.post(
+        "/api/v2/assistant/morning",
+        **api_v2(
+            "Assistant",
+            "sendAssistantMorning",
+            "The Assistant's background run only: one morning message for a person, in their own Assistant chat, as the Assistant (no card). Once a company day per person: a second is 409 already_sent_today",
+        ),
+    )
     def morning(request: Request, body: M.AssistantMorning):
         """The Assistant's one morning message to a person: what they can do today to move their goals, in their own
         Assistant chat, as the Assistant. No card and nothing to confirm. Only the Assistant bot's background run may
@@ -2320,7 +2375,10 @@ def install(app, store, auth, mutate, onboarding):
             raise Problem("not_found", "No such proposal", 404)  # nobody else's is visible
         return dict(row)
 
-    @app.get("/api/v2/assistant/actions/{aid}")
+    @app.get(
+        "/api/v2/assistant/actions/{aid}",
+        **api_v2("Assistant", "getAssistantAction", "One proposal and how it ended", "AssistantActionResult"),
+    )
     def action_show(request: Request, aid: str):
         who = person(request)
         with store.read() as c:
@@ -2349,7 +2407,10 @@ def install(app, store, auth, mutate, onboarding):
                 )
             return {"action": action_view(row, c)}
 
-    @app.post("/api/v2/assistant/actions/{aid}/cancel")
+    @app.post(
+        "/api/v2/assistant/actions/{aid}/cancel",
+        **api_v2("Assistant", "cancelAssistantAction", "Drop a proposal; it never runs", "AssistantActionResult"),
+    )
     def action_cancel(request: Request, aid: str, body: M.Empty):
         who = own(request)
 
@@ -2363,7 +2424,15 @@ def install(app, store, auth, mutate, onboarding):
 
         return mutate(request, body, work)
 
-    @app.post("/api/v2/assistant/actions/{aid}/withdraw")
+    @app.post(
+        "/api/v2/assistant/actions/{aid}/withdraw",
+        **api_v2(
+            "Assistant",
+            "withdrawAssistantAction",
+            "Any teammate (a person or a bot) withdraws a waiting card: it never runs, and the owner's chat says who withdrew it. Only the owner confirms it; the owner cancels it instead",
+            "AssistantActionResult",
+        ),
+    )
     def action_withdraw(request: Request, aid: str, body: M.AssistantWithdraw):
         """Any signed-in teammate (a person or a bot) takes back a card that is still waiting: it never runs, and the
         card owner's chat says who withdrew it, with the reason if given. Confirming stays the owner's own click."""
@@ -2416,7 +2485,14 @@ def install(app, store, auth, mutate, onboarding):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/assistant/proposals")
+    @app.get(
+        "/api/v2/assistant/proposals",
+        **api_v2(
+            "Assistant",
+            "listAssistantProposals",
+            "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner",
+        ),
+    )
     def proposals(request: Request, proposer: str = "", owner: str = ""):
         """The Confirm cards still waiting, newest first, so a teammate can find one to withdraw: summary and what it
         does, with its id, owner and proposer. Filter by `proposer` (botops, assistant) and/or `owner` (a person's id)."""
@@ -2451,7 +2527,15 @@ def install(app, store, auth, mutate, onboarding):
                 ]
             }
 
-    @app.post("/api/v2/assistant/actions/{aid}/confirm")
+    @app.post(
+        "/api/v2/assistant/actions/{aid}/confirm",
+        **api_v2(
+            "Assistant",
+            "confirmAssistantAction",
+            "The person's own click: runs the proposal as them, once. Never callable by the assistant or a personal token",
+            "AssistantActionResult",
+        ),
+    )
     async def action_confirm(request: Request, aid: str, body: M.AssistantConfirm | None = None):
         who = own(request)
         if who.via_token:

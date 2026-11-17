@@ -79,20 +79,3 @@ def chown(path, *, recursive=False):
                     os.chown(os.path.join(root, name), *who, follow_symlinks=False)
     except OSError:
         pass
-
-
-def mkdir(path, mode=0o700):
-    """`mkdir -p` where every directory it creates belongs to the bot user when isolation is on."""
-    from clients.repo_safety import outside_installation
-
-    outside_installation(path)
-    path = Path(path)
-    missing = []
-    for part in (path, *path.parents):
-        if part.exists():
-            break
-        missing.append(part)
-    path.mkdir(mode=mode, parents=True, exist_ok=True)
-    for part in missing:
-        chown(part)
-    return path

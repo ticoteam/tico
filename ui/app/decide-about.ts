@@ -22,6 +22,7 @@ interface DecAboutTask {
   links?: {url: string; title?: string | null; kind?: string | null}[] | null;
   tags?: {owner?: string | null}[] | null;
   conversation_id?: string | null;   // its thread: Flow's chat on an ask (decide.ts decideChatMount)
+  documents?: TaskDoc[] | null;      // its documents: a phone's tabs on an ask (decide.ts decideTabsOf)
 }
 /** One task's read for this screen, by task id: loading (a skeleton), ready, or failed with its words. */
 interface DecAbout {

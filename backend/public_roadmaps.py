@@ -18,6 +18,7 @@ from . import hubdb as H
 from . import roadmaps as R
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 PREFIX = '/public/roadmaps/'
 
@@ -130,13 +131,16 @@ def public_write(store):
 
 
 def install(app, store, auth, mutate):
-    @app.get('/api/v2/roadmaps/settings')
+    @app.get('/api/v2/roadmaps/settings', **api_v2("Roadmaps", "getRoadmapSettings", "Company roadmap settings"))
     def read_settings(request: Request):
         auth.domain(request.state.identity)
         with store.read() as c:
             return R.settings_view(c)
 
-    @app.post('/api/v2/roadmaps/settings')
+    @app.post(
+        '/api/v2/roadmaps/settings',
+        **api_v2("Roadmaps", "setRoadmapSettings", "Partially update roadmap settings (owners and admins)"),
+    )
     def write_settings(request: Request, body: RoadmapSettings):
         def work(c):
             who = request.state.identity

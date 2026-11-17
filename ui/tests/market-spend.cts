@@ -27,7 +27,9 @@ interface Seg {id: string; name: string; parent: string | null; depth: number; s
   rolled_usd: {spend_usd: number; low_usd: number; high_usd: number} | null; estimates: Size[]; disagree: boolean; bases: string[]; players: unknown[]; self: boolean}
 interface Data {definition: unknown; year: number; dimension: string; basis: string; total: unknown; segments: Seg[]}
 interface LiveData {offering?: Data; chain?: typeof chain; [key: string]: unknown}
-interface OpenOpts {role?: string; route?: string; viewport?: Viewport; empty?: boolean; data?: LiveData}
+// The open Size the market task as GET /api/v2/market/spend carries it (market_spend.py sizing).
+interface Sizing {id: string; version: number; turn: string; ask: {requirement_id: string; kind: string; line: string; choices: string[]} | null}
+interface OpenOpts {role?: string; route?: string; viewport?: Viewport; empty?: boolean; data?: LiveData; sizing?: Sizing | null}
 type Sent = [string, string, unknown];
 
 const shots = process.env.TICO_SCREENSHOT_DIR;
@@ -93,11 +95,11 @@ const chain = {layers: [
 const bets = [{id: 'b-price', statement: 'Price at half the market.', status: 'active', cites: ['segment/home']},
   {id: 'b-offices', statement: 'Sell to offices through managers.', status: 'active', cites: []}, {id: 'b-old', statement: 'Offices only.', status: 'retired', cites: []}];
 
-async function open(browser: Browser, {role = 'owner', route = '#/strategy/market', viewport = DESKTOP, empty = false, data}: OpenOpts = {}) {
+async function open(browser: Browser, {role = 'owner', route = '#/strategy/market', viewport = DESKTOP, empty = false, data, sizing = null}: OpenOpts = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});
   const errors: string[] = [], sent: Sent[] = [], reads: [string, string][] = [];
   page.on('pageerror', (e: Error) => errors.push(e.message));
-  const live: {data: LiveData | undefined; task: boolean} = {data, task: false};
+  const live: {data: LiveData | undefined; task: boolean; sizing: Sizing | null} = {data, task: !!sizing, sizing};
   await page.route('**/*', async (route: Route) => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
     const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
@@ -116,13 +118,20 @@ async function open(browser: Browser, {role = 'owner', route = '#/strategy/marke
     if (p === '/api/v2/market/spend' && method === 'GET') {
       const dimension = url.searchParams.get('dimension') || 'offering', basis = url.searchParams.get('basis') || 'product';
       reads.push([dimension, basis]);
-      if (empty) return json({definition: live.task ? {description: 'What offices spend on cleaning'} : null, year: 2025, dimension, basis, total: {spend_usd: 0, low_usd: 0, high_usd: 0}, segments: []});
+      if (empty) return json({definition: live.task ? {description: 'What offices spend on cleaning'} : null, year: 2025, dimension, basis, total: {spend_usd: 0, low_usd: 0, high_usd: 0}, segments: [], sizing: live.sizing});
       return json(live.data?.[dimension] || buildData(dimension, basis));
     }
     if (p === '/api/v2/market/spend/research') {
       sent.push(['POST', p, req.postDataJSON()]);
       live.task = true;
-      return json({task_id: 'task-size'});
+      live.sizing = {id: 'task-size', version: (live.sizing?.version || 0) + 1, turn: 'working', ask: null};
+      return json({task_id: 'task-size', sizing: live.sizing});
+    }
+    const answered = p.match(/^\/api\/v2\/tasks\/([^/]+)\/asks\/([^/]+)\/answer$/);
+    if (answered && method === 'POST') {
+      sent.push(['POST', p, req.postDataJSON()]);
+      live.sizing = {id: answered[1]!, version: (live.sizing?.version || 0) + 1, turn: 'working', ask: null};
+      return json({id: answered[1], version: live.sizing.version});
     }
     const params = p.match(/^\/api\/v2\/market\/sizes\/([^/]+)\/params$/);
     if (params) {
@@ -238,10 +247,69 @@ const noSideScroll = (page: Page) => page.evaluate(() => ({page: document.docume
         await page.locator('#mkt-q-money [data-mkt-researching]').waitFor();
         assert.deepEqual(sent, [['POST', '/api/v2/market/spend/research', {description: 'What offices spend on cleaning'}]], 'one research request');
         assert.equal(await page.locator('[data-mkt-researching] a').getAttribute('href'), '#/task/task-size');
+        assert.equal(await form.locator('button').innerText(), 'Update', 'the sentence now changes the market');
+        // The task is the server's: a reload shows it working.
+        await page.reload();
+        await page.locator('#mkt-q-money [data-mkt-researching] .market-spin').waitFor();
+        assert.equal(await page.locator('#mkt-describe').inputValue(), 'What offices spend on cleaning');
       } else assert.equal(await page.locator('#mkt-q-money').count(), 0, role);
       assert.deepEqual(await page.locator('.mkt-pl tbody tr button').allInnerTexts(), ['Acme'], role);
       assert.equal(await page.locator('.mkt-pl tr.us').count(), 1, role + ': our row is marked');
       assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/spend');
+      assert.deepEqual(errors, [], role);
+      await page.close();
+    }
+    // The task waits on the owner: its question is on the card, answered there with the task's version, and the card
+    // goes back to working. Needs you marks Where is the money going? until then.
+    {
+      const sizing = {id: 'task-size', version: 4, turn: 'person', ask: {requirement_id: 'req-1', kind: 'answer', line: 'Offices only, or homes too?', choices: ['Offices only']}};
+      const {page, errors, sent} = await open(browser, {route: '#/strategy/market/spend', empty: true, sizing});
+      const asked = page.locator('#mkt-q-money [data-mkt-asked]');
+      await asked.waitFor();
+      assert.equal(await asked.locator('.mkt-q-line').innerText(), 'Offices only, or homes too?');
+      assert.equal(await asked.locator('a').getAttribute('href'), '#/task/task-size');
+      assert.equal(await page.locator('#mkt-qh-money .needs-mark').count(), 1, 'Needs you');
+      await asked.locator('[data-mkt-reply] [type="submit"]').click();
+      assert.equal(sent.length, 0, 'an empty reply is not sent');
+      await asked.locator('[data-mkt-reply] input').fill('Offices only, under 50 staff');
+      await asked.locator('[data-mkt-reply] [type="submit"]').click();
+      await page.locator('#mkt-q-money [data-mkt-researching] .market-spin').waitFor();
+      assert.deepEqual(sent, [['POST', '/api/v2/tasks/task-size/asks/req-1/answer', {value: 'Offices only, under 50 staff', version: 4}]]);
+      assert.equal(await page.locator('#mkt-qh-money .needs-mark').count(), 0, 'answered');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // A sized market: the owner's sentence is a line with a pencil above the map. The pencil opens it prefilled, Escape
+    // keeps it, a new sentence is sent once and the line shows it, with the task's state; a member sees no line.
+    for (const role of ['owner', 'member']) {
+      const {page, errors, sent} = await open(browser, {role, route: '#/strategy/market/spend'});
+      await page.locator('#mkt-q-money .mkt-map').waitFor();
+      const line = page.locator('#mkt-q-money [data-mkt-def-line]'), form = page.locator('#mkt-q-money [data-mkt-size]');
+      if (role !== 'owner') {
+        assert.equal(await line.count(), 0, 'no line for a member');
+        assert.equal(await form.count(), 0, 'no form for a member');
+      } else {
+        assert.equal((await line.innerText()).trim(), 'What small offices and homes spend on cleaning services');
+        assert.equal(await form.isVisible(), false, 'the form is folded on a sized market');
+        assert.equal(await page.locator('#mkt-qh-money .needs-mark').count(), 0, 'a sized market asks nothing');
+        await line.locator('[data-mkt-edit]').click();
+        assert.equal(await line.isVisible(), false);
+        assert.equal(await form.locator('#mkt-describe').inputValue(), 'What small offices and homes spend on cleaning services');
+        await form.locator('#mkt-describe').fill('Something else');
+        await form.locator('#mkt-describe').press('Escape');
+        await line.locator('[data-mkt-edit]').waitFor();
+        assert.equal((await line.innerText()).trim(), 'What small offices and homes spend on cleaning services', 'Escape keeps the sentence');
+        assert.deepEqual(sent, [], 'Escape sends nothing');
+        await line.locator('[data-mkt-edit]').click();
+        await form.locator('#mkt-describe').fill('What offices and schools spend on cleaning');
+        assert.equal(await form.locator('[type="submit"]').innerText(), 'Update');
+        await form.locator('[type="submit"]').click();
+        await page.locator('#mkt-q-money [data-mkt-researching] a[href="#/task/task-size"]').waitFor();
+        assert.equal((await line.innerText()).trim(), 'What offices and schools spend on cleaning');
+        assert.equal(await form.isVisible(), false);
+        assert.deepEqual(sent, [['POST', '/api/v2/market/spend/research', {description: 'What offices and schools spend on cleaning'}]]);
+        assert.equal(await page.locator('#mkt-q-money .mkt-map').count(), 1, 'the sizes stay');
+      }
       assert.deepEqual(errors, [], role);
       await page.close();
     }

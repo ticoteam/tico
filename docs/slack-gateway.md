@@ -154,7 +154,7 @@ goes on), for each reader that is an active bot, in one transaction:
    seen before is shown with its root and the last three earlier replies marked `(earlier)`,
    then the new ones; a message edited after delivery comes again marked `(edited)`, one
    removed after delivery as `(message removed)`. Names are the roster names Slack reports,
-   permalinks link the threads, the channel's registry `purpose` heads the section.
+   permalinks link the threads, the channel's note (Settings > Tools > Slack) heads the section.
 2. A channel with more than `TICO_SLACK_DIGEST_CAP` (200) unread is skimmed: the oldest 200,
    a line saying how many more, and the cursor still moves to the end, so a storm is not
    replayed next hour.
@@ -297,7 +297,7 @@ FROM slack_reads r ORDER BY r.reader, r.channel;
 ```
 
 A reader that should start further back than now: set its `last_ts` to the `ts` to start
-after (the next pass delivers everything past it, capped). A reader removed from the registry
+after (the next pass delivers everything past it, capped). A reader taken off a channel
 keeps its cursor rows; nothing is delivered to it.
 
 For an `uncertain` post, open the exact thread in Slack. If the reply is there, record its
