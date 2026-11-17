@@ -113,11 +113,15 @@ async function nothingMoves(browser: Browser) {
     release();
     await page.locator('[data-pv-play]').first().waitFor();
     assert.deepEqual(await layoutOf(page), before, `${layout}: the counts and ▶'s slot stay where they were`);
+    // ▶ ends the header's own part; only the quiet marks (rules, ⋯) may follow it, and the last one meets the right edge.
     const right = await page.locator('.pv-play').evaluateAll(els => els.map(e => {
-      const h = e.parentElement!.getBoundingClientRect(), r = e.getBoundingClientRect();
-      return {gap: Math.round(h.right - r.right - parseFloat(getComputedStyle(e.parentElement!).paddingRight)), w: Math.round(r.width)};
+      const head = e.parentElement!, h = head.getBoundingClientRect(), last = head.lastElementChild!.getBoundingClientRect();
+      const after: string[] = [];
+      for (let n = e.nextElementSibling; n; n = n.nextElementSibling) after.push(n.classList[0] ?? n.tagName);
+      return {gap: Math.round(h.right - last.right - parseFloat(getComputedStyle(head).paddingRight)), w: Math.round(e.getBoundingClientRect().width), after};
     }));
-    assert.ok(right.every(x => x.gap === 0 && x.w >= 40), `${layout}: ▶ at the header's right edge, 40 px or more: ${JSON.stringify(right)}`);
+    assert.ok(right.every(x => x.gap === 0 && x.w >= 40 && x.after.every(c => c === 'sr-mark' || c === 'pv-col-more')),
+      `${layout}: ▶ last but the rules mark and ⋯, at the header's right edge, 40 px or more: ${JSON.stringify(right)}`);
     assert.deepEqual(errors, []);
     await page.close();
   }
