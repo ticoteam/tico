@@ -130,14 +130,6 @@ function decideKind(it: NeedsEntry): AskKind {
   // buttons are the stuck card's, never Done, Snooze or Give to (task #392).
   return 'stuck';
 }
-/** A bot's ❓ opens its chat at the marked message, where the reply clears it: a task's chat, else the direct chat. */
-function questionOpen(it: NeedsEntry) {
-  const task = it.task_id || it.task?.id;
-  if (task) void taskChatJump(String(task), it.message_id || '');
-  else if (it.conversation_id) {
-    location.hash = threadHref(it.conversation_id) + (it.message_id ? `?m=${encodeURIComponent(it.message_id)}` : '');
-  }
-}
 // ---- the count, and the lists that show Needs you
 /** A bot, or a bot's read-only view of the app (view-only.ts), has no Needs you and never opens Flow. */
 const decideNoFlow = (): boolean => S.me?.role === 'bot' || !!S.me?.read_only_view;

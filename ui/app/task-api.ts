@@ -321,9 +321,6 @@ const taskUnsnooze = (id: string, why?: string): Promise<TaskMoved> => post(`${t
 const askSnooze = (id: string, until: string): Promise<{id: string; snoozed_until: string}> =>
   post('/v2/needs-you/snooze', {id, until}, newRequestId());
 const askUnsnooze = (id: string): Promise<{id: string}> => post('/v2/needs-you/unsnooze', {id}, newRequestId());
-/** Give to… on a bot's ❓: its reply is needed from another person now. */
-const questionGive = (markId: string, to: string): Promise<unknown> =>
-  post(`/v2/questions/${encodeURIComponent(markId)}/give`, {to}, newRequestId());
 /** A person hands a task back to its owner to try again. */
 const taskTryAgain = (id: string, why?: string): Promise<TaskMoved> => post(`${taskPath(id)}/try-again`, why ? {why} : {}, newRequestId());
 
