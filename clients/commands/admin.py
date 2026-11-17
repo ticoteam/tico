@@ -695,3 +695,34 @@ SETTINGS = (
         example="tico settings set team.rules.admin_sql on",
     ),
 )
+
+
+# `tico alerts ...` (clients/cli_spec.py) except `set`, which the hand parser still builds (clients/hubcli.py): its
+# --urgent-needs and --bot-stuck are not in the alert-preferences schema, so the tool never gets them.
+ALERTS = (
+    Group("alerts", "your own phone and paid alert preferences"),
+    Command("alerts show", "your phone, alert preferences and spend", example="tico alerts show"),
+    Command("alerts remove", "revoke your phone and cancel queued alerts", example="tico alerts remove"),
+    Command(
+        "alerts verify",
+        "send a free code to your own US/Canada phone (SMS consent is required)",
+        args=(Arg("sms_consent", flag="--sms-consent"),),
+        example="tico alerts verify +14155550100 --sms-consent",
+    ),
+    Command(
+        "alerts confirm",
+        "confirm your phone with its six-digit code",
+        example="tico alerts confirm 123456",
+    ),
+    Command(
+        "alerts test",
+        "send yourself a test alert; the company pays $1 per accepted alert",
+        args=(Arg("accept_charge", flag="--accept-charge"), Arg("operation_id", flag="--operation-id")),
+        example="tico alerts test --accept-charge --operation-id test-1",
+    ),
+    Command(
+        "alerts company",
+        "the company's alert cap and spend in USD; --monthly-cap sets the cap (zero stops paid alerts)",
+        example="tico alerts company --monthly-cap 50",
+    ),
+)

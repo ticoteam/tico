@@ -9,7 +9,8 @@
    tasks there, the stage's name under the line with one mark beside it, and the factory's manager and teammates by name.
    One floor is on screen at a time: floorMount puts the company's in its card, pageFloorFactory one factory's page.
    Reads: GET /api/v2/company/floor (backend/company_floor.py) and, for a card's rows, GET /api/v2/tasks (task-api.ts).
-   The live task and Needs-you signals read the floor again and patch each changed line in place.
+   The live task and Needs-you signals read the floor again and patch each changed line in place; Company's safety read
+   (dashboard.ts) reads it too and draws it only when the answer differs.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -19,7 +20,7 @@ type FloorPipe = FloorFactory['pipelines'][number];
 type FloorStage = FloorPipe['stages'][number];
 type FloorUnit = 'day' | 'week';
 /** What a card is about: a stage, or one teammate's deck in it (`actor`; '' for the whole stage, CF_REST for the deck
- *  of everyone past the most loaded and of tasks nobody holds). */
+ *  of everyone past the most loaded and of tasks nobody holds, whose card is the whole stage's). */
 interface FloorPick { pipeline: string; stage: string; actor: string }
 interface FloorState {
   factory: string;            // '' for the whole company
@@ -81,16 +82,21 @@ function cfManager(f: FloorFactory): string | null {
   for (const p of f.pipelines) if (p.manager_id) tally.set(p.manager_id, (tally.get(p.manager_id) ?? 0) + 1);
   return [...tally].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
-/** The manager's own reports on the org chart, as actors: the bots the reader may see, archived ones and helpers left out. */
+/** The manager's own reports on the org chart, as actors: its people and its bots. A bot reports to a person as
+    'human:<id>' and to a bot by its bare id; a person reports to a person by bare id. Hidden people, and the bots the
+    reader may not see, archived ones and helpers are left out. */
 function cfReports(manager: string | null): string[] {
   if (!manager) return [];
   const boss = manager.startsWith('bot:') ? manager.slice(4) : manager;
-  return (S.emps || [])
+  const bots = (S.emps || [])
     .filter(e => e.reports_to === boss && e.status !== 'archived' && e.state !== 'archived' && orgBranchVisible(e) && !isHelperBot(e))
     .map(e => 'bot:' + e.id);
+  const person = manager.startsWith('human:') ? manager.slice(6) : '';
+  const people = person ? (S.people || []).filter(p => p.reports_to === person && !p.hidden).map(p => 'human:' + p.id) : [];
+  return [...bots, ...people];
 }
-/** Everyone on the factory's pipelines or reporting to its manager: those holding work first, the most loaded leading,
-    then the manager's idle reports by name. The manager is left out. */
+/** Every person and bot on the factory's pipelines or reporting to its manager: those holding work first, the most loaded
+    leading, then the manager's idle reports. The manager is left out. */
 function cfMates(f: FloorFactory, manager: string | null): string[] {
   const load = new Map<string, number>();
   for (const a of cfReports(manager)) load.set(a, 0);
@@ -130,10 +136,13 @@ function cfOrgHTML(manager: string | null, mates: string[]): string {
     + (shown.length ? `<div class="cf-org-row${manager ? ' cf-org-under' : ''}">${shown.map(a => tile(a, 14)).join('')}</div>` : '')
     + '</div>';
 }
+/** A hall: a factory, or Other (`id` null: the pipelines in no factory), which has no page and no org chart. */
 function cfHallHTML(f: FloorFactory): string {
   const manager = cfManager(f);
-  return `<section class="cf-hall" data-cf-factory="${esc(f.id)}" aria-label="${esc(f.name)}">`
-    + `<div class="cf-hall-head"><a class="cf-hall-name" href="${esc(cfHref(f.id))}">${esc(f.name)}</a>${cfOrgHTML(manager, cfMates(f, manager))}</div>`
+  const name = f.id === null ? `<span class="cf-hall-name">${esc(f.name)}</span>`
+    : `<a class="cf-hall-name" href="${esc(cfHref(f.id))}">${esc(f.name)}</a>${cfOrgHTML(manager, cfMates(f, manager))}`;
+  return `<section class="cf-hall" data-cf-factory="${esc(f.id ?? '')}" aria-label="${esc(f.name)}">`
+    + `<div class="cf-hall-head">${name}</div>`
     + `<div class="cf-lines">${f.pipelines.map(p => cfLineHTML(p, false)).join('')}</div></section>`;
 }
 
@@ -198,7 +207,7 @@ function cfSkeleton(factory: string): string {
 /** Whether the floor is still on screen: its host is in the page and still holds it. */
 const cfHere = (): boolean => !!CF && CF.host.isConnected && CF.host.querySelector('#cf-body') !== null;
 
-async function cfLoad(): Promise<void> {
+async function cfLoad(poll = false): Promise<void> {
   const st = CF;
   if (!st) return;
   const run = ++st.run;
@@ -212,8 +221,13 @@ async function cfLoad(): Promise<void> {
     return;
   }
   if (run !== st.run || CF !== st || !cfHere()) return;
+  if (poll && sameData(data, st.data)) return;  // the safety read draws only an answer that differs
   st.data = data;
   cfDraw(st, data);
+}
+/** Company's safety read (dashboard.ts dashReread) reads the floor again, every 2 minutes on screen or 5 with the live stream. */
+function cfPoll(): void {
+  if (CF && cfHere()) void cfLoad(true);
 }
 
 function cfDraw(st: FloorState, data: FloorData): void {
@@ -239,7 +253,7 @@ function cfDraw(st: FloorState, data: FloorData): void {
  *  replaced only when its own numbers did. A pinned card, the scroll and the focus stay where they were. */
 function cfPatch(body: HTMLElement, html: string, factories: FloorFactory[]): void {
   const halls = body.querySelector<HTMLElement>(':scope > .cf-halls:not([aria-busy])');
-  const ids = factories.map(f => f.id);
+  const ids = factories.map(f => f.id ?? '');
   const had = halls ? [...halls.querySelectorAll<HTMLElement>(':scope > .cf-hall')].map(h => h.dataset['cfFactory'] ?? '') : [];
   if (!halls || had.join('|') !== ids.join('|')) { body.innerHTML = html; return; }
   const next = document.createElement('div');
@@ -270,16 +284,15 @@ const cfPickOf = (el: HTMLElement): FloorPick => ({pipeline: el.dataset['cfPipel
 
 /** How many tasks a card is about, and how many of them wait on the reader. */
 function cfPickCounts(pick: FloorPick, s: FloorStage): {count: number; wait: number} {
-  if (pick.actor === CF_REST) return {count: s.count - s.owners.reduce((n, o) => n + o.count, 0), wait: 0};
-  if (!pick.actor) return {count: s.count, wait: s.needs_you};
+  // The overflow deck has no one to filter by: its card is the whole stage's, so its count and rows agree.
+  if (!pick.actor || pick.actor === CF_REST) return {count: s.count, wait: s.needs_you};
   const own = s.owners.find(o => o.actor === pick.actor);
   return {count: own?.count ?? 0, wait: own?.needs_you ?? 0};
 }
 function cfCardHead(pick: FloorPick, p: FloorPipe, s: FloorStage): string {
   const {count, wait} = cfPickCounts(pick, s);
   let who: string;
-  if (pick.actor === CF_REST) who = `<b class="cf-card-name tnum">+${count}</b>`;
-  else if (pick.actor) who = `${cfFace(pick.actor, 32)}<b class="cf-card-name">${esc(actorName(pick.actor))}</b>`;
+  if (pick.actor && pick.actor !== CF_REST) who = `${cfFace(pick.actor, 32)}<b class="cf-card-name">${esc(actorName(pick.actor))}</b>`;
   else if (s.owners.length) {
     const faces = s.owners.slice(0, 3).map(o => cfFace(o.actor, 24)).join('');
     const names = s.owners.slice(0, 2).map(o => actorName(o.actor)).join(', ');
@@ -327,8 +340,7 @@ function cfCardFill(st: FloorState, card: HTMLElement): void {
   const pick = st.shown, found = pick && cfFind(pick);
   if (!pick || !found) { cfCardClose(false); return; }
   const {count} = cfPickCounts(pick, found.s);
-  // The rest have no one filter to list them by: their deck's card counts them and lists none.
-  const held = pick.actor === CF_REST ? {tasks: []} : st.rows.get(cfKey(pick));
+  const held = st.rows.get(cfKey(pick));
   card.innerHTML = cfCardHead(pick, found.p, found.s) + cfRowsHTML(held ? held.tasks : null, count);
 }
 /** Beside its stack on a computer, kept on screen; a sheet on a phone (its own CSS). */
@@ -372,10 +384,11 @@ function cfCardFollow(st: FloorState): void {
 }
 async function cfRowsLoad(st: FloorState, pick: FloorPick): Promise<void> {
   const key = cfKey(pick), held = st.rows.get(key);
-  if (pick.actor === CF_REST || held && Date.now() - held.at < CF_ROWS_FRESH_MS) return;
+  if (held && Date.now() - held.at < CF_ROWS_FRESH_MS) return;
+  // Snoozed tasks too, as the counts include them.
   try {
-    const page = await taskBriefsPage({pipeline: pick.pipeline, stages: [pick.stage], status: 'open', limit: CF_ROWS,
-      ...(pick.actor ? {owners: [pick.actor]} : {})});
+    const page = await taskBriefsPage({pipeline: pick.pipeline, stages: [pick.stage], status: 'open', snoozed: 'all', limit: CF_ROWS,
+      ...(pick.actor && pick.actor !== CF_REST ? {owners: [pick.actor]} : {})});
     st.rows.set(key, {at: Date.now(), tasks: page.tasks});
   } catch {
     st.rows.set(key, {at: Date.now(), tasks: []});

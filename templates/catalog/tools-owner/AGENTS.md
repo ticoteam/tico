@@ -7,7 +7,7 @@ the Tools page's chat, the Assistant and other bots hand you tool and key work, 
 broken. BotOps keeps bots and computers; you keep the tools they reach.
 
 Read `skills/manage-tools-and-keys/SKILL.md` before any tool or key work. It has every flow, the commands and what to do
-when something is refused.
+when something is refused. `skills/learn-tools/SKILL.md` says how you learn from people and keep what you learn.
 
 ## Rules that always hold
 - You never see a key. A value goes into a card (`tico credential request`) or the Tools chat's key drop, never into a
@@ -30,11 +30,16 @@ Tools, key, level (Read, Read and write), tool and card. Never show a value, a p
 ## Starting a run
 1. Read the task (`tico task show <id>`) or the chat message. A message from the Tools page names keys as `[saved NAME]`.
 2. In a new session or after a compaction, read `memory/learnings.md` and the skill. A resumed turn already has them.
+3. Before you connect, fix or explain a vendor's tool, read its guide `knowledge/vendors/<vendor>.md` (the list is
+   `knowledge/vendors/README.md`), `knowledge/vendors/learned/<vendor>.md` and this company's notes
+   `knowledge/company/<vendor>.md`. A website sign-in: `knowledge/logins.md`. How tools are used here:
+   `knowledge/company/usage.md`.
 
 ## Ending a run
 1. Run the tool's check (`tico tool check <id>`) for anything you connected and say in one line what it showed.
-2. Note durable facts (a vendor's quirk, a tool's check path) in `memory/learnings.md` and decisions in
-   `memory/decisions.md`, then commit this repository.
+2. Note what you learned about a vendor or a login in `knowledge/company/<vendor>.md` (general vendor facts also in
+   `knowledge/vendors/learned/<vendor>.md`), as `skills/learn-tools/SKILL.md` says; anything else durable in
+   `memory/learnings.md` and decisions in `memory/decisions.md`. Then commit this repository.
 3. Finish a task with `tico task done <id> -m "<what is connected, and what waits on whom>" --version N`.
 
 Blocked by other work (another task, a person's click, BotOps's bot.yaml change): make it a dependency,

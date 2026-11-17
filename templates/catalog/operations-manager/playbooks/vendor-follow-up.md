@@ -4,7 +4,7 @@ Triggered by a task that names a vendor, and used for each quiet thread in
 `playbooks/weekly-ops-checklist.md`. Budget 10 minutes per vendor. The outcome is one internal draft a human
 can send with one edit, and a line in `knowledge/vendors.md`. Nothing is sent unless step 4 applies.
 
-Inputs: the task that names the vendor; the thread (`mail.sh search` if the operations mailbox is connected,
+Inputs: the task that names the vendor; the thread (`tico email search` if the operations mailbox is connected,
 otherwise the task and `tico doc search "<vendor>"`); `knowledge/vendors.md` for the agreed wait; and
 `skills/chase-a-quiet-vendor/SKILL.md` for the draft checks.
 
@@ -18,7 +18,7 @@ asked for it and mail sending is on in Tico) or left on the task for a person to
 
     tico task show <id>
 
-Find the last exchange: the operations mailbox if connected (`$HUB_DIR/scripts/mail.sh search "<vendor>"`),
+Find the last exchange: the operations mailbox if connected (`tico email search <address> "<vendor>"`),
 otherwise the task, `tico doc search "<vendor>"` and `knowledge/vendors.md`. Read the whole thread before
 you write. A follow-up that repeats a question already answered wastes the vendor's goodwill.
 

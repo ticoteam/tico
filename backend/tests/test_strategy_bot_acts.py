@@ -232,7 +232,9 @@ def proposals(api):
         return [
             dict(r)
             for r in c.execute(
-                "SELECT * FROM tasks WHERE requester_id=? AND owner_id=? AND title LIKE 'Decide %' ORDER BY created_at",
+                # Its question to the owner, on its own task (backend/person_asks.py).
+                "SELECT * FROM tasks t WHERE requester_id=? AND title LIKE 'Decide %' AND EXISTS (SELECT 1 FROM visits v "
+                "JOIN requirements r ON r.visit_id=v.id WHERE v.task_id=t.id AND r.person_id=?) ORDER BY created_at",
                 (STRATEGY_BOT, OWNER),
             )
         ]

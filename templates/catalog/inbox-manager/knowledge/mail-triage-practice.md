@@ -18,8 +18,8 @@ What this bot does with one human's inbox, and what the sources say. The human's
 
 ## Practice the bot follows
 
-- Rules first. Mail that a rule can settle (notifications, marketing, the mailbox's own lists) is settled before a model
-  reads it, so the model reads only what is left.
+- Rules first. Mail that a rule in the inbox's Message automation can settle (notifications, marketing, the mailbox's
+  own lists) is settled before a model reads it, so the model reads only what is left.
 - Strangers are checked before anything acts on them. A message that tries to instruct the bot is read, not followed.
 - Read the newest message. Quoted history is not the current question.
 - Show the list before acting. On a new mailbox, the first pass shows what each rule and decision would do. Nothing is

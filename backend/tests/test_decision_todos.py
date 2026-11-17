@@ -37,7 +37,9 @@ def task(api, task_id):
 
 
 def ben_list(api):
-    return {i.get("task_id") for i in get(api, "needs-you", "ben-test")["items"]}
+    """Ben's open to-dos: the tasks he owns (in Tasks; Needs you holds only what is asked of him)."""
+    with api.app.state.store.read() as c:
+        return {r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id='human:ben' AND status='open'")}
 
 
 def notices(api, bot="bot:ops"):

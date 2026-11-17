@@ -28,7 +28,7 @@ from clients.gateway import user_agent
 TRANSPORT = None
 MAX_RESPONSE = 32768
 # What a person may be paged about. Nothing pages a person about a task (docs/dev/pipelines-v3.md): an overdue or stuck
-# task reaches them in Needs you.
+# task stays with its bot, and the quiet-task rule tells the pipeline's manager.
 KINDS = ("legal_mail",)
 TEXTS = {
     "legal_mail": "Tico: legal mail has arrived. Open Inboxes in Tico.",
@@ -417,7 +417,7 @@ class Alerts:
         if task["status"] != "open" or snoozed:
             return False
         # Legal mail is the one page about mail that came in. Nothing pages a person about a task: an overdue or stuck
-        # task reaches them in Needs you (Late, the never-stuck ladder), so an older alert of those kinds is not sent.
+        # task stays with its bot (Late, the never-stuck ladder), so an older alert of those kinds is not sent.
         return alert["kind"] == "legal_mail"
 
     def dispatch(self, alert_id):

@@ -177,6 +177,18 @@ def recent(c, auth, who, at=None, *, bot=None, attempt_id=""):
             [who.actor, *[U.author_actor(a) for a in authors]],
         )
     }
+    # A bot's task for a person is its own task with its question to them (backend/person_asks.py): it waits on the
+    # reader while that question is in their Needs you.
+    from . import waiting_on as W
+
+    asked = [n["requirement_id"] for n in W.needs(c, who.actor) if n.get("kind") == "ask" and n.get("requirement_id")]
+    if asked:
+        waiting |= {
+            r[0]
+            for r in c.execute(
+                f"SELECT DISTINCT added_by_id FROM requirements WHERE id IN ({','.join('?' * len(asked))})", asked
+            )
+        }
     person = H.human(c, H.actor_id(who.actor)) or {}
     first = str(person.get("name") or "").split()[:1]
     named = re.compile(r"\b" + re.escape(first[0]) + r"\b", re.I) if first and len(first[0]) > 1 else None

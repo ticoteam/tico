@@ -152,10 +152,18 @@ def test_an_ask_is_answered_given_and_withdrawn_on_the_task(api):
     refused(api, f"tasks/{made['id']}/asks/nope/answer", {"value": "ok"}, status=404)
 
 
-def test_needs_you_lists_a_persons_own_task_and_counts_the_list(api):
+def test_needs_you_leaves_out_a_persons_own_task_lists_its_ask_and_counts_the_list(api):
+    from backend import task_engine as E
+
     made = task(api, owner="ben")
     needs = get(api, "needs-you", token="ben-test")
-    mine = [i for i in needs["items"] if i["kind"] == "task" and i["task"]["id"] == made["id"]]
+    assert not [i for i in needs["items"] if i.get("task_id") == made["id"]]  # his, with nothing asked: in Tasks
+    with api.app.state.store.transaction() as c:
+        E.add_requirement(
+            c, made["id"], "human:ana", "answer", "human:ben", "Which barn?", seen_version=made["version"]
+        )
+    needs = get(api, "needs-you", token="ben-test")
+    mine = [i for i in needs["items"] if i["kind"] == "ask" and i["task"]["id"] == made["id"]]
     assert len(mine) == 1 and mine[0]["task"]["stage_id"] == "general-todo"
     assert needs["count"] == len(needs["items"]) == get(api, "needs-you?count=1", token="ben-test")["count"]
 

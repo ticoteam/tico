@@ -82,22 +82,6 @@
                 }
             },
             {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 26,
-                    "endColumn": 28,
-                    "lineCount": 1
-                }
-            },
-            {
-                "code": "reportArgumentType",
-                "range": {
-                    "startColumn": 26,
-                    "endColumn": 28,
-                    "lineCount": 1
-                }
-            },
-            {
                 "code": "reportOptionalSubscript",
                 "range": {
                     "startColumn": 24,

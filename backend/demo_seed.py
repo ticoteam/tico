@@ -581,11 +581,14 @@ class Builder:
                     )
                     self.tasks[key] = made["id"]
                 elif kind == "ask":
+                    # The bot's own task, with its question to the person: Needs you holds what is asked of a person,
+                    # never a task only handed to them (backend/waiting_on.py needs).
                     key, title, owner, target, body, _created, _status = row
                     due = stamp(self.now + timedelta(days=D.ASK_DUE[key])) if key in D.ASK_DUE else None
-                    self.tasks[key] = hubdb.task_create(c, owner, title, body, target, due=due, allow_planned=True)[
-                        "id"
-                    ]
+                    made = hubdb.task_create(c, owner, title, body, owner, due=due, allow_planned=True)
+                    self.tasks[key] = made["id"]
+                    question = body.split("?", 1)[0] + "?"
+                    hubdb.task_ask(c, owner, made["id"], target, question, seen_version=version(c, made["id"]))
                 else:
                     self.work_task(c, row)
 

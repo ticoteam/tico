@@ -194,6 +194,8 @@ EMPTY = (
     "email_send_operations",
     "email_send_previews",
     "email_legacy_automations",
+    "mail_unsubscribes",  # one-click unsubscribes sent from the source: a copy sends none
+    "mail_drafts",  # ids of the source's Gmail drafts
     # mail, Slack, GitHub, Granola, meeting bots, support; the old copies of mail (read live from Gmail now) stay behind
     "mail_mailboxes",
     "mail_messages",

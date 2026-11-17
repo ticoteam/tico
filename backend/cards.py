@@ -21,14 +21,14 @@ A pin puts a page (`page:<file id>`) or a card (`card:<id>`) at a place, in orde
   else. `person:me` is the caller's own. Its cards are cards they made. Its first default card is the Floor (`floor`),
   which goes on no other place and once only.
 
-A Dashboard, team page, Growth page or My dashboard nobody saved shows its default cards (DEFAULTS) as pins without
+A Dashboard, team page, Growth page or Company page nobody saved shows its default cards (DEFAULTS) as pins without
 ids; saving it (PUT) makes them real, and every write saves it first.
 
 The pinning rule keeps a page's data from spreading on its own: a bot pins only its own pages to its sidebar, and its
 own cards to its sidebar or a task it holds or asked for. At a task it can read, it may link any page it can read.
 A page a person pins to the Dashboard or a team page is readable by that place's audience (`widened`, read by
 backend/files.py file_visible), so a private task's file is never pinned there, and every
-pin and unpin of a page is in the file's activity. A pin on My dashboard widens nothing: its owner is its only reader,
+pin and unpin of a page is in the file's activity. A pin on Company widens nothing: its owner is its only reader,
 and each card and page there is still read with their own rights.
 """
 
@@ -407,19 +407,16 @@ def needs_list(ctx):
 
 
 def needs_act(it):
-    """What a Needs you row asks of the reader, as ui/app/tasks.ts decideKind sorts it: done, ok, answer, reply, fix.
-    Only an OK or a page's OK is ok; an ask of any other kind is answered."""
-    kind, task = it.get("kind"), it.get("task") or {}
+    """What a Needs you row asks of the reader, as ui/app/decide.ts decideKind sorts it: ok, answer, reply, fix. Only an
+    OK or a page's OK is ok; an ask of any other kind is answered. A task row is one a person must fix before it can
+    move (a private task to let someone see): Needs you lists no task only because it is the reader's
+    (waiting_on.needs)."""
+    kind = it.get("kind")
     if kind == "ask":
         return "ok" if (it.get("ask") or {}).get("kind") in ("ok", "page") else "answer"
-    if kind == "paused":
-        return "fix"
     if kind == "mention":
         return "reply"
-    turn = task.get("turn") or {}
-    late = (task.get("late") or {}).get("level") == "person"
-    stuck = turn.get("state") == "paused" or late or bool(task.get("stuck")) or bool(turn.get("share"))
-    return "fix" if stuck else "done"
+    return "fix"
 
 
 def needs_brief(items, n):
@@ -1266,13 +1263,13 @@ def audience_of(c, place):
 
 
 def own_person(ctx, ident):
-    """Whether `person:<ident>` is the reader's own My dashboard: the person, or BotOps or the Assistant acting for
+    """Whether `person:<ident>` is the reader's own Company page: the person, or BotOps or the Assistant acting for
     them (both carry the person's actor)."""
     return ctx.person and ctx.who.actor == H.human_actor(ident)
 
 
 def someone_elses(ctx, places):
-    """Whether any of these places is another person's My dashboard, which no admin right reaches."""
+    """Whether any of these places is another person's Company page, which no admin right reaches."""
     for place in places:
         kind, _, ident = place.partition(":")
         if kind == "person" and not own_person(ctx, ident):
@@ -1486,7 +1483,7 @@ def place_timing(timings):
 
 
 def view_home(ctx):
-    """A bot's read-only view (backend/app_view.py) opening My dashboard (person:me, a person's own page): one card of
+    """A bot's read-only view (backend/app_view.py) opening Company page (person:me, a person's own page): one card of
     the bot's own open tasks, headed with its name, which nobody arranges."""
     row = {"id": None, "template": "my_tasks", "settings": {"count": 10}, "title": "", "made_by_id": None}
     card = {**card_view(ctx, row), "heading": f"{H.actor_name(ctx.c, ctx.who.actor)}'s tasks"}
@@ -1548,8 +1545,8 @@ def place_view(ctx, place, timings=None):
 
 
 def log(ctx, action, target, detail, private=False):
-    """The event a write leaves. A write to someone's My dashboard names nothing: no card, page or place, since the
-    event log is the company's (the owner reads it whole, `tico sql` included) and the dashboard is its person's alone."""
+    """The event a write leaves. A write to someone's Company page names nothing: no card, page or place, since the
+    event log is the company's (the owner reads it whole, `tico sql` included) and the Company page is its person's alone."""
     if private:
         H.event(ctx.c, ctx.who.actor, action, "", {})
     else:
@@ -1647,7 +1644,7 @@ def insert_pin(ctx, place, item, size, position=None):
         "INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
         (pid, place, item, position, size_of(size), ctx.who.actor, H.now()),
     )
-    if item.startswith("page:") and not place.startswith("person:"):  # My dashboard is its person's alone
+    if item.startswith("page:") and not place.startswith("person:"):  # a person's Company page is theirs alone
         file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
     return pid
 
@@ -1680,6 +1677,7 @@ def add_pin(ctx, place, item, size="medium", position=None):
         require_manage(ctx, place)
     check_item(ctx, kind, item)
     place = canonical(kind, ident)
+    ensure(ctx, kind, ident)  # an unsaved page's defaults are real first: they may hold the Floor
     if (
         item.startswith("card:")
         and (card_row(ctx.c, item[5:]) or {}).get("template") == "floor"
@@ -1694,7 +1692,6 @@ def add_pin(ctx, place, item, size="medium", position=None):
         if size != "medium":
             ctx.c.execute("UPDATE pins SET size=? WHERE id=?", (size_of(size), pin["id"]))
         return pin["id"]
-    ensure(ctx, kind, ident)
     pid = insert_pin(ctx, place, item, size, position)
     log(ctx, "pin.added", place, {"item": item}, kind == "person")
     return pid
@@ -1804,7 +1801,7 @@ def card_places(ctx, row):
 
 
 def may_edit_card(ctx, row):
-    """The owner and admins, unless it is on another person's My dashboard; else whoever may arrange every place it is
+    """The owner and admins, unless it is on another person's Company page; else whoever may arrange every place it is
     pinned to (its maker when it is nowhere)."""
     places = card_places(ctx, row)
     if ctx.admin and not someone_elses(ctx, places):
@@ -1829,7 +1826,7 @@ def card_or_404(ctx, cid):
 
 
 def card_readable(ctx, row):
-    """A card is known to whoever made it, may edit it, or sees a place it is pinned to. Another person's My dashboard
+    """A card is known to whoever made it, may edit it, or sees a place it is pinned to. Another person's Company page
     is no way in, an admin's included."""
     places = card_places(ctx, row)
     if row["made_by_id"] == ctx.who.actor or (ctx.admin and not someone_elses(ctx, places)):
@@ -1895,12 +1892,12 @@ def remove_card(ctx, cid):
 def save_place(ctx, place, audience=None):
     kind, ident = require_manage(ctx, place)
     if kind not in DEFAULTS:
-        raise bad("Only the Dashboard, team pages and My dashboard are saved whole")
+        raise bad("Only the Dashboard, team pages and Company are saved whole")
     ensure(ctx, kind, ident)
     place = canonical(kind, ident)
     if audience is not None:
         if kind == "person":
-            raise bad("My dashboard is yours alone")
+            raise bad("Company is yours alone")
         if kind != "team":
             raise bad("Everyone sees the Growth page" if kind == "growth" else "Everyone sees the Dashboard")
         # The page's audience is its group's Read (See, being on the chart, is left as it is): set there, with the
@@ -1987,7 +1984,7 @@ def install(app, store, auth, mutate, settings, task_view):
     @app.get("/api/v2/places/{place}")
     def place_show(request: Request, place: str, month: str | None = None):
         """A place's pins in order, each card with what it shows the caller; pages the caller may not read are left
-        out. A Dashboard, team page or My dashboard nobody saved shows its default cards, pins without ids (`saved`
+        out. A Dashboard, team page or Company page nobody saved shows its default cards, pins without ids (`saved`
         false). The Growth page takes `month` (YYYY-MM): the month its cards read, and the months it may pick from."""
         timings = {}
         with store.read_transaction() as c:
@@ -2001,7 +1998,7 @@ def install(app, store, auth, mutate, settings, task_view):
 
     @app.put("/api/v2/places/{place}")
     def place_save(request: Request, place: str, body: PlaceSave):
-        """Save a Dashboard, team page or My dashboard (its default cards become real pins) and, for a team page, who
+        """Save a Dashboard, team page or Company page (its default cards become real pins) and, for a team page, who
         sees it."""
 
         def work(c):

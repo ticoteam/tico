@@ -46,13 +46,7 @@ def _delivery(args):
 
 
 def _contacts_args(args):
-    """`tico contacts` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
-    --option pairs are an attribute's options. The pairs are the command line's; the tool takes objects."""
-    if getattr(args, "match", None):
-        args.match = {args.match[0]: args.match[1]}
-    if getattr(args, "set_values", None) is not None:
-        args.values = dict(args.set_values)
-    args.set_values = None
+    """`tico contacts attribute add` flags as the tool takes them: each --option pair is a {key, label} option."""
     if getattr(args, "options", None) is not None:
         args.options = [{"key": key, "label": label} for key, label in args.options]
     return args
@@ -89,7 +83,8 @@ def via_tool(client, args, **more):
 
 
 def automation(client, args):
-    """`tico automation ...`: the tico_automation_* tools, with flows read from a file or stdin."""
+    """`tico automation create|update|inbox`: the flows read from a file or stdin. The other leaves are specs
+    (clients/commands/automations.py)."""
     from clients import hubtools
 
     def flow(path):
@@ -107,38 +102,13 @@ def automation(client, args):
     if args.sub == "inbox":
         return run("tico_inbox_send", {"inbox": args.inbox, **({"send": args.send == "on"} if args.send else {})})
     fields = {"id": args.id} if hasattr(args, "id") else {}
-    if args.sub == "list":
-        fields.update({k: getattr(args, k) for k in ("owner", "limit", "cursor") if getattr(args, k) is not None})
-    elif args.sub == "create":
+    if args.sub == "create":
         fields.update(flow(args.file))
     elif args.sub == "update":
         fields.update(flow(args.file) if args.file else {})
         fields.update({k: getattr(args, k) for k in ("name", "summary") if getattr(args, k) is not None})
         if args.enable or args.disable:
             fields["enabled"] = bool(args.enable)
-    elif args.sub == "run":
-        try:
-            fields["input"] = json.loads(args.input) if args.input else {}
-        except ValueError:
-            raise APIError("input", "--input must be JSON") from None
-    elif args.sub == "runs":
-        fields.update({k: getattr(args, k) for k in ("limit", "before") if getattr(args, k) is not None})
-    elif args.sub in ("recent-runs", "stats"):
-        fields.update(
-            {
-                k: getattr(args, k)
-                for k in ("range", "status", "trigger", "owner", "limit", "before")
-                if getattr(args, k, None) is not None
-            }
-        )
-    elif args.sub == "versions" and args.pending:
-        fields["status"] = "pending"
-    elif args.sub in ("restore", "discard"):
-        fields["n"] = args.n
-    elif args.sub == "held":
-        fields["action"] = args.action
-    elif args.sub == "template":
-        fields.update({"owner": args.owner, "inbox": args.inbox})
     return run(tool_name(args.fn), fields)
 
 
@@ -442,7 +412,7 @@ def run(args, who=None):
 
     if fn in hubtools_connections.COMMANDS:
         return hubtools_connections.run_command(client, args)
-    if args.cmd == "alerts" or fn in ("tool index", "tool check", "tool level"):
+    if args.cmd == "alerts" or fn in ("tool index", "tool check", "tool activity", "tool level"):
         return via_tool(client, args)
     if args.cmd == "contacts":
         return via_tool(client, _contacts_args(args))
@@ -529,12 +499,6 @@ def run(args, who=None):
         "update settings",
         "changelog list",
         "changelog mark-read",
-        "needs-you start",
-        "needs-you next",
-        "needs-you respond",
-        "needs-you commit",
-        "needs-you abandon",
-        "needs-you show",
         "origin show",
         "brief",
         "mcp stats",
@@ -627,16 +591,6 @@ def run(args, who=None):
         if fn == "meeting import":
             return hubtools.meetings_import_file(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
-    if fn == "doc ask-status":
-        from clients import docs_ask
-
-        return docs_ask.status(
-            client, args.conversation_id, args.message_id, args.wait, key=os.environ.get("HUB_OPERATION_ID")
-        )
-    if fn == "doc ask":  # `doc fetch` never gets here: it runs locally (clients/hubcli.py)
-        from clients import docs_ask
-
-        return docs_ask.ask(client, args.question, args.wait, key=os.environ.get("HUB_OPERATION_ID"))
     if args.cmd == "grokbot":
         from clients import hubtools
 
@@ -647,26 +601,6 @@ def run(args, who=None):
 
         body = json.loads(Path(args.file).read_text())
         return hubtools.BY_NAME["tico_external_sync"]["fn"](client, {**body, "provider": args.provider})
-    if args.cmd == "file":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn == "file publish":
-            return hubtools.files_publish_path(client, fields)
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
-    if args.cmd == "doc":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn", "body_file") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn == "doc write":
-            fields["body"] = (
-                sys.stdin.read()
-                if not args.body_file or args.body_file == "-"
-                else Path(args.body_file).read_text(encoding="utf-8-sig")
-            )
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
 

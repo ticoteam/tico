@@ -97,7 +97,7 @@ The runner image brings its own Python, and a release can move it to a new minor
 release that moved the images to Debian trixie). The image's own venv (`/opt/tico/.venv`) comes with it. The runner's
 home volume (`/home/runner`) is kept across updates, and a Python environment there belongs to the Python that built it:
 
-- **Tico's mail venv** (`~/tools/mail-venv`, or `TICO_MAIL_VENV`) rebuilds itself on the next `mail.sh`, which logs
+- **Tico's mail venv** (`~/tools/mail-venv`, or `TICO_MAIL_VENV`) rebuilds itself the next time the runner's `connectors` job starts, which logs
   "built by another Python, rebuilding it". Nothing to do.
 - **A venv a bot or person made** (a project's `.venv`, say) still points at the old interpreter, which the new image
   does not have, so its `python` fails with "No such file or directory". Delete it and build it again with the image's

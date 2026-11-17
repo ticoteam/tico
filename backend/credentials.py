@@ -220,10 +220,12 @@ def owned(c, who):
     see their metadata and share them with bots they manage, never their value unless it is also granted to them.
     `created_by` alone is not enough: it names whoever added any credential, an administrator's company credentials too,
     and a person demoted since must not keep those. A value someone else has since saved makes it no longer theirs, and
-    the team rule "Members store credentials for their bots" off ends it for everyone."""
+    the team rule "Members store credentials for their bots" off ends it for everyone. A bot acting as itself owns the
+    keys it stored for itself (backend/tool_access.py `_itself`), the same way and whatever the team rule."""
     from . import team_rules
 
-    if who.role not in ('human', 'owner') or not team_rules.load(c)['members_store_credentials']:
+    own_bot = who.role == 'bot' and not getattr(who, 'via', '')
+    if not own_bot and (who.role not in ('human', 'owner') or not team_rules.load(c)['members_store_credentials']):
         return set()
     return {
         r[0]
@@ -599,8 +601,8 @@ class Vault:
 
     def write(self, c, who, body, cid=None, for_bot=None):
         """`for_bot`: storing it for that bot (backend/credential_cards.py `store_for_bot`), which a member who manages the bot
-        may do too, for a new credential or one they stored themselves (backend/tool_access.py STORE); everything else is
-        an administrator's."""
+        may do too, and the bot itself for its own key, for a new credential or one they stored themselves
+        (backend/tool_access.py STORE); everything else is an administrator's."""
         member = bool(
             for_bot
             and not TA.admin(c, who, self.admins)
@@ -937,8 +939,6 @@ def _is_id(c, cipher, row):
 
 
 def install_credentials(app, store, delegate=None, propose=None):
-    from . import runner_versions
-
     vault = app.state.vault = Vault(store, auth=getattr(app.state, 'auth', None))
 
     def migration_runner(c, who):
@@ -959,8 +959,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                 )
             )
             row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (HUB_MIGRATION,)).fetchone()
-            if runner_versions.at_least(c, who.runner_id, '0.2.31'):
-                pending |= set(json.loads(row[0])) if row else set()
+            pending |= set(json.loads(row[0])) if row else set()
             return {
                 'bots': [
                     r[0]
@@ -1004,12 +1003,6 @@ def install_credentials(app, store, delegate=None, propose=None):
             if bot not in pending and bot not in hub_pending:
                 return {'migrated': True}
             first = bot in pending
-            supports_hub = runner_versions.at_least(c, who.runner_id, '0.2.31')
-            if not first and not supports_hub:
-                return {'migrated': False, 'min_runner': '0.2.31'}
-            if first and not supports_hub and bot not in hub_pending:
-                hub_pending.append(bot)
-                c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(hub_pending), HUB_MIGRATION))
             subject = 'bot:' + bot
             label = (H.bot(c, bot) or {}).get('slug') or bot
             from . import api_tools, tool_settings
@@ -1063,8 +1056,6 @@ def install_credentials(app, store, delegate=None, propose=None):
 
             later = []
             for item in body.credentials:
-                if item.env.startswith('HUB_') and not supports_hub:
-                    continue
                 if not first and not item.env.startswith('HUB_'):
                     continue  # the bot migrated before: only the HUB_ keys 0.2.30 could not take
                 if item.env in RESERVED_ENV or item.env.startswith(RESERVED_PREFIXES):
@@ -1086,7 +1077,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             if first:
                 pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(pending), FILE_MIGRATION))
-            if bot in hub_pending and supports_hub:
+            if bot in hub_pending:
                 hub_pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value=? WHERE key=?', (encode(hub_pending), HUB_MIGRATION))
             return {'migrated': True}

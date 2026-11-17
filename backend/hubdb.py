@@ -1123,6 +1123,8 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
             f"The last one broke the {rule} rule: {said}. "
             f"Read its refusals and decide whether its playbook or its reach needs a change.",
             origin=actor,
+            # A person reviews only BotOps (no assistant to do it), and BotOps asks them about itself.
+            why=f"{count} of my writes were turned down today.",
         )
     # Refusals are diagnostics for the bot, not decisions for the human.
     # Keep the audit, internal repeated-failure review, and quarantine enforcement.
@@ -1143,10 +1145,26 @@ def _review_exists(conn, title, day):
     )
 
 
-def _review_task(conn, owner, title, body, origin=None):
+def _review_task(conn, owner, title, body, origin=None, why=None):
     try:
-        # lint=False: a person's review reads as written; the shape rule is for asks bots write.
-        row = task_create(conn, KEEPER, title, body, owner, lint=False)
+        if is_human(owner):
+            # A person's review is BotOps' question to them on their task (backend/person_asks.py): in their Needs
+            # you. No bot holds it: the bot it reviews is BotOps itself, with no assistant to review it.
+            from . import person_asks
+
+            row = person_asks.ask(
+                conn,
+                KEEPER,
+                owner,
+                title,
+                body,
+                "Does my playbook or reach need a change?",
+                why or body.split(". ")[0].rstrip(".") + ".",
+                asker=person_asks.botops(),
+            )
+        else:
+            # lint=False: a review reads as written; the shape rule is for asks bots write.
+            row = task_create(conn, KEEPER, title, body, owner, lint=False)
         if origin and is_bot(origin):
             event(conn, KEEPER, "task.origin", row["id"], {"bot": origin})
     except Refused:
@@ -4416,8 +4434,10 @@ def task_create(
     readers_check=None,
     unassigned=False,
     human_id=None,
+    asks=None,
 ):
-    """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7).
+    """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7), and so is
+    a bot's own task that asks a person (`asks`: the person its question is for, backend/person_asks.py).
 
     The task is made and put into the first stage of its pipeline in one step (`task_engine.enter`): `pipeline` is a
     pipeline's id, General when none is given. `owner` is who the task is given to (its assignee); the stage says who
@@ -4553,13 +4573,12 @@ def task_create(
     # pipeline writes them, not as an ask.
     if not title:
         refuse(conn, actor, "lint", "give it a title that says what you are asking for")
-    if is_bot(actor) and is_human(target) and lint and general:
+    asked = target if is_human(target) else asks if is_human(asks) else None
+    if is_bot(actor) and asked and lint and general:
         # A bot giving a person work opens the body with the ask: their card leads with it (lint_person_ask).
-        require_person_ask(conn, actor, target, person_ask_of_body(body, title), "assign")
+        require_person_ask(conn, actor, asked, person_ask_of_body(body, title), "assign")
     warnings = (
-        style_problems(conn, actor, lint_human_item(body, title=title), severity)
-        if is_human(target) and lint and general
-        else []
+        style_problems(conn, actor, lint_human_item(body, title=title), severity) if asked and lint and general else []
     )
     # A task in another pipeline keeps that pipeline's own references ("#18945", "(B/F)") in its title.
     plain = lint_title(title) if is_bot(actor) and TITLE_LINT != "off" and general else []

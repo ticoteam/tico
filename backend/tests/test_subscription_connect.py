@@ -357,7 +357,8 @@ def test_a_plan_added_with_no_name_is_named_after_its_plan_and_numbered_from_the
     second = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
     assert second["name"] == "Claude 2"
     assert send(api, m, second, OTHER)["state"] == "done"
-    assert post(api, "model-subscriptions/connect", {"kind": "codex_login"})["name"] == "ChatGPT"
+    # A ChatGPT sign-in has no name yet: it takes its account email once saved.
+    assert post(api, "model-subscriptions/connect", {"kind": "codex_login"})["name"] == ""
     # A pasted key with no name gets its provider's; one given is kept.
     key = post(api, "model-subscriptions", {"kind": "anthropic_key", "secret": "sk-ant-api03-" + "k" * 40})
     named = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": " Team Max "})

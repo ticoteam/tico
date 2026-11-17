@@ -130,10 +130,10 @@ function decideKind(it: NeedsEntry): AskKind {
   if (it.kind === 'ask') return it.ask?.kind === 'ok' || it.ask?.kind === 'page' ? 'ok' : 'question';
   if (it.kind === 'paused') return 'fix';
   if (it.kind === 'mention') return 'mention';
-  // Stuck: the ladder brought it to the person (stuck or late with them), a bot is Paused on it, or it waits on someone
-  // being let in (turn.share). Its buttons are the stuck card's, never Done, Snooze or Give to (task #392).
-  const t = it.task;
-  return t?.turn?.state === 'paused' || t?.late?.level === 'person' || t?.stuck || t?.turn?.share?.length ? 'stuck' : 'yours';
+  // A task item is one thing a person must fix before it can move: a private task that waits on someone being let in
+  // (turn.share). Needs you never lists a task only because it is the person's (backend/waiting_on.py needs). Its
+  // buttons are the stuck card's, never Done, Snooze or Give to (task #392).
+  return 'stuck';
 }
 // ---- the count, and the lists that show Needs you
 /** A bot, or a bot's read-only view of the app (view-only.ts), has no Needs you and never opens Flow. */

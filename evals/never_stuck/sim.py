@@ -7,8 +7,8 @@ seven rules are checked (`never_stuck.rules_hold`), every open task must wait on
 more than 7 bot runs without a change before a person was asked.
 
 At the end the faults stop and the bots only stop early. The clock runs on until nothing is due, and every task must be
-Done, Closed, Snoozed, in a by-hand stage or a person's turn, or wait only on room or on tasks whose own chain ends in
-one of those."""
+Done, Closed, Snoozed, in a by-hand stage, a person's turn or resting at the ladder's end (with its bot, for the
+quiet-task rule to tell the manager), or wait only on room or on tasks whose own chain ends in one of those."""
 
 import random
 import sqlite3
@@ -657,7 +657,8 @@ class Sim:
         for person in PEOPLE:
             if self.rng.random() >= self.person_rate[person]:
                 continue
-            items = self.world.read(lambda c, person=person: W.needs(c, person))
+            # Their Needs you, and the tasks whose work is theirs (in Tasks): a person works both.
+            items = self.world.read(lambda c, person=person: W.needs(c, person, own_work=True))
             if person == ANA:
                 items = items + [{"kind": "by_hand", "task_id": t} for t in self.by_hand_tasks()]
             if not items:
@@ -722,7 +723,7 @@ class Sim:
                 value = "ok" if requirement.get("kind") == "ok" else "Yes, go"
                 self.act(person, f"answers {value}", lambda c: A.answer(c, task, rid, person, value), task)
             return
-        # The task is theirs: their own, or the ladder or Late brought it to them.
+        # The task is theirs: their own, or one they must let someone see.
         choice = rng.choice(("try again", "done", "reassign", "close", "snooze", "push past", SILENT, SILENT))
         self.stats.add(self.stats.people, f"task: {choice}")
         if choice == SILENT:
@@ -1014,8 +1015,8 @@ class Sim:
         return min(max(gap, 10.0), 3600.0)
 
     def final_check(self) -> None:
-        """Every task is Done, Closed, Snoozed, in a by-hand stage or a person's turn, or waits only on room or tasks
-        whose own chain ends in one of those."""
+        """Every task is Done, Closed, Snoozed, in a by-hand stage, a person's turn or resting at the ladder's end, or
+        waits only on room or tasks whose own chain ends in one of those."""
         from backend import waiting_on as W
 
         def settled(task: str, seen: set[str]) -> str | None:
@@ -1031,8 +1032,10 @@ class Sim:
             states = {x.state for x in waits}
             if states & {W.SNOOZED, W.BY_HAND, W.PERSON, W.PAUSED}:
                 return None
-            if W.BOT in states:
+            if W.BOT in states and (row.get("visit") or {}).get("level") != "person":
                 return f"{self.name(task)} is left waiting on a bot: {[(x.who, x.line) for x in waits]}"
+            if W.BOT in states:
+                return None  # the ladder rests on it: its bot has it, and the quiet-task rule tells the manager
             for x in waits:
                 if x.state == W.TASKS and x.who:
                     problem = settled(x.who, seen)

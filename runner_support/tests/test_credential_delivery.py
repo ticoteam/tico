@@ -540,6 +540,27 @@ def test_a_key_granted_to_two_bots_reaches_both_and_revoking_one_leaves_the_othe
 
 
 @pytest.mark.parametrize("harness", ["claude"])
+def test_a_key_a_bot_stores_for_itself_reaches_its_next_turn_and_no_other_bot(api, vendor, computer, tmp_path):
+    """A bot keeps a key it already holds (one it made through the vendor's API) with `tico credential add
+    --from-file`, as itself: its next turn has it and the vendor accepts it; another bot's turn does not."""
+    held = tmp_path / "held-key"
+    held.write_text(SECRET + "\n")
+    add_bot(api, computer, "finance")
+    computer.start()
+    until(lambda: computer.readiness().get("finance", {}).get("ready"), "the second bot's readiness")
+    _, uses, _ = turn(api, computer, f"STORE {ENV} {held}")
+    [step] = one(uses, "store")["steps"]
+    assert step["code"] == 0 and SECRET not in step["stdout"] + step["stderr"], step
+    line = f"CALL bearer {ENV} {vendor.url}/bearer"
+    _, uses, conversation = turn(api, computer, line)
+    call = one(uses, "call")
+    assert call["environ"][ENV] == SECRET and call["status"] == 200
+    _, uses, _ = turn(api, computer, line, bot="finance")
+    assert ENV not in one(uses, "call")["environ"]
+    nowhere(api, computer, conversation, SECRET)
+
+
+@pytest.mark.parametrize("harness", ["claude"])
 def test_after_revoke_the_next_turn_has_neither_the_variable_nor_the_mcp_server(api, vendor, computer):
     api_tool(api, delivery="computer")
     level(api, "ops", "read_write")

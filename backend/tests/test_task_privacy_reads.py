@@ -695,7 +695,8 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
     def cards(size):
         with store.transaction() as c:
             for n in range(size):
-                H.task_create(c, "bot:ops", f"Step {size}-{n}", "Do it.", "human:ben", lint=False)
+                step = H.task_create(c, "bot:ops", f"Step {size}-{n}", "Do it.", "bot:ops", lint=False)
+                H.task_ask(c, "bot:ops", step["id"], "human:ben", f"Which step for {n}?", seen_version=step["version"])
                 work = H.task_create(c, "human:ana", f"Release {size}-{n}", "Checklist", "human:ana", lint=False)
                 H.task_ask(c, "human:ana", work["id"], "human:ben", f"Which region for {n}?")
 
@@ -705,7 +706,7 @@ def test_needs_you_reads_a_fixed_number_of_statements_and_hides_private_items(ap
         total += 2 * size
         page, counts[size] = traced_get(api, "needs-you", "ben-test")
         assert len(page["items"]) == total
-        assert {x["kind"] for x in page["items"]} == {"task", "ask"}
+        assert {x["kind"] for x in page["items"]} == {"ask"}
         assert hidden["id"] not in json.dumps(page) and "Private plan" not in json.dumps(page)
     assert counts[30] <= counts[3] + 5
 

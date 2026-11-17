@@ -298,13 +298,12 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
             let home = profile.home(&runtime).unwrap_or_default();
             let command = profiles::login_command(&runtime).unwrap_or_default();
             if command.is_empty() && harness_tools::caps(&runtime, "").api_keys == "bot" {
-                let secrets = config.projects_dir().join("secrets");
                 let key = harness_tools::api_key_env(&runtime)
                     .into_iter()
                     .next()
                     .unwrap_or_default();
                 let name = harness_tools::name_for(&runtime);
-                println!("{name} authenticates with an API key, not an interactive login: put {key} in {}/_shared.env or <bot>.env. This profile's {name} sessions live in {}.", secrets.display(), home.display());
+                println!("{name} authenticates with an API key, not an interactive login: save {key} in Tools > Credentials and grant it to the bot. This profile's {name} sessions live in {}.", home.display());
                 return 0;
             }
             if command.is_empty()
