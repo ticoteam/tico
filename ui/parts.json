@@ -298,6 +298,7 @@
    "taskCommentsRender",
    "taskModalOpen",
    "taskModalShow",
+   "taskMoveToMenu",
    "taskPropsMsgPaint",
    "taskRunCatalog",
    "taskThreadOpen"

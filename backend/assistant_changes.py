@@ -388,7 +388,12 @@ def restore_task(c, who, row):
     if row["kind"] == "reassign":
         H.task_reassign(c, who.actor, task_id, old, UNDO_WHY)
         return
-    stage = c.execute("SELECT kind FROM stages WHERE id=?", (old,)).fetchone()
+    stage = c.execute("SELECT kind, pipeline_id FROM stages WHERE id=?", (old,)).fetchone()
+    now = H.task(c, task_id) or {}
+    if stage and stage["pipeline_id"] != now.get("pipeline_id"):
+        # A move to another pipeline is taken back by moving it back the same way (a Done or Closed one stays so).
+        H.task_move_to(c, who.actor, task_id, stage["pipeline_id"], old, UNDO_WHY)
+        return
     to = {"done": H.TASK_DONE, "closed": H.TASK_CLOSED}.get(stage["kind"] if stage else "", old)
     if (H.task(c, task_id) or {}).get("status") != "open" and to not in (H.TASK_DONE, H.TASK_CLOSED):
         to = H.TASK_REOPEN  # a done or closed task goes back to work by a reopen, which lands where it left

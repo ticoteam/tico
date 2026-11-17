@@ -245,9 +245,10 @@ def merged_work(conn: "sqlite3.Connection", task_id: str) -> bool:
     return any(link["metadata"] and link["metadata"]["state"] == "merged" for link in GS.prs_of(conn, task_id))
 
 
-def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
+def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str, *, sub_tasks: bool = True) -> None:
     """Undo what the task's open visit did on entering: close the tasks filed in it that are still open, except one
-    whose PR already merged."""
+    whose PR already merged. `sub_tasks=False` (a move to another pipeline, task_engine.refile) closes only the hand-offs
+    the stage filed on entering: the sub-tasks stay open in their own pipelines, linked as they were."""
     from . import task_engine
 
     visit = task.get("visit")
@@ -256,7 +257,17 @@ def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
     from . import source_actions
 
     source_actions.undo_stage(conn, task)
+    handoffs = (
+        set()
+        if sub_tasks
+        else {
+            row[0]
+            for row in conn.execute(
+                "SELECT to_task_id FROM links WHERE visit_id=? AND kind='handoff'", (visit["id"],)
+            ).fetchall()
+        }
+    )
     for filed in filed_open(conn, visit["id"]):
-        if merged_work(conn, filed):
+        if merged_work(conn, filed) or not (sub_tasks or filed in handoffs):
             continue
         task_engine.move(conn, filed, task_engine.CLOSED, by, note, cascade=True)

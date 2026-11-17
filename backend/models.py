@@ -303,15 +303,42 @@ class TaskDone(Contract):
 
 
 class TaskMove(Contract):
-    """`to` is next, done, closed, reopen, or a stage's id or name (H.task_move)."""
+    """`to` is next, done, closed, reopen, or a stage's id or name (H.task_move). With `to_pipeline` (another
+    pipeline's id or name) it moves there (H.task_move_to): `to` names that pipeline's stage, its first when left out."""
 
-    to: Annotated[str, Field(min_length=1, max_length=200)]
+    to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    to_pipeline: Annotated[str, Field(min_length=1, max_length=200)] | None = None
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
     # A person lets exactly this one see a private task and moves it on (the stuck card's one fix, task #392): `to` is
     # next. Refused when the task now waits on someone else (H.task_let_see).
     let_see: list[ID] | None = Field(default=None, min_length=1, max_length=50)
+
+
+class TaskMovePlace(Contract):
+    """A stage of a pipeline, each by id or name."""
+
+    pipeline: Annotated[str, Field(min_length=1, max_length=200)]
+    stage: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class TaskMoveMany(Contract):
+    """Move many tasks to a stage of another pipeline (`POST /api/v2/tasks/move`): the tasks `ids` names, or every open
+    task in the stage `from` names. `to` is the stage of `to_pipeline`, its first when left out."""
+
+    ids: list[ID] | None = Field(default=None, min_length=1, max_length=500)
+    from_: TaskMovePlace | None = Field(default=None, alias="from")
+    to_pipeline: Annotated[str, Field(min_length=1, max_length=200)]
+    to: Annotated[str, Field(min_length=1, max_length=200)] | None = None
+    why: Why | None = None
+    on_behalf_of: ID | None = None
+
+    @model_validator(mode="after")
+    def one_selection(self):
+        if (self.ids is None) == (self.from_ is None):
+            raise ValueError("name the tasks: ids, or from (a pipeline and a stage), not both")
+        return self
 
 
 class TaskQueue(Contract):

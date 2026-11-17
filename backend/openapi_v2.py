@@ -819,9 +819,22 @@ STABLE = [
         "post",
         "Tasks",
         "moveTask",
-        "Move a task: to is next (with a why, past what is not met), done, closed, reopen, or a stage's id or name. A "
-        "refusal is 409 with error, detail, missing, next and version",
+        "Move a task: to is next (with a why, past what is not met), done, closed, reopen, or a stage's id or name. "
+        "With to_pipeline (another pipeline's id or name) it moves there, to the stage to names (its first when left out), "
+        "keeping its number, label and history; a Done or Closed task lands in that pipeline's Done or Closed. A "
+        "refusal is 409 with error, detail, missing, next and version (task_turn_running while a bot's turn on it runs)",
         "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/move",
+        "post",
+        "Tasks",
+        "moveTasks",
+        "Move many tasks to a stage of another pipeline: ids, or from {pipeline, stage} for every open task there; "
+        "to_pipeline, to (its first stage when left out) and why (a bot's is required). Each moves as one move does; "
+        "one that cannot is skipped with its code (task_turn_running, task_stage_full, not_found, ...) and the rest "
+        "still move. At most 500 tasks",
+        "TaskMoveResult",
     ),
     (
         "/api/v2/tasks/{tid}/owner",
@@ -931,7 +944,9 @@ STABLE = [
         "post",
         "Pipelines",
         "savePipeline",
-        "Make or change a pipeline: the whole record, with the settings_version it was read at",
+        "Make or change a pipeline: the whole record, with the settings_version it was read at. Removing a stage that "
+        "holds open tasks answers 409 stage_has_tasks (stages, and a move_to hint) until the record carries "
+        "move_tasks_to {pipeline, stage}: its tasks move there first, in any pipeline",
         None,
     ),
     (
@@ -3612,6 +3627,13 @@ SCHEMAS = {
             "run_model": {"oneOf": [ref("TaskRunChoice"), {"type": "null"}]},
             "readiness": {"type": ["object", "null"]},
             "warning": "s",
+        }
+    ),
+    "TaskMoveResult": obj(
+        {
+            "batch_id": "s",
+            "moved": items("s"),
+            "skipped": items(obj({"id": "s", "code": "s", "reason": "s"})),
         }
     ),
     "TaskBulkResult": obj(

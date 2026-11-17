@@ -121,6 +121,7 @@ function pageTasks(openId = '') {
         more: '<button type="button" id="task-mi-search">Search</button>'
           + '<button type="button" id="task-mi-new" class="tl-mi-k" data-key="C" aria-keyshortcuts="c">New task</button>'
           + '<button type="button" id="task-mi-archive">Archived</button>'
+          + '<button type="button" id="task-mi-select" hidden>Select</button>'
           + '<button type="button" id="task-mi-edit" hidden>Edit pipeline</button>'})}
       <div class="tl-bar" id="task-bar" hidden>
         <button type="button" class="tl-ib" id="task-archive-x" aria-label="Leave Archived" title="Leave Archived" hidden>${TL_ICON.x}</button>
@@ -145,6 +146,7 @@ function pageTasks(openId = '') {
   $('#task-mi-search').onclick = () => setTimeout(() => $('#task-q')?.focus());
   $('#task-mi-archive').onclick = () => tasksShow(state, {archive: state.archive ? '' : 'snoozed'});
   $('#task-mi-edit').onclick = () => { const p = tasksPipeline(state); if (p) TASK_PAGE_HOOKS.pipeline?.edit?.(p); };
+  $('#task-mi-select').onclick = () => { const p = tasksPipeline(state); if (p) TASK_PAGE_HOOKS.pipeline?.select?.(p); };
   $('#task-mi-layout').onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-layout]');
     if (b) tasksShow(state, {layout: b.dataset.layout === 'columns' ? 'columns' : 'list'});
@@ -492,6 +494,7 @@ function tasksHeadPaint(state: TasksPageState) {
   const archiveWord = state.archive ? 'Leave Archived' : 'Archived';
   if (archive.textContent !== archiveWord) archive.textContent = archiveWord;
   tasksHidden($('#task-mi-edit'), !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive);
+  tasksHidden($('#task-mi-select'), !p || !TASK_PAGE_HOOKS.pipeline?.select || !!state.archive || tasksViewOnly());
   tasksHidden($('#task-mi-layout'), !p || !!state.archive || matchMedia(PHONE).matches);
   for (const b of document.querySelectorAll<HTMLElement>('#task-mi-layout [data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.layout));
   tasksHidden($('#task-archive-x'), !state.archive);

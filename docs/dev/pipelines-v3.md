@@ -325,6 +325,12 @@ The life of a task, in a line: First stage → Stage → Last stage → Done.
   in a stage that queues PRs lands in the stage before it, so a new commit is reviewed before it is queued.
 - **Reassign.** Changes the owner for this visit. It goes through the same function, so it is logged and resets the
   tries. The old owner's queued wakes for the task are dropped.
+- **Move to another pipeline.** The same task, with its number, label and history, into a stage of another pipeline
+  (`task_engine.refile`). A re-file, not a forward move: the old stage's requirements don't hold it, and entering the
+  new stage is a normal entry (owner rule, stage rules, room, wake). The old visit ends `moved`, its asks withdrawn; a
+  snooze ends; the old stage's on-enter action is undone as by Back, but sub-tasks stay open where they are. A Done or
+  Closed task lands in the new pipeline's Done or Closed. Anyone who reads the task; a bot with a reason, never past a
+  people-only OK. Refused while a bot's turn on the task runs (`task_turn_running`) and into a full stage.
 
 Every move records who, when and why, and raises the task's version. A move made against an old version is refused with
 "changed since you looked". A bot's command always carries the version from its wake.
@@ -1157,8 +1163,9 @@ stages        pipeline, position, kind (work | done | closed), name, purpose,
 requirements  stage or visit, kind, source, condition (on an item), settings, can_push_past, who_oks (none | people_only | people_with_exceptions),
               person, added_by, line, shows (page + version | email | PR | action), choices, withdrawn_at
               on a stage: every task. on a visit: this task, this time. unique (visit, added_by) for a bot
-tasks         pipeline, stage, owner, assignee, version, status (open | done | closed; written by move() only)
-visits        task, stage, entered_at, left_at, how (met | pushed_past | back | closed | reopened), by, why,
+tasks         pipeline, stage, owner, assignee, version, status (open | done | closed; written by move() only),
+              prefix (its label's letters, from the pipeline it was made in; kept when it moves)
+visits        task, stage, entered_at, left_at, how (met | pushed_past | back | closed | reopened | moved), by, why,
               tries, level (owner | manager | person), next_try_at, progress_mark, last_change_at,
               late_told_at, late_person_at, bot_snoozes
 answers       visit, requirement, by, answer, notes, page_version, at
@@ -1559,7 +1566,7 @@ Today: the task window, in two columns.
   - Group heading "History", then dimmed lines: "11:31 Builder pushed 4c1e9a", "09:15 Builder started", "09:14 Moved to
     Build".
 
-⋯ holds Snooze, Move back, Move on, Reassign, Close, Move to another pipeline, Who can see, Runs on.
+⋯ holds Snooze, Move back, Move on, Reassign, Close, Move to… (another pipeline), Who can see, Runs on.
 
 **The one line under the title, in every state:**
 
@@ -1973,7 +1980,8 @@ How each one works on the engine.
   no task, Tico files one.
 - **Work for "someone".** A General task with no assignee belongs to the General Manager, who assigns it.
 - **Action items from a meeting.** General tasks.
-- **Moving a task to another pipeline.** It lands in that pipeline's first stage.
+- **Moving a task to another pipeline.** The same task moves, keeping its number and label, into the stage picked (the
+  first by default) ([The moves](#the-moves)).
 - **Goals.** Not tasks. A goal links to the tasks that serve it.
 - **Private tasks.** Same engine. Who can see them doesn't change, except that entering a private pipeline adds its
   manager and the company's owner. The bot a pipeline names for a stage (its fixed owner bot, or a bot on its "One of

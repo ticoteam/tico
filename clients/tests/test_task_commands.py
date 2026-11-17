@@ -56,6 +56,23 @@ COMMANDS = [
         ("POST", "tasks/T1/move", {"to": "Build", "version": 3}),
     ),
     (
+        ["task", "move", "T1", "--to", "Backlog/On ice", "-m", "Parked", "--version", "3"],
+        ("tico_task_move", {"id": "T1", "to_pipeline": "Backlog", "to": "On ice", "why": "Parked", "version": 3}),
+        ("POST", "tasks/T1/move", {"to": "On ice", "to_pipeline": "Backlog", "version": 3, "why": "Parked"}),
+    ),
+    (
+        ["task", "move", "--from", "Dev/Ideas", "--to", "Backlog", "-m", "Old ideas"],
+        (
+            "tico_task_move",
+            {"from_pipeline": "Dev", "from_stage": "Ideas", "to_pipeline": "Backlog", "why": "Old ideas"},
+        ),
+        (
+            "POST",
+            "tasks/move",
+            {"from": {"pipeline": "Dev", "stage": "Ideas"}, "to_pipeline": "Backlog", "why": "Old ideas"},
+        ),
+    ),
+    (
         ["task", "close", "T1", "-m", "Not needed", "--version", "3"],
         ("tico_task_close", {"id": "T1", "why": "Not needed", "version": 3}),
         ("POST", "tasks/T1/move", {"to": "closed", "version": 3, "why": "Not needed"}),

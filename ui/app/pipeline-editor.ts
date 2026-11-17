@@ -46,6 +46,9 @@ interface PeState {
   readOnly: boolean;
   /** The row whose editor is open, as `<stage index>:<key>`: On entering's `limit`, `owner` or `act`, To leave's `req:<index>` or `hand`; '' for none. */
   rowOpen?: string;
+  /** A stage removed that holds tasks (the save's 409 stage_has_tasks): the line that says so, where they go
+   * (`<pipeline id>/<stage id>`, the server's suggestion first) and the stages of every pipeline to pick from. */
+  moveOut?: {line: string; to: string; options: {value: string; text: string}[]} | null;
 }
 
 let PE: PeState | null = null;
@@ -606,7 +609,11 @@ function peBodyHTML(state: PeState): string {
  * the left and Save at the right, last. */
 function peFootHTML(state: PeState): string {
   const one = state.only && state.draft.stages.some(s => s.id === state.only);
-  return `<p class="err" role="alert" data-pe-error${state.error ? '' : ' hidden'}>${esc(state.error)}</p>`
+  const out = state.moveOut;
+  // "Move Speccing's 11 tasks to [Dev › On deck]": a removed stage's tasks go where this says, then it goes.
+  const move = out ? `<label class="pe-move-out">${esc(out.line)} <select data-pe-move-to>${out.options.map(o =>
+    `<option value="${esc(o.value)}"${o.value === out.to ? ' selected' : ''}>${esc(o.text)}</option>`).join('')}</select></label>` : '';
+  return `<p class="err" role="alert" data-pe-error${state.error ? '' : ' hidden'}>${esc(state.error)}</p>${move}`
     + `<div class="pe-foot-row">${one ? '<span></span>' : '<button type="button" class="ghost" data-pe-stage-add>+ Stage</button>'}`
     // While a clash is shown, Save mine is the one filled button; Save stays, quiet.
     + `<button type="button" class="${state.clash ? 'ghost' : 'primary'}" data-pe-save${state.saving ? ' disabled' : ''}>Save</button></div>`;
@@ -646,6 +653,7 @@ const peRowEl = (si: number, key: string): HTMLElement | null => document.queryS
  * type) draws again; a stage's name is written in place (its row, or one stage's dialog title). */
 function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void {
   const value = el.value, checked = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : false;
+  if (el.hasAttribute('data-pe-move-to')) { if (state.moveOut) state.moveOut.to = value; return; }
   const d = state.draft;
   const pf = el.dataset['pePf'];
   if (pf) {
@@ -980,8 +988,11 @@ async function peSave(state: PeState): Promise<void> {
  * editor whose stage they left as read saves again on theirs (up to three times), else the clash banner. */
 async function peSaveTry(state: PeState, retries: number): Promise<void> {
   try {
-    const saved = await pipelineSave(state.id, {...peOut(state.draft), settings_version: state.base.settings_version});
+    const [toPipeline, toStage] = (state.moveOut?.to ?? '').split('/');
+    const moving = toPipeline && toStage ? {move_tasks_to: {pipeline: toPipeline, stage: toStage}} : {};
+    const saved = await pipelineSave(state.id, {...peOut(state.draft), settings_version: state.base.settings_version, ...moving});
     if (PE !== state) return;
+    state.moveOut = null;
     // The editor stays as S11 draws it, now on the saved record: its ids and its new settings_version.
     const draft = peCopy(saved);
     state.open = peOpenSame(state.open, state.draft.stages, draft);
@@ -990,6 +1001,7 @@ async function peSaveTry(state: PeState, retries: number): Promise<void> {
   } catch (error) {
     if (PE !== state) return;
     const refused = taskRefusedOf(error);
+    if (errorCode(error) === 'stage_has_tasks') { await peMoveOutAsk(state, error); return; }
     if (refused?.error === 'task_changed') {
       try {
         const theirs = await pipelineRec(state.id);
@@ -1004,6 +1016,25 @@ async function peSaveTry(state: PeState, retries: number): Promise<void> {
       state.error = refused?.detail || errorMessage(error, 'Could not save.');
     }
   }
+}
+
+/** The save removed a stage that holds tasks: ask where they go, from every pipeline's stages but those removed, the
+ * server's suggestion picked. Save again sends it. */
+async function peMoveOutAsk(state: PeState, error: unknown): Promise<void> {
+  const said = errorBody(error);
+  const gone = Array.isArray(said['stages']) ? said['stages'] as {id: string; name: string; tasks: number}[] : [];
+  const hint = isErrorRecord(said['move_to']) ? said['move_to'] : {};
+  const all = await pipelinesAll().catch((): PipelineRec[] => []);
+  if (PE !== state) return;
+  const leaving = new Set(gone.map(g => g.id));
+  const options = all.filter(p => !p.retired_at).flatMap(p => p.stages.filter(st => st.id && !leaving.has(st.id))
+    .map(st => ({value: `${p.id}/${st.id}`, text: `${p.name} › ${st.name}`})));
+  const n = gone.reduce((sum, g) => sum + g.tasks, 0);
+  const names = gone.map(g => g.name).join(' and ');
+  const suggested = `${String(hint['pipeline'] ?? '')}/${String(hint['stage'] ?? '')}`;
+  state.moveOut = {line: `Move ${names}'s ${n} task${n === 1 ? '' : 's'} to`, options,
+    to: options.some(o => o.value === suggested) ? suggested : options[0]?.value ?? ''};
+  state.error = '';
 }
 
 /** The arrow keys in a segmented switch choose the choice beside the one in focus, as in any radio group. */

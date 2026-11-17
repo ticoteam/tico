@@ -301,7 +301,7 @@ function taskPropsMsgPaint(d: TaskDialog): void {
 }
 
 // ---- one small menu for every row (and the "…" menu): arrow keys, Home/End, Enter, Esc; an optional find box
-function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {label, items = [], find = '', entry = '', none = 'Nothing to pick', onPick, onEntry, search}: PropMenuOptions<T>): PropPop | undefined {
+function propMenu<T extends PropMenuItem>(d: HTMLElement, anchor: HTMLElement, {label, items = [], find = '', entry = '', none = 'Nothing to pick', onPick, onEntry, search}: PropMenuOptions<T>): PropPop | undefined {
   let pop: PropPop | null = $('.prop-pop', d);
   if (pop?.matches(':popover-open')) { const same = pop.anchor === anchor; pop.hidePopover(); if (same) return; }
   if (pop?.anchor && pop.anchor !== anchor) pop.anchor.setAttribute('aria-expanded', 'false');   // only one menu, only one expanded
@@ -355,7 +355,9 @@ function propMenu<T extends PropMenuItem>(d: TaskDialog, anchor: HTMLElement, {l
       timer = window.setTimeout(() => void search(input.value.trim()).then(show, () => show([])), 200);
       return;
     }
-    for (const b of pop.querySelectorAll<HTMLElement>('.tl-mi')) b.hidden = !!q && !b.dataset.label!.includes(q);
+    // Each word typed finds the item on its own ("back ice" finds "Backlog › On ice").
+    const words = q.split(/\s+/).filter(Boolean);
+    for (const b of pop.querySelectorAll<HTMLElement>('.tl-mi')) b.hidden = !words.every(w => b.dataset.label!.includes(w));
   };
   pop.onclick = ev => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-pick]'); if (!b) return;
@@ -558,6 +560,10 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (r.snooze) items.push(taskSnoozed(task) ? {text: 'Unsnooze', icon: 'schedule', run: () => save('snooze', {unsnooze: true})}
       : {text: 'Snooze…', icon: 'schedule', run: () => setTimeout(() => snoozeMenu(d, more, save))});
     if (r.edit && task.pipeline_id) items.push({text: 'Move to a stage…', icon: 'arrow_forward', run: () => setTimeout(() => void taskStageMenu(d, more, task, save))});
+    // Another pipeline: anyone who reads the task may re-file it there (docs/pipelines-v3.md, "Who may move").
+    if (task.pipeline_id) items.push({text: 'Move to…', icon: 'swap_horiz', run: () => setTimeout(() => void taskMoveToMenu(d, more, {
+      pipeline: task.pipeline_id ?? null, stage: task.stage_id ?? null,
+      run: (p, st, why) => void save('stage', {move: String(st.id), pipeline: p.id, where: `${p.name} › ${st.name}`, ...(why ? {why} : {})})}))});
     if (r.edit) items.push({text: 'Reassign…', icon: 'person', run: () => setTimeout(() => { taskTabShow(taskModalOf(d), 'details'); ($('[data-prop="owner"]', d) as HTMLElement | null)?.click(); })});
     // Empty facts wait hidden in Details (a passed wake time counts as no due date); these show one and open its editor.
     const waiting = (key: string) => !!$(`[data-prop-row="${key}"][hidden]`, d);
@@ -612,6 +618,28 @@ async function taskStageMenu(d: TaskDialog, anchor: HTMLElement, task: PropTask,
   propMenu(d, anchor, {label: only === 'back' ? 'Move back to' : 'Move to', items, none: 'No earlier stage', onPick: it => {
     if (it.value === 'next') taskMoveOn(d, anchor, save);
     else void save('stage', {move: it.value});
+  }});
+}
+/** Move to… (docs/pipelines-v3.md S5): every pipeline's work stages as "Backlog › On ice", the pipeline's first stage
+    first; typing filters by each word. The stage the task is in is left out. Then the why, which a person may leave
+    empty, and Move; `confirm` is the line above it for many tasks ("Move 217 tasks to Backlog › On ice?"). */
+async function taskMoveToMenu(host: HTMLElement, anchor: HTMLElement, opts: {pipeline: string | null; stage: string | null;
+  confirm?: (where: string) => string; run: (p: PipelineRec, st: PipelineStageRec, why: string) => unknown}): Promise<void> {
+  if (!TASK_PIPELINES) await tasksPipelinesRead().catch(() => []);
+  if (!anchor.isConnected) return;
+  type Spot = PropMenuItem & {p: PipelineRec; st: PipelineStageRec};
+  const spots: Spot[] = (TASK_PIPELINES || []).filter(p => !p.retired_at).flatMap(p => p.stages
+    .filter(st => st.id && st.id !== opts.stage)
+    .map(st => ({p, st, value: `${p.id}/${st.id}`, text: `${p.name} › ${st.name}`,
+      html: `<span>${esc(p.name)}</span><span class="muted"> › </span><span>${esc(st.name)}</span>`})));
+  propMenu(host, anchor, {label: 'Move to', items: spots, find: 'Pipeline or stage', none: 'Nothing found', onPick: spot => {
+    const where = `${spot.p.name} › ${spot.st.name}`;
+    setTimeout(() => {
+      let pop: PropPop | undefined;
+      const typed = (): string => pop?.querySelector<HTMLInputElement>('.tl-menu-q')?.value.trim() ?? '';
+      pop = propMenu(host, anchor, {label: opts.confirm ? opts.confirm(where) : where, entry: 'Why (optional)',
+        items: [{text: 'Move'}], onEntry: why => opts.run(spot.p, spot.st, why), onPick: () => opts.run(spot.p, spot.st, typed())});
+    });
   }});
 }
 // Move on: when the engine refuses for what is missing, the menu names it and takes a why to move on anyway.

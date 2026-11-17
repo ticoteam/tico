@@ -1151,7 +1151,7 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
     out += _lines(
         conn,
         "SELECT l.to_task_id, v.task_id FROM links l JOIN visits v ON v.id = l.visit_id "
-        "JOIN tasks c ON c.id = l.to_task_id WHERE l.kind='handoff' AND v.how IN ('back', 'closed') "
+        "JOIN tasks c ON c.id = l.to_task_id WHERE l.kind='handoff' AND v.how IN ('back', 'closed', 'moved') "
         "AND c.status='open'",
         "5: task {0} is still open after {1} moved back or closed",
         (0, 1),
@@ -1159,7 +1159,7 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
     out += _lines(
         conn,
         "SELECT e.key, v.task_id FROM effects e JOIN visits v ON v.id = e.visit_id JOIN tasks t ON t.id = v.task_id "
-        "WHERE e.kind='act' AND e.state IN ('owed', 'done') AND v.how IN ('back', 'closed') AND NOT EXISTS "
+        "WHERE e.kind='act' AND e.state IN ('owed', 'done') AND v.how IN ('back', 'closed', 'moved') AND NOT EXISTS "
         "(SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id AND u.kind='undo' AND u.source = e.source "
         "AND u.action = e.action)",
         "5: effect {0} of task {1} was not undone when it moved back or closed",

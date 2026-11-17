@@ -65,7 +65,21 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
             given = body.model_dump()
             seen = given.pop("settings_version", None)
             given.pop("may_change", None)
-            pipeline_settings.save(c, who.actor, {**given, "id": pipeline_id}, seen)
+            move_to = given.pop("move_tasks_to", None)
+            given = {**given, "id": pipeline_id}
+            if move_to is not None and not (isinstance(move_to, dict) and move_to.get("pipeline")):
+                raise Problem("move_tasks_to", "move_tasks_to names a pipeline and a stage", 422)
+            gone = pipeline_settings.holding(c, given)
+            if gone and not move_to:
+                # A stage that holds tasks goes once they have somewhere to go: the editor asks, then sends move_tasks_to.
+                names = ", ".join(f"{g['name']} ({g['tasks']})" for g in gone)
+                raise Problem(
+                    "stage_has_tasks",
+                    f"Say where the tasks of {names} go",
+                    409,
+                    extra={"stages": gone, "move_to": pipeline_settings.move_to_hint(c, given)},
+                )
+            pipeline_settings.save(c, who.actor, given, seen, move_to)
             return {"pipeline": record(c, who, pipeline_id)}
 
         return mutate(request, body, write)

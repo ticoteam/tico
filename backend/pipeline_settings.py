@@ -1471,10 +1471,77 @@ def _changes_release(conn: "sqlite3.Connection", pipeline_id: str, parsed: Row) 
     return None
 
 
-def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | str | None = None) -> Row:
+def holding(conn: "sqlite3.Connection", record: Row) -> list[Row]:
+    """The work stages a save of `record` removes that still hold open tasks, each as {"id", "name", "tasks"}, in the
+    pipeline's order. Empty for a new pipeline."""
+    parsed, _ = _parse(record)
+    pid = str(parsed["id"] or "")
+    if not pid or not task_engine.pipeline(conn, pid):
+        return []
+    kept = {str(s["id"]) for s in parsed["stages"] if s["id"]}
+    out: list[Row] = []
+    for gone in task_engine.stages(conn, pid):
+        if gone["kind"] == "work" and gone["id"] not in kept:
+            held = _open_tasks(conn, gone["id"])
+            if held:
+                out.append({"id": gone["id"], "name": gone["name"], "tasks": held})
+    return out
+
+
+def move_to_hint(conn: "sqlite3.Connection", record: Row) -> Row | None:
+    """Where the tasks of the stages a save removes would go by default: the kept stage before the first one removed,
+    else the first kept stage, as {"pipeline", "stage"}."""
+    parsed, _ = _parse(record)
+    pid = str(parsed["id"] or "")
+    kept = {str(s["id"]) for s in parsed["stages"] if s["id"]}
+    order = [s for s in task_engine.stages(conn, pid) if s["kind"] == "work"]
+    before: Row | None = None
+    for stage in order:
+        if stage["id"] not in kept:
+            break
+        before = stage
+    found = before or next((s for s in order if s["id"] in kept), None)
+    return {"pipeline": pid, "stage": found["id"]} if found else None
+
+
+def _move_out(conn: "sqlite3.Connection", by: str, pid: str, gone: list[Row], to: Row) -> None:
+    """Move the open tasks of the stages a save removes to `to` ({"pipeline", "stage"}, each an id or a name): a stage of
+    this pipeline that stays, or of any other (task_engine.refile, which a bot's own turn on a task does not hold here:
+    the stage is going). Any task that cannot go refuses the whole save."""
+    target = str(to.get("stage") or "").strip() or None
+    pipe = task_engine.pipeline_named(conn, by, str(to.get("pipeline") or ""))
+    leaving = {str(g["id"]) for g in gone} | {str(g["name"]).lower() for g in gone}
+    if pipe["id"] == pid and (not target or target in leaving or target.lower() in leaving):
+        # The first stage, when none is named, is one that stays: only a named one that goes is refused.
+        first = next((s for s in task_engine.stages(conn, pid) if s["kind"] == "work"), None)
+        if target or (first and first["id"] in leaving):
+            _refuse(conn, by, "task_settings", "Move the tasks to a stage that stays.")
+    for stage in gone:
+        ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT id FROM tasks WHERE pipeline_id IS NOT NULL AND stage_id=? AND status='open' ORDER BY created_at, id",
+                (stage["id"],),
+            )
+        ]
+        for task_id in ids:
+            task_engine.refile(
+                conn, task_id, str(pipe["id"]), target, by, f"{stage['name']} was removed", turn_check=False
+            )
+
+
+def save(
+    conn: "sqlite3.Connection",
+    by: str,
+    record: Row,
+    seen_version: int | str | None = None,
+    move_tasks_to: Row | None = None,
+) -> Row:
     """Create a pipeline (no id, or an id that does not exist yet) or change one. Returns the record as `read` gives
     it. Refuses `task_settings` with the first problem `check` finds, and `task_changed` when `seen_version` is not the
-    pipeline's `settings_version`; a bot must give it to change a pipeline, a person may leave it out."""
+    pipeline's `settings_version`; a bot must give it to change a pipeline, a person may leave it out. A stage it
+    removes that holds open tasks is refused, unless `move_tasks_to` ({"pipeline", "stage"}) says where they go: they
+    move there first (`_move_out`)."""
     parsed, problems = _parse(record)
     existing = task_engine.pipeline(conn, parsed["id"]) if parsed["id"] else None
     _may_change(conn, by, existing, seen_version)
@@ -1487,6 +1554,10 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
         release = _changes_release(conn, str(existing["id"]), parsed)
         if release:
             _refuse(conn, by, "task_settings", RELEASE_PEOPLE_ONLY.format(release))
+    if existing and move_tasks_to:
+        gone = holding(conn, record)
+        if gone:
+            _move_out(conn, by, str(existing["id"]), gone, move_tasks_to)
     problems += _problems(conn, parsed)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])

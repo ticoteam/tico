@@ -3759,8 +3759,10 @@ def pr_state(links):
 
 
 def ticket_refs(conn, ids):
-    """Each task's label (its pipeline's prefix and its number) and its stage's name, for many ids in one query:
-    {id: {"label": str|None, "stage": str|None}}. A task with no number, no prefix or no stage has None for that."""
+    """Each task's label (the prefix it was made with and its number) and its stage's name, for many ids in one query:
+    {id: {"label": str|None, "stage": str|None}}. A task with no number, no prefix or no stage has None for that. The
+    prefix is the task's own (`tasks.prefix`, kept when it moves to another pipeline); one made before it was kept
+    reads its pipeline's."""
     ids = list(ids)
     refs: dict[str, dict[str, str | None]] = {ident: {"label": None, "stage": None} for ident in ids}
     if not ids:
@@ -3768,7 +3770,7 @@ def ticket_refs(conn, ids):
     marks = ",".join("?" * len(ids))
     for row in _rows(
         conn.execute(
-            "SELECT k.id, k.number, p.prefix, s.name AS stage FROM tasks k "
+            "SELECT k.id, k.number, COALESCE(k.prefix, p.prefix) AS prefix, s.name AS stage FROM tasks k "
             "LEFT JOIN pipelines p ON p.id = k.pipeline_id LEFT JOIN stages s ON s.id = k.stage_id "
             f"WHERE k.id IN ({marks})",
             ids,
@@ -7192,6 +7194,7 @@ from .task_calls import (
     task_give as task_give,
     task_let_see as task_let_see,
     task_move as task_move,
+    task_move_to as task_move_to,
     task_page_attach as task_page_attach,
     task_reassign as task_reassign,
     task_release as task_release,
