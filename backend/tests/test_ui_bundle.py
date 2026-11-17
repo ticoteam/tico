@@ -240,7 +240,10 @@ def test_a_build_is_stale_when_any_input_changes_or_a_typescript_file_is_new(tmp
     assert ui_build.build_id(ui) == "b2"
 
 
-def test_a_server_builds_a_stale_ui_with_the_node_on_path_or_says_what_is_missing(tmp_path):
+def test_a_server_builds_a_stale_ui_with_the_node_on_path_or_says_what_is_missing(tmp_path, monkeypatch):
+    monkeypatch.delenv("VOLTA_HOME", raising=False)
+    monkeypatch.delenv("NVM_BIN", raising=False)
+    monkeypatch.setattr(ui_build, "NODE_DIRS", ("~/.volta/bin",))  # none of this computer's own Nodes
     ui = _built(tmp_path, {"index.html": "<p>page</p>\n"})
     (ui / "index.html").write_text("<p>edited</p>\n")
     ran = []
@@ -254,8 +257,9 @@ def test_a_server_builds_a_stale_ui_with_the_node_on_path_or_says_what_is_missin
         ui_build.prepare(ui, run, lambda _: "/usr/bin/node")
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/build-ui.cjs").write_text("")
+    home = tmp_path / "home"
     with pytest.raises(ui_build.StaleBuild, match="no Node on PATH"):
-        ui_build.prepare(ui, run, lambda _: None)
+        ui_build.prepare(ui, run, lambda _: None, home=home)
     with pytest.raises(ui_build.StaleBuild, match="npm ci"):
         ui_build.prepare(ui, run, lambda _: "/usr/bin/node")
     (tmp_path / "node_modules/esbuild").mkdir(parents=True)
@@ -275,3 +279,40 @@ def test_the_bundle_names_a_browser_event_may_give_are_this_builds_scripts(tmp_p
         (folder / name).write_bytes(gzip.compress(b""))
     assert support.bundle_files(ui) == {"app.bundle.0123456789abcdef.js", "app.bundle.task.0123456789abcdef.js"}
     assert support.bundle_files(tmp_path / "none") == set()
+
+
+def test_a_server_whose_path_has_no_node_finds_one_where_it_is_usually_installed(tmp_path, monkeypatch):
+    # A launchd or systemd job keeps the PATH it was installed with: after an update makes the UI stale it must still
+    # find the Node that Homebrew, Volta or nvm put elsewhere, or the server exits and stays down.
+    monkeypatch.delenv("VOLTA_HOME", raising=False)
+    monkeypatch.delenv("NVM_BIN", raising=False)
+    monkeypatch.setattr(ui_build, "NODE_DIRS", ("~/.volta/bin",))
+    home = tmp_path / "home"
+    assert ui_build.node(lambda _: None, home) is None
+    nvm = home / ".nvm/versions/node"
+    for version in ("v20.11.0", "v22.18.0", "v9.0.0"):
+        (nvm / version / "bin").mkdir(parents=True)
+        (nvm / version / "bin/node").write_text("")
+        (nvm / version / "bin/node").chmod(0o755)
+    assert ui_build.node(lambda _: None, home) == str(nvm / "v22.18.0/bin/node")  # nvm's newest
+    volta = home / ".volta/bin"
+    volta.mkdir(parents=True)
+    (volta / "node").write_text("")
+    (volta / "node").chmod(0o755)
+    assert ui_build.node(lambda _: None, home) == str(volta / "node")
+    assert ui_build.node(lambda _: "/usr/bin/node", home) == "/usr/bin/node"  # PATH's first
+    # And prepare builds with it.
+    ui = _built(tmp_path, {"index.html": "<p>page</p>\n"})
+    (ui / "index.html").write_text("<p>edited</p>\n")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/build-ui.cjs").write_text("")
+    (tmp_path / "node_modules/esbuild").mkdir(parents=True)
+    ran = []
+
+    def run(cmd, **kwargs):
+        ran.append(cmd[0])
+        inputs = {"index.html": hashlib.sha256(b"<p>edited</p>\n").hexdigest()}
+        (ui_build.out_dir(ui) / "manifest.json").write_text(json.dumps({"build": "b2", "inputs": inputs}))
+
+    ui_build.prepare(ui, run, lambda _: None, home=home)
+    assert ran == [str(volta / "node")] and ui_build.stale(ui) == []

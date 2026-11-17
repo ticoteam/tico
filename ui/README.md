@@ -40,7 +40,7 @@ writes to `build/ui/` (backend/ui_bundle_routes.py). The build:
   (a JSON block, `#ui-parts`, holding `build`, this build's id). It is revalidated on every load;
 - writes `build/ui/manifest.json` last: the build id, the scripts a cold open runs, and the sha256 of every file under
   `ui/` it read. backend/ui_build.py compares it with `ui/`: `python -m backend.server` refuses to start on a missing or
-  stale build (it builds first when the checkout has Node on PATH and `npm ci`; so do pytest and `npm run test:ui`),
+  stale build (it builds first when the checkout has Node, on PATH or where Homebrew, Volta or nvm put it, and `npm ci`; so do pytest and `npm run test:ui`),
   and the image builds the UI in its own stage (Dockerfile `ui-build`) and checks it there. The server image has no Node.
 
 While editing, run `npm run watch:ui`: every change under `ui/` rebuilds (about a second), and a reload shows it. The

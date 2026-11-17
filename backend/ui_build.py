@@ -7,7 +7,7 @@ content, with its source map and a gzip copy beside it); build/ui/<path>.js is e
 (the overview's modules, the service worker). build/ui/manifest.json holds the build's id (`build`, which the config
 carries as `ui_build` so an open page can tell it is out of date), the files a cold open runs (`shell`) and the sha256 of
 every file under ui/ the build read (`inputs`): a build whose inputs differ from ui/ is stale. A server refuses to start
-on a stale build (`prepare` builds it first when this checkout has Node on PATH and `npm ci`'s esbuild); the image
+on a stale build (`prepare` builds it first when this checkout has Node (`node()`: PATH, then the usual install folders) and `npm ci`'s esbuild); the image
 builds the UI in its own stage (Dockerfile `ui-build`) and checks it with `python -m backend.ui_build --check`.
 
 `python -m backend.ui_build --shell-size` prints what a cold open of Home downloads; `--where app.bundle.<hash>.js:1:4567`
@@ -110,30 +110,59 @@ def check(ui_dir: "PathArg") -> None:
         )
 
 
+# Where Node usually is when PATH lacks it: a launchd or systemd job installed before Node was on its PATH keeps the PATH
+# it was installed with. Homebrew (Apple silicon, Intel), the runner image's own Node, Volta, nvm's `current` link.
+NODE_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/node/bin", "~/.volta/bin", "~/.nvm/current/bin")
+
+
+def node(which: "Callable[[str], str | None]" = shutil.which, home: "PathArg | None" = None) -> str | None:
+    """The Node to build with: PATH's, else the first in the usual install folders (NODE_DIRS, VOLTA_HOME, NVM_BIN, then
+    nvm's newest installed version)."""
+    found = which("node")
+    if found:
+        return found
+    home = Path(home or Path.home())
+    places = [Path(d.replace("~", str(home), 1)) for d in NODE_DIRS]
+    places += [
+        Path(os.environ[k]) / ("bin" if k == "VOLTA_HOME" else "")
+        for k in ("VOLTA_HOME", "NVM_BIN")
+        if os.environ.get(k)
+    ]
+    versions = home / ".nvm" / "versions" / "node"
+    if versions.is_dir():
+
+        def number(p: Path) -> tuple[int, ...]:
+            return tuple(int(n) if n.isdigit() else 0 for n in p.name.lstrip("v").split("."))
+
+        places += [p / "bin" for p in sorted(versions.iterdir(), key=number, reverse=True)]
+    return next((str(p / "node") for p in places if (p / "node").is_file() and os.access(p / "node", os.X_OK)), None)
+
+
 def prepare(
     ui_dir: "PathArg" = ROOT / "ui",
     run: "Callable[..., Any]" = subprocess.run,
     which: "Callable[[str], str | None]" = shutil.which,
+    home: "PathArg | None" = None,
 ) -> None:
-    """Before a server starts: the UI build, built here first when it is stale and this checkout can build it (the Node
-    on PATH and `npm ci`'s esbuild). StaleBuild, saying what was missing, when it still is not current."""
+    """Before a server starts: the UI build, built here first when it is stale and this checkout can build it (a Node,
+    `node()`, and `npm ci`'s esbuild). StaleBuild, saying what was missing, when it still is not current."""
     ui_dir = Path(ui_dir)
     if not stale(ui_dir):
         return
-    root, node = ui_dir.parent, which("node")
+    root, found = ui_dir.parent, node(which, home)
     script = root / "scripts" / "build-ui.cjs"
     if not script.is_file():
         reason = f"{script} is missing"
-    elif not node:
-        reason = "no Node on PATH: install Node 22, then `npm ci`"
+    elif not found:
+        reason = f"no Node on PATH or in {', '.join(NODE_DIRS)}: install Node 22, then `npm ci`"
     elif not (root / "node_modules" / "esbuild").is_dir():
         reason = f"node_modules/esbuild is missing: run `npm ci` in {root}"
     else:
         try:
-            run([node, str(script)], cwd=str(root), check=False, timeout=300, stdin=subprocess.DEVNULL)
+            run([found, str(script)], cwd=str(root), check=False, timeout=300, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.SubprocessError):
             pass
-        reason = f"building with {node} failed"
+        reason = f"building with {found} failed"
     try:
         check(ui_dir)
     except StaleBuild as exc:
