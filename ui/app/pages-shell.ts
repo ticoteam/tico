@@ -719,9 +719,20 @@ function frBotBannerHTML(e: FrBot | null | undefined): string {
 
 // goals-kpis.ts
 // A status dot: green, yellow, red, gray (stale, missing or no data) or a ring (fresh, no target to judge by).
-function gdot(status: string | null | undefined, title = '') {
+function gdot(status: string | null | undefined, title = '', label = '') {
   const s = ['green', 'yellow', 'red', 'none'].includes(status!) ? status! : 'gray';
-  return `<span class="gdot ${s}" role="img" aria-label="${esc(KPI_LABEL[s])}"${title ? ` title="${esc(title)}"` : ''}></span>`;
+  return `<span class="gdot ${s}" role="img" aria-label="${esc(label || KPI_LABEL[s])}"${title ? ` title="${esc(title)}"` : ''}></span>`;
+}
+// A goal with work done but no KPI on target or check-in to judge it by: gray, its automatic note starting with this
+// (backend/goals.py NO_MEASURE). Finished tasks never make a goal green.
+const GOAL_NO_MEASURE = 'No measure yet';
+function goalNoMeasure(g: {status?: string | null; status_source?: string | null; status_note?: string | null}) {
+  return g.status === 'gray' && g.status_source !== 'person' && String(g.status_note || '').startsWith(GOAL_NO_MEASURE);
+}
+// A goal's dot, and beside it the "No measure yet" label when that is what its colour means.
+function goalDotHtml(g: {status?: string | null; status_source?: string | null; status_note?: string | null}, title: string, name: string) {
+  const none = goalNoMeasure(g);
+  return gdot(g.status, title, none ? GOAL_NO_MEASURE : '') + name + (none ? `<span class="goal-nomeasure">${GOAL_NO_MEASURE}</span>` : '');
 }
 function kpiNum(value: number | string | null | undefined, unit: string | undefined = '') {
   if (value == null || value === '') return '';

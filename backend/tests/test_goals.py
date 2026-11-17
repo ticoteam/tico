@@ -242,10 +242,12 @@ def test_finished_tasks_never_make_a_goal_green_only_a_measure_or_a_check_in_doe
             (GL.AUTO_ACTOR, setup_only["id"]),
         )
         tasks_before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+        messages_before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
         GL.refresh(c)
         rows = {g["title"]: GL.goal(c, g["id"]) for g in (setup_only, half, checked_in, measured, by_hand)}
         events = [e for e in GL.history(c, setup_only["id"]) if e["field"] == "status"]
         tasks_after = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+        messages_after = c.execute("SELECT count(*) FROM messages").fetchone()[0]
 
     def seen(title):
         r = rows[title]
@@ -259,4 +261,34 @@ def test_finished_tasks_never_make_a_goal_green_only_a_measure_or_a_check_in_doe
     assert seen("Make Automations useful")[0::2] == ("green", "person")
     assert rows["Make Automations useful"]["suggest_status"] is None
     assert [e["new"] for e in events][-1] == "gray" and len([e for e in events if e["new"] == "gray"]) == 1
-    assert tasks_after == tasks_before  # no ask or Needs-you item is filed for the change
+    # No ask, Needs-you item or notice is filed for the change.
+    assert (tasks_after, messages_after) == (tasks_before, messages_before)
+
+
+def test_stalled_tasks_still_warn_and_a_measure_with_no_reading_says_so(company, monkeypatch):
+    """Tasks can still warn: nothing done in two weeks is yellow, nothing moved in thirty days is red. A goal with a
+    KPI that has no reading yet keeps the KPI's own reason, not "No measure yet", even when its tasks are all done."""
+    from datetime import timedelta
+
+    from backend import goals as GL, kpis as K
+    from backend.store import H
+    from backend.tests.helpers import engine as X
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        stalled = GL.create(c, "human:ana", "Open a second city", "human:ana")
+        H.task_create(c, "human:ana", "Scout Denver", "Work it.", "bot:ops", goal_id=stalled["id"], lint=False)
+        waiting = GL.create(c, "human:ana", "Grow weekly teams", "human:ana")
+        done = H.task_create(
+            c, "human:ana", "Ship onboarding", "Work it.", "bot:ops", goal_id=waiting["id"], lint=False
+        )
+        H.task_done(c, "human:ana", done["id"], "Live")
+        kpi = K.create(c, "human:ana", "human:ana", {"name": "Weekly teams", "unit": "teams", "cadence": "weekly"})
+        target, error = K.validate_target(kpi, {"kind": "maintain", "min": 10, "max": 100})
+        assert error is None
+        K.set_link(c, "human:ana", waiting["id"], kpi["id"], target)
+        now = K.now()
+        later = {d: GL.score(c, GL.goal(c, stalled["id"]), now + timedelta(days=d)) for d in (20, 40)}
+        unread = GL.score(c, GL.goal(c, waiting["id"]))
+    assert later[20]["status"] == "yellow" and later[40]["status"] == "red", later
+    assert unread["status"] == "gray" and not unread["reason"].startswith("No measure yet"), unread

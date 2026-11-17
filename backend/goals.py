@@ -6,7 +6,8 @@ its owner: `company` is a company goal, `human:x` a person's, `bot:x` a bot's. A
 optional. Bots read theirs with `tico goal list`; nothing is pushed into a run.
 
 A goal links to KPIs (backend/kpis.py) and its colour is set automatically from them, by the Goal
-Manager, or from its owner's check-ins and its tasks when it has none. A person may override that:
+Manager, or from its owner's check-ins and its tasks when it has none (tasks can only warn: finished
+tasks never make a goal green, they leave it gray, "No measure yet"). A person may override that:
 the colour they set sticks (`status_source` is `person`, with their note) until a person hands it
 back, and the Strategy Owner may only *suggest* a different one. Every colour is stored with who set
 it (`status_by`) and how (`status_source`, auto or person), in `goals` and in its history rows.
