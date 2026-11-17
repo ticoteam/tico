@@ -29,6 +29,7 @@ from . import hubdb as H
 from . import skills as SK
 from .harnesses import reports_skill_uses
 from .store import Problem
+from .api_contract import api_v2
 
 KEEP_DAYS = 90
 WATERMARK_KEY = "skill_usage_rollup"  # registry_metadata: when the last rollup started
@@ -564,7 +565,14 @@ def install(app, store, auth):
             raise Problem("forbidden", "Skills are read by people and bots", 403)
         return who
 
-    @app.get("/api/v2/skills/usage")
+    @app.get(
+        "/api/v2/skills/usage",
+        **api_v2(
+            "Skills",
+            "listSkillUsage",
+            "Each skill's use over 7 or 30 days: by trigger, people and bots, last used, top users (admins; others see themselves)",
+        ),
+    )
     def skills_usage(request: Request, days: int = Query(default=30)):
         """Each skill's use over the last 7 or 30 days: by trigger, how many people and bots, last used, and the top
         users (admins; anyone else sees only themselves there)."""
@@ -572,21 +580,42 @@ def install(app, store, auth):
         with store.read() as c:
             return overview(c, auth, who, _days(days))
 
-    @app.get("/api/v2/skills/install-targets")
+    @app.get(
+        "/api/v2/skills/install-targets",
+        **api_v2(
+            "Skills",
+            "listSkillInstallTargets",
+            "Who the caller may install a skill for: writable bots, people, and teams as current members",
+        ),
+    )
     def skills_install_targets(request: Request):
         """Who the caller may install for: bots they can write, people, and teams as their current members."""
         who = reader(request)
         with store.read() as c:
             return targets(c, auth, who)
 
-    @app.get("/api/v2/skills/installed")
+    @app.get(
+        "/api/v2/skills/installed",
+        **api_v2(
+            "Skills",
+            "listMySkillInstalls",
+            "Your installs and those of the bots you may write, desired and staged, with updates available",
+        ),
+    )
     def skills_installed(request: Request):
         """The caller's installs and those of the bots they may write, with desired and staged versions."""
         who = reader(request)
         with store.read() as c:
             return installed(c, auth, who)
 
-    @app.get("/api/v2/skills/{name}/usage")
+    @app.get(
+        "/api/v2/skills/{name}/usage",
+        **api_v2(
+            "Skills",
+            "getSkillUsage",
+            "One skill's use: totals, per actor, the last 20 uses with readable links, and install coverage",
+        ),
+    )
     def skill_usage(request: Request, name: str, days: int = Query(default=30)):
         """One skill's use: totals, per actor and the last 20 uses (admins see everyone; anyone else their own), each
         use's task or thread when the caller may read it, and the installs' coverage (used, unused or unknown)."""

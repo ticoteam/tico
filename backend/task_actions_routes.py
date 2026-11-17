@@ -1,11 +1,20 @@
 """Task action routes: the model a task's runs use."""
 
 from . import models as M
+from .api_contract import api_v2
 from fastapi import Request
 
 
 def register(app, auth, mutate, settings_admin):
-    @app.post("/api/v2/tasks/{tid}/model")
+    @app.post(
+        "/api/v2/tasks/{tid}/model",
+        **api_v2(
+            "Tasks",
+            "setTaskModel",
+            "Set the model this task's runs use, with its effort and harness (backend/task_run_models.py): an absent `model` keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task again. Whoever may change the bot's model may change this; a bot never does. Its `readiness` says whether the bot's computer can run it now",
+            "TaskRunModelResult",
+        ),
+    )
     def task_run_model(request: Request, tid: str, body: M.TaskRunModel):
         """The model this task's runs use, with its effort and harness (backend/task_run_models.py). An absent
         `model` keeps it and changes only what is named; a null `model` clears it, so the bot's task model runs

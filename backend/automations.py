@@ -64,6 +64,7 @@ from .models import Contract
 from . import audit_log, cloud_access, listening, outbox
 from .store import H, Problem
 from . import sources as SRC
+from .api_contract import api_v2
 
 log = logging.getLogger(__name__)
 
@@ -3773,7 +3774,15 @@ def install(app, store, auth, mutate):
             )
         return row
 
-    @app.get("/api/v2/automations")
+    @app.get(
+        "/api/v2/automations",
+        **api_v2(
+            "Automations",
+            "listAutomations",
+            "The automations you may see, newest first, each with can_edit; paged by cursor",
+            "AutomationList",
+        ),
+    )
     def automations_list(request: Request, owner: str = "", trigger: str = "", limit: int = 50, cursor: int = 0):
         """The automations the caller may change (the same rule decides what they see), newest first; up to 500 a page,
         and `next` is the `cursor` for the page after. `trigger` keeps one trigger type (`listening`: the Listening
@@ -3808,7 +3817,15 @@ def install(app, store, auth, mutate):
         shown, more = page(visible[max(cursor, 0) :], max(1, min(limit, 500)), max(cursor, 0), LIST_BYTES)
         return {"automations": shown, "next": more}
 
-    @app.get("/api/v2/automations/question-sets")
+    @app.get(
+        "/api/v2/automations/question-sets",
+        **api_v2(
+            "Automations",
+            "listQuestionSets",
+            "The saved question sets a Decide step may name (`set`), each with its questions",
+            "QuestionSets",
+        ),
+    )
     def automations_question_sets(request: Request):
         """The saved question sets a Decide step may name, each with its questions."""
         from clients import judge as J
@@ -3824,14 +3841,30 @@ def install(app, store, auth, mutate):
             )
         return {"sets": sets}
 
-    @app.get("/api/v2/automations/guide")
+    @app.get(
+        "/api/v2/automations/guide",
+        **api_v2(
+            "Automations",
+            "getAutomationGuide",
+            "How BotOps builds and edits automations, with the flow format generated from the hub's code",
+            "AutomationGuide",
+        ),
+    )
     def automations_guide(request: Request):
         """How BotOps builds and edits automations, with the flow format generated from the code."""
         auth.domain(request.state.identity)
         return {"text": F.guide_text()}
 
     # The templates come before /{aid}, which would read "templates" as an id.
-    @app.get("/api/v2/automations/templates")
+    @app.get(
+        "/api/v2/automations/templates",
+        **api_v2(
+            "Automations",
+            "listAutomationTemplates",
+            "The inbox templates a new inbox starts from: each with its id, name and destination names",
+            "AutomationTemplates",
+        ),
+    )
     def automations_templates(request: Request):
         """The inbox templates a new inbox starts from: each with its id, name and destination names."""
         from . import automation_templates as T
@@ -3839,7 +3872,15 @@ def install(app, store, auth, mutate):
         auth.domain(request.state.identity)
         return {"templates": T.listing()}
 
-    @app.get("/api/v2/automations/templates/{tid}")
+    @app.get(
+        "/api/v2/automations/templates/{tid}",
+        **api_v2(
+            "Automations",
+            "getAutomationTemplate",
+            "One template filled in for `owner` and `inbox`, as the flow the hub would save: enabled off, nothing saved",
+            "AutomationTemplate",
+        ),
+    )
     def automations_template(request: Request, tid: str, owner: str, inbox: str):
         """A template filled in for `owner` on `inbox`, as the flow the hub would save: its roles resolved on the org
         chart, the destinations the owner may not use taken out, `enabled` off. Nothing is saved; POST
@@ -3854,7 +3895,15 @@ def install(app, store, auth, mutate):
             _require(c, who, raw, "make an automation for " + raw["owner"])
             return _checked(c, raw, store.settings)
 
-    @app.post("/api/v2/automations")
+    @app.post(
+        "/api/v2/automations",
+        **api_v2(
+            "Automations",
+            "createAutomation",
+            "Save a new automation as version 1; a flow that fails its checks is refused with where and why. BotOps saves it off unless `enabled` is sent; a bot without rights to it saves a proposal (off, version 1 pending). An Assistant Message routine saves off with action, message_id and needs_confirm; only its person's card click enables it. A chooser without a mode defaults to Draft",
+            "Automation",
+        ),
+    )
     def automations_create(request: Request, body: AutomationIn):
         """Save a new automation as version 1. The caller must be allowed to change an automation of that owner; a bot
         that may not proposes it instead (off, version 1 pending). What BotOps builds is saved off unless `enabled` is
@@ -3893,7 +3942,15 @@ def install(app, store, auth, mutate):
 
     AO.install(app, store, auth)  # /runs and /stats, before /{aid} reads them as ids
 
-    @app.get("/api/v2/automations/{aid}")
+    @app.get(
+        "/api/v2/automations/{aid}",
+        **api_v2(
+            "Automations",
+            "getAutomation",
+            "One automation with set questions filled in, today's counts and, for a schedule or a due date, next_run (for a due date, next_due too)",
+            "Automation",
+        ),
+    )
     def automations_get(request: Request, aid: str):
         who = request.state.identity
         with store.read() as c:
@@ -3914,7 +3971,15 @@ def install(app, store, auth, mutate):
                 ids,
             )
 
-    @app.patch("/api/v2/automations/{aid}")
+    @app.patch(
+        "/api/v2/automations/{aid}",
+        **api_v2(
+            "Automations",
+            "updateAutomation",
+            "Change it: a new trigger, steps or batch is a new version. A bot without edit rights gets `pending`, a proposal a person restores",
+            "Automation",
+        ),
+    )
     def automations_update(request: Request, aid: str, body: AutomationPatch):
         """Change an automation. A change to its trigger, steps or batch times is a new version. A bot that may not
         change it proposes instead: a pending version a person restores. BotOps acting for a person changes it as that
@@ -4034,16 +4099,37 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/automations/{aid}")
+    @app.delete(
+        "/api/v2/automations/{aid}",
+        **api_v2(
+            "Automations",
+            "deleteAutomation",
+            "Delete it; its runs stay. A built-in one is refused",
+            "AutomationDeleted",
+        ),
+    )
     def automations_delete(request: Request, aid: str, body: Empty | None = None):
         return delete(request, aid, body or Empty())
 
-    @app.post("/api/v2/automations/{aid}/delete")
+    @app.post(
+        "/api/v2/automations/{aid}/delete",
+        **api_v2(
+            "Automations", "deleteAutomationPost", "The same delete, for clients that only POST", "AutomationDeleted"
+        ),
+    )
     def automations_delete_post(request: Request, aid: str, body: Empty | None = None):
         """The same delete for clients that only POST (the tico CLI and MCP)."""
         return delete(request, aid, body or Empty())
 
-    @app.post("/api/v2/automations/{aid}/run")
+    @app.post(
+        "/api/v2/automations/{aid}/run",
+        **api_v2(
+            "Automations",
+            "runAutomation",
+            "Run it now with `input` standing in for the trigger's output; answers the run",
+            "AutomationRunNow",
+        ),
+    )
     def automations_run(request: Request, aid: str, body: RunNow | None = None):
         """Run it now, whatever its trigger and batch times say; `input` stands in for the trigger's output (the page's
         "Test with sample"). Answers with the run once it has gone as far as it can now."""
@@ -4094,7 +4180,15 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return {"run": run_view(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())}
 
-    @app.post("/api/v2/automations/{aid}/held")
+    @app.post(
+        "/api/v2/automations/{aid}/held",
+        **api_v2(
+            "Automations",
+            "endAutomationHold",
+            "End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. `moved` is how many",
+            "AutomationHeld",
+        ),
+    )
     def automations_held(request: Request, aid: str, body: HeldAction):
         """End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. Whoever may
         change the automation may do either."""
@@ -4109,7 +4203,15 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/automations/{aid}/runs")
+    @app.get(
+        "/api/v2/automations/{aid}/runs",
+        **api_v2(
+            "Automations",
+            "listAutomationRuns",
+            "Its runs, newest first (limit, before → next), step detail for 30 days, and daily run and drop counts",
+            "AutomationRuns",
+        ),
+    )
     def automations_runs(request: Request, aid: str, limit: int = 25, before: str = ""):
         """Its runs, newest first, each with its steps' status, outputs and cost (kept 30 days); `next` is the `before`
         for the page after. `daily` holds the counts, which include what the trigger's filters dropped. A system job's
@@ -4147,7 +4249,15 @@ def install(app, store, auth, mutate):
         runs, cut = page([run_view(r) for r in rows], limit, 0, RUN_BYTES)
         return {"runs": runs, "next": runs[-1]["id"] if cut is not None and runs else None, "daily": days}
 
-    @app.get("/api/v2/automations/{aid}/versions")
+    @app.get(
+        "/api/v2/automations/{aid}/versions",
+        **api_v2(
+            "Automations",
+            "listAutomationVersions",
+            "Its versions, newest first; status=pending for proposals",
+            "AutomationVersions",
+        ),
+    )
     def automations_versions(request: Request, aid: str, status: str = "", limit: int = 50, cursor: int = 0):
         """Its versions, newest first; `status=pending` for the proposals waiting on a person."""
         with store.read() as c:
@@ -4171,7 +4281,15 @@ def install(app, store, auth, mutate):
         shown, more = page(rows[max(cursor, 0) :], max(1, min(limit, 200)), max(cursor, 0), LIST_BYTES)
         return {"versions": shown, "next": more}
 
-    @app.post("/api/v2/automations/{aid}/versions/{n}/restore")
+    @app.post(
+        "/api/v2/automations/{aid}/versions/{n}/restore",
+        **api_v2(
+            "Automations",
+            "restoreAutomationVersion",
+            "Make a version current: a pending one keeps its number, an older one is saved as a new version; a draft's first pending version turns it on",
+            "Automation",
+        ),
+    )
     def automations_restore(request: Request, aid: str, n: int, body: Empty | None = None):
         """A pending version becomes the current one and keeps its number; an older one is saved as a new version.
         Either way its trigger, steps and batch times replace the current ones."""
@@ -4220,7 +4338,12 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.delete("/api/v2/automations/{aid}/versions/{n}")
+    @app.delete(
+        "/api/v2/automations/{aid}/versions/{n}",
+        **api_v2(
+            "Automations", "discardAutomationVersion", "Discard a pending version (409 for any other)", "Automation"
+        ),
+    )
     def automations_discard(request: Request, aid: str, n: int, body: Empty | None = None):
         """Discard a pending version (a proposal); any other version stays (409)."""
         who, body = request.state.identity, body or Empty()
@@ -4246,14 +4369,30 @@ def install(app, store, auth, mutate):
         if not (person and "@" in inbox and str(person.get("email") or "").lower() == inbox):
             raise Problem("forbidden", "Only the inbox's person or the top of the org sets its send switch", 403)
 
-    @app.get("/api/v2/inboxes/{inbox}")
+    @app.get(
+        "/api/v2/inboxes/{inbox}",
+        **api_v2(
+            "Automations",
+            "getInboxSend",
+            "An inbox's send switch (on by default): email address, slack:dm or slack:#<channel>",
+            "InboxSwitch",
+        ),
+    )
     def inbox_view(request: Request, inbox: str):
         inbox = inbox.strip().lower()
         with store.read() as c:
             inbox_rights(c, request.state.identity, inbox)
             return {"inbox": inbox, "send": A.send_on(c, inbox)}
 
-    @app.patch("/api/v2/inboxes/{inbox}")
+    @app.patch(
+        "/api/v2/inboxes/{inbox}",
+        **api_v2(
+            "Automations",
+            "setInboxSend",
+            "Turn the send switch on or off (the inbox's person, or the owner); off, send_reply saves a draft",
+            "InboxSwitch",
+        ),
+    )
     def inbox_update(request: Request, inbox: str, body: InboxSend):
         who, inbox = request.state.identity, inbox.strip().lower()
 
@@ -4273,7 +4412,15 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work)
 
-    @app.get("/api/v2/humans/{person}/assistant")
+    @app.get(
+        "/api/v2/humans/{person}/assistant",
+        **api_v2(
+            "Automations",
+            "getPersonAssistant",
+            "The bot behind a person's Assistant, or null until it is first used",
+            "PersonAssistant",
+        ),
+    )
     def person_assistant(request: Request, person: str):
         """The bot an `assistant:<person>` step runs on, once one has run (null before)."""
         from . import assistant

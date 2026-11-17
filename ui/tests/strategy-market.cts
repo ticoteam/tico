@@ -199,7 +199,11 @@ async function onePage(page: Page, tag: string) {
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="market"] ${mark}`).count(), 0, tag + ': and Market\'s tab is not');
       assert.equal(await page.locator(`.strat-tabs [data-strat-tab="strategy"] ${mark}`).count(), 1, tag + ': Strategy keeps its mark, its brand is still unset');
       assert.deepEqual(writes.filter(w => w.method === 'POST').map(w => [w.path, w.body]), [['/api/v2/market/spend/research', {description: 'Release tooling for small teams'}]], tag + ': the sizing is filed once');
-      db.market.sized = true;
+      // A reload keeps the open task: the server has it, not the page.
+      await page.reload();
+      await page.locator('#mkt-q-money [data-mkt-researching] a[href="#/task/task-sizing"]').waitFor();
+      assert.equal(await page.locator(`#mkt-q-money h3 ${mark}`).count(), 0, tag + ': still not marked after a reload');
+      db.market.sized = true; db.market.sizing = null;
       await page.reload();
       await page.locator('.mkt-map .mkt-box').first().waitFor();
       assert.equal(await page.locator(mark).count(), 0, tag + ': sized, no mark');

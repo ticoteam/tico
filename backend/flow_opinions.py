@@ -49,6 +49,7 @@ from . import updates as updates_
 from . import views as views_
 from .call_slots import NEUTRAL, Calls
 from .store import H as H_
+from .api_contract import api_v2
 
 Row = dict[str, Any]
 Writer = Callable[[str, str], Any]
@@ -588,7 +589,15 @@ def install(app: Any, store: Any, auth: Any) -> None:
     class FlowOpinionsAsk(Contract):
         items: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(max_length=MAX_ITEMS)
 
-    @app.post("/api/v2/flow/opinions")
+    @app.post(
+        "/api/v2/flow/opinions",
+        **api_v2(
+            "Needs you",
+            "getFlowOpinions",
+            "Tico's opinion on each ask in Flow's set (`items`: the Needs-you ids of asks, at most 30), one entry per id in order: `ready` with `pick` (an OK: approve or send_back, never a snooze; a question: one of its choices, or empty), `line` (80 characters at most), `note` (for a send back) and `score` (0-100, to sort by, never shown); `pending` while it is worked out: ask again for those; `none` when there is none, including any id that is not an ask on the caller's own Needs you. Answers at once, never waits on a model and changes no task. One opinion per ask, shared by everyone the ask waits on, for 24 hours or until the ask changes",
+            "FlowOpinions",
+        ),
+    )
     async def flow_opinions(request: Request, body: FlowOpinionsAsk) -> Row:
         """Tico's opinion on each ask in Flow's set (`items`: Needs-you ids, at most 30): `ready` with the button it
         would press (`pick`), its line, a note for a send back and a score to sort by; `pending` while it is worked

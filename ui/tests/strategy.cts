@@ -25,7 +25,7 @@ type Seg = {id: string; name: string; parent: string | null; depth: number; summ
 type Goal = {id: string; title: string; owner_id: string; parent_id: string | null; status: string; status_source?: string; rank?: number;
   kpis: unknown[]; why: string; bet_id: string | null};
 // The write bodies the tests read back (what the page sent); only the fields a check names are listed.
-type Body = {revision: number; id?: string; name: string; target: string; note: string; summary?: string;
+type Body = {revision: number; id?: string; name: string; target: string; note: string; summary?: string; parent_id?: string;
   sections?: {[key: string]: unknown; extra?: {[key: string]: unknown}}; wrong_if?: {kind?: string; check_by?: string | null} | null;
   statement: string; status?: string; rank?: number; title?: string; bet_id?: string | null; decision?: string; moves?: Record<string, string>};
 type Sent = [string, string, Body];
@@ -191,10 +191,12 @@ async function open(browser: Browser, {role = 'owner', route = '#/strategy', vie
         return json({id: body.id, removed: true});
       }
       if (p === '/api/v2/market/segments') {
-        const made = seg(body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), body.name, null, 0);
+        const made = seg(body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), body.name, body.parent_id ? body.parent_id.replace(/^segment\//, '') : null, 0, {summary: body.summary || ''});
         if (mk.segments.some(x => x.id === made.id)) return json({error: {code: 'exists', detail: 'exists'}}, 409);
         mk.segments.push(made); return json({segment: made});
       }
+      const renamed = p.match(/^\/api\/v2\/market\/entities\/(segment\/[^/]+)$/);
+      if (renamed) { const g = mk.segments.find(x => x.id === renamed[1])!; g.name = body.name; return json({entity: {id: g.id, name: g.name}}); }
       if (p === '/api/v2/market/competitors') {
         const host = /\./.test(body.name) ? body.name.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]!.toLowerCase() : '';
         const made = {id: 'company/' + (host || body.name.toLowerCase()), name: host || body.name, url: host ? 'https://' + host : ''};
@@ -394,11 +396,34 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/medical"]'));
       assert.deepEqual(sent.find(x => x[1] === '/api/v2/market/segments/remove'), ['POST', '/api/v2/market/segments/remove', {id: 'segment/offices'}]);
       assert.equal(mk.segments.find(x => x.id === 'segment/medical')!.parent, null, 'its part moved up');
-      const addSeg = where.locator('[data-add="seg"] input');
+      const addSeg = where.locator('[data-add="seg"] input[name="name"]');
       await addSeg.fill('Window cleaning');
       await addSeg.press('Enter');
       await tile('window-cleaning').waitFor();
       assert.deepEqual(sent.find(x => x[1] === '/api/v2/market/segments')![2], {name: 'Window cleaning'});
+      // A part with its one line, under the segment picked.
+      await addSeg.fill('Gutters');
+      await where.locator('[data-add="seg"] input[name="summary"]').fill('Gutter cleaning for homes');
+      await where.locator('[data-add="seg"] select[name="parent"]').selectOption('segment/homes');
+      await where.locator('[data-add="seg"] [type="submit"]').click();
+      await tile('gutters').waitFor();
+      assert.deepEqual(sent.filter(x => x[1] === '/api/v2/market/segments').map(x => x[2]).at(-1), {name: 'Gutters', summary: 'Gutter cleaning for homes', parent_id: 'segment/homes'});
+      assert.equal(await where.locator('[data-add="seg"] input[name="summary"]').inputValue(), '', 'the row is emptied for the next one');
+      // Rename in place: Enter saves, Escape keeps the old name.
+      await tile('moveout').hover();
+      await tile('moveout').locator('[data-seg-edit]').click();
+      const renaming = tile('moveout').locator('[data-seg-rename] input');
+      await renaming.fill('Move-out cleaning');
+      await renaming.press('Escape');
+      await tile('moveout').locator('b').waitFor();
+      assert.equal(sent.filter(x => x[1].startsWith('/api/v2/market/entities/')).length, 0, 'Escape sends nothing');
+      await tile('moveout').hover();
+      await tile('moveout').locator('[data-seg-edit]').click();
+      await renaming.fill('Move-out cleaning');
+      await renaming.press('Enter');
+      await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/moveout"] b')?.textContent === 'Move-out cleaning');
+      assert.deepEqual(sent.find(x => x[1].startsWith('/api/v2/market/entities/')), ['POST', '/api/v2/market/entities/segment/moveout', {name: 'Move-out cleaning'}]);
+      assert.equal(await tile('moveout').getAttribute('aria-pressed'), 'false', 'renaming did not target the tile');
       const rivals = page.locator('#strat-rivals');
       assert.deepEqual(await rivals.locator('.strat-chip').allInnerTexts(), ['CleanCo', 'Sparkle']);
       assert.equal(await rivals.locator('.strat-chip a').getAttribute('href'), 'https://cleanco.example');

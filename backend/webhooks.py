@@ -29,6 +29,7 @@ from . import models as M
 from . import webhook_delivery as D
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 log = logging.getLogger(__name__)
 
@@ -1404,7 +1405,15 @@ def install(app, settings, store, auth, mutate):
         if who.role not in ("owner", "human", "bot"):
             raise Problem("forbidden", "Only people and bots use webhook endpoints", 403)
 
-    @app.get("/api/v2/webhooks")
+    @app.get(
+        "/api/v2/webhooks",
+        **api_v2(
+            "Webhooks",
+            "listWebhooks",
+            "Your outgoing endpoints (an admin sees all) with 7-day delivered, failed and pending counts; paged",
+            "WebhookList",
+        ),
+    )
     def webhook_list(request: Request, limit: int = LISTED, offset: int = 0):
         """The caller's endpoints (an admin sees everyone's), with 7-day delivered and failed counts. Paged."""
         who = request.state.identity
@@ -1412,7 +1421,15 @@ def install(app, settings, store, auth, mutate):
         with store.read() as c:
             return listing(c, who, limit, offset)
 
-    @app.post("/api/v2/webhooks")
+    @app.post(
+        "/api/v2/webhooks",
+        **api_v2(
+            "Webhooks",
+            "createWebhook",
+            "A person makes an endpoint; the secret is in the answer once. A bot files an approval and the answer says so",
+            "WebhookCreated",
+        ),
+    )
     def webhook_create(request: Request, body: WebhookCreate):
         """A new endpoint. The answer's `secret` is shown only now. A bot's call files an approval instead and the
         answer says `approval`; asking again after a person approved it makes the endpoint."""
@@ -1425,7 +1442,10 @@ def install(app, settings, store, auth, mutate):
 
         return once(request, body, make)
 
-    @app.get("/api/v2/webhooks/{hook_id}")
+    @app.get(
+        "/api/v2/webhooks/{hook_id}",
+        **api_v2("Webhooks", "getWebhook", "One endpoint and its last ten attempts", "WebhookShown"),
+    )
     def webhook_show(request: Request, hook_id: str):
         """One endpoint and its last ten attempts."""
         who = request.state.identity
@@ -1446,7 +1466,15 @@ def install(app, settings, store, auth, mutate):
             )
             return {"webhook": shown, "recent_attempts": recent}
 
-    @app.post("/api/v2/webhooks/{hook_id}/update")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/update",
+        **api_v2(
+            "Webhooks",
+            "updateWebhook",
+            "Change the name, address, events, filter, custom headers, hourly rate or (owner only) the plain-http switch",
+            "WebhookChanged",
+        ),
+    )
     def webhook_update(request: Request, hook_id: str, body: WebhookUpdate):
         """Change the name, address, events, rate or (for the owner) the plain-http switch."""
         return mutate(
@@ -1455,34 +1483,71 @@ def install(app, settings, store, auth, mutate):
             lambda c: {"webhook": update(c, request.state.identity, hook_id, body, request.app.state.vault)},
         )
 
-    @app.post("/api/v2/webhooks/{hook_id}/rotate")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/rotate",
+        **api_v2(
+            "Webhooks",
+            "rotateWebhookSecret",
+            "A new secret, shown once; the old one signs beside it for 24 hours",
+            "WebhookCreated",
+        ),
+    )
     def webhook_rotate(request: Request, hook_id: str, body: M.Empty):
         """A new secret, shown once; the old one keeps signing beside it for 24 hours."""
         return once(
             request, body, lambda c: {"webhook": rotate(c, request.app.state.vault, request.state.identity, hook_id)}
         )
 
-    @app.post("/api/v2/webhooks/{hook_id}/pause")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/pause",
+        **api_v2("Webhooks", "pauseWebhook", "Stop sending; queued sends wait", "WebhookChanged"),
+    )
     def webhook_pause(request: Request, hook_id: str, body: Pause):
         """Stop sending; what is queued waits."""
         return mutate(request, body, lambda c: {"webhook": pause(c, request.state.identity, hook_id, body.reason)})
 
-    @app.post("/api/v2/webhooks/{hook_id}/resume")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/resume", **api_v2("Webhooks", "resumeWebhook", "Send again", "WebhookChanged")
+    )
     def webhook_resume(request: Request, hook_id: str, body: M.Empty):
         return mutate(request, body, lambda c: {"webhook": resume(c, request.state.identity, hook_id)})
 
-    @app.post("/api/v2/webhooks/{hook_id}/enable")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/enable",
+        **api_v2(
+            "Webhooks",
+            "enableWebhook",
+            "Turn an endpoint back on; after an automatic turn-off the answer offers `recover` with the date to send again from",
+            "WebhookEnabled",
+        ),
+    )
     def webhook_enable(request: Request, hook_id: str, body: M.Empty):
         """Turn an endpoint back on. After Tico turned it off for failing, the answer offers `recover` with the day to
         send again from."""
         return mutate(request, body, lambda c: enable(c, request.state.identity, hook_id))
 
-    @app.post("/api/v2/webhooks/{hook_id}/recover")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/recover",
+        **api_v2(
+            "Webhooks",
+            "recoverWebhookSends",
+            "Send again every send that gave up since a date (same ids and bodies)",
+            "WebhookRecovered",
+        ),
+    )
     def webhook_recover(request: Request, hook_id: str, body: WebhookSince):
         """Send again every send that gave up since a date."""
         return mutate(request, body, lambda c: recover_failed(c, request.state.identity, hook_id, body.since))
 
-    @app.post("/api/v2/webhooks/{hook_id}/replay")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/replay",
+        **api_v2(
+            "Webhooks",
+            "replayWebhookEvents",
+            "Send the events since a date that the endpoint should have had and has no send for",
+            "WebhookReplayed",
+        ),
+    )
     def webhook_replay(request: Request, hook_id: str, body: WebhookReplay):
         """Send the events since a date that this endpoint should have had and has no send for. At most 500 events a
         round; when `more`, send `next_since` and `next_after` back as `since` and `after` for the next round."""
@@ -1490,22 +1555,44 @@ def install(app, settings, store, auth, mutate):
             request, body, lambda c: replay_missing(c, request.state.identity, hook_id, body.since, body.after)
         )
 
-    @app.post("/api/v2/webhooks/{hook_id}/delete")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/delete",
+        **api_v2("Webhooks", "deleteWebhook", "Delete the endpoint and cancel its pending sends"),
+    )
     def webhook_delete(request: Request, hook_id: str, body: M.Empty):
         """Delete the endpoint and cancel what is waiting to be sent."""
         return mutate(request, body, lambda c: delete(c, request.state.identity, hook_id))
 
-    @app.post("/api/v2/webhooks/{hook_id}/send")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/send",
+        **api_v2(
+            "Webhooks",
+            "sendWebhook",
+            "A custom.<name> event to one endpoint: people, and bots with sending on",
+            "WebhookQueued",
+        ),
+    )
     def webhook_send(request: Request, hook_id: str, body: WebhookSend):
         """A custom event (custom.<name>) to one endpoint."""
         return mutate(request, body, lambda c: send_custom(c, request.state.identity, hook_id, body))
 
-    @app.post("/api/v2/webhooks/{hook_id}/example")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/example",
+        **api_v2("Webhooks", "sendWebhookExample", "Send an event type's example to one endpoint", "WebhookQueued"),
+    )
     def webhook_example(request: Request, hook_id: str, body: WebhookExample):
         """Send an event type's example to one endpoint."""
         return mutate(request, body, lambda c: send_example(c, request.state.identity, hook_id, body))
 
-    @app.get("/api/v2/webhooks/{hook_id}/sends")
+    @app.get(
+        "/api/v2/webhooks/{hook_id}/sends",
+        **api_v2(
+            "Webhooks",
+            "listWebhookSends",
+            "The send log, newest first: type, subject, state, attempts, last status, next attempt",
+            "WebhookSends",
+        ),
+    )
     def webhook_sends(request: Request, hook_id: str, state: str = "", limit: int = LOG_LISTED, offset: int = 0):
         """The send log, newest first: type, subject, state, attempts, last status, next attempt."""
         who = request.state.identity
@@ -1513,7 +1600,10 @@ def install(app, settings, store, auth, mutate):
         with store.read() as c:
             return sends(c, who, hook_id, state or None, limit, offset)
 
-    @app.get("/api/v2/webhooks/{hook_id}/sends/{send_id}")
+    @app.get(
+        "/api/v2/webhooks/{hook_id}/sends/{send_id}",
+        **api_v2("Webhooks", "getWebhookSend", "One send with its attempts"),
+    )
     def webhook_send_one(request: Request, hook_id: str, send_id: str):
         """One send with its attempts."""
         who = request.state.identity
@@ -1521,7 +1611,10 @@ def install(app, settings, store, auth, mutate):
         with store.read() as c:
             return {"send": one_send(c, who, hook_id, send_id)}
 
-    @app.post("/api/v2/webhooks/{hook_id}/sends/{send_id}/retry")
+    @app.post(
+        "/api/v2/webhooks/{hook_id}/sends/{send_id}/retry",
+        **api_v2("Webhooks", "retryWebhookSend", "Send a failed, canceled or delivered send again now"),
+    )
     def webhook_retry(request: Request, hook_id: str, send_id: str, body: M.Empty):
         """Send a failed, canceled or delivered send again."""
         return mutate(request, body, lambda c: {"send": retry(c, request.state.identity, hook_id, send_id)})

@@ -40,6 +40,7 @@ from . import hubdb as H
 from .hook_relay import Failed, Link, Stop, link_of
 from .models import Contract
 from .store import Problem
+from .api_contract import api_v2
 
 TRANSPORT = None  # tests' fake HQ, never the live one
 EVERY = 300  # seconds between looks for quiet
@@ -585,7 +586,15 @@ def install(app, settings, store, auth):
     service = SleepIdle(store, settings, app, auth)
     app.state.sleep_idle = service
 
-    @app.get("/api/v2/sleep")
+    @app.get(
+        "/api/v2/sleep",
+        **api_v2(
+            "Sleep when idle",
+            "getSleepWhenIdle",
+            "Whether this server is hosted, the idle hours (0 = off), whether bot computers stop with it, since when it has been quiet and what Tico last answered",
+            "SleepWhenIdle",
+        ),
+    )
     def sleep_status(request: Request):
         """Sleep when idle: whether this server is hosted, the idle hours (0 = off), whether bot computers stop with it,
         since when it has been quiet, and Tico's last answer."""
@@ -595,7 +604,15 @@ def install(app, settings, store, auth):
             raise Problem("forbidden", "Only people and bots read this", 403)
         return {"sleep": service.read()}
 
-    @app.post("/api/v2/sleep")
+    @app.post(
+        "/api/v2/sleep",
+        **api_v2(
+            "Sleep when idle",
+            "setSleepWhenIdle",
+            "Turn Sleep when idle on (hours 1-24) or off (0) and choose whether bot computers stop with the server; an owner or an admin (and BotOps for one); on needs a server Tico hosts",
+            "SleepWhenIdle",
+        ),
+    )
     def sleep_set(request: Request, body: SleepSet):
         """Change Sleep when idle: `hours` 1-24 turns it on, 0 turns it off; `runners` says whether bot computers stop and
         start with the server. An owner or an admin (BotOps for one) only; turning it on needs a server Tico hosts."""

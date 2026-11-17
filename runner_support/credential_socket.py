@@ -42,17 +42,3 @@ def _server_rejects_token_purpose(exc):
             "extra_forbidden",
         )
     )
-
-
-def request_refresh(path, attempt_token, repository, timeout=60):
-    """Refresh only a mirror this attempt can read; no supervisor token is returned."""
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(timeout)
-        connection.connect(str(path))
-        connection.sendall(
-            json.dumps({'token': attempt_token, 'repository': repository, 'refresh': True}).encode() + b'\n'
-        )
-        reply = json.loads(connection.makefile('rb').readline(MAX_LINE))
-    if not reply.get('refreshed') and not reply.get('cached'):
-        raise ValueError(reply.get('error') or 'mirror refresh failed')
-    return reply

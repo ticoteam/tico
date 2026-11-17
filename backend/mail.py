@@ -22,6 +22,7 @@ from . import gmail_live, google_tokens, google_workspace, mail_compose, mailbox
 from .models import Contract
 from .store import H, Problem
 from .views import human_only, roster
+from .api_contract import api_v2
 
 LIMIT_DEFAULT, LIMIT_MAX = 50, 100
 DURATION = {"d": 86400, "h": 3600, "m": 60}
@@ -277,7 +278,15 @@ def compose(c, who, addr, body, mid):
 
 
 def install_mail(app, store, auth):
-    @app.post("/api/v2/mail/messages/organize")
+    @app.post(
+        "/api/v2/mail/messages/organize",
+        **api_v2(
+            "Email",
+            "organizeMailMessages",
+            "Organize up to 500 messages live in Whole Workspace Gmail; requires organize access; never deletes",
+            "MailOrganizeResult",
+        ),
+    )
     def organize(request: Request, body: dict):
         who = request.state.identity
         addr = body.get("mailbox")

@@ -331,6 +331,23 @@ def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_
         assert {"audit_log_no_update", "audit_log_no_delete"} <= triggers
 
 
+def test_a_copy_of_a_database_that_has_not_moved_its_run_budgets_into_holds_keeps_them(tmp_path, booted):
+    """The copy is pruned before its first start runs migration 20261117061834_holds_runaway: bot_budget is kept."""
+    source = source_db(tmp_path, booted)
+    with closing(sqlite3.connect(source)) as c:
+        c.execute(
+            "CREATE TABLE bot_budget(bot TEXT PRIMARY KEY, held_at TEXT, window TEXT, runs INTEGER, budget INTEGER, "
+            "task_id TEXT, released_at TEXT, released_by TEXT)"
+        )
+        c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('sales',?,'hour',300,300)", (OLD,))
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    _, loose = devcopy.build(source, dest, days=30)
+    assert "bot_budget" not in loose
+    with closing(sqlite3.connect(dest)) as c:
+        assert c.execute("SELECT bot, held_at FROM bot_budget").fetchall() == [("sales", OLD)]
+
+
 def test_a_lease_less_run_is_kept_only_once_settled(tmp_path, booted):
     """A run with no job (a chat run, or a turn migration 0072 made into an attempts row) has no lease: it is open until
     settled_at. A copy keeps the settled ones and removes the open ones, as it removes a job-backed attempt still running."""

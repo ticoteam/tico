@@ -4,10 +4,14 @@ import json
 from fastapi import Request
 from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, task_rule_gate, views
 from .store import H, Problem
+from .api_contract import api_v2
 
 
 def register(app, auth, mutate, send, store, task_view):
-    @app.post("/api/v2/chat/{bot}/new")
+    @app.post(
+        "/api/v2/chat/{bot}/new",
+        **api_v2("Conversations", "startNewChat", "Archive the current personal chat and start fresh"),
+    )
     def new_chat(request: Request, bot: str, body: M.Empty):
         who = request.state.identity
 

@@ -58,7 +58,7 @@ export interface StrategyDb {
   goals: Goal[];
   // Market: whether the spend is sized (a test flips it to stand for the sizes arriving), and whether the owner has a
   // setup in progress (the questions Market asks before it is set up).
-  market: {sized: boolean; setup: boolean};
+  market: {sized: boolean; setup: boolean; sizing?: Json | null};
   // Brand: the draft body, empty until the owner saves a section into it (PUT /api/v2/brand/draft merges it in).
   brand: {draft: Json | null; revision: number};
 }
@@ -208,8 +208,12 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
     if (p === '/api/v2/market/entities') return json(market ? mk.entities : {entities: [], total: 0});
     if (p.startsWith('/api/v2/market/entities/')) return json(mk.note);
-    if (p === '/api/v2/market/spend') return json(market ? spendOf(url.searchParams.get('dimension') || 'offering') : {segments: [], total: {spend_usd: 0}});
-    if (p === '/api/v2/market/spend/research' && method === 'POST') return json({task_id: 'task-sizing'});
+    // The open Size the market task rides on the spend read, as market_spend.py sizing serves it.
+    if (p === '/api/v2/market/spend') return json({...(market ? spendOf(url.searchParams.get('dimension') || 'offering') : {segments: [], total: {spend_usd: 0}}), sizing: db.market.sizing || null});
+    if (p === '/api/v2/market/spend/research' && method === 'POST') {
+      db.market.sizing = {id: 'task-sizing', version: 1, turn: 'working', ask: null};
+      return json({task_id: 'task-sizing', sizing: db.market.sizing});
+    }
     if (p === '/api/v2/market/value-chain') return json(market ? mk.chain : {layers: [], edges: []});
     if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: db.market.setup ? {answers: {}, can_answer: true, skipped: false, step: 0, task: null} : null});

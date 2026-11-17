@@ -43,6 +43,7 @@ from clients import judge as J
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .models import Contract
 from .store import H, Problem
+from .api_contract import api_v2
 
 log = logging.getLogger("tico.screening")
 # How long a screening waits for the model's answer: Jev's one 8 s try, then a little for the company's model.
@@ -953,14 +954,28 @@ def install(app, store, auth, mutate):
         if not auth.bot_admin(who):
             raise Problem("forbidden", "Only an owner or an admin " + what, 403)
 
-    @app.get("/api/v2/screening")
+    @app.get(
+        "/api/v2/screening",
+        **api_v2(
+            "Screening",
+            "getScreening",
+            "Each door's mode, the two detector switches, the defaults, whether a decision model answers and the newest holds and warnings, never their text (an owner or an admin)",
+        ),
+    )
     def screening_view(request: Request):
         """The modes per source, whether the decision model is there, and the newest holds and warnings."""
         admin(request.state.identity, "sees screening")
         with store.read() as c:
             return view(c, store)
 
-    @app.put("/api/v2/screening")
+    @app.put(
+        "/api/v2/screening",
+        **api_v2(
+            "Screening",
+            "setScreening",
+            "Change door modes (off, warn, hold; mail off or warn) and the patterns and model switches; an owner or an admin",
+        ),
+    )
     def screening_save(request: Request, body: ScreeningModes):
         """Set a source's mode (off, warn or hold) or switch the patterns or the decision model on or off. An owner or
         an admin; only what is sent changes."""
@@ -970,7 +985,14 @@ def install(app, store, auth, mutate):
         with store.read() as c:
             return view(c, store)
 
-    @app.post("/api/v2/screening/test")
+    @app.post(
+        "/api/v2/screening/test",
+        **api_v2(
+            "Screening",
+            "testScreening",
+            "Run the built-in samples through the check; nothing is held or kept (an owner or an admin; each sample counts against their decision budget)",
+        ),
+    )
     def screening_test(request: Request, body: ScreeningTest):
         """Run the built-in samples: four attacks and four lookalikes. Nothing is held or kept."""
         who = request.state.identity

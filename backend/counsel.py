@@ -47,6 +47,7 @@ from .auth import Identity
 from .blobs import register
 from .models import Contract
 from .store import Problem, encode
+from .api_contract import api_v2
 
 SLUG = H.RULES_OWNER
 NAME = "Rules Owner"
@@ -985,7 +986,14 @@ def ask(c, auth, who, question):
 
 
 def install(app, store, auth, mutate):
-    @app.post("/api/v2/rules/read")
+    @app.post(
+        "/api/v2/rules/read",
+        **api_v2(
+            "Rules",
+            "readRuleDocument",
+            "Add a document for the Rules Owner to read: a file you can read, or a public link (saved as a file version); the Rules Owner suggests the rules in it",
+        ),
+    )
     def rules_read_document(request: Request, body: RuleRead):
         """Add a document for the Rules Owner to read: a file you can read, or a public link (fetched now, with no credential,
         saved as a file version). The Rules Owner suggests the obligations in it as rules, each with its quote, for a person to add
@@ -1000,7 +1008,14 @@ def install(app, store, auth, mutate):
         found = None if replayed else prepare(store, auth, who, blobs, body)
         return mutate(request, body, lambda c: read(c, auth, who, files, blobs, body, found))
 
-    @app.post("/api/v2/rules/ask")
+    @app.post(
+        "/api/v2/rules/ask",
+        **api_v2(
+            "Rules",
+            "askRules",
+            "A can-I question: the active rules that share words with it, cited, and the Rules Owner's answer on a task",
+        ),
+    )
     def rules_ask(request: Request, body: RuleAsk):
         """A "can I...?" question: the rules that apply, cited, and the Rules Owner's answer as a task."""
         who = request.state.identity

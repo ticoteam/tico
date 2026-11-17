@@ -483,7 +483,7 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
     budget holds, its sign-in cards) in a few statements for all of them, and keep it in the snapshot's read
     cache: a pass over many tasks then asks "can this bot run" for each bot without reading it again. Nothing without a
     read cache."""
-    from . import bot_settings, read_cache, reconnects, run_backoff, turn_budgets
+    from . import bot_settings, holds, read_cache, reconnects, run_backoff
 
     RC: Any = read_cache
     H = _h()
@@ -517,16 +517,13 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
         )
     }
     RC.prime(conn, _ONBOARDING, {(b,): onboarding.get(b) for b in bots})
-    # Most bots have no back-off or budget row: the miss is kept too, or each would be read again.
-    for table, column, sql in (
-        ("run_backoff", "bot", cast("Any", run_backoff).GET_SQL),
-        ("bot_budget", "bot", cast("Any", turn_budgets).GET_SQL),
-    ):
-        found = {
-            str(r[column]): r
-            for r in conn.execute(f"SELECT * FROM {table} WHERE {column} IN (SELECT value FROM json_each(?))", listed)
-        }
-        RC.prime(conn, sql, {(b,): found.get(b) for b in bots})
+    # Most bots have no back-off row or budget hold: the miss is kept too, or each would be read again.
+    backoffs = {
+        str(r["bot"]): r
+        for r in conn.execute("SELECT * FROM run_backoff WHERE bot IN (SELECT value FROM json_each(?))", listed)
+    }
+    RC.prime(conn, cast("Any", run_backoff).GET_SQL, {(b,): backoffs.get(b) for b in bots})
+    holds.prime(conn, holds.RUNAWAY, "bot", bots)
     cast("Any", reconnects).prime_open(conn, bots, "login:")
 
 

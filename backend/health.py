@@ -49,6 +49,7 @@ def _harness_name(runtime):
 from .store import H, Problem, readiness_document
 from .views import roster
 from . import bot_settings as BS
+from .api_contract import api_v2
 
 QUEUE_MINUTES = 15  # work that has waited this long on a computer that is up is stuck
 PERSON_QUEUE_MINUTES = 2  # a person's own message, sooner: someone is sitting there waiting for the reply
@@ -4074,7 +4075,15 @@ def install(app, store, auth, settings):
         result = store.mutate(who, request.url.path, request.headers.get("idempotency-key"), body.model_dump(), work)
         return result
 
-    @app.get("/api/v2/health")
+    @app.get(
+        "/api/v2/health",
+        **api_v2(
+            "Health",
+            "getHealth",
+            "Checks, computers and failures (bots see counts, computers and failed runs)",
+            "Health",
+        ),
+    )
     def read(request: Request):
         who = request.state.identity
         if who.role != "bot":

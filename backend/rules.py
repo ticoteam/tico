@@ -51,6 +51,7 @@ from typing import NamedTuple, Optional
 
 from . import event_catalog as CAT, hubdb as H, templating, tico_notices, task_trigger_rules as TTR
 from .migrations import renames
+from .api_contract import api_v2
 
 log = logging.getLogger(__name__)
 
@@ -1610,7 +1611,15 @@ def install(app, store, auth):
     decides by them."""
     from fastapi import Request
 
-    @app.get("/api/v2/event-types")
+    @app.get(
+        "/api/v2/event-types",
+        **api_v2(
+            "Events",
+            "listEventTypes",
+            "Every named event with its description, version and an example payload (`group` narrows it)",
+            "EventTypeList",
+        ),
+    )
     def event_types(request: Request, group: str | None = None):
         """Every event Tico names, with a plain description and an example payload (`data`): what automations and
         outgoing webhooks read. Nothing secret."""

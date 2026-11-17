@@ -32,6 +32,7 @@ from . import recruiting
 from .recruiting import end_draft
 from .store import Problem, digest, encode
 from .support import CONTROL, SupportTicket, require_on, require_person
+from .api_contract import api_v2
 
 AGENTS = (
     {
@@ -579,13 +580,29 @@ def _seat_agent(c, who, row):
 def install(app, store, auth, settings, mutate, settings_admin, onboarding):
     from fastapi import Request
 
-    @app.get("/api/v2/cloud-agents")
+    @app.get(
+        "/api/v2/cloud-agents",
+        **api_v2(
+            "Team chart",
+            "listCloudAgents",
+            "The cloud coding agents: the supported ones are added to the team, the others are requested from Tico",
+            "CloudAgentList",
+        ),
+    )
     def cloud_agents(request: Request):
         """The cloud coding agents: the supported ones are added to the team, the others are requested from Tico."""
         auth.domain(request.state.identity)
         return {"agents": listing()}
 
-    @app.post("/api/v2/cloud-agents/{agent_id}/add")
+    @app.post(
+        "/api/v2/cloud-agents/{agent_id}/add",
+        **api_v2(
+            "Team chart",
+            "addCloudAgent",
+            "Add an agent Tico connects as a Tico bot on the harness it runs on, placed under `reports_to`, or in the seat's place when `seat_id` names one, which the bot then fills",
+            "CloudAgentAdded",
+        ),
+    )
     def cloud_agent_add(request: Request, agent_id: str, body: CloudAgentAdd):
         """Add an agent Tico connects as a Tico bot on the harness it runs on, placed under `reports_to`, or in the seat's
         place when `seat_id` names one, which the bot then fills."""
@@ -596,7 +613,15 @@ def install(app, store, auth, settings, mutate, settings_admin, onboarding):
         recover(store, body.seat_id)
         return mutate(request, body, lambda c: _add_bot(c, auth, onboarding, settings_admin, who, agent, body))
 
-    @app.post("/api/v2/cloud-agents/{agent_id}/request")
+    @app.post(
+        "/api/v2/cloud-agents/{agent_id}/request",
+        **api_v2(
+            "Team chart",
+            "requestCloudAgent",
+            "Request an agent Tico does not connect yet: a seat for it goes on the chart now and Tico's team builds the connection. `other` takes the agent's name or website in `name`",
+            "Seat",
+        ),
+    )
     def cloud_agent_request(request: Request, agent_id: str, body: CloudAgentRequest):
         """Request an agent Tico does not connect yet: a seat for it goes on the chart now and Tico's team builds the
         connection. `other` takes the agent's name or website in `name`."""
@@ -615,7 +640,15 @@ def install(app, store, auth, settings, mutate, settings_admin, onboarding):
             reports_to=body.reports_to,
         )
 
-    @app.post("/api/v2/seats/{seat_id}/request-agent")
+    @app.post(
+        "/api/v2/seats/{seat_id}/request-agent",
+        **api_v2(
+            "Team chart",
+            "requestSeatAgent",
+            "Request a cloud agent for a seat that has none: the seat keeps its role and holds its place until the agent connects",
+            "Seat",
+        ),
+    )
     def seat_request_agent(request: Request, seat_id: str, body: SeatAgentRequest):
         """Request a cloud agent for a seat that has none. The seat keeps its role and holds its place until the agent
         connects."""
@@ -625,14 +658,30 @@ def install(app, store, auth, settings, mutate, settings_admin, onboarding):
             request, store, auth, settings, who, body.agent, name=body.name, first_task=body.first_task, seat_id=seat_id
         )
 
-    @app.post("/api/v2/seats/{seat_id}/cancel-request")
+    @app.post(
+        "/api/v2/seats/{seat_id}/cancel-request",
+        **api_v2(
+            "Team chart",
+            "cancelSeatRequest",
+            "Withdraw a seat's cloud agent request: Tico hears of it, the seat closes and its first task is declined",
+            "SeatCanceled",
+        ),
+    )
     def seat_cancel_request(request: Request, seat_id: str):
         """Withdraw a seat's cloud agent request: Tico hears of it, the seat closes and its first task is let go."""
         who = request.state.identity
         auth.domain(who)
         return cancel_request(request, store, auth, settings, who, seat_id)
 
-    @app.get("/api/v2/seats/{seat_id}/request")
+    @app.get(
+        "/api/v2/seats/{seat_id}/request",
+        **api_v2(
+            "Team chart",
+            "getSeatAgent",
+            "A seat's cloud agent: where its request stands (requested, building, ready) and the first task waiting for it",
+            "SeatAgent",
+        ),
+    )
     def seat_agent_request(request: Request, seat_id: str):
         """A seat's cloud agent: where its request stands and the first task waiting for the agent."""
         who = request.state.identity

@@ -13,6 +13,7 @@ from pydantic import Field
 from . import media, models as M, task_references
 from .store import H, Problem
 from .views import human_only
+from .api_contract import api_v2
 
 PAGE_BYTES = 64 * 1024
 
@@ -169,14 +170,30 @@ def task_meetings(c, auth, who, tid, limit=20, cursor=None):
 
 
 def install(app, store, auth, mutate):
-    @app.get('/api/v2/meetings/{rid}/tasks')
+    @app.get(
+        '/api/v2/meetings/{rid}/tasks',
+        **api_v2(
+            "Meetings",
+            "listMeetingTasks",
+            "Readable tasks linked to a shared meeting; limit 20 by default, at most 50, cursor and 64 KB cap",
+            "MeetingTaskLinks",
+        ),
+    )
     def listing(request: Request, rid: str, limit: int = Query(20, ge=1, le=50), cursor: str | None = None):
         who = request.state.identity
         human_only(who)
         with store.read_transaction() as c:
             return meeting_tasks(c, auth, who, rid, limit, cursor)
 
-    @app.post('/api/v2/meetings/{rid}/tasks')
+    @app.post(
+        '/api/v2/meetings/{rid}/tasks',
+        **api_v2(
+            "Meetings",
+            "linkMeetingTasks",
+            "Link up to 20 readable tasks; sent is only for their requester. Results match input order; 404 skips an unavailable task without its data",
+            "MeetingTaskLinkBatch",
+        ),
+    )
     def link(request: Request, rid: str, body: Link):
         who = request.state.identity
         human_only(who)
@@ -221,7 +238,15 @@ def install(app, store, auth, mutate):
                 results.append({'status': 200 if linked else 404})
             return meeting_tasks(c, auth, who, rid, extra={'results': results})
 
-    @app.delete('/api/v2/meetings/{rid}/tasks/{tid}')
+    @app.delete(
+        '/api/v2/meetings/{rid}/tasks/{tid}',
+        **api_v2(
+            "Meetings",
+            "removeMeetingTask",
+            "Remove a link as its creator, meeting owner, task owner or requester, or org owner",
+            "MeetingTaskRemoved",
+        ),
+    )
     def unlink(request: Request, rid: str, tid: str):
         who = request.state.identity
         human_only(who)
@@ -247,7 +272,15 @@ def install(app, store, auth, mutate):
 
         return mutate(request, M.Empty(), work, check=check)
 
-    @app.get('/api/v2/tasks/{tid}/meetings')
+    @app.get(
+        '/api/v2/tasks/{tid}/meetings',
+        **api_v2(
+            "Tasks",
+            "listTaskMeetings",
+            "Readable linked meetings, newest first; limit 20 by default, at most 50, cursor and 64 KB cap",
+            "TaskMeetings",
+        ),
+    )
     def meetings(request: Request, tid: str, limit: int = Query(20, ge=1, le=50), cursor: str | None = None):
         who = request.state.identity
         human_only(who)

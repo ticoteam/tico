@@ -5,6 +5,9 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 import argparse
 import base64
 import json
+import os
+import shutil
+import subprocess
 from urllib.parse import quote
 from pathlib import Path
 from clients import s3links
@@ -231,9 +234,7 @@ def tag_update(api, args):
     local=True,
 )
 def task_worktree_add(api, args):
-    from runner_support.worktrees import command
-
-    return command(api, 'add', args['repo'], args.get('task'))
+    return worktree('add', args['repo'], args.get('task'))
 
 
 @tool(
@@ -245,9 +246,81 @@ def task_worktree_add(api, args):
     local=True,
 )
 def task_worktree_attach(api, args):
-    from runner_support.worktrees import command
+    return worktree('attach', args['path'], args.get('task'))
 
-    return command(api, 'attach', args['path'], args.get('task'))
+
+OLD_RUNNER = (
+    "This computer's runner is older than this Tico checkout (it has no `tico-runner worktree`); "
+    "it is being updated, so try again in a few minutes"
+)
+
+
+def runner_binary(env, root=None):
+    """The runner binary to run a worktree command with: the one built for this checkout, else the runner that
+    started this turn (the turn's `gh` is a link to it), else any other this computer has."""
+    from runner_support import engine
+
+    root = root or engine.ROOT
+    found = engine.ready(env, root)
+    if found:
+        return found
+    path = env.get("PATH")
+    gh = shutil.which("gh", path=path)
+    on_path = shutil.which("tico-runner", path=path)
+    options = [
+        *([Path(gh).resolve()] if gh and Path(gh).resolve().name == "tico-runner" else []),
+        *engine.candidates(env, root),
+        *([Path(on_path)] if on_path else []),
+    ]
+    return next((p for p in options if p.is_file() and os.access(p, os.X_OK)), None)
+
+
+def worktree(operation, value, task=None, env=None):
+    """`tico task worktree add|attach|setup`: the runner's own worktree code (`tico-runner worktree`,
+    runner-rs/src/worktrees/cli.rs) with this turn's environment. Raises APIError for Tico's refusals and failures
+    (a worktree wait keeps its `extra`; a 503 or lost connection stays retryable) and for a runner that predates the
+    command (retryable: it is mid-update), ValueError for the rest."""
+    from clients.tico import APIError
+    from runner_support import engine
+
+    env = dict(os.environ if env is None else env)
+    binary = runner_binary(env)
+    if not binary:
+        raise ValueError("No Tico runner binary on this computer to manage worktrees; update this computer's runner")
+    # The runner finds the Tico install it must keep worktrees out of from here, wherever its binary lives.
+    env.setdefault("TICO_ROOT", str(engine.ROOT))
+    done = subprocess.run(
+        [str(binary), "worktree", operation, *(["--task", task] if task else []), "--", value],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode == 2 and "unrecognized subcommand" in done.stderr:
+        # Only while an update has moved the checkout and its runner is not ready yet (release_update.py prepares
+        # the new binary before the restart), so it is one to retry.
+        raise APIError("runner_outdated", OLD_RUNNER, 0, True)
+    try:
+        reply = json.loads(done.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        reason = (done.stderr.strip().splitlines() or ["no output"])[-1][:300]
+        raise ValueError(f"tico-runner worktree failed (exit {done.returncode}): {reason}") from None
+    error = reply.get("error") if isinstance(reply, dict) else None
+    if done.returncode == 0 and not error:
+        return reply
+    error = error if isinstance(error, dict) else {"detail": str(error or "tico-runner worktree failed")}
+    if error.get("code"):
+        fields = ("code", "detail", "status", "retryable", "operation_id")
+        raise APIError(
+            error["code"],
+            error.get("detail") or "",
+            error.get("status") or 0,
+            bool(error.get("retryable")),
+            error.get("operation_id"),
+            extra={k: v for k, v in error.items() if k not in fields},
+        )
+    raise ValueError(error.get("detail") or "tico-runner worktree failed")
 
 
 @tool(

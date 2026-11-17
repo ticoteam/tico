@@ -28,6 +28,7 @@ from . import task_asks
 from .models import Contract, Empty
 from .email_content import MAX_RAW, attachment, digest, snapshot
 from .store import H, Problem
+from .api_contract import api_v2
 
 DEFAULTS = {
     "mode": "ask_first",
@@ -1297,13 +1298,24 @@ def install(app, store, auth, mutate):
         except (Problem, TypeError):
             return False
 
-    @app.get("/api/v2/email/sending-policy")
+    @app.get(
+        "/api/v2/email/sending-policy",
+        **api_v2("Email sending", "getEmailSendingPolicy", "Company sending policy", "EmailSendingPolicy"),
+    )
     def read_company(request: Request):
         company(request.state.identity)
         with store.read() as c:
             return policy_view(c)
 
-    @app.put("/api/v2/email/sending-policy")
+    @app.put(
+        "/api/v2/email/sending-policy",
+        **api_v2(
+            "Email sending",
+            "setEmailSendingPolicy",
+            "Set company sending policy (an admin, acting as themselves)",
+            "EmailSendingPolicy",
+        ),
+    )
     def write_company(request: Request, body: PolicyUpdate):
         company(request.state.identity, write=True)
         return mutate(
@@ -1313,7 +1325,15 @@ def install(app, store, auth, mutate):
             durable=True,
         )
 
-    @app.get("/api/v2/email/inboxes/{mailbox}/sending-policy")
+    @app.get(
+        "/api/v2/email/inboxes/{mailbox}/sending-policy",
+        **api_v2(
+            "Email sending",
+            "getInboxSendingPolicy",
+            "Inbox policy with effective rule and inheritance",
+            "EmailSendingPolicy",
+        ),
+    )
     def read_inbox(request: Request, mailbox: str):
         with store.read() as c:
             return policy_view(
@@ -1322,7 +1342,15 @@ def install(app, store, auth, mutate):
                 H.actor_id(request.state.identity.actor) if request.state.identity.actor.startswith("bot:") else "",
             )
 
-    @app.put("/api/v2/email/inboxes/{mailbox}/sending-policy")
+    @app.put(
+        "/api/v2/email/inboxes/{mailbox}/sending-policy",
+        **api_v2(
+            "Email sending",
+            "setInboxSendingPolicy",
+            "Set inbox policy (its person or a shared inbox admin)",
+            "EmailSendingPolicy",
+        ),
+    )
     def write_inbox(request: Request, mailbox: str, body: PolicyUpdate):
         def work(c):
             address = inbox(c, mailbox, request.state.identity, manage=True)
@@ -1331,7 +1359,15 @@ def install(app, store, auth, mutate):
 
         return mutate(request, body, work, durable=True)
 
-    @app.get("/api/v2/bots/{bot}/email-sending-policy")
+    @app.get(
+        "/api/v2/bots/{bot}/email-sending-policy",
+        **api_v2(
+            "Email sending",
+            "getBotEmailSendingPolicy",
+            "Bot policy, optionally resolved for an inbox",
+            "EmailSendingPolicy",
+        ),
+    )
     def read_bot(request: Request, bot: str, mailbox: str = ""):
         with store.read() as c:
             ref = bot_ref(c, request.state.identity, bot)
@@ -1339,7 +1375,15 @@ def install(app, store, auth, mutate):
                 raise Problem("forbidden", "The bot cannot use this inbox", 403)
             return policy_view(c, mailbox.strip().lower(), ref)
 
-    @app.put("/api/v2/bots/{bot}/email-sending-policy")
+    @app.put(
+        "/api/v2/bots/{bot}/email-sending-policy",
+        **api_v2(
+            "Email sending",
+            "setBotEmailSendingPolicy",
+            "Set bot override (a person who manages it)",
+            "EmailSendingPolicy",
+        ),
+    )
     def write_bot(request: Request, bot: str, body: PolicyUpdate):
         def work(c):
             ref = bot_ref(c, request.state.identity, bot, write=True)
@@ -1368,7 +1412,15 @@ def install(app, store, auth, mutate):
             update={"raw": found["raw"], "thread_id": body.thread_id or (found["thread"] if answers else "")}
         )
 
-    @app.post("/api/v2/email/sends")
+    @app.post(
+        "/api/v2/email/sends",
+        **api_v2(
+            "Email sending",
+            "queueEmail",
+            "Freeze email content for approval and the undo window; identical content and recipients deduplicate",
+            "EmailSendResult",
+        ),
+    )
     def queue(request: Request, body: Enqueue):
         who = request.state.identity
         if not body.raw:
@@ -1429,7 +1481,15 @@ def install(app, store, auth, mutate):
             durable=True,
         )
 
-    @app.get("/api/v2/email/sends")
+    @app.get(
+        "/api/v2/email/sends",
+        **api_v2(
+            "Email sending",
+            "listEmailSends",
+            "Pending sends or the inbox send audit, paged and byte capped",
+            "EmailSendList",
+        ),
+    )
     def sends(request: Request, mailbox: str, pending: bool = False, cursor: str = "", limit: int = 50):
         with store.read() as c:
             address = inbox(c, mailbox, request.state.identity)
@@ -1465,7 +1525,15 @@ def install(app, store, auth, mutate):
             inbox(c, row["mailbox"], request.state.identity)
         return row
 
-    @app.get("/api/v2/email/sends/{sid}")
+    @app.get(
+        "/api/v2/email/sends/{sid}",
+        **api_v2(
+            "Email sending",
+            "getEmailSend",
+            "Frozen preview and audit (inbox readers, the sender or an authorized approver)",
+            "EmailSendDetail",
+        ),
+    )
     def send_detail(request: Request, sid: str, response: Response):
         response.headers["Cache-Control"] = "no-store"
         who = request.state.identity
@@ -1482,7 +1550,14 @@ def install(app, store, auth, mutate):
                 "shown_hash": shown,
             }
 
-    @app.get("/api/v2/email/sends/{sid}/attachments/{part}")
+    @app.get(
+        "/api/v2/email/sends/{sid}/attachments/{part}",
+        **api_v2(
+            "Email sending",
+            "getFrozenEmailAttachment",
+            "Download the exact frozen attachment (the send's readers or approvers)",
+        ),
+    )
     def send_attachment(request: Request, sid: str, part: int):
         with store.read() as c:
             row = preview_row(c, request, sid)
@@ -1501,7 +1576,12 @@ def install(app, store, auth, mutate):
                 },
             )
 
-    @app.get("/api/v2/email/inboxes/{mailbox}/suppressed-recipients")
+    @app.get(
+        "/api/v2/email/inboxes/{mailbox}/suppressed-recipients",
+        **api_v2(
+            "Email sending", "listEmailSuppressions", "Inbox admin's bounce suppression list", "EmailSuppressionList"
+        ),
+    )
     def suppressed(request: Request, mailbox: str, cursor: str = "", limit: int = 50):
         with store.read() as c:
             address = inbox(c, mailbox, request.state.identity, manage=True)
@@ -1516,7 +1596,10 @@ def install(app, store, auth, mutate):
                 "next_cursor": rows[cap - 1]["address"] if len(rows) > cap else None,
             }
 
-    @app.delete("/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}")
+    @app.delete(
+        "/api/v2/email/inboxes/{mailbox}/suppressed-recipients/{address}",
+        **api_v2("Email sending", "removeEmailSuppression", "Restore sending to a bounced address (inbox admin)"),
+    )
     def unsuppress(request: Request, mailbox: str, address: str):
         def work(c):
             box = inbox(c, mailbox, request.state.identity, manage=True)
@@ -1526,7 +1609,15 @@ def install(app, store, auth, mutate):
 
         return mutate(request, Empty(), work, durable=True)
 
-    @app.post("/api/v2/email/sends/{sid}/cancel")
+    @app.post(
+        "/api/v2/email/sends/{sid}/cancel",
+        **api_v2(
+            "Email sending",
+            "cancelEmailSend",
+            "Cancel before dispatch; delivered mail cannot be recalled",
+            "EmailSendResult",
+        ),
+    )
     def cancel(request: Request, sid: str):
         def work(c):
             row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
