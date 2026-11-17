@@ -41,14 +41,32 @@ def _one(conn: "sqlite3.Connection", sql: str, args: tuple[Any, ...]) -> Row | N
     return dict(zip([d[0] for d in cursor.description], found, strict=True)) if found else None
 
 
+# Submission and standing use the same live set. A page can still open from a link after archiving.
+LIVE_DOCUMENT = (
+    "FROM page_links l JOIN bot_files f ON f.id=l.page_id JOIN pages p ON p.file_id=f.id "
+    "WHERE p.archived=0 AND p.deleted_at IS NULL AND f.archived=0 AND f.state<>'deleted' AND f.current_version>0 "
+)
+
+
+def live_documents(conn: "sqlite3.Connection", task_id: str, document: str) -> dict[str, int]:
+    return {
+        str(file_id): int(version)
+        for file_id, version in conn.execute(
+            "SELECT f.id,f.current_version " + LIVE_DOCUMENT + "AND l.target=? AND l.role=? ORDER BY f.id",
+            ("task:" + task_id, document),
+        )
+    }
+
+
 def current_pages(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -> list[Row]:
     """All submitted pages on a requirement, newest submission first."""
     cursor = conn.execute(
-        "SELECT p.* FROM requirement_pages p JOIN requirements r ON r.id=p.requirement_id "
-        "JOIN visits v ON v.id=p.visit_id WHERE p.visit_id=? AND p.requirement_id=? AND p.replaced_at IS NULL "
-        "AND (json_extract(r.settings,'$.document') IS NULL OR EXISTS "
-        "(SELECT 1 FROM page_links l WHERE l.page_id=p.file_id AND l.target='task:'||v.task_id "
-        "AND l.role=json_extract(r.settings,'$.document'))) ORDER BY p.created_at DESC,p.rowid DESC",
+        "SELECT rp.* FROM requirement_pages rp JOIN requirements r ON r.id=rp.requirement_id "
+        "JOIN visits v ON v.id=rp.visit_id WHERE rp.visit_id=? AND rp.requirement_id=? AND rp.replaced_at IS NULL "
+        "AND (json_extract(r.settings,'$.document') IS NULL OR EXISTS (SELECT 1 "
+        + LIVE_DOCUMENT
+        + "AND l.page_id=rp.file_id AND l.target='task:'||v.task_id AND l.role=json_extract(r.settings,'$.document'))) "
+        "ORDER BY rp.created_at DESC,rp.rowid DESC",
         (visit_id, requirement_id),
     )
     names = [d[0] for d in cursor.description]
@@ -267,7 +285,10 @@ def attach(
     document = TR.document_of(found)
     if document:
         _as_document(conn, by, task_id, document, file_id)
-        return _submit_pages(conn, row, found, file_id, version, by, saying)
+        made = _submit_pages(conn, row, found, document, by, ref=(file_id, version), saying=saying)
+        if made is None:
+            _refuse(conn, by, "task_requirement", "No such page", task_id)
+        return made
     return _pin(conn, row, found, file_id, version, by, saying)
 
 
@@ -284,11 +305,27 @@ WRITE_DOCUMENT = (
 )
 
 
-def submit(conn: "sqlite3.Connection", task_id: str, document: str, file_id: str, version: int, by: str) -> Row | None:
-    """A new version of a task document, written while the task is in a stage that names it for approval, is the
-    submission: it is pinned to that approval as `attach` pins a page, and the decision model checks it. Anywhere else,
-    or written by a bot that neither owns nor holds the task, it is just a new version: None. The pinned
-    `requirement_pages` row otherwise."""
+def submit_linked(conn: "sqlite3.Connection", file_id: str, version: int | None, by: str) -> dict[tuple[str, str], Row]:
+    """Refresh each task that uses this page as a document. Without a version, its archive status changed."""
+    ref = (file_id, version) if version is not None else None
+    submitted: dict[tuple[str, str], Row] = {}
+    for target, document in conn.execute(
+        "SELECT target,role FROM page_links WHERE page_id=? AND target LIKE 'task:%' "
+        "AND role NOT IN ('writer','related') ORDER BY target,role",
+        (file_id,),
+    ).fetchall():
+        task_id = str(target)[5:]
+        name = str(document)
+        if made := submit(conn, task_id, name, by, ref=ref):
+            submitted[(task_id, name)] = made
+    return submitted
+
+
+def submit(
+    conn: "sqlite3.Connection", task_id: str, document: str, by: str, *, ref: tuple[str, int] | None = None
+) -> Row | None:
+    """Refresh the open stage's matching approval. A publish supplies its version; a link or archive edit reconciles
+    membership. A publish by a bot that neither owns nor holds the task leaves the submission as it is."""
     from . import hubdb_core
     from . import task_engine as E
     from . import task_requirements as TR
@@ -304,39 +341,43 @@ def submit(conn: "sqlite3.Connection", task_id: str, document: str, file_id: str
     )
     if found is None:
         return None
-    if by not in (row.get("owner_id"), W.holder(conn, row)) and not core.is_human(by):
+    if ref and by not in (row.get("owner_id"), W.holder(conn, row)) and not core.is_human(by):
         return None
     _, context, _ = judged_against(conn, row, found)
     heads: dict[str, str | None] = context.get("heads") or {}
     if not all(heads.values()):
-        return None  # a PR not read yet: a version written now stays unsubmitted rather than fail the write
-    return _submit_pages(conn, row, found, file_id, version, by, {})
+        return None  # a PR not read yet: leave the write in place until the page can be submitted
+    return _submit_pages(conn, row, found, document, by, ref=ref)
 
 
 def _submit_pages(
-    conn: "sqlite3.Connection", row: Row, found: Row, file_id: str, version: int, by: str, saying: Row
-) -> Row:
-    """Submitting a role pins every linked page, without advancing halfway through the set."""
-    from . import page_links as L
+    conn: "sqlite3.Connection",
+    row: Row,
+    found: Row,
+    document: str,
+    by: str,
+    *,
+    ref: tuple[str, int] | None,
+    saying: Row | None = None,
+) -> Row | None:
+    """Pin the live document set before evaluating the task. Link and archive edits preserve existing submissions."""
     from . import task_engine as E
-    from . import task_requirements as TR
 
-    ids = L.pages_for(conn, "task:" + row["id"], TR.document_of(found))
-    pages = conn.execute(
-        "SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id "
-        "WHERE f.id IN (SELECT value FROM json_each(?)) AND p.archived=0 AND p.deleted_at IS NULL",
-        (json.dumps(ids),),
-    ).fetchall()
+    pages = live_documents(conn, row["id"], document)
+    if ref:
+        if ref[0] not in pages:
+            return None
+        pages[ref[0]] = ref[1]
+    else:
+        for page in current_pages(conn, row["visit"]["id"], found["id"]):
+            pages.pop(page["file_id"], None)
+
     result: Row | None = None
-    for page in pages:
-        pid = str(page["id"])
-        number = version if pid == file_id else int(page["current_version"] or 0)
-        if not number or page["archived"]:
-            continue
-        made = _pin(conn, row, found, pid, number, by, saying if pid == file_id else {}, advance=False)
-        if pid == file_id:
+    for file_id, version in pages.items():
+        selected = ref is not None and file_id == ref[0]
+        made = _pin(conn, row, found, file_id, version, by, (saying or {}) if selected else {}, advance=False)
+        if selected:
             result = made
-    assert result is not None
     if E.advance(conn, row["id"]) is None:
         E.changed(conn, row["id"], by)
     return result

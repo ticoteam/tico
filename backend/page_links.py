@@ -44,7 +44,7 @@ def link(c: Any, page_id: str, target: str, role: str, by: str) -> bool:
     )
 
 
-def unlink(c: Any, page_id: str, target: str, role: str, by: str) -> None:
+def unlink(c: Any, page_id: str, target: str, role: str, by: str) -> bool:
     role = role_name(role)
     _target(target, role)
     if (
@@ -56,7 +56,10 @@ def unlink(c: Any, page_id: str, target: str, role: str, by: str) -> None:
         <= 1
     ):
         raise Problem("conflict", "A page needs at least one writer", 409)
-    c.execute("DELETE FROM page_links WHERE page_id=? AND target=? AND role=?", (page_id, target, role))
+    return (
+        c.execute("DELETE FROM page_links WHERE page_id=? AND target=? AND role=?", (page_id, target, role)).rowcount
+        > 0
+    )
 
 
 def pages_for(c: Any, target: str, role: str | None = None) -> list[str]:
