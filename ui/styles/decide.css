@@ -34,7 +34,7 @@
 .dc-wave i:nth-child(4){animation-delay:-.15s;animation-duration:.8s}
 .dc-wave i:nth-child(5){animation-delay:-.75s;animation-duration:1.2s}
 @keyframes dc-wv{0%,100%{transform:scaleY(.22)}20%{transform:scaleY(.95)}45%{transform:scaleY(.4)}70%{transform:scaleY(.75)}}
-/* The slot over the undo notice: the voice notice while the mic is on; its wrapper is the callout on a phone */
+/* The voice notice while the mic is on; its wrapper is the callout on a phone */
 .dc-sayw{display:contents}
 .dc-say{flex:1;display:flex;align-items:center;gap:6px;min-width:0;margin:0;padding:0;border:0;background:none;color:inherit;font:inherit;font-size:var(--t-base);text-align:left;overflow-wrap:anywhere}
 /* The next ask Tico is still thinking about, faint, before ‹ ›; none on a phone. */
@@ -174,20 +174,19 @@
 .dc-snzl li{display:flex;align-items:center;gap:8px;min-height:40px;border-bottom:1px solid var(--line)}
 .dc-snzl-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dc-snzl .dc-icon{flex:none;color:var(--muted)}
-/* What was just done, with ↩ to take it back: in the top bar left of ‹ ›, laid over the bar's own end (the faint
-   next-up line) so nothing moves, never over the page or the buttons (decide.ts decideBar). */
+/* What was just done, for 5 s, then it fades: "✓ Approved with comments  Undo" (decide.ts decideBar). Quiet text in the
+   top bar, in the faint next-up line's place left of ‹ ›, with no box of its own: it covers nothing and moves nothing. */
 .dc-nav{position:relative}
-.dc-sayw{position:relative}
-/* What was just done, in the top bar's slot for 5 s: "✓ Approved with comments · Undo" */
-.dc-bar{position:absolute;inset:0;z-index:2;display:flex;align-items:center;gap:8px;padding:0 4px 0 12px;border-radius:10px;background:var(--surface2);color:var(--ink);font-size:var(--t-sm);white-space:nowrap;transition:opacity .4s}
+.dc-bar{flex:0 1 auto;min-width:0;display:flex;align-items:center;color:var(--muted);font-size:var(--t-sm);white-space:nowrap;transition:opacity .4s}
 .dc-bar[hidden]{display:none}
 .dc-bar.dc-bar-out{opacity:0}
+.dc-head:has(>.dc-bar:not([hidden])) .dc-up{display:none}
 .dc-bar-w{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.dc-bar button{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 10px;border:0;border-radius:8px;background:none;color:inherit;font:inherit;font-weight:600;text-decoration:underline;cursor:pointer}
-.dc-bar button:hover{color:var(--ink);background:var(--surface2)}
+/* Undo: words, underlined on hover; its 44 px target is padding, never a visible box */
+.dc-bar button{flex:none;min-width:44px;min-height:44px;padding:0 6px;border:0;background:none;color:inherit;font:inherit;font-weight:600;cursor:pointer}
+.dc-bar button:hover,.dc-bar button:focus-visible{color:var(--ink);text-decoration:underline}
 .dc-bar-i{flex:none}
 .dc-bar-err{color:var(--fail)}
-.dc-bar-err .dc-bar-w{max-width:40vw;overflow:hidden;text-overflow:ellipsis}
 /* a page that comes back (decideRoundsHTML): one meta line (stage · version · date · Jev · #N ↗), the version a menu of
    each version and Changes since vK, then its parts */
 .dc-meta{display:flex;align-items:center;gap:0 6px;min-width:0;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
@@ -309,11 +308,15 @@ button.dc-jev{cursor:pointer}
   /* The slot under the bar: a quiet callout from the mark (its caret at --dc-caret-x, set by decidePaintHead), up
      to two lines, not cut in half; none while the slot is empty. */
   .dc-sayw{display:block;order:9;flex-basis:100%;min-width:0;position:relative;margin:4px 0 10px}
-  .dc-sayw:has(>.dc-say:empty):not(:has(>.dc-bar:not([hidden]))){display:none}
+  .dc-sayw:has(>.dc-say:empty){display:none}
   .dc-sayw::before{content:"";position:absolute;top:-6px;left:calc(var(--dc-caret-x,24px) - 6px);border:6px solid transparent;border-top:0;border-bottom-color:var(--surface2)}
   /* up to two lines, never cut */
   .dc-say{width:100%;min-height:44px;box-sizing:border-box;padding:6px 12px;border-radius:10px;background:var(--surface2);font-size:var(--t-sm);line-height:1.4}
   .dc-up{display:none}
+  /* The notice on the same row, between the mic and ‹ ›: its words give way first, Undo never; a long crumb gives it
+     room (52 px and the gap). */
+  .dc-bar{flex:1 1 0;min-width:52px;justify-content:flex-end}
+  .dc-head:has(>.dc-bar:not([hidden])) .dc-where{max-width:calc(100% - 294px)}
   .dc-where{flex:0 1 auto;max-width:calc(100% - 236px)}
   .dc-crumb{min-height:44px;overflow:hidden}
   .dc-crumb>span{flex:none;min-width:0;overflow:hidden;text-overflow:ellipsis}
