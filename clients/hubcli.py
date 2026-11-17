@@ -450,6 +450,7 @@ def parser():
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
     from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
+    from clients.commands import tasks as tasks_commands
     from clients.commands import assistant as assistant_commands
     from clients.commands import automations as automations_commands
     from clients.commands import browser as browser_commands, logins
@@ -718,31 +719,8 @@ def parser():
     s.set_defaults(fn="assistant proposals")
     cli_spec.add(sub, task_work_commands.TAG)  # tico tag: clients/commands/task_work.py
 
-    task = sub.add_parser("task", aliases=["tasks"]).add_subparsers(dest="sub")
-    s = task.add_parser("child", help="create a subtask")
-    s.add_argument("parent")
-    s.add_argument("--owner", help="who does it; a --check-model subtask is your own (`me`)")
-    s.add_argument("--title", required=True)
-    s.add_argument("--body", default="")
-    s.add_argument(
-        "--check-model",
-        metavar="RUNTIME[:MODEL]",
-        nargs="?",
-        const="auto",
-        help="run this subtask of yours on another model, in its own session (e.g. grok, codex:gpt-6.1-sol); "
-        "with no value (put the flag after the parent id), the company's check model, from a provider other "
-        "than the parent's authors when one can run it",
-    )
-    s.add_argument(
-        "--role",
-        dest="check_role",
-        choices=("review", "check"),
-        help="review files a review child; with --check-model, what that model is asked for (default check)",
-    )
-    s.set_defaults(fn="task child create")
-    s = task.add_parser("tree", help="show nested subtasks")
-    s.add_argument("id")
-    s.set_defaults(fn="task tree")
+    cli_spec.add(sub, tasks_commands.TASK)  # tico task and tasks: clients/commands/tasks.py
+    task = _group_subparsers(sub, "task")  # the leaves still built here are added below
     worktree = task.add_parser("worktree", help="create or attach this task's worktree").add_subparsers(
         dest="worktree_sub"
     )
@@ -751,22 +729,6 @@ def parser():
         s.add_argument(argument)
         s.add_argument("--task", help="task id; defaults to this run's task")
         s.set_defaults(fn="task worktree " + operation)
-    s = task.add_parser(
-        "caps",
-        help="the task caps: today's count per pair, the tasks closed before the "
-        "receiver acted, and the changes bots asked for",
-    )
-    s.set_defaults(fn="task caps")
-    cap = task.add_parser(
-        "cap", help="set a task cap: how many tasks sender may create for receiver a day"
-    ).add_subparsers(dest="cap_sub")
-    s = cap.add_parser(
-        "set", help="sender receiver --per-day N; 0 blocks the pair, and with no --per-day the cap is removed"
-    )
-    s.add_argument("sender", help="bot:<slug> or person:<id>")
-    s.add_argument("receiver", help="bot:<slug> or person:<id>, a manager above the sender")
-    s.add_argument("--per-day", dest="per_day", type=int, help="tasks a day; 0 blocks the pair")
-    s.set_defaults(fn="task cap set")
     s = task.add_parser("create")
     s.add_argument("--visibility", choices=["public", "private"])
     s.add_argument("--public-title", dest="public_title", help="public roadmap title (needed with --visibility public)")
@@ -833,37 +795,6 @@ def parser():
     s.add_argument("--harness", help="the harness that runs that model")
     s.set_defaults(fn="task create")
     version_help = "the version you were last shown: tico task show, a list row and every wake print it"
-    s = task.add_parser("done", help="the work of this stage is finished; never pushes past what is missing")
-    s.add_argument("id")
-    s.add_argument("-m", "--note", help="what was done, in a few plain sentences")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task done")
-    s = task.add_parser(
-        "move", help="move a task: next (with -m, past what is not met), back to a stage, done, closed or reopen"
-    )
-    s.add_argument("id")
-    s.add_argument("to", help="next, done, closed, reopen, or a stage's name or id")
-    s.add_argument("-m", "--why", help="why, in one plain sentence; a bot always says why")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task move")
-    s = task.add_parser("close", help="close a task with why; its open sub-tasks close with it")
-    s.add_argument("id")
-    s.add_argument("-m", "--why", help="why it is closed")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task close")
-    s = task.add_parser("reassign", help="give the task to another bot or person for this stage")
-    s.add_argument("id")
-    s.add_argument("owner", help="a bot slug, a person id, or me")
-    s.add_argument("-m", "--why", help="why, in one plain sentence")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument(
-        "--set-anyway", action="store_true", help="a person gives it all the same when a stage rule refused this owner"
-    )
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task reassign")
     s = task.add_parser(
         "ask", help="ask a person on this task, in one line; it waits for their answer, which wakes you once"
     )
@@ -904,14 +835,6 @@ def parser():
     s.add_argument("up", metavar="up|down", type=thumb, help="up: worth asking; down: what was wrong goes in --note")
     s.add_argument("--note", help="what was wrong, in a few words")
     s.set_defaults(fn="task thumbs")
-    s = task.add_parser("answer", help="answer what you are asked on a task: ok, no, again or your answer")
-    s.add_argument("id")
-    s.add_argument("requirement", help="the requirement's id from tico task show, or a stage's answer by its name")
-    s.add_argument("value", help="ok, no (send back, with -m), again (look again), or your answer")
-    s.add_argument("-m", "--note", help="what they read with it; required with no")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task answer")
     s = task.add_parser("give", help="give what you are asked on a task to another person")
     s.add_argument("id")
     s.add_argument("requirement", help="the requirement's id, from tico task show")
@@ -920,38 +843,6 @@ def parser():
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")
-    s = task.add_parser(
-        "file",
-        help="file a task this one waits on; yours unless --owner, or picked by a pipeline whose first stage picks",
-    )
-    s.add_argument("title")
-    s.add_argument("--parent", required=True, help="the task you work on: it waits until this one ends")
-    s.add_argument("--pipeline", help="the pipeline's id; default general")
-    s.add_argument(
-        "--owner", help="who does it; default you, or the stage's pick in a pipeline whose first stage picks"
-    )
-    s.add_argument("--body", help="the details; default the title")
-    s.add_argument("--due")
-    s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")
-    s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
-    s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
-    s.set_defaults(fn="task file")
-    s = task.add_parser("update", help="edit a task's fields: title, body, due, labels, privacy, goal; with --version")
-    visibility = s.add_mutually_exclusive_group()
-    visibility.add_argument("--private", dest="private", action="store_true", default=None)
-    visibility.add_argument(
-        "--company", dest="private", action="store_false", help="human requester publishes the task"
-    )
-    s.add_argument("id")
-    s.add_argument("--title", help="a new title, checked as a new task's title would be")
-    s.add_argument("--body")
-    s.add_argument("--due")
-    s.add_argument("--label", dest="labels", action="append", help="replace the labels with these; repeat for more")
-    s.add_argument("--goal", dest="goal_id", help='the goal this task serves; "" takes it off')
-    s.add_argument("-m", "--note", help="what changed, in a sentence")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task update")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
     s.add_argument("--public", action="store_true", default=None)
     s.add_argument("--ok", metavar="OK_ID", help="the OK a person gave on exactly this public reply")
@@ -987,96 +878,6 @@ def parser():
         help="a bot's message to a bot waits for that bot's next run; this wakes it now",
     )
     s.set_defaults(fn="task comment")
-    s = task.add_parser("comment-moderate", help="hide, show again or delete a public comment on a task you manage")
-    s.add_argument("id")
-    s.add_argument("comment_id")
-    s.add_argument("action", choices=["hide", "show", "delete"])
-    s.set_defaults(fn="task comment-moderate")
-    s = task.add_parser("requesters", help="a task's requesters: internal contacts and counts, never tokens")
-    s.add_argument("id")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--offset", type=int)
-    s.set_defaults(fn="task requesters")
-    s = task.add_parser(
-        "requester-save", help="add a requester to a task, or update one with --requester-id; nothing is sent"
-    )
-    s.add_argument("id")
-    s.add_argument("--requester-id", dest="requester_id", help="the requester to update; omit to add one")
-    s.add_argument("--actor", help="a teammate (verified identity); omit for someone outside")
-    for field in ("name", "email", "phone", "other", "organization", "note"):
-        s.add_argument("--" + field)
-    s.add_argument("--source", choices=["public_form", "inbox", "meeting", "manual"])
-    s.add_argument("--important", action=argparse.BooleanOptionalAction, default=None)
-    s.set_defaults(fn="task requester-save")
-    s = task.add_parser("requester-remove", help="take a requester off a task")
-    s.add_argument("id")
-    s.add_argument("requester_id")
-    s.set_defaults(fn="task requester-remove")
-    s = task.add_parser("comment-edit", help="change the text of a comment you wrote; it wakes nobody")
-    s.add_argument("--ok", metavar="OK_ID", help="the OK a person gave on exactly this public reply")
-    s.add_argument("id")
-    s.add_argument("comment_id", help="the comment's id (its id in the task's comments)")
-    s.add_argument("text")
-    s.set_defaults(fn="task comment-edit")
-    s = task.add_parser("comment-delete", help="take back a comment you wrote")
-    s.add_argument("id")
-    s.add_argument("comment_id", help="the comment's id (its id in the task's comments)")
-    s.set_defaults(fn="task comment-delete")
-    s = task.add_parser("delete", help="delete a task made by mistake: its requester or a mover, never a bot")
-    s.add_argument("id")
-    s.set_defaults(fn="task delete")
-    s = task.add_parser("deleted", help="deleted tasks you may restore, newest first")
-    s.set_defaults(fn="task deleted")
-    s = task.add_parser("restore", help="put a deleted task back: whoever deleted it, its requester or a mover")
-    s.add_argument("id")
-    s.set_defaults(fn="task restore")
-    s = task.add_parser("link", help="attach a link: the pull request you opened, an issue, a document, a session")
-    s.add_argument("id")
-    s.add_argument("url", help="the URL; with --session also a resume command or a reference")
-    s.add_argument("--title")
-    s.add_argument(
-        "--session",
-        action="store_true",
-        help="another session working this task, tracked only: task chat goes to the owning bot",
-    )
-    s.add_argument(
-        "--wake-once",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="a pull request: wake this task once when its checks finish (pass or fail), it is approved or "
-        "gets changes requested, or a release ships it; never changes the task's status. "
-        "--no-wake-once disarms it",
-    )
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task link")
-    readers = task.add_parser("readers", help="who can see a private task: list, add, remove").add_subparsers(
-        dest="subsub"
-    )
-    s = readers.add_parser("list", help="its requester, owner and readers")
-    s.add_argument("id")
-    s.set_defaults(fn="task readers list")
-    for change, words in (
-        ("add", "let them see it: people, bots or group:<id>s"),
-        ("remove", "take them off: they stop seeing it"),
-    ):
-        s = readers.add_parser(change, help=words)
-        s.add_argument("id")
-        s.add_argument("readers", nargs="+", metavar="X", help="human:<id>, bot:<slug> or group:<id>")
-        s.set_defaults(fn="task readers " + change)
-    s = task.add_parser("followers", help="who follows a task, each at their level")
-    s.add_argument("id")
-    s.set_defaults(fn="task followers")
-    for change, words in (("follow", "follow a task, or set your level"), ("unfollow", "stop following a task")):
-        s = task.add_parser(change, help=words)
-        s.add_argument("id")
-        if change == "follow":
-            s.add_argument("--level", choices=("live", "mentions", "digest", "muted"))
-        s.add_argument(
-            "--who", help="someone else who sees it (human:<id> or bot:<slug>), when you may change the task"
-        )
-        s.set_defaults(
-            fn="task follow", **({"unfollow": True} if change == "unfollow" else {})
-        )  # one tool: tico_task_follow
     for change, words in (
         ("relate", "relate another task to this one: <id> [<kind>] <task>, e.g. <id> depends_on <task>"),
         ("unrelate", "take a relation off: <id> [<kind>] <task>"),
@@ -1100,18 +901,6 @@ def parser():
                 "its merged PRs (how a Validate task waits for its work to reach production)",
             )
         s.set_defaults(fn="task relate", **({"remove": True} if change == "unrelate" else {}))
-    s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
-    s.add_argument("id", help="the task that merges later")
-    s.add_argument("task", help="the task it merges after")
-    s.add_argument("--remove", action="store_true", help="take the order off instead")
-    s.set_defaults(fn="task after")
-    s = task.add_parser("label", help="add or remove labels on a task")
-    s.add_argument("id")
-    s.add_argument("--add", action="append")
-    s.add_argument("--remove", action="append")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task label")
     s = task.add_parser(
         "attach",
         help="attach a file to a task; prints the link for your note. With --req, attach a page "
@@ -1138,98 +927,6 @@ def parser():
         "Never quote their note back to them",
     )
     s.set_defaults(fn="task attach")
-    s = task.add_parser("context", help="readable page and meeting references for a task")
-    s.add_argument("id")
-    s.set_defaults(fn="task context")
-    s = task.add_parser("meetings", help="meetings linked to a task")
-    s.add_argument("id")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor")
-    s.set_defaults(fn="task meetings")
-    s = task.add_parser("list")
-    s.add_argument("--q", help="title words or #N")
-    s.add_argument("--owner")
-    s.add_argument("--requester")
-    s.add_argument("--status", action="append", choices=["open", "done", "closed"])
-    s.add_argument("--label")
-    s.add_argument("--sort", choices=["queue", "finished"], help="finished: most recently ended first")
-    s.add_argument("--number", type=int, help="only this task number")
-    s.add_argument("--updated-since", help="only tasks changed after this ISO-8601 time with a timezone")
-    s.add_argument("--member", help="only tasks this person or bot is on in some role (me, a human id, a bot slug)")
-    s.add_argument("--role", help="with --member: only tasks they are on in this role")
-    s.add_argument("--pipeline", help="only this pipeline's tasks: its id (tico pipeline list)")
-    s.add_argument(
-        "--stage",
-        help="only the tasks in this stage: its id, or its name with --pipeline (tico pipeline show <pipeline>)",
-    )
-    s.add_argument(
-        "--waiting-on", help="only open tasks whose turn is this person's or bot's: me, a human id, a bot slug"
-    )
-    s.add_argument("--brief", action="store_true", help="leave out bodies")
-    s.add_argument(
-        "--all", action="store_true", help="every task (snoozed ones too) and every bot you may see, as {tasks, bots}"
-    )
-    s.add_argument(
-        "--snoozed",
-        choices=["only", "all"],
-        help="snoozed tasks are left out: only lists just them, all lists them with the rest",
-    )
-    s.add_argument("--limit", type=int, help="tasks in a page (500 at most); the answer is then {tasks, next_offset}")
-    s.add_argument("--offset", type=int, help="skip this many: a page's next_offset")
-    s.set_defaults(fn="task list")
-    s = task.add_parser(
-        "show",
-        help="one task: its version, stage, owner, turn, what it takes to leave the stage, next; several ids: their "
-        "fields in one read",
-    )
-    s.add_argument("id", nargs="+")
-    s.add_argument("--json", action="store_true", help="the task as JSON instead of its lines")
-    s.set_defaults(fn="task show")
-    s = task.add_parser("run", help="start a bot's task now, as the task")
-    s.add_argument("id")
-    s.set_defaults(fn="task run")
-    s = task.add_parser(
-        "model",
-        help="the model this task's runs use, with its effort and harness; --clear puts it "
-        "back on the bot's task model",
-    )
-    s.add_argument("id")
-    s.add_argument("model", nargs="?", help="a model id or name; leave out to change only --effort or --harness")
-    s.add_argument("--effort")
-    s.add_argument("--harness")
-    s.add_argument(
-        "--clear", action="store_true", help="clear the task's own model: its runs use the bot's task model again"
-    )
-    s.set_defaults(fn="task model")
-    s = task.add_parser(
-        "snooze",
-        help="set a task aside in its stage, with why: off Needs you and quiet until DATE; with no date it is On ice",
-    )
-    s.add_argument("id")
-    s.add_argument("--until", help="ISO-8601 date (the start of that day, Pacific) or date-time with a zone")
-    s.add_argument("-m", "--why", help='why, and what you wait for ("vendor replies by Nov 14")')
-    s.add_argument("--version", type=int, help=version_help)
-    s.set_defaults(fn="task snooze")
-    s = task.add_parser("unsnooze", help="a person brings a snoozed task back now; its owner is woken once")
-    s.add_argument("id")
-    s.add_argument("-m", "--why")
-    s.set_defaults(fn="task unsnooze")
-    s = task.add_parser("queue", help="queue again: put the PRs GitHub took out of the merge queue back in it")
-    s.add_argument("id")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task queue")
-    s = task.add_parser("release", help="cut the release a task in Release waits for, the way the repository makes one")
-    s.add_argument("id")
-    s.add_argument("--tag", help="the release's tag, where the repository releases from a tag")
-    s.add_argument("--version", type=int, help=version_help)
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task release")
-    s = task.add_parser("unlink", help="take a link off a task: a PR closed without merging, by its URL or id")
-    s.add_argument("id")
-    s.add_argument("link", help="the link's URL, or its id")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="task unlink")
 
     replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
     s = replay.add_parser("show", help="what happened in a window, in time order, as you may see it (JSON)")

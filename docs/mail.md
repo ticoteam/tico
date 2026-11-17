@@ -42,8 +42,9 @@ Undo applies the inverse to those ids, including mail already in that state. Onl
 label. These commands never delete, trash, or change Spam, Sent or Draft labels.
 API: `POST /api/v2/mail/messages/organize`.
 
-Automation archive, label and leave actions run on the server for Whole Workspace mailboxes, without waiting for a
-computer. Other mail actions and personal connections still use the mailbox's computer; owner access is checked again before acting.
+Automation mail actions run on the server, for a Whole Workspace mailbox or one with its person's own Connect Google
+grant; owner access is checked again before acting. An action on a mailbox neither covers fails with why; one Google
+cannot be reached for waits for the server's next try.
 
 Mail is one shared tool, `tico email` (with `tico calendar`), over the server's routes. Who may act as which
 mailbox is Tico's answer (below), never a prompt's. Every read of a body and every label, archive or

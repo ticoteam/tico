@@ -120,7 +120,9 @@ def granola_sync(api, args):
 
 @tool(
     "tico_meeting_search",
-    "Search meeting history and transcripts, with excerpts and available speaker timestamps. Bots see shared Team meetings and filed meetings they were attached to, never personal notes. Empty q lists recent accessible meetings.",
+    "Search meeting history and transcripts, with excerpts and available speaker timestamps. Bots "
+    "see shared Team meetings and filed meetings they were attached to, never personal notes. "
+    "Empty q lists recent accessible meetings.",
     {
         "q": _s("Words to search for; omit for recent history"),
         "person": _s("Owner, participant, or speaker"),
@@ -152,9 +154,10 @@ def meetings_transcript(api, args):
 @tool(
     "tico_meeting_import",
     "File a meeting transcript or notes from another tool (Zoom, Google Meet, Granola, Otter, "
-    "Fireflies, a file...) into your Pending queue unless you choose live or auto-share. The transcript is plain text (one line per turn: an optional "
-    "[mm:ss] and 'Name: text'), WebVTT, SRT, or JSON segments [{speaker, start, end, text}] with times in seconds; the "
-    "format is detected. Send the same source and external_id again to update it instead of adding another.",
+    "Fireflies, a file...) into your Pending queue, unless you choose live or auto-share. Plain "
+    "text (one 'Name: text' line per turn, optional [mm:ss]), WebVTT, SRT, or JSON segments "
+    "[{speaker, start, end, text}] with times in seconds; the format is detected. The same source "
+    "and external_id again updates it.",
     {
         "title": _s("What the meeting was"),
         "transcript": {
@@ -203,10 +206,9 @@ def meetings_import_file(api, args):
 # ----------------------------------------------------------------------------- calendar
 @tool(
     "tico_calendar_list",
-    "Read upcoming appointments on a team calendar. Every bot may "
-    "use this tool. The default is the team owner's calendar; pass `calendar` for your "
-    "operator's. "
-    "Results are read live from the calendar and include when they were read.",
+    "Read upcoming appointments on a team calendar. Every bot may use this tool. The default is "
+    "the team owner's calendar; pass `calendar` for your operator's. Results are read live from "
+    "the calendar and include when they were read.",
     {"calendar": _s("Roster email whose calendar to read; default the team owner's", default="")},
 )
 def calendar_upcoming(api, args):
@@ -281,9 +283,9 @@ def _clean(fields):
 
 @tool(
     "tico_calendar_events",
-    "Events, bot runs, due dates and time away on the calendars in `who` (default: yours), in a window of up to 62 "
-    "days. Everyone in the company reads a Tico calendar; a Google calendar shows what Google's sharing allows. A "
-    "busy-only event shows as Busy. Returns occurrences.",
+    "Events, bot runs, due dates and time away on the calendars in `who` (default: yours), in a "
+    "window of up to 62 days. Everyone in the company reads a Tico calendar; a Google calendar "
+    "shows what Google's sharing allows. A busy-only event shows as Busy. Returns occurrences.",
     {
         "who": CALENDAR_WHO,
         "from": _s("Window start: ISO-8601 with zone, or YYYY-MM-DD. Default: today"),
@@ -315,10 +317,10 @@ def calendar_free(api, args):
 
 @tool(
     "tico_calendar_add",
-    "Book an event with `attendees`, optionally repeated. Bots and the Assistant may book anyone unless the Who bots "
-    "may book rule prevents it, and the refusal names that rule. A person may add only to their own Tico calendar, "
-    "and only without Google connected. A write to a connected person's calendar lands on their Google calendar. "
-    "Returns the occurrence.",
+    "Book an event with `attendees`, optionally repeated. Bots and the Assistant may book anyone "
+    "unless the Who bots may book rule prevents it; the refusal names that rule. A person may add "
+    "only to their own Tico calendar, and only without Google connected. A write to a connected "
+    "person's calendar lands on their Google calendar. Returns the occurrence.",
     {
         "calendar": _s(
             "Whose calendar: a ref (human:<id>, bot:<id>, shared:<id>, google:<id>) or an email such as "
@@ -390,10 +392,10 @@ def calendar_cancel(api, args):
 
 @tool(
     "tico_calendar_search",
-    "Find events whose title, notes or location match the words, across the calendars in `who` (default: yours), "
-    "nearest first. Tokens in q: with:<name>, bot:<name>, kind:<event|run|due|away>, before:<date>, after:<date>, "
-    "has:transcript, automation:<name>, trigger:<kind>, longer:<N>m. `partial` true means some Google calendars ran "
-    "out of time.",
+    "Find events whose title, notes or location match the words, across the calendars in `who` "
+    "(default: yours), nearest first. Tokens in q: with:<name>, bot:<name>, "
+    "kind:<event|run|due|away>, before:<date>, after:<date>, has:transcript, automation:<name>, "
+    "trigger:<kind>, longer:<N>m. `partial` true means some Google calendars ran out of time.",
     {"q": _s("Words and tokens"), "who": CALENDAR_WHO},
     required=("q",),
 )
