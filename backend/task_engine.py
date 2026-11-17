@@ -2300,14 +2300,13 @@ def add_requirement(
     ends_with_task: bool = False,
 ) -> Row:
     """Add an OK from a named person to this task, for this visit (C30). A question is refused: it is a message marked
-    ❓ (backend/question_marks.py); a bot's OK not bound to an action shows what it approves (a page or a file). `brief`: a question's why, its
-    choices' lines and the one recommended (backend/ask_shape.py), and `title`, the ask's short heading, kept in the
-    requirement's settings. `ends_with_task`: a question a feature asks about the task's own work
-    (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it never holds it alone. The task does not leave the stage
-    until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
-    `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
-    (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
-    `for_action`: an OK bound to an action, task_asks.ask_ok, is that action's own)."""
+    ❓ (backend/question_marks.py); a bot's OK not bound to an action shows what it approves (a page or a file). `brief`
+    and `title`, the ask's short heading, are kept in the requirement's settings. `ends_with_task`: an OK a feature asks
+    about the task's own work (backend/person_asks.py), taken back once nothing else holds the task (`advance`), so it
+    never holds it alone. The task does not leave the stage until it is answered, withdrawn or pushed past. A bot has
+    one open per task: asking again replaces it (C15, `_replace_open`). A bot does not ask a person the stage's OK or
+    page already waits on (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page
+    (validate_gate; `for_action`: an OK bound to an action, task_asks.ask_ok, is that action's own)."""
     H = _h()
     row = task(conn, task_id)
     if not row:

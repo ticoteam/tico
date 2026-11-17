@@ -306,9 +306,21 @@ def test_a_bots_end_of_turn_text_on_its_open_task_is_posted_to_the_tasks_chat(ap
 
 def test_a_turn_that_already_wrote_in_the_tasks_chat_posts_no_end_of_turn_text(api):
     machine, task, attempt = _turn(api)
-    post(api, f"tasks/{task['id']}/comments", {"text": "Halfway through the packet."}, attempt["token"])
+    post(api, f"tasks/{task['id']}/questions", {"to": "ana", "text": "Is the second half needed?"}, attempt["token"])
     assert not _finish(api, machine, attempt, "Done with the first half.")
     assert _said(api, "Done with the first half.") == 0
+
+
+def test_a_bot_does_not_comment_on_its_own_task_during_its_turn_there(api):
+    """(c): what it says goes in its reply at the end of the turn; a comment carrying files, or on another task, goes."""
+    machine, task, attempt = _turn(api)
+    refused = post(api, f"tasks/{task['id']}/comments", {"text": "Halfway."}, attempt["token"], expected=409)
+    assert refused["error"]["code"] == "own_turn"
+    other = post(api, "tasks", {"owner": "ana", "title": "Order the paper", "body": "Order the fixture paper"})
+    post(api, f"tasks/{other['id']}/comments", {"text": "The packet needs paper."}, attempt["token"])
+    assert _said(api, "The packet needs paper.") == 1
+    reply = _finish(api, machine, attempt, "Halfway through the packet.")
+    assert reply and reply["refs"]["task"] == task["id"]
 
 
 # ---- review follow-ups: who a reply resumes, a gone addressee, the counts, the rules, Send anyway -----------------
@@ -443,7 +455,7 @@ def test_a_chat_started_task_posts_no_end_of_turn_text_after_its_turn_wrote(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Check the packet", "body": "Check the fixture packet"})
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "fixture-thread"}, machine["token"])
-    post(api, f"tasks/{task['id']}/comments", {"text": "Halfway through the packet."}, attempt["token"])
+    post(api, f"tasks/{task['id']}/questions", {"to": "ana", "text": "Is the second half needed?"}, attempt["token"])
     assert not _finish(api, machine, attempt, "Done with the first half.")
     assert _said(api, "Done with the first half.") == 0
 
