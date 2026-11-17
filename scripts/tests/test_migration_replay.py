@@ -108,7 +108,7 @@ def test_arguments_refuse_invalid_reserves_exceptions_and_docker_options(extra):
     assert error.value.code == 2
 
 
-def test_report_lists_dropped_tables_first_and_json_has_the_same_facts():
+def test_report_lists_dropped_tables_first_and_json_has_changes_and_totals_not_every_count():
     before, after = checks({"old": 10, "tasks": 5}), checks({"new": 2, "tasks": 4})
     result = {
         "before": before,
@@ -121,7 +121,11 @@ def test_report_lists_dropped_tables_first_and_json_has_the_same_facts():
     assert text.splitlines()[0] == "Dropped tables: old"
     assert "New tables: new" in text and "Rows tasks: 5 -> 4" in text
     assert "Migration: 1.250s" in text and "Result: FAIL" in text
-    assert json.loads(text.splitlines()[-1].removeprefix("REPLAY ")) == result
+    summary = json.loads(text.splitlines()[-1].removeprefix("REPLAY "))
+    assert summary["changed"] == result["changed"] and summary["dropped"] == ["old"] and summary["new"] == ["new"]
+    assert summary["before"] == {"integrity_errors": 0, "foreign_keys": 0, "tables": 2, "rows": 15}
+    assert summary["after"] == {"integrity_errors": 0, "foreign_keys": 0, "tables": 2, "rows": 6}
+    assert "Before: integrity ok" in text and "2 tables, 15 rows" in text
 
 
 def test_main_returns_failure_and_reports_only_safe_facts(monkeypatch, capsys):

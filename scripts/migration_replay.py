@@ -158,12 +158,23 @@ def report(result):
             lines.append(
                 f"{phase.title()}: integrity {'ok' if not checks['integrity_errors'] else 'FAIL'}, "
                 f"integrity errors {checks['integrity_errors']}, foreign keys {checks['foreign_keys']}; "
-                f"rows {json.dumps(checks['counts'], sort_keys=True)}"
+                f"{len(checks['counts'])} tables, {sum(checks['counts'].values())} rows"
             )
     seconds = result.get("migration_seconds")
     lines.append(f"Migration: {seconds:.3f}s" if seconds is not None else "Migration: not run")
     lines.append("Result: " + ("PASS" if result["ok"] else "FAIL: " + "; ".join(result["failures"])))
-    lines.append("REPLAY " + json.dumps(result, sort_keys=True))
+    # Per-table counts stay out of the summary line; changed tables are already in "changed".
+    summary = {key: value for key, value in result.items() if key not in ("before", "after")}
+    for phase in ("before", "after"):
+        if result.get(phase):
+            checks = result[phase]
+            summary[phase] = {
+                "integrity_errors": checks["integrity_errors"],
+                "foreign_keys": checks["foreign_keys"],
+                "tables": len(checks["counts"]),
+                "rows": sum(checks["counts"].values()),
+            }
+    lines.append("REPLAY " + json.dumps(summary, sort_keys=True))
     return "\n".join(lines)
 
 
