@@ -484,6 +484,8 @@ def test_a_ui_change_runs_the_release_only_browser_scripts_it_picks_before_it_me
         assert set(light(["ui/tests/support/page.cts"], event)["browser"]) >= every
         # UI source outside UI_MAP runs the scripts named after it, beside the smoke set.
         assert {"tools", "bot-tools", "redesign-e2e-tools"} <= set(light(["ui/app/tools.ts"], event)["browser_direct"])
+        # And the scripts UI_ALSO adds for it: the big board's flood check for the board's live drawing.
+        assert "board-flood" in light(["ui/app/task-pipelines.ts"], event)["browser_direct"]
         # A change outside ui/ picks none: its plan is what it was.
         assert light(["backend/health.py"], event)["browser_direct"] == []
     assert light(["backend/health.py"])["browser"] == []

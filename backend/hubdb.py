@@ -175,7 +175,7 @@ def task_post_sql(m="m"):
     )
 
 
-def delivery_counts_sql(m, recipient, reason):
+def delivery_counts_sql(m: str, recipient: str, reason: str) -> str:
     """SQL: a delivery of message `m` to `recipient`, whose reason is the SQL `reason`, is a reason for a person to see
     it. Not when the recipient is a person and the message is task news (`task_news_sql`), nor when it is a bot's post
     in a task's own thread (`task_post_sql`) for a reason outside `BOT_TASK_REASONS`. One rule for the write side

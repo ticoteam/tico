@@ -260,9 +260,9 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
         E.changed(conn, task_id, E.SYSTEM)
         if said == "not_met" and R.jev_gates(requirement):
             line = (
-                f'Jev sent back "{R.name_of(requirement)}": {reasons}'
+                f'Decision model sent back "{R.name_of(requirement)}": {reasons}'
                 if reasons
-                else (f'Jev sent back "{R.name_of(requirement)}"')
+                else (f'Decision model sent back "{R.name_of(requirement)}"')
             )
             E.tell_owner(conn, task_id, line, f"jev:{verdict['id']}")
         elif said in ("unsure", "failed"):
@@ -287,7 +287,7 @@ def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str)
     standing = R.standing(conn, row, requirement, answer)
     name = R.name_of(requirement)
     if standing.state == R.WAITING and standing.line.startswith(R.DECIDE) and standing.on:
-        what_jev = "could not check" if "Jev couldn't check" in standing.line else "is unsure of"
+        what_jev = "could not check" if "Decision model couldn't check" in standing.line else "is unsure of"
         lead = f'Jev {what_jev} "{name}": you decide it, as the pipeline\'s manager.'
         task_wakes.add(
             conn,

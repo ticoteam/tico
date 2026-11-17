@@ -811,3 +811,42 @@ TAG = (
         example="tico tag update launch --version 2 --label Launch",
     ),
 )
+
+
+# `tico feedback ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+FEEDBACK = (
+    Group("feedback", "a person's 👍/👎 on a bot's work: give, list, make a rule"),
+    Command(
+        "feedback give",
+        "rate a message or task a bot made; again replaces it (an ask: task thumbs)",
+        example="tico feedback give task T1 down --reason 'Wrong owner' --tell-bot",
+    ),
+    Command(
+        "feedback remove",
+        "take back your feedback, and its note if no run carried it",
+        example="tico feedback remove f1",
+    ),
+    Command(
+        "feedback markers",
+        "your feedback on these subjects and everyone's up/down counts",
+        args=(Arg("subject_ids", action="store", nargs="+"),),
+        example="tico feedback markers task T1 T2",
+    ),
+    Command(
+        "feedback list",
+        "feedback newest first, a page at a time",
+        args=(Arg("bot_id", "--bot"),),
+        example="tico feedback list --rating down --since 7d",
+    ),
+    Command("feedback reasons", "your five latest distinct reasons", example="tico feedback reasons"),
+    Command(
+        "feedback rule-draft",
+        "a one-sentence rule drafted from your 👎; stores nothing",
+        example="tico feedback rule-draft f1",
+    ),
+    Command(
+        "feedback rule",
+        "your 👎 as an org rule: active if you manage the bot, else suggested",
+        example="tico feedback rule f1 'Reply within a day' --all-bots",
+    ),
+)

@@ -304,7 +304,7 @@ def _close(conn: "sqlite3.Connection", dup: Row, original: Row) -> None:
     H = _h()
     number = f"#{original['number']}" if original.get("number") is not None else "another task"
     TR.relate(conn, H.KEEPER, dup["id"], original["id"], "duplicate_of")  # pyright: ignore[reportUnknownMemberType]
-    E.move(conn, dup["id"], E.CLOSED, E.SYSTEM, f"Duplicate of {number}: Jev found the same idea")
+    E.move(conn, dup["id"], E.CLOSED, E.SYSTEM, f"Duplicate of {number}: Decision model found the same idea")
     asker = dup.get("requester_id")
     if H.is_human(asker):
         from . import roadmaps

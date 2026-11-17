@@ -73,7 +73,7 @@ const PE_SWITCHES: Record<string, [string, string][]> = {
  * same kind `ok`, told apart by who it names); "…" opens the new one's editor to choose. "Someone moves it by hand" is
  * the stage's `by_hand`, shown as one more requirement. */
 const PE_REQ_PICKS: [string, string][] = [
-  ['by_hand', 'OK from anyone'], ['ok_person', 'OK from a person…'], ['ok_bot', 'OK from a bot…'], ['owner_done', 'Owner says done'], ['page', 'A page, checked by Jev…'],
+  ['by_hand', 'OK from anyone'], ['ok_person', 'OK from a person…'], ['ok_bot', 'OK from a bot…'], ['owner_done', 'Owner says done'], ['page', 'A page, checked by Decision model…'],
   ['answer', 'An answer…'], ['pr_open', 'PR open'], ['checks_pass', 'Checks pass'], ['pr_merged', 'PR merged'], ['in_release', 'In a release'],
   ['linked_done', 'Linked work done'], ['related_input', 'Related input']];
 /** The picks whose new requirement opens its editor (something to choose or name); the rest are added as a row. */
@@ -179,7 +179,7 @@ function peReqText(req: PipelineReqRec): string {
     const who = peApprovers(req);
     return who.length ? peOkWords(who) : line || (req.who_oks === 'people_only' ? 'OK from a person' : 'OK from someone');
   }
-  if (needs === 'page') return line ? `Page: ${line}` : 'A page, checked by Jev';
+  if (needs === 'page') return line ? `Page: ${line}` : 'A page, checked by Decision model';
   if (needs === 'answer') return line ? `Answer: ${line}` : 'An answer';
   return line ? `${peKindName(needs)}: ${line}` : peKindName(needs);
 }
@@ -293,7 +293,7 @@ function peReqPickOpen(state: PeState, button: HTMLElement): void {
   if (!stage) return;
   pePickOpen(button, 'pe-req-pick', 'data-pe-req-add', `<div class="tl-menu" role="menu" aria-label="Add a requirement">`
     + peReqPicks(stage).map(([k, l]) => `<button type="button" class="tl-mi" role="menuitem" data-pe-req-kind="${k}" data-pe-si="${si}">${esc(l)}</button>`).join('')
-    + peSoonItem('A question Jev answers…') + peSoonItem('In your own words…') + '</div>');
+    + peSoonItem('A question Decision model answers…') + peSoonItem('In your own words…') + '</div>');
 }
 /** A stage's add button's pick list (+ Requirement, On entering's + Rule and + Action), beside it: the popover `id` in the dialog, made
  * once, with the menu's HTML. A second click on the button (`attr`) closes it; closed, the button has the focus back. */
@@ -436,7 +436,7 @@ function peEnterPickOpen(state: PeState, button: HTMLElement): void {
   const items = peEnterGroup(peEnterPicks(state, stage, si), kind)
     .map(([k, l]) => `<button type="button" class="tl-mi" role="menuitem" data-pe-enter-pick="${k}" data-pe-si="${si}">${esc(l)}</button>`);
   pePickOpen(button, `pe-${kind}-pick`, `data-pe-enter-add="${kind}"`,
-    `<div class="tl-menu" role="menu" aria-label="${kind === 'rule' ? 'Add a rule' : 'Add an action'}">${items.join('')}${kind === 'rule' ? peSoonItem('A question Jev answers…') + peSoonItem('In your own words…') : ''}</div>`);
+    `<div class="tl-menu" role="menu" aria-label="${kind === 'rule' ? 'Add a rule' : 'Add an action'}">${items.join('')}${kind === 'rule' ? peSoonItem('A question Decision model answers…') + peSoonItem('In your own words…') : ''}</div>`);
 }
 /** A Limit typed, an owner or a bot of several picked, or a Pipeline picked: its row says it at once (the editor stays
     open; a redraw would take the focus). */

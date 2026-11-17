@@ -470,7 +470,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     said = (verdict or {}).get("verdict")
     reasons = " ".join(str((verdict or {}).get("reasons") or "").split())
     if said is None:
-        return Standing(requirement, WAITING, JEV, "Jev is checking")
+        return Standing(requirement, WAITING, JEV, "Decision model is checking")
     oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
     # Jev's verdict on a spec predicts nothing a person decides (task #351: specs it passed were sent back 49% of the
     # time, those it was unsure of 36%), so on a Spec page it never gates: a missing part goes to the person as its line.
@@ -480,7 +480,12 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         and gates
         and not (oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone())
     ):
-        return Standing(requirement, NOT_MET, owner, f"Jev sent it back: {reasons}" if reasons else "Jev sent it back")
+        return Standing(
+            requirement,
+            NOT_MET,
+            owner,
+            f"Decision model sent it back: {reasons}" if reasons else "Decision model sent it back",
+        )
     # This version was asked of someone once Jev had looked: its wait counts from then, not from the stage's start.
     asked = max(str(page["created_at"]), str((verdict or {}).get("updated_at") or ""))
     first = ""
@@ -505,17 +510,17 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         # decides with Jev's reason, as on an unsure (Initech, Nov 11: a page Jev could never pass left only a push-past).
         # A Spec page Jev never gates: the person sees the part that is missing.
         if not gates:
-            line = f"Jev: {reasons}" if reasons else "Jev: a part is missing"
+            line = f"Decision model: {reasons}" if reasons else "Decision model: a part is missing"
         else:
-            line = f"Jev sent it back again: {reasons}" if reasons else "Jev sent it back again"
+            line = f"Decision model sent it back again: {reasons}" if reasons else "Decision model sent it back again"
         return Standing(requirement, WAITING, person, after + line, since=asked, notices=notices)
     if said in ("unsure", "failed"):
         # A failed verdict's reason is why the calls failed (last_error): it was Jev, not the page.
         failure = " ".join(str((verdict or {}).get("last_error") or "").split())
         line = (
-            (f"Jev couldn't check this: {failure}" if failure else "Jev couldn't check this")
+            (f"Decision model couldn't check this: {failure}" if failure else "Decision model couldn't check this")
             if said == "failed"
-            else (f"Jev is unsure: {reasons}" if reasons else "Jev is unsure")
+            else (f"Decision model is unsure: {reasons}" if reasons else "Decision model is unsure")
         )
         if oks_anyway:
             # A person OKs this page whatever Jev says: they are asked at once, every version. A bot round trip adds
@@ -537,7 +542,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         return Standing(
             requirement, WAITING, person, f"{after}{_ok_line(conn, person, page)}", since=asked, notices=notices
         )
-    return Standing(requirement, MET, line="Jev passed it")
+    return Standing(requirement, MET, line="Decision model passed it")
 
 
 def _same_code_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row, page: Row) -> bool:

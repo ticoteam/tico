@@ -99,14 +99,14 @@ def test_a_check_marks_a_401_key_rejected_and_a_2xx_working(api, monkeypatch):
     assert get(api, f"api-tools/{tid}")["status"] == {"tone": "ok", "text": "Working"}
     answer.code = 500
     assert post(api, f"api-tools/{tid}/check", {})["detail"].startswith("Check failed")
-    # The background loop checks a proxied tool once its last check is old; a computer tool never.
+    # The background loop checks a tool once its last check is old, its key on the proxy or on computers alike.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tool_checks SET checked_at='2000-01-01T00:00:00Z'")
     with api.app.state.store.read() as c:
         assert api_tools.due(c) == [tid]
     api.patch(f"/api/v2/api-tools/{tid}", json={"delivery": "computer"}, headers=headers())
     with api.app.state.store.read() as c:
-        assert api_tools.due(c) == []
+        assert api_tools.due(c) == [tid]
 
 
 def test_no_answer_carries_a_key_value_but_the_vaults_reveal(api, monkeypatch):

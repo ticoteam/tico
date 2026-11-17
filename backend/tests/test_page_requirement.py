@@ -82,7 +82,7 @@ def test_no_page_is_the_owners_turn_and_attaching_owes_jev_a_verdict(c, store):
     made = _attach(c, row, "page:" + fid)
     assert made["version"] == 2, "no version pins the newest"
     standing = _standing(c, row)
-    assert (standing.state, standing.on, standing.line) == (R.WAITING, R.JEV, "Jev is checking")
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, R.JEV, "Decision model is checking")
     owed = V.owed(c, H.shift(H.now(), seconds=1))
     assert [(o["file_id"], o["version"], o["rubric_hash"]) for o in owed] == [(fid, 2, made["rubric_hash"])]
     assert "page_attached" in X.events(c, row["id"])
@@ -129,7 +129,7 @@ def test_jev_passed_with_no_person_named_meets_it_and_the_task_moves(c, store):
     row = _task(c)
     made = _attach(c, row, "page:" + _page(c, store)[0])
     _say(c, made, "met")
-    assert _standing(c, row).line == "Jev passed it"
+    assert _standing(c, row).line == "Decision model passed it"
     assert E.advance(c, row["id"])["stage"]["name"] == "Done"
 
 
@@ -142,7 +142,7 @@ def test_jev_sends_it_back_to_the_owner_with_the_reasons(c, store):
     assert (standing.state, standing.on, standing.line) == (
         R.NOT_MET,
         WRITER,
-        "Jev sent it back: No acceptance criteria.",
+        "Decision model sent it back: No acceptance criteria.",
     )
 
 
@@ -166,7 +166,7 @@ def test_after_jev_passes_the_named_person_oks_that_exact_version(c, store):
     assert H._one(c, "SELECT page_version FROM answers WHERE id=?", (sent["answer_id"],))["page_version"] == 1
     _page(c, store, "<p>v2 with errors</p>", fid=fid)
     second = _attach(c, row, "page:" + fid)
-    assert _standing(c, row).line == "Jev is checking", "a new version starts the verdict and the OK over"
+    assert _standing(c, row).line == "Decision model is checking", "a new version starts the verdict and the OK over"
     _say(c, second, "met")
     assert _standing(c, row).line == 'Version 2, after the send back: "Say how errors show". OK Ana (version 2)', (
         "the send back was for version 1: the new version comes back marked with it"
@@ -236,7 +236,7 @@ def test_unsure_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_once(c, s
     _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell if the scope is set.")
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
-    assert standing.line == f"{R.DECIDE} Jev is unsure: Can't tell if the scope is set."
+    assert standing.line == f"{R.DECIDE} Decision model is unsure: Can't tell if the scope is set."
     for who in (BEN, WRITER):
         with _refused("task_requirement"):
             A.answer(c, row["id"], rid, who, "ok", "Looks fine", seen_version=_v(c, row))
@@ -299,7 +299,7 @@ def test_unsure_goes_to_a_person_when_no_manager_bot_can_decide(c, store):
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell")
     standing = _standing(c, row)
-    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev is unsure: Can't tell"), (
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Decision model is unsure: Can't tell"), (
         "no bot round"
     )
     A.answer(c, row["id"], rid, BEN, "no", "Set the scope")
@@ -319,7 +319,7 @@ def test_unsure_on_a_persons_stage_is_theirs_at_once(c, store):
     _pipeline(c)
     row = _owned(c, BEN)
     _say(c, _attach(c, row, "page:" + _page(c, store)[0], by=BEN), "unsure", "Can't tell")
-    assert (_standing(c, row).state, _standing(c, row).line) == (R.WAITING, "Jev is unsure: Can't tell")
+    assert (_standing(c, row).state, _standing(c, row).line) == (R.WAITING, "Decision model is unsure: Can't tell")
 
 
 def test_a_page_a_person_oks_anyway_goes_to_them_every_version_and_after_a_send_back_to_the_same_person(c, store):
@@ -368,7 +368,7 @@ def test_a_page_a_person_oks_anyway_that_jev_sends_back_twice_is_the_persons_to_
     _again(c, store, row, fid, verdict="not_met", reasons="Says no brand check passed")
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, None)
-    assert standing.line == "Jev sent it back again: Says no brand check passed"
+    assert standing.line == "Decision model sent it back again: Says no brand check passed"
     (ask,) = [r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == rid]
     assert sorted(ask["may"]) == ["no", "ok"], "the person may OK it"
     assert A.answer(c, row["id"], rid, BEN, "ok", "No brand card yet; the copy is fine")["stage"]["name"] != "Spec"
@@ -548,7 +548,7 @@ def test_a_failed_check_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_o
     _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "unsure", "no model", failed=True)
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
-    assert standing.line == f"{R.DECIDE} Jev couldn't check this: no model."
+    assert standing.line == f"{R.DECIDE} Decision model couldn't check this: no model."
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, BEN, "ok")
     with _refused("task_why"):
@@ -562,7 +562,11 @@ def test_a_failed_check_on_the_managers_own_stage_is_a_persons(c, store):
     row = _owned(c, "bot:manager")
     _say(c, _attach(c, row, "page:" + _page(c, store)[0], by="bot:manager"), "unsure", "no model", failed=True)
     standing = _standing(c, row)
-    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev couldn't check this: no model")
+    assert (standing.state, standing.on, standing.line) == (
+        R.WAITING,
+        None,
+        "Decision model couldn't check this: no model",
+    )
 
 
 def test_a_failed_check_on_a_page_a_person_oks_anyway_is_theirs(c, store):
@@ -588,7 +592,7 @@ def test_a_failed_check_goes_to_a_person_once_per_visit_with_no_manager_bot(c, s
     assert (standing.state, standing.on, standing.line) == (
         R.NOT_MET,
         WRITER,
-        "Jev couldn't check this: Still can't tell",
+        "Decision model couldn't check this: Still can't tell",
     ), "a person already decided one this visit: the next goes back to the owner, not to their list"
 
 
@@ -598,7 +602,7 @@ def test_a_failed_check_is_a_persons_to_decide_and_their_ok_meets_it(c, store):
     row = _task(c)
     made = _attach(c, row, "page:" + _page(c, store)[0])
     _say(c, made, "unsure", "no model", failed=True)
-    assert _standing(c, row).line == "Jev couldn't check this: no model", (
+    assert _standing(c, row).line == "Decision model couldn't check this: no model", (
         "the failure says why: it was Jev, not the page"
     )
     assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] == "Done"
@@ -642,11 +646,11 @@ def test_a_review_page_counts_only_for_the_newest_commit(c, store):
     assert (standing.state, standing.on, standing.line) == (R.NOT_MET, WRITER, "New commits since the review")
     again = _attach(c, row, "page:" + fid, requirement="review")
     assert again["rubric_hash"] != made["rubric_hash"], "the same page for a new commit is a new verdict"
-    assert _standing(c, row).line == "Jev is checking"
+    assert _standing(c, row).line == "Decision model is checking"
 
 
 def _in_qa(c, store, *more):
-    """Review (Reviewer's page at 62de57f, Jev passed it), then QA: the Writer (the Builder) owns it, and a person
+    """Review (Reviewer's page at 62de57f, Decision model passed it), then QA: the Writer (the Builder) owns it, and a person
     OKs its Pre-release page (people only). `more`: QA's other requirements. Returns (task, Pre-release id)."""
     made = X.pipeline(
         c,
@@ -1179,8 +1183,8 @@ def test_jevs_send_back_wakes_the_bot_owner_with_the_reasons(store, seeded, monk
                 "SELECT body FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (WRITER, row["id"] + ":%:jev:%")
             )
         ]
-        assert _standing(r, row).line == "Jev sent it back: No scope"
-    assert len(bodies) == 1 and 'Jev sent back "Spec page": No scope' in bodies[0]
+        assert _standing(r, row).line == "Decision model sent it back: No scope"
+    assert len(bodies) == 1 and 'Decision model sent back "Spec page": No scope' in bodies[0]
 
 
 def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, seeded, monkeypatch):
@@ -1205,7 +1209,7 @@ def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, 
                 (row["id"],),
             )
         ]
-    assert line == f'{R.DECIDE} Jev is unsure: Can\'t tell if it meets "Spec page".', line
+    assert line == f'{R.DECIDE} Decision model is unsure: Can\'t tell if it meets "Spec page".', line
     assert notes == ['Can\'t tell if it meets "Spec page".'], notes
 
 
@@ -1256,7 +1260,9 @@ def test_three_failed_calls_give_the_page_to_the_pipelines_manager(store, seeded
     with store.read() as r:
         standing = _standing(r, row)
         assert standing.on == "bot:manager"
-        assert standing.line.startswith(f"{R.DECIDE} Jev couldn't check this: No judge is configured on this server.")
+        assert standing.line.startswith(
+            f"{R.DECIDE} Decision model couldn't check this: No judge is configured on this server."
+        )
         (woken,) = [
             m[0]
             for m in r.execute(
@@ -1337,7 +1343,7 @@ def test_the_route_attaches_a_readable_page_and_the_task_read_shows_it(api):
     assert body["page"] == {"file_id": fid, "version": 1}
     (entry,) = [e for e in body["task"]["to_leave"] if e["requirement_id"] == rid]
     assert entry["page"] == {"file_id": fid, "version": 1, "ref": f"page:{fid}@1"}
-    assert entry["standing"] == "Jev is checking" and entry["may"] == []
+    assert entry["standing"] == "Decision model is checking" and entry["may"] == []
     missing = api.post(
         f"/api/v2/tasks/{row['id']}/pages",
         json={"requirement": "Spec page", "page": "page:file-" + "1" * 24},
@@ -1648,12 +1654,12 @@ def test_needs_you_names_a_page_ok_by_its_task_and_decision_not_the_requirement(
     assert r.status_code == 200, r.text
     (item,) = [i for i in r.json()["items"] if i.get("requirement_id") == rid]
     assert item["line"] == "Spec for Importer spec, ready for your OK", item["line"]
-    assert views.page_ask_line("Review page", "Share chat", 'Jev is unsure: no checks. OK Ana (version 2)') == (
-        "Review for Share chat, ready for your OK. Jev is unsure: no checks."
-    )
+    assert views.page_ask_line(
+        "Review page", "Share chat", 'Decision model is unsure: no checks. OK Ana (version 2)'
+    ) == ("Review for Share chat, ready for your OK. Decision model is unsure: no checks.")
     assert views.page_ask_line("Results page", "", "OK someone (version 1)") == "Results page, ready for your OK"
     # Only the stage's own last phrase goes: one inside Jev's reason stays, and a name with brackets goes whole.
-    said = "Jev is unsure: says OK Ana (version 2) earlier. OK Ana (version 2)"
+    said = "Decision model is unsure: says OK Ana (version 2) earlier. OK Ana (version 2)"
     assert (
         views.page_ask_line("Spec page", "X", said)
         == "Spec for X, ready for your OK. " + said[: -len(" OK Ana (version 2)")]
@@ -1730,7 +1736,7 @@ def test_a_spec_page_missing_a_part_goes_to_the_person_with_that_line_not_back_t
     V.run(store, H.shift(H.now(), seconds=1))
     with store.read() as r:
         standing = _standing(r, row)
-        assert (standing.state, standing.line) == (R.WAITING, "Jev: No out-of-scope list found.")
+        assert (standing.state, standing.line) == (R.WAITING, "Decision model: No out-of-scope list found.")
         assert standing.on != WRITER
         assert _jev_lines(r, row) == ["No out-of-scope list found."]
         sent = r.execute(
@@ -1748,7 +1754,7 @@ def test_a_qa_page_missing_a_part_still_goes_back_to_its_bot_first(c, store):
     assert (standing.state, standing.on, standing.line) == (
         R.NOT_MET,
         WRITER,
-        "Jev sent it back: Reviewer 2's findings are missing.",
+        "Decision model sent it back: Reviewer 2's findings are missing.",
     )
 
 
@@ -1777,7 +1783,9 @@ def test_unsure_on_a_bots_stage_wakes_the_manager_once_per_version_and_not_the_p
     with store.read() as r:
         standing = _standing(r, row)
         assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
-        assert standing.line == f"{R.DECIDE} Jev is unsure: Can't tell if the version production runs is named."
+        assert (
+            standing.line == f"{R.DECIDE} Decision model is unsure: Can't tell if the version production runs is named."
+        )
         (asked,) = _jev_wakes(r, row, "bot:manager")
         assert "Can't tell if the version production runs is named." in asked
         assert _shipped("VALIDATE_RUBRIC") not in asked, "the line, never the whole check"
@@ -1799,7 +1807,8 @@ def test_a_part_that_is_no_on_a_bots_stage_still_goes_back_to_the_pages_bot(stor
         standing = _standing(r, row)
         assert (standing.state, standing.on) == (R.NOT_MET, WRITER)
         assert (
-            standing.line == "Jev sent it back: Doesn't say what was run or looked at in production and what it gave."
+            standing.line
+            == "Decision model sent it back: Doesn't say what was run or looked at in production and what it gave."
         )
         (told,) = _jev_wakes(r, row, WRITER)
         assert "Doesn't say what was run or looked at in production" in told

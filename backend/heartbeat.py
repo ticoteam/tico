@@ -284,7 +284,7 @@ def jev_verdicts(ctx: Context) -> tuple[str | None, bool]:
     given = page_verdicts.run(ctx.store, at)
     if not given:
         return None, True
-    return f"Jev gave {given} verdicts", False
+    return f"Decision model gave {given} verdicts", False
 
 
 def idea_checks(ctx: Context) -> tuple[str | None, bool]:
@@ -296,7 +296,7 @@ def idea_checks(ctx: Context) -> tuple[str | None, bool]:
     checked = IC.run(ctx.store, at)
     if not checked:
         return None, True
-    return f"Jev checked {checked} ideas", False
+    return f"Decision model checked {checked} ideas", False
 
 
 def related_input(ctx: Context) -> tuple[str | None, bool]:
@@ -423,8 +423,24 @@ STEPS = [
         capture="scheduler",
         outside=True,
     ),
-    Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
-    Step("idea_checks", "Jev's idea check", "due", None, idea_checks, failure="idea_checks", capture="scheduler"),
+    Step(
+        "jev_verdicts",
+        "Decision model's page verdicts",
+        "due",
+        None,
+        jev_verdicts,
+        failure="jev_verdicts",
+        capture="scheduler",
+    ),
+    Step(
+        "idea_checks",
+        "Decision model's idea check",
+        "due",
+        None,
+        idea_checks,
+        failure="idea_checks",
+        capture="scheduler",
+    ),
     Step("related_input", "Related input", "due", None, related_input, failure="related_input", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}

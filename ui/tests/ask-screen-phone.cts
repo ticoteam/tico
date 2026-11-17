@@ -146,7 +146,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     }
     await page.locator(`${approve}:not([disabled])`).waitFor();
 
-    // Approve: "✓ Approved · Undo" in Tico's line slot, over nothing else: not the page, not the buttons; all three
+    // Approve: "✓ Approved · Undo" in the bar's slot, over nothing else: not the page, not the buttons; all three
     // buttons visible, 44 px, and reached by a tap.
     const spot = (await box(page, approve))!;
     await page.mouse.click(spot.x + spot.width / 2, spot.y + spot.height / 2);
@@ -157,7 +157,7 @@ const box = async (page: Page, sel: string): Promise<Box | null> => page.locator
     if (shots) await page.screenshot({path: path.join(shots, 'ask-phone-390-approved.png')});
     const toast = (await box(page, '#need-card .dc-bar'))!, row = (await box(page, `${approve} >> xpath=..`))!;
     const slot = (await box(page, '#need-card .dc-sayw'))!;
-    check(Math.abs(toast.y - slot.y) < 1 && Math.abs(toast.height - slot.height) < 1, `the undo sits in Tico's line slot (${JSON.stringify(toast)} vs ${JSON.stringify(slot)})`);
+    check(Math.abs(toast.y - slot.y) < 1 && Math.abs(toast.height - slot.height) < 1, `the undo sits in the bar's slot (${JSON.stringify(toast)} vs ${JSON.stringify(slot)})`);
     check((await page.locator('#need-card .dc-bar').innerText()).startsWith('✓ Approved'), 'it says what was done');
     check(toast.y + toast.height <= row.y, `the undo is clear of the buttons (${toast.y + toast.height} > ${row.y})`);
     const undoBtn = (await box(page, '#need-card .dc-bar [data-dc="undo"]'))!;

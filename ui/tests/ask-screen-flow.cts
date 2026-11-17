@@ -6,8 +6,8 @@ import type {Route} from 'playwright';
 //   moment: each an exact span from now, late in the evening in Los Angeles too (a clock and zone faked here); Undo
 //   unsnoozes; the end counts it;
 // - the mic turns the mark into the wave and back, and nothing is sent;
-// - decideLineSet puts Tico's line in the bar and makes its pick the main button; null puts it back.
-// FLOW_SHOTS=<folder> saves the screen with a line on it, your own task's snooze choices and the undo after one.
+// - Tico's opinions show no line: the bar holds nothing while the mic is off, and a question's choices stay as drawn.
+// FLOW_SHOTS=<folder> saves the screen, your own task's snooze choices and the undo after one.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -108,24 +108,19 @@ const Q = ['Which plan do new signups get?', 'Ship on Monday?', 'Write the relea
     await dialog.locator('.dc-mic').click();
     assert.equal(await dialog.locator('.dc-wave').isVisible(), true);
     assert.equal(await dialog.locator('.dc-flow').isHidden(), true);
-    assert.notEqual(await dialog.locator('.dc-say').textContent(), '', 'the line says something');
+    assert.notEqual(await dialog.locator('.dc-say').textContent(), '', 'the voice notice shows in the bar');
     await dialog.locator('.dc-wave').click();
     assert.equal(await dialog.locator('.dc-wave').isHidden(), true);
     assert.equal(await dialog.locator('.dc-mic').isVisible(), true);
     assert.equal(await dialog.locator('.dc-say').textContent(), '');
     assert.deepEqual(writes, [], 'voice sends nothing');
 
-    // Tico's line: the bar shows it; a question's choices stay as drawn, none looking chosen before a tap; null takes
-    // the line back.
-    await page.evaluate(`decideLineSet('r2', {line: 'Yes. It matches the plan.', pick: 'No'})`);
-    assert.equal(await dialog.locator('.dc-say').textContent(), 'Yes. It matches the plan.');
+    // The bar holds only the undo notice: no line from Tico, and a question's choices stay as drawn, none looking chosen.
     const main = (choice: string) => dialog.locator(`[data-dc-choice="${choice}"]`).evaluate(b => b.matches('.primary, .dc-rec') || b === document.activeElement);
+    assert.equal(await dialog.locator('.dc-say').textContent(), '');
     assert.equal(await main('No'), false);
     assert.equal(await main('Yes'), false);
     await shot('flow');
-    await page.evaluate(`decideLineSet('r2', null)`);
-    assert.equal(await dialog.locator('.dc-say').textContent(), '');
-    assert.equal(await main('No'), false);
 
     // Snooze on your own task. 1 day and 1 week: a day and seven days from now, each undone.
     const snooze = async (what: string, until: string) => {

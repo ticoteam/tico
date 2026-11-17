@@ -270,7 +270,7 @@ NO_EVIDENCE = "No evidence is attached."
 # What a person sees as the reason when the judge was not shown all of the evidence (Fix L2-2).
 CANNOT_SEE = "Tico could not read all of this evidence, so a person decides."
 # What the owner is told when the text was too long for Jev: what to do, so it shortens it rather than attaching it again.
-TOO_LONG = "This {what} is too long for Jev to read: keep it under {chars:,} characters."
+TOO_LONG = "This {what} is too long for the Decision model to read: keep it under {chars:,} characters."
 # What a person sees when the judge said met on a spec it was shown only the start of: the rest may hold what is missing.
 SPEC_CUT = "The judge saw only the start of this work's spec, so a person decides."
 # The engine a test or a harness may set: (model, state, questions, label) -> {p, reason, provider, model, cost_usd,

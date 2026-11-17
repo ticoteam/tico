@@ -265,11 +265,15 @@ def test_a_page_a_bot_writes_is_read_whole_and_one_too_long_says_how_long_it_may
     too_long = {**page, "text": "x" * (P.TEXT_CHARS + 1)}
     result = P.judge_once(None, REQ, too_long, engine=_engine(0.95))
     assert (result["verdict"], result["p"]) == ("unsure", 0.5)
-    assert result["reason"] == "This page is too long for Jev to read: keep it under 40,000 characters."
+    assert result["reason"] == "This page is too long for the Decision model to read: keep it under 40,000 characters."
     other = P.judge_once(None, REQ, {**ATTACHMENT, "text": "x" * (P.TEXT_CHARS + 1)}, engine=_engine(0.05))
-    assert other["reason"] == "This evidence is too long for Jev to read: keep it under 40,000 characters."
+    assert (
+        other["reason"] == "This evidence is too long for the Decision model to read: keep it under 40,000 characters."
+    )
     bytes_cut = P.judge_once(None, REQ, {**page, "text": "short", "truncated": True}, engine=_engine(0.95))
-    assert bytes_cut["verdict"] == "unsure" and "too long for Jev" in bytes_cut["reason"], "cut bytes are too long too"
+    assert bytes_cut["verdict"] == "unsure" and "too long for the Decision model" in bytes_cut["reason"], (
+        "cut bytes are too long too"
+    )
     image = P.judge_once(None, REQ, {**ATTACHMENT, "text": None}, engine=_engine(0.95))
     assert image["reason"] == P.CANNOT_SEE, "no text is not a length problem"
 
@@ -284,7 +288,9 @@ def test_text_that_escapes_long_in_json_is_cut_to_fit_jevs_limit_and_the_owner_i
     clients_judge.validate(state, P._questions(), P.QUESTION_SET)  # Jev takes it
     result = P.judge_once(None, REQ, page, engine=_engine(0.95))
     shown = len(state["attachment"]["text"]) // 1000 * 1000
-    assert result["reason"] == f"This page is too long for Jev to read: keep it under {shown:,} characters."
+    assert (
+        result["reason"] == f"This page is too long for the Decision model to read: keep it under {shown:,} characters."
+    )
     both = P._state(REQ, {**page, "task_spec": "ü" * P.SPEC_CHARS})
     assert len(json.dumps(both, default=str)) <= P.STATE_CHARS, "with a spec that escapes long as well"
     assert len(both["attachment"]["text"]) < len(state["attachment"]["text"]), "the evidence is cut before the spec"

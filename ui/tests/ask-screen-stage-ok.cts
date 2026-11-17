@@ -43,7 +43,7 @@ const pages: Record<string, string> = {
   const shots = process.env.TICO_UI_SHOTS;
   const needs = [
     need('t-a', 'Talk to the right bot from a pipeline board', 'pa', 1, 10),
-    need('t-b', 'Images in bot chat: paste fails', 'pb', 3, 11, 'Spec for Images in bot chat: paste fails, ready for your OK. Jev is unsure: no mobile layout.'),
+    need('t-b', 'Images in bot chat: paste fails', 'pb', 3, 11, 'Spec for Images in bot chat: paste fails, ready for your OK. Decision model is unsure: no mobile layout.'),
     need('t-c', 'Paste retries', 'pc', 2, 12),
   ];
   const writes: {p: string; body: Record<string, unknown>}[] = [];
@@ -104,7 +104,7 @@ const pages: Record<string, string> = {
       assert.equal(await frame.count(), 1);
       assert.match(await frame.getAttribute('srcdoc') ?? '', /Paste images spec/);
       assert.doesNotMatch(await frame.getAttribute('srcdoc') ?? '', /Board chat proposals/);
-      assert.equal(await dialog.locator('.dc-said').innerText(), 'Jev is unsure: no mobile layout.');
+      assert.equal(await dialog.locator('.dc-said').innerText(), 'Decision model is unsure: no mobile layout.');
       if (shots) await page.screenshot({path: path.join(shots, `stage-ok-${label}-2.png`)});
 
       // The third ask's page is Markdown: drawn as Markdown, never as raw text in the frame, and its script never runs.

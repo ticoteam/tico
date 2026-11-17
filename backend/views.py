@@ -1869,23 +1869,12 @@ BRIEF_FIELDS = (
     "pushed_past",
 )
 
-# Every @ of a person by another person that they have not answered since in the same conversation (C28): on a task
-# (its own room, or a comment in a chat the task was filed into) or in a channel. A bot's @ only marks a task unread.
-MENTIONS_SQL = (
-    "SELECT m.id, m.conversation_id, coalesce(cv.root_id, cv.id) AS root_id, m.sender_id, m.body, m.created_at, "
-    "coalesce(cv.task_id, json_extract(CASE WHEN json_valid(m.refs) THEN m.refs END, '$.task')) AS task_id "
-    "FROM message_deliveries d JOIN messages m ON m.id=d.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-    "WHERE d.recipient=? AND d.reason='mention' AND m.sender_id LIKE 'human:%' AND m.sender_id<>? "
-    "AND m.deleted_at IS NULL AND m.superseded_at IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
-    "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
-    "AND r.created_at>m.created_at AND r.deleted_at IS NULL) "
-    "ORDER BY m.created_at, m.id"
-)
-
 
 def _mentions(c, who):
-    """The @s of `who` by a person that they have not replied to and may still read, oldest first."""
-    rows = [dict(r) for r in c.execute(MENTIONS_SQL, (who.actor, who.actor, who.actor))]
+    """The open @s of `who` (open_mentions: by a person, not yet answered) that they may still read, oldest first."""
+    from . import open_mentions
+
+    rows = open_mentions.rows(c, who.actor)
     # Each mention's message, rooms and references read together, not a few statements per mention.
     stored = H.prime_messages(c, [row["id"] for row in rows])
     privacy.prime_messages(c, list(stored.values()))

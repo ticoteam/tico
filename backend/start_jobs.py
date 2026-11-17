@@ -95,3 +95,11 @@ def run(store, onboarding, telemetry, vault=None):
             tool_settings.move_once(store, vault)
         except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
             telemetry.capture("tool_settings_move", exc)
+        # Once: an id stored as a proxied tool's key (POSTHOG_PROJECT_ID, TWILIO_ACCOUNT_SID), which runs got as a proxy
+        # token, becomes a setting or a key on a computer tool (backend/tool_settings.py repair_ids_once).
+        try:
+            from . import tool_settings
+
+            tool_settings.repair_ids_once(store, vault)
+        except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+            telemetry.capture("tool_settings_ids", exc)

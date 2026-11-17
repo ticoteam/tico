@@ -125,7 +125,7 @@ def _jev(verdict: Row | None) -> Row:
     said_ = str(verdict["verdict"])
     reason = " ".join(str(verdict.get("last_error") if said_ == "failed" else verdict.get("reasons") or "").split())
     if said_ == "failed":
-        reason = f"Jev couldn't check this: {reason}" if reason else "Jev couldn't check this"
+        reason = f"Decision model couldn't check this: {reason}" if reason else "Decision model couldn't check this"
     else:
         reason = _P_VALUE.sub("", reason, count=1)
     return {"verdict": said_, "reason": reason}

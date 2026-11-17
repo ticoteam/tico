@@ -192,7 +192,9 @@ const ready = (page: Page) => page.waitForFunction(() => {
     // task was asked for by a bot) and the + and × on Sessions; × still closes. Kept apart from view-only.ts's list.
     await page.waitForFunction(() => document.body.classList.contains('fb-on') && !!document.querySelector('.tmodal[open] [data-fb-rate]'), null, {timeout: t(15000)});
     await page.locator('.tmodal[open] [data-task-tab="details"]').click();
-    await page.locator('.tmodal[open] .task-sessions .tlink').waitFor({timeout: t(15000)});
+    // The bot's own session is listed as the primary one (#417), beside the linked alternate this test sets up.
+    await page.locator('.tmodal[open] .task-sessions .tlink:not(.primary)').waitFor({timeout: t(15000)});
+    assert.equal(await page.locator('.tmodal[open] .task-sessions .tlink.primary').count(), 1, 'the primary session is listed too');
     const inert = '.tmodal[open] :is([data-tp-add], [data-req-ask], [data-prop-follow], [data-fb-rate], [data-session-add], [data-link-add], '
       + '[data-drop-link], [data-related-add], [data-tf-add], [data-tp-unlink], [data-req-withdraw], [data-task-body-edit], .prop-add, .prop-x)';
     assert.deepEqual(await page.locator(inert).evaluateAll(els => els.filter(e => (e as HTMLElement).offsetWidth > 0).map(e => e.outerHTML.slice(0, 80))), [], 'no greyed-out write in the task window');
@@ -209,7 +211,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
     await win.locator('[data-task-more]').click();
     const menu = page.locator('.prop-pop:popover-open');
     await menu.waitFor({timeout: t(15000)});
-    assert.deepEqual((await menu.locator('.tl-mi').allInnerTexts()).map(s => s.replace(/^\S+\s+/, '').trim()), ['Copy link'], 'the task ⋯ holds only what a viewer can use');
+    assert.deepEqual((await menu.locator('.tl-mi').allInnerTexts()).map(s => s.replace(/^\S+\s+/, '').trim()), ['Copy link', 'Copy session ID'], 'the task ⋯ holds only what a viewer can use');
     assert.deepEqual(await writesShown(page), [], 'the task ⋯ offers nothing that writes');
     await menu.locator('.tl-mi', {hasText: 'Copy link'}).click();
     await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 1, null, {timeout: t(15000)});
@@ -222,7 +224,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
     assert.equal(await long.locator('xpath=..').getByRole('button', {name: 'Show more'}).count(), 0, 'a long message has no Show more');
     // Copy session copies its resume command; a file opens, and its ✕ closes it.
     await win.locator('[data-task-tab="details"]').click();
-    await win.locator('[data-copy-session]').click();
+    await win.locator('.task-sessions .tlink:not(.primary) [data-copy-session]').click();
     await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 2, null, {timeout: t(15000)});
     assert.equal((await copied())[1], 'claude --resume th-view-1', 'Copy session copied the resume command');
     await win.locator('[data-tf-file]').first().click();

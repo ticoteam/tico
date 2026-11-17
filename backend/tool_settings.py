@@ -19,6 +19,13 @@ What is a setting, not a key (`is_setting`): a variable whose name ends in one o
 (`POST /api/v2/runner-credential-migration`) brings such a variable in as a setting on the tool of its vendor the bot
 holds a key of (`import_for_bot`), and as a key, as before, when the bot holds no such tool or that tool already has a
 different value under the name. `move_once` does the same, once, for the credentials stored before Settings existed.
+
+An id is a setting too (ID_SUFFIXES: `_PROJECT_ID`, `_ACCOUNT_SID`, ...), only when its value is one short word and no
+word of its name says key: AWS_ACCESS_KEY_ID, GOOGLE_ADS_CLIENT_ID, `*_KEY_ID` and `*_SECRET_ID` stay keys. An id never
+goes behind the proxy, where a run would get a proxy token in its place: a newly stored one lands on a computer tool of
+its own with no address (backend/api_tools.py `ensure_tool`), a proxied tool's id key reaches runs as its value
+(backend/credentials.py `held_at_read`), and `repair_ids_once` moves, once, the ids stored as proxied tools' keys before
+this rule into settings, else onto computer tools.
 """
 
 import re
@@ -59,13 +66,30 @@ def _api_tools() -> Any:
 
 
 SUFFIXES = ("_HOST", "_REGION", "_PROFILE", "_PROJECT_ID", "_BUCKET", "_URL")
+# Ids a bot sends as they are (in a path, a query, as Twilio's Basic username): an account's, project's or workspace's.
+ID_SUFFIXES = (
+    "_PROJECT_ID",
+    "_ACCOUNT_ID",
+    "_ACCOUNT_SID",
+    "_ORG_ID",
+    "_ORGANIZATION_ID",
+    "_WORKSPACE_ID",
+    "_TEAM_ID",
+    "_CUSTOMER_ID",
+)
 NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,99}$")
 # A name that says it is a key: the runner masks such a variable's value anyway (runner-rs/src/redact.rs for_turn).
 KEY_WORDS = ("TOKEN", "SECRET", "PASSWORD", "API_KEY", "PRIVATE_KEY")
+# A word of a name that says key whatever the name ends in: AWS_ACCESS_KEY_ID, GOOGLE_ADS_CLIENT_ID, X_SECRET_ID.
+NOT_SETTING_WORDS = frozenset(("KEY", "KEYS", "SECRET", "SECRETS", "TOKEN", "PASSWORD", "PASSWD", "PWD", "CLIENT"))
+# An id's value: one short word of letters, digits and . _ : - (12345, AC + 32 hex, 123-456-7890, my-project).
+ID_VALUE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$")
 VALUE_MAX = 2000
 SETTINGS_MAX = 50  # one tool's settings
 URL_SECRETS = re.compile(r"(?i)(token|secret|password|passwd|pwd|api[_-]?key|key|sig|signature|auth|credential)")
 MOVED = "tool_settings.moved"  # registry_metadata: the one-time move of stored keys that are settings has run
+# registry_metadata: the one-time repair of ids stored as keys of proxied tools (`repair_ids_once`) has run.
+IDS_REPAIRED = "tool_settings.ids_repaired"
 
 
 class SettingWrite(Contract):
@@ -108,14 +132,25 @@ def secret_reason(value: Any) -> Any:
 
 
 def known_name(env: Any) -> Any:
-    """Whether `env` is a variable Tico reads as a setting by its name alone (SUFFIXES), not a key's."""
+    """Whether `env`'s name says setting (SUFFIXES, ID_SUFFIXES) and no word of it says key (KEY_WORDS,
+    NOT_SETTING_WORDS): POSTHOG_PROJECT_ID and TWILIO_ACCOUNT_SID are, AWS_ACCESS_KEY_ID is not."""
     env = str(env or "")
-    return bool(NAME.match(env)) and env.endswith(SUFFIXES) and not any(w in env for w in KEY_WORDS)
+    return (
+        bool(NAME.match(env))
+        and env.endswith(SUFFIXES + ID_SUFFIXES)
+        and not any(w in env for w in KEY_WORDS)
+        and not NOT_SETTING_WORDS & set(env.split("_"))
+    )
 
 
 def is_setting(env: Any, value: Any) -> Any:
-    """A setting, not a key: a known setting name with a value that does not look like a credential."""
-    return known_name(env) and not secret_reason(value)
+    """A setting, not a key, only when both say so: its name (`known_name`) and its value's shape. The value never
+    looks like a credential (`secret_reason`: clients/access_entry.py `secret_in`), has no space in it, and an id's
+    (ID_SUFFIXES) is one short word (ID_VALUE)."""
+    text = str(value or "").strip()
+    if not known_name(env) or not text or secret_reason(text) or any(ch.isspace() for ch in text):
+        return False
+    return not str(env).endswith(ID_SUFFIXES) or bool(ID_VALUE.match(text))
 
 
 def _check(c: Any, tool_id: Any, name: Any, value: Any, setting_id: Any = "") -> Any:
@@ -397,6 +432,64 @@ def move_once(store: Any, vault: Any) -> Any:
                 moved += 1
         c.execute("INSERT INTO registry_metadata VALUES(?,?)", (MOVED, str(moved)))
         return moved
+
+
+def _off_the_proxy(c: Any, row: Any) -> None:
+    """A proxied tool's id key that no tool can take as a setting: on a computer tool with no address, so runs get
+    its value and no check sends it as a key. Its own tool when the id is all it holds, else a new tool for it."""
+    tool_id = row["tool_id"]
+    if c.execute("SELECT 1 FROM credentials WHERE tool_id=? AND id<>?", (tool_id, row["id"])).fetchone():
+        tool = c.execute("SELECT service FROM tools WHERE id=?", (tool_id,)).fetchone()
+        made = TS.insert_tool(
+            c,
+            tool["service"],
+            row["env"],
+            "computer",
+            "system",
+            H.now(),
+            tid=_api_tools()._unique_id(c, TS.slug(row["env"])),
+        )
+        c.execute("UPDATE tools SET name=?, base_url='', check_path='' WHERE id=?", (row["env"], made))
+        c.execute("UPDATE credentials SET tool_id=? WHERE id=?", (made, row["id"]))
+        H.event(c, "system", "tool.key_moved", made, {"credential": row["id"], "from": tool_id, "why": "id"})
+        return
+    c.execute(
+        "UPDATE tools SET delivery='computer', base_url='', check_path='', updated_at=? WHERE id=?", (H.now(), tool_id)
+    )
+    H.event(c, "system", "tool.updated", tool_id, {"delivery": "computer", "base_url": "", "why": "id"})
+
+
+def repair_ids_once(store: Any, vault: Any) -> Any:
+    """Once per company: each id stored as a key of a proxied tool (`is_setting`: its name and its value both say id;
+    POSTHOG_PROJECT_ID, TWILIO_ACCOUNT_SID), which runs got as a proxy token instead of the id, becomes a setting on
+    a tool every one of its holders holds a key of (`_move_one`), else stays a key on a computer tool with no address
+    (`_off_the_proxy`). Either way every holder's runs get the id's value under the same variable. The number
+    repaired."""
+    with store.transaction() as c:
+        if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (IDS_REPAIRED,)).fetchone():
+            return 0
+        if not vault.cipher.configured:
+            return 0  # nothing can be read yet: a later start repairs them
+        repaired = 0
+        for row in c.execute(
+            "SELECT k.* FROM credentials k JOIN tools t ON t.id=k.tool_id WHERE t.delivery='proxy' AND t.mcp_url='' "
+            "AND k.env<>'' AND k.kind IN ('api_key','token') AND k.ciphertext IS NOT NULL ORDER BY k.id"
+        ).fetchall():
+            if not known_name(row["env"]):
+                continue
+            try:
+                value = vault.cipher.decrypt(c, row)
+            except Problem:
+                continue
+            if not is_setting(row["env"], value):
+                continue
+            if any(not s.startswith(("bot:", "human:")) for s in _grantees(c, row["id"])):
+                continue  # held by the computers (a model setup): not a tool's
+            if not _move_one(c, vault, row):
+                _off_the_proxy(c, row)
+            repaired += 1
+        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (IDS_REPAIRED, str(repaired)))
+        return repaired
 
 
 # ---- routes

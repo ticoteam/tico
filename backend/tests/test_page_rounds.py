@@ -253,3 +253,10 @@ def test_tico_task_attach_sends_changed_and_answered_with_a_page(monkeypatch):
             "answered": ["Sources: done, each row links its query"],
         },
     )
+
+
+def test_a_check_that_failed_says_the_decision_model_could_not_check_it():
+    assert PR._jev({"verdict": "failed", "last_error": "no model"})["reason"] == (
+        "Decision model couldn't check this: no model"
+    )
+    assert PR._jev({"verdict": "failed", "last_error": ""})["reason"] == "Decision model couldn't check this"

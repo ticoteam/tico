@@ -231,7 +231,11 @@ def not_acting(rule: Any) -> str:
 
 def cost(row: Any) -> str:
     """Free, or one Jev call per event. Timers never call a model."""
-    return "one Jev call per event" if (row.get("jev") or "").strip() and row.get("event") != "timer" else "free"
+    return (
+        "one Decision model call per event"
+        if (row.get("jev") or "").strip() and row.get("event") != "timer"
+        else "free"
+    )
 
 
 def _scope_rank(rule: Any) -> int:
@@ -820,7 +824,7 @@ def _check(fields: Any, retiring: bool = False) -> dict[str, Any]:
         if timer.get("kind") not in TIMERS or not isinstance(timer.get("hours"), (int, float)) or timer["hours"] <= 0:
             raise _problem("validation", f"A timer is a kind ({', '.join(TIMERS)}) and a number of hours")
         if (out.get("jev") or "").strip():
-            raise _problem("validation", "A timer never asks Jev: use fixed conditions")
+            raise _problem("validation", "A timer never asks the Decision model: use fixed conditions")
     if out.get("then") not in THENS:
         raise _problem("validation", f"Then is one of {', '.join(THENS)}")
     if out["then"] == "block" and not set(events) & {"enters", "owner_changes", "bot_snoozes"}:

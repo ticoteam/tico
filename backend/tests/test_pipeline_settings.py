@@ -283,6 +283,10 @@ CASES = {
         "Intake files into a pipeline that does not exist",
     ),
     "a manager nobody is": (lambda r: r.update(manager_id="bot:nobody"), "The manager must be a bot or a person"),
+    "a rubric that is not text": (
+        lambda r: _req(r).update(kind="page", settings={"rubric": 5}),
+        "What the Decision model checks on Intake must be text.",
+    ),
 }
 
 

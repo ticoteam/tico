@@ -127,10 +127,14 @@ the copy. You cannot compare values: you find candidates by service, variable an
 are the same key.
 
 ## 7. Checks
-A check is one authenticated GET to the tool's check path with each key: 2xx **Working**, 401/403 **Key rejected**,
-anything else **Check failed**. Proxied tools are checked every 30 minutes. Other states: **No key**, **Key expired**,
-**Expires in N days** (14 or fewer), **Not checked** (no check path). A tool with no check path: propose one, a cheap
-authenticated GET such as `/me` or `/v1/user`.
+A check is one authenticated GET to the tool's check path (a known service's own when the tool has none) with each
+key: 2xx **Working**, 403 **Works (limited)** (the key works; the path needs a scope it lacks, nothing to fix), only 401
+**Key rejected** (and Vercel's 403), anything else **Check failed**. A proxied tool's real calls outrank its check: a
+2xx in the last 24 hours is Working, and 3 calls in a row answered 401 with no 2xx since is Key rejected. Every tool with
+a check path is checked every 30 minutes, its key on the proxy or on computers. Other states: **No key**, **Key
+expired**, **Expires in N days** (14 or fewer), **Not checked** (no check path). A tool with no check path: propose
+one, a cheap authenticated GET such as `/me` or `/v1/user`. An id (`*_PROJECT_ID`, `*_ACCOUNT_SID`) is a setting, never
+a key: put it under Settings.
 
 ## Troubleshooting
 - **409 `env_in_use`**: the bot already gets that variable from another key. Same value: it is a duplicate (section 6).
