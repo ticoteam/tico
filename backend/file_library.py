@@ -582,8 +582,8 @@ class Library:
         if bot:
             kind_sql, kind_args = "(" + kind_sql + ") AND f.bot_id=?", (*kind_args, bot)
         select = (
-            "SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM bot_files f "
-            "LEFT JOIN pages p ON p.file_id=f.id {join} WHERE f.state<>'deleted' AND f.archived=0 "
+            "SELECT f.*,p.cadence AS page_cadence,{text} AS text FROM {source} "
+            "WHERE f.state<>'deleted' AND f.archived=0 "
             "AND COALESCE(p.archived,0)=0 AND (" + kind_sql + ") {match} LIMIT ?"
         )
         if has_fts(c):
@@ -591,7 +591,9 @@ class Library:
 
             query = select.format(
                 text="file_text.text",
-                join="JOIN file_text_state s ON s.file_id=f.id JOIN file_text ON file_text.rowid=s.doc",
+                # FTS drives the search: otherwise an IN filter may put a complete MATCH inside every file lookup.
+                source="file_text CROSS JOIN file_text_state s ON s.doc=file_text.rowid "
+                "CROSS JOIN bot_files f ON f.id=s.file_id LEFT JOIN pages p ON p.file_id=f.id",
                 match="AND file_text MATCH ? ORDER BY bm25(file_text, 10.0, 1.0)",
             )
             seen, rows = set(), []
@@ -610,7 +612,11 @@ class Library:
             return rows
         like = " AND ".join("f.title LIKE ?" for _ in tokens)
         return c.execute(
-            select.format(text="''", join="", match="AND " + like + " ORDER BY f.last_activity_at DESC"),
+            select.format(
+                text="''",
+                source="bot_files f LEFT JOIN pages p ON p.file_id=f.id",
+                match="AND " + like + " ORDER BY f.last_activity_at DESC",
+            ),
             (*kind_args, *["%" + t + "%" for t in tokens], SCAN_MAX),
         ).fetchall()
 
