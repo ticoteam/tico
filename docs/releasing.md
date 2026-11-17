@@ -404,9 +404,10 @@ Python jobs install no npm packages, browsers or apt packages. The browser job c
 Ubuntu package indexes/debs under exact runner-image and dependency-lock keys. A warm cache uses apt with
 `--no-download`; a cold cache uses the canonical Ubuntu mirror. Each Install attempt has a five-minute limit with
 one retry. Pip and npm download caches remain enabled. The queue's tests run on 4-vCPU GitHub-hosted runners, as PR pushes do. `scripts/pr_checks.py` sizes the Python and browser groups so each VM
-finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script timings
-from the latest successful Release validation run (its `test-timings` artifact: the same pytest flags, slow tests
-included), with collected test counts until timings exist. New files use the observed
+finishes in about `TICO_CI_JOB_SECONDS` (330 s, under seven minutes) including setup, using JUnit per-file and browser per-script
+timings averaged over the last three green queue groups (each group's **PR job timings** job saves them as its
+`queue-timings` artifact: the same hosted runners and pytest flags), over the committed table
+(`scripts/test-timings.json`), with collected test counts until timings exist. New files use the observed
 seconds per test; untimed browser scripts count 20 seconds. The **PR job timings** check on a queue run links each job and its elapsed seconds in its summary; it gates nothing. The `checks` gate fails when a job it needs failed or was canceled. The target is under ten minutes from the group's start to its completed checks; the queue run's receipt, including cache state, establishes whether that target is met.
 
 Nothing is mapped by hand or by filename: a test that uses a file in a way the map cannot see (a path built at run
@@ -445,10 +446,10 @@ checks on that merge commit, and moves main only when they pass.
   job a queue group runs under the same conditions (the Caddy image, Rust lint, the desktop app and
   the macOS recorder tests when the change reaches them), on each push, so a failure shows before the change is enqueued.
   The plan decides which of those the change reaches, so a job it does not reach starts no VM. Only the cosmetic timing
-  receipt is queue-only. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's pull
+  receipt and the merge commit checks are queue-only. A failed leg cancels the run (`gh run cancel`), so `checks` fails within minutes. A fork's pull
   request runs none of them.
-- **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its plan job also runs every
-  static check on that commit (`scripts/ci/merge_commit_checks.sh`), in place of a static checks VM. A job the change does
+- **A queue group** (GitHub-hosted, 2 and 4 vCPU): the same jobs again on the merge commit. Its merge commit checks job runs every
+  static check on that commit (`scripts/ci/merge_commit_checks.sh`) on its own VM, beside the plan and the tests. A job the change does
   not reach starts no VM. The group's base is the head of the group ahead of it, so it selects from its own pull
   request's change. Its tests pack toward 19 test VMs at most (`NARROW`, and `CEILING` in
   `scripts/pr_checks.py`), each planned at the 330-second job target including setup; the organisation allows 500 concurrent hosted jobs, so a larger selection takes more VMs, up to `TICO_CI_MAX_JOBS`.
