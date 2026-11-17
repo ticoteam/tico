@@ -200,7 +200,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=int, help="one-based case number in red_main_cases.json")
     parser.add_argument("--json", type=Path, help="also write detailed results as JSON")
-    parser.add_argument("--cost", action="store_true", help="also measure the last 20 merges on local main")
+    parser.add_argument("--cost", action="store_true", help="also measure the last 20 merges on main")
     args = parser.parse_args()
     start = time.monotonic()
     replay = Replay()
@@ -212,8 +212,13 @@ def main():
     costs = []
     if args.cost:
         browser_timings = json.loads((replay.root / checks.TIMINGS_FILE).read_text()).get("browser", {})
+        main_ref = subprocess.check_output(
+            ["git", "for-each-ref", "--count=1", "--format=%(refname)", "refs/heads/main", "refs/remotes/origin/main"],
+            cwd=replay.root,
+            text=True,
+        ).strip()
         merges = subprocess.check_output(
-            ["git", "log", "main", "--merges", "-20", "--format=%H"], cwd=replay.root, text=True
+            ["git", "log", main_ref or "main", "--merges", "-20", "--format=%H"], cwd=replay.root, text=True
         ).split()
         for sha in merges:
             changed = subprocess.check_output(
