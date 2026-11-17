@@ -2176,6 +2176,17 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     case 'fix': if (it.href) { decideStop(); location.hash = it.href; } return;
   }
 }
+/** A bot's ❓ opens its chat at the marked message, where the reply clears it: a task's chat, else the direct chat. */
+function questionOpen(it: NeedsEntry) {
+  const task = it.task_id || it.task?.id;
+  if (task) void taskChatJump(String(task), it.message_id || '');
+  else if (it.conversation_id) {
+    location.hash = threadHref(it.conversation_id) + (it.message_id ? `?m=${encodeURIComponent(it.message_id)}` : '');
+  }
+}
+/** Give to… on a bot's ❓: its reply is needed from another person now. */
+const questionGive = (markId: string, to: string): Promise<unknown> =>
+  post(`/v2/questions/${encodeURIComponent(markId)}/give`, {to}, newRequestId());
 /** Open: a mention's thread (or its task), a ❓'s chat at its message, a cause's first task. */
 function decideOpenWhere(it: NeedsEntry) {
   decideStop();

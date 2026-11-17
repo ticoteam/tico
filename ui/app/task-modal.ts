@@ -1381,7 +1381,7 @@ async function taskChatLoad(id: string | number, dialog: ModalDialog, data: Moda
     })] : [];
   state.liveOff = () => { offs.forEach(off => off()); state.liveOff = null; };
 }
-/** A bot's ❓ from Needs you (tasks.ts questionOpen): the task's chat, at the marked message. */
+/** A bot's ❓ from Flow (decide.ts questionOpen): the task's chat, at the marked message. */
 function taskChatJump(task: string, message: string) {
   if (message) TASK_JUMP = {task, id: message};
   return taskModalOpen(task, undefined, {thread: true, direct: true});

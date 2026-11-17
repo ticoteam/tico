@@ -675,8 +675,6 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
     } catch (e) { answer.disabled = false; toast(errorMessage(e, 'Not answered.')); }
     return;
   }
-  // A bot's ❓ opens in Flow as its chat (decide.ts), like any ask; one with no chat named opens its task's.
-  if (it?.kind === 'question' && !(it.root_id || it.conversation_id)) { questionOpen(it); return; }
   if (it) { decideOpen(it.id); return; }
   const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
   // On a pipeline's board on a phone a card opens at its conversation, its box asking the task's owner.
