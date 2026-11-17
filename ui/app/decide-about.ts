@@ -18,6 +18,7 @@ interface DecAboutTask {
   tags?: {owner?: string | null}[] | null;
   conversation_id?: string | null;   // its thread: Flow's chat on an ask (decide.ts decideChatMount)
   documents?: TaskDoc[] | null;      // its documents: a phone's tabs on an ask (decide.ts decideTabsOf)
+  labels?: string[] | null;          // a rule review's (RH_LABEL) shows its held items (org-rule-holds.ts ruleReviewMount)
 }
 /** One task's read for this screen, by task id: loading (a skeleton), ready, or failed with its words. */
 interface DecAbout {
@@ -99,6 +100,9 @@ function decideAboutHTML(it: NeedsEntry, kind: AskKind, head = ''): string {
   const body = text ? `<div class="md dc-md">${md(text)}</div>` : head ? '' : '<p class="muted">No details.</p>';
   // Nothing to show (no heading, text, links or files): marked, so a phone opens on the question instead (decide.css).
   const chips = decideAboutChips(t!), bare = !head && !text && !chips && !quote ? ' dc-bare' : '';
+  // A rule review: what was held and the part that broke the rule, with one decision for them all, in place of its text.
+  if ((t?.labels || []).includes(RH_LABEL))
+    return `<div class="dc-doc">${head}${decideAboutWho(it, kind, t)}<div class="rh-dc" data-rh-dc="${esc(t!.id)}"></div>${chips}</div>`;
   return `<div class="dc-doc${bare}">${head}${decideAboutWho(it, kind, t)}${quote}${body}${chips}</div>`;
 }
 /** The task's links and files, as chips: a file opens in the viewer. A document its text names (`page:<id>@<n>`) is a

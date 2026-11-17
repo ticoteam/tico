@@ -476,7 +476,7 @@ function decideStop() {
   DEC = null; DEC_VOICE = false;
   decideOpinionsEnd();
   decideChatStop(); DEC_APPROVED.clear(); DEC_BROWSED.clear();
-  DEC_ABOUT.clear();
+  DEC_ABOUT.clear(); RH_DC.clear();
   clearTimeout(st.barTimer);
   for (const v of st.ok.values()) decideOkLet(v);
   st.off.forEach(fn => fn());
@@ -880,11 +880,12 @@ function decidePaintBody(st: DecState) {
   // A website's browser the ask shows (`browser:<tool>/<account>`): the live view; an OK's comes in its shows.
   // (On a phone it is in the Task tab; the bottom row's Open browser opens it: decidePaintSide.)
   if (kind !== 'ok') html += (it.ask?.shows || it.shows || []).filter(r => r.startsWith('browser:')).map(r => decideBrowserSlot(r.slice(8))).join('');
-  if (host.dataset.html === html && host.dataset.key === it.id) { decideOkDocMount(host, it); return; }
+  if (host.dataset.html === html && host.dataset.key === it.id) { decideOkDocMount(host, it); ruleReviewMount(host); return; }
   host.dataset.html = html; host.dataset.key = it.id;
   browserView.stopIn(host);
   host.innerHTML = html;
   decideOkDocMount(host, it);
+  ruleReviewMount(host);
   host.querySelectorAll<HTMLElement>('[data-dc-browser]').forEach(slot => { decideBrowserMount(st, it, slot); });
   const v = kind === 'ok' ? st.ok.get(decideOkKey(it)) : null;
   if (v && typeof window.pageCard === 'function')
@@ -1792,6 +1793,8 @@ function decideOkLabel(st: DecState, it: NeedsEntry, docs: TaskDoc[]): string {
 }
 function decideTabsOf(st: DecState, it: NeedsEntry): DocTab[] {
   const docs: TaskDoc[] = decideAboutOf(it)?.task?.documents || [];
+  // A rule review's held items are its left side: on a phone they need a tab of their own beside the chat.
+  if (decideKind(it) !== 'ok' && (decideAboutOf(it)?.task?.labels || []).includes(RH_LABEL)) return docTabs(docs, [{key: 'task', label: 'Held'}]);
   if (decideKind(it) !== 'ok') return docTabs(docs);
   const tabs = docTabs(docs, [], false);
   if (decideOkDoc(it, docs)) return tabs;

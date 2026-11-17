@@ -54,11 +54,18 @@ org_rule_check.OPERATIONS.setdefault("batch_note", "a note to a bot on its item"
 org_rule_check.OPERATIONS.setdefault("task_bulk", "a change to many tasks")
 
 
-def said_text(row: Row | None, said: Said, hands_over: bool = False, hide_task: bool = False, words: str = "") -> str:
+# An ask's own fields, which its reviewer reads as they are: the question, then what it shows (`said_text` `plain`).
+PLAIN_LABELS = ("Ask", "Shows")
+
+
+def said_text(
+    row: Row | None, said: Said, hands_over: bool = False, hide_task: bool = False, words: str = "", plain: bool = False
+) -> str:
     """What a write says, as the check reads it: each (label, text) it carries, and the task itself when it hands the
     task to a new owner: its title and `words` (what it asks, `H.task_words`). `hide_task`: the task's own words are
-    left out (a private task's, on its hold)."""
-    parts = [f"{label}: {value}" for label, value in said if value]
+    left out (a private task's, on its hold). `plain`: the hold's copy, where an ask's line and what it shows read
+    without their labels."""
+    parts = [value if plain and label in PLAIN_LABELS else f"{label}: {value}" for label, value in said if value]
     if hands_over and row:
         if hide_task:
             parts.append("Assigned: a private task")
@@ -330,7 +337,7 @@ class TaskRules:
         # Nor its people: everyone the write reaches is reached through the private task.
         private = bool(row and H.task_private(c, row))
         words = str(H.task_words(c, row["id"])) if hands_over and row else ""
-        payload = said_text(row, said, hands_over, hide_task=private)
+        payload = said_text(row, said, hands_over, hide_task=private, plain=True)
         judged = said_text(row, said, hands_over, words=words)
         private_to = {row["id"]: list(verdict.get("recipients") or [])} if private and row else None
         gate = org_rule_check.apply(
