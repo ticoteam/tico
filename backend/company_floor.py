@@ -104,8 +104,8 @@ def _unknown(c: Any, auth: Any, who: Any, held: dict[str, list[tuple[str | None,
 
 
 def _into(on_enter: Any, drawn: set[str]) -> str | None:
-    settings: Any = json.loads(on_enter or "{}")
-    target: Any = settings.get("file_into") if isinstance(settings, dict) else None
+    settings: dict[str, Any] = H._json(on_enter, None) or {}
+    target = settings.get("file_into")
     return target if isinstance(target, str) and target in drawn else None
 
 
