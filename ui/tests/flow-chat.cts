@@ -165,6 +165,15 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
       await approve.and(page.locator(':not([disabled])')).waitFor();
     };
     const wordsRow = () => page.waitForFunction(() => document.querySelector('#need-card .dc-side [data-key] > .dc-acts-row')?.classList.contains('dc-with-words'));
+    // Line two, at every width: Snooze on its left, ⋯ on its right, both under the three.
+    const line2 = async (name: string) => {
+      const under = Math.max(...(await shown.evaluateAll(els => els.map(e => e.getBoundingClientRect().bottom))));
+      const [snooze, more, row] = [await sides.locator('.dc-snzw:not(.dc-askw)').boundingBox(), await dialog.locator('.dc-side [data-key] [data-dc="ask-more"]').boundingBox(), await sides.boundingBox()];
+      if (!snooze || !more || !row) throw new Error(`${name}: Snooze, ⋯ or the row is not drawn`);
+      assert.ok(snooze.y >= under - 1 && more.y >= under - 1, `${name}: Snooze and ⋯ take line two, under the three (${JSON.stringify([snooze, more])})`);
+      assert.ok(Math.abs(more.x + more.width - (row.x + row.width)) <= 4, `${name}: ⋯ is within 4 px of the row's right edge (${JSON.stringify([more, row])})`);
+      assert.ok(snooze.x - row.x <= 4, `${name}: Snooze is at the left of line two (${JSON.stringify([snooze, row])})`);
+    };
     const themed = async (name: string) => {
       if (!process.env.FLOW_SHOTS) return;
       await dialog.locator('.dc-start').waitFor({state: 'detached'});
@@ -195,6 +204,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     assert.match((await note('approve').getAttribute('class')) ?? '', /\bprimary\b/, 'Approve is the primary button');
     assert.match((await note('chat-back').getAttribute('class')) ?? '', /\bghost\b/, 'Send back is a ghost button');
     assert.match((await note('close-task').getAttribute('class')) ?? '', /\bghost\b/, 'Close is a ghost button');
+    await line2('desktop');
     await themed('ok-typed-desktop');
 
     // On a phone the three stay on one line, each a 44 px target; Snooze and ⋯ take the line under them.
@@ -205,8 +215,7 @@ const msg = (id: string, from: string, body: string, at: string) => ({id, seq: N
     assert.ok(boxes.every(b => b.left >= 0 && b.right <= 390), `the three fit a 390 px phone (${JSON.stringify(boxes)})`);
     assert.ok(boxes.every(b => b.fits), `no label runs out of its button (${JSON.stringify(boxes)})`);
     assert.ok(boxes.every(b => Math.abs(b.top - boxes[0]!.top) <= 2 && b.bottom - b.top >= 44), `one line of 44 px targets (${JSON.stringify(boxes)})`);
-    const [snooze, more] = [await sides.locator('.dc-snzw:not(.dc-askw)').boundingBox(), await dialog.locator('.dc-side [data-key] [data-dc="ask-more"]').boundingBox()];
-    assert.ok(snooze && more && snooze.y >= boxes[0]!.bottom - 1 && more.y >= boxes[0]!.bottom - 1 && more.x > snooze.x, `Snooze and ⋯ take the line under them, ⋯ last (${JSON.stringify([snooze, more])})`);
+    await line2('phone');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, 'no sideways scroll');
     await themed('ok-typed-phone');
 
