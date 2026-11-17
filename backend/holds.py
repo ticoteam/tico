@@ -90,7 +90,7 @@ RUNAWAY = "runaway"  # a bot over its run budget (turn_budgets): BUDGET to the p
 FAILING = "failing"  # a bot whose runs fail at once (run_failures): BACKOFF while it waits, RUN_HOLD once held
 LOGIN_LIMIT = "usage_limit"  # a login over its provider's usage limit (login_holds): USAGE_LIMIT to the pages
 # Pinned to the partial indexes of open holds: released holds stay as history, and stats taken while the table was small
-# plan a scan of all of it (test_holds_usage_limit_plan).
+# plan a scan of all of it (the test_holds_*_plan tests).
 OPEN_SQL = (
     "SELECT * FROM holds INDEXED BY holds_open WHERE kind=? AND holdable_type=? AND holdable_id=? "
     "AND coalesce(bot_id,'')=? AND released_at IS NULL"
