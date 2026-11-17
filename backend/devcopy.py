@@ -653,6 +653,8 @@ KEEP = (
             "message_mentions",
             "message_reactions",
             "message_revisions",
+            # A ❓ on a bot's chat message (backend/question_marks.py): kept with its message.
+            "question_marks",
             "sequences",
             "teammate_accesses",
             "thread_followers",
@@ -921,6 +923,7 @@ def prune(c, days, keep_automations=False):
             "message_mentions",
             "message_reactions",
             "message_revisions",
+            "question_marks",
         ):
             if table in present:
                 delete(table, "message_id NOT IN (SELECT id FROM messages)")
