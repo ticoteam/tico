@@ -213,7 +213,7 @@ const PAGES: PageSpec[] = [
     ui: ['ui/market-*.ts', 'ui/app/redesign.ts', 'ui/app/redesign-market.ts', 'ui/styles/market-spend.css', 'ui/styles/strategy.css',
       'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'strategy', route: '#/strategy', ready: 'Who we serve',
-    ui: ['ui/strategy-page.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts', 'ui/app/redesign-market.ts', 'ui/app/strategy-budget.ts',
+    ui: ['ui/strategy-page.ts', 'ui/app/redesign.ts', 'ui/app/redesign-org.ts', 'ui/app/redesign-market.ts', 'ui/app/strategy-budget.ts', 'ui/app/setup-gaps.ts',
       'ui/styles/strategy.css', 'ui/styles/strategy-budget.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css']},
   {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.ts', 'ui/app/brand-page.ts', 'ui/styles/growth.css']},
   {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
