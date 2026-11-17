@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from urllib.parse import parse_qs
 
 import httpx
 
@@ -216,3 +217,46 @@ def test_untrusted_verification_urls_rejected(api):
     response = api.post(BASE + "/connect", headers=headers("ana-test"))
     assert response.status_code == 503 and url not in response.text
     assert provider.service.load("human:ana") is None
+
+
+def test_two_refreshes_of_one_granola_connection_send_its_rotated_refresh_token_once(api):
+    """Granola rotates its refresh token and refuses a used one. Two services on one database (as two processes run)
+    refresh the same connection at once: one refresh reaches Granola, and the other takes the tokens it stored."""
+    from backend.granola_mcp import GranolaMCP
+
+    provider = Provider(api)
+    provider.connect()
+    current, accepted, refused = {"refresh": "fake-refresh-sensitive"}, [], []
+    answer = provider.handle
+
+    async def handle(request):
+        form = parse_qs(request.content.decode()) if request.url.path == "/oauth2/token" else {}
+        if form.get("grant_type") != ["refresh_token"]:
+            return answer(request)
+        await asyncio.sleep(0.3)  # the answer takes a while, as it does over the network
+        sent = form["refresh_token"][0]
+        if sent != current["refresh"]:
+            refused.append(sent)
+            return httpx.Response(400, json={"error": "invalid_grant"})
+        accepted.append(sent)
+        current["refresh"] = "fake-refresh-rotated"
+        return httpx.Response(
+            200,
+            json={"access_token": "fake-access-rotated", "refresh_token": current["refresh"], "expires_in": 3600},
+        )
+
+    provider.service.transport = httpx.MockTransport(handle)
+    other = GranolaMCP(api.app)
+    other.transport, other.clock, other.sleep = provider.service.transport, provider.service.clock, provider.sleep
+    first, second = provider.service.load("human:ana"), other.load("human:ana")
+
+    async def both():
+        return await asyncio.gather(
+            provider.service.refresh_for_sync(*first), other.refresh_for_sync(*second), return_exceptions=True
+        )
+
+    assert asyncio.run(both()) == [None, None]
+    assert accepted == ["fake-refresh-sensitive"] and refused == []
+    assert first[2]["access_token"] == second[2]["access_token"] == "fake-access-rotated"
+    saved = provider.service.load("human:ana")
+    assert saved[2]["refresh_token"] == "fake-refresh-rotated" and saved[1]["state"] == "connected"

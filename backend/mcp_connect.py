@@ -36,7 +36,7 @@ import re
 import secrets
 import threading
 import time
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 from urllib.parse import SplitResult, quote, urlencode, urlsplit
 
 import httpx
@@ -44,7 +44,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 from pydantic import Field, SecretStr
 
-from . import egress, mcp_client, outbound_tls
+from . import egress, mcp_client, oauth_refresh, outbound_tls
 from . import store as _store
 from . import tool_access as TA
 from . import tool_services as _tool_services
@@ -78,6 +78,7 @@ TIMEOUT = 15.0  # seconds for one request to an MCP or OAuth server
 MAX_ANSWER = 4 * 1024 * 1024
 STATE_TTL = 15 * 60  # a sign-in started and not finished is forgotten after this
 REFRESH_EARLY = 60  # an access token this close to its end is refreshed before use
+STALE_TRIES = 3  # a refresh whose tokens were dropped (the sign-in changed under it) is read and tried again this often
 LIST_PAGES = 10
 NAMES_MAX = 500
 SIGN_IN_AGAIN = "Sign in again"
@@ -350,53 +351,108 @@ def _record_failure(store: Any, tool_id: str, credential_id: str | None, code: i
         )
 
 
-_locks: dict[str, threading.Lock] = {}
-_locks_guard = threading.Lock()
+class _Turn(NamedTuple):
+    """A claim on one sign-in's refresh: its tool, the client secret, the tokens read with the claim and the claim's
+    holder."""
+
+    tool: Any
+    secret: str
+    held: Json
+    holder: str
 
 
-def _lock(credential_id: str) -> threading.Lock:
-    with _locks_guard:
-        return _locks.setdefault(credential_id, threading.Lock())
+def _fresh(held: Json) -> bool:
+    return not held.get("expires_at") or held["expires_at"] > time.time() + REFRESH_EARLY
+
+
+def _stored_refresh(store: Any, vault: Any, credential_id: str) -> str | None:
+    """The refresh token the sign-in stores now, or None when it has none."""
+    with store.transaction() as c:
+        row = c.execute("SELECT * FROM credentials WHERE id=? AND kind=?", (credential_id, OAUTH)).fetchone()
+        if row is None or row["ciphertext"] is None:
+            return None
+        return json.loads(vault.cipher.decrypt(c, row)).get("refresh_token")
 
 
 def access_token(store: Any, vault: Any, credential_id: str, force: bool = False) -> str:
     """The sign-in's current access token, refreshed first when it ends within REFRESH_EARLY seconds (or `force`).
-    One refresh at a time per sign-in. SignInNeeded when the server will not refresh it (and a failed check says
-    Sign in again); Failed when it did not answer. Blocking: call it off the event loop."""
-    with _lock(credential_id):
-        with store.transaction() as c:  # decrypt may reseal an old value in place
+    SignInNeeded when the server will not refresh it (and a failed check says Sign in again); Failed when it did not
+    answer. Blocking: call it off the event loop.
+
+    Refreshes of one sign-in run one at a time, across processes (backend/oauth_refresh.py). A vendor that rotates
+    refresh tokens accepts each once, so the refresh token is read and claimed in one write transaction, sent with no
+    transaction open, and the new tokens are stored only while the stored refresh token is still the one sent. A
+    caller that finds a refresh in progress waits for it and uses the tokens it stored.
+    """
+    sign_in = "credential:" + credential_id
+    deadline = time.monotonic() + oauth_refresh.WAIT_SECONDS
+    for _ in range(STALE_TRIES):
+        turn = _take_turn(store, vault, credential_id, sign_in, force, deadline)
+        if isinstance(turn, str):
+            return turn
+        token = _refresh(store, vault, credential_id, sign_in, turn)
+        if token is not None:
+            return token
+    raise Failed("the sign-in changed while it was refreshed; try again")
+
+
+def _take_turn(store: Any, vault: Any, credential_id: str, sign_in: str, force: bool, deadline: float) -> str | _Turn:
+    """The fresh access token when no refresh is needed, else the claim to refresh. Waits while another holder's
+    refresh lasts; Failed when it does not end in time."""
+    while True:
+        with store.transaction() as c:
             row = c.execute("SELECT * FROM credentials WHERE id=? AND kind=?", (credential_id, OAUTH)).fetchone()
             tool = c.execute("SELECT * FROM tools WHERE id=?", ((row or {"tool_id": ""})["tool_id"],)).fetchone()
             if row is None or tool is None or row["ciphertext"] is None:
                 raise SignInNeeded()
-            held = json.loads(vault.cipher.decrypt(c, row))
-            secret = _client_secret(c, vault, tool)
-            revision = row["revision"]
-        now = time.time()
-        fresh = not held.get("expires_at") or held["expires_at"] > now + REFRESH_EARLY
-        if held.get("access_token") and fresh and not force:
-            return held["access_token"]
-        meta = _meta(tool)
-        if not held.get("refresh_token") or not meta or not meta.get("client_id"):
-            _record_failure(store, tool["id"], credential_id, 401, SIGN_IN_AGAIN)
-            raise SignInNeeded()
-        response = _token_request(meta, secret, {"grant_type": "refresh_token", "refresh_token": held["refresh_token"]})
-        if response.status_code in (400, 401, 403):
-            _record_failure(store, tool["id"], credential_id, 401, SIGN_IN_AGAIN)
-            raise SignInNeeded()
-        if response.status_code >= 300:
-            raise Failed(f"the sign-in server answered {response.status_code}")
-        try:
-            new = mcp_client.tokens(_json(response), time.time(), held)
-        except mcp_client.AnswerError:
-            raise Failed("the sign-in server's answer had no token") from None
-        with store.transaction() as c:
-            ciphertext, nonce = vault.cipher.encrypt(c, credential_id, encode(new))
-            c.execute(
-                "UPDATE credentials SET ciphertext=?, nonce=?, updated_at=? WHERE id=? AND revision=?",
-                (ciphertext, nonce, H.now(), credential_id, revision),
-            )
-        return new["access_token"]
+            held = json.loads(vault.cipher.decrypt(c, row))  # decrypt may reseal an old value in place
+            if held.get("access_token") and _fresh(held) and not force:
+                return held["access_token"]
+            holder = oauth_refresh.take(c, sign_in)
+            if holder is not None:
+                return _Turn(tool, _client_secret(c, vault, tool), held, holder)
+        if time.monotonic() > deadline:
+            raise Failed("the sign-in is being refreshed; try again")
+        time.sleep(oauth_refresh.POLL_SECONDS)
+
+
+def _refresh(store: Any, vault: Any, credential_id: str, sign_in: str, turn: _Turn) -> str | None:
+    """The new access token, or None when the sign-in changed during the refresh (its tokens are read again)."""
+    try:
+        return _send_refresh(store, vault, credential_id, turn)
+    finally:
+        oauth_refresh.release(store, sign_in, turn.holder)
+
+
+def _send_refresh(store: Any, vault: Any, credential_id: str, turn: _Turn) -> str | None:
+    tool, held = turn.tool, turn.held
+    meta = _meta(tool)
+    sent = held.get("refresh_token")
+    if not sent or not meta or not meta.get("client_id"):
+        _record_failure(store, tool["id"], credential_id, 401, SIGN_IN_AGAIN)
+        raise SignInNeeded()
+    response = _token_request(meta, turn.secret, {"grant_type": "refresh_token", "refresh_token": sent})
+    if response.status_code in (400, 401, 403):
+        if _stored_refresh(store, vault, credential_id) != sent:
+            return None  # refused because another refresh has stored a newer token: the stored tokens are read again
+        _record_failure(store, tool["id"], credential_id, 401, SIGN_IN_AGAIN)
+        raise SignInNeeded()
+    if response.status_code >= 300:
+        raise Failed(f"the sign-in server answered {response.status_code}")
+    try:
+        new = mcp_client.tokens(_json(response), time.time(), held)
+    except mcp_client.AnswerError:
+        raise Failed("the sign-in server's answer had no token") from None
+    with store.transaction() as c:
+        row = c.execute("SELECT * FROM credentials WHERE id=? AND kind=?", (credential_id, OAUTH)).fetchone()
+        if row is None or json.loads(vault.cipher.decrypt(c, row)).get("refresh_token") != sent:
+            return None  # the claim lapsed during the refresh and the sign-in has changed: these tokens are dropped
+        ciphertext, nonce = vault.cipher.encrypt(c, credential_id, encode(new))
+        c.execute(
+            "UPDATE credentials SET ciphertext=?, nonce=?, updated_at=? WHERE id=?",
+            (ciphertext, nonce, H.now(), credential_id),
+        )
+    return new["access_token"]
 
 
 def store_sign_in(c: Any, vault: Any, tool: Any, actor: str, tokens: Json) -> str:
