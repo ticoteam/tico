@@ -4,8 +4,9 @@
 //! environment: its Tico token (`HUB_TOKEN`), workspace, task and git helper. It never reads runner.json.
 //!
 //! It prints one JSON object: the link on success (exit 0), else `{"error": {...}}` (exit 1), with the server's
-//! `code`, `status`, `retryable` and extra fields when Tico refused (a worktree wait, `worktree_limit`), or only a
-//! `detail` for everything else.
+//! `code`, `status`, `retryable`, `operation_id` and extra fields whenever Tico answered with an error or could not be
+//! reached (a worktree wait, `worktree_limit`; a 503 or lost connection, retryable), or only a `detail` for everything
+//! else.
 
 use std::path::Path;
 
@@ -30,7 +31,12 @@ impl From<ApiError> for Failure {
 
 impl From<WtErr> for Failure {
     fn from(e: WtErr) -> Failure {
-        Failure::Wt(e)
+        match e {
+            // Tico's answer from inside a checkout or setup step stays a refusal: a 503 or a lost connection is
+            // still one to retry.
+            WtErr::Api(e) => Failure::Api(e),
+            other => Failure::Wt(other),
+        }
     }
 }
 
@@ -49,6 +55,9 @@ impl Failure {
                 out.insert("detail".into(), json!(e.detail));
                 out.insert("status".into(), json!(e.status));
                 out.insert("retryable".into(), json!(e.retryable));
+                if let Some(id) = &e.operation_id {
+                    out.insert("operation_id".into(), json!(id));
+                }
                 json!({ "error": out })
             }
             Failure::Wt(e) => json!({"error": {"detail": e.text()}}),
@@ -103,6 +112,17 @@ pub async fn run(
     task: Option<&str>,
     turn: &Env,
 ) -> Result<Value, Failure> {
+    run_with_backoff(operation, value, task, turn, 1.0).await
+}
+
+/// `run`, with the client's waits between retries scaled by `backoff` (tests use a small one).
+pub(crate) async fn run_with_backoff(
+    operation: &str,
+    value: &str,
+    task: Option<&str>,
+    turn: &Env,
+    backoff: f64,
+) -> Result<Value, Failure> {
     let get = |k: &str| turn.get(k).cloned().filter(|v| !v.is_empty());
     let explicit = task.is_some();
     let task = task
@@ -115,12 +135,13 @@ pub async fn run(
             "Task worktrees need a bot run and a task; use --task when this run has no current task",
         ));
     };
-    let client = Client::new(
+    let mut client = Client::new(
         &get("HUB_API_URL").unwrap_or_default(),
         &get("HUB_TOKEN").unwrap_or_default(),
         15,
         3,
     )?;
+    client.backoff_scale = backoff;
     let task = if explicit {
         canonical_task_id(&client, &task).await?
     } else {

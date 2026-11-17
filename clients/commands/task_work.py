@@ -251,7 +251,7 @@ def task_worktree_attach(api, args):
 
 OLD_RUNNER = (
     "This computer's runner is older than this Tico checkout (it has no `tico-runner worktree`); "
-    "update this computer's runner, then try again"
+    "it is being updated, so try again in a few minutes"
 )
 
 
@@ -277,8 +277,10 @@ def runner_binary(env, root=None):
 
 def worktree(operation, value, task=None, env=None):
     """`tico task worktree add|attach|setup`: the runner's own worktree code (`tico-runner worktree`,
-    runner-rs/src/worktrees/cli.rs) with this turn's environment. Raises APIError for a server refusal (a worktree
-    wait keeps its `extra`), ValueError for the rest."""
+    runner-rs/src/worktrees/cli.rs) with this turn's environment. Raises APIError for Tico's refusals and failures
+    (a worktree wait keeps its `extra`; a 503 or lost connection stays retryable) and for a runner that predates the
+    command (retryable: it is mid-update), ValueError for the rest."""
+    from clients.tico import APIError
     from runner_support import engine
 
     env = dict(os.environ if env is None else env)
@@ -296,7 +298,9 @@ def worktree(operation, value, task=None, env=None):
         check=False,
     )
     if done.returncode == 2 and "unrecognized subcommand" in done.stderr:
-        raise ValueError(OLD_RUNNER)
+        # Only while an update has moved the checkout and its runner is not ready yet (release_update.py prepares
+        # the new binary before the restart), so it is one to retry.
+        raise APIError("runner_outdated", OLD_RUNNER, 0, True)
     try:
         reply = json.loads(done.stdout.strip().splitlines()[-1])
     except (IndexError, ValueError):
@@ -307,15 +311,14 @@ def worktree(operation, value, task=None, env=None):
         return reply
     error = error if isinstance(error, dict) else {"detail": str(error or "tico-runner worktree failed")}
     if error.get("code"):
-        from clients.tico import APIError
-
-        extra = {k: v for k, v in error.items() if k not in ("code", "detail", "status", "retryable")}
+        fields = ("code", "detail", "status", "retryable", "operation_id")
         raise APIError(
             error["code"],
             error.get("detail") or "",
             error.get("status") or 0,
             bool(error.get("retryable")),
-            extra=extra,
+            error.get("operation_id"),
+            extra={k: v for k, v in error.items() if k not in fields},
         )
     raise ValueError(error.get("detail") or "tico-runner worktree failed")
 

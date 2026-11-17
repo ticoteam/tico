@@ -2223,7 +2223,8 @@ async fn recording_server() -> (
     (client, seen)
 }
 
-/// What the fake server answers, by "METHOD /api/v2/path": a status and a JSON body (else 200 `{}`).
+/// What the fake server answers, by "METHOD /api/v2/path": a status and a JSON body (else 200 `{}`). Status 0
+/// closes the connection without an answer.
 type Routes = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, (u16, Value)>>>;
 
 /// A fake Tico server that records each request ("METHOD /path", body) and answers from `Routes`, which a test
@@ -2284,6 +2285,9 @@ async fn routed_server() -> (
             log.lock()
                 .unwrap()
                 .push((line, serde_json::from_str(&body).unwrap_or(Value::Null)));
+            if status == 0 {
+                continue;
+            }
             let answer = answer.to_string();
             let reply = format!(
                 "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
@@ -2688,6 +2692,79 @@ async fn an_attached_worktree_is_registered_and_certified_ready() {
             .unwrap()["phase"],
         json!("ready")
     );
+}
+
+#[tokio::test]
+async fn a_server_failure_inside_checkout_or_setup_stays_a_refusal_to_retry() {
+    let tmp = Tmp::new();
+    let workspace = workspace_with_base(&tmp.0);
+    let (_, seen, routes, url) = routed_server().await;
+    let turn = worktree_turn(&tmp.0, &workspace, &url);
+    let record = "PATCH /api/v2/tasks/task-0007/links/link-0007";
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "GET /api/v2/runners/me/repositories".into(),
+            (200, writable("")),
+        );
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees".into(),
+            (
+                200,
+                json!({"link_id": "link-0007", "branch": "tico/added", "path": "tasks/t7/product", "repo": "org/product",
+                       "state": "pending", "checkout_state": "queued", "setup_pending": true}),
+            ),
+        );
+        // The checkout's first record (worktrees.rs patch_checkout) is where Tico fails.
+        r.insert(
+            record.into(),
+            (
+                503,
+                json!({"error": {"code": "unavailable", "detail": "Tico is busy; try again"}}),
+            ),
+        );
+    }
+    let busy = worktrees::cli::run_with_backoff("add", "org/product", None, &turn, 0.001)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (
+            &busy["error"]["code"],
+            &busy["error"]["detail"],
+            &busy["error"]["status"],
+            &busy["error"]["retryable"]
+        ),
+        (
+            &json!("unavailable"),
+            &json!("Tico is busy; try again"),
+            &json!(503),
+            &json!(true)
+        )
+    );
+    // The client tried it four times (three retries) before giving up.
+    let tries = || {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(l, _)| l == record)
+            .count()
+    };
+    assert_eq!(tries(), 4);
+
+    // A connection lost on the same record is one to retry too, with the operation to retry it as.
+    routes.lock().unwrap().insert(record.into(), (0, json!({})));
+    let lost = worktrees::cli::run_with_backoff("add", "org/product", None, &turn, 0.001)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (&lost["error"]["code"], &lost["error"]["retryable"]),
+        (&json!("unavailable"), &json!(true)),
+        "{lost}"
+    );
+    assert!(lost["error"]["operation_id"].is_string(), "{lost}");
+    assert_eq!(tries(), 8);
 }
 
 #[tokio::test]

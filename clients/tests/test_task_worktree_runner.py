@@ -78,15 +78,48 @@ def test_a_worktree_wait_ends_the_cli_with_its_own_exit_status(runner, monkeypat
     assert (code, capsys.readouterr().out.strip()) == (remotecli.WORKTREE_WAIT_EXIT, "Waiting for a worktree")
 
 
+UNAVAILABLE = {"code": "unavailable", "detail": "Tico could not confirm this request", "status": 0, "retryable": True}
+
+
+@pytest.mark.parametrize(
+    ("out", "err", "code", "error"),
+    [
+        (
+            json.dumps({"error": {**UNAVAILABLE, "detail": "Tico is busy", "status": 503, "operation_id": "op-1"}}),
+            "",
+            1,
+            ("unavailable", "Tico is busy", 503, "op-1"),
+        ),
+        (
+            json.dumps({"error": {**UNAVAILABLE, "operation_id": "op-2"}}),
+            "",
+            1,
+            ("unavailable", "Tico could not confirm this request", 0, "op-2"),
+        ),
+        ("", "error: unrecognized subcommand 'worktree'", 2, ("runner_outdated", task_work.OLD_RUNNER, 0, None)),
+    ],
+    ids=["server-503", "connection-lost", "runner-mid-update"],
+)
+def test_a_failure_to_retry_stays_one_and_ends_the_cli_with_exit_1(runner, monkeypatch, capsys, out, err, code, error):
+    runner(out=out, err=err, code=code)
+    with pytest.raises(APIError) as failed:
+        task_work.worktree("setup", "org/product")
+    got = failed.value
+    assert (got.code, got.detail, got.status, got.operation_id, got.retryable, got.extra) == (*error, True, {})
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *args, **kwargs: object())
+    assert remotecli.main(hubcli.parser().parse_args(["task", "worktree", "setup", "org/product"])) == 1
+    assert json.loads(capsys.readouterr().out)["retryable"] is True
+
+
 @pytest.mark.parametrize(
     ("out", "err", "code", "message"),
     [
         ('{"error": {"detail": "Setup did not finish"}}', "", 1, "^Setup did not finish$"),
         ('{"error": "plain words"}', "", 1, "^plain words$"),
-        ("", "error: unrecognized subcommand 'worktree'", 2, "older than this Tico checkout"),
         ("", "thread 'main' panicked", 101, r"failed \(exit 101\): thread 'main' panicked"),
     ],
-    ids=["message", "flat-error", "old-runner", "no-answer"],
+    ids=["message", "flat-error", "no-answer"],
 )
 def test_everything_else_is_a_message(runner, out, err, code, message):
     runner(out=out, err=err, code=code)
