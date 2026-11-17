@@ -39,7 +39,9 @@ def test_upload_replays_and_conflicts_do_not_write_blobs(api, monkeypatch, kind)
 def test_task_file_raises_a_refusal_the_write_replays(api, monkeypatch):
     """A concurrent retry can store a refusal between the replay check and the write lock: the route raises it."""
     tid = post(api, "tasks", {"title": "Review upload", "owner": "ops", "body": "Read the report."})["id"]
-    refusal = {"_refusal": {"code": "file_refused", "detail": "Refused under the write lock", "status": 422, "extra": {}}}
+    refusal = {
+        "_refusal": {"code": "file_refused", "detail": "Refused under the write lock", "status": 422, "extra": {}}
+    }
     monkeypatch.setattr(api.app.state.store, "mutate", lambda *args, **kwargs: refusal)
     response = api.post(
         f"/api/v2/tasks/{tid}/files",
