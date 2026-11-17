@@ -53,8 +53,9 @@ def register(
             raise Problem("validation", "That is not a bot's question on this task", 422)
         return found[0], found[1] == who.actor
 
-    def comment_write(c, who, tid, body, ingest=None, rc=None, reader=None):
-        """One task comment, as `POST /api/v2/tasks/{tid}/comments` writes it and Send anyway replays it."""
+    def comment_write(c, who, tid, body, ingest=None, rc=None, reader=None, ask_to=None):
+        """One task comment, as `POST /api/v2/tasks/{tid}/comments` writes it and Send anyway replays it. `ask_to`: the
+        person a ❓ on it will ask (`question_write`), who is in its audience too."""
         reader = reader or who
         mark = H.jobs_mark(c)
         task_id = auth.resolve_task(c, who, tid)
@@ -65,12 +66,17 @@ def register(
         comment_rights(c, auth, who, task_id)
         asker, asked_me = replying_to(c, who, task_id, body)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
-        audience = rule_comment_audience(c, who, row, body.text) if rc is not None else None
+        extra = (ask_to,) if ask_to else ()
+        audience = rule_comment_audience(c, who, row, body.text, *extra) if rc is not None else None
         rule = org_rule_check.apply(
             c,
             rc,
             body.text,
-            {"task": task_id, "body": body.model_dump(mode="json", by_alias=True)},
+            {
+                "task": task_id,
+                "body": body.model_dump(mode="json", by_alias=True),
+                **({"to": ask_to} if ask_to else {}),
+            },
             audience_now=audience,
         )
         if rule and rule.get("moved"):
@@ -259,24 +265,35 @@ def register(
         who = request.state.identity
         if who.role != "bot":
             raise Problem("forbidden", "Only a bot marks a message ❓", 403)
+        with store.read() as c:
+            to = auth.target(c, who, body.to)  # who it asks: checked by the rules for them too, as a recipient
         rc = rule_check(
             who,
-            "comment",
+            "question",
             body.text,
-            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text),
+            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text, to),
             place=question_marks.Asking(task_place(who, tid)),
         )
-        comment = M.TaskComment(text=body.text)
+        return mutate(request, body, lambda c: question_write(c, who, tid, body.text, to, rc))
 
-        def write(c):
-            done = comment_write(c, who, tid, comment, None, rc, who)
-            said = done.get("comment") or {}
-            if not said.get("id"):
-                return done  # held by a rule: nothing is written, and nothing is marked
-            mark = question_marks.mark(c, who.actor, said["id"], body.to)
-            return {**done, "question": question_marks.public(mark)}
+    def question_write(c, who, tid, text, to, rc, ingest=None):
+        """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
+        transaction. Held by a rule, nothing is written and nothing is marked."""
+        done = comment_write(c, who, tid, M.TaskComment(text=text), ingest, rc, who, ask_to=to)
+        said = done.get("comment") or {}
+        if not said.get("id"):
+            return done
+        mark = question_marks.mark(c, who.actor, said["id"], to)
+        return {**done, "question": question_marks.public(mark)}
 
-        return mutate(request, body, write)
+    def rule_question_audience(c, bot, replay):
+        row = auth.task(c, bot, auth.resolve_task(c, bot, replay["task"]))
+        return rule_comment_audience(c, bot, row, replay["body"].get("text") or "", replay["to"])
+
+    @org_rule_check.replayer("question", audience=rule_question_audience)
+    def rule_replay_question(c, bot, hold, replay, ingest, gate=None):
+        text = replay["body"].get("text") or ""
+        return question_write(c, bot, replay["task"], text, replay["to"], org_rule_check.decided(gate), ingest)
 
     @app.get("/api/v2/tasks/{tid}/tree")
     def task_tree(request: Request, tid: str):

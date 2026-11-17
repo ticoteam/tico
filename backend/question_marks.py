@@ -78,14 +78,78 @@ def mark_id(value: object) -> str | None:
 
 
 def open_rows(conn: sqlite3.Connection) -> list[Row]:
-    """Every open ❓, oldest first, read once per snapshot (read_cache): Needs you and the ladder read them for many
-    tasks in one pass. Shared: never change a row."""
+    """Every open ❓ its person can still answer (`answerable`), oldest first, read once per snapshot (read_cache):
+    Needs you and the ladder read them for many tasks in one pass. One whose person left or lost the chat waits on
+    nobody, so its bot is not held, even before `clear_gone` clears it. Shared: never change a row."""
     read_cache = _mod("read_cache")
 
     def build() -> list[Row]:
-        return [dict(r) for r in conn.execute(_OPEN)]
+        return [m for m in (dict(r) for r in conn.execute(_OPEN)) if answerable(conn, m)]
 
     return read_cache.value(conn, ("question_marks_open",), build, shared=True)
+
+
+def answerable(conn: sqlite3.Connection, mark: Mapping[str, Any]) -> bool:
+    """Whether the person an open ❓ names can still answer it: still here and able to act (task_requirements
+    .active_person), and able to read the marked message."""
+    R = _mod("task_requirements")
+
+    if not R.active_person(conn, mark["person_id"]):
+        return False
+    message = H.message(conn, mark["message_id"])
+    return bool(message) and readable(conn, str(mark["person_id"]), message)
+
+
+def clear_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
+    """Clear each open ❓ (on `task_id`, or anywhere) whose person can no longer answer it: they left, lost sign-in, or
+    can no longer read the chat (`cleared_reason` 'addressee_gone'). Nobody else is asked for them: on a task, its bot
+    is handed the task back and told the question went nowhere, so it can ask someone who can. Run when the roster or
+    a task's readers change, and on each never-stuck pass for anything else. Returns the cleared marks' ids."""
+    if task_id:
+        found = conn.execute("SELECT * FROM question_marks WHERE cleared_at IS NULL AND task_id=?", (str(task_id),))
+    else:
+        found = conn.execute(_OPEN)
+    rows = [dict(r) for r in found]
+    gone = [m for m in rows if not answerable(conn, m)]
+    if not gone:
+        return []
+    at = H.now()
+    conn.execute(
+        "UPDATE question_marks SET cleared_at=?, cleared_reason='addressee_gone', cleared_by_id=? "
+        "WHERE id IN (SELECT value FROM json_each(?)) AND cleared_at IS NULL",
+        (at, H.KEEPER, H._dump([m["id"] for m in gone])),
+    )
+    for bot in sorted({str(m["bot_id"]) for m in gone}):
+        H._recount(conn, bot)
+    for m in gone:
+        H.event(conn, H.KEEPER, "question.cleared", m["id"], {"reason": "addressee_gone", "to": m["person_id"]})
+        if m["task_id"]:
+            after_reply(conn, m["task_id"], H.KEEPER, "Its question can't be answered")
+            _tell_gone(conn, m)
+    return [str(m["id"]) for m in gone]
+
+
+def _tell_gone(conn: sqlite3.Connection, mark: Row) -> None:
+    """Wake the bot on the task: its ❓ went nowhere, so it asks someone who can, or goes on without the answer."""
+    E = _mod("task_engine")
+    task_wakes = _mod("task_wakes")
+
+    row: Row | None = E.task(conn, mark["task_id"])
+    if not row or row.get("status") != "open" or not row.get("visit"):
+        return
+    name = H.actor_name(conn, mark["person_id"])
+    lead = (
+        f"{name} can no longer answer your question \"{mark['line']}\" (they left, or can't read this chat any more). "
+        "Ask someone who can, or go on without it."
+    )
+    task_wakes.add(
+        conn,
+        row,
+        mark["bot_id"],
+        row["visit"],
+        task_wakes.body(conn, row, lead, to=mark["bot_id"]),
+        wake_key=f"{row['id']}:{row['visit']['id']}:qmark-gone:{mark['id']}",
+    )
 
 
 def on_task(conn: sqlite3.Connection, task_id: object) -> list[Row]:
@@ -236,7 +300,8 @@ def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:
 def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[str, Any], refs: object) -> list[str]:
     """A person's message just written: it clears each open ❓ for them in that chat. Their own hand, their token or
     their Assistant on their word (`REPLY_VIA`); BotOps or an automation writing as them do not. A reply counts as
-    progress on the task (task_engine.progress_mark). Returns the cleared marks' ids."""
+    progress on the task (task_engine.progress_mark). Returns the tasks of the marks it cleared, each once ('' for a
+    direct chat's): a shared chat can hold marks for several tasks, and the reply itself need not name any."""
     sender = str(message.get("sender_id") or "")
     if not H.is_human(sender) or message.get("kind") == "notice":
         return []
@@ -246,7 +311,8 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
         return []
     room = room_of(conv)
     found = conn.execute(
-        "SELECT id, bot_id FROM question_marks WHERE room_id=? AND person_id=? AND cleared_at IS NULL", (room, sender)
+        "SELECT id, bot_id, task_id FROM question_marks WHERE room_id=? AND person_id=? AND cleared_at IS NULL",
+        (room, sender),
     ).fetchall()
     if not found:
         return []
@@ -258,12 +324,13 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
     )
     for bot in sorted({str(r[1]) for r in found}):
         H._recount(conn, bot)
-    return ids
+    return sorted({str(r[2] or "") for r in found})
 
 
-def after_reply(conn: sqlite3.Connection, task_id: object, by: str) -> None:
-    """A reply cleared a ❓ on a task's chat: it is progress, so the never-stuck ladder starts again; a bot's snooze of
-    the task waited for it and ends; a merge conflict held for it goes to its builder now."""
+def after_reply(conn: sqlite3.Connection, task_id: object, by: str, why: str = "Replied") -> None:
+    """A reply cleared a ❓ on a task's chat (or its person can no longer answer it): it is progress, so the
+    never-stuck ladder starts again; a bot's snooze of the task waited for it and ends; a merge conflict held for it
+    goes to its builder now."""
     if not task_id:
         return
     pr_conflicts = _mod("pr_conflicts")
@@ -273,7 +340,7 @@ def after_reply(conn: sqlite3.Connection, task_id: object, by: str) -> None:
     row: Row = E.task(conn, tid) or {}
     snoozed: Any = row.get("snooze")
     if snoozed and H.is_bot(snoozed["by_id"]):
-        E.unsnooze(conn, tid, by, "Replied")
+        E.unsnooze(conn, tid, by, why)
     E.changed(conn, tid, by)
     pr_conflicts.after_answer(conn, tid)
 

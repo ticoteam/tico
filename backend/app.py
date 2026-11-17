@@ -2443,8 +2443,8 @@ def create_app(settings=None):
         people = T.mentioned_people(c, text, author) if text else []
         return [a for a in dict.fromkeys((row["owner_id"], row["requester_id"], *people, *extra)) if a]
 
-    def rule_comment_audience(c, who, row, text):
-        return rule_task_audience(c, row, who.actor, text)
+    def rule_comment_audience(c, who, row, text, *extra):
+        return rule_task_audience(c, row, who.actor, text, *extra)
 
     def rule_message_to(c, who, body):
         """The actor a message goes to, as `send` writes it: `to: assistant` is the person's Assistant bot."""
@@ -2826,16 +2826,19 @@ def create_app(settings=None):
         asking = question_marks.Asking(
             lambda c, author, recipients: rule_message_place(who, sent)(c, author, recipients)
         )
-        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=asking)
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=asking, operation="chat_question")
+        return ask_ingest.judged(
+            store, ingest, lambda: mutate(request, body, lambda c: chat_question_write(c, who, sent, rc, ingest))
+        )
 
-        def write(c):
-            message = message_write(c, who, sent, rc, ingest)
-            if not message.get("id"):
-                return message  # held by a rule: nothing is written, and nothing is marked
-            mark = question_marks.mark(c, who.actor, str(message["id"]), body.to)
-            return {**message, "question": question_marks.public(mark)}
-
-        return ask_ingest.judged(store, ingest, lambda: mutate(request, body, write))
+    def chat_question_write(c, who, sent, rc, ingest):
+        """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one
+        transaction. Held by a rule, nothing is written and nothing is marked."""
+        message = message_write(c, who, sent, rc, ingest)
+        if not message.get("id"):
+            return message
+        mark = question_marks.mark(c, who.actor, str(message["id"]), sent.to)
+        return {**message, "question": question_marks.public(mark)}
 
     @app.post(
         "/api/v2/questions/{mid}/give",
@@ -2864,6 +2867,12 @@ def create_app(settings=None):
         return message_write(
             c, bot, M.MessageCreate.model_validate(replay["body"]), org_rule_check.decided(gate), ingest
         )
+
+    @org_rule_check.replayer("chat_question", prepare=rule_prepare_message)
+    def rule_replay_chat_question(c, bot, hold, replay, ingest, gate=None):
+        """Send anyway of a held ❓ in a direct chat: the message and its mark, as the route writes them."""
+        sent = M.MessageCreate.model_validate(replay["body"])
+        return chat_question_write(c, bot, sent, org_rule_check.decided(gate), ingest)
 
     def chat_upload_checks(request, who, bot, sent):
         """The checks of a person's chat message with files, outside the write: `message_checks` under its own operation,

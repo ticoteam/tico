@@ -186,7 +186,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
             # Only the task read is counted: each new task also gets a room under a random id, and where those ids
             # fall moves the later reads' index seeks by a step or two, whatever the tasks' status.
             c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 1)
-            c.execute(privacy.status_tasks_sql(marks), actors * 4).fetchall()
+            c.execute(privacy.status_tasks_sql(marks), actors * 5).fetchall()
             c.set_progress_handler(None, 1)
             # The rows an unindexed read of the same filter gives: live or private tasks a bot owns or asked for.
             wanted = {
@@ -235,17 +235,17 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
         return sorted(tuple((k, type(v).__name__, v) for k, v in row.items()) for row in rows)
 
     with store.read_transaction() as c:
-        stepped = [dict(row) for row in c.execute(privacy.status_tasks_sql(marks), actors * 4)]
+        stepped = [dict(row) for row in c.execute(privacy.status_tasks_sql(marks), actors * 5)]
         seen = []
         c.set_trace_callback(seen.append)
-        packed = privacy.status_tasks(c, marks, actors * 4)
+        packed = privacy.status_tasks(c, marks, actors * 5)
         c.set_trace_callback(None)
         assert len(seen) == 1 and len(c.execute(seen[0]).fetchall()) == 1
         assert [list(row) for row in packed] == [privacy.STATUS_TASK_COLUMNS.split(",")] * len(packed)
         assert typed(packed) == typed(stepped)
         for bot in actors:
-            assert typed(privacy.status_tasks(c, "=?", (bot,) * 4)) == typed(
-                dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 4)
+            assert typed(privacy.status_tasks(c, "=?", (bot,) * 5)) == typed(
+                dict(row) for row in c.execute(privacy.status_tasks_sql("=?"), (bot,) * 5)
             )
     ids = {row["id"] for row in packed}
     assert shared["id"] in ids and done["id"] not in ids

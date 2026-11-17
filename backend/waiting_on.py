@@ -564,6 +564,11 @@ def of(
         line = f"{'Late' if late else 'Stuck'} in {stage['name']}: {_share_line(conn, shut)}"
         since = late or visit.get("last_change_at") or entered
         out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since, share=shut))
+    if marks:
+        # Any bot with an open ❓ here (the holder, or a reviewer asked for its OK) is not chased for anything on the
+        # task while it waits: the wait is the person's. It is chased again once the ❓ clears.
+        asking = {m["bot_id"] for m in marks}
+        out = [wait for wait in out if not (wait.state in (BOT, PAUSED) and not wait.fix and wait.who in asking)]
     for m in marks:
         out.append(Wait(PERSON, m["person_id"], m["line"], question_marks.wait_id(m), m["created_at"], ask=True))
     blockers = task_depends.blockers(conn, str(row["id"]))

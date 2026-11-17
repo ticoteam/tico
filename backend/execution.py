@@ -6890,18 +6890,24 @@ class Execution:
                     target = reply_target(source, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread hears its owner's turn: on
-                    # the open task, unless the turn already wrote in that room (its own comment or ❓ says it);
-                    # once the owner marked the work done; or, for a finished turn that came in after its lease
-                    # lapsed, once the task was closed under it: no later turn will answer that room.
+                    # the open task; once the owner marked the work done; or, for a finished turn that came in after
+                    # its lease lapsed, once the task was closed under it: no later turn will answer that room. On
+                    # its own open task, a turn that already wrote in that room (its own comment or ❓ says it) posts
+                    # nothing more, wherever the room is.
+                    wrote = (
+                        actor == task["owner_id"]
+                        and task["status"] == "open"
+                        and turn_wrote(c, aid, (conv or {}).get("id"), actor)
+                    )
                     if conv.get("kind") == "chat" or (
                         conv.get("task_id") == task["id"] and H.task_from_chat(c, task["id"])
                     ):
-                        replyable = target not in (H.KEEPER, actor)
+                        replyable = target not in (H.KEEPER, actor) and not wrote
                     else:
                         replyable = actor == task["owner_id"] and (
                             task["status"] == "done"
                             or (late and task["status"] == "closed")
-                            or (task["status"] == "open" and not turn_wrote(c, aid, (conv or {}).get("id"), actor))
+                            or (task["status"] == "open" and not wrote)
                         )
                     # Woken by Tico on a task finished before it started, a turn that wrote nothing has no news: the
                     # person would only read "nothing changed" again. Its text stays on the run (Dev 359).

@@ -309,3 +309,141 @@ def test_a_turn_that_already_wrote_in_the_tasks_chat_posts_no_end_of_turn_text(a
     post(api, f"tasks/{task['id']}/comments", {"text": "Halfway through the packet."}, attempt["token"])
     assert not _finish(api, machine, attempt, "Done with the first half.")
     assert _said(api, "Done with the first half.") == 0
+
+
+# ---- review follow-ups: who a reply resumes, a gone addressee, the counts, the rules, Send anyway -----------------
+
+
+def test_a_reply_in_a_shared_chat_resumes_the_task_whose_mark_it_cleared(c, general):
+    said = H.say(c, ANA, BUILDER, "Please help with the launch.")
+    task = H.task_create(
+        c,
+        ANA,
+        "Write the launch note",
+        "Draft the note.",
+        BUILDER,
+        conversation_id=said["conversation_id"],
+        own_room=False,
+        lint=False,
+    )
+    mark = _ask(c, task["id"])
+    E.snooze(
+        c, task["id"], BUILDER, "waiting on Ana", "2099-01-01T00:00:00Z", seen_version=E.task(c, task["id"])["version"]
+    )
+    H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=said["conversation_id"])  # no refs.task: the room's reply
+    assert Q.get(c, mark["id"])["cleared_reason"] == "replied"
+    assert not E.task(c, task["id"]).get("snooze")
+
+
+def test_a_question_for_someone_who_left_clears_and_hands_the_task_back(c, general):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    mark = _ask(c, task_id, person="human:ben")
+    X.left(c, "human:ben")
+    waits = W.of(c, E.task(c, task_id))
+    assert not any(w.who == "human:ben" for w in waits), [(w.state, w.who) for w in waits]
+    assert W.turn(c, E.task(c, task_id)) == BUILDER
+    assert Q.get(c, mark["id"])["cleared_reason"] == "addressee_gone"
+
+
+def test_a_question_for_someone_who_can_no_longer_read_the_chat_clears(c, general):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    H.task_update(c, ANA, task_id, private=True)
+    H.set_task_readers(c, ANA, task_id, add=["human:cara"])
+    mark = _ask(c, task_id, person="human:cara")
+    H.set_task_readers(c, ANA, task_id, replace=[ANA, BUILDER])
+    assert not Q.readable(c, "human:cara", H.message(c, mark["message_id"]))
+    assert W.turn(c, E.task(c, task_id)) == BUILDER
+    assert Q.get(c, mark["id"])["cleared_reason"] == "addressee_gone"
+
+
+def test_a_reviewer_waiting_on_its_own_question_is_not_chased(c, general):
+    stages = [
+        {
+            "name": "Review",
+            "owner": "assignee",
+            "requirements": [{"kind": "ok", "person": "bot:reviewer", "line": "OK the wording"}],
+        }
+    ]
+    X.pipeline(c, pid="review", name="Review workflow", manager=MANAGER, stages=stages)
+    task_id = X.new_task(c, ANA, "Review the launch note", pipeline_id="review", assignee=BUILDER)["id"]
+    _ask(c, task_id, bot="bot:reviewer")
+    row = E.task(c, task_id)
+    waits = W.of(c, row)
+    assert "bot:reviewer" not in W.turns(c, row, waits), [(w.state, w.who, w.ask) for w in waits]
+    assert (W.PERSON, ANA, True) in [(w.state, w.who, w.ask) for w in waits]
+    H.task_comment(c, ANA, task_id, "Friday works.")
+    row = E.task(c, task_id)
+    assert "bot:reviewer" in W.turns(c, row, W.of(c, row))  # the answer brings its review back
+
+
+def test_progress_reads_its_replied_marks_by_index(c):
+    plan = c.execute(
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM question_marks WHERE task_id=? AND cleared_message_id IS NOT NULL",
+        ("a-task",),
+    ).fetchall()
+    assert not any("SCAN question_marks" in str(r[-1]) for r in plan), [tuple(r) for r in plan]
+
+
+def test_a_direct_chat_question_counts_as_waiting_on_a_person(c, general):
+    said = H.say(c, BUILDER, "human:ben", ASKED)
+    Q.mark(c, BUILDER, said["id"], "human:ben")
+    assert H.status_counts(c, BUILDER)[1] == 1
+    from backend import task_privacy as P
+    from backend.auth import Identity
+
+    shown = P.status(c, Identity("human:ben", "member"), {"bot": "builder", "needs_human": 1, "open_tasks": 0})
+    assert shown["needs_human"] == 1, shown
+
+
+def test_a_question_by_a_bot_not_on_the_task_counts_in_the_status_people_see(c, general):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    _ask(c, task_id, bot="bot:reviewer", person="human:ben")
+    assert H.status_counts(c, "bot:reviewer")[1] == 1
+    from backend import task_privacy as P
+    from backend.auth import Identity
+
+    shown = P.status(c, Identity(ANA, "owner"), {"bot": "reviewer", "needs_human": 1, "open_tasks": 0})
+    assert shown["needs_human"] == 1, shown
+
+
+def test_a_task_question_checks_the_rules_for_the_person_it_asks(ruled):
+    from backend.tests.helpers.org_rules import rule
+
+    api, judge = ruled
+    text = "Never ask Ben about Friday."
+    rule(
+        api,
+        {"kind": "internal", "text": text, "who": {"bots": ["ops"]}, "with": {"people": ["ben"]}, "if_broken": "block"},
+    )
+    judge.needles[text] = "Friday"
+    r = ask_on(api, task_for_ops(api), to="ben", text="Should it go out Friday?")
+    assert r.status_code == 200 and r.json().get("held"), r.text
+    assert sql(api, "SELECT count(*) AS n FROM question_marks")[0]["n"] == 0
+
+
+@pytest.mark.parametrize("where", ["task", "direct"])
+def test_send_anyway_posts_and_marks_a_held_question(ruled, where):
+    api, judge = ruled
+    judge.needles = {OR.ASKS_TO_A_PERSON: "**"}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rules SET if_broken='escalate', reviewer='ana' WHERE text=?", (OR.ASKS_TO_A_PERSON,))
+    path = f"tasks/{task_for_ops(api)['id']}/questions" if where == "task" else "questions"
+    held = post(api, path, {"to": "ben", "text": "Should it go out **Friday**?"}, token="ops-test")["held"]
+    view = get(api, f"rule-holds/{held['id']}")
+    assert view["can_send"], view
+    post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]})
+    [mark] = sql(api, "SELECT * FROM question_marks WHERE cleared_at IS NULL")
+    assert mark["person_id"] == "human:ben" and "Friday" in mark["line"]
+    assert questions(api, "ben-test")[0]["mark_id"] == mark["id"]
+
+
+def test_a_chat_started_task_posts_no_end_of_turn_text_after_its_turn_wrote(api):
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the packet", "body": "Check the fixture packet"})
+    attempt = claim(api, machine)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "fixture-thread"}, machine["token"])
+    post(api, f"tasks/{task['id']}/comments", {"text": "Halfway through the packet."}, attempt["token"])
+    assert not _finish(api, machine, attempt, "Done with the first half.")
+    assert _said(api, "Done with the first half.") == 0

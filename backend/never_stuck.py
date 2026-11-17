@@ -39,7 +39,7 @@ from collections.abc import Callable, Iterable
 from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from . import batch_work, hubdb_core, merge_order, stage_rule_timers, task_depends, task_wakes
+from . import batch_work, hubdb_core, merge_order, question_marks, stage_rule_timers, task_depends, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
@@ -136,6 +136,8 @@ def check(
     seen: dict[str, str | None] = {}
     live = task_wakes.live_bots(conn, at)  # a pass starts no run: read once
     _ready_snoozes(conn, done, failures)
+    # A ❓ whose person can no longer answer it (a change the roster and readers hooks did not see) goes nowhere.
+    question_marks.clear_gone(conn)
     # A snooze of a task that was deleted, or is not on the engine, is no task's: it is left alone.
     due = conn.execute(
         "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id AND t.pipeline_id IS NOT NULL "

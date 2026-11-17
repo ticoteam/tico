@@ -2243,8 +2243,9 @@ def _write_message(
         from . import question_marks
 
         room = conv or {}
-        if question_marks.replied(conn, row, room, row["refs"]):  # their reply clears each ❓ for them in this chat
-            question_marks.after_reply(conn, room.get("task_id") or (refs or {}).get("task"), actor)
+        # Their reply clears each ❓ for them in this chat, and resumes each task one of those was on.
+        for cleared_task in question_marks.replied(conn, row, room, row["refs"]):
+            question_marks.after_reply(conn, cleared_task, actor)
     if is_human(actor) and is_bot(target) and row["body"].lstrip().startswith("/"):
         from . import skill_runtime
 
@@ -2591,6 +2592,9 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
     for reader in wanted:
         if reader not in before:
             _task_event(conn, task_id, actor, "reader", None, reader, "")
+    from . import question_marks
+
+    question_marks.clear_gone(conn, task_id)  # a ❓ for someone who can no longer read the task's chat goes nowhere
     return wanted
 
 
@@ -6242,10 +6246,10 @@ def status_counts(conn, actor):
         "AND a.answer NOT IN ('give', 'again'))",
         (actor,),
     ).fetchone()[0]
-    # And each open ❓ of the bot's on an open task's chat (backend/question_marks.py).
+    # And each open ❓ of the bot's (backend/question_marks.py): on an open task's chat, or in a direct chat.
     marked = conn.execute(
-        "SELECT COUNT(*) FROM question_marks q JOIN tasks t ON t.id = q.task_id AND t.status = 'open' "
-        "WHERE q.bot_id=? AND q.cleared_at IS NULL",
+        "SELECT COUNT(*) FROM question_marks q LEFT JOIN tasks t ON t.id = q.task_id "
+        "WHERE q.bot_id=? AND q.cleared_at IS NULL AND (q.task_id = '' OR t.status = 'open')",
         (actor,),
     ).fetchone()[0]
     return open_tasks, waits + asks + marked
