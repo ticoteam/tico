@@ -207,6 +207,22 @@ def permitted(c, who, credential, admins):
     return administrator(c, who, admins) and not key_hidden(c, who, credential, admins)
 
 
+def usable(c, who, credential, admins):
+    """Whether `who` may put this credential to use, so that Tico sends its value somewhere for them (a Finance
+    connection, backend/finance/store/tico.py `may_use_credential`). It is the rule GET /api/v2/credentials lists by.
+    A bot may use what it is granted (`granted`). A person may use a credential they may reveal (`permitted`: a grant,
+    or a credential administrator) or one they stored for a bot (`owned`), never a key of a tool they may not see. A
+    website login or a service row never counts."""
+    row = c.execute('SELECT kind FROM credentials WHERE id=?', (credential,)).fetchone()
+    if row is None or row['kind'] in ('login', 'service'):
+        return False
+    if who.role == 'bot':
+        return credential in granted(c, who.actor)
+    if who.role not in ('human', 'owner') or key_hidden(c, who, credential, admins):
+        return False
+    return permitted(c, who, credential, admins) or credential in owned(c, who)
+
+
 def signed_in_person(who):
     """A person at their own session: not a bot, a computer, an agent token, a run, support, BotOps or the Assistant."""
     return who.role in ('human', 'owner') and not (

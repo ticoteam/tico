@@ -1218,6 +1218,9 @@ def install(app, store, auth, mutate):
         who = viewer(request)
         if not read(lambda c: finance_reads.may_connect(c, who.actor)):
             raise Problem("denied", "connecting a bank is for finance admins", 403)
+        if not read(lambda c: finance.may_use_credential(c, who.actor, body.credential_id)):
+            # Before the probe: probing sends the key to the provider (connection_create checks again).
+            raise Problem("denied", finance.KEY_NOT_YOURS, 403)
         probe = {"stripe": finance.stripe_probe, "brex": finance.brex_probe}.get(body.provider, finance.mercury_probe)
         found, why = probe(store, request.app.state.vault, body.credential_id)
         if why:

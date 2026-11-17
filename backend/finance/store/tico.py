@@ -591,6 +591,41 @@ def drop_credential(c: sqlite3.Connection, credential_id: str) -> None:
     c.execute("DELETE FROM credentials WHERE id=? AND source=?", (credential_id, SEALED_SOURCE))
 
 
+def _identity(c: sqlite3.Connection, actor: str) -> Any:
+    """The vault's view of `actor` (backend/auth.py `Identity`), with no more rights than they hold: a bot as itself,
+    a person rebuilt the way deferred work rebuilds them (`Auth.identity_for_actor`). None for anyone else, or a
+    person who has left or whose sign-in is off."""
+    from ... import auth
+
+    A: Any = auth
+    if actor.startswith("bot:"):
+        return A.Identity(actor, "bot")
+    if not actor.startswith("human:"):
+        return None
+    signed: Any = getattr(_VAULT[0], "auth", None)
+    if signed is not None:
+        try:
+            return signed.identity_for_actor(c, actor)
+        except A.Problem:
+            return None
+    # A vault registered without the app's sign-in (a worker or a test): the same rebuild, from the stored owner.
+    if A.standing(c, actor.partition(":")[2]):
+        return None
+    return A.Identity(actor, "owner" if actor == owner_person(c) else "human", email=person_email(c, actor))
+
+
+def may_use_credential(c: sqlite3.Connection, actor: str, credential_id: str) -> bool:
+    """Whether `actor` may put this stored credential to use: the vault's rule (backend/credentials.py `usable`), with
+    the actor's own rights. A Finance connection reads only a credential its creator may use, so a finance admin can
+    never send a key they could not use themselves to a provider. False with no vault registered."""
+    from ... import credentials
+
+    if not _VAULT:
+        return False
+    who = _identity(c, actor)
+    return who is not None and bool(cast(Any, credentials).usable(c, who, credential_id, _VAULT[0].admins))
+
+
 def credential_exists(c: sqlite3.Connection, credential_id: str) -> bool:
     return (
         c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)).fetchone()
