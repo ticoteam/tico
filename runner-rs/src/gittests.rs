@@ -2832,13 +2832,10 @@ async fn worktree_refusals_keep_the_servers_words_and_say_what_is_missing() {
         )
     );
 
-    // A server without task worktrees says so.
+    // A server without task worktrees (FastAPI's bare route miss) says so.
     routes.lock().unwrap().insert(
         "POST /api/v2/tasks/task-0007/worktrees".into(),
-        (
-            404,
-            json!({"error": {"code": "not_found", "detail": "Not found"}}),
-        ),
+        (404, json!({"detail": "Not Found"})),
     );
     let old = worktrees::cli::run("add", "org/product", None, &turn)
         .await
@@ -2847,6 +2844,68 @@ async fn worktree_refusals_keep_the_servers_words_and_say_what_is_missing() {
     assert_eq!(
         old["error"]["detail"],
         json!("The server is too old for task worktrees; update Tico")
+    );
+}
+
+#[tokio::test]
+async fn ticos_own_not_found_is_passed_on_not_taken_for_an_old_server() {
+    let tmp = Tmp::new();
+    let workspace = workspace_with_base(&tmp.0);
+    let (_, _, routes, url) = routed_server().await;
+    let turn = worktree_turn(&tmp.0, &workspace, &url);
+    let gone = |detail: &str| {
+        (
+            404,
+            json!({"error": {"code": "not_found", "detail": detail}}),
+        )
+    };
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "GET /api/v2/runners/me/repositories".into(),
+            (200, writable("")),
+        );
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees".into(),
+            gone("Task not found"),
+        );
+    }
+    let missing = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (
+            &missing["error"]["code"],
+            &missing["error"]["detail"],
+            &missing["error"]["status"]
+        ),
+        (&json!("not_found"), &json!("Task not found"), &json!(404))
+    );
+
+    // The worktree's record deleted mid-turn: the first checkout record finds it gone.
+    {
+        let mut r = routes.lock().unwrap();
+        r.insert(
+            "POST /api/v2/tasks/task-0007/worktrees".into(),
+            (
+                200,
+                json!({"link_id": "link-0007", "branch": "tico/added", "path": "tasks/t7/product", "repo": "org/product",
+                       "state": "pending", "checkout_state": "queued", "setup_pending": true}),
+            ),
+        );
+        r.insert(
+            "PATCH /api/v2/tasks/task-0007/links/link-0007".into(),
+            gone("Worktree not found"),
+        );
+    }
+    let deleted = worktrees::cli::run("add", "org/product", None, &turn)
+        .await
+        .unwrap_err()
+        .to_json();
+    assert_eq!(
+        (&deleted["error"]["code"], &deleted["error"]["detail"]),
+        (&json!("not_found"), &json!("Worktree not found"))
     );
 }
 

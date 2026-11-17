@@ -157,11 +157,17 @@ pub(crate) async fn run_with_backoff(
     )
     .await
     {
-        Err(Failure::Api(e)) if e.status == 404 || e.status == 405 => {
+        Err(Failure::Api(e)) if route_missing(&e) => {
             Err(msg("The server is too old for task worktrees; update Tico"))
         }
         other => other,
     }
+}
+
+/// A server without the route at all: FastAPI's bare 404/405 (`{"detail": "Not Found"}`), which has no Tico error
+/// code. Tico's own 404s (a task or worktree record gone) carry a code and are passed on as they are.
+fn route_missing(e: &ApiError) -> bool {
+    (e.status == 404 || e.status == 405) && e.code == "http_error"
 }
 
 /// A task named on the command line, as the server's canonical id: a UUID as it is, a number or short id looked up.
