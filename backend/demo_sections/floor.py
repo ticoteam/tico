@@ -62,7 +62,7 @@ WORK = (
     ("customer", "customer-referral-asked", "bot:success-owner", 6.3, "Referral ask: Grove Street Cinema"),
     ("product", "product-build", "bot:mobile", 1.2, "Scene preview on the phone app"),
     ("product", "product-build", "bot:firmware", 2.3, "Firmware 2.5: steady Wi-Fi"),
-    ("product", "product-build", "bot:cloud", 3.0, "Faster scene upload"),
+    ("product", "product-build", "bot:cloud", 3.0, "Scene upload retries on a weak signal"),
     ("product", "product-review-1", "bot:mobile", 4.1, "Share a show with a link"),
     ("product", "product-review-1", "bot:firmware", 4.7, "Two-phone calibration"),
     ("product", "product-qa", "bot:qa-owner", 5.3, "Sunset start for scheduled shows"),
