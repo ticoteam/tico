@@ -6041,7 +6041,8 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
     """One active row per bot; the old one moves to `bot_status_history` with `until`.
 
     `state="active"` is how a human clears a quarantine (deviation 4): it sets `bots.state`
-    and leaves the live status `idle`.
+    and leaves the live status `idle`. On a quarantined bot it lifts the quarantine alone: a pause the bot
+    had before stays, and the bot is `paused` until someone resumes it. On any other bot it is a resume.
     """
     _writer(conn, actor, task_id=task_id)
     slug = actor_id(bot_slug) if actor_kind(bot_slug) else str(bot_slug).strip()
@@ -6094,6 +6095,14 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
 
         if state == "paused":
             company_pause.pause_bot(conn, actor, slug, reason or "")
+        elif quarantined:  # the quarantine lifts (its hold was released above), not the bot's own pause
+            from . import holds
+
+            paused = bool(holds.get(conn, holds.PAUSED, "bot", slug))
+            conn.execute(
+                "UPDATE bots SET state=? WHERE id=? AND state='quarantined'", ("paused" if paused else "active", slug)
+            )
+            live = "paused" if paused else "idle"
         else:
             company_pause.resume_bot(conn, actor, slug)
             conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
