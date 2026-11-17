@@ -36,6 +36,9 @@ def test_draft_merges_only_what_is_sent_and_a_stale_revision_gets_409(api):
 
 def test_every_save_is_live_as_the_next_version_and_publish_only_answers_it(api):
     assert get(api, "strategy", token="cara-test")["current"] is None and get(api, "strategy/versions") == []
+    # Before the first save there is nothing to answer: publish says so and makes no empty version 1.
+    assert "no strategy yet" in json.dumps(publish(api, expected=422))
+    assert get(api, "strategy/versions") == []
     write(api, summary="Acme runs rentals with bots.")
     assert get(api, "strategy", token="cara-test")["current"]["summary"] == "Acme runs rentals with bots."
     # No preconditions: no active bet and no "What we won't do" yet, live all the same. Rules out and Wrong if are

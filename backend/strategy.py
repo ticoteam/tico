@@ -533,7 +533,7 @@ def update_draft(
     H._writer(c, actor)
     row = draft(c)
     if not row:
-        raise RuntimeError("no strategy draft: ensure() makes it at start")
+        raise RuntimeError("no strategy draft: ensure() makes it")  # pragma: no cover - ensure() makes one at start
     _check_revision(c, row, revision)
     changes = {}
     if guide_id is not None and guide_id != row["guide"]:
